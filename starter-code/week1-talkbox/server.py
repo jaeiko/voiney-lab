@@ -153,30 +153,53 @@ SYSTEM_PROMPT = (
 
 
 async def answer(audio: bytes, mime: str, timer: StageTimer) -> AgentReply:
-    # ---- Step 0: the echo (delete once your cascade works) -----------------
-    return AgentReply(audio=audio, mime=mime)
+    api_key = require_env("XAI_API_KEY")
+    client = xai_client()
 
-    # ---- Steps 1-3: the cascade (implement STT -> Grok -> TTS) -------------
-    #
-    # Only the Grok (chat) step is OpenAI-SDK compatible. xAI's STT and TTS are
-    # native xAI REST endpoints — call them directly with `requests` (already
-    # imported). Full reference implementation: solution/server.py.
-    #
-    # client = xai_client()
-    #
-    # with timer.stage("stt"):
-    #     # POST https://api.x.ai/v1/stt  (multipart form-data, field "file")
-    #     # -> transcript from resp.json()["text"]
-    #
-    # with timer.stage("llm"):
-    #     # client.chat.completions.create(...)  — the OpenAI SDK -> reply_text
-    #
-    # with timer.stage("tts"):
-    #     # POST https://api.x.ai/v1/tts  (JSON: text, voice_id, language)
-    #     # -> reply audio bytes (mp3) from resp.content
-    #
-    # return AgentReply(audio=reply_audio, mime="audio/mpeg",
-    #                   transcript=transcript, reply_text=reply_text)
+    with timer.stage("stt"):
+        stt_response = requests.post(
+            "https://api.x.ai/v1/stt",
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={
+                "file": (
+                    f"recording.{ext_for(mime)}",
+                    audio,
+                    mime,
+                )
+            },
+        )
+        stt_response.raise_for_status()
+        transcript = stt_response.json()["text"]
+
+    with timer.stage("llm"):
+        chat_response = client.chat.completions.create(
+            model=os.environ.get("CHAT_MODEL", "grok-4"),
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": transcript},
+            ],
+        )
+        reply_text = chat_response.choices[0].message.content
+
+    with timer.stage("tts"):
+        tts_response = requests.post(
+            "https://api.x.ai/v1/tts",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "text": reply_text,
+                "voice_id": require_env("TTS_VOICE"),
+                "language": "auto",
+            },
+        )
+        tts_response.raise_for_status()
+        reply_audio = tts_response.content
+
+    return AgentReply(
+        audio=reply_audio,
+        mime="audio/mpeg",
+        transcript=transcript,
+        reply_text=reply_text,
+    )
     
 
 
