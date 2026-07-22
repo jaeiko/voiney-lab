@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 .DS_Store
+student-work/safebridge-lab/reports/
+student-work/safebridge-lab/outbox/
