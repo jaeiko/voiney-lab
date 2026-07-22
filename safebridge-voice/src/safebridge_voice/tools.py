@@ -220,6 +220,38 @@ def _clean_text(value: Any, field: str, maximum: int = 500) -> tuple[str | None,
     return cleaned, None
 
 
+def normalize_report_arguments(arguments: Any) -> dict[str, Any]:
+    """Validate report input without causing any report side effects."""
+    if not isinstance(arguments, dict):
+        return _result("invalid_arguments", message="arguments must be an object")
+    required = {"location", "summary", "urgency", "exposure_status", "language"}
+    allowed = required | {"material_or_equipment"}
+    if not required.issubset(arguments) or not set(arguments).issubset(allowed):
+        return _result("invalid_arguments", message="unexpected or missing arguments")
+    location, error = _clean_text(arguments["location"], "location", 160)
+    if error:
+        return _result("invalid_arguments", message=error)
+    summary, error = _clean_text(arguments["summary"], "summary", 800)
+    if error:
+        return _result("invalid_arguments", message=error)
+    if arguments["urgency"] not in ("emergency", "urgent", "routine"):
+        return _result("invalid_arguments", message="urgency is invalid")
+    if arguments["exposure_status"] not in ("yes", "no", "unknown"):
+        return _result("invalid_arguments", message="exposure_status is invalid")
+    if arguments["language"] not in ("ko", "vi"):
+        return _result("invalid_arguments", message="language is invalid")
+    report = {"location": location, "summary": summary,
+              "urgency": arguments["urgency"],
+              "exposure_status": arguments["exposure_status"],
+              "language": arguments["language"]}
+    if arguments.get("material_or_equipment") is not None:
+        material, error = _clean_text(arguments["material_or_equipment"], "material_or_equipment", 200)
+        if error:
+            return _result("invalid_arguments", message=error)
+        report["material_or_equipment"] = material
+    return _result("success", report=report)
+
+
 def _report_fingerprint(report: dict[str, Any]) -> str:
     material = {key: report.get(key, "") for key in (
         "location",
@@ -266,40 +298,23 @@ def create_safety_report(
     now_epoch: float | None = None,
 ) -> dict[str, Any]:
     """Validate and append one small report job, returning well under 100 ms locally."""
-    location_text, error = _clean_text(location, "location", 160)
-    if error:
-        return _result("invalid_arguments", message=error)
-    summary_text, error = _clean_text(summary, "summary", 800)
-    if error:
-        return _result("invalid_arguments", message=error)
-    if urgency not in ("emergency", "urgent", "routine"):
-        return _result("invalid_arguments", message="urgency is invalid")
-    if exposure_status not in ("yes", "no", "unknown"):
-        return _result("invalid_arguments", message="exposure_status is invalid")
-    if language not in ("ko", "vi"):
-        return _result("invalid_arguments", message="language is invalid")
-    material_text = ""
-    if material_or_equipment is not None:
-        material_text, error = _clean_text(
-            material_or_equipment, "material_or_equipment", 200
-        )
-        if error:
-            return _result("invalid_arguments", message=error)
+    normalized = normalize_report_arguments({
+        "location": location, "summary": summary, "urgency": urgency,
+        "exposure_status": exposure_status, "language": language,
+        **({"material_or_equipment": material_or_equipment} if material_or_equipment is not None else {}),
+    })
+    if normalized["status"] != "success":
+        return normalized
+    values = normalized["report"]
 
     now_epoch = time.time() if now_epoch is None else now_epoch
     now = datetime.fromtimestamp(now_epoch, timezone.utc)
     report: dict[str, Any] = {
         "id": _new_report_id(now),
-        "location": location_text,
-        "summary": summary_text,
-        "urgency": urgency,
-        "exposure_status": exposure_status,
-        "language": language,
+        **values,
         "filed_at": now.isoformat(),
         "filed_at_epoch": now_epoch,
     }
-    if material_text:
-        report["material_or_equipment"] = material_text
     report["dedupe_key"] = _report_fingerprint(report)
 
     with REPORT_WRITE_LOCK:

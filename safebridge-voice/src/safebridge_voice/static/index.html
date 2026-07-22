@@ -120,6 +120,7 @@
           <div class="label">최근 안전 보고</div>
           <strong id="last-report-id">아직 접수된 보고 없음</strong>
           <div id="last-report-state">음성으로 이상상황을 보고하면 여기에 표시됩니다.</div>
+          <div id="pending-report" hidden></div>
         </div>
       </aside>
     </div>
@@ -150,11 +151,11 @@ const UI={
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인"};
-const REPORT_LABELS={queued_for_handoff:"관리자 인계 대기",processing:"관리자 인계문 작성 중",retry_pending:"인계문 작성 재시도 대기",handoff_ready:"관리자 인계문 준비 완료",failed:"인계문 작성 실패"};
+const REPORT_LABELS={awaiting_user_confirmation:"사용자 제출 확인 대기",submitting:"보고서 제출 중",confirmed:"제출 확인됨",submission_failed:"제출에 실패했습니다. 다시 승인하거나 취소할 수 있습니다.",cancelled:"보고 초안 취소됨",queued_for_handoff:"관리자 인계 대기",processing:"관리자 인계문 작성 중",retry_pending:"인계문 작성 재시도 대기",handoff_ready:"관리자 인계문 준비 완료",failed:"인계문 작성 실패"};
 function renderState(state,detail=""){const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];$("start").disabled=view[1];$("stop").disabled=view[2];const dot=document.querySelector?.(".session-dot");if(dot)dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#23a872":visibleState==="ERROR"?"#b53b32":"#8ea199";}
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function clearPlayback(){playbackEpoch++;if(activeSource){activeSource.onended=null;try{activeSource.stop();}catch(_){}try{activeSource.disconnect();}catch(_){}activeSource=null;}receiving=null;receivedFrames=[];queued.clear();activeTurn=null;audioComplete=false;turnComplete=false;playing=false;nextSegment=0;}
-function resetSessionUI(){clearPlayback();turns.clear();$("log").replaceChildren();}
+function resetSessionUI(){clearPlayback();turns.clear();$("log").replaceChildren();const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 접수된 보고 없음";$("last-report-state").textContent="음성으로 이상상황을 보고하면 여기에 표시됩니다.";}
 async function closeAudio(){if(processor){processor.onaudioprocess=null;try{processor.disconnect();}catch(_){}processor=null;}if(micSource){for(const track of micSource.mediaStream?.getTracks?.()||[])track.stop();try{micSource.disconnect();}catch(_){}micSource=null;}for(const context of [micContext,playContext])if(context&&context.state!=="closed")try{await context.close();}catch(_){}micContext=null;playContext=null;}
 function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const node=document.createElement("section");node.className="turn";node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">SafeBridge</div><div class="reply"></div><div class="label">Tool</div><div class="tools">사용된 Tool 없음</div><div class="stats"></div><div class="error"></div>`;$("log").prepend(node);turns.set(key,node);return node;}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();renderState("ERROR","오류: "+text);}
@@ -178,7 +179,12 @@ async function pump(generation=sessionGeneration){
 function updateToolView(m){
  const node=m.turn_id?turnNode(m.turn_id):null,label=TOOL_LABELS[m.tool]||m.tool||"Tool";
  if(node)node.querySelector(".tools").textContent=m.type==="tool.call"?`${label} 실행 중…`:`${label} · ${m.status||"완료"}${m.elapsed_ms!==undefined?` · ${m.elapsed_ms} ms`:""}`;
- if(m.report_id){const id=$("last-report-id"),state=$("last-report-state");if(id)id.textContent=m.report_id;if(state)state.textContent=REPORT_LABELS[m.report_status]||m.report_status||"보고 접수됨";}
+ const state=$("last-report-state"),draft=$("pending-report");
+ if(m.report){const r=m.report;draft.hidden=false;draft.textContent=`위치: ${r.location} · 상황: ${r.summary} · 긴급도: ${r.urgency} · 노출: ${r.exposure_status} · 물질/장비: ${r.material_or_equipment||"알 수 없음"}`;$("last-report-id").textContent="보고 초안";}
+ if(m.status==="cancelled"||m.status==="confirmed"){draft.hidden=true;draft.textContent="";}
+ if(m.status==="cancelled")$("last-report-id").textContent="아직 접수된 보고 없음";
+ if(state&&REPORT_LABELS[m.status])state.textContent=REPORT_LABELS[m.status];
+ if(m.report_id){$("last-report-id").textContent=m.report_id;if(state)state.textContent=REPORT_LABELS[m.report_status]||m.report_status||"보고 접수됨";}
 }
 async function onMessage(e,generation,current){
  if(generation!==sessionGeneration||socket!==current)return;
