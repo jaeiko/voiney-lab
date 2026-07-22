@@ -1,6 +1,0 @@
-fastapi
-uvicorn[standard]
-openai
-python-dotenv
-requests
-webrtcvad-wheels==2.0.14
