@@ -11,8 +11,7 @@ agent on the xAI Grok voice stack.
 | [SYLLABUS.md](SYLLABUS.md) | Course overview, milestones, grading |
 | [slides.html](slides.html) | Full lecture slide deck (open in a browser; `→`/`←` to navigate, `N` for speaker notes, `T` for dark mode, `Esc` for contents) |
 | [course-overview.html](course-overview.html) | One-page course overview |
-| [week1.md](week1.md) – [week6.md](week6.md) | Detailed lecture notes per week |
-| [starter-code/](starter-code/) | Milestone scaffolds (Week 1: Talkbox — push-to-talk STT → Grok → TTS agent) |
+| [lectures/week1.md](lectures/week1.md) – [lectures/week6.md](lectures/week6.md) | Detailed lecture notes per week |
 
 ## The six milestones
 
@@ -43,6 +42,6 @@ webrtcvad/Silero as the weeks progress.
 
 ## Getting started
 
-See [starter-code/week1-talkbox/README.md](starter-code/week1-talkbox/README.md).
+See the historical [Week 1 starter code on the `main` branch](https://github.com/jaeiko/voice-ai-course/tree/main/starter-code/week1-talkbox).
 You'll need an API key from [console.x.ai](https://console.x.ai) — copy
 `.env.example` to `.env` and fill it in. Never commit a real key.

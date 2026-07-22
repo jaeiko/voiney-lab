@@ -107,7 +107,7 @@ M4 Streaming TTS·Memory·search_approved_safety_manual 동작을 보존한 채
 SafeBridge Voice용 M2 Dispatcher를 통합해줘.
 
 요구사항:
-1. 원본 week4-brain은 수정하지 말고 student-work/safebridge-voice에 복사해 작업한다.
+1. 원본 week4-brain은 수정하지 말고 safebridge-voice에 복사해 작업한다.
 2. create_safety_report와 check_safety_report_status Tool JSON Schema를 추가한다.
 3. create_safety_report는 location, summary, urgency, exposure_status, language를
    검증하고 reports/inbox.jsonl에 한 줄만 추가한 뒤 즉시 report_id를 반환한다.

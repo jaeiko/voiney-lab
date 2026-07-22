@@ -36,7 +36,7 @@ Voice Agent는 최대 네 번의 Tool Round를 수행할 수 있다. 따라서 �
 ## 설치
 
 ```bash
-cd student-work/safebridge-voice
+cd safebridge-voice
 source .venv/bin/activate
 python -m pip install -e .
 ```
@@ -48,7 +48,7 @@ python -m pip install -e .
 Voice Agent:
 
 ```bash
-cd student-work/safebridge-voice
+cd safebridge-voice
 source .venv/bin/activate
 uvicorn safebridge_voice.server:app --reload
 ```
@@ -56,7 +56,7 @@ uvicorn safebridge_voice.server:app --reload
 Safety Handoff Worker:
 
 ```bash
-cd student-work/safebridge-voice
+cd safebridge-voice
 source .venv/bin/activate
 python -m safebridge_voice.worker
 ```
@@ -64,7 +64,7 @@ python -m safebridge_voice.worker
 Queue 관찰:
 
 ```bash
-cd student-work/safebridge-voice
+cd safebridge-voice
 tail -f reports/inbox.jsonl
 ```
 
@@ -93,7 +93,7 @@ tail -f reports/inbox.jsonl
 테스트는 STT, Grok, TTS 네트워크 호출을 만들지 않는다.
 
 ```bash
-cd student-work/safebridge-voice
+cd safebridge-voice
 source .venv/bin/activate
 python -m unittest discover -s tests -v
 python -m compileall -q src tests
