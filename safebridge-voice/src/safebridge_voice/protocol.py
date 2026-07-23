@@ -8,7 +8,16 @@ def parse_control(raw: str) -> dict[str, Any]:
     try: message=json.loads(raw)
     except json.JSONDecodeError as exc: raise ProtocolError("control message must be valid JSON") from exc
     if not isinstance(message,dict) or not isinstance(message.get("type"),str): raise ProtocolError("control message needs a string type")
-    if message["type"] in ("session.start","session.stop"): return {"type":message["type"]}
+    if message["type"]=="session.start":
+        language=message.get("language")
+        if language is not None and not isinstance(language,str):
+            raise ProtocolError("session.start language must be a string")
+        return {"type":"session.start",**({"language":language} if language is not None else {})}
+    if message["type"]=="session.set_language":
+        language=message.get("language")
+        if not isinstance(language,str): raise ProtocolError("session.set_language needs a string language")
+        return {"type":"session.set_language","language":language}
+    if message["type"]=="session.stop": return {"type":"session.stop"}
     if message["type"]=="playback.ended":
         turn_id=message.get("turn_id")
         if not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0: raise ProtocolError("playback.ended needs a positive integer turn_id")

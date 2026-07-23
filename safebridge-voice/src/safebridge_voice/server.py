@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from safebridge_voice.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from safebridge_voice.brain import ConversationHistory, SentenceSegment, stream_brain_turn
+from safebridge_voice.tools import ToolContext
 from safebridge_voice.protocol import ProtocolError, audio_segment_start, event, parse_control
 from safebridge_voice.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 
@@ -20,6 +21,50 @@ logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(messa
 log=logging.getLogger("safebridge")
 app=FastAPI(title="SafeBridge Voice")
 STATIC_DIR=Path(__file__).with_name("static")
+
+def normalize_session_language(value:str)->str:
+    normalized=value.strip().casefold().replace("_","-")
+    if normalized in ("ko","ko-kr"): return "ko"
+    if normalized in ("en","en-us","en-gb"): return "en"
+    if normalized in ("vi","vi-vn"): return "vi"
+    raise ValueError("unsupported session language")
+
+@dataclass(frozen=True)
+class ServerConfig:
+    catalog_path:Path
+    facility_id:str|None
+    usage_scope:str
+    allowed_languages:frozenset[str]
+    default_language:str
+
+def server_config()->ServerConfig:
+    """Load server-wide policy without exposing configuration values."""
+    catalog=os.environ.get("SAFEBRIDGE_SAFETY_CATALOG","").strip()
+    scope=os.environ.get("SAFEBRIDGE_USAGE_SCOPE","").strip()
+    catalog_path=Path(catalog)
+    if not catalog or not catalog_path.is_absolute() or scope not in ("operational","demo","reference_only"):
+        raise RuntimeError("safety catalog configuration is incomplete")
+    facility=os.environ.get("SAFEBRIDGE_FACILITY_ID","").strip() or None
+    raw_allowed=os.environ.get("SAFEBRIDGE_ALLOWED_LANGUAGES","ko,en,vi")
+    try:
+        allowed=frozenset(normalize_session_language(value) for value in raw_allowed.split(",") if value.strip())
+        default=normalize_session_language(os.environ.get("SAFEBRIDGE_SESSION_LANGUAGE","ko"))
+    except ValueError as exc:
+        raise RuntimeError("session language configuration is invalid") from exc
+    if not allowed or default not in allowed:
+        raise RuntimeError("session language configuration is invalid")
+    return ServerConfig(catalog_path,facility,scope,allowed,default)
+
+def server_tool_context(
+    config:ServerConfig|None=None,
+    language:str|None=None,
+)->ToolContext:
+    """Construct an independent session context from trusted server policy."""
+    config=config or server_config()
+    selected=config.default_language if language is None else normalize_session_language(language)
+    if selected not in config.allowed_languages:
+        raise ValueError("unsupported session language")
+    return ToolContext(config.catalog_path,config.facility_id,selected,config.usage_scope)
 
 def require_env(name:str)->str:
     value=os.environ.get(name,"").strip()
@@ -59,10 +104,12 @@ class ListenerEvent:
     kind:str; turn_id:int; result:EndpointResult
 
 class ListenerSession:
-    def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.monotonic)->None:
+    def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.monotonic,
+                 tool_context:ToolContext|None=None)->None:
         self.detector=detector or EndpointDetector(); self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
         self.cooldown_until=0.0; self.endpoint_at=0.0; self.history=ConversationHistory(); self.generation=0
+        self.tool_context=tool_context
     @property
     def state(self): return self.detector.state
     def start(self):
@@ -72,6 +119,12 @@ class ListenerSession:
     def stop(self):
         self.generation+=1
         self.active=False; self.active_turn_id=None; self.cooldown_until=0
+        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+    def set_tool_context(self,context:ToolContext)->None:
+        """Change trusted language and clear all language-sensitive session state."""
+        self.generation+=1
+        self.tool_context=context
+        self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
     def is_current(self,turn_id:int,generation:int)->bool:
         return self.active and self.generation==generation and self.active_turn_id==turn_id
@@ -167,7 +220,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     consumer=asyncio.create_task(consume())
     try:
         client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("CHAT_MODEL")
-        result=await stream_brain_turn(client,session.history,transcript,sentence,mark_token,tool_event)
+        result=await stream_brain_turn(client,session.history,transcript,sentence,mark_token,tool_event,
+                                       tool_context=session.tool_context)
         if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
         await queue.put(None); await consumer
         if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
@@ -176,7 +230,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         timings["total_ms"]=round((clock()-endpoint)*1000)
         if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used): return
         if not session.is_current(turn_id,generation): return
-        session.history.commit(result.messages)
+        session.history.commit(result.messages,result.source_references)
     finally:
         if not consumer.done(): consumer.cancel()
         while not queue.empty():
@@ -194,7 +248,7 @@ async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voic
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
-    await websocket.accept(); config=VadConfig(); session=ListenerSession(EndpointDetector(config)); task=None
+    await websocket.accept(); config=VadConfig(); session=ListenerSession(EndpointDetector(config)); task=None; trusted_config=None
     await websocket.send_text(event("ready",sample_rate=16000,frame_ms=20,frame_bytes=FRAME_BYTES,vad_mode=config.mode,endpoint_silence_ms=config.endpoint_silence_frames*20,prefix_padding_ms=config.prefix_frames*20))
     try:
         while True:
@@ -211,7 +265,26 @@ async def voice_socket(websocket:WebSocket):
             control=parse_control(message["text"])
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
+                try:
+                    trusted_config=trusted_config or server_config()
+                    session.tool_context=server_tool_context(trusted_config,control.get("language"))
+                except (RuntimeError,ValueError):
+                    await websocket.send_text(event("error",message="invalid session configuration"))
+                    continue
                 session.start(); await websocket.send_text(event("session.started",state=session.state.value))
+            elif control["type"]=="session.set_language":
+                if not session.active:
+                    await websocket.send_text(event("error",message="session is not active"))
+                    continue
+                try:
+                    trusted_config=trusted_config or server_config()
+                    context=server_tool_context(trusted_config,control["language"])
+                except (RuntimeError,ValueError):
+                    await websocket.send_text(event("error",message="invalid session language"))
+                    continue
+                if task and not task.done(): task.cancel()
+                session.set_tool_context(context)
+                await websocket.send_text(event("session.language_changed",state=session.state.value))
             elif control["type"]=="session.stop":
                 if task and not task.done(): task.cancel()
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))

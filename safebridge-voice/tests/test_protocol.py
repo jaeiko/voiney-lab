@@ -4,6 +4,10 @@ from safebridge_voice.protocol import ProtocolError, audio_segment_start, event,
 class ProtocolTests(unittest.TestCase):
     def test_controls(self):
         self.assertEqual(parse_control("{\"type\":\"session.start\"}"),{"type":"session.start"})
+        self.assertEqual(parse_control("{\"type\":\"session.start\",\"language\":\"en\"}"),
+                         {"type":"session.start","language":"en"})
+        self.assertEqual(parse_control("{\"type\":\"session.set_language\",\"language\":\"ko\"}"),
+                         {"type":"session.set_language","language":"ko"})
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))

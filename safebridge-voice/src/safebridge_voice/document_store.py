@@ -12,6 +12,9 @@ from .safety_documents import ValidatedManifest, validate_manifest
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS catalog_metadata (
+ schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+);
 CREATE TABLE IF NOT EXISTS documents (
  id INTEGER PRIMARY KEY, document_id TEXT NOT NULL, document_family_id TEXT NOT NULL,
  canonical_source_id TEXT NOT NULL, canonical_version TEXT NOT NULL,
@@ -39,6 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_product_code ON documents(product_code)
 CREATE INDEX IF NOT EXISTS idx_documents_family ON documents(document_family_id);
 CREATE INDEX IF NOT EXISTS idx_aliases_alias ON aliases(alias);
 """
+CATALOG_SCHEMA_VERSION = 2
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -53,6 +57,11 @@ def initialize_database(db_path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as connection:
         connection.executescript(SCHEMA)
+        connection.execute("DELETE FROM catalog_metadata")
+        connection.execute(
+            "INSERT INTO catalog_metadata (schema_version) VALUES (?)",
+            (CATALOG_SCHEMA_VERSION,),
+        )
 
 
 def ingest_manifest(payload: dict[str, Any] | ValidatedManifest, db_path: str | Path) -> dict[str, int]:

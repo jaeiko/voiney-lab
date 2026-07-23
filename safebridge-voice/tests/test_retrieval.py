@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class RetrievalTests(unittest.TestCase):
         ingest_manifest({"documents": list(documents)}, self.db)
 
     def search(self, query, language="en", **kwargs):
+        kwargs.setdefault("topic", "spill" if query.casefold().startswith("spill") else "first_aid")
         return search_safety_documents(
             query, language, self.db, usage_scope="operational", now=self.now, **kwargs
         )
@@ -77,6 +79,29 @@ class RetrievalTests(unittest.TestCase):
                                    aliases=[{"alias": "dung môi hư cấu", "language": "vi", "approved": True}])
         self.ingest(operational_document(), doc)
         self.assertEqual(self.search("sơ cứu dung môi hư cấu", "vi")["status"], "success")
+
+    def test_reviewed_english_succeeds_and_unreviewed_english_is_blocked(self):
+        original = operational_document(language="ko")
+        reviewed = operational_document(
+            document_id="FICTIONAL-OP-SDS-EN", language="en",
+            translation_status="human_reviewed",
+            translation_of_document_id="FICTIONAL-OP-SDS-001",
+        )
+        self.ingest(original, reviewed)
+        self.assertEqual(self.search("first aid TEST-A100", "en")["status"], "success")
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "unreviewed.sqlite"
+            unreviewed = operational_document(
+                document_id="FICTIONAL-OP-SDS-EN", language="en",
+                translation_status="machine_unreviewed",
+                translation_of_document_id="FICTIONAL-OP-SDS-001",
+            )
+            ingest_manifest({"documents": [original, unreviewed]}, db)
+            result = search_safety_documents(
+                "first aid TEST-A100", "en", db, usage_scope="operational",
+                topic="first_aid", now=self.now,
+            )
+            self.assert_blocked(result, "translation_unverified")
 
     def test_spill_routes_facility_sop_then_sds_six(self):
         sds = operational_document(sections=[{
@@ -118,7 +143,7 @@ class RetrievalTests(unittest.TestCase):
             db = Path(directory) / "stale.sqlite"
             ingest_manifest({"documents": [operational_document(review_due_at="2026-01-01T00:00:00+00:00")]}, db)
             self.assert_blocked(search_safety_documents(
-                "first aid TEST-A100", "en", db, usage_scope="operational", now=self.now
+                "first aid TEST-A100", "en", db, usage_scope="operational", topic="first_aid", now=self.now
             ), "stale_document")
 
     def test_conflicting_active_versions_are_blocked(self):
@@ -157,6 +182,19 @@ class RetrievalTests(unittest.TestCase):
         self.assert_blocked(search_safety_documents(
             "unknown topic", "en", self.db, usage_scope="operational"
         ), "invalid_arguments")
+
+    def test_missing_and_old_schema_fail_closed_without_creating_catalog(self):
+        missing = Path(self.temp.name) / "missing.sqlite"
+        self.assert_blocked(search_safety_documents(
+            "first aid TEST-A100", "en", missing, usage_scope="operational", topic="first_aid"
+        ), "error")
+        self.assertFalse(missing.exists())
+        old = Path(self.temp.name) / "old.sqlite"
+        with sqlite3.connect(old) as connection:
+            connection.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
+        self.assert_blocked(search_safety_documents(
+            "first aid TEST-A100", "en", old, usage_scope="operational", topic="first_aid"
+        ), "error")
 
     def test_language_variants_of_same_canonical_version_do_not_conflict(self):
         korean = operational_document(language="ko", aliases=[
@@ -401,7 +439,8 @@ class RetrievalTests(unittest.TestCase):
                     ingest_manifest({"documents": [operational_document(usage_scope=scope)]}, db)
                     for requested in scopes:
                         result = search_safety_documents(
-                            "first aid TEST-A100", "en", db, usage_scope=requested, now=self.now
+                            "first aid TEST-A100", "en", db, usage_scope=requested,
+                            topic="first_aid", now=self.now
                         )
                         self.assertEqual(result["status"], "success" if requested == scope else "not_found")
         with tempfile.TemporaryDirectory() as directory:
@@ -409,10 +448,12 @@ class RetrievalTests(unittest.TestCase):
             ingest_manifest({"documents": [synthetic_document()]}, db)
             for requested in scopes:
                 self.assert_blocked(search_safety_documents(
-                    "first aid TEST-A100", "en", db, usage_scope=requested, now=self.now
+                    "first aid TEST-A100", "en", db, usage_scope=requested,
+                    topic="first_aid", now=self.now
                 ), "not_found")
         self.assert_blocked(search_safety_documents(
-            "first aid TEST-A100", "en", self.db, usage_scope="test_only", now=self.now
+            "first aid TEST-A100", "en", self.db, usage_scope="test_only",
+            topic="first_aid", now=self.now
         ), "invalid_arguments")
 
     def test_partial_product_code_and_cas_are_rejected(self):
@@ -432,8 +473,23 @@ class RetrievalTests(unittest.TestCase):
         self.ingest(operational_document())
         result = self.search("TEST-A100", topic="first_aid")
         self.assertEqual(result["status"], "success")
-        self.assert_blocked(self.search("fire spill TEST-A100"), "invalid_arguments")
+        self.assert_blocked(search_safety_documents(
+            "fire spill TEST-A100", "en", self.db, usage_scope="operational", now=self.now
+        ), "invalid_arguments")
         self.assertEqual(self.search("fire spill TEST-A100", topic="first_aid")["status"], "success")
+
+    def test_two_explicit_topics_are_isolated(self):
+        document = operational_document(sections=[
+            {"section_code": "SDS-04", "section_title": "FICTIONAL A", "page_start": 4,
+             "page_end": 4, "content": "FICTIONAL TOPIC A.", "topic": "first_aid", "keywords": []},
+            {"section_code": "SDS-05", "section_title": "FICTIONAL B", "page_start": 5,
+             "page_end": 5, "content": "FICTIONAL TOPIC B.", "topic": "fire", "keywords": []},
+        ])
+        self.ingest(document)
+        first = self.search("TEST-A100", topic="first_aid")
+        fire = self.search("TEST-A100", topic="fire")
+        self.assertEqual([item["section_code"] for item in first["matches"]], ["SDS-04"])
+        self.assertEqual([item["section_code"] for item in fire["matches"]], ["SDS-05"])
 
 
 if __name__ == "__main__":

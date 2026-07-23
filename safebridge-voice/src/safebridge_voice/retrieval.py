@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .document_store import connect
+from .document_store import CATALOG_SCHEMA_VERSION, connect
 
 
 TOPICS = {
@@ -20,15 +20,6 @@ TOPICS = {
     "exposure_ppe": (("supplier_sds", "8"), ("facility_sop", None)),
     "disposal": (("facility_sop", None), ("supplier_sds", "13")),
     "equipment_operation": (("facility_sop", None), ("equipment_manual", None)),
-}
-TOPIC_WORDS = {
-    "first_aid": ("first aid", "first-aid", "응급처치", "sơ cứu"),
-    "fire": ("fire", "화재", "chữa cháy"),
-    "spill": ("spill", "release", "누출", "유출", "tràn đổ"),
-    "handling_storage": ("handling", "storage", "취급", "보관", "bảo quản"),
-    "exposure_ppe": ("ppe", "exposure", "보호구", "노출", "bảo hộ"),
-    "disposal": ("disposal", "폐기", "thải bỏ"),
-    "equipment_operation": ("equipment", "operation", "장비", "운전", "thiết bị"),
 }
 RUNTIME_SCOPES = {"operational", "demo", "reference_only"}
 PRODUCT_DOCUMENT_TYPES = {"supplier_sds", "equipment_manual"}
@@ -46,13 +37,6 @@ def _mentions(query: str, value: str) -> bool:
     """Match a complete normalized identifier or phrase, never a substring."""
     value = _normalized(value)
     return bool(value) and re.search(rf"(?<!\w){re.escape(value)}(?!\w)", query) is not None
-
-
-def _detected_topic(query: str) -> str | None:
-    q = _normalized(query)
-    found = [topic for topic, words in TOPIC_WORDS.items()
-             if any(_mentions(q, word) for word in words)]
-    return found[0] if len(found) == 1 else None
 
 
 def _section_number(code: str) -> str | None:
@@ -150,19 +134,26 @@ def search_safety_documents(
         return _result("invalid_arguments")
     if facility_id is not None and (not isinstance(facility_id, str) or not facility_id.strip()):
         return _result("invalid_arguments")
-    if topic is not None and (not isinstance(topic, str) or topic not in TOPICS):
+    if not isinstance(topic, str) or topic not in TOPICS:
         return _result("invalid_arguments")
     if now is not None and not isinstance(now, datetime):
         return _result("invalid_arguments")
-    selected_topic = topic or _detected_topic(query)
-    if selected_topic is None:
-        return _result("invalid_arguments")
+    selected_topic = topic
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
 
     try:
+        path = Path(db_path)
+        if not path.is_file():
+            return _result("error")
         connection = connect(db_path)
+        metadata = connection.execute(
+            "SELECT schema_version FROM catalog_metadata"
+        ).fetchall()
+        if len(metadata) != 1 or metadata[0]["schema_version"] != CATALOG_SCHEMA_VERSION:
+            connection.close()
+            return _result("error")
         docs = connection.execute("SELECT * FROM documents ORDER BY document_id, version, language").fetchall()
         aliases = connection.execute(
             "SELECT * FROM aliases WHERE approved=1 ORDER BY generic, alias, document_row_id"

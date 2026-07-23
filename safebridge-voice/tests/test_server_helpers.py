@@ -2,7 +2,9 @@ import asyncio, unittest
 from unittest.mock import patch
 from collections import deque
 from safebridge_voice.audio import FRAME_BYTES
-from safebridge_voice.server import ListenerSession, frame_complete_audio, validate_tts_pcm, voice_socket
+from pathlib import Path
+from safebridge_voice.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, server_tool_context, validate_tts_pcm, voice_socket
+from safebridge_voice.tools import ToolContext
 from safebridge_voice.vad import EndpointDetector, TurnState
 
 class FakeResponse:
@@ -16,6 +18,50 @@ TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
 
 class ServerTests(unittest.TestCase):
+    def test_server_owned_tool_context_and_language_normalization(self):
+        self.assertEqual(normalize_session_language("ko-KR"), "ko")
+        self.assertEqual(normalize_session_language("vi_VN"), "vi")
+        values={"SAFEBRIDGE_SAFETY_CATALOG":"/trusted/catalog.sqlite",
+                "SAFEBRIDGE_FACILITY_ID":"FACILITY-A","SAFEBRIDGE_SESSION_LANGUAGE":"vi-VN",
+                "SAFEBRIDGE_USAGE_SCOPE":"operational"}
+        with patch.dict("os.environ", values, clear=True):
+            context=server_tool_context()
+        self.assertEqual((str(context.catalog_path),context.facility_id,context.language,context.usage_scope),
+                         ("/trusted/catalog.sqlite","FACILITY-A","vi","operational"))
+
+    def test_sessions_have_independent_korean_and_english_contexts(self):
+        config=ServerConfig(Path("/trusted/catalog.sqlite"),"F","operational",
+                            frozenset({"ko","en","vi"}),"ko")
+        korean=ListenerSession(tool_context=server_tool_context(config,"ko"))
+        english=ListenerSession(tool_context=server_tool_context(config,"en"))
+        self.assertEqual(korean.tool_context.language,"ko")
+        self.assertEqual(english.tool_context.language,"en")
+        english.set_tool_context(server_tool_context(config,"vi"))
+        self.assertEqual(korean.tool_context.language,"ko")
+        self.assertEqual(english.tool_context.language,"vi")
+
+    def test_invalid_language_is_rejected_without_changing_context(self):
+        config=ServerConfig(Path("/trusted/catalog.sqlite"),None,"operational",
+                            frozenset({"ko","en"}),"ko")
+        session=ListenerSession(tool_context=server_tool_context(config,"ko"))
+        with self.assertRaises(ValueError):
+            server_tool_context(config,"vi")
+        self.assertEqual(session.tool_context.language,"ko")
+
+    def test_language_change_clears_sensitive_session_state(self):
+        session=ListenerSession(tool_context=ToolContext(Path("/trusted/catalog.sqlite"),None,"ko","operational"))
+        session.active=True
+        session.history.commit([{"role":"user","content":"old"}],[{"document_id":"OLD"}])
+        session.history.pending_report={"language":"ko","location":"F"}
+        session.set_tool_context(ToolContext(Path("/trusted/catalog.sqlite"),None,"en","operational"))
+        self.assertEqual(session.tool_context.language,"en")
+        self.assertEqual(len(session.history.messages()),1)
+        self.assertEqual(session.history.source_references,[])
+        self.assertIsNone(session.history.pending_report)
+
+    def test_missing_catalog_configuration_fails_closed(self):
+        with patch.dict("os.environ", {}, clear=True), self.assertRaises(RuntimeError):
+            server_tool_context()
     def test_pcm_validation_and_framing(self):
         self.assertEqual(validate_tts_pcm(FakeResponse(b"\\0\\0")),b"\\0\\0")
         self.assertEqual([len(x) for x in frame_complete_audio(b"x"*(FRAME_BYTES+2))],[FRAME_BYTES,FRAME_BYTES])

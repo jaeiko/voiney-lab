@@ -1,9 +1,4 @@
-"""Deterministic tools for the SafeBridge Voice voice agent.
-
-The voice path only searches approved demo material or records a small JSON
-job. Slow handoff drafting belongs to ``worker.py`` so a caller is not kept
-waiting for a second model response.
-"""
+"""Deterministic, context-bound tools for the SafeBridge Voice agent."""
 
 from __future__ import annotations
 
@@ -13,12 +8,14 @@ import re
 import secrets
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from safebridge_voice.retrieval import TOPICS
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_PATH = PROJECT_ROOT / "data" / "approved_safety_manual.demo.json"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 INBOX_PATH = REPORTS_DIR / "inbox.jsonl"
 PROCESSED_PATH = REPORTS_DIR / "processed.txt"
@@ -39,8 +36,8 @@ SEARCH_TOOL = {
         "name": SEARCH_TOOL_NAME,
         "description": (
             "Use this whenever a lab worker asks about a safety procedure or "
-            "approved lab safety information. Search the locally approved demo "
-            "manual before answering; do not use it for greetings or ordinary "
+            "approved lab safety information. Search the trusted local catalog "
+            "before answering; do not use it for greetings or ordinary "
             "conversation."
         ),
         "parameters": {
@@ -51,13 +48,13 @@ SEARCH_TOOL = {
                     "minLength": 1,
                     "description": "The worker's non-empty safety question or keywords.",
                 },
-                "language": {
+                "topic": {
                     "type": "string",
-                    "enum": ["ko", "vi"],
-                    "description": "Language used by the worker.",
+                    "enum": list(TOPICS),
+                    "description": "An explicit validated safety topic.",
                 },
             },
-            "required": ["query", "language"],
+            "required": ["query", "topic"],
             "additionalProperties": False,
         },
     },
@@ -102,7 +99,7 @@ CREATE_REPORT_TOOL = {
                 },
                 "language": {
                     "type": "string",
-                    "enum": ["ko", "vi"],
+                    "enum": ["ko", "en", "vi"],
                     "description": "Language used by the worker.",
                 },
                 "material_or_equipment": {
@@ -145,70 +142,57 @@ CHECK_REPORT_TOOL = {
 TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL]
 
 
+@dataclass(frozen=True)
+class ToolContext:
+    """Trusted retrieval inputs owned by the server, never by Tool JSON."""
+
+    catalog_path: Path | None
+    facility_id: str | None
+    language: str
+    usage_scope: str
+
+
 def _result(status: str, **fields: Any) -> dict[str, Any]:
     return {"status": status, **fields}
 
 
+def _search_failure(status: str) -> dict[str, Any]:
+    return {"status": status, "answerable": False, "matches": []}
+
+
 def search_approved_safety_manual(
     query: Any,
-    language: Any,
-    data_path: Path = DATA_PATH,
+    *,
+    context: ToolContext | None = None,
+    topic: Any = None,
 ) -> dict[str, Any]:
-    """Return structured local matches; expected bad input and misses never raise."""
-    if not isinstance(query, str) or not query.strip() or language not in ("ko", "vi"):
-        return _result(
-            "invalid_arguments",
-            matches=[],
-            message="query and language must be valid",
-        )
+    """Search SQLite only; the legacy demo JSON is never an implicit fallback."""
+    from safebridge_voice.retrieval import search_safety_documents
+
+    blocked = _search_failure("invalid_arguments")
+    if (not isinstance(query, str) or not query.strip() or context is None or
+            context.language not in ("ko", "en", "vi") or context.catalog_path is None):
+        return blocked
+    if not isinstance(topic, str) or topic not in TOPICS:
+        return blocked
     try:
-        records = json.loads(data_path.read_text(encoding="utf-8"))
-        if not isinstance(records, list):
-            raise ValueError("demo data must be a list")
-        terms = {term.casefold() for term in query.split() if len(term) >= 2}
-        scored: list[tuple[int, dict[str, Any]]] = []
-        allowed = (
-            "document_id",
-            "title",
-            "section",
-            "guidance",
-            "source_label",
-            "demo_only",
+        result = search_safety_documents(
+            query, context.language, context.catalog_path,
+            usage_scope=context.usage_scope, facility_id=context.facility_id, topic=topic,
         )
-        for record in records:
-            localized = record["translations"][language]
-            haystack = " ".join(
-                (
-                    localized["title"],
-                    localized["section"],
-                    localized["guidance"],
-                    " ".join(record.get("keywords", [])),
-                )
-            ).casefold()
-            score = sum(term in haystack for term in terms)
-            if score:
-                item = {
-                    "document_id": record["document_id"],
-                    "title": localized["title"],
-                    "section": localized["section"],
-                    "guidance": localized["guidance"],
-                    "source_label": record["source_label"],
-                    "demo_only": bool(record["demo_only"]),
-                }
-                scored.append((score, {key: item[key] for key in allowed}))
-        matches = [
-            item
-            for _, item in sorted(
-                scored, key=lambda pair: (-pair[0], pair[1]["document_id"])
-            )[:3]
-        ]
-        return _result("success" if matches else "not_found", matches=matches)
+        if result.get("status") != "success" or not result.get("answerable"):
+            return _search_failure(result.get("status", "error"))
+        allowed = {
+            "document_id", "document_type", "title", "issuer", "manufacturer",
+            "product_name", "product_code", "cas_numbers", "version", "canonical_version",
+            "section_code", "section_title", "page_start", "page_end", "content",
+            "language", "translation_status", "source_uri", "source_checksum",
+        }
+        matches = [{key: value for key, value in match.items() if key in allowed}
+                   for match in result["matches"]]
+        return {"status": "success", "answerable": True, "matches": matches}
     except Exception:
-        return _result(
-            "error",
-            matches=[],
-            message="local demo safety data could not be read",
-        )
+        return _search_failure("error")
 
 
 def _clean_text(value: Any, field: str, maximum: int = 500) -> tuple[str | None, str | None]:
@@ -238,7 +222,7 @@ def normalize_report_arguments(arguments: Any) -> dict[str, Any]:
         return _result("invalid_arguments", message="urgency is invalid")
     if arguments["exposure_status"] not in ("yes", "no", "unknown"):
         return _result("invalid_arguments", message="exposure_status is invalid")
-    if arguments["language"] not in ("ko", "vi"):
+    if arguments["language"] not in ("ko", "en", "vi"):
         return _result("invalid_arguments", message="language is invalid")
     report = {"location": location, "summary": summary,
               "urgency": arguments["urgency"],
@@ -395,7 +379,7 @@ REGISTERED_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
-def execute_tool(name: str, arguments: Any) -> dict[str, Any]:
+def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) -> dict[str, Any]:
     """Dispatch only registered functions with exact, schema-compatible keys."""
     if name not in REGISTERED_TOOLS:
         return _result("invalid_arguments", message="unknown tool")
@@ -403,7 +387,7 @@ def execute_tool(name: str, arguments: Any) -> dict[str, Any]:
         return _result("invalid_arguments", message="arguments must be an object")
 
     required_and_allowed = {
-        SEARCH_TOOL_NAME: ({"query", "language"}, {"query", "language"}),
+        SEARCH_TOOL_NAME: ({"query", "topic"}, {"query", "topic"}),
         CREATE_REPORT_TOOL_NAME: (
             {"location", "summary", "urgency", "exposure_status", "language"},
             {
@@ -420,5 +404,9 @@ def execute_tool(name: str, arguments: Any) -> dict[str, Any]:
     required, allowed = required_and_allowed[name]
     keys = set(arguments)
     if not required.issubset(keys) or not keys.issubset(allowed):
+        if name == SEARCH_TOOL_NAME:
+            return _search_failure("invalid_arguments")
         return _result("invalid_arguments", message="unexpected or missing arguments")
+    if name == SEARCH_TOOL_NAME:
+        return search_approved_safety_manual(**arguments, context=context)
     return REGISTERED_TOOLS[name](**arguments)

@@ -9,11 +9,14 @@ from safebridge_voice.tools import (
     CREATE_REPORT_TOOL,
     SEARCH_TOOL,
     TOOLS,
+    ToolContext,
     check_safety_report_status,
     create_safety_report,
     execute_tool,
     search_approved_safety_manual,
 )
+from safebridge_voice.document_store import ingest_manifest
+from tests.test_retrieval import operational_document
 
 
 class ToolTests(unittest.TestCase):
@@ -30,10 +33,8 @@ class ToolTests(unittest.TestCase):
         )
         for function in by_name.values():
             self.assertFalse(function["parameters"]["additionalProperties"])
-        self.assertEqual(
-            SEARCH_TOOL["function"]["parameters"]["properties"]["language"]["enum"],
-            ["ko", "vi"],
-        )
+        self.assertEqual(set(SEARCH_TOOL["function"]["parameters"]["properties"]), {"query", "topic"})
+        self.assertEqual(set(SEARCH_TOOL["function"]["parameters"]["required"]), {"query", "topic"})
         self.assertEqual(
             set(CREATE_REPORT_TOOL["function"]["parameters"]["required"]),
             {"location", "summary", "urgency", "exposure_status", "language"},
@@ -42,33 +43,57 @@ class ToolTests(unittest.TestCase):
             CHECK_REPORT_TOOL["function"]["parameters"]["required"], ["report_id"]
         )
 
-    def test_bilingual_search_success_and_safe_shape(self):
-        for query, language in (("화학 누출", "ko"), ("máy thiết bị", "vi")):
-            result = search_approved_safety_manual(query, language)
+    def test_explicit_topic_is_required_and_validated(self):
+        context = ToolContext(Path("unused.sqlite"), None, "en", "operational")
+        for arguments in ({"query": "FICTIONAL"}, {"query": "FICTIONAL", "topic": "unsupported"}):
+            result = execute_tool("search_approved_safety_manual", arguments, context)
+            self.assertEqual(result, {"status": "invalid_arguments", "answerable": False, "matches": []})
+
+    def test_sqlite_search_uses_trusted_context_and_safe_shape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "catalog.sqlite"
+            doc = operational_document(language="ko", aliases=[
+                {"alias": "가상 용제", "language": "ko", "approved": True}
+            ])
+            ingest_manifest({"documents": [doc]}, db)
+            context = ToolContext(db, "TEST-FACILITY", "ko", "operational")
+            result = execute_tool("search_approved_safety_manual", {
+                "query": "가상 용제", "topic": "first_aid"
+            }, context)
             self.assertEqual(result["status"], "success")
-            self.assertLessEqual(len(result["matches"]), 3)
-            self.assertEqual(
-                set(result["matches"][0]),
-                {
-                    "document_id",
-                    "title",
-                    "section",
-                    "guidance",
-                    "source_label",
-                    "demo_only",
-                },
-            )
-            self.assertTrue(result["matches"][0]["demo_only"])
+            match = result["matches"][0]
+            self.assertEqual(match["language"], "ko")
+            self.assertEqual(match["section_code"], "SDS-04")
+            self.assertNotIn("source_path", match)
+            self.assertNotIn(str(db), json.dumps(result, ensure_ascii=False))
+
+    def test_model_cannot_override_trusted_retrieval_context(self):
+        context = ToolContext(Path("trusted.sqlite"), "TRUSTED", "ko", "operational")
+        for field, value in (("language", "vi"), ("facility_id", "OTHER"),
+                             ("usage_scope", "reference_only"), ("db_path", "other.sqlite")):
+            result = execute_tool("search_approved_safety_manual", {"query": "x", field: value}, context)
+            self.assertEqual(result["status"], "invalid_arguments")
+            self.assertEqual(result.get("matches", []), [])
+
+    def test_trusted_language_facility_and_scope_reach_retrieval(self):
+        context = ToolContext(Path("trusted.sqlite"), "TRUSTED-FACILITY", "vi", "reference_only")
+        with patch("safebridge_voice.retrieval.search_safety_documents",
+                   return_value={"status":"not_found","answerable":False,"matches":[]}) as search:
+            result = execute_tool("search_approved_safety_manual",
+                                  {"query":"FICTIONAL","topic":"first_aid"}, context)
+        self.assertEqual(result["status"], "not_found")
+        search.assert_called_once_with("FICTIONAL", "vi", Path("trusted.sqlite"),
+                                       usage_scope="reference_only", facility_id="TRUSTED-FACILITY",
+                                       topic="first_aid")
 
     def test_search_miss_invalid_unknown_and_error_are_structured(self):
-        self.assertEqual(search_approved_safety_manual("zzzzzz", "ko")["status"], "not_found")
-        self.assertEqual(search_approved_safety_manual("", "ko")["status"], "invalid_arguments")
+        self.assertEqual(search_approved_safety_manual("zzzzzz")["status"], "invalid_arguments")
+        self.assertEqual(search_approved_safety_manual("")["status"], "invalid_arguments")
         self.assertEqual(execute_tool("bad", {})["status"], "invalid_arguments")
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(
-                search_approved_safety_manual("누출", "ko", Path(directory) / "missing")[
-                    "status"
-                ],
+                search_approved_safety_manual("누출", context=ToolContext(
+                    Path(directory) / "missing", None, "ko", "operational"), topic="spill")["status"],
                 "error",
             )
 
