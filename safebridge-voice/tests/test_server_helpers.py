@@ -4,6 +4,7 @@ from collections import deque
 from safebridge_voice.audio import FRAME_BYTES
 from pathlib import Path
 from safebridge_voice.language import CLARIFICATION_TEXT, Transcription
+from safebridge_voice.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
 from safebridge_voice.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, run_turn, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from safebridge_voice.tools import ToolContext
 from safebridge_voice.vad import EndpointDetector, TurnState
@@ -21,6 +22,147 @@ TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
 
 class ServerTests(unittest.TestCase):
+    def emergency_session(self):
+        session=ListenerSession(tool_context=ToolContext(
+            Path("/trusted/catalog.sqlite"),None,"ko","operational"))
+        session.active=True; session.language_mode="auto"
+        session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
+        return session
+
+    def run_emergency(self, transcription, session=None, tts_result=b"\0\0"):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+        session=session or self.emergency_session()
+        socket=Socket()
+        tts_patch=(patch("safebridge_voice.server.synthesize",side_effect=tts_result)
+                   if isinstance(tts_result,BaseException)
+                   else patch("safebridge_voice.server.synthesize",return_value=tts_result))
+        with patch("safebridge_voice.server.transcribe",return_value=transcription), \
+             tts_patch as tts, \
+             patch("safebridge_voice.server.stream_brain_turn") as brain, \
+             patch("safebridge_voice.tools.search_approved_safety_manual") as retrieval, \
+             patch("safebridge_voice.brain.execute_tool") as execute, \
+             patch("safebridge_voice.server.AsyncOpenAI") as llm:
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        return session,socket,tts,brain,retrieval,execute,llm
+
+    def test_emergency_precedes_language_resolution_and_uses_fixed_language(self):
+        cases=(
+            (Transcription("도와줘!",None),"ko",KOREAN_EMERGENCY_RESPONSE),
+            (Transcription("Emergency!",None),"en",ENGLISH_EMERGENCY_RESPONSE),
+            (Transcription("도와줘!","ja"),"ko",KOREAN_EMERGENCY_RESPONSE),
+            (Transcription("Emergency!","unsupported"),"en",ENGLISH_EMERGENCY_RESPONSE),
+        )
+        for transcription,language,response in cases:
+            with self.subTest(transcription=transcription):
+                with patch("safebridge_voice.server.resolve_turn_language") as resolver:
+                    session,socket,tts,brain,retrieval,execute,llm=self.run_emergency(transcription)
+                resolver.assert_not_called()
+                self.assertEqual(tts.call_args.args,(response,language))
+                for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+                event_types=[item["type"] for item in socket.text]
+                self.assertNotIn("session.language_confirmation_required",event_types)
+                self.assertNotIn("session.turn_language_resolved",event_types)
+                self.assertNotIn("tool.call",event_types)
+                self.assertNotIn("tool.result",event_types)
+                self.assertEqual([item["text"] for item in socket.text
+                                  if item["type"]=="reply.delta"],[response])
+                self.assertEqual(len(socket.binary),1)
+                self.assertEqual([item["text"] for item in socket.text
+                                  if item["type"]=="reply.complete"],[response])
+                audio_complete=next(item for item in socket.text
+                                    if item["type"]=="audio.complete")
+                self.assertEqual(audio_complete["segment_count"],1)
+                done=next(item for item in socket.text if item["type"]=="turn.done")
+                self.assertEqual(done["segment_count"],1)
+                self.assertGreater(done["output_frames"],0)
+                self.assertEqual(done["tools_used"],[])
+                states=[item["state"] for item in socket.text
+                        if item["type"]=="state.changed"]
+                self.assertIn(TurnState.AGENT_SPEAKING.value,states)
+                self.assertIsNone(session.last_confirmed_language)
+
+    def test_emergency_preserves_pending_product_sources_and_report_fields(self):
+        session=self.emergency_session()
+        session.last_confirmed_language="ko"
+        product_group=[{"role":"user","content":"Product ABC-7"},
+                       {"role":"assistant","content":"Please provide its full label."}]
+        session.history.commit(product_group,[{"document_id":"PRIVATE-REFERENCE"}])
+        pending={"location":"Lab A","summary":"unchanged","urgency":"urgent",
+                 "exposure_status":"unknown","language":"ko",
+                 "material_or_equipment":"Product ABC-7"}
+        session.history.pending_report=dict(pending)
+        _,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+            Transcription("Emergency!",None),session)
+        self.assertEqual(session.history.pending_report,pending)
+        self.assertEqual(session.history.groups[0],product_group)
+        self.assertEqual(session.history.source_references,[{"document_id":"PRIVATE-REFERENCE"}])
+        self.assertEqual(session.last_confirmed_language,"ko")
+        self.assertEqual(session.language_mode,"auto")
+        visible=json.dumps(socket.text,ensure_ascii=False)
+        self.assertNotIn("PRIVATE-REFERENCE",visible)
+        self.assertNotIn("Product ABC-7",visible)
+        self.assertNotIn("/trusted/catalog.sqlite",visible)
+        self.assertNotIn("credential",visible.casefold())
+        self.assertNotIn("database",visible.casefold())
+        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+
+    def test_emergency_preserves_full_capacity_product_history(self):
+        session=self.emergency_session()
+        history=session.history
+        product_group=[{"role":"user","content":"Product ABC-7 full label"},
+                       {"role":"assistant","content":"Product ABC-7 identified."}]
+        history.commit(product_group)
+        for index in range(1,history.max_turns):
+            history.commit([{"role":"user","content":f"context {index}"},
+                            {"role":"assistant","content":f"answer {index}"}])
+        before=[[dict(message) for message in group] for group in history.groups]
+        self.assertEqual(len(before),history.max_turns)
+        self.run_emergency(Transcription("Emergency!",None),session)
+        self.assertEqual(history.groups,before)
+        self.assertEqual(history.groups[0],product_group)
+
+    def test_emergency_does_not_reset_manual_language_mode(self):
+        session=self.emergency_session()
+        session.language_mode="manual"; session.manual_language="ko"
+        self.run_emergency(Transcription("Emergency!",None),session)
+        self.assertEqual((session.language_mode,session.manual_language),("manual","ko"))
+        self.assertEqual(session.tool_context.language,"ko")
+
+    def test_emergency_sessions_are_isolated(self):
+        korean=self.emergency_session()
+        english=self.emergency_session()
+        korean.history.pending_report={"language":"ko","location":"K"}
+        english.history.pending_report={"language":"en","location":"E"}
+        self.run_emergency(Transcription("도와줘!",None),korean)
+        self.run_emergency(Transcription("Emergency!",None),english)
+        self.assertEqual(korean.history.pending_report,{"language":"ko","location":"K"})
+        self.assertEqual(english.history.pending_report,{"language":"en","location":"E"})
+        self.assertEqual(korean.history.groups,[])
+        self.assertEqual(english.history.groups,[])
+
+    def test_emergency_tts_failure_keeps_fixed_text_response(self):
+        with patch("safebridge_voice.server.resolve_turn_language") as resolver, \
+             patch("safebridge_voice.server.log.exception"):
+            session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+                Transcription("Emergency!",None),
+                tts_result=RuntimeError("synthetic TTS failure"))
+        resolver.assert_not_called()
+        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+        self.assertEqual([item["text"] for item in socket.text
+                          if item["type"] in ("reply.delta","reply.complete")],
+                         [ENGLISH_EMERGENCY_RESPONSE,ENGLISH_EMERGENCY_RESPONSE])
+        self.assertEqual(socket.binary,[])
+        audio_complete=next(item for item in socket.text if item["type"]=="audio.complete")
+        self.assertEqual(audio_complete["segment_count"],0)
+        done=next(item for item in socket.text if item["type"]=="turn.done")
+        self.assertEqual(done["segment_count"],0)
+        self.assertEqual(done["output_frames"],0)
+        self.assertEqual(done["tools_used"],[])
+        self.assertEqual(session.state,TurnState.COOLDOWN)
+
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
         self.assertEqual(normalize_session_language("vi_VN"), "vi")
@@ -94,7 +236,7 @@ class ServerTests(unittest.TestCase):
             async def send_bytes(self,value): self.binary.append(value)
         cases=(
             Transcription("Please show the approved procedure.",None),
-            Transcription("Help, there is an emergency spill now.",None),
+            Transcription("Please explain the emergency spill procedure.",None),
             Transcription("Please show the approved procedure.","ja"),
             Transcription("누출됐어요. How should I clean this spill?","en"),
             Transcription("Please show the approved procedure.","ko"),

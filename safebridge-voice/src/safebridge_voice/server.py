@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from safebridge_voice.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from safebridge_voice.brain import ConversationHistory, SentenceSegment, stream_brain_turn
+from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
 )
@@ -189,6 +190,10 @@ class ListenerSession:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset(TurnState.COOLDOWN)
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+    def complete_without_playback(self,turn_id:int)->bool:
+        if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
+        self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset(TurnState.COOLDOWN)
+        self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
 
 class LockedSender:
     def __init__(self,websocket): self.websocket=websocket; self.lock=asyncio.Lock()
@@ -219,6 +224,35 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
+    emergency=recognize_emergency(transcript)
+    if emergency is not None:
+        text=emergency.response
+        if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
+        try:
+            pcm=await asyncio.to_thread(synthesize,text,emergency.language)
+            frames=frame_complete_audio(pcm)
+        except Exception:
+            log.exception("emergency TTS failed")
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=0,input_frames=input_frames,
+                               output_frames=0,tools_used=[])
+            if session.complete_without_playback(turn_id):
+                await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
+                                  cooldown_ms=session.detector.config.cooldown_ms)
+            return
+        if session.start_playback(turn_id):
+            await current_text("state.changed",state=session.state.value,turn_id=turn_id)
+            await sender.segment(turn_id,0,frames)
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=1,input_frames=input_frames,
+                               output_frames=len(frames),tools_used=[])
+        return
     resolution=resolve_turn_language(
         transcript,transcription.detected_language,mode=session.language_mode,
         manual_language=session.manual_language,
