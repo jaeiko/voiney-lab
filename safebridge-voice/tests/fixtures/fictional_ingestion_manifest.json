@@ -1,0 +1,48 @@
+{
+  "documents": [
+    {
+      "document_id": "FICTIONAL-CLI-SDS-001",
+      "document_family_id": "FICTIONAL-CLI-SDS-FAMILY",
+      "canonical_source_id": "FICTIONAL-CLI-SDS-SOURCE",
+      "canonical_version": "1.0",
+      "document_type": "supplier_sds",
+      "title": "FICTIONAL CLI TEST FIXTURE — NOT SAFETY GUIDANCE",
+      "issuer": "Fictional Test Supplier",
+      "manufacturer": "Fictional Test Manufacturer",
+      "product_name": "Fictional CLI Solvent",
+      "product_code": "CLI-TEST-100",
+      "cas_numbers": ["111-11-1"],
+      "version": "1.0",
+      "language": "en",
+      "facility_id": "TEST-FACILITY",
+      "source_authority": "test_fixture",
+      "approval_status": "approved",
+      "usage_scope": "test_only",
+      "effective_at": "2026-01-01T00:00:00+00:00",
+      "review_due_at": "2030-01-01T00:00:00+00:00",
+      "source_path": "tests/fixtures/fictional-cli-source.json",
+      "source_uri": "test://fictional/cli-sds",
+      "source_checksum": "sha256:fictional-cli-test-checksum",
+      "translation_status": "original",
+      "active": true,
+      "aliases": [
+        {
+          "alias": "fictional cli solvent",
+          "language": "en",
+          "approved": true
+        }
+      ],
+      "sections": [
+        {
+          "section_code": "SDS-04",
+          "section_title": "FICTIONAL CLI first aid fixture",
+          "page_start": 3,
+          "page_end": 4,
+          "content": "FICTIONAL CLI TEST CONTENT. NOT SAFETY GUIDANCE.",
+          "topic": "first_aid",
+          "keywords": ["fixture"]
+        }
+      ]
+    }
+  ]
+}

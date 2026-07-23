@@ -41,6 +41,10 @@
     #state{font-weight:850;letter-spacing:.04em;color:var(--forest)}
     #status{color:var(--muted);font-size:.88rem}
     .controls{display:flex;gap:.5rem}
+    .language-controls{margin-top:.8rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+    .language-controls select,.language-controls button{border:1px solid var(--line);border-radius:.7rem;background:white;padding:.5rem .65rem;color:var(--ink)}
+    #language-status{font-size:.82rem;font-weight:800;color:var(--forest)}
+    #language-confirmation{color:var(--red);font-size:.8rem;font-weight:750}
     .controls button{border:0;border-radius:.85rem;padding:.72rem 1rem;cursor:pointer;font-weight:800;transition:transform .15s ease,opacity .15s ease,background .15s ease}
     .controls button:active:not(:disabled){transform:translateY(1px)}
     .controls button:disabled{cursor:not-allowed;opacity:.45}
@@ -106,6 +110,19 @@
             <button id="stop" type="button" disabled>종료</button>
           </div>
         </div>
+        <div class="language-controls">
+          <span id="language-status">Automatic · 확인 대기</span>
+          <select id="language-mode" aria-label="언어 모드">
+            <option value="auto" selected>Automatic</option>
+            <option value="manual">Manual</option>
+          </select>
+          <select id="manual-language" aria-label="수동 언어" hidden>
+            <option value="ko">한국어</option>
+            <option value="en">English</option>
+          </select>
+          <button id="new-user" type="button">New user · 대화 초기화</button>
+          <span id="language-confirmation" hidden>Language confirmation required · 언어를 선택하고 다시 말씀해 주세요.</span>
+        </div>
         <p class="safety-note">즉시 위험한 상황에서는 이 서비스보다 연구실의 기존 비상 연락·대피 절차를 우선하세요.</p>
       </section>
 
@@ -144,6 +161,7 @@
 const $=id=>document.getElementById(id);
 let socket,micContext,processor,micSource,playContext,sessionActive=false;
 let receiving=null,receivedFrames=[],activeTurn=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
+let acknowledgedLanguageMode="auto",acknowledgedLanguage=null;
 const queued=new Map(),turns=new Map();
 const UI={
  IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
@@ -168,6 +186,9 @@ async function ensureAudio(generation){
  playContext||=new AudioContext({sampleRate:16000});await Promise.all([micContext.resume(),playContext.resume()]);
 }
 async function startSession(){const generation=sessionGeneration;renderState("CONNECTING");try{resetSessionUI();if(!socket||socket.readyState!==WebSocket.OPEN)await init(generation);if(generation!==sessionGeneration)return;await ensureAudio(generation);if(generation!==sessionGeneration)return;sendControl("session.start");}catch(e){if(generation===sessionGeneration)fail(e);}}
+function requestLanguageMode(){const mode=$("language-mode").value;if(mode==="auto")sendControl("session.set_language_mode",{mode:"auto"});else sendControl("session.set_language_mode",{mode:"manual",language:$("manual-language").value});}
+function renderLanguageState(mode,language){acknowledgedLanguageMode=mode;acknowledgedLanguage=language||null;$("language-mode").value=mode;$("manual-language").hidden=mode!=="manual";const names={ko:"Korean · 한국어",en:"English",vi:"Vietnamese"};$("language-status").textContent=(mode==="auto"?"Automatic":"Manual")+" · "+(names[language]||"확인 대기");}
+function newUser(){if(!sessionActive)return;sendControl("session.reset");}
 async function stopSession(){sessionActive=false;sessionGeneration++;sendControl("session.stop");clearPlayback();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function pump(generation=sessionGeneration){
@@ -191,8 +212,12 @@ async function onMessage(e,generation,current){
  if(typeof e.data!=="string"){if(receiving&&receiving.turn_id===activeTurn)receivedFrames.push(e.data);return;}
  const m=JSON.parse(e.data);
  if(m.type==="ready"&&visibleState==="IDLE")renderState("IDLE");
- if(m.type==="session.started"){sessionActive=true;renderState("LISTENING");}
+ if(m.type==="session.started"){sessionActive=true;renderState("LISTENING");sendControl("session.set_language_mode",{mode:"auto"});}
  if(m.type==="session.stopped"){sessionActive=false;renderState("IDLE");}
+ if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);$("language-confirmation").hidden=true;}
+ if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);$("language-confirmation").hidden=true;}
+ if(m.type==="session.language_confirmation_required"){$("language-confirmation").hidden=false;$("language-status").textContent="Language confirmation required";}
+ if(m.type==="session.reset"){resetSessionUI();}
  if(m.type==="state.changed"&&sessionActive&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");
  if(m.type==="turn.processing"&&sessionActive)renderState("THINKING");
  if(m.type==="speech.start"){activeTurn=m.turn_id;turnNode(m.turn_id,generation);}
@@ -203,9 +228,10 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.segment.end"&&receiving&&m.turn_id===activeTurn&&m.segment_index===receiving.segment_index){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}
  if(m.type==="audio.complete"&&m.turn_id===activeTurn){audioComplete=true;pump(generation);}
  if(m.type==="turn.done"){const t=m.timings_ms,tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"";turnNode(m.turn_id,generation).querySelector(".stats").textContent=`STT ${t.stt} ms · 첫 음성 ${t.first_audio_ms} ms · 전체 ${t.total_ms} ms${tool} · ${m.segment_count}개 문장`;if(m.turn_id===activeTurn){turnComplete=true;pump(generation);}}
- if(m.type==="error")fail(m.message,m.turn_id);
+ if(m.type==="error"){renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(m.message,m.turn_id);}
 }
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
+$("language-mode").addEventListener("change",requestLanguageMode);$("manual-language").addEventListener("change",requestLanguageMode);$("new-user").addEventListener("click",newUser);
 </script>
 </body>
 </html>

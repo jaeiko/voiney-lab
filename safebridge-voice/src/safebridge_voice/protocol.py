@@ -17,6 +17,18 @@ def parse_control(raw: str) -> dict[str, Any]:
         language=message.get("language")
         if not isinstance(language,str): raise ProtocolError("session.set_language needs a string language")
         return {"type":"session.set_language","language":language}
+    if message["type"]=="session.set_language_mode":
+        mode=message.get("mode")
+        if mode not in ("auto","manual"):
+            raise ProtocolError("session.set_language_mode needs auto or manual mode")
+        language=message.get("language")
+        if mode=="manual" and not isinstance(language,str):
+            raise ProtocolError("manual language mode needs a string language")
+        if mode=="auto" and language is not None:
+            raise ProtocolError("automatic language mode cannot include language")
+        return {"type":"session.set_language_mode","mode":mode,
+                **({"language":language} if mode=="manual" else {})}
+    if message["type"]=="session.reset": return {"type":"session.reset"}
     if message["type"]=="session.stop": return {"type":"session.stop"}
     if message["type"]=="playback.ended":
         turn_id=message.get("turn_id")

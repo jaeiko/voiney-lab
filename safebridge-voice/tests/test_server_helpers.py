@@ -1,9 +1,10 @@
-import asyncio, unittest
+import asyncio, json, unittest
 from unittest.mock import patch
 from collections import deque
 from safebridge_voice.audio import FRAME_BYTES
 from pathlib import Path
-from safebridge_voice.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, server_tool_context, validate_tts_pcm, voice_socket
+from safebridge_voice.language import CLARIFICATION_TEXT, Transcription
+from safebridge_voice.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, run_turn, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from safebridge_voice.tools import ToolContext
 from safebridge_voice.vad import EndpointDetector, TurnState
 
@@ -11,6 +12,8 @@ class FakeResponse:
     def __init__(self,content=b"",status=200,content_type="audio/pcm"):
         self.content=content; self.status_code=status; self.ok=200<=status<300
         self.headers={"content-type":content_type}; self.text=""
+    def raise_for_status(self): pass
+    def json(self): return {"text":"short test utterance","language":"Korean","duration":1.2}
 class Decisions:
     def __init__(self,values): self.values=deque(values)
     def __call__(self,frame): return self.values.popleft()
@@ -28,6 +31,16 @@ class ServerTests(unittest.TestCase):
             context=server_tool_context()
         self.assertEqual((str(context.catalog_path),context.facility_id,context.language,context.usage_scope),
                          ("/trusted/catalog.sqlite","FACILITY-A","vi","operational"))
+        self.assertEqual(context.report_language,"ko")
+
+    def test_rest_stt_preserves_text_and_provider_language_only(self):
+        with patch("safebridge_voice.server.requests.post",return_value=FakeResponse()) as post, \
+             patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
+            result=transcribe(b"\0\0")
+        self.assertEqual((result.text,result.detected_language),
+                         ("short test utterance","ko"))
+        self.assertFalse(hasattr(result,"confidence"))
+        self.assertTrue(post.call_args.args[0].endswith("/stt"))
 
     def test_sessions_have_independent_korean_and_english_contexts(self):
         config=ServerConfig(Path("/trusted/catalog.sqlite"),"F","operational",
@@ -58,6 +71,65 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(session.history.messages()),1)
         self.assertEqual(session.history.source_references,[])
         self.assertIsNone(session.history.pending_report)
+
+    def test_auto_switch_preserves_state_and_reset_clears_it(self):
+        session=ListenerSession(tool_context=ToolContext(Path("/trusted/catalog.sqlite"),None,"ko","operational"))
+        session.active=True
+        session.history.commit([{"role":"user","content":"safe history"}],[{"document_id":"OLD"}])
+        session.history.pending_report={"language":"ko","location":"F"}
+        session.set_language_mode("auto")
+        session.last_confirmed_language="en"
+        self.assertEqual(len(session.history.messages()),2)
+        self.assertIsNotNone(session.history.pending_report)
+        session.reset_sensitive_state()
+        self.assertEqual(len(session.history.messages()),1)
+        self.assertEqual(session.history.source_references,[])
+        self.assertIsNone(session.history.pending_report)
+        self.assertIsNone(session.last_confirmed_language)
+
+    def test_unresolved_server_turn_bypasses_brain_retrieval_and_report_mutation(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+        cases=(
+            Transcription("Please show the approved procedure.",None),
+            Transcription("Help, there is an emergency spill now.",None),
+            Transcription("Please show the approved procedure.","ja"),
+            Transcription("누출됐어요. How should I clean this spill?","en"),
+            Transcription("Please show the approved procedure.","ko"),
+            Transcription("Acetone","en"),
+        )
+        for transcription in cases:
+            with self.subTest(transcription=transcription):
+                session=ListenerSession(tool_context=ToolContext(
+                    Path("/trusted/catalog.sqlite"),None,"ko","operational"))
+                session.active=True; session.language_mode="auto"
+                session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
+                pending={"location":"F","summary":"unchanged","urgency":"routine",
+                         "exposure_status":"unknown","language":"ko"}
+                references=[{"document_id":"UNCHANGED"}]
+                session.history.pending_report=dict(pending)
+                session.history.source_references=list(references)
+                socket=Socket()
+                with patch("safebridge_voice.server.transcribe",return_value=transcription), \
+                     patch("safebridge_voice.server.synthesize",return_value=b"\0\0") as tts, \
+                     patch("safebridge_voice.server.stream_brain_turn") as brain, \
+                     patch("safebridge_voice.tools.search_approved_safety_manual") as retrieval, \
+                     patch("safebridge_voice.server.AsyncOpenAI") as llm:
+                    asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+                brain.assert_not_called(); retrieval.assert_not_called(); llm.assert_not_called()
+                self.assertEqual(session.history.pending_report,pending)
+                self.assertEqual(session.history.source_references,references)
+                self.assertEqual(tts.call_args.args[0],CLARIFICATION_TEXT["ko"])
+                event_types=[item["type"] for item in socket.text]
+                self.assertIn("session.language_confirmation_required",event_types)
+                self.assertEqual(
+                    [item["text"] for item in socket.text if item["type"]=="reply.delta"],
+                    [CLARIFICATION_TEXT["ko"]],
+                )
+                self.assertNotIn("tool.call",event_types)
+                self.assertNotIn("tool.result",event_types)
 
     def test_missing_catalog_configuration_fails_closed(self):
         with patch.dict("os.environ", {}, clear=True), self.assertRaises(RuntimeError):

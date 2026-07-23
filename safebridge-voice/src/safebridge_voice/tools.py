@@ -150,6 +150,8 @@ class ToolContext:
     facility_id: str | None
     language: str
     usage_scope: str
+    # Manager handoff language is trusted facility policy and never a Tool arg.
+    report_language: str = "ko"
 
 
 def _result(status: str, **fields: Any) -> dict[str, Any]:

@@ -11,6 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from safebridge_voice.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from safebridge_voice.brain import ConversationHistory, SentenceSegment, stream_brain_turn
+from safebridge_voice.language import (
+    CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
+)
 from safebridge_voice.tools import ToolContext
 from safebridge_voice.protocol import ProtocolError, audio_segment_start, event, parse_control
 from safebridge_voice.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
@@ -73,11 +76,14 @@ def require_env(name:str)->str:
 def api_url(path:str)->str:
     return os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/" + path.lstrip("/")
 
-def transcribe(pcm:bytes)->str:
+def transcribe(pcm:bytes)->Transcription:
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
         files={"file":("utterance.wav",pcm_to_wav(pcm),"audio/wav")},timeout=120)
     response.raise_for_status()
-    return response.json().get("text","").strip()
+    payload=response.json()
+    text=payload.get("text","")
+    return Transcription(text.strip() if isinstance(text,str) else "",
+                         normalize_provider_language(payload.get("language")))
 
 def validate_tts_pcm(response:requests.Response)->bytes:
     if not response.ok:
@@ -88,9 +94,9 @@ def validate_tts_pcm(response:requests.Response)->bytes:
     if not response.content or len(response.content)%2: raise RuntimeError("xAI TTS returned invalid PCM")
     return response.content
 
-def synthesize(text:str)->bytes:
+def synthesize(text:str,language:str|None=None)->bytes:
     response=requests.post(api_url("tts"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
-        json={"text":text,"voice_id":require_env("TTS_VOICE"),"language":"auto",
+        json={"text":text,"voice_id":require_env("TTS_VOICE"),"language":language or "auto",
               "output_format":{"codec":"pcm","sample_rate":16000}},timeout=120)
     return validate_tts_pcm(response)
 
@@ -110,22 +116,40 @@ class ListenerSession:
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
         self.cooldown_until=0.0; self.endpoint_at=0.0; self.history=ConversationHistory(); self.generation=0
         self.tool_context=tool_context
+        self.language_mode="manual"
+        self.manual_language=tool_context.language if tool_context else None
+        self.last_confirmed_language=None
     @property
     def state(self): return self.detector.state
     def start(self):
         self.generation+=1
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.last_confirmed_language=None
     def stop(self):
         self.generation+=1
         self.active=False; self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.last_confirmed_language=None
     def set_tool_context(self,context:ToolContext)->None:
         """Change trusted language and clear all language-sensitive session state."""
         self.generation+=1
         self.tool_context=context
         self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.language_mode="manual"; self.manual_language=context.language
+        self.last_confirmed_language=None
+    def set_language_mode(self,mode:str,context:ToolContext|None=None)->None:
+        if mode=="manual":
+            if context is None: raise ValueError("manual mode requires context")
+            self.set_tool_context(context)
+            return
+        if mode!="auto": raise ValueError("invalid language mode")
+        self.language_mode="auto"; self.manual_language=None
+    def reset_sensitive_state(self)->None:
+        self.generation+=1; self.active_turn_id=None; self.cooldown_until=0
+        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.last_confirmed_language=None
     def is_current(self,turn_id:int,generation:int)->bool:
         return self.active and self.generation==generation and self.active_turn_id==turn_id
     def refresh_cooldown(self):
@@ -183,13 +207,48 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if not session.is_current(turn_id,generation): return False
         await sender.text(kind,**fields); return True
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
-    started=clock(); transcript=await asyncio.to_thread(transcribe,clean_path(source_pcm)); timings["stt"]=round((clock()-started)*1000)
+    started=clock(); transcription=await asyncio.to_thread(transcribe,clean_path(source_pcm)); timings["stt"]=round((clock()-started)*1000)
+    # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
+    # working in manual mode while production returns structured metadata.
+    if isinstance(transcription,str):
+        transcription=Transcription(transcription,None)
+    transcript=transcription.text
     if not transcript.strip():
         if session.reject_empty_transcript(turn_id):
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
+    resolution=resolve_turn_language(
+        transcript,transcription.detected_language,mode=session.language_mode,
+        manual_language=session.manual_language,
+    )
+    if not resolution.resolved:
+        fallback=session.last_confirmed_language or (
+            session.tool_context.language if session.tool_context else "ko")
+        text=CLARIFICATION_TEXT.get(fallback,CLARIFICATION_TEXT["ko"])
+        await current_text("session.language_confirmation_required",turn_id=turn_id,
+                           reason=resolution.reason,languages=["ko","en"])
+        await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
+        pcm=await asyncio.to_thread(synthesize,text,fallback)
+        frames=frame_complete_audio(pcm)
+        if session.start_playback(turn_id):
+            await current_text("state.changed",state=session.state.value,turn_id=turn_id)
+            await sender.segment(turn_id,0,frames)
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=1,input_frames=input_frames,
+                               output_frames=len(frames),tools_used=[])
+        return
+    turn_language=resolution.language
+    session.last_confirmed_language=turn_language
+    await current_text("session.turn_language_resolved",turn_id=turn_id,language=turn_language)
+    if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
+    turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
+                             turn_language,session.tool_context.usage_scope,
+                             session.tool_context.report_language)
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token
@@ -208,7 +267,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             segment=await queue.get()
             if segment is None:return
             if "first_tts_request_ms" not in timings: timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-            pcm=await asyncio.to_thread(synthesize,segment.text); frames=frame_complete_audio(pcm)
+            pcm=await asyncio.to_thread(synthesize,segment.text,turn_language); frames=frame_complete_audio(pcm)
             if not session.is_current(turn_id,generation):return
             if not first_audio:
                 if not session.start_playback(turn_id):return
@@ -221,7 +280,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     try:
         client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("CHAT_MODEL")
         result=await stream_brain_turn(client,session.history,transcript,sentence,mark_token,tool_event,
-                                       tool_context=session.tool_context)
+                                       tool_context=turn_context)
         if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
         await queue.put(None); await consumer
         if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
@@ -272,6 +331,8 @@ async def voice_socket(websocket:WebSocket):
                     await websocket.send_text(event("error",message="invalid session configuration"))
                     continue
                 session.start(); await websocket.send_text(event("session.started",state=session.state.value))
+                await websocket.send_text(event("session.language_state",mode=session.language_mode,
+                                                language=session.manual_language))
             elif control["type"]=="session.set_language":
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))
@@ -285,6 +346,32 @@ async def voice_socket(websocket:WebSocket):
                 if task and not task.done(): task.cancel()
                 session.set_tool_context(context)
                 await websocket.send_text(event("session.language_changed",state=session.state.value))
+                await websocket.send_text(event("session.language_state",mode="manual",
+                                                language=context.language))
+            elif control["type"]=="session.set_language_mode":
+                if not session.active:
+                    await websocket.send_text(event("error",message="session is not active"))
+                    continue
+                try:
+                    trusted_config=trusted_config or server_config()
+                    context=(server_tool_context(trusted_config,control["language"])
+                             if control["mode"]=="manual" else None)
+                    session.set_language_mode(control["mode"],context)
+                except (RuntimeError,ValueError):
+                    await websocket.send_text(event("error",message="invalid language mode"))
+                    continue
+                if task and not task.done(): task.cancel()
+                await websocket.send_text(event("session.language_state",mode=session.language_mode,
+                                                language=session.manual_language))
+            elif control["type"]=="session.reset":
+                if not session.active:
+                    await websocket.send_text(event("error",message="session is not active"))
+                    continue
+                if task and not task.done(): task.cancel()
+                session.reset_sensitive_state()
+                await websocket.send_text(event("session.reset",state=session.state.value))
+                await websocket.send_text(event("session.language_state",mode=session.language_mode,
+                                                language=session.manual_language))
             elif control["type"]=="session.stop":
                 if task and not task.done(): task.cancel()
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))

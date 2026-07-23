@@ -252,7 +252,10 @@ async def stream_brain_turn(
     # prevents draft creation and submission from occurring in one turn.
     if history.pending_report is not None:
         pending = history.pending_report
-        intent = confirmation_intent(transcript, pending["language"])
+        # The stored report remains unchanged; a later trusted turn language
+        # controls only the worker-facing confirmation interaction.
+        confirmation_language = language if tool_context is not None else pending["language"]
+        intent = confirmation_intent(transcript, confirmation_language)
         if intent == "cancel":
             history.pending_report = None
             if on_tool_event:

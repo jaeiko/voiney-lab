@@ -8,6 +8,21 @@ class BrainTests(unittest.TestCase):
     def test_persona_and_guardrails(self):
         for text in ("SafeBridge Voice","wet-lab researchers","Korean, English, or Vietnamese","Never use Markdown","Never approve work resumption","search_approved_safety_manual","create_safety_report","check_safety_report_status"):
             self.assertIn(text,SYSTEM_PROMPT)
+
+    def test_existing_emergency_boundary_is_prompt_and_report_confirmation(self):
+        self.assertIn(
+            "For apparent immediate danger, first say to stop work, move away, "
+            "and contact the lab's established emergency channel or lab manager.",
+            SYSTEM_PROMPT,
+        )
+        text=report_confirmation_text({
+            "location":"F","summary":"fictional emergency","urgency":"emergency",
+            "exposure_status":"unknown","language":"en",
+        })
+        self.assertTrue(text.startswith(
+            "Stop work, move away from the hazard, and use the established "
+            "emergency contact procedure."
+        ))
     def test_sanitizer_removes_markdown_not_punctuation(self):
         self.assertEqual(sanitize_spoken_text("# 제목\n- **멈추세요!**\n```"),"제목 멈추세요!")
     def test_chunker_boundaries_unicode_decimal_and_remainder(self):
@@ -511,5 +526,87 @@ class BrainTests(unittest.TestCase):
         history.reset()
         self.assertEqual(history.source_references,[])
         self.assertEqual(len(history.messages()),1)
+
+    def test_same_auto_session_ko_to_en_keeps_history_and_isolates_sources(self):
+        import asyncio
+        class Stream:
+            def __init__(self,items): self.items=iter(items)
+            def __aiter__(self): return self
+            async def __anext__(self):
+                try: return next(self.items)
+                except StopIteration: raise StopAsyncIteration
+        class Completions:
+            def __init__(self,call_id,answer): self.call_id=call_id; self.answer=answer; self.calls=[]
+            async def create(self,**kwargs):
+                recorded=dict(kwargs)
+                recorded["messages"]=json.loads(json.dumps(kwargs["messages"],ensure_ascii=False))
+                self.calls.append(recorded)
+                if len(self.calls)==1:
+                    arguments=json.dumps({"query":self.call_id,"topic":"first_aid"})
+                    return Stream([{"choices":[{"delta":{"tool_calls":[{
+                        "index":0,"id":self.call_id,"function":{
+                            "name":"search_approved_safety_manual","arguments":arguments
+                        }}]}}]}])
+                return Stream([{"choices":[{"delta":{"content":self.answer}}]}])
+        class Client: pass
+        def client(call_id,answer):
+            value=Client(); value.model="fake"; value.chat=Client()
+            value.chat.completions=Completions(call_id,answer)
+            return value
+        def match(document_id,content,language):
+            return {
+                "document_id":document_id,"title":f"FICTIONAL {language}",
+                "version":"1","section_code":"SDS-04","section_title":"FICTIONAL",
+                "page_start":4,"page_end":4,"content":content,"language":language,
+                "source_uri":f"test://{document_id}","source_checksum":document_id,
+            }
+        async def sentence(_): pass
+        history=ConversationHistory()
+        secret_catalog=Path("/private/never-model-visible/catalog.sqlite")
+        contexts=[]
+        results=[
+            {"status":"success","answerable":True,
+             "matches":[match("KO-DOC","UNIQUE_KO_SOURCE","ko")]},
+            {"status":"success","answerable":True,
+             "matches":[match("EN-DOC","UNIQUE_EN_SOURCE","en")]},
+        ]
+        def execute(name,arguments,context=None):
+            contexts.append(context)
+            return results[len(contexts)-1]
+
+        korean=client("ko-call","검토된 한국어 답변입니다.")
+        with patch("safebridge_voice.brain.execute_tool",side_effect=execute):
+            first=asyncio.run(stream_brain_turn(
+                korean,history,"승인된 응급조치 절차를 알려 주세요.",sentence,
+                tool_context=ToolContext(secret_catalog,None,"ko","operational")))
+        history.commit(first.messages,first.source_references)
+
+        english=client("en-call","Reviewed English answer.")
+        with patch("safebridge_voice.brain.execute_tool",side_effect=execute):
+            second=asyncio.run(stream_brain_turn(
+                english,history,"Please show the approved first aid procedure.",sentence,
+                tool_context=ToolContext(secret_catalog,None,"en","operational")))
+
+        self.assertEqual([context.language for context in contexts],["ko","en"])
+        second_initial=json.dumps(english.chat.completions.calls[0]["messages"],ensure_ascii=False)
+        second_grounded=json.dumps(english.chat.completions.calls[1]["messages"],ensure_ascii=False)
+        all_payloads=[
+            json.dumps(call["messages"],ensure_ascii=False)
+            for completion in (korean.chat.completions,english.chat.completions)
+            for call in completion.calls
+        ]
+        self.assertIn("승인된 응급조치 절차를 알려 주세요.",second_initial)
+        self.assertIn("검토된 한국어 답변입니다.",second_initial)
+        self.assertNotIn("UNIQUE_KO_SOURCE",second_grounded)
+        self.assertIn("UNIQUE_EN_SOURCE",second_grounded)
+        self.assertEqual(sum("UNIQUE_KO_SOURCE" in payload for payload in all_payloads),1)
+        self.assertEqual(sum("UNIQUE_EN_SOURCE" in payload for payload in all_payloads),1)
+        self.assertIn("server-validated session language is English",second_grounded)
+        self.assertEqual([message["role"] for message in second.messages],
+                         ["user","assistant","tool","assistant"])
+        self.assertEqual(second.messages[2]["tool_call_id"],"en-call")
+        for payload in all_payloads:
+            self.assertNotIn("source_path",payload)
+            self.assertNotIn(str(secret_catalog),payload)
 
 if __name__=="__main__": unittest.main()
