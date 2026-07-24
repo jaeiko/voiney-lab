@@ -69,9 +69,11 @@ class EmergencyRecognizerTests(unittest.TestCase):
 
     def test_current_emergency_may_be_followed_by_help_question(self):
         cases = (
+            ("불이 났어요. 어떻게 해야 돼요?", "ko", KOREAN_EMERGENCY_RESPONSE),
             ("불이 났어요. 어떻게 해야 해요?", "ko", KOREAN_EMERGENCY_RESPONSE),
             ("가스 누출이 발생하고 있습니다. 무엇을 해야 하나요?", "ko",
              KOREAN_EMERGENCY_RESPONSE),
+            ("There is a fire, what should I do?", "en", ENGLISH_EMERGENCY_RESPONSE),
             ("There is a fire. What should I do?", "en", ENGLISH_EMERGENCY_RESPONSE),
             ("There is an active gas leak. How do we get help?", "en",
              ENGLISH_EMERGENCY_RESPONSE),

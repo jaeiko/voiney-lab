@@ -227,7 +227,7 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.segment.start"){if(activeTurn===null)activeTurn=m.turn_id;if(m.turn_id!==activeTurn||m.segment_index<nextSegment)return;receiving=m;receivedFrames=[];}
  if(m.type==="audio.segment.end"&&receiving&&m.turn_id===activeTurn&&m.segment_index===receiving.segment_index){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}
  if(m.type==="audio.complete"&&m.turn_id===activeTurn){audioComplete=true;pump(generation);}
- if(m.type==="turn.done"){const t=m.timings_ms,tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"";turnNode(m.turn_id,generation).querySelector(".stats").textContent=`STT ${t.stt} ms · 첫 음성 ${t.first_audio_ms} ms · 전체 ${t.total_ms} ms${tool} · ${m.segment_count}개 문장`;if(m.turn_id===activeTurn){turnComplete=true;pump(generation);}}
+ if(m.type==="turn.done"){const t=m.timings_ms,firstAudio=t.first_audio_ms!==undefined?`${t.first_audio_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"";turnNode(m.turn_id,generation).querySelector(".stats").textContent=`경로 ${m.route} · STT ${t.stt} ms · 첫 음성 ${firstAudio} · 전체 ${t.total_ms} ms${tool} · ${m.segment_count}개 문장`;if(m.turn_id===activeTurn){turnComplete=true;pump(generation);}}
  if(m.type==="error"){renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(m.message,m.turn_id);}
 }
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();

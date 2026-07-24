@@ -35,10 +35,10 @@ _ENGLISH_EXCLUSIONS = re.compile(
 )
 
 _KO_HELP_FOLLOWUP = (
-    r"(?:\s*[.!?。？！]+\s*(?:어떻게\s+해야\s+해요|무엇을\s+해야\s+하나요|"
+    r"(?:\s*[.!?。？！]+\s*(?:어떻게\s+해야\s+(?:해요|돼요)|무엇을\s+해야\s+하나요|"
     r"뭘\s+해야\s+해요|도와\s*주세요))?"
 )
-_EN_HELP_FOLLOWUP = r"(?:\s*[.!?]+\s*(?:what\s+should\s+i\s+do|how\s+do\s+we\s+get\s+help))?"
+_EN_HELP_FOLLOWUP = r"(?:\s*[,.!?]+\s*(?:what\s+should\s+i\s+do|how\s+do\s+we\s+get\s+help))?"
 
 _KOREAN_IMMEDIATE = (
     re.compile(r"^도와\s*줘$"),

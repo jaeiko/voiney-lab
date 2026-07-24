@@ -238,12 +238,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["total_ms"]=round((clock()-endpoint)*1000)
             await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
                                segment_count=0,input_frames=input_frames,
-                               output_frames=0,tools_used=[])
+                               output_frames=0,tools_used=[],
+                               route="deterministic_emergency")
             if session.complete_without_playback(turn_id):
                 await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
                                   cooldown_ms=session.detector.config.cooldown_ms)
             return
         if session.start_playback(turn_id):
+            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
             await current_text("state.changed",state=session.state.value,turn_id=turn_id)
             await sender.segment(turn_id,0,frames)
             await current_text("reply.complete",turn_id=turn_id,text=text)
@@ -251,7 +253,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["total_ms"]=round((clock()-endpoint)*1000)
             await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
                                segment_count=1,input_frames=input_frames,
-                               output_frames=len(frames),tools_used=[])
+                               output_frames=len(frames),tools_used=[],
+                               route="deterministic_emergency")
         return
     resolution=resolve_turn_language(
         transcript,transcription.detected_language,mode=session.language_mode,
@@ -264,9 +267,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await current_text("session.language_confirmation_required",turn_id=turn_id,
                            reason=resolution.reason,languages=["ko","en"])
         await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
-        pcm=await asyncio.to_thread(synthesize,text,fallback)
-        frames=frame_complete_audio(pcm)
+        try:
+            pcm=await asyncio.to_thread(synthesize,text,fallback)
+            frames=frame_complete_audio(pcm)
+        except Exception:
+            log.exception("language clarification TTS failed")
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                               segment_count=0,input_frames=input_frames,
+                               output_frames=0,tools_used=[],
+                               route="language_clarification")
+            if session.complete_without_playback(turn_id):
+                await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
+                                  cooldown_ms=session.detector.config.cooldown_ms)
+            return
         if session.start_playback(turn_id):
+            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
             await current_text("state.changed",state=session.state.value,turn_id=turn_id)
             await sender.segment(turn_id,0,frames)
             await current_text("reply.complete",turn_id=turn_id,text=text)
@@ -274,7 +292,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["total_ms"]=round((clock()-endpoint)*1000)
             await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
                                segment_count=1,input_frames=input_frames,
-                               output_frames=len(frames),tools_used=[])
+                               output_frames=len(frames),tools_used=[],
+                               route="language_clarification")
         return
     turn_language=resolution.language
     session.last_confirmed_language=turn_language
@@ -321,7 +340,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if not await current_text("reply.complete",turn_id=turn_id,text=result.text): return
         if not await current_text("audio.complete",turn_id=turn_id,segment_count=segment_count): return
         timings["total_ms"]=round((clock()-endpoint)*1000)
-        if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used): return
+        if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used,route="brain"): return
         if not session.is_current(turn_id,generation): return
         session.history.commit(result.messages,result.source_references)
     finally:

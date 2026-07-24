@@ -2,6 +2,7 @@ import asyncio, json, unittest
 from unittest.mock import patch
 from collections import deque
 from safebridge_voice.audio import FRAME_BYTES
+from safebridge_voice.brain import BrainResult, SentenceSegment
 from pathlib import Path
 from safebridge_voice.language import CLARIFICATION_TEXT, Transcription
 from safebridge_voice.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
@@ -50,6 +51,8 @@ class ServerTests(unittest.TestCase):
 
     def test_emergency_precedes_language_resolution_and_uses_fixed_language(self):
         cases=(
+            (Transcription("불이 났어요. 어떻게 해야 돼요?",None),"ko",KOREAN_EMERGENCY_RESPONSE),
+            (Transcription("There is a fire, what should I do?",None),"en",ENGLISH_EMERGENCY_RESPONSE),
             (Transcription("도와줘!",None),"ko",KOREAN_EMERGENCY_RESPONSE),
             (Transcription("Emergency!",None),"en",ENGLISH_EMERGENCY_RESPONSE),
             (Transcription("도와줘!","ja"),"ko",KOREAN_EMERGENCY_RESPONSE),
@@ -76,6 +79,8 @@ class ServerTests(unittest.TestCase):
                                     if item["type"]=="audio.complete")
                 self.assertEqual(audio_complete["segment_count"],1)
                 done=next(item for item in socket.text if item["type"]=="turn.done")
+                self.assertEqual(done["route"],"deterministic_emergency")
+                self.assertIn("first_audio_ms",done["timings_ms"])
                 self.assertEqual(done["segment_count"],1)
                 self.assertGreater(done["output_frames"],0)
                 self.assertEqual(done["tools_used"],[])
@@ -158,10 +163,51 @@ class ServerTests(unittest.TestCase):
         audio_complete=next(item for item in socket.text if item["type"]=="audio.complete")
         self.assertEqual(audio_complete["segment_count"],0)
         done=next(item for item in socket.text if item["type"]=="turn.done")
+        self.assertEqual(done["route"],"deterministic_emergency")
+        self.assertNotIn("first_audio_ms",done["timings_ms"])
         self.assertEqual(done["segment_count"],0)
         self.assertEqual(done["output_frames"],0)
         self.assertEqual(done["tools_used"],[])
         self.assertEqual(session.state,TurnState.COOLDOWN)
+
+    def test_language_clarification_tts_failure_has_no_first_audio_timing(self):
+        with patch("safebridge_voice.server.log.exception"):
+            session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
+                Transcription("Please show the approved procedure.",None),
+                tts_result=RuntimeError("synthetic TTS failure"))
+        for boundary in (brain,retrieval,execute,llm): boundary.assert_not_called()
+        done=next(item for item in socket.text if item["type"]=="turn.done")
+        self.assertEqual(done["route"],"language_clarification")
+        self.assertNotIn("first_audio_ms",done["timings_ms"])
+        self.assertEqual((done["segment_count"],done["output_frames"]),(0,0))
+        self.assertEqual(socket.binary,[])
+        self.assertEqual(session.state,TurnState.COOLDOWN)
+
+    def test_brain_turn_done_uses_server_authored_route(self):
+        session=self.emergency_session()
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+        socket=Socket()
+        async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
+                             tool_context):
+            mark_token()
+            await sentence(SentenceSegment(0,"Approved answer."))
+            return BrainResult(
+                [{"role":"user","content":transcript},
+                 {"role":"assistant","content":"Approved answer."}],
+                "Approved answer.",None,[],
+            )
+        with patch("safebridge_voice.server.transcribe",
+                   return_value=Transcription("Approved information please.","en")), \
+             patch("safebridge_voice.server.synthesize",return_value=b"\0\0"), \
+             patch("safebridge_voice.server.stream_brain_turn",side_effect=fake_brain), \
+             patch("safebridge_voice.server.AsyncOpenAI"):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        done=next(item for item in socket.text if item["type"]=="turn.done")
+        self.assertEqual(done["route"],"brain")
+        self.assertIn("first_audio_ms",done["timings_ms"])
 
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
@@ -266,6 +312,9 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(tts.call_args.args[0],CLARIFICATION_TEXT["ko"])
                 event_types=[item["type"] for item in socket.text]
                 self.assertIn("session.language_confirmation_required",event_types)
+                done=next(item for item in socket.text if item["type"]=="turn.done")
+                self.assertEqual(done["route"],"language_clarification")
+                self.assertIn("first_audio_ms",done["timings_ms"])
                 self.assertEqual(
                     [item["text"] for item in socket.text if item["type"]=="reply.delta"],
                     [CLARIFICATION_TEXT["ko"]],
