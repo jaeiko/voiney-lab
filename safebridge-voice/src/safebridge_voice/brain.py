@@ -20,7 +20,17 @@ from safebridge_voice.tools import (
 MAX_TOOL_ROUNDS = 4
 
 APPROVAL_PHRASES = {
-    "ko": frozenset({"네", "예", "동의합니다", "제출해 주세요", "제출해주세요", "보고서를 제출해 주세요", "보고서를 제출해주세요"}),
+    "ko": frozenset({
+        "네",
+        "예",
+        "동의합니다",
+        "제출해 주세요",
+        "제출해주세요",
+        "보고서를 제출해 주세요",
+        "보고서를 제출해주세요",
+        "네, 지금 제출해 주세요",
+        "지금 작성한 보고 초안 제출해 주세요",
+    }),
     "en": frozenset({"yes", "i agree", "submit the report", "send the report"}),
     "vi": frozenset({"đồng ý", "tôi đồng ý", "hãy gửi báo cáo", "gửi báo cáo đi", "xác nhận gửi"}),
 }
@@ -30,13 +40,42 @@ CANCELLATION_PHRASES = {
     "vi": frozenset({"không", "hủy", "hủy báo cáo", "đừng gửi", "không gửi báo cáo"}),
 }
 
+REPORT_CONFIRMATION_CLARIFICATION_TEXT = {
+    "ko": (
+        "보고서 제출 여부를 확인할 수 없습니다. 보고서를 제출해 주세요 또는 "
+        "보고서를 취소해 주세요라고 다시 말해 주세요."
+    ),
+    "en": (
+        "I could not confirm whether to submit the report. Please say submit the "
+        "report or cancel the report."
+    ),
+    "vi": (
+        "Tôi chưa xác nhận được có gửi báo cáo hay không. Vui lòng nói hãy gửi "
+        "báo cáo hoặc hủy báo cáo."
+    ),
+}
+
+
+def _normalize_confirmation_text(text: str) -> str:
+    """Normalize punctuation without weakening whole-utterance matching."""
+    without_punctuation = re.sub(r"[,，.!?。？！]+", " ", text)
+    return " ".join(without_punctuation.split()).casefold()
+
 
 def confirmation_intent(transcript: str, language: str) -> str | None:
     """Classify only a complete, explicitly allow-listed utterance."""
-    normalized = re.sub(r"[.!?。？！]+$", "", " ".join(transcript.split())).casefold()
-    if normalized in {phrase.casefold() for phrase in APPROVAL_PHRASES[language]}:
+    normalized = _normalize_confirmation_text(transcript)
+    approvals = {
+        _normalize_confirmation_text(phrase)
+        for phrase in APPROVAL_PHRASES.get(language, ())
+    }
+    cancellations = {
+        _normalize_confirmation_text(phrase)
+        for phrase in CANCELLATION_PHRASES.get(language, ())
+    }
+    if normalized in approvals:
         return "approve"
-    if normalized in {phrase.casefold() for phrase in CANCELLATION_PHRASES[language]}:
+    if normalized in cancellations:
         return "cancel"
     return None
 

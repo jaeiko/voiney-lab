@@ -2,9 +2,13 @@ import asyncio, json, unittest
 from unittest.mock import patch
 from collections import deque
 from safebridge_voice.audio import FRAME_BYTES
-from safebridge_voice.brain import BrainResult, SentenceSegment
+from safebridge_voice.brain import (
+    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
+    BrainResult,
+    SentenceSegment,
+)
 from pathlib import Path
-from safebridge_voice.language import CLARIFICATION_TEXT, Transcription
+from safebridge_voice.language import Transcription
 from safebridge_voice.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
 from safebridge_voice.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, run_turn, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from safebridge_voice.tools import ToolContext
@@ -183,6 +187,145 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(socket.binary,[])
         self.assertEqual(session.state,TurnState.COOLDOWN)
 
+    def test_pending_report_approval_precedes_language_resolution(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+
+        pending={"location":"Lab A","summary":"spill","urgency":"urgent",
+                 "exposure_status":"unknown","language":"ko"}
+        cases=(
+            Transcription("네, 지금 제출해 주세요.",None),
+            Transcription("지금 작성한 보고 초안 제출해 주세요.","en"),
+        )
+        for transcription in cases:
+            with self.subTest(transcription=transcription):
+                session=ListenerSession(tool_context=ToolContext(
+                    Path("/trusted/catalog.sqlite"),"FACILITY-A","en","operational"))
+                session.active=True; session.language_mode="auto"
+                session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
+                session.last_confirmed_language="en"
+                session.history.pending_report=dict(pending)
+                socket=Socket()
+                with patch("safebridge_voice.server.transcribe",
+                           return_value=transcription), \
+                     patch("safebridge_voice.server.resolve_turn_language") as resolver, \
+                     patch("safebridge_voice.server.synthesize",return_value=b"\0\0") as tts, \
+                     patch("safebridge_voice.brain.execute_tool",return_value={
+                         "status":"success",
+                         "report_id":"SR-20260724-A1B2C3",
+                         "report_status":"queued_for_handoff",
+                     }) as execute, \
+                     patch("safebridge_voice.server.AsyncOpenAI"), \
+                     patch.dict("os.environ",{
+                         "XAI_API_KEY":"test",
+                         "CHAT_MODEL":"test",
+                     },clear=False):
+                    asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+                resolver.assert_not_called()
+                execute.assert_called_once()
+                name,arguments=execute.call_args.args
+                context=execute.call_args.kwargs["context"]
+                self.assertEqual(name,"create_safety_report")
+                self.assertEqual(arguments,pending)
+                self.assertEqual(
+                    (str(context.catalog_path),context.facility_id,
+                     context.language,context.usage_scope),
+                    ("/trusted/catalog.sqlite","FACILITY-A","ko","operational"),
+                )
+                self.assertIsNone(session.history.pending_report)
+                self.assertEqual(session.last_confirmed_language,"ko")
+                self.assertEqual(tts.call_args.args[1],"ko")
+                event_types=[item["type"] for item in socket.text]
+                self.assertNotIn("session.language_confirmation_required",event_types)
+                resolved=next(item for item in socket.text
+                              if item["type"]=="session.turn_language_resolved")
+                self.assertEqual(resolved["language"],"ko")
+                statuses=[item.get("status") for item in socket.text
+                          if item["type"] in ("tool.call","tool.result")]
+                self.assertEqual(statuses,["submitting","confirmed"])
+                done=next(item for item in socket.text if item["type"]=="turn.done")
+                self.assertEqual(done["route"],"brain")
+                self.assertEqual(done["tools_used"],["create_safety_report"])
+
+    def test_pending_report_cancellation_precedes_language_resolution(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+
+        pending={"location":"Lab A","summary":"spill","urgency":"routine",
+                 "exposure_status":"no","language":"ko"}
+        session=ListenerSession(tool_context=ToolContext(
+            Path("/trusted/catalog.sqlite"),None,"en","operational"))
+        session.active=True; session.language_mode="auto"
+        session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
+        session.history.pending_report=dict(pending)
+        socket=Socket()
+        with patch("safebridge_voice.server.transcribe",
+                   return_value=Transcription("보고서를 취소해 주세요.","en")), \
+             patch("safebridge_voice.server.resolve_turn_language") as resolver, \
+             patch("safebridge_voice.server.synthesize",return_value=b"\0\0") as tts, \
+             patch("safebridge_voice.brain.execute_tool") as execute, \
+             patch("safebridge_voice.server.AsyncOpenAI"), \
+             patch.dict("os.environ",{
+                 "XAI_API_KEY":"test",
+                 "CHAT_MODEL":"test",
+             },clear=False):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        resolver.assert_not_called()
+        execute.assert_not_called()
+        self.assertIsNone(session.history.pending_report)
+        self.assertEqual(tts.call_args.args[1],"ko")
+        result=next(item for item in socket.text if item["type"]=="tool.result")
+        self.assertEqual(result["status"],"cancelled")
+        done=next(item for item in socket.text if item["type"]=="turn.done")
+        self.assertEqual(done["route"],"brain")
+        self.assertEqual(done["tools_used"],[])
+
+    def test_pending_report_correction_still_uses_language_resolution_and_brain(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+
+        pending={"location":"Lab A","summary":"spill","urgency":"urgent",
+                 "exposure_status":"unknown","language":"ko",
+                 "material_or_equipment":"acetone"}
+        session=ListenerSession(tool_context=ToolContext(
+            Path("/trusted/catalog.sqlite"),None,"ko","operational"))
+        session.active=True; session.language_mode="auto"
+        session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
+        session.history.pending_report=dict(pending)
+        socket=Socket()
+
+        async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
+                             tool_context):
+            self.assertEqual(tool_context.language,"ko")
+            await sentence(SentenceSegment(0,"수정 내용을 다시 확인하겠습니다."))
+            return BrainResult(
+                [{"role":"user","content":transcript},
+                 {"role":"assistant","content":"수정 내용을 다시 확인하겠습니다."}],
+                "수정 내용을 다시 확인하겠습니다.",None,[],
+            )
+
+        with patch("safebridge_voice.server.transcribe",return_value=Transcription(
+                 "네, 하지만 아세톤이 아니라 메탄올이에요.","ko")), \
+             patch("safebridge_voice.server.synthesize",return_value=b"\0\0"), \
+             patch("safebridge_voice.server.stream_brain_turn",
+                   side_effect=fake_brain) as brain, \
+             patch("safebridge_voice.server.AsyncOpenAI"), \
+             patch.dict("os.environ",{
+                 "XAI_API_KEY":"test",
+                 "CHAT_MODEL":"test",
+             },clear=False):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        brain.assert_called_once()
+        self.assertEqual(session.history.pending_report,pending)
+        self.assertIn("session.turn_language_resolved",
+                      [item["type"] for item in socket.text])
+
     def test_brain_turn_done_uses_server_authored_route(self):
         session=self.emergency_session()
         class Socket:
@@ -287,6 +430,10 @@ class ServerTests(unittest.TestCase):
             Transcription("누출됐어요. How should I clean this spill?","en"),
             Transcription("Please show the approved procedure.","ko"),
             Transcription("Acetone","en"),
+            Transcription("They",None),
+            Transcription("Day",None),
+            Transcription("ねえ","ja"),
+            Transcription("내",None),
         )
         for transcription in cases:
             with self.subTest(transcription=transcription):
@@ -309,7 +456,10 @@ class ServerTests(unittest.TestCase):
                 brain.assert_not_called(); retrieval.assert_not_called(); llm.assert_not_called()
                 self.assertEqual(session.history.pending_report,pending)
                 self.assertEqual(session.history.source_references,references)
-                self.assertEqual(tts.call_args.args[0],CLARIFICATION_TEXT["ko"])
+                self.assertEqual(
+                    tts.call_args.args[0],
+                    REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"],
+                )
                 event_types=[item["type"] for item in socket.text]
                 self.assertIn("session.language_confirmation_required",event_types)
                 done=next(item for item in socket.text if item["type"]=="turn.done")
@@ -317,7 +467,7 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("first_audio_ms",done["timings_ms"])
                 self.assertEqual(
                     [item["text"] for item in socket.text if item["type"]=="reply.delta"],
-                    [CLARIFICATION_TEXT["ko"]],
+                    [REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"]],
                 )
                 self.assertNotIn("tool.call",event_types)
                 self.assertNotIn("tool.result",event_types)

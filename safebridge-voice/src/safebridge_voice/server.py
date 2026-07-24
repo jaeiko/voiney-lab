@@ -10,7 +10,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from safebridge_voice.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
-from safebridge_voice.brain import ConversationHistory, SentenceSegment, stream_brain_turn
+from safebridge_voice.brain import (
+    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
+    ConversationHistory,
+    SentenceSegment,
+    confirmation_intent,
+    stream_brain_turn,
+)
 from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
@@ -256,48 +262,73 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                output_frames=len(frames),tools_used=[],
                                route="deterministic_emergency")
         return
-    resolution=resolve_turn_language(
-        transcript,transcription.detected_language,mode=session.language_mode,
-        manual_language=session.manual_language,
+    pending=session.history.pending_report
+    pending_language=(
+        pending.get("language")
+        if isinstance(pending,dict) and pending.get("language") in ("ko","en","vi")
+        else None
     )
-    if not resolution.resolved:
-        fallback=session.last_confirmed_language or (
-            session.tool_context.language if session.tool_context else "ko")
-        text=CLARIFICATION_TEXT.get(fallback,CLARIFICATION_TEXT["ko"])
-        await current_text("session.language_confirmation_required",turn_id=turn_id,
-                           reason=resolution.reason,languages=["ko","en"])
-        await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
-        try:
-            pcm=await asyncio.to_thread(synthesize,text,fallback)
-            frames=frame_complete_audio(pcm)
-        except Exception:
-            log.exception("language clarification TTS failed")
-            await current_text("reply.complete",turn_id=turn_id,text=text)
-            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
-            timings["total_ms"]=round((clock()-endpoint)*1000)
-            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
-                               segment_count=0,input_frames=input_frames,
-                               output_frames=0,tools_used=[],
-                               route="language_clarification")
-            if session.complete_without_playback(turn_id):
-                await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
-                                  cooldown_ms=session.detector.config.cooldown_ms)
+    pending_intent=(
+        confirmation_intent(transcript,pending_language)
+        if pending_language is not None
+        else None
+    )
+    if pending_intent is not None:
+        # A validated draft owns the language of this bounded confirmation.
+        # Provider metadata and the current auto-language state cannot override it.
+        turn_language=pending_language
+        session.last_confirmed_language=turn_language
+        await current_text("session.turn_language_resolved",turn_id=turn_id,
+                           language=turn_language)
+    else:
+        resolution=resolve_turn_language(
+            transcript,transcription.detected_language,mode=session.language_mode,
+            manual_language=session.manual_language,
+        )
+        if not resolution.resolved:
+            fallback=pending_language or session.last_confirmed_language or (
+                session.tool_context.language if session.tool_context else "ko")
+            clarification=(
+                REPORT_CONFIRMATION_CLARIFICATION_TEXT
+                if pending_language is not None
+                else CLARIFICATION_TEXT
+            )
+            text=clarification.get(fallback,clarification["ko"])
+            await current_text("session.language_confirmation_required",turn_id=turn_id,
+                               reason=resolution.reason,languages=["ko","en"])
+            await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
+            try:
+                pcm=await asyncio.to_thread(synthesize,text,fallback)
+                frames=frame_complete_audio(pcm)
+            except Exception:
+                log.exception("language clarification TTS failed")
+                await current_text("reply.complete",turn_id=turn_id,text=text)
+                await current_text("audio.complete",turn_id=turn_id,segment_count=0)
+                timings["total_ms"]=round((clock()-endpoint)*1000)
+                await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                                   segment_count=0,input_frames=input_frames,
+                                   output_frames=0,tools_used=[],
+                                   route="language_clarification")
+                if session.complete_without_playback(turn_id):
+                    await sender.text("state.changed",state=session.state.value,turn_id=turn_id,
+                                      cooldown_ms=session.detector.config.cooldown_ms)
+                return
+            if session.start_playback(turn_id):
+                timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+                await current_text("state.changed",state=session.state.value,turn_id=turn_id)
+                await sender.segment(turn_id,0,frames)
+                await current_text("reply.complete",turn_id=turn_id,text=text)
+                await current_text("audio.complete",turn_id=turn_id,segment_count=1)
+                timings["total_ms"]=round((clock()-endpoint)*1000)
+                await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
+                                   segment_count=1,input_frames=input_frames,
+                                   output_frames=len(frames),tools_used=[],
+                                   route="language_clarification")
             return
-        if session.start_playback(turn_id):
-            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-            await current_text("state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames)
-            await current_text("reply.complete",turn_id=turn_id,text=text)
-            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
-            timings["total_ms"]=round((clock()-endpoint)*1000)
-            await current_text("turn.done",turn_id=turn_id,timings_ms=timings,
-                               segment_count=1,input_frames=input_frames,
-                               output_frames=len(frames),tools_used=[],
-                               route="language_clarification")
-        return
-    turn_language=resolution.language
-    session.last_confirmed_language=turn_language
-    await current_text("session.turn_language_resolved",turn_id=turn_id,language=turn_language)
+        turn_language=resolution.language
+        session.last_confirmed_language=turn_language
+        await current_text("session.turn_language_resolved",turn_id=turn_id,
+                           language=turn_language)
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,

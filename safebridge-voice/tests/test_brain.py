@@ -58,6 +58,28 @@ class BrainTests(unittest.TestCase):
         self.assertIsNone(confirmation_intent("네, 하지만 아세톤이 아니라 메탄올이에요", "ko"))
         self.assertIsNone(confirmation_intent("có lẽ", "vi"))
 
+    def test_natural_korean_approval_phrases_remain_exact_and_stt_safe(self):
+        approved = (
+            "네, 지금 제출해 주세요.",
+            "네 지금 제출해 주세요",
+            "지금 작성한 보고 초안 제출해 주세요.",
+        )
+        for transcript in approved:
+            with self.subTest(transcript=transcript):
+                self.assertEqual(confirmation_intent(transcript, "ko"), "approve")
+
+        near_misses = (
+            "They",
+            "Day",
+            "ねえ",
+            "내",
+            "내 제출해 주세요.",
+            "네, 지금 제출해 주세요. 다만 위치를 바꿔 주세요.",
+        )
+        for transcript in near_misses:
+            with self.subTest(transcript=transcript):
+                self.assertIsNone(confirmation_intent(transcript, "ko"))
+
     def test_report_confirmation_localizes_korean_and_vietnamese_enums(self):
         base={"location":"A","summary":"spill","material_or_equipment":"x"}
         korean=report_confirmation_text({**base,"urgency":"emergency","exposure_status":"yes","language":"ko"})
