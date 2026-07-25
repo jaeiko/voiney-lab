@@ -10,7 +10,7 @@ class FrontendSessionTests(unittest.TestCase):
         harness = r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.disabled=false}set innerHTML(v){for(const c of ["transcript","reply","tools","stats","error"])this.fields[c]={textContent:c==="transcript"?"듣는 중…":""}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[]}addEventListener(){}}
-const ids=Object.fromEntries(["start","stop","log","status","state","last-report-id","last-report-state","pending-report","language-status","language-mode","manual-language","new-user","language-confirmation"].map(x=>[x,new Element()]));
+const ids=Object.fromEntries(["start","stop","log","status","state","last-report-id","last-report-state","pending-report","language-status","language-mode","manual-language","new-user","language-confirmation","procedure-title","procedure-meta","procedure-progress","procedure-step-title","procedure-instruction"].map(x=>[x,new Element()]));
 ids["language-mode"].value="auto";ids["manual-language"].value="ko";
 globalThis.document={getElementById:id=>ids[id],createElement:()=>new Element()}; globalThis.location={protocol:"http:",host:"test"};
 class WS{static OPEN=1;static CLOSING=2;constructor(){this.readyState=1;this.sent=[]}send(x){this.sent.push(x)}close(){this.readyState=3}}
@@ -27,7 +27,21 @@ await onMessage({data:JSON.stringify({type:"session.turn_language_resolved",turn
 await onMessage({data:JSON.stringify({type:"session.language_confirmation_required",turn_id:1,reason:"language_unresolved",languages:["ko","en"]})},generation,newSocket);assert(ids["language-confirmation"].hidden===false&&!ids["language-status"].textContent.includes("source_path"),"confirmation missing");
 ids["language-mode"].value="manual";ids["manual-language"].value="en";requestLanguageMode();assert(JSON.parse(newSocket.sent.at(-1)).mode==="manual"&&JSON.parse(newSocket.sent.at(-1)).language==="en","manual event invalid");assert(acknowledgedLanguageMode==="auto","manual state changed before ack");
 await onMessage({data:JSON.stringify({type:"session.language_state",mode:"manual",language:"en"})},generation,newSocket);assert(acknowledgedLanguageMode==="manual"&&ids["manual-language"].hidden===false,"manual ack missing");
+const ps={attached:true,procedure_id:"demo",title:"FICTIONAL NON-OPERATIONAL Demo",version:"1",status:"active",total_step_count:2,completed_step_count:0,current_step_number:1,current_step_id:"one",current_step_title:"One",approved_current_instruction:"Approved fictional instruction."};
+await onMessage({data:JSON.stringify({type:"procedure.state",state:ps})},generation,newSocket);assert(ids["procedure-title"].textContent===ps.title&&ids["procedure-instruction"].textContent===ps.approved_current_instruction,"procedure event not rendered");
+await onMessage({data:JSON.stringify({type:"reply.delta",turn_id:1,text:"completed step two"})},generation,newSocket);assert(procedureState.completed_step_count===0,"reply text mutated procedure");
+await onMessage({data:JSON.stringify({type:"procedure.state",state:{attached:true,title:"bad"}})},generation,newSocket);assert(procedureState.completed_step_count===0,"malformed procedure state accepted");
+for(const bad of [
+ {...ps,current_step_number:2},
+ {...ps,current_step_id:""},
+ {...ps,completed_step_count:2},
+ {...ps,status:"completed",completed_step_count:2},
+ {...ps,status:"completed",completed_step_count:2,current_step_number:null,current_step_id:null,current_step_title:null,approved_current_instruction:"not null"}
+]){await onMessage({data:JSON.stringify({type:"procedure.state",state:bad})},generation,newSocket);assert(procedureState.status==="active"&&procedureState.completed_step_count===0,"inconsistent procedure state accepted");}
+const done={...ps,status:"completed",completed_step_count:2,current_step_number:null,current_step_id:null,current_step_title:null,approved_current_instruction:null};
+await onMessage({data:JSON.stringify({type:"procedure.state",state:done})},generation,newSocket);assert(procedureState.status==="completed","canonical completed state rejected");
 newUser();assert(JSON.parse(newSocket.sent.at(-1)).type==="session.reset","new user reset missing");
+await onMessage({data:JSON.stringify({type:"procedure.state",state:{attached:false}})},generation,newSocket);assert(procedureState.attached===false&&ids["procedure-title"].textContent.includes("없음"),"procedure detach not rendered");
 ids["language-mode"].value="auto";requestLanguageMode();assert(acknowledgedLanguageMode==="manual","request changed acknowledged mode");
 await onMessage({data:JSON.stringify({type:"error",message:"invalid language mode"})},generation,newSocket);assert(ids["language-mode"].value==="manual"&&ids["manual-language"].value==="en"&&ids["language-status"].textContent.includes("Manual")&&ids["language-status"].textContent.includes("English"),"failed request did not roll back acknowledged language UI");assert(visibleState==="ERROR","failed request did not use safe error state");
 await onMessage({data:JSON.stringify({type:"speech.start",turn_id:1})},generation,newSocket);await onMessage({data:JSON.stringify({type:"transcript",turn_id:1,text:"new question"})},generation,newSocket);await onMessage({data:JSON.stringify({type:"reply.delta",turn_id:1,text:"new answer"})},generation,newSocket);

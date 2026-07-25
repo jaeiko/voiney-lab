@@ -21,7 +21,7 @@ from tests.test_retrieval import operational_document
 
 class ToolTests(unittest.TestCase):
     def test_all_schemas_are_strict_and_registered(self):
-        self.assertEqual(len(TOOLS), 3)
+        self.assertEqual(len(TOOLS), 6)
         by_name = {tool["function"]["name"]: tool["function"] for tool in TOOLS}
         self.assertEqual(
             set(by_name),
@@ -29,6 +29,9 @@ class ToolTests(unittest.TestCase):
                 "search_approved_safety_manual",
                 "create_safety_report",
                 "check_safety_report_status",
+                "start_procedure",
+                "get_current_step",
+                "complete_current_step",
             },
         )
         for function in by_name.values():

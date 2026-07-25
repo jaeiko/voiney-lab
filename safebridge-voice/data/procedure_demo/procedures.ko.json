@@ -1,0 +1,49 @@
+{
+  "procedures": [
+    {
+      "schema_version": 1,
+      "procedure_id": "fictional-color-card-demo-ko",
+      "title": "FICTIONAL NON-OPERATIONAL 색상 카드 확인 데모",
+      "version": "1.0",
+      "facility_id": "DEMO-FACILITY",
+      "language": "ko",
+      "approval_status": "approved",
+      "usage_scope": "test_only",
+      "active": true,
+      "approved_document": {
+        "document_id": "FICTIONAL-COLOR-CARD-DEMO-DOC-KO",
+        "version": "1.0",
+        "language": "ko",
+        "section_reference": "COLOR-CARDS",
+        "page_start": 1,
+        "page_end": 1
+      },
+      "steps": [
+        {
+          "step_id": "blue-card",
+          "order": 1,
+          "title": "파란색 가상 카드",
+          "approved_spoken_instruction": "파란색 가상 카드를 화면의 왼쪽 칸에 놓았다고 확인해 주세요.",
+          "completion_mode": "explicit_confirmation",
+          "source_reference": {"section_reference": "COLOR-CARDS", "page_start": 1, "page_end": 1}
+        },
+        {
+          "step_id": "yellow-card",
+          "order": 2,
+          "title": "노란색 가상 카드",
+          "approved_spoken_instruction": "노란색 가상 카드를 화면의 가운데 칸에 놓았다고 확인해 주세요.",
+          "completion_mode": "explicit_confirmation",
+          "source_reference": {"section_reference": "COLOR-CARDS", "page_start": 1, "page_end": 1}
+        },
+        {
+          "step_id": "green-card",
+          "order": 3,
+          "title": "초록색 가상 카드",
+          "approved_spoken_instruction": "초록색 가상 카드를 화면의 오른쪽 칸에 놓았다고 확인해 주세요.",
+          "completion_mode": "explicit_confirmation",
+          "source_reference": {"section_reference": "COLOR-CARDS", "page_start": 1, "page_end": 1}
+        }
+      ]
+    }
+  ]
+}

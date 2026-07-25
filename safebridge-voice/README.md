@@ -123,3 +123,25 @@ python -m compileall -q src tests
 - 실제 SMTP, 인증, 권한 관리, 암호화 저장, 관리자 Dashboard는 구현하지 않았다.
 - Worker가 만든 `.eml`은 검토용 Outbox 산출물이며 자동 전송하지 않는다.
 - 실제 마이크, 연구실 소음, 시약명·숫자·단위 STT는 별도 현장 검증이 필요하다.
+# Fictional ProcedureSession demo
+
+This demo is a test-only, fictional, non-operational color-card workflow. It is
+not safety guidance and must not be used for real work. Generate fresh databases
+only in a temporary directory:
+
+```bash
+demo_dir=$(mktemp -d)
+./.venv/bin/python scripts/setup_procedure_demo.py --output-dir "$demo_dir"
+
+export SAFEBRIDGE_SAFETY_CATALOG="$demo_dir/approved_catalog.sqlite"
+export SAFEBRIDGE_PROCEDURE_CATALOG="$PWD/data/procedure_demo/procedures.ko.json"
+export SAFEBRIDGE_PROCEDURE_STORE="$demo_dir/procedure_sessions.sqlite"
+export SAFEBRIDGE_FACILITY_ID="DEMO-FACILITY"
+export SAFEBRIDGE_USAGE_SCOPE="test_only"
+export SAFEBRIDGE_SESSION_LANGUAGE="ko"
+export SAFEBRIDGE_ALLOWED_LANGUAGES="ko"
+```
+
+These shell exports override equivalent `.env` values for that one demo process.
+The procedure ID is `fictional-color-card-demo-ko`. Never place the generated
+SQLite files in tracked source or the existing runtime directories.

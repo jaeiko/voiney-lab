@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from safebridge_voice.tools import (
     CREATE_REPORT_TOOL_NAME,
     REPORT_ID_PATTERN,
+    PROCEDURE_TOOL_NAMES,
     SEARCH_TOOL_NAME,
     TOOLS,
     ToolContext,
@@ -267,6 +268,26 @@ def grounding_instruction(context: ToolContext) -> str:
     )
 
 
+def procedure_availability_instruction(context: ToolContext) -> str|None:
+    controller=context.procedure_controller
+    definitions=getattr(controller,"definitions",None)
+    if not isinstance(definitions,dict) or not definitions:
+        return None
+    entries="; ".join(
+        f"procedure_id={item.procedure_id}, title={item.title}, version={item.version}, "
+        f"scope={item.usage_scope} (non-operational)"
+        for item in sorted(definitions.values(),key=lambda value:value.procedure_id)
+    )
+    return (
+        f"Validated procedures available for this session: {entries}. Start only a "
+        "validated listed procedure and only after an explicit user request. Never "
+        "describe a test_only procedure as operational or officially approved guidance. "
+        "Never generate, rewrite, or improvise a step instruction. Read current state "
+        "through get_current_step. Call complete_current_step only when the server-authorized "
+        "completion condition can succeed."
+    )
+
+
 async def stream_brain_turn(
     client: Any,
     history: ConversationHistory,
@@ -281,6 +302,10 @@ async def stream_brain_turn(
     language = tool_context.language if tool_context else "ko"
     messages = history.messages()
     messages.append({"role": "system", "content": trusted_language_instruction(language)})
+    if tool_context is not None:
+        availability=procedure_availability_instruction(tool_context)
+        if availability:
+            messages.append({"role":"system","content":availability})
     messages.append(user)
     group = [user]
     tool_ms = 0
@@ -459,6 +484,16 @@ async def stream_brain_turn(
                     event_fields["report_status"] = result["report_status"]
                 if result.get("report"):
                     event_fields["report"] = result["report"]
+                if name in PROCEDURE_TOOL_NAMES:
+                    if result.get("code"):
+                        event_fields["code"] = result["code"]
+                    if result.get("state"):
+                        event_fields["procedure_state"] = result["state"]
+                    event_fields["operation"] = result.get("operation")
+                    event_fields["idempotent"] = bool(result.get("idempotent"))
+                    if result.get("completed_step_id"):
+                        event_fields["completed_step_id"] = result["completed_step_id"]
+                    event_fields["procedure_completed"] = bool(result.get("completed"))
                 await on_tool_event("tool.result", event_fields)
             tool_message = {
                 "role": "tool",

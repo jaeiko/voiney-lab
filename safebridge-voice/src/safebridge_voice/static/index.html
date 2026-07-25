@@ -62,6 +62,9 @@
     .report-card .label{color:#b8d6ca}
     .report-card strong{display:block;margin:.28rem 0;font-size:1.05rem;letter-spacing:.02em}
     #last-report-state{color:#dff4e9;font-size:.84rem}
+    .procedure-card{padding:1rem;border:1px solid var(--line);border-radius:1rem;background:var(--paper)}
+    .procedure-card strong{display:block;margin:.25rem 0}.procedure-card p{margin:.45rem 0 0;font-size:.82rem}
+    #procedure-meta,#procedure-progress{color:var(--muted);font-size:.76rem}
     .example-strip{margin:1rem 0 0;display:grid;grid-template-columns:repeat(3,1fr);gap:.7rem}
     .example{padding:.9rem 1rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.68);color:var(--muted);font-size:.82rem}
     .example b{display:block;margin-bottom:.2rem;color:var(--ink);font-size:.78rem}
@@ -133,6 +136,14 @@
           <div class="capability"><code>QUEUE</code><b>이상상황 보고</b><span>위치·상황·긴급도·노출 여부를 JSONL에 기록</span></div>
           <div class="capability"><code>STATUS</code><b>인계 상태 확인</b><span>접수부터 관리자 인계문 생성까지 추적</span></div>
         </div>
+        <div class="procedure-card" aria-live="polite">
+          <div class="label">Procedure</div>
+          <strong id="procedure-title">연결된 절차 없음</strong>
+          <div id="procedure-meta">서버가 승인 절차 상태를 전송하면 표시됩니다.</div>
+          <div id="procedure-progress"></div>
+          <p id="procedure-step-title"></p>
+          <p id="procedure-instruction"></p>
+        </div>
         <div class="report-card">
           <div class="label">최근 안전 보고</div>
           <strong id="last-report-id">아직 접수된 보고 없음</strong>
@@ -162,6 +173,7 @@ const $=id=>document.getElementById(id);
 let socket,micContext,processor,micSource,playContext,sessionActive=false;
 let receiving=null,receivedFrames=[],activeTurn=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
 let acknowledgedLanguageMode="auto",acknowledgedLanguage=null;
+let procedureState={attached:false};
 const queued=new Map(),turns=new Map();
 const UI={
  IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
@@ -174,6 +186,16 @@ function renderState(state,detail=""){const view=UI[state]||UI.ERROR;visibleStat
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function clearPlayback(){playbackEpoch++;if(activeSource){activeSource.onended=null;try{activeSource.stop();}catch(_){}try{activeSource.disconnect();}catch(_){}activeSource=null;}receiving=null;receivedFrames=[];queued.clear();activeTurn=null;audioComplete=false;turnComplete=false;playing=false;nextSegment=0;}
 function resetSessionUI(){clearPlayback();turns.clear();$("log").replaceChildren();const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 접수된 보고 없음";$("last-report-state").textContent="음성으로 이상상황을 보고하면 여기에 표시됩니다.";}
+function renderProcedureState(value){
+ if(!value||typeof value!=="object"||typeof value.attached!=="boolean")return;
+ if(!value.attached){procedureState={attached:false};$("procedure-title").textContent="연결된 절차 없음";$("procedure-meta").textContent="서버가 승인 절차 상태를 전송하면 표시됩니다.";$("procedure-progress").textContent="";$("procedure-step-title").textContent="";$("procedure-instruction").textContent="";return;}
+ const nonempty=v=>typeof v==="string"&&v.trim().length>0;
+ const common=nonempty(value.procedure_id)&&nonempty(value.title)&&nonempty(value.version)&&["active","completed"].includes(value.status)&&Number.isInteger(value.total_step_count)&&value.total_step_count>0&&Number.isInteger(value.completed_step_count);
+ const active=value.status==="active"&&value.completed_step_count>=0&&value.completed_step_count<value.total_step_count&&Number.isInteger(value.current_step_number)&&value.current_step_number===value.completed_step_count+1&&value.current_step_number>=1&&value.current_step_number<=value.total_step_count&&nonempty(value.current_step_id)&&nonempty(value.current_step_title)&&nonempty(value.approved_current_instruction);
+ const completed=value.status==="completed"&&value.completed_step_count===value.total_step_count&&value.current_step_number===null&&value.current_step_id===null&&value.current_step_title===null&&value.approved_current_instruction===null;
+ const valid=common&&(active||completed);
+ if(!valid)return;procedureState={...value};$("procedure-title").textContent=value.title;$("procedure-meta").textContent=`버전 ${value.version} · ${value.status==="completed"?"완료":"진행 중"}`;$("procedure-progress").textContent=`완료 ${value.completed_step_count}/${value.total_step_count}${value.current_step_number?` · 현재 ${value.current_step_number}/${value.total_step_count}`:""}`;$("procedure-step-title").textContent=typeof value.current_step_title==="string"?value.current_step_title:"";$("procedure-instruction").textContent=typeof value.approved_current_instruction==="string"?value.approved_current_instruction:"";
+}
 async function closeAudio(){if(processor){processor.onaudioprocess=null;try{processor.disconnect();}catch(_){}processor=null;}if(micSource){for(const track of micSource.mediaStream?.getTracks?.()||[])track.stop();try{micSource.disconnect();}catch(_){}micSource=null;}for(const context of [micContext,playContext])if(context&&context.state!=="closed")try{await context.close();}catch(_){}micContext=null;playContext=null;}
 function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const node=document.createElement("section");node.className="turn";node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">SafeBridge</div><div class="reply"></div><div class="label">Tool</div><div class="tools">사용된 Tool 없음</div><div class="stats"></div><div class="error"></div>`;$("log").prepend(node);turns.set(key,node);return node;}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();renderState("ERROR","오류: "+text);}
@@ -218,6 +240,7 @@ async function onMessage(e,generation,current){
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);$("language-confirmation").hidden=true;}
  if(m.type==="session.language_confirmation_required"){$("language-confirmation").hidden=false;$("language-status").textContent="Language confirmation required";}
  if(m.type==="session.reset"){resetSessionUI();}
+ if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="state.changed"&&sessionActive&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");
  if(m.type==="turn.processing"&&sessionActive)renderState("THINKING");
  if(m.type==="speech.start"){activeTurn=m.turn_id;turnNode(m.turn_id,generation);}

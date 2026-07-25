@@ -53,6 +53,61 @@ class ServerTests(unittest.TestCase):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         return session,socket,tts,brain,retrieval,execute,llm
 
+    def test_server_maps_procedure_results_to_canonical_event_sequences(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+        state={"attached":True,"procedure_id":"fictional-color-card-demo-ko",
+               "title":"FICTIONAL NON-OPERATIONAL 색상 카드 확인 데모","version":"1.0",
+               "status":"active","total_step_count":3,"completed_step_count":0,
+               "current_step_number":1,"current_step_id":"blue-card",
+               "current_step_title":"파란색 가상 카드",
+               "approved_current_instruction":"검토된 가상 지시문"}
+        cases=(
+            ({"status":"success","operation":"start","idempotent":False,
+              "procedure_state":state},["procedure.started","procedure.state"]),
+            ({"status":"success","operation":"read","idempotent":False,
+              "procedure_state":state},["procedure.state"]),
+            ({"status":"success","operation":"complete","idempotent":False,
+              "completed_step_id":"blue-card","procedure_completed":False,
+              "procedure_state":state},["procedure.step_completed","procedure.state"]),
+            ({"status":"success","operation":"complete","idempotent":False,
+              "completed_step_id":"green-card","procedure_completed":True,
+              "procedure_state":{**state,"status":"completed","completed_step_count":3,
+                  "current_step_number":None,"current_step_id":None,
+                  "current_step_title":None,"approved_current_instruction":None}},
+             ["procedure.step_completed","procedure.completed","procedure.state"]),
+            ({"status":"invalid_arguments","code":"invalid_arguments"},
+             ["procedure.error"]),
+        )
+        for fields,expected in cases:
+            with self.subTest(expected=expected):
+                socket=Socket()
+                session=ListenerSession(tool_context=ToolContext(
+                    Path("/trusted/catalog.sqlite"),None,"ko","test_only"))
+                session.active=True;session.active_turn_id=1
+                session.detector.state=TurnState.PROCESSING
+                async def fake_brain(client,history,transcript,on_sentence,on_first_token,
+                                     on_tool_event,tool_context):
+                    await on_tool_event("tool.result",{"tool":"start_procedure",**fields})
+                    await on_sentence(SentenceSegment(0,"가상 응답입니다."))
+                    return BrainResult([],"가상 응답입니다.",0,["start_procedure"])
+                with patch("safebridge_voice.server.transcribe",
+                           return_value=Transcription("가상 데모를 시작해 주세요","ko")), \
+                     patch("safebridge_voice.server.synthesize",return_value=b"\0\0"), \
+                     patch("safebridge_voice.server.stream_brain_turn",
+                           side_effect=fake_brain), \
+                     patch("safebridge_voice.server.AsyncOpenAI"), \
+                     patch("safebridge_voice.server.require_env",return_value="test"):
+                    asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+                procedure_events=[
+                    item["type"] for item in socket.text
+                    if item["type"].startswith("procedure.")]
+                self.assertEqual(procedure_events,expected)
+                done=[item for item in socket.text if item["type"]=="turn.done"][0]
+                self.assertEqual(done["route"],"brain")
+
     def test_emergency_precedes_language_resolution_and_uses_fixed_language(self):
         cases=(
             (Transcription("불이 났어요. 어떻게 해야 돼요?",None),"ko",KOREAN_EMERGENCY_RESPONSE),

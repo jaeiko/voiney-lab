@@ -1,7 +1,8 @@
 import json, tempfile, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
-from safebridge_voice.brain import ConversationHistory, SentenceChunker, SYSTEM_PROMPT, confirmation_intent, report_confirmation_text, sanitize_spoken_text, stream_brain_turn
+from safebridge_voice.brain import ConversationHistory, SentenceChunker, SYSTEM_PROMPT, confirmation_intent, procedure_availability_instruction, report_confirmation_text, sanitize_spoken_text, stream_brain_turn
 from safebridge_voice.tools import ToolContext, create_safety_report
 
 class BrainTests(unittest.TestCase):
@@ -155,7 +156,7 @@ class BrainTests(unittest.TestCase):
         self.assertEqual([message.get("tool_call_id") for message in result.messages if message["role"]=="tool"],["search-1","report-1"])
         self.assertNotIn("plan"," ".join(spoken))
         self.assertEqual(events,[("tool.call","search_approved_safety_manual"),("tool.result","search_approved_safety_manual"),("tool.call","create_safety_report"),("tool.result","create_safety_report")])
-        self.assertEqual(len(client.chat.completions.calls[0]["tools"]),3)
+        self.assertEqual(len(client.chat.completions.calls[0]["tools"]),6)
 
     def test_draft_then_next_turn_approval_submits_exactly_once(self):
         class Stream:
@@ -630,5 +631,25 @@ class BrainTests(unittest.TestCase):
         for payload in all_payloads:
             self.assertNotIn("source_path",payload)
             self.assertNotIn(str(secret_catalog),payload)
+
+    def test_procedure_availability_uses_only_validated_public_metadata(self):
+        definition=SimpleNamespace(
+            procedure_id="fictional-color-card-demo-ko",
+            title="FICTIONAL NON-OPERATIONAL 색상 카드 확인 데모",
+            version="1.0",usage_scope="test_only")
+        controller=SimpleNamespace(
+            definitions={"fictional-color-card-demo-ko":definition},
+            attached_session_id="secret-session-id")
+        context=ToolContext(
+            Path("/private/catalog.sqlite"),"DEMO-FACILITY","ko","test_only",
+            procedure_controller=controller)
+        instruction=procedure_availability_instruction(context)
+        self.assertIn("fictional-color-card-demo-ko",instruction)
+        self.assertIn(definition.title,instruction)
+        self.assertIn("explicit user request",instruction)
+        self.assertIn("server-authorized",instruction)
+        self.assertNotIn("/private",instruction)
+        self.assertNotIn("secret-session-id",instruction)
+        self.assertNotIn("DEMO-FACILITY",instruction)
 
 if __name__=="__main__": unittest.main()

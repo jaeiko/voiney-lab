@@ -22,6 +22,12 @@ from safebridge_voice.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
 )
 from safebridge_voice.tools import ToolContext
+from safebridge_voice.tools import PROCEDURE_TOOL_NAMES
+from safebridge_voice.procedure_definitions import load_procedure_definitions
+from safebridge_voice.procedure_store import ProcedureStore
+from safebridge_voice.procedures import (
+    ProcedureController, authorized_completion_step_id, unattached_procedure_state,
+)
 from safebridge_voice.protocol import ProtocolError, audio_segment_start, event, parse_control
 from safebridge_voice.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 
@@ -46,13 +52,16 @@ class ServerConfig:
     usage_scope:str
     allowed_languages:frozenset[str]
     default_language:str
+    procedure_catalog_path:Path|None=None
+    procedure_store_path:Path|None=None
 
 def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("SAFEBRIDGE_SAFETY_CATALOG","").strip()
     scope=os.environ.get("SAFEBRIDGE_USAGE_SCOPE","").strip()
     catalog_path=Path(catalog)
-    if not catalog or not catalog_path.is_absolute() or scope not in ("operational","demo","reference_only"):
+    if not catalog or not catalog_path.is_absolute() or scope not in (
+        "operational","demo","reference_only","test_only"):
         raise RuntimeError("safety catalog configuration is incomplete")
     facility=os.environ.get("SAFEBRIDGE_FACILITY_ID","").strip() or None
     raw_allowed=os.environ.get("SAFEBRIDGE_ALLOWED_LANGUAGES","ko,en,vi")
@@ -63,7 +72,16 @@ def server_config()->ServerConfig:
         raise RuntimeError("session language configuration is invalid") from exc
     if not allowed or default not in allowed:
         raise RuntimeError("session language configuration is invalid")
-    return ServerConfig(catalog_path,facility,scope,allowed,default)
+    procedure_catalog=os.environ.get("SAFEBRIDGE_PROCEDURE_CATALOG","").strip()
+    procedure_store=os.environ.get("SAFEBRIDGE_PROCEDURE_STORE","").strip()
+    procedure_catalog_path=Path(procedure_catalog) if procedure_catalog else None
+    procedure_store_path=Path(procedure_store) if procedure_store else None
+    if ((procedure_catalog_path is None)!=(procedure_store_path is None) or
+        procedure_catalog_path is not None and
+        (not procedure_catalog_path.is_absolute() or not procedure_store_path.is_absolute())):
+        raise RuntimeError("procedure configuration is invalid")
+    return ServerConfig(catalog_path,facility,scope,allowed,default,
+                        procedure_catalog_path,procedure_store_path)
 
 def server_tool_context(
     config:ServerConfig|None=None,
@@ -330,9 +348,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
+    authorized_step_id=None
+    if pending is None:
+        authorized_step_id=authorized_completion_step_id(
+            transcript,turn_language,session.tool_context.procedure_controller)
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language)
+                             session.tool_context.report_language,
+                             session.tool_context.procedure_controller,
+                             authorized_step_id)
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token
@@ -344,6 +368,20 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await queue.put(segment)
     async def tool_event(kind,fields):
         if not await current_text(kind,turn_id=turn_id,**fields): return
+        if kind=="tool.result" and fields.get("tool") in PROCEDURE_TOOL_NAMES:
+            state=fields.get("procedure_state")
+            if fields.get("code"):
+                await current_text("procedure.error",turn_id=turn_id,code=fields["code"])
+            elif isinstance(state,dict):
+                operation=fields.get("operation")
+                if operation=="start" and not fields.get("idempotent"):
+                    await current_text("procedure.started",turn_id=turn_id,state=state)
+                if operation=="complete" and not fields.get("idempotent"):
+                    await current_text("procedure.step_completed",turn_id=turn_id,
+                                       step_id=fields.get("completed_step_id"))
+                    if fields.get("procedure_completed"):
+                        await current_text("procedure.completed",turn_id=turn_id,state=state)
+                await current_text("procedure.state",turn_id=turn_id,state=state)
         log.info("%s turn_id=%s tool=%s status=%s elapsed_ms=%s",kind,turn_id,fields.get("tool"),fields.get("status"),fields.get("elapsed_ms"))
     async def consume():
         nonlocal output_frames,segment_count,first_audio
@@ -391,7 +429,7 @@ async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voic
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
-    await websocket.accept(); config=VadConfig(); session=ListenerSession(EndpointDetector(config)); task=None; trusted_config=None
+    await websocket.accept(); config=VadConfig(); session=ListenerSession(EndpointDetector(config)); task=None; trusted_config=None; procedure_store=None
     await websocket.send_text(event("ready",sample_rate=16000,frame_ms=20,frame_bytes=FRAME_BYTES,vad_mode=config.mode,endpoint_silence_ms=config.endpoint_silence_frames*20,prefix_padding_ms=config.prefix_frames*20))
     try:
         while True:
@@ -411,6 +449,18 @@ async def voice_socket(websocket:WebSocket):
                 try:
                     trusted_config=trusted_config or server_config()
                     session.tool_context=server_tool_context(trusted_config,control.get("language"))
+                    if trusted_config.procedure_catalog_path and trusted_config.procedure_store_path:
+                        definitions=load_procedure_definitions(
+                            trusted_config.procedure_catalog_path,trusted_config.catalog_path,
+                            facility_id=trusted_config.facility_id,
+                            language=session.tool_context.language,
+                            usage_scope=trusted_config.usage_scope)
+                        procedure_store=procedure_store or ProcedureStore(trusted_config.procedure_store_path)
+                        session.tool_context=ToolContext(
+                            session.tool_context.catalog_path,session.tool_context.facility_id,
+                            session.tool_context.language,session.tool_context.usage_scope,
+                            session.tool_context.report_language,
+                            ProcedureController(definitions,procedure_store))
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid session configuration"))
                     continue
@@ -424,6 +474,10 @@ async def voice_socket(websocket:WebSocket):
                 try:
                     trusted_config=trusted_config or server_config()
                     context=server_tool_context(trusted_config,control["language"])
+                    if session.tool_context and session.tool_context.procedure_controller:
+                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
+                                            context.usage_scope,context.report_language,
+                                            session.tool_context.procedure_controller)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid session language"))
                     continue
@@ -440,6 +494,10 @@ async def voice_socket(websocket:WebSocket):
                     trusted_config=trusted_config or server_config()
                     context=(server_tool_context(trusted_config,control["language"])
                              if control["mode"]=="manual" else None)
+                    if context and session.tool_context and session.tool_context.procedure_controller:
+                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
+                                            context.usage_scope,context.report_language,
+                                            session.tool_context.procedure_controller)
                     session.set_language_mode(control["mode"],context)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid language mode"))
@@ -453,7 +511,10 @@ async def voice_socket(websocket:WebSocket):
                     continue
                 if task and not task.done(): task.cancel()
                 session.reset_sensitive_state()
+                if session.tool_context and session.tool_context.procedure_controller:
+                    session.tool_context.procedure_controller.detach()
                 await websocket.send_text(event("session.reset",state=session.state.value))
+                await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
@@ -473,5 +534,6 @@ async def voice_socket(websocket:WebSocket):
             try: await task
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         session.stop()
+        if procedure_store is not None: procedure_store.close()
 
 app.mount("/",StaticFiles(directory=STATIC_DIR,html=True),name="static")

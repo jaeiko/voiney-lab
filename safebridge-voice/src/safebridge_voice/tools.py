@@ -25,6 +25,9 @@ OUTBOX_DIR = PROJECT_ROOT / "outbox"
 SEARCH_TOOL_NAME = "search_approved_safety_manual"
 CREATE_REPORT_TOOL_NAME = "create_safety_report"
 CHECK_REPORT_TOOL_NAME = "check_safety_report_status"
+START_PROCEDURE_TOOL_NAME = "start_procedure"
+GET_CURRENT_STEP_TOOL_NAME = "get_current_step"
+COMPLETE_CURRENT_STEP_TOOL_NAME = "complete_current_step"
 REPORT_ID_PATTERN = re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
 REPORT_WRITE_LOCK = threading.Lock()
 DEDUPLICATION_WINDOW_SECONDS = 60
@@ -139,7 +142,25 @@ CHECK_REPORT_TOOL = {
     },
 }
 
-TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL]
+START_PROCEDURE_TOOL = {"type":"function","function":{
+    "name":START_PROCEDURE_TOOL_NAME,
+    "description":"Start one server-approved procedure by its stable procedure ID.",
+    "parameters":{"type":"object","properties":{"procedure_id":{"type":"string","minLength":1}},
+                  "required":["procedure_id"],"additionalProperties":False}}}
+GET_CURRENT_STEP_TOOL = {"type":"function","function":{
+    "name":GET_CURRENT_STEP_TOOL_NAME,
+    "description":"Read the current approved step of the server-attached procedure.",
+    "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":False}}}
+COMPLETE_CURRENT_STEP_TOOL = {"type":"function","function":{
+    "name":COMPLETE_CURRENT_STEP_TOOL_NAME,
+    "description":"Complete only the current step after explicit user confirmation.",
+    "parameters":{"type":"object","properties":{"expected_step_id":{"type":"string","minLength":1}},
+                  "required":["expected_step_id"],"additionalProperties":False}}}
+
+PROCEDURE_TOOL_NAMES=frozenset({
+    START_PROCEDURE_TOOL_NAME,GET_CURRENT_STEP_TOOL_NAME,COMPLETE_CURRENT_STEP_TOOL_NAME})
+TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL,
+         START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL]
 
 
 @dataclass(frozen=True)
@@ -152,6 +173,8 @@ class ToolContext:
     usage_scope: str
     # Manager handoff language is trusted facility policy and never a Tool arg.
     report_language: str = "ko"
+    procedure_controller: Any = None
+    procedure_completion_authorized_step_id: str | None = None
 
 
 def _result(status: str, **fields: Any) -> dict[str, Any]:
@@ -383,10 +406,12 @@ REGISTERED_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
 
 def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) -> dict[str, Any]:
     """Dispatch only registered functions with exact, schema-compatible keys."""
-    if name not in REGISTERED_TOOLS:
+    if name not in REGISTERED_TOOLS and name not in PROCEDURE_TOOL_NAMES:
         return _result("invalid_arguments", message="unknown tool")
     if not isinstance(arguments, dict):
-        return _result("invalid_arguments", message="arguments must be an object")
+        return (_result("invalid_arguments", code="invalid_arguments")
+                if name in PROCEDURE_TOOL_NAMES else
+                _result("invalid_arguments", message="arguments must be an object"))
 
     required_and_allowed = {
         SEARCH_TOOL_NAME: ({"query", "topic"}, {"query", "topic"}),
@@ -402,13 +427,29 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
             },
         ),
         CHECK_REPORT_TOOL_NAME: ({"report_id"}, {"report_id"}),
+        START_PROCEDURE_TOOL_NAME: ({"procedure_id"}, {"procedure_id"}),
+        GET_CURRENT_STEP_TOOL_NAME: (set(), set()),
+        COMPLETE_CURRENT_STEP_TOOL_NAME: ({"expected_step_id"}, {"expected_step_id"}),
     }
     required, allowed = required_and_allowed[name]
     keys = set(arguments)
     if not required.issubset(keys) or not keys.issubset(allowed):
         if name == SEARCH_TOOL_NAME:
             return _search_failure("invalid_arguments")
-        return _result("invalid_arguments", message="unexpected or missing arguments")
+        return (_result("invalid_arguments",code="invalid_arguments")
+                if name in PROCEDURE_TOOL_NAMES else
+                _result("invalid_arguments", message="unexpected or missing arguments"))
     if name == SEARCH_TOOL_NAME:
         return search_approved_safety_manual(**arguments, context=context)
+    if name in PROCEDURE_TOOL_NAMES:
+        controller=context.procedure_controller if context else None
+        if controller is None:
+            return _result("error",code="procedure_not_available")
+        if name==START_PROCEDURE_TOOL_NAME:
+            return controller.start(arguments["procedure_id"],facility_id=context.facility_id,
+                                    language=context.language,usage_scope=context.usage_scope)
+        if name==GET_CURRENT_STEP_TOOL_NAME: return controller.current()
+        if context.procedure_completion_authorized_step_id != arguments["expected_step_id"]:
+            return _result("error",code="explicit_confirmation_required")
+        return controller.complete(arguments["expected_step_id"])
     return REGISTERED_TOOLS[name](**arguments)
