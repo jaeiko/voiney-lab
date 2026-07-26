@@ -16,6 +16,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control('{"type":"session.set_language_mode","mode":"manual","language":"en"}'),
                          {"type":"session.set_language_mode","mode":"manual","language":"en"})
         self.assertEqual(parse_control('{"type":"session.reset"}'),{"type":"session.reset"})
+        self.assertEqual(
+            parse_control(
+                '{"type":"report.status.get","report_id":"sr-20260722-a1b2c3"}'),
+            {"type":"report.status.get","report_id":"SR-20260722-A1B2C3"})
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))
@@ -35,6 +39,8 @@ class ProtocolTests(unittest.TestCase):
             {"type":"native.playback.truncate","response_id":"r1",
              "item_id":"i1","audio_end_ms":True},
             {"type":"native.playback.ended","response_id":""},
+            {"type":"report.status.get","report_id":"not-a-report"},
+            {"type":"report.status.get","report_id":7},
         ):
             with self.assertRaises(ProtocolError): parse_control(json.dumps(payload))
     def test_segment_contract(self):

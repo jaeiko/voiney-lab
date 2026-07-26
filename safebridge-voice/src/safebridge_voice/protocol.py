@@ -1,8 +1,11 @@
 """JSON helpers for M4 segmented audio."""
 import json
+import re
 from typing import Any
 
 class ProtocolError(ValueError): pass
+
+REPORT_ID_PATTERN=re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
 
 def parse_control(raw: str) -> dict[str, Any]:
     try: message=json.loads(raw)
@@ -35,6 +38,14 @@ def parse_control(raw: str) -> dict[str, Any]:
                 **({"language":language} if mode=="manual" else {})}
     if message["type"]=="session.reset": return {"type":"session.reset"}
     if message["type"]=="session.stop": return {"type":"session.stop"}
+    if message["type"]=="report.status.get":
+        report_id=message.get("report_id")
+        if not isinstance(report_id,str):
+            raise ProtocolError("report.status.get needs a report_id")
+        normalized=report_id.strip().upper()
+        if REPORT_ID_PATTERN.fullmatch(normalized) is None:
+            raise ProtocolError("report.status.get report_id is invalid")
+        return {"type":"report.status.get","report_id":normalized}
     if message["type"]=="playback.ended":
         turn_id=message.get("turn_id")
         if not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0: raise ProtocolError("playback.ended needs a positive integer turn_id")

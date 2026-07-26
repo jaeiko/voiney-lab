@@ -11,7 +11,8 @@ from safebridge_voice.procedures import (
 )
 from safebridge_voice.tools import (
     COMPLETE_CURRENT_STEP_TOOL_NAME, GET_CURRENT_STEP_TOOL_NAME,
-    START_PROCEDURE_TOOL_NAME, ToolContext, execute_tool,
+    GET_WORKFLOW_SUMMARY_TOOL_NAME, RECORD_STEP_OBSERVATION_TOOL_NAME,
+    START_PROCEDURE_TOOL_NAME, START_STEP_TIMER_TOOL_NAME, ToolContext, execute_tool,
 )
 
 
@@ -24,6 +25,24 @@ def approved(procedure_id="demo"):
                        "explicit_confirmation",source),
          ProcedureStep("two",2,"Two","Read approved fictional instruction two.",
                        "explicit_confirmation",source)))
+
+
+def workflow_approved():
+    source=SourceReference("DEMO-WORKFLOW",1,1)
+    return ProcedureDefinition(
+        1,"workflow","FICTIONAL NON-OPERATIONAL Workflow","2","TEST","en",
+        "approved","test_only",True,"workflow-doc","2","en",source,
+        (
+            ProcedureStep(
+                "observe",1,"Observe","Report the fictional display value.",
+                "explicit_confirmation",source,
+                observation_schema={
+                    "type":"text","required":True,"label":"Fictional display",
+                }),
+            ProcedureStep(
+                "wait",2,"Wait","Start the fixed fictional timer.",
+                "explicit_confirmation",source,timer={"duration_seconds":10}),
+        ))
 
 
 class ProcedureToolTests(unittest.TestCase):
@@ -164,3 +183,121 @@ class ProcedureToolTests(unittest.TestCase):
         self.assertEqual(result["state"]["current_step_id"],"two")
         self.assertEqual(len([event for event in self.store.list_events(session_id)
                               if event["event_type"]=="step_completed"]),1)
+
+    def test_required_observation_timer_and_audit_summary_gate_completion(self):
+        now=[1000.0]
+        controller=ProcedureController(
+            {"workflow":workflow_approved()},self.store,clock=lambda:now[0])
+        context=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=controller)
+        started=execute_tool(
+            START_PROCEDURE_TOOL_NAME,{"procedure_id":"workflow"},context)
+        self.assertEqual(started["state"]["observation"]["recorded_count"],0)
+
+        authorized=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=controller,
+            procedure_completion_authorized_step_id="observe")
+        self.assertEqual(
+            execute_tool(
+                COMPLETE_CURRENT_STEP_TOOL_NAME,
+                {"expected_step_id":"observe"},authorized)["code"],
+            "observation_required")
+        recorded=execute_tool(
+            RECORD_STEP_OBSERVATION_TOOL_NAME,
+            {"expected_step_id":"observe","value":" red "},context)
+        self.assertEqual(recorded["state"]["observation"]["latest_value"],"red")
+        self.assertEqual(
+            execute_tool(
+                COMPLETE_CURRENT_STEP_TOOL_NAME,
+                {"expected_step_id":"observe"},authorized)["state"]["current_step_id"],
+            "wait")
+
+        wait_authorized=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=controller,
+            procedure_completion_authorized_step_id="wait")
+        self.assertEqual(
+            execute_tool(
+                COMPLETE_CURRENT_STEP_TOOL_NAME,
+                {"expected_step_id":"wait"},wait_authorized)["code"],
+            "timer_not_started")
+        timer=execute_tool(
+            START_STEP_TIMER_TOOL_NAME,{"expected_step_id":"wait"},context)
+        self.assertEqual(timer["state"]["timer"]["remaining_seconds"],10)
+        self.assertEqual(
+            execute_tool(
+                COMPLETE_CURRENT_STEP_TOOL_NAME,
+                {"expected_step_id":"wait"},wait_authorized)["code"],
+            "timer_not_elapsed")
+        now[0]=1010.0
+        completed=execute_tool(
+            COMPLETE_CURRENT_STEP_TOOL_NAME,
+            {"expected_step_id":"wait"},wait_authorized)
+        self.assertEqual(completed["state"]["status"],"completed")
+        summary=execute_tool(GET_WORKFLOW_SUMMARY_TOOL_NAME,{},context)
+        self.assertEqual(len(summary["audit_summary"]["completed_steps"]),2)
+        self.assertEqual(len(summary["audit_summary"]["observations"]),1)
+        self.assertEqual(len(summary["audit_summary"]["timers"]),1)
+
+    def test_observation_identifier_must_exactly_match_final_transcript(self):
+        controller=ProcedureController({"workflow":workflow_approved()},self.store)
+        base=dict(
+            catalog_path=Path("catalog.sqlite"),
+            facility_id="TEST",
+            language="en",
+            usage_scope="test_only",
+            procedure_controller=controller,
+        )
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,
+            {"procedure_id":"workflow"},
+            ToolContext(**base),
+        )
+        evidenced=ToolContext(
+            **base,
+            current_transcript="The fictional label is A-170.",
+        )
+        shortened=execute_tool(
+            RECORD_STEP_OBSERVATION_TOOL_NAME,
+            {"expected_step_id":"observe","value":"A-17"},
+            evidenced,
+        )
+        self.assertEqual(shortened["code"],"observation_evidence_mismatch")
+        self.assertEqual(
+            self.store.list_observations(controller.attached_session_id),[])
+
+        recorded=execute_tool(
+            RECORD_STEP_OBSERVATION_TOOL_NAME,
+            {"expected_step_id":"observe","value":"A-170"},
+            evidenced,
+        )
+        self.assertEqual(recorded["status"],"success")
+        self.assertEqual(
+            recorded["state"]["observation"]["latest_value"],"A-170")
+
+    def test_report_context_blocks_workflow_and_prevents_advancement(self):
+        controller=ProcedureController({"workflow":workflow_approved()},self.store)
+        context=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=controller)
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,{"procedure_id":"workflow"},context)
+        report_context=controller.report_context()
+        self.assertEqual(report_context["step_id"],"observe")
+        blocked=controller.block_for_handoff(
+            "SR-20260722-A1B2C3","fictional red display")
+        self.assertEqual(blocked["state"]["status"],"blocked_for_handoff")
+        self.assertEqual(
+            blocked["state"]["handoff"]["report_id"],"SR-20260722-A1B2C3")
+        self.assertEqual(
+            controller.record_observation("observe","green")["code"],
+            "procedure_blocked_for_handoff")
+        self.assertEqual(
+            controller.complete("observe")["code"],
+            "procedure_blocked_for_handoff")
+        summary=controller.summary()
+        self.assertEqual(
+            summary["audit_summary"]["handoff"]["report_id"],
+            "SR-20260722-A1B2C3")

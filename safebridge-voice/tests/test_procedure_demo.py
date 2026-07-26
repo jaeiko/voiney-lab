@@ -21,9 +21,12 @@ class ProcedureDemoTests(unittest.TestCase):
             definitions=load_procedure_definitions(
                 ROOT/"data"/"procedure_demo"/"procedures.ko.json",catalog,
                 facility_id="DEMO-FACILITY",language="ko",usage_scope="test_only")
-            definition=definitions["fictional-color-card-demo-ko"]
+            definition=definitions["fictional-wet-lab-workflow-demo-ko"]
             self.assertIn("FICTIONAL NON-OPERATIONAL",definition.title)
             self.assertEqual(len(definition.steps),3)
+            self.assertTrue(definition.steps[0].observation_schema["required"])
+            self.assertEqual(definition.steps[1].timer["duration_seconds"],10)
+            self.assertTrue(definition.steps[2].observation_schema["required"])
 
 
 if __name__=="__main__":

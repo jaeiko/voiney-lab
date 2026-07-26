@@ -21,7 +21,7 @@ from tests.test_retrieval import operational_document
 
 class ToolTests(unittest.TestCase):
     def test_all_schemas_are_strict_and_registered(self):
-        self.assertEqual(len(TOOLS), 6)
+        self.assertEqual(len(TOOLS), 9)
         by_name = {tool["function"]["name"]: tool["function"] for tool in TOOLS}
         self.assertEqual(
             set(by_name),
@@ -32,6 +32,9 @@ class ToolTests(unittest.TestCase):
                 "start_procedure",
                 "get_current_step",
                 "complete_current_step",
+                "record_step_observation",
+                "start_step_timer",
+                "get_workflow_summary",
             },
         )
         for function in by_name.values():
@@ -123,6 +126,70 @@ class ToolTests(unittest.TestCase):
             queued = json.loads(lines[0])
             self.assertEqual(queued["location"], "3층 유기화학실 후드 앞")
             self.assertEqual(queued["material_or_equipment"], "아세톤")
+
+    def test_report_can_carry_trusted_workflow_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inbox=Path(directory)/"inbox.jsonl"
+            workflow={
+                "workflow_session_id":"workflow-1",
+                "procedure_id":"fictional-demo",
+                "step_id":"observe",
+                "step_number":3,
+            }
+            with patch(
+                "safebridge_voice.tools._new_report_id",
+                return_value="SR-20260722-A1B2C3",
+            ):
+                result=create_safety_report(
+                    "Lab A","reported anomaly","urgent","unknown","ko",
+                    inbox_path=inbox,now_epoch=1000,workflow_context=workflow)
+            self.assertEqual(result["status"],"success")
+            queued=json.loads(inbox.read_text(encoding="utf-8"))
+            self.assertEqual(queued["workflow"],workflow)
+
+    def test_report_dispatch_links_and_blocks_attached_workflow(self):
+        class Controller:
+            def __init__(self): self.blocked=None
+            def report_context(self):
+                return {
+                    "workflow_session_id":"workflow-1",
+                    "procedure_id":"fictional-demo",
+                    "step_id":"observe",
+                }
+            def block_for_handoff(self,report_id,reason):
+                self.blocked=(report_id,reason)
+                return {
+                    "status":"success","operation":"block_for_handoff",
+                    "idempotent":False,
+                    "state":{
+                        "attached":True,"status":"blocked_for_handoff",
+                        "handoff":{"report_id":report_id},
+                    },
+                }
+        controller=Controller()
+        context=ToolContext(
+            Path("catalog.sqlite"),"TEST","ko","test_only",
+            procedure_controller=controller)
+        arguments={
+            "location":"Lab A","summary":"reported anomaly",
+            "urgency":"urgent","exposure_status":"unknown","language":"ko",
+        }
+        with patch(
+            "safebridge_voice.tools.create_safety_report",
+            return_value={
+                "status":"success","report_id":"SR-20260722-A1B2C3",
+                "report_status":"queued_for_handoff",
+            },
+        ) as create:
+            result=execute_tool("create_safety_report",arguments,context)
+        self.assertEqual(
+            create.call_args.kwargs["workflow_context"]["step_id"],"observe")
+        self.assertEqual(
+            controller.blocked,
+            ("SR-20260722-A1B2C3","reported anomaly"))
+        self.assertTrue(result["procedure_blocked"])
+        self.assertEqual(
+            result["procedure_state"]["status"],"blocked_for_handoff")
 
     def test_report_validation_and_exact_dispatch_arguments(self):
         base = {

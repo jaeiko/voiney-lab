@@ -28,6 +28,9 @@ CHECK_REPORT_TOOL_NAME = "check_safety_report_status"
 START_PROCEDURE_TOOL_NAME = "start_procedure"
 GET_CURRENT_STEP_TOOL_NAME = "get_current_step"
 COMPLETE_CURRENT_STEP_TOOL_NAME = "complete_current_step"
+RECORD_STEP_OBSERVATION_TOOL_NAME = "record_step_observation"
+START_STEP_TIMER_TOOL_NAME = "start_step_timer"
+GET_WORKFLOW_SUMMARY_TOOL_NAME = "get_workflow_summary"
 REPORT_ID_PATTERN = re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
 REPORT_WRITE_LOCK = threading.Lock()
 DEDUPLICATION_WINDOW_SECONDS = 60
@@ -156,11 +159,41 @@ COMPLETE_CURRENT_STEP_TOOL = {"type":"function","function":{
     "description":"Complete only the current step after explicit user confirmation.",
     "parameters":{"type":"object","properties":{"expected_step_id":{"type":"string","minLength":1}},
                   "required":["expected_step_id"],"additionalProperties":False}}}
+RECORD_STEP_OBSERVATION_TOOL = {"type":"function","function":{
+    "name":RECORD_STEP_OBSERVATION_TOOL_NAME,
+    "description":(
+        "Record a user-observed value against the current server-approved workflow "
+        "step. Use only the value the user actually reported; never infer it."
+    ),
+    "parameters":{"type":"object","properties":{
+        "expected_step_id":{"type":"string","minLength":1},
+        "value":{"anyOf":[{"type":"string","minLength":1},{"type":"number"},{"type":"boolean"}]},
+    },"required":["expected_step_id","value"],"additionalProperties":False}}}
+START_STEP_TIMER_TOOL = {"type":"function","function":{
+    "name":START_STEP_TIMER_TOOL_NAME,
+    "description":(
+        "Start the fixed-duration timer configured by the server for the current "
+        "workflow step. Never choose or override the duration."
+    ),
+    "parameters":{"type":"object","properties":{
+        "expected_step_id":{"type":"string","minLength":1},
+    },"required":["expected_step_id"],"additionalProperties":False}}}
+GET_WORKFLOW_SUMMARY_TOOL = {"type":"function","function":{
+    "name":GET_WORKFLOW_SUMMARY_TOOL_NAME,
+    "description":(
+        "Read the server-owned workflow audit summary: completed steps, recorded "
+        "observations, timers, and any linked human handoff."
+    ),
+    "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":False}}}
 
 PROCEDURE_TOOL_NAMES=frozenset({
-    START_PROCEDURE_TOOL_NAME,GET_CURRENT_STEP_TOOL_NAME,COMPLETE_CURRENT_STEP_TOOL_NAME})
+    START_PROCEDURE_TOOL_NAME,GET_CURRENT_STEP_TOOL_NAME,COMPLETE_CURRENT_STEP_TOOL_NAME,
+    RECORD_STEP_OBSERVATION_TOOL_NAME,START_STEP_TIMER_TOOL_NAME,
+    GET_WORKFLOW_SUMMARY_TOOL_NAME})
 TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL,
-         START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL]
+         START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL,
+         RECORD_STEP_OBSERVATION_TOOL,START_STEP_TIMER_TOOL,
+         GET_WORKFLOW_SUMMARY_TOOL]
 
 
 @dataclass(frozen=True)
@@ -175,10 +208,47 @@ class ToolContext:
     report_language: str = "ko"
     procedure_controller: Any = None
     procedure_completion_authorized_step_id: str | None = None
+    # Final server-owned transcript for the current turn. Procedure observations
+    # are checked against this evidence so a model cannot shorten or alter a
+    # spoken identifier before it is durably recorded.
+    current_transcript: str | None = None
 
 
 def _result(status: str, **fields: Any) -> dict[str, Any]:
     return {"status": status, **fields}
+
+
+def _observation_matches_transcript(value: Any, transcript: str) -> bool:
+    """Require a recorded observation to be supported by the final transcript."""
+    normalized_transcript = " ".join(transcript.split())
+    if not normalized_transcript:
+        return False
+    if isinstance(value, bool):
+        evidence = {
+            True: ("true", "yes", "예", "맞아", "있음", "có"),
+            False: ("false", "no", "아니", "없음", "không"),
+        }[value]
+        folded = normalized_transcript.casefold()
+        return any(item in folded for item in evidence)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        token = re.escape(str(value))
+        return re.search(rf"(?<![0-9.]){token}(?![0-9.])", normalized_transcript) is not None
+    if not isinstance(value, str):
+        return False
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        return False
+    if re.search(r"[A-Za-z0-9]", cleaned):
+        # ASCII identifiers require full token boundaries. This rejects a model
+        # argument such as A-17 when the transcript actually contains A-170.
+        token = re.escape(cleaned)
+        return re.search(
+            rf"(?<![A-Za-z0-9]){token}(?![A-Za-z0-9])",
+            normalized_transcript,
+            flags=re.IGNORECASE,
+        ) is not None
+    # Korean and Vietnamese particles can attach to a value in normal speech.
+    return cleaned.casefold() in normalized_transcript.casefold()
 
 
 def _search_failure(status: str) -> dict[str, Any]:
@@ -270,6 +340,12 @@ def _report_fingerprint(report: dict[str, Any]) -> str:
         "language",
         "material_or_equipment",
     )}
+    workflow=report.get("workflow")
+    if isinstance(workflow,dict):
+        material["workflow"]={
+            key:workflow.get(key)
+            for key in ("workflow_session_id","procedure_id","step_id")
+        }
     canonical = json.dumps(material, ensure_ascii=False, sort_keys=True).casefold()
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -305,6 +381,7 @@ def create_safety_report(
     *,
     inbox_path: Path = INBOX_PATH,
     now_epoch: float | None = None,
+    workflow_context: dict[str,Any] | None = None,
 ) -> dict[str, Any]:
     """Validate and append one small report job, returning well under 100 ms locally."""
     normalized = normalize_report_arguments({
@@ -324,6 +401,19 @@ def create_safety_report(
         "filed_at": now.isoformat(),
         "filed_at_epoch": now_epoch,
     }
+    if workflow_context is not None:
+        try:
+            encoded=json.dumps(
+                workflow_context,ensure_ascii=False,separators=(",",":"))
+            trusted=json.loads(encoded)
+        except (TypeError,ValueError,json.JSONDecodeError):
+            return _result("invalid_arguments",message="workflow context is invalid")
+        if (not isinstance(trusted,dict) or len(encoded)>12000 or
+                not isinstance(trusted.get("workflow_session_id"),str) or
+                not isinstance(trusted.get("procedure_id"),str) or
+                not isinstance(trusted.get("step_id"),str)):
+            return _result("invalid_arguments",message="workflow context is invalid")
+        report["workflow"]=trusted
     report["dedupe_key"] = _report_fingerprint(report)
 
     with REPORT_WRITE_LOCK:
@@ -350,6 +440,7 @@ def create_safety_report(
         report_id=report["id"],
         report_status="queued_for_handoff",
         deduplicated=False,
+        **({"workflow":report["workflow"]} if "workflow" in report else {}),
     )
 
 
@@ -394,6 +485,7 @@ def check_safety_report_status(
         urgency=report["urgency"],
         location=report["location"],
         attempts=int(worker_status.get("attempts", 0)),
+        **({"workflow":report["workflow"]} if isinstance(report.get("workflow"),dict) else {}),
     )
 
 
@@ -430,6 +522,10 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
         START_PROCEDURE_TOOL_NAME: ({"procedure_id"}, {"procedure_id"}),
         GET_CURRENT_STEP_TOOL_NAME: (set(), set()),
         COMPLETE_CURRENT_STEP_TOOL_NAME: ({"expected_step_id"}, {"expected_step_id"}),
+        RECORD_STEP_OBSERVATION_TOOL_NAME: (
+            {"expected_step_id","value"},{"expected_step_id","value"}),
+        START_STEP_TIMER_TOOL_NAME: ({"expected_step_id"},{"expected_step_id"}),
+        GET_WORKFLOW_SUMMARY_TOOL_NAME: (set(),set()),
     }
     required, allowed = required_and_allowed[name]
     keys = set(arguments)
@@ -448,8 +544,61 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
         if name==START_PROCEDURE_TOOL_NAME:
             return controller.start(arguments["procedure_id"],facility_id=context.facility_id,
                                     language=context.language,usage_scope=context.usage_scope)
-        if name==GET_CURRENT_STEP_TOOL_NAME: return controller.current()
+        if name==GET_CURRENT_STEP_TOOL_NAME:
+            return controller.current()
+        if name==RECORD_STEP_OBSERVATION_TOOL_NAME:
+            if (
+                context.current_transcript is not None
+                and not _observation_matches_transcript(
+                    arguments["value"], context.current_transcript
+                )
+            ):
+                current = controller.current()
+                return _result(
+                    "error",
+                    code="observation_evidence_mismatch",
+                    **(
+                        {"state": current["state"]}
+                        if isinstance(current.get("state"), dict)
+                        else {}
+                    ),
+                )
+            return controller.record_observation(
+                arguments["expected_step_id"],arguments["value"])
+        if name==START_STEP_TIMER_TOOL_NAME:
+            return controller.start_timer(arguments["expected_step_id"])
+        if name==GET_WORKFLOW_SUMMARY_TOOL_NAME:
+            return controller.summary()
         if context.procedure_completion_authorized_step_id != arguments["expected_step_id"]:
             return _result("error",code="explicit_confirmation_required")
         return controller.complete(arguments["expected_step_id"])
+    if name==CREATE_REPORT_TOOL_NAME:
+        controller=context.procedure_controller if context else None
+        report_context=getattr(controller,"report_context",None)
+        workflow=report_context() if callable(report_context) else None
+        result=create_safety_report(
+            **arguments,workflow_context=workflow)
+        if result.get("status")=="success" and workflow is not None:
+            block_for_handoff=getattr(controller,"block_for_handoff",None)
+            if not callable(block_for_handoff):
+                return {
+                    **result,"status":"error","code":"workflow_block_failed",
+                    "report_queued":True,
+                }
+            blocked=block_for_handoff(
+                result.get("report_id"),arguments.get("summary"))
+            if blocked.get("status")!="success":
+                return {
+                    **result,"status":"error","code":"workflow_block_failed",
+                    "report_queued":True,
+                    **({"procedure_state":blocked["state"]}
+                       if isinstance(blocked.get("state"),dict) else {}),
+                }
+            result["procedure_state"]=blocked["state"]
+            result["workflow_operation"]=blocked["operation"]
+            result["workflow_idempotent"]=blocked["idempotent"]
+            result["procedure_blocked"]=bool(
+                blocked["state"].get("attached") and
+                blocked["state"].get("status")=="blocked_for_handoff")
+        return result
     return REGISTERED_TOOLS[name](**arguments)

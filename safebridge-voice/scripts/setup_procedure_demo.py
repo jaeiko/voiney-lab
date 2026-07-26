@@ -29,7 +29,7 @@ def main()->int:
     definitions=load_procedure_definitions(
         fixture/"procedures.ko.json",catalog,facility_id="DEMO-FACILITY",
         language="ko",usage_scope="test_only")
-    if "fictional-color-card-demo-ko" not in definitions:
+    if "fictional-wet-lab-workflow-demo-ko" not in definitions:
         raise RuntimeError("fictional demo procedure validation failed")
     store=ProcedureStore(store_path)
     store.close()

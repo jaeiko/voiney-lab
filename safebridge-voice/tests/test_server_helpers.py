@@ -573,4 +573,33 @@ class ServerTests(unittest.TestCase):
             asyncio.run(voice_socket(socket))
         self.assertEqual(socket.receives,1); logged.assert_not_called()
 
+    def test_report_status_control_returns_worker_progress(self):
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":json.dumps({
+                        "type":"report.status.get",
+                        "report_id":"SR-20260722-A1B2C3",
+                    })},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+        socket=Socket()
+        with patch(
+            "safebridge_voice.server.check_safety_report_status",
+            return_value={
+                "status":"success","report_id":"SR-20260722-A1B2C3",
+                "report_status":"handoff_ready","attempts":1,
+                "workflow":{"procedure_id":"fictional-demo","step_id":"observe"},
+            },
+        ):
+            asyncio.run(voice_socket(socket))
+        status=next(item for item in socket.sent if item["type"]=="report.status")
+        self.assertEqual(status["report_status"],"handoff_ready")
+        self.assertEqual(status["attempts"],1)
+        self.assertEqual(status["workflow"]["step_id"],"observe")
+
 if __name__=="__main__": unittest.main()

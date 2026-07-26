@@ -88,11 +88,21 @@ def _timer(raw: Any, field: str) -> dict[str, Any] | None:
 def _observation(raw: Any, field: str) -> dict[str, Any] | None:
     if raw is None:
         return None
-    if not isinstance(raw, dict) or set(raw) != {"type", "required"}:
+    required_fields={"type","required"}
+    allowed_fields=required_fields|{"label","unit"}
+    if (not isinstance(raw,dict) or not required_fields.issubset(raw) or
+            not set(raw).issubset(allowed_fields)):
         raise ProcedureDefinitionError(f"{field} is malformed")
     if raw["type"] not in ("text", "number", "boolean") or not isinstance(raw["required"], bool):
         raise ProcedureDefinitionError(f"{field} is malformed")
-    return {"type": raw["type"], "required": raw["required"]}
+    result={"type":raw["type"],"required":raw["required"]}
+    if "label" in raw: result["label"]=_text(raw["label"],f"{field}.label")
+    if "unit" in raw:
+        if raw["unit"] is not None:
+            result["unit"]=_text(raw["unit"],f"{field}.unit")
+        else:
+            result["unit"]=None
+    return result
 
 
 def load_procedure_definitions(

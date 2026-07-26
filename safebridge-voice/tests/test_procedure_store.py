@@ -59,3 +59,49 @@ class ProcedureStoreTests(unittest.TestCase):
                     """INSERT INTO procedure_step_events
                     (session_id,step_id,event_type,previous_step_index,resulting_step_index,event_at)
                     VALUES (?,NULL,'started',0,0,?)""",(row["session_id"],"2026-01-01"))
+
+    def test_observation_timer_and_handoff_are_durable_append_only_events(self):
+        row=self.store.create_session("workflow","2")
+        session_id=row["session_id"]
+        observation=self.store.record_observation(
+            session_id,"observe",{"display":"red"})
+        timer,idempotent=self.store.start_timer(
+            session_id,"wait",10,now_epoch=1000)
+        replay,replayed=self.store.start_timer(
+            session_id,"wait",10,now_epoch=1005)
+        handoff,blocked_replay=self.store.block_for_handoff(
+            session_id,"observe","SR-20260722-A1B2C3","reported anomaly")
+
+        self.assertFalse(idempotent)
+        self.assertTrue(replayed)
+        self.assertEqual(timer,replay)
+        self.assertEqual(
+            self.store.list_observations(session_id)[0]["value"],
+            {"display":"red"})
+        self.assertEqual(
+            self.store.get_timer(session_id,"wait")["deadline_epoch"],1010)
+        self.assertEqual(handoff["report_id"],"SR-20260722-A1B2C3")
+        replay_handoff,replayed_handoff=self.store.block_for_handoff(
+            session_id,"observe","SR-20260722-A1B2C3","reported anomaly")
+        self.assertTrue(replayed_handoff)
+        self.assertEqual(replay_handoff,handoff)
+        with self.assertRaises(ProcedureTransitionError):
+            self.store.complete_step(session_id,"observe",0,1,final=False)
+        with self.assertRaises(ProcedureTransitionError):
+            self.store.record_observation(session_id,"observe","green")
+        self.store.close(); self.store=ProcedureStore(self.path)
+        self.assertEqual(
+            self.store.list_observations(session_id)[0]["event_id"],
+            observation["event_id"])
+        self.assertEqual(
+            self.store.get_handoff(session_id)["report_id"],
+            "SR-20260722-A1B2C3")
+
+        for statement in (
+            "UPDATE procedure_observations SET value_json='null'",
+            "DELETE FROM procedure_step_timers",
+            "UPDATE procedure_handoffs SET reason='changed'",
+        ):
+            with self.assertRaises(sqlite3.DatabaseError):
+                self.store._connection.execute(statement)
+            self.store._connection.rollback()

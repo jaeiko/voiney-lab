@@ -2,7 +2,17 @@ import json, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from safebridge_voice.brain import ConversationHistory, SentenceChunker, SYSTEM_PROMPT, confirmation_intent, procedure_availability_instruction, report_confirmation_text, sanitize_spoken_text, stream_brain_turn
+from safebridge_voice.brain import (
+    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
+    ConversationHistory,
+    SentenceChunker,
+    SYSTEM_PROMPT,
+    confirmation_intent,
+    procedure_availability_instruction,
+    report_confirmation_text,
+    sanitize_spoken_text,
+    stream_brain_turn,
+)
 from safebridge_voice.tools import ToolContext, create_safety_report
 
 class BrainTests(unittest.TestCase):
@@ -53,6 +63,7 @@ class BrainTests(unittest.TestCase):
 
     def test_exact_bilingual_confirmation_phrases_are_conservative(self):
         self.assertEqual(confirmation_intent("네.", "ko"), "approve")
+        self.assertEqual(confirmation_intent("네, 제출해줘.", "ko"), "approve")
         self.assertEqual(confirmation_intent("취소해 주세요", "ko"), "cancel")
         self.assertEqual(confirmation_intent("Đồng ý!", "vi"), "approve")
         self.assertEqual(confirmation_intent("hủy báo cáo", "vi"), "cancel")
@@ -61,6 +72,7 @@ class BrainTests(unittest.TestCase):
 
     def test_natural_korean_approval_phrases_remain_exact_and_stt_safe(self):
         approved = (
+            "네, 제출해줘.",
             "네, 지금 제출해 주세요.",
             "네 지금 제출해 주세요",
             "지금 작성한 보고 초안 제출해 주세요.",
@@ -156,7 +168,7 @@ class BrainTests(unittest.TestCase):
         self.assertEqual([message.get("tool_call_id") for message in result.messages if message["role"]=="tool"],["search-1","report-1"])
         self.assertNotIn("plan"," ".join(spoken))
         self.assertEqual(events,[("tool.call","search_approved_safety_manual"),("tool.result","search_approved_safety_manual"),("tool.call","create_safety_report"),("tool.result","create_safety_report")])
-        self.assertEqual(len(client.chat.completions.calls[0]["tools"]),6)
+        self.assertEqual(len(client.chat.completions.calls[0]["tools"]),9)
 
     def test_draft_then_next_turn_approval_submits_exactly_once(self):
         class Stream:
@@ -265,6 +277,29 @@ class BrainTests(unittest.TestCase):
             execute.assert_not_called(); self.assertIsNotNone(history.pending_report)
             asyncio.run(stream_brain_turn(client,history,"hủy báo cáo",sentence))
             execute.assert_not_called(); self.assertIsNone(history.pending_report)
+
+    def test_pending_draft_does_not_allow_unconfirmed_block_claim(self):
+        history=ConversationHistory()
+        history.pending_report={
+            "location":"제3 실험실 B 작업대",
+            "summary":"가상 표시창이 빨간색임",
+            "urgency":"urgent",
+            "exposure_status":"no",
+            "language":"ko",
+        }
+        class C:
+            async def create(self,**kwargs):
+                raise AssertionError("ambiguous pending action must not reach the model")
+        class Client: pass
+        client=Client();client.model="fake";client.chat=Client();client.chat.completions=C()
+        spoken=[]
+        async def sentence(item):spoken.append(item.text)
+        import asyncio
+        result=asyncio.run(stream_brain_turn(
+            client,history,"문제는 보고했으니까 다음 단계로 진행해줘",sentence))
+        self.assertIsNotNone(history.pending_report)
+        self.assertEqual(result.text,REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"])
+        self.assertEqual(spoken,[REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"]])
 
     def test_correction_replaces_draft_and_requests_confirmation_again(self):
         history=ConversationHistory(); history.pending_report={"location":"A","summary":"spill","urgency":"urgent","exposure_status":"unknown","language":"ko","material_or_equipment":"acetone"}

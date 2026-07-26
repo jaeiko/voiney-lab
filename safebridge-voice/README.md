@@ -1,10 +1,44 @@
 # SafeBridge Voice
 
-SafeBridge Voice는 승인된 안전 절차를 검색하고, 구조화된 사고 보고서를 작성해 책임자에게 인계하며, 감사 가능한 기록을 보존하는 voice-first safety dispatcher다. 승인되지 않은 안전 판단이나 작업 재개 승인은 하지 않는다.
+SafeBridge Voice는 **Voice Workflow Guide의 SafeBridge Lab Pack**이다. 승인된
+절차를 음성으로 안내하고, 단계별 관찰·타이머를 기록하며, 이상상황을 현재
+단계와 함께 책임자에게 인계하는 voice-first workflow copilot이다.
+승인되지 않은 안전 판단이나 작업 재개 승인은 하지 않는다.
 
 이 디렉터리는 `week4-brain`을 기준으로 기존 Hands-free VAD, WebSocket,
 대화 Memory, Tool Calling, 문장 단위 TTS를 보존하면서 공식 M2 Dispatcher의
 빠른 Tool → JSONL Queue → 별도 Worker 구조를 통합한다.
+
+## Phase 6 Voice Workflow Copilot
+
+Phase 6는 독립적으로 존재하던 Procedure와 안전 보고를 하나의 서버 소유
+업무 상태로 연결한다.
+
+```text
+승인 절차 시작
+  → 현재 단계 안내
+  → 사용자 관찰값 기록 또는 고정 타이머 실행
+  → 서버 Gate를 통과한 단계 완료
+  → 이상상황 보고 초안 재확인
+  → 보고 Queue + 현재 단계 연결
+  → blocked_for_handoff
+  → Worker 인계 상태 자동 갱신
+  → 완료·중단 감사 요약
+```
+
+- Procedure 상태, 관찰, 타이머, 인계 연결은 별도 SQLite에 보존한다.
+- 관찰값은 사용자가 실제 말한 값만 기록하며, 서버 정의의 type과 필수 여부를
+  다시 검증한다.
+- 타이머 길이는 모델 인자가 아니라 승인된 ProcedureDefinition에 고정된다.
+- 필수 관찰이 없거나 타이머가 끝나지 않으면 단계 완료를 거부한다.
+- 보고가 접수되면 현재 procedure·version·step·출처·관찰·타이머를 보고에
+  연결하고 상태를 `blocked_for_handoff`로 바꾼다.
+- 차단된 워크플로는 이후 단계 완료, 추가 관찰, 새 타이머 실행을 거부하며
+  작업 재개는 사람 관리자가 결정한다.
+- 브라우저는 보고 ID를 2초마다 확인해
+  `queued_for_handoff → processing/retry_pending → handoff_ready`를 자동 표시한다.
+- Native와 Cascade 경로 모두 같은 서버 상태와 동일한 canonical UI event를
+  사용한다.
 
 ## Phase 5 Native Speech-to-Speech
 
@@ -53,17 +87,18 @@ Native 화면은 브라우저 음성 신호 감지와 서버 전송 시작을 �
 브라우저 상단의 음성 처리 방식에서 `Cascade 비교 모드`를 선택하면 기존
 16 kHz cascade 경로를 그대로 시험할 수 있다.
 
-## M2 동작
+## 전체 동작
 
 ```text
-연구자 음성 → STT → Voice Agent + Tool Loop → TTS
+연구자 음성 ─┬─ Native Realtime S2S
+             └─ STT → Voice Agent + Tool Loop → TTS
                          │
-                         ├─ search_approved_safety_manual
-                         ├─ create_safety_report → reports/inbox.jsonl
-                         └─ check_safety_report_status
-                                                    ▲
-reports/inbox.jsonl → 별도 worker.py → Grok → outbox/*.eml
-                                      └→ reports/processed.txt + status/*.json
+                         ├─ 승인자료 검색
+                         ├─ Procedure·관찰·타이머 → procedure_sessions.sqlite
+                         └─ 안전 보고 + 현재 단계 → reports/inbox.jsonl
+                                                        │
+reports/inbox.jsonl → 별도 worker.py → 한국어 관리자 인계문 → outbox/*.eml
+                                      └→ status/*.json ─→ 브라우저 자동 갱신
 ```
 
 Voice Tool은 짧은 파일 기록만 수행한다. Worker 전용 Grok Prompt로 한국어
@@ -76,6 +111,12 @@ Voice Tool은 짧은 파일 기록만 수행한다. Worker 전용 Grok Prompt로
 | `search_approved_safety_manual` | 승인된 로컬 데모 자료 검색 |
 | `create_safety_report` | 위치·상황·긴급도·노출 여부를 검증하고 Queue에 기록 |
 | `check_safety_report_status` | Queue·재시도·인계문 준비 상태 확인 |
+| `start_procedure` | 서버가 검증한 Procedure 시작 |
+| `get_current_step` | 현재 승인 단계와 출처 확인 |
+| `record_step_observation` | 현재 단계에 사용자 관찰값 기록 |
+| `start_step_timer` | 현재 단계에 정의된 고정 타이머 시작 |
+| `complete_current_step` | 명시적 완료 확인과 서버 Gate 통과 후 한 단계 전이 |
+| `get_workflow_summary` | 완료 단계·관찰·타이머·인계 감사 요약 |
 
 Voice Agent는 최대 네 번의 Tool Round를 수행할 수 있다. 따라서 승인자료를
 찾은 뒤 같은 Turn에서 안전 보고를 접수하는 Tool Chaining도 가능하다.
@@ -118,7 +159,41 @@ tail -f reports/inbox.jsonl
 브라우저에서 `http://localhost:8000`을 열고 `세션 시작`을 한 번 누른다.
 원격 VM에서는 기존 SSH Port Forwarding을 유지한다.
 
-## M2 수동 데모
+## Phase 6 실음성 검증 순서
+
+영상 촬영과 무관하게 아래 순서로 현재 라이브 동작을 검증한다. 모든 데이터와
+화면 동작은 `FICTIONAL NON-OPERATIONAL`이다.
+
+### 정상 워크플로
+
+1. “가상 샘플 점검 워크플로를 시작해 줘.”
+2. Step 1에서 “가상 라벨은 A-170이야.”라고 말하고, 화면과 음성 응답에
+   `A-170`이 글자·숫자 그대로 기록되는지 확인한다. `A-17`처럼 축약된 Tool
+   인자는 서버가 거부해야 한다.
+3. “현재 단계를 완료했습니다.”라고 말해 Step 2로 이동한다.
+4. “고정 타이머를 시작해 줘.”라고 말하고 화면의 10초 countdown을 확인한다.
+5. 타이머가 끝나기 전 완료를 요청해 서버가 거부하는 것을 보여준 뒤,
+   종료 후 같은 완료 문구로 Step 3에 진입한다.
+
+### 이상상황 인계
+
+1. Step 3에서 “가상 표시창은 빨간색이야.”라고 관찰값을 기록한다.
+2. “제3 실험실 B 작업대의 가상 혼합 장치에서 표시창이 빨간색이고 이상한
+   소리가 나. 노출된 사람은 없고 긴급한 관리자 확인이 필요해. 보고서 초안을
+   만들어 줘.”라고 위치·상황·긴급도·노출 상태를 한 번에 말한다.
+3. Agent가 읽어 준 초안을 확인하고 “네, 제출해줘.” 또는 “보고서를 제출해
+   주세요.”라고 승인한다.
+4. Procedure 카드가 `관리자 인계 대기 · 진행 차단`으로 바뀌고 보고 ID,
+   현재 step, 출처, 관찰값이 연결되는지 확인한다.
+5. “현재 단계를 완료했습니다.”라고 말해 차단 이후 진행이 거부되는지 확인한다.
+6. Worker를 실행해 보고 카드가 자동으로 `관리자 인계문 준비 완료`로
+   바뀌는지 확인한다.
+7. 긴 Agent 답변 도중 “잠깐, 핵심만 말해 줘.”라고 끼어들어 Native
+   Barge-in을 함께 보여준다.
+
+초안이 화면에 `사용자 제출 확인 대기`로 남아 있는 동안은 아직 보고 접수나
+워크플로 차단이 아니다. 승인·취소·명시적 수정이 아닌 발화에는 서버가 다시
+제출 또는 취소를 요청하며, 모델이 차단 완료를 임의로 주장하지 않는다.
 
 ### 긴급 보고
 
@@ -156,14 +231,19 @@ python -m compileall -q src tests
 - PCM, FrameBuffer, WebRTC VAD, endpoint, cooldown 회귀
 - ConversationHistory와 Tool-call 메시지 순서
 - 다중 Tool Round와 선택-pass 텍스트 비노출
-- 세 Tool의 엄격한 JSON Schema·인자 검증
+- 아홉 Tool의 엄격한 JSON Schema·인자 검증
 - JSONL Queue와 60초 중복 방지
+- Procedure 관찰·타이머 Gate와 append-only 감사 기록
+- Procedure–Report 연결, `blocked_for_handoff`, 차단 이후 전이 거부
+- Native·Cascade의 동일 workflow event와 브라우저 countdown
+- 보고 상태 WebSocket polling과 Worker handoff 자동 갱신
 - Worker 우선순위, `.eml`, 성공 Ledger
 - 최대 3회 재시도와 실패 상태
 - 웹 세션 재시작, stale event 격리, Tool·보고 상태 표시
 
 ## 설계 문서
 
+- [`docs/PHASE6_WORKFLOW_COPILOT.md`](docs/PHASE6_WORKFLOW_COPILOT.md)
 - [`docs/WEB_WIREFRAMES.md`](docs/WEB_WIREFRAMES.md)
 - [`docs/M2_DISPATCHER_PLAN.md`](docs/M2_DISPATCHER_PLAN.md)
 
@@ -175,11 +255,11 @@ python -m compileall -q src tests
 - 실제 SMTP, 인증, 권한 관리, 암호화 저장, 관리자 Dashboard는 구현하지 않았다.
 - Worker가 만든 `.eml`은 검토용 Outbox 산출물이며 자동 전송하지 않는다.
 - 실제 마이크, 연구실 소음, 시약명·숫자·단위 STT는 별도 현장 검증이 필요하다.
-# Fictional ProcedureSession demo
+## Fictional Workflow Copilot demo
 
-This demo is a test-only, fictional, non-operational color-card workflow. It is
-not safety guidance and must not be used for real work. Generate fresh databases
-only in a temporary directory:
+This demo is a test-only, fictional, non-operational sample-inspection workflow.
+It is not safety guidance and must not be used for real work. Generate fresh
+databases only in a temporary directory:
 
 ```bash
 demo_dir=$(mktemp -d)
@@ -195,5 +275,5 @@ export SAFEBRIDGE_ALLOWED_LANGUAGES="ko"
 ```
 
 These shell exports override equivalent `.env` values for that one demo process.
-The procedure ID is `fictional-color-card-demo-ko`. Never place the generated
+The procedure ID is `fictional-wet-lab-workflow-demo-ko`. Never place the generated
 SQLite files in tracked source or the existing runtime directories.

@@ -1,18 +1,18 @@
 {
   "documents": [
     {
-      "document_id": "FICTIONAL-COLOR-CARD-DEMO-DOC-KO",
-      "document_family_id": "FICTIONAL-COLOR-CARD-DEMO-FAMILY",
-      "canonical_source_id": "FICTIONAL-COLOR-CARD-DEMO-SOURCE",
-      "canonical_version": "1.0",
+      "document_id": "FICTIONAL-WET-LAB-WORKFLOW-DEMO-DOC-KO",
+      "document_family_id": "FICTIONAL-WET-LAB-WORKFLOW-DEMO-FAMILY",
+      "canonical_source_id": "FICTIONAL-WET-LAB-WORKFLOW-DEMO-SOURCE",
+      "canonical_version": "2.0",
       "document_type": "facility_sop",
-      "title": "FICTIONAL NON-OPERATIONAL 색상 카드 확인 데모 문서",
+      "title": "FICTIONAL NON-OPERATIONAL 모의 샘플 점검 문서",
       "issuer": "SafeBridge Test Fixture",
       "manufacturer": null,
       "product_name": null,
       "product_code": null,
       "cas_numbers": [],
-      "version": "1.0",
+      "version": "2.0",
       "language": "ko",
       "facility_id": "DEMO-FACILITY",
       "source_authority": "test_fixture",
@@ -21,22 +21,33 @@
       "effective_at": "2026-01-01T00:00:00+00:00",
       "review_due_at": "2030-01-01T00:00:00+00:00",
       "source_path": "data/procedure_demo/approved_document.ko.json",
-      "source_uri": "test://fictional/color-card-demo-ko",
-      "source_checksum": "sha256:fictional-color-card-demo-ko-v1",
+      "source_uri": "test://fictional/wet-lab-workflow-demo-ko",
+      "source_checksum": "sha256:fictional-wet-lab-workflow-demo-ko-v2",
       "translation_status": "original",
       "active": true,
       "aliases": [
-        {"alias": "색상 카드 확인 데모", "language": "ko", "approved": true}
+        {
+          "alias": "가상 샘플 점검 워크플로",
+          "language": "ko",
+          "approved": true
+        }
       ],
       "sections": [
         {
-          "section_code": "COLOR-CARDS",
-          "section_title": "FICTIONAL NON-OPERATIONAL 색상 카드 순서",
+          "section_code": "DEMO-WORKFLOW",
+          "section_title": "FICTIONAL NON-OPERATIONAL 모의 샘플 점검",
           "page_start": 1,
           "page_end": 1,
-          "content": "파란색 가상 카드를 화면의 왼쪽 칸에 놓았다고 확인해 주세요.\n노란색 가상 카드를 화면의 가운데 칸에 놓았다고 확인해 주세요.\n초록색 가상 카드를 화면의 오른쪽 칸에 놓았다고 확인해 주세요.",
+          "content": "이 문서는 실제 실험·안전 지침이 아닌 화면 전용 가상 워크플로입니다.\n화면에 표시된 가상 샘플 라벨을 읽고 확인한 값을 말해 주세요.\n화면의 가상 혼합 버튼을 눌렀다고 확인한 뒤 고정 타이머를 시작해 주세요.\n화면의 가상 표시창 색상을 관찰하고 보이는 색상을 말해 주세요.",
           "topic": null,
-          "keywords": ["가상", "색상", "카드", "데모"]
+          "keywords": [
+            "가상",
+            "샘플",
+            "워크플로",
+            "타이머",
+            "관찰",
+            "데모"
+          ]
         }
       ]
     }

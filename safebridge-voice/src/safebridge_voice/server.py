@@ -27,8 +27,12 @@ from safebridge_voice.native_realtime import (
     NativeRealtimeError,
     NativeRealtimeSession,
 )
-from safebridge_voice.tools import ToolContext
-from safebridge_voice.tools import PROCEDURE_TOOL_NAMES
+from safebridge_voice.tools import (
+    CREATE_REPORT_TOOL_NAME,
+    PROCEDURE_TOOL_NAMES,
+    ToolContext,
+    check_safety_report_status,
+)
 from safebridge_voice.procedure_definitions import load_procedure_definitions
 from safebridge_voice.procedure_store import ProcedureStore
 from safebridge_voice.procedures import (
@@ -371,7 +375,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                              turn_language,session.tool_context.usage_scope,
                              session.tool_context.report_language,
                              session.tool_context.procedure_controller,
-                             authorized_step_id)
+                             authorized_step_id,
+                             transcript)
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token
@@ -396,7 +401,30 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                        step_id=fields.get("completed_step_id"))
                     if fields.get("procedure_completed"):
                         await current_text("procedure.completed",turn_id=turn_id,state=state)
+                if operation=="record_observation":
+                    await current_text(
+                        "procedure.observation_recorded",turn_id=turn_id,
+                        step_id=fields.get("recorded_step_id"))
+                if operation=="start_timer" and not fields.get("idempotent"):
+                    await current_text(
+                        "procedure.timer_started",turn_id=turn_id,
+                        step_id=fields.get("timer_step_id"),
+                        timer=state.get("timer"))
+                if operation=="summary":
+                    await current_text(
+                        "procedure.audit_summary",turn_id=turn_id,
+                        audit_summary=fields.get("audit_summary"))
                 await current_text("procedure.state",turn_id=turn_id,state=state)
+        if (kind=="tool.result" and fields.get("tool")==CREATE_REPORT_TOOL_NAME
+                and fields.get("status")=="confirmed"
+                and isinstance(fields.get("procedure_state"),dict)):
+            await current_text(
+                "procedure.blocked_for_handoff",turn_id=turn_id,
+                report_id=fields.get("report_id"),
+                state=fields["procedure_state"])
+            await current_text(
+                "procedure.state",turn_id=turn_id,
+                state=fields["procedure_state"])
         log.info("%s turn_id=%s tool=%s status=%s elapsed_ms=%s",kind,turn_id,fields.get("tool"),fields.get("status"),fields.get("elapsed_ms"))
     async def consume():
         nonlocal output_frames,segment_count,first_audio
@@ -587,6 +615,17 @@ async def voice_socket(websocket:WebSocket):
                     native_session=None
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"]=="report.status.get":
+                result=await asyncio.to_thread(
+                    check_safety_report_status,control["report_id"])
+                await websocket.send_text(event(
+                    "report.status",
+                    report_id=control["report_id"],
+                    status=result.get("status","error"),
+                    report_status=result.get("report_status"),
+                    attempts=result.get("attempts",0),
+                    workflow=result.get("workflow"),
+                ))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
                 await websocket.send_text(event("state.changed",state=session.state.value,turn_id=control["turn_id"],cooldown_ms=config.cooldown_ms))
             elif control["type"]=="native.playback.truncate" and native_session is not None:

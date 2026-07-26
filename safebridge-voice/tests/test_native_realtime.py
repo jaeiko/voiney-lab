@@ -23,6 +23,7 @@ from safebridge_voice.tools import (
     CHECK_REPORT_TOOL_NAME,
     COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
+    START_STEP_TIMER_TOOL_NAME,
     ToolContext,
 )
 
@@ -174,7 +175,7 @@ def audio_delta(response_id, pcm=b"\x01\x00" * 240):
 class NativeConfigurationTests(unittest.TestCase):
     def test_realtime_schema_is_flat_strict_and_uses_correlated_audio(self):
         schemas = realtime_tool_schemas()
-        self.assertEqual(len(schemas), 6)
+        self.assertEqual(len(schemas), 9)
         self.assertTrue(all(item["type"] == "function" for item in schemas))
         self.assertTrue(all("function" not in item for item in schemas))
         self.assertTrue(
@@ -569,23 +570,113 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     {"type": "response.done", "response": {"id": "selection"}}
                 )
             )
-            sent_before_playback = [
+            sent_after_result = [
                 json.loads(item)
                 for item in self.upstream.sent
                 if isinstance(item, str)
             ]
-            self.assertNotIn(
-                "response.create",
-                [item["type"] for item in sent_before_playback],
+            self.assertEqual(
+                [item["type"] for item in sent_after_result].count("response.create"),
+                1,
             )
             await self.session.playback_ended("selection")
             await self.session.playback_ended("selection")
         execute.assert_called_once()
+        clear = next(
+            event for event in self.sender.events
+            if event["type"] == "native.playback.clear"
+        )
+        self.assertEqual(clear["reason"],"tool_validation")
         sent = [json.loads(item) for item in self.upstream.sent if isinstance(item, str)]
         self.assertEqual(
             [item["type"] for item in sent].count("conversation.item.create"), 1
         )
         self.assertEqual([item["type"] for item in sent].count("response.create"), 1)
+
+    async def test_procedure_tool_discards_premature_success_audio_and_forces_error(self):
+        self.session.turn_id=1
+        self.session.transcript_finalized=True
+        self.session.latest_transcript="고정 타이머를 시작해 줘"
+        await self.session.handle_upstream_message(response_created("timer"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.output_item.added",
+            "response_id":"timer",
+            "item":{"id":"spoken-before-tool"},
+        }))
+        await self.session.handle_upstream_message(audio_delta("timer"))
+        self.assertTrue(self.sender.audio)
+
+        with patch(
+            "safebridge_voice.native_realtime.execute_tool",
+            return_value={
+                "status":"error",
+                "code":"timer_not_configured",
+                "state":{
+                    "attached":True,
+                    "status":"active",
+                    "current_step_number":1,
+                    "approved_current_instruction":"라벨을 말해 주세요.",
+                },
+            },
+        ):
+            await self.session.handle_upstream_message(json.dumps({
+                "type":"response.function_call_arguments.done",
+                "response_id":"timer",
+                "call_id":"timer-call",
+                "name":START_STEP_TIMER_TOOL_NAME,
+                "arguments":'{"expected_step_id":"demo-label-check"}',
+            }))
+            await self.session.handle_upstream_message(json.dumps({
+                "type":"response.output_audio_transcript.delta",
+                "response_id":"timer",
+                "delta":"타이머를 시작했습니다.",
+            }))
+            await self.session.handle_upstream_message(json.dumps({
+                "type":"response.done",
+                "response":{"id":"timer"},
+            }))
+
+        clear=next(
+            event for event in self.sender.events
+            if event["type"]=="native.playback.clear")
+        self.assertEqual(clear["reason"],"tool_validation")
+        self.assertFalse(any(
+            event["type"]=="reply.delta"
+            and "시작했습니다" in event.get("text","")
+            for event in self.sender.events))
+        sent=[
+            json.loads(item) for item in self.upstream.sent
+            if isinstance(item,str)]
+        force=next(
+            item for item in sent
+            if item["type"]=="conversation.item.create"
+            and item["item"]["type"]=="force_message")
+        self.assertIn(
+            "타이머가 없습니다",
+            force["item"]["content"][0]["text"])
+
+    async def test_pending_report_accepts_natural_approval_and_blocks_model(self):
+        self.session.pending_report={
+            "location":"제3 실험실 B 작업대",
+            "summary":"가상 표시창이 빨간색임",
+            "urgency":"urgent",
+            "exposure_status":"no",
+            "language":"ko",
+        }
+        self.session.turn_id=4
+        with patch(
+            "safebridge_voice.native_realtime.execute_tool",
+            return_value={
+                "status":"success",
+                "report_id":"SR-20260726-C1D2E3",
+                "report_status":"queued_for_handoff",
+            },
+        ) as execute:
+            handled=await self.session._handle_server_owned_transcript(
+                "네, 제출해줘.")
+        self.assertTrue(handled)
+        execute.assert_called_once()
+        self.assertIsNone(self.session.pending_report)
 
     async def test_tool_execution_failure_is_sanitized_and_connection_survives(self):
         self.session.turn_id = 1
@@ -692,7 +783,9 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "report_id": "SR-20260726-A1B2C3",
                 "report_status": "queued_for_handoff",
             },
-        ) as execute:
+        ) as execute, patch(
+            "safebridge_voice.native_realtime.asyncio.to_thread"
+        ) as to_thread:
             await self.session.handle_upstream_message(
                 json.dumps(
                     {
@@ -708,6 +801,7 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
         execute.assert_called_once()
+        to_thread.assert_not_called()
         self.assertIsNone(self.session.pending_report)
         sent = [json.loads(item) for item in self.upstream.sent if isinstance(item, str)]
         self.assertEqual(
@@ -720,6 +814,48 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             and item["item"]["type"] == "force_message"
         ][-1]
         self.assertIn("SR-20260726-A1B2C3", force["item"]["content"][0]["text"])
+
+    async def test_pending_report_approval_emits_linked_workflow_block(self):
+        self.session.pending_report = {
+            "location":"F","summary":"fictional red display",
+            "urgency":"urgent","exposure_status":"unknown","language":"ko",
+        }
+        self.session.turn_id=3
+        blocked_state={
+            "attached":True,"procedure_id":"demo","title":"Fictional demo",
+            "version":"1","status":"blocked_for_handoff",
+            "total_step_count":1,"completed_step_count":0,
+            "current_step_number":1,"current_step_id":"observe",
+            "current_step_title":"Observe",
+            "approved_current_instruction":"Observe the fictional display.",
+            "handoff":{
+                "report_id":"SR-20260726-B1C2D3",
+                "blocked_step_id":"observe",
+            },
+        }
+        with patch(
+            "safebridge_voice.native_realtime.execute_tool",
+            return_value={
+                "status":"success","report_id":"SR-20260726-B1C2D3",
+                "report_status":"queued_for_handoff",
+                "procedure_state":blocked_state,
+                "procedure_blocked":True,
+            },
+        ):
+            await self.session.handle_upstream_message(json.dumps({
+                "type":"conversation.item.input_audio_transcription.completed",
+                "transcript":"보고서를 제출해 주세요",
+            }))
+
+        event_types=[event["type"] for event in self.sender.events]
+        self.assertIn("procedure.blocked_for_handoff",event_types)
+        self.assertIn("procedure.state",event_types)
+        result=next(
+            event for event in self.sender.events
+            if event["type"]=="tool.result")
+        self.assertTrue(result["procedure_blocked"])
+        self.assertEqual(
+            result["procedure_state"]["status"],"blocked_for_handoff")
 
     async def test_reconnect_audio_buffer_is_bounded(self):
         self.session._ready.clear()

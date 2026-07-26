@@ -9,7 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from safebridge_voice.brain import ConversationHistory
+from safebridge_voice.brain import (
+    REPORT_CONFIRMATION_CLARIFICATION_TEXT,
+    ConversationHistory,
+)
 from safebridge_voice.document_store import ingest_manifest, ingest_manifest_file
 from safebridge_voice.language import Transcription
 from safebridge_voice.procedure_definitions import load_procedure_definitions
@@ -23,7 +26,7 @@ from safebridge_voice.vad import TurnState
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "data" / "procedure_demo"
-PROCEDURE_ID = "fictional-color-card-demo-ko"
+PROCEDURE_ID = "fictional-wet-lab-workflow-demo-ko"
 ROUTES = {"deterministic_emergency", "language_clarification", "brain"}
 UNAUTHORIZED = (
     "아직 현재 단계를 완료하지 않았습니다",
@@ -85,7 +88,9 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
             facility_id="DEMO-FACILITY", language="ko", usage_scope="test_only",
         )
         self.store = ProcedureStore(self.database)
-        self.controller = ProcedureController(definitions, self.store)
+        self.now = [1000.0]
+        self.controller = ProcedureController(
+            definitions, self.store, clock=lambda: self.now[0])
         context = ToolContext(
             self.catalog, "DEMO-FACILITY", "ko", "test_only", "ko",
             self.controller,
@@ -131,12 +136,26 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         return socket, client
 
     def start(self):
-        return self.turn(
-            "가상 색상 카드 데모를 시작해 주세요",
+        socket = self.turn(
+            "가상 샘플 점검 워크플로를 시작해 주세요",
             "start_procedure", json.dumps({"procedure_id": PROCEDURE_ID}),
         )[0]
+        if (self.controller.attached_session_id and not
+                self.store.list_observations(
+                    self.controller.attached_session_id,"demo-label-check")):
+            self.controller.record_observation("demo-label-check","A-17")
+        return socket
 
     def complete(self, step_id, transcript="현재 단계를 완료했습니다"):
+        if transcript.rstrip(".!?。？！") in {
+            "현재 단계를 완료했습니다","이 단계를 완료했습니다","현재 단계 완료했습니다"
+        }:
+            if step_id=="demo-mix-timer":
+                started=self.controller.start_timer(step_id)
+                if started.get("status")=="success":
+                    self.now[0]+=10
+            if step_id=="demo-indicator-observation":
+                self.controller.record_observation(step_id,"green")
         return self.turn(
             transcript, "complete_current_step",
             json.dumps({"expected_step_id": step_id}),
@@ -183,7 +202,7 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
     def test_server_authorized_completion_advances_exactly_one_step(self):
         self.start()
         before = self.snapshot()
-        socket = self.complete("blue-card")
+        socket = self.complete("demo-label-check")
         after = self.snapshot()
         self.assertEqual([e["type"] for e in self.procedure_events(socket)],
                          ["procedure.step_completed", "procedure.state"])
@@ -196,13 +215,13 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         for transcript in UNAUTHORIZED:
             with self.subTest(transcript=transcript):
                 before = self.snapshot()
-                socket = self.complete("blue-card", transcript)
+                socket = self.complete("demo-label-check", transcript)
                 self.assertEqual(self.snapshot(), before)
                 self.assert_sanitized_error(socket, "explicit_confirmation_required")
 
     def test_emergency_preserves_complete_procedure_and_conversation_state(self):
         self.start()
-        self.complete("blue-card")
+        self.complete("demo-label-check")
         before = self.snapshot()
         attachment = self.controller.attached_session_id
         pending = {"location": "F", "summary": "fictional", "urgency": "routine",
@@ -243,12 +262,55 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         }):
             self.turn("보고서를 제출해 주세요")
         self.assertEqual(self.snapshot(), before)
-        # Even an adversarial forced Tool call is rejected while confirmation is pending.
+        # Even an adversarial forced Tool call cannot bypass the server-owned
+        # pending-report confirmation branch.
         self.session.history.pending_report = dict(pending)
-        socket = self.complete("blue-card", "현재 단계를 완료했습니다")
+        socket = self.complete("demo-label-check", "현재 단계를 완료했습니다")
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.controller.attached_session_id, attachment)
-        self.assert_sanitized_error(socket, "explicit_confirmation_required")
+        self.assertEqual(self.procedure_events(socket), [])
+        self.assertEqual(self.session.history.pending_report, pending)
+        reply = next(
+            item for item in socket.text if item["type"] == "reply.complete"
+        )
+        self.assertEqual(
+            reply["text"],
+            REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"],
+        )
+
+    def test_confirmed_report_links_current_step_and_blocks_workflow(self):
+        self.start()
+        pending = {
+            "location":"F","summary":"가상 표시창이 빨간색임",
+            "urgency":"urgent","exposure_status":"unknown","language":"ko",
+        }
+        self.session.history.pending_report=dict(pending)
+        with patch(
+            "safebridge_voice.tools.create_safety_report",
+            return_value={
+                "status":"success","report_id":"SR-20260725-A1B2C3",
+                "report_status":"queued_for_handoff",
+            },
+        ) as create:
+            socket,_=self.turn("보고서를 제출해 주세요")
+
+        workflow=create.call_args.kwargs["workflow_context"]
+        self.assertEqual(workflow["procedure_id"],PROCEDURE_ID)
+        self.assertEqual(workflow["step_id"],"demo-label-check")
+        state=self.controller.current()["state"]
+        self.assertEqual(state["status"],"blocked_for_handoff")
+        self.assertEqual(
+            state["handoff"]["report_id"],"SR-20260725-A1B2C3")
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(socket)],
+            ["procedure.blocked_for_handoff","procedure.state"])
+        self.assertIn(
+            "관리자 인계를 위해 이 단계에서 차단",
+            next(item for item in socket.text
+                 if item["type"]=="reply.delta")["text"])
+        blocked=self.complete("demo-label-check")
+        self.assert_sanitized_error(
+            blocked,"procedure_blocked_for_handoff")
 
     def test_ordinary_conversation_and_real_approved_retrieval_are_read_only(self):
         self.start()
@@ -282,9 +344,9 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
 
     def test_final_completion_is_atomic_and_replays_are_idempotent_or_stale(self):
         self.start()
-        self.complete("blue-card")
-        self.complete("yellow-card")
-        socket = self.complete("green-card")
+        self.complete("demo-label-check")
+        self.complete("demo-mix-timer")
+        socket = self.complete("demo-indicator-observation")
         self.assertEqual([e["type"] for e in self.procedure_events(socket)],
                          ["procedure.step_completed", "procedure.completed",
                           "procedure.state"])
@@ -294,16 +356,18 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(sessions[0]["completed_at"])
         self.assertEqual([e["event_type"] for e in events].count("completed"), 1)
         before = self.snapshot()
-        replay = self.complete("green-card")
+        replay = self.complete("demo-indicator-observation")
         self.assertEqual(self.snapshot(), before)
         self.assertEqual([e["type"] for e in self.procedure_events(replay)],
                          ["procedure.state"])
         # Older-step replay is rejected by the real controller as stale.  The
         # server authorization boundary intentionally cannot authorize an old
         # step after completion.
-        stale = self.controller.complete("blue-card")
+        stale = self.controller.complete("demo-label-check")
         self.assertEqual(self.snapshot(), before)
-        self.assertEqual(stale, {"status": "error", "code": "stale_step"})
+        self.assertEqual(stale["status"],"error")
+        self.assertEqual(stale["code"],"stale_step")
+        self.assertEqual(stale["state"]["status"],"completed")
 
     def test_real_errors_and_sqlite_rollback_are_sanitized(self):
         cases = (
@@ -321,7 +385,7 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
                 self.assert_sanitized_error(socket, code)
         self.start()
         before = self.snapshot()
-        mismatch = self.complete("yellow-card")
+        mismatch = self.complete("demo-mix-timer")
         self.assertEqual(self.snapshot(), before)
         self.assert_sanitized_error(mismatch, "explicit_confirmation_required")
         self.store._connection.execute("""
@@ -330,7 +394,7 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
             BEGIN SELECT RAISE(ABORT,'synthetic database path /tmp/private.sqlite'); END
         """)
         before = self.snapshot()
-        failed = self.complete("blue-card")
+        failed = self.complete("demo-label-check")
         self.assertEqual(self.snapshot(), before)
         self.assert_sanitized_error(failed, "step_mismatch")
 

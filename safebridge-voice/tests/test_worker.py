@@ -93,6 +93,43 @@ class WorkerTests(unittest.TestCase):
             )
             self.assertIn("[긴급]", parsed["Subject"])
 
+    def test_worker_receives_linked_workflow_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inbox, processed, status_dir, outbox = self.paths(root)
+            value = report("SR-20260722-DDDDDD", "urgent", 1)
+            value["workflow"] = {
+                "workflow_session_id": "workflow-1",
+                "procedure_id": "fictional-demo",
+                "procedure_title": "FICTIONAL NON-OPERATIONAL Demo",
+                "procedure_version": "2.0",
+                "step_id": "observe",
+                "step_number": 3,
+                "step_title": "가상 표시창 관찰",
+                "latest_observation": {"label": "색상", "value": "빨간색"},
+            }
+            self.write_reports(inbox, [value])
+            client = FakeClient()
+
+            self.assertEqual(
+                process_once(
+                    inbox_path=inbox,
+                    processed_path=processed,
+                    status_dir=status_dir,
+                    outbox_dir=outbox,
+                    client=client,
+                ),
+                1,
+            )
+
+            payload = json.loads(
+                client.completions.requests[0]["messages"][1]["content"]
+            )
+            self.assertEqual(payload["workflow"]["step_id"], "observe")
+            self.assertEqual(
+                payload["workflow"]["latest_observation"]["value"], "빨간색"
+            )
+
     def test_failure_retries_three_times_then_stops(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
