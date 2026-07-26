@@ -41,10 +41,18 @@ SEARCH_TOOL = {
     "function": {
         "name": SEARCH_TOOL_NAME,
         "description": (
-            "Use this whenever a lab worker asks about a safety procedure or "
-            "approved lab safety information. Search the trusted local catalog "
-            "before answering; do not use it for greetings or ordinary "
-            "conversation."
+            "Call this whenever a worker asks a factual question that must be "
+            "answered from approved local safety material, including SOP or SDS "
+            "content, first aid, fire, spills, handling or storage, exposure or "
+            "PPE, disposal, and equipment operation. Pass the worker's actual "
+            "question and the one validated topic that best matches the request. "
+            "Use only a successful, answerable result as evidence; if the catalog "
+            "does not return an answerable match, do not fill the gap from general "
+            "knowledge or claim that the requested fact is confirmed. Do not call "
+            "this for greetings, ordinary conversation, workflow state, step "
+            "observations, timers, or report status. The catalog path, facility, "
+            "session language, and usage scope are trusted server context and must "
+            "never be supplied or overridden in Tool arguments."
         ),
         "parameters": {
             "type": "object",
@@ -52,12 +60,21 @@ SEARCH_TOOL = {
                 "query": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The worker's non-empty safety question or keywords.",
+                    "description": (
+                        "The worker's non-empty safety question or identifying "
+                        "keywords, preserving any stated product, material, equipment, "
+                        "number, or unit. Do not add facts that the worker did not say."
+                    ),
                 },
                 "topic": {
                     "type": "string",
                     "enum": list(TOPICS),
-                    "description": "An explicit validated safety topic.",
+                    "description": (
+                        "The single catalog route that matches the requested fact: "
+                        "first_aid, fire, spill, handling_storage, exposure_ppe, "
+                        "disposal, or equipment_operation. Select by user intent, "
+                        "not by guessing the answer."
+                    ),
                 },
             },
             "required": ["query", "topic"],
@@ -72,10 +89,21 @@ CREATE_REPORT_TOOL = {
     "function": {
         "name": CREATE_REPORT_TOOL_NAME,
         "description": (
-            "Record a lab hazard, near miss, spill, exposure concern, damaged "
-            "equipment, or other abnormal situation for human handoff. Collect "
-            "the location, a factual summary, urgency, and exposure status before "
-            "calling. This queues a report; it never replaces emergency contact."
+            "Call this when a worker reports a hazard, near miss, spill, exposure "
+            "concern, damaged equipment, abnormal device behavior, or another "
+            "situation that should be recorded for human handoff, after location, "
+            "a factual summary, urgency, and exposure status are all known and the "
+            "worker asks to record, report, submit, or create a draft. Use only "
+            "facts the worker stated; ask for any missing required fact instead of "
+            "guessing. The runtime stages the normalized report and requires "
+            "explicit user confirmation before it is actually queued. A confirmed "
+            "submission returns a SafeBridge report id and, when a workflow is "
+            "attached, links the report to the current step and blocks further "
+            "progress for manager handoff. A draft awaiting confirmation is not "
+            "submitted and must not be described as submitted or blocked. This "
+            "Tool records and queues a handoff; it does not contact emergency "
+            "services, determine that an area is safe, approve work resumption, or "
+            "replace the facility's established emergency channel."
         ),
         "parameters": {
             "type": "object",
@@ -83,36 +111,58 @@ CREATE_REPORT_TOOL = {
                 "location": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Specific lab, room, bench, hood, or equipment location.",
+                    "description": (
+                        "The most specific location the worker provided, such as "
+                        "laboratory, room, bench, hood, or equipment position. Do not "
+                        "invent a building, room number, or device location."
+                    ),
                 },
                 "summary": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Short factual description using only details the worker gave.",
+                    "description": (
+                        "A short factual account of what the worker observed, "
+                        "including relevant symptoms or device behavior, using only "
+                        "their statements. Do not add a cause, diagnosis, safety "
+                        "judgment, or corrective action."
+                    ),
                 },
                 "urgency": {
                     "type": "string",
                     "enum": ["emergency", "urgent", "routine"],
                     "description": (
-                        "emergency = immediate danger now; urgent = prompt human "
-                        "review needed; routine = non-immediate near miss or issue."
+                        "Classify from the worker's stated present condition: "
+                        "emergency means immediate danger now, urgent means prompt "
+                        "human review is needed without a stated immediate danger, "
+                        "and routine means a non-immediate issue or near miss. Do not "
+                        "downgrade a stated immediate danger."
                     ),
                 },
                 "exposure_status": {
                     "type": "string",
                     "enum": ["yes", "no", "unknown"],
-                    "description": "Whether a person may have been exposed; never guess.",
+                    "description": (
+                        "Whether any person may have been exposed: yes only when the "
+                        "worker reports possible or actual exposure, no only when the "
+                        "worker explicitly reports no exposure, otherwise unknown. "
+                        "Never infer this from urgency or the event type."
+                    ),
                 },
                 "language": {
                     "type": "string",
                     "enum": ["ko", "en", "vi"],
-                    "description": "Language used by the worker.",
+                    "description": (
+                        "The trusted session language used by the worker: ko, en, or "
+                        "vi. The server enforces this value; do not switch it based on "
+                        "report content or the desired manager handoff language."
+                    ),
                 },
                 "material_or_equipment": {
                     "type": "string",
                     "description": (
-                        "Chemical, sample, instrument, or equipment name if the "
-                        "worker provided it. Omit when not known."
+                        "The chemical, sample, instrument, or equipment name exactly "
+                        "as the worker provided it. Preserve identifiers, digits, and "
+                        "separators. Omit this optional field when it is unknown."
                     ),
                 },
             },
@@ -128,15 +178,27 @@ CHECK_REPORT_TOOL = {
     "function": {
         "name": CHECK_REPORT_TOOL_NAME,
         "description": (
-            "Check whether a previously queued SafeBridge safety report is "
-            "awaiting handoff, being retried, or has a manager handoff artifact."
+            "Call this only when the worker asks for the processing or handoff "
+            "status of a previously submitted SafeBridge report and a valid report "
+            "id is available from conversation memory or the worker. It can show "
+            "whether the report is queued for handoff, being processed or retried, "
+            "or has a manager handoff artifact. This is a read-only status check: "
+            "it does not submit, edit, cancel, resend, or unblock a report or its "
+            "linked workflow. Do not call it for a draft that has not been "
+            "confirmed, and do not infer completion when the returned status does "
+            "not say that the handoff is ready."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "report_id": {
                     "type": "string",
-                    "description": "SafeBridge report id, for example SR-20260722-A1B2C3.",
+                    "description": (
+                        "The exact SafeBridge report id returned by a confirmed "
+                        "submission, in the form SR-YYYYMMDD-XXXXXX, for example "
+                        "SR-20260722-A1B2C3. Preserve every character; do not invent "
+                        "or reconstruct a missing id."
+                    ),
                 },
             },
             "required": ["report_id"],
@@ -145,46 +207,210 @@ CHECK_REPORT_TOOL = {
     },
 }
 
-START_PROCEDURE_TOOL = {"type":"function","function":{
-    "name":START_PROCEDURE_TOOL_NAME,
-    "description":"Start one server-approved procedure by its stable procedure ID.",
-    "parameters":{"type":"object","properties":{"procedure_id":{"type":"string","minLength":1}},
-                  "required":["procedure_id"],"additionalProperties":False}}}
-GET_CURRENT_STEP_TOOL = {"type":"function","function":{
-    "name":GET_CURRENT_STEP_TOOL_NAME,
-    "description":"Read the current approved step of the server-attached procedure.",
-    "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":False}}}
-COMPLETE_CURRENT_STEP_TOOL = {"type":"function","function":{
-    "name":COMPLETE_CURRENT_STEP_TOOL_NAME,
-    "description":"Complete only the current step after explicit user confirmation.",
-    "parameters":{"type":"object","properties":{"expected_step_id":{"type":"string","minLength":1}},
-                  "required":["expected_step_id"],"additionalProperties":False}}}
-RECORD_STEP_OBSERVATION_TOOL = {"type":"function","function":{
-    "name":RECORD_STEP_OBSERVATION_TOOL_NAME,
-    "description":(
-        "Record a user-observed value against the current server-approved workflow "
-        "step. Use only the value the user actually reported; never infer it."
-    ),
-    "parameters":{"type":"object","properties":{
-        "expected_step_id":{"type":"string","minLength":1},
-        "value":{"anyOf":[{"type":"string","minLength":1},{"type":"number"},{"type":"boolean"}]},
-    },"required":["expected_step_id","value"],"additionalProperties":False}}}
-START_STEP_TIMER_TOOL = {"type":"function","function":{
-    "name":START_STEP_TIMER_TOOL_NAME,
-    "description":(
-        "Start the fixed-duration timer configured by the server for the current "
-        "workflow step. Never choose or override the duration."
-    ),
-    "parameters":{"type":"object","properties":{
-        "expected_step_id":{"type":"string","minLength":1},
-    },"required":["expected_step_id"],"additionalProperties":False}}}
-GET_WORKFLOW_SUMMARY_TOOL = {"type":"function","function":{
-    "name":GET_WORKFLOW_SUMMARY_TOOL_NAME,
-    "description":(
-        "Read the server-owned workflow audit summary: completed steps, recorded "
-        "observations, timers, and any linked human handoff."
-    ),
-    "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":False}}}
+START_PROCEDURE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": START_PROCEDURE_TOOL_NAME,
+        "description": (
+            "Call this only after the worker explicitly asks to begin one of the "
+            "validated procedures listed for the current session. Use its exact "
+            "stable procedure_id; do not invent an id, choose an unlisted "
+            "procedure, or start a workflow merely because the worker asks a "
+            "general safety question. The server revalidates the procedure against "
+            "trusted facility, session language, and usage scope, and permits only "
+            "one attached workflow. Repeating the same active procedure is "
+            "idempotent; trying a different procedure while one is attached is a "
+            "conflict. Facility, language, scope, session id, database path, and "
+            "workflow state are server-owned and must never appear in arguments. "
+            "Do not claim that the workflow started until the Tool returns success."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "procedure_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "The exact stable id of a procedure listed as available in "
+                        "the current session context, not its title, step id, or a "
+                        "model-created label."
+                    ),
+                },
+            },
+            "required": ["procedure_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+GET_CURRENT_STEP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": GET_CURRENT_STEP_TOOL_NAME,
+        "description": (
+            "Call this to read the current server-attached workflow state when the "
+            "worker asks what to do now, asks to repeat the current instruction, or "
+            "when a state-changing Tool needs a fresh current step id. This is "
+            "read-only and returns the approved instruction, source, step id and "
+            "number, required observation state, fixed timer state, completion "
+            "counts, and any human-handoff block. Read the approved instruction "
+            "without rewriting or improvising operational details. No session id "
+            "is accepted because attachment is trusted server state. This Tool "
+            "does not start, complete, skip, record, time, unblock, or restart a "
+            "workflow."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
+
+COMPLETE_CURRENT_STEP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": COMPLETE_CURRENT_STEP_TOOL_NAME,
+        "description": (
+            "Call this only for the current step after the worker explicitly "
+            "confirms completion in the current turn. Pass the exact current "
+            "step_id returned by server-owned workflow state, never a step number, "
+            "title, previous step, or guessed next step. Do not infer completion "
+            "from an observation, a timer request, silence, or conversational "
+            "agreement, and never use this Tool to skip steps. The server "
+            "independently checks turn-scoped confirmation, step identity, required "
+            "observations, fixed-timer start and elapsed state, completion status, "
+            "and any manager-handoff block. If any gate fails, keep the workflow at "
+            "the current step, explain the returned requirement, and do not claim "
+            "success. A blocked_for_handoff workflow cannot advance or restart "
+            "until handled outside this Tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expected_step_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "The exact current_step_id from the latest trusted procedure "
+                        "state. It is an optimistic concurrency check, not a request "
+                        "to choose or jump to that step."
+                    ),
+                },
+            },
+            "required": ["expected_step_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+RECORD_STEP_OBSERVATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": RECORD_STEP_OBSERVATION_TOOL_NAME,
+        "description": (
+            "Call this when the worker explicitly states an observation requested "
+            "by the current server-approved step. Record only the value present in "
+            "the current finalized user transcript. Preserve every letter, digit, "
+            "decimal point, sign, separator, and boolean meaning exactly; do not "
+            "shorten identifiers, correct or translate the value, infer a value "
+            "from context, or add a unit the worker did not say. Pass the exact "
+            "current step_id from trusted workflow state. The server rejects stale "
+            "steps, steps without an observation schema, wrong value types, "
+            "blocked or completed workflows, and values unsupported by the final "
+            "transcript. This Tool records an auditable observation only; it does "
+            "not complete the step or make a safety judgment."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expected_step_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "The exact current_step_id from the latest trusted procedure "
+                        "state. Do not use a step number, title, or earlier step id."
+                    ),
+                },
+                "value": {
+                    "anyOf": [
+                        {"type": "string", "minLength": 1},
+                        {"type": "number"},
+                        {"type": "boolean"},
+                    ],
+                    "description": (
+                        "The exact user-observed value in the type required by the "
+                        "current step. Preserve identifiers such as A-170 verbatim "
+                        "and never substitute a shorter or normalized value."
+                    ),
+                },
+            },
+            "required": ["expected_step_id", "value"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+START_STEP_TIMER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": START_STEP_TIMER_TOOL_NAME,
+        "description": (
+            "Call this only when the worker explicitly asks to start the timer for "
+            "the current step and trusted workflow state shows that the step has a "
+            "configured timer. Pass the exact current step_id. Never choose, "
+            "estimate, mention as started, or override a duration: the approved "
+            "ProcedureDefinition on the server owns the fixed duration and this "
+            "Tool accepts no duration argument. Repeating the call for the same "
+            "active step is idempotent and does not reset the deadline. The server "
+            "rejects stale steps, steps without a timer, completed workflows, and "
+            "workflows blocked for manager handoff. Starting a timer does not "
+            "complete the step; completion remains gated until the fixed deadline "
+            "has elapsed and the worker separately confirms completion."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expected_step_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "The exact current_step_id from the latest trusted procedure "
+                        "state. No duration, deadline, session id, or reset flag is "
+                        "allowed."
+                    ),
+                },
+            },
+            "required": ["expected_step_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+GET_WORKFLOW_SUMMARY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": GET_WORKFLOW_SUMMARY_TOOL_NAME,
+        "description": (
+            "Call this when the worker asks for a workflow recap, completed-step "
+            "history, recorded observations, timer records, current progress, or "
+            "the report linked to manager handoff. It returns a read-only, "
+            "server-owned audit summary together with current workflow state. Use "
+            "the returned records exactly and distinguish the current step from "
+            "completed steps. This Tool is for audit and recap, not for retrieving "
+            "new SOP or SDS facts, generating missing observations, deciding that "
+            "work is safe, or mutating, completing, unblocking, or restarting the "
+            "workflow. It accepts no model-supplied session or database identifier."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
 
 PROCEDURE_TOOL_NAMES=frozenset({
     START_PROCEDURE_TOOL_NAME,GET_CURRENT_STEP_TOOL_NAME,COMPLETE_CURRENT_STEP_TOOL_NAME,

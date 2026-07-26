@@ -49,6 +49,63 @@ class ToolTests(unittest.TestCase):
             CHECK_REPORT_TOOL["function"]["parameters"]["required"], ["report_id"]
         )
 
+    def test_model_facing_descriptions_define_selection_and_safety_contracts(self):
+        by_name = {tool["function"]["name"]: tool["function"] for tool in TOOLS}
+        required_guidance = {
+            "search_approved_safety_manual": (
+                "approved local safety material",
+                "only a successful, answerable result",
+                "trusted server context",
+            ),
+            "create_safety_report": (
+                "explicit user confirmation",
+                "draft awaiting confirmation",
+                "does not contact emergency services",
+            ),
+            "check_safety_report_status": (
+                "previously submitted SafeBridge report",
+                "read-only status check",
+                "draft that has not been confirmed",
+            ),
+            "start_procedure": (
+                "explicitly asks to begin",
+                "trusted facility",
+                "Do not claim that the workflow started",
+            ),
+            "get_current_step": (
+                "read-only",
+                "approved instruction",
+                "does not start, complete, skip",
+            ),
+            "complete_current_step": (
+                "explicitly confirms completion",
+                "required observations",
+                "blocked_for_handoff",
+            ),
+            "record_step_observation": (
+                "current finalized user transcript",
+                "Preserve every letter, digit",
+                "does not complete the step",
+            ),
+            "start_step_timer": (
+                "accepts no duration argument",
+                "does not reset the deadline",
+                "does not complete the step",
+            ),
+            "get_workflow_summary": (
+                "server-owned audit summary",
+                "not for retrieving new SOP or SDS facts",
+                "accepts no model-supplied session",
+            ),
+        }
+        for name, fragments in required_guidance.items():
+            description = by_name[name]["description"]
+            self.assertGreater(len(description), 300, name)
+            for fragment in fragments:
+                self.assertIn(fragment, description, name)
+            for schema in by_name[name]["parameters"]["properties"].values():
+                self.assertGreater(len(schema.get("description", "")), 40, name)
+
     def test_explicit_topic_is_required_and_validated(self):
         context = ToolContext(Path("unused.sqlite"), None, "en", "operational")
         for arguments in ({"query": "FICTIONAL"}, {"query": "FICTIONAL", "topic": "unsupported"}):
