@@ -27,7 +27,12 @@ from safebridge_voice.vad import TurnState
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "data" / "procedure_demo"
 PROCEDURE_ID = "fictional-wet-lab-workflow-demo-ko"
-ROUTES = {"deterministic_emergency", "language_clarification", "brain"}
+ROUTES = {
+    "deterministic_emergency",
+    "deterministic_procedure",
+    "language_clarification",
+    "brain",
+}
 UNAUTHORIZED = (
     "아직 현재 단계를 완료하지 않았습니다",
     "현재 단계를 완료하면 어떻게 되나요",
@@ -163,8 +168,12 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
 
     def assert_sanitized_error(self, socket, expected_code):
         events = self.procedure_events(socket)
-        self.assertEqual([(item["type"], item.get("code")) for item in events],
-                         [("procedure.error", expected_code)])
+        self.assertEqual(
+            (events[0]["type"],events[0].get("code")),
+            ("procedure.error",expected_code),
+        )
+        self.assertTrue(all(
+            item["type"]=="procedure.state" for item in events[1:]))
         visible = json.dumps(events, ensure_ascii=False)
         for secret in (str(self.catalog), str(self.database),
                        self.controller.attached_session_id or "", "sqlite", "sql",
@@ -209,6 +218,110 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         self.assertEqual(after[0][0]["current_step_index"], 1)
         self.assertEqual(len(after[1]), len(before[1]) + 1)
         self.assertEqual(after[1][-1]["event_type"], "step_completed")
+
+    def test_natural_completion_and_timer_start_are_server_owned(self):
+        self.start()
+        completed,completion_client=self.turn(
+            "현재 단계를 완료했어.",
+            "complete_current_step",
+            json.dumps({"expected_step_id":"demo-mix-timer"}),
+            answer="이전 단계가 아직 진행 중입니다.",
+        )
+        self.assertEqual(completion_client.chat.completions.calls,[])
+        self.assertEqual(
+            next(item for item in completed.text
+                 if item["type"]=="tool.result")["completed_step_id"],
+            "demo-label-check",
+        )
+
+        timer,timer_client=self.turn(
+            "고정 타이머를 시작해줘.",
+            "start_step_timer",
+            json.dumps({"expected_step_id":"demo-label-check"}),
+            answer="현재 단계와 일치하지 않습니다.",
+        )
+        self.assertEqual(timer_client.chat.completions.calls,[])
+        result=next(item for item in timer.text
+                    if item["type"]=="tool.result")
+        self.assertEqual(result["tool"],"start_step_timer")
+        self.assertEqual(result["timer_step_id"],"demo-mix-timer")
+        self.assertEqual(result["status"],"success")
+        reply=next(item for item in timer.text
+                   if item["type"]=="reply.complete")["text"]
+        self.assertIn("고정 10초 타이머를 시작했습니다",reply)
+        sessions,_=self.snapshot()
+        self.assertEqual(sessions[0]["current_step_index"],1)
+        self.assertEqual(
+            self.controller.current()["state"]["timer"]["state"],
+            "running",
+        )
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(timer)],
+            ["procedure.timer_started","procedure.state"],
+        )
+
+    def test_timer_completion_is_server_owned_and_uses_fresh_deadline(self):
+        self.start()
+        self.complete("demo-label-check")
+        started=self.controller.start_timer("demo-mix-timer")
+        self.assertEqual(started["status"],"success")
+        before=self.snapshot()
+
+        early,early_client=self.turn(
+            "현재 단계를 완료했습니다",
+            answer="Do you want to confirm completion?",
+        )
+        self.assertEqual(self.snapshot(),before)
+        self.assertEqual(early_client.chat.completions.calls,[])
+        result=next(item for item in early.text
+                    if item["type"]=="tool.result")
+        self.assertEqual(result["code"],"timer_not_elapsed")
+        self.assertEqual(result["remaining_seconds"],10)
+        reply=next(item for item in early.text
+                   if item["type"]=="reply.complete")["text"]
+        self.assertIn("현재 단계를 완료했습니다",reply)
+        self.assertIn("0초가 된 뒤",reply)
+        self.assertNotIn("확인",reply)
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(early)],
+            ["procedure.error","procedure.state"],
+        )
+
+        self.now[0]+=10
+        status,status_client=self.turn(
+            "왜 0초인데 안 끝나요?",
+            answer="이미 완료되었습니다.",
+        )
+        self.assertEqual(self.snapshot(),before)
+        self.assertEqual(status_client.chat.completions.calls,[])
+        self.assertEqual(
+            next(item for item in status.text
+                 if item["type"]=="tool.call")["tool"],
+            "get_current_step",
+        )
+        status_reply=next(item for item in status.text
+                          if item["type"]=="reply.complete")["text"]
+        self.assertIn("현재 단계를 완료했습니다",status_reply)
+        self.assertNotIn("완료하고 다음",status_reply)
+
+        completed,completed_client=self.turn(
+            "현재 단계를 완료했습니다",
+            answer="ordinary model text without a Tool",
+        )
+        self.assertEqual(completed_client.chat.completions.calls,[])
+        sessions,events=self.snapshot()
+        self.assertEqual(sessions[0]["current_step_index"],2)
+        self.assertEqual(
+            [event["event_type"] for event in events].count("step_completed"),2)
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(completed)],
+            ["procedure.step_completed","procedure.state"],
+        )
+        self.assertEqual(
+            next(item for item in completed.text
+                 if item["type"]=="tool.call")["tool"],
+            "complete_current_step",
+        )
 
     def test_forced_unauthorized_completion_calls_fail_closed_without_mutation(self):
         self.start()
@@ -275,6 +388,15 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             reply["text"],
+            REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"],
+        )
+        self.session.history.pending_report = dict(pending)
+        timer_status,_ = self.turn("왜 0초인데 안 끝나요?")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.procedure_events(timer_status), [])
+        self.assertEqual(
+            next(item for item in timer_status.text
+                 if item["type"]=="reply.complete")["text"],
             REPORT_CONFIRMATION_CLARIFICATION_TEXT["ko"],
         )
 
@@ -385,7 +507,8 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
                 self.assert_sanitized_error(socket, code)
         self.start()
         before = self.snapshot()
-        mismatch = self.complete("demo-mix-timer")
+        mismatch = self.complete(
+            "demo-mix-timer","현재 단계를 완료해 주세요")
         self.assertEqual(self.snapshot(), before)
         self.assert_sanitized_error(mismatch, "explicit_confirmation_required")
         self.store._connection.execute("""

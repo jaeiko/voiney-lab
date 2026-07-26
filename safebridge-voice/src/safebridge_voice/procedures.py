@@ -14,8 +14,34 @@ KOREAN_COMPLETION_PHRASES=frozenset({
     "현재 단계를 완료했습니다",
     "이 단계를 완료했습니다",
     "현재 단계 완료했습니다",
+    "현재 단계를 완료했어요",
+    "이 단계를 완료했어요",
+    "현재 단계 완료했어요",
+    "현재 단계를 완료했어",
+    "이 단계를 완료했어",
+    "현재 단계 완료했어",
+    "현재 단계 완료",
+})
+KOREAN_COMPLETION_INSTRUCTION="현재 단계를 완료했습니다"
+KOREAN_TIMER_START_PHRASES=frozenset({
+    "고정 타이머를 시작해 줘",
+    "고정 타이머를 시작해줘",
+    "고정 타이머를 시작해 주세요",
+    "고정 타이머 시작해 줘",
+    "고정 타이머 시작해줘",
+    "고정 타이머 시작해 주세요",
+    "타이머를 시작해 줘",
+    "타이머를 시작해줘",
+    "타이머를 시작해 주세요",
+    "현재 단계 타이머를 시작해 줘",
+    "현재 단계 타이머를 시작해줘",
+    "현재 단계 타이머를 시작해 주세요",
 })
 REPORT_ID_PATTERN=re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
+
+
+def _normalized_korean_command(transcript:str)->str:
+    return re.sub(r"[\s.!?。？！]+$", "", transcript.strip())
 
 
 def authorized_completion_step_id(
@@ -24,18 +50,183 @@ def authorized_completion_step_id(
     """Authorize one current step for this turn using exact reviewed utterances."""
     if language!="ko" or controller is None or not isinstance(transcript,str):
         return None
-    normalized=re.sub(r"[\s.!?。？！]+$", "", transcript.strip())
+    normalized=_normalized_korean_command(transcript)
     if normalized not in KOREAN_COMPLETION_PHRASES:
         return None
+    return _active_step_id(controller,allow_completed_replay=True)
+
+
+def _active_step_id(
+    controller:"ProcedureController",*,allow_completed_replay:bool=False
+)->str|None:
     definition,row=controller._attached()
     if not definition or not row:
         return None
-    if row["status"]=="completed" and definition.steps:
+    if allow_completed_replay and row["status"]=="completed" and definition.steps:
         return definition.steps[-1].step_id
     if (row["status"]!="active" or
             row["current_step_index"]>=len(definition.steps)):
         return None
     return definition.steps[row["current_step_index"]].step_id
+
+
+def authorized_timer_start_step_id(
+    transcript:str,language:str,controller:"ProcedureController"|None
+)->str|None:
+    """Bind an exact Korean timer-start command to the latest current step."""
+    if language!="ko" or controller is None or not isinstance(transcript,str):
+        return None
+    if _normalized_korean_command(transcript) not in KOREAN_TIMER_START_PHRASES:
+        return None
+    return _active_step_id(controller)
+
+
+def korean_timer_status_question(transcript:str,language:str)->bool:
+    """Recognize a bounded Korean timer-state question, never a completion."""
+    if language!="ko" or not isinstance(transcript,str):
+        return False
+    text=transcript.strip()
+    normalized=_normalized_korean_command(text)
+    if (normalized in KOREAN_COMPLETION_PHRASES or
+            normalized in KOREAN_TIMER_START_PHRASES):
+        return False
+    mentions_timer="타이머" in text or "초" in text
+    asks_status=any(token in text for token in (
+        "왜","얼마","남았","끝났","끝나","0초","영 초","안 끝","진행 중","지났",
+    ))
+    return mentions_timer and asks_status
+
+
+def deterministic_procedure_text(result:dict[str,Any],language:str)->str:
+    """Return server-owned speech for deterministic completion/status routes."""
+    state=result.get("state")
+    code=result.get("code")
+    if code=="timer_not_elapsed":
+        remaining=result.get("remaining_seconds")
+        return {
+            "ko":(
+                f"타이머가 아직 끝나지 않았습니다. 약 {remaining}초 남았습니다. "
+                f"타이머가 0초가 된 뒤 “{KOREAN_COMPLETION_INSTRUCTION}”라고 다시 말해 주세요."
+            ),
+            "en":f"The timer has not finished. About {remaining} seconds remain.",
+            "vi":f"Bộ hẹn giờ chưa kết thúc. Còn khoảng {remaining} giây.",
+        }[language]
+    if code=="timer_not_started":
+        return {
+            "ko":"현재 단계의 고정 타이머를 먼저 시작해 주세요.",
+            "en":"Start the fixed timer for the current step first.",
+            "vi":"Trước tiên, hãy bắt đầu bộ hẹn giờ cố định cho bước hiện tại.",
+        }[language]
+    if code=="timer_not_configured":
+        return {
+            "ko":"현재 단계에는 시작할 고정 타이머가 없습니다. 화면의 현재 단계 안내를 확인해 주세요.",
+            "en":"The current step has no fixed timer to start.",
+            "vi":"Bước hiện tại không có bộ hẹn giờ cố định để bắt đầu.",
+        }[language]
+    if code=="observation_required":
+        return {
+            "ko":"현재 단계의 필수 관찰값을 먼저 말해 주세요. 관찰값을 기록한 뒤 단계를 완료할 수 있습니다.",
+            "en":"State the required observation for this step first. The step can finish after it is recorded.",
+            "vi":"Trước tiên, hãy nêu giá trị quan sát bắt buộc. Bước này có thể hoàn thành sau khi giá trị được ghi lại.",
+        }[language]
+    if code=="procedure_blocked_for_handoff":
+        return {
+            "ko":"현재 워크플로는 관리자 인계를 위해 차단되어 다음 단계로 진행할 수 없습니다.",
+            "en":"The workflow is blocked for manager handoff and cannot advance.",
+            "vi":"Quy trình bị chặn để bàn giao cho quản lý và không thể tiếp tục.",
+        }[language]
+    if code in {
+        "no_active_procedure","procedure_not_available",
+        "procedure_already_completed","procedure_store_unavailable",
+    }:
+        return {
+            "ko":"현재 워크플로 상태에서는 단계를 완료할 수 없습니다. 화면의 절차 상태를 확인해 주세요.",
+            "en":"The step cannot be completed in the current workflow state. Check the procedure state on screen.",
+            "vi":"Không thể hoàn thành bước trong trạng thái quy trình hiện tại. Hãy kiểm tra trạng thái trên màn hình.",
+        }[language]
+    if code:
+        return {
+            "ko":"현재 단계의 완료 조건과 맞지 않아 실행하지 않았습니다. 화면의 현재 단계 안내를 확인해 주세요.",
+            "en":"The request did not meet the current step's completion conditions. Check the current step on screen.",
+            "vi":"Yêu cầu chưa đáp ứng điều kiện hoàn thành bước hiện tại. Hãy kiểm tra bước trên màn hình.",
+        }[language]
+    if result.get("operation")=="complete" and not result.get("idempotent"):
+        if result.get("completed"):
+            return {
+                "ko":"현재 단계를 완료했고 전체 절차가 완료되었습니다.",
+                "en":"The current step and the procedure are complete.",
+                "vi":"Bước hiện tại và toàn bộ quy trình đã hoàn thành.",
+            }[language]
+        return {
+            "ko":"현재 단계를 완료하고 다음 단계로 이동했습니다.",
+            "en":"The current step is complete and the workflow moved to the next step.",
+            "vi":"Bước hiện tại đã hoàn thành và quy trình đã chuyển sang bước tiếp theo.",
+        }[language]
+    if result.get("operation")=="start_timer":
+        timer=result.get("timer")
+        state_timer=state.get("timer") if isinstance(state,dict) else None
+        duration=(
+            timer.get("duration_seconds") if isinstance(timer,dict) else None
+        )
+        remaining=(
+            state_timer.get("remaining_seconds")
+            if isinstance(state_timer,dict) else None
+        )
+        if result.get("idempotent"):
+            return {
+                "ko":f"고정 타이머가 이미 실행 중입니다. 약 {remaining}초 남았습니다.",
+                "en":f"The fixed timer is already running with about {remaining} seconds left.",
+                "vi":f"Bộ hẹn giờ cố định đang chạy và còn khoảng {remaining} giây.",
+            }[language]
+        return {
+            "ko":f"현재 단계의 고정 {duration}초 타이머를 시작했습니다.",
+            "en":f"Started the current step's fixed {duration}-second timer.",
+            "vi":f"Đã bắt đầu bộ hẹn giờ cố định {duration} giây cho bước hiện tại.",
+        }[language]
+    if (result.get("operation")=="complete" and result.get("idempotent") or
+            isinstance(state,dict) and state.get("status")=="completed"):
+        return {
+            "ko":"전체 절차가 이미 완료되어 있습니다.",
+            "en":"The procedure is already complete.",
+            "vi":"Quy trình đã hoàn thành.",
+        }[language]
+    if isinstance(state,dict):
+        if state.get("status")=="blocked_for_handoff":
+            return {
+                "ko":"현재 워크플로는 관리자 인계를 위해 차단되어 다음 단계로 진행할 수 없습니다.",
+                "en":"The workflow is blocked for manager handoff and cannot advance.",
+                "vi":"Quy trình bị chặn để bàn giao cho quản lý và không thể tiếp tục.",
+            }[language]
+        timer=state.get("timer")
+        if isinstance(timer,dict):
+            remaining=timer.get("remaining_seconds")
+            if timer.get("state")=="elapsed":
+                return {
+                    "ko":f"타이머가 0초입니다. 단계를 완료하려면 “{KOREAN_COMPLETION_INSTRUCTION}”라고 말해 주세요.",
+                    "en":"The timer has elapsed. Say that the current step is complete to finish it.",
+                    "vi":"Bộ hẹn giờ đã kết thúc. Hãy nói rằng bước hiện tại đã hoàn thành để hoàn tất.",
+                }[language]
+            if timer.get("state")=="running":
+                return {
+                    "ko":f"현재 타이머에 약 {remaining}초 남았습니다.",
+                    "en":f"About {remaining} seconds remain on the timer.",
+                    "vi":f"Bộ hẹn giờ còn khoảng {remaining} giây.",
+                }[language]
+            return {
+                "ko":"현재 단계의 타이머는 아직 시작되지 않았습니다.",
+                "en":"The timer for the current step has not started.",
+                "vi":"Bộ hẹn giờ của bước hiện tại chưa bắt đầu.",
+            }[language]
+        return {
+            "ko":"현재 단계에는 고정 타이머가 없습니다.",
+            "en":"The current step has no fixed timer.",
+            "vi":"Bước hiện tại không có bộ hẹn giờ cố định.",
+        }[language]
+    return {
+        "ko":"현재 워크플로 상태를 확인할 수 없습니다.",
+        "en":"The current workflow state is unavailable.",
+        "vi":"Không thể kiểm tra trạng thái quy trình hiện tại.",
+    }[language]
 
 
 def unattached_procedure_state() -> dict[str,Any]:
