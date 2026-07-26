@@ -6,6 +6,53 @@ SafeBridge Voice는 승인된 안전 절차를 검색하고, 구조화된 사고
 대화 Memory, Tool Calling, 문장 단위 TTS를 보존하면서 공식 M2 Dispatcher의
 빠른 Tool → JSONL Queue → 별도 Worker 구조를 통합한다.
 
+## Phase 5 Native Speech-to-Speech
+
+브라우저의 기본 음성 처리 방식은 xAI Realtime Native Speech-to-Speech다.
+기존 STT → Brain → TTS cascade는 삭제하지 않고 비교·fallback 모드로
+보존한다.
+
+```text
+브라우저 24 kHz PCM
+  → SafeBridge WebSocket
+  → 서버 전용 xAI Realtime WebSocket
+  → 응답 ID가 포함된 24 kHz PCM delta
+  → 브라우저 재생
+```
+
+- API 키는 서버에만 두며 브라우저에 전달하지 않는다.
+- `session.updated`가 오기 전에는 마이크 입력을 upstream으로 보내지 않는다.
+- 사용자 최종 transcript가 확정되기 전 모델 음성과 Tool call은 서버에서
+  보류한다. 긴급 발화, 보고 승인, Procedure 완료 권한은 기존 서버 규칙이
+  먼저 판정한다.
+- `speech_started`에서 재생을 즉시 중단하고, 중단한 `response_id`의 후속
+  audio delta를 폐기하며, 실제 재생 시간만 upstream conversation에서
+  truncate한다.
+- Tool 결과를 보낸 뒤에는 현재 응답의 브라우저 재생 종료를 확인하고
+  후속 응답을 정확히 한 번 생성해 두 음성이 겹치지 않게 한다.
+- 비정상 연결 종료는 제한된 backoff와 conversation resumption으로 복구한다.
+  사용자가 누른 Stop은 재연결하지 않는다.
+- watchdog은 일반적인 무음 상태가 아니라, 발화 종료 후 응답 시작이
+  제한시간을 넘긴 경우에만 연결 복구를 시작한다.
+
+`.env`에는 기존 `XAI_API_KEY`와 함께 아래 값을 선택적으로 설정할 수 있다.
+
+```dotenv
+XAI_REALTIME_URL=wss://api.x.ai/v1/realtime
+XAI_REALTIME_MODEL=grok-voice-latest
+XAI_REALTIME_VOICE=eve
+XAI_REALTIME_VAD_THRESHOLD=0.6
+```
+
+`XAI_REALTIME_VAD_THRESHOLD`는 xAI server VAD의 발화 시작 감도다.
+브라우저 마이크와 일반 실내 음성을 기준으로 기본값을 `0.6`으로 두며,
+허용 범위는 `0.1`~`0.9`다. 값이 높을수록 더 큰 음성이 필요하다.
+Native 화면은 브라우저 음성 신호 감지와 서버 전송 시작을 별도로 표시해
+마이크 캡처 문제와 upstream VAD 문제를 구분한다.
+
+브라우저 상단의 음성 처리 방식에서 `Cascade 비교 모드`를 선택하면 기존
+16 kHz cascade 경로를 그대로 시험할 수 있다.
+
 ## M2 동작
 
 ```text
@@ -101,6 +148,11 @@ python -m compileall -q src tests
 
 검증 범위:
 
+- Native session 설정, 24 kHz PCM, 응답 ID 기반 audio correlation
+- 최종 transcript 이전 assistant audio·Tool call preflight 차단
+- barge-in 재생 중단, stale response 폐기, 안전한 playback truncation
+- Tool exactly-once 실행과 다중 Tool 이후 단일 continuation
+- 연결 재개, 제한된 reconnect buffer, 발화 기반 watchdog, Stop 취소
 - PCM, FrameBuffer, WebRTC VAD, endpoint, cooldown 회귀
 - ConversationHistory와 Tool-call 메시지 순서
 - 다중 Tool Round와 선택-pass 텍스트 비노출

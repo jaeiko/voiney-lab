@@ -21,6 +21,12 @@ from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
 )
+from safebridge_voice.native_realtime import (
+    NATIVE_SAMPLE_RATE,
+    NativeRealtimeConfig,
+    NativeRealtimeError,
+    NativeRealtimeSession,
+)
 from safebridge_voice.tools import ToolContext
 from safebridge_voice.tools import PROCEDURE_TOOL_NAMES
 from safebridge_voice.procedure_definitions import load_procedure_definitions
@@ -228,6 +234,15 @@ class LockedSender:
             await self.websocket.send_text(audio_segment_start(turn_id,index,len(frames)))
             for frame in frames: await self.websocket.send_bytes(frame)
             await self.websocket.send_text(event("audio.segment.end",turn_id=turn_id,segment_index=index))
+    async def native_audio(
+        self,turn_id:int,response_id:str,item_id:str|None,pcm:bytes,*,sample_rate:int
+    ):
+        async with self.lock:
+            await self.websocket.send_text(event(
+                "native.audio.delta",turn_id=turn_id,response_id=response_id,
+                item_id=item_id,sample_rate=sample_rate,encoding="pcm_s16le",
+                byte_length=len(pcm)))
+            await self.websocket.send_bytes(pcm)
 
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.monotonic)->None:
@@ -430,12 +445,20 @@ async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voic
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept(); config=VadConfig(); session=ListenerSession(EndpointDetector(config)); task=None; trusted_config=None; procedure_store=None
-    await websocket.send_text(event("ready",sample_rate=16000,frame_ms=20,frame_bytes=FRAME_BYTES,vad_mode=config.mode,endpoint_silence_ms=config.endpoint_silence_frames*20,prefix_padding_ms=config.prefix_frames*20))
+    sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
+    await websocket.send_text(event("ready",sample_rate=16000,native_sample_rate=NATIVE_SAMPLE_RATE,
+                                    pipelines=["cascade","native"],frame_ms=20,
+                                    frame_bytes=FRAME_BYTES,vad_mode=config.mode,
+                                    endpoint_silence_ms=config.endpoint_silence_frames*20,
+                                    prefix_padding_ms=config.prefix_frames*20))
     try:
         while True:
             message=await websocket.receive()
             if message.get("type")=="websocket.disconnect": break
             if message.get("bytes") is not None:
+                if native_session is not None:
+                    await native_session.send_audio(message["bytes"])
+                    continue
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 for item in session.accept_chunk(message["bytes"]):
                     await websocket.send_text(event(item.kind,turn_id=item.turn_id,state=session.state.value,voiced_frames=item.result.voiced_frames,total_frames=item.result.total_frames,duration_ms=item.result.total_frames*20,reason=item.result.rejection_reason,forced=item.result.forced))
@@ -447,24 +470,42 @@ async def voice_socket(websocket:WebSocket):
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
                 try:
+                    requested_pipeline=control.get("pipeline","cascade")
                     trusted_config=trusted_config or server_config()
-                    session.tool_context=server_tool_context(trusted_config,control.get("language"))
+                    context=server_tool_context(trusted_config,control.get("language"))
                     if trusted_config.procedure_catalog_path and trusted_config.procedure_store_path:
                         definitions=load_procedure_definitions(
                             trusted_config.procedure_catalog_path,trusted_config.catalog_path,
                             facility_id=trusted_config.facility_id,
-                            language=session.tool_context.language,
+                            language=context.language,
                             usage_scope=trusted_config.usage_scope)
                         procedure_store=procedure_store or ProcedureStore(trusted_config.procedure_store_path)
-                        session.tool_context=ToolContext(
-                            session.tool_context.catalog_path,session.tool_context.facility_id,
-                            session.tool_context.language,session.tool_context.usage_scope,
-                            session.tool_context.report_language,
+                        context=ToolContext(
+                            context.catalog_path,context.facility_id,
+                            context.language,context.usage_scope,
+                            context.report_language,
                             ProcedureController(definitions,procedure_store))
-                except (RuntimeError,ValueError):
+                    session.set_tool_context(context)
+                    if control.get("language") is None:
+                        session.set_language_mode("auto")
+                    session.start()
+                    pipeline=requested_pipeline
+                    if pipeline=="native":
+                        native_config=native_config or NativeRealtimeConfig.from_environment()
+                        native_session=NativeRealtimeSession(
+                            sender,session.tool_context,native_config,
+                            language_mode=session.language_mode,
+                            manual_language=session.manual_language)
+                        await native_session.start()
+                except (RuntimeError,ValueError,NativeRealtimeError):
+                    if native_session is not None:
+                        await native_session.stop()
+                        native_session=None
+                    session.stop()
                     await websocket.send_text(event("error",message="invalid session configuration"))
                     continue
-                session.start(); await websocket.send_text(event("session.started",state=session.state.value))
+                await websocket.send_text(event("session.started",state=session.state.value,
+                                                pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.set_language":
@@ -483,6 +524,9 @@ async def voice_socket(websocket:WebSocket):
                     continue
                 if task and not task.done(): task.cancel()
                 session.set_tool_context(context)
+                if native_session is not None:
+                    await native_session.update_language(
+                        context,language_mode="manual",manual_language=context.language)
                 await websocket.send_text(event("session.language_changed",state=session.state.value))
                 await websocket.send_text(event("session.language_state",mode="manual",
                                                 language=context.language))
@@ -503,6 +547,10 @@ async def voice_socket(websocket:WebSocket):
                     await websocket.send_text(event("error",message="invalid language mode"))
                     continue
                 if task and not task.done(): task.cancel()
+                if native_session is not None and session.tool_context is not None:
+                    await native_session.update_language(
+                        session.tool_context,language_mode=session.language_mode,
+                        manual_language=session.manual_language)
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.reset":
@@ -513,15 +561,39 @@ async def voice_socket(websocket:WebSocket):
                 session.reset_sensitive_state()
                 if session.tool_context and session.tool_context.procedure_controller:
                     session.tool_context.procedure_controller.detach()
+                if native_session is not None:
+                    await native_session.stop()
+                    native_session=NativeRealtimeSession(
+                        sender,session.tool_context,native_config,
+                        language_mode=session.language_mode,
+                        manual_language=session.manual_language)
+                    try:
+                        await native_session.start()
+                    except NativeRealtimeError:
+                        await native_session.stop()
+                        native_session=None
+                        session.stop()
+                        await websocket.send_text(event(
+                            "error",message="native session reset failed"))
+                        continue
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
                 if task and not task.done(): task.cancel()
+                if native_session is not None:
+                    await native_session.stop()
+                    native_session=None
+                pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
                 await websocket.send_text(event("state.changed",state=session.state.value,turn_id=control["turn_id"],cooldown_ms=config.cooldown_ms))
+            elif control["type"]=="native.playback.truncate" and native_session is not None:
+                await native_session.truncate_playback(
+                    control["response_id"],control["item_id"],control["audio_end_ms"])
+            elif control["type"]=="native.playback.ended" and native_session is not None:
+                await native_session.playback_ended(control["response_id"])
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -533,6 +605,8 @@ async def voice_socket(websocket:WebSocket):
             task.cancel()
             try: await task
             except (asyncio.CancelledError, WebSocketDisconnect): pass
+        if native_session is not None:
+            await native_session.stop()
         session.stop()
         if procedure_store is not None: procedure_store.close()
 

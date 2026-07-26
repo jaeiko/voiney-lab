@@ -6,6 +6,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control("{\"type\":\"session.start\"}"),{"type":"session.start"})
         self.assertEqual(parse_control("{\"type\":\"session.start\",\"language\":\"en\"}"),
                          {"type":"session.start","language":"en"})
+        self.assertEqual(parse_control(
+            '{"type":"session.start","pipeline":"native"}'),
+            {"type":"session.start","pipeline":"native"})
         self.assertEqual(parse_control("{\"type\":\"session.set_language\",\"language\":\"ko\"}"),
                          {"type":"session.set_language","language":"ko"})
         self.assertEqual(parse_control('{"type":"session.set_language_mode","mode":"auto"}'),
@@ -16,10 +19,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))
+        self.assertEqual(parse_control(json.dumps({
+            "type":"native.playback.truncate","response_id":"r1",
+            "item_id":"i1","audio_end_ms":120})),{
+                "type":"native.playback.truncate","response_id":"r1",
+                "item_id":"i1","audio_end_ms":120})
+        self.assertEqual(parse_control(json.dumps({
+            "type":"native.playback.ended","response_id":"r1"})),{
+                "type":"native.playback.ended","response_id":"r1"})
         for payload in (
+            {"type":"session.start","pipeline":"direct"},
             {"type":"session.set_language_mode","mode":"automatic"},
             {"type":"session.set_language_mode","mode":"manual"},
             {"type":"session.set_language_mode","mode":"auto","language":"en"},
+            {"type":"native.playback.truncate","response_id":"r1",
+             "item_id":"i1","audio_end_ms":True},
+            {"type":"native.playback.ended","response_id":""},
         ):
             with self.assertRaises(ProtocolError): parse_control(json.dumps(payload))
     def test_segment_contract(self):

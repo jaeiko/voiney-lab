@@ -15,6 +15,7 @@ dependencies = [
   "python-dotenv",
   "requests",
   "webrtcvad-wheels==2.0.14",
+  "websockets>=14,<17",
 ]
 
 [tool.setuptools]
