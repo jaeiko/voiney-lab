@@ -28,12 +28,21 @@ from safebridge_voice.brain import (
 )
 from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import resolve_turn_language
-from safebridge_voice.procedures import authorized_completion_step_id
+from safebridge_voice.procedures import (
+    authorized_completion_step_id,
+    authorized_timer_start_step_id,
+    deterministic_procedure_text,
+    korean_timer_status_question,
+)
 from safebridge_voice.tools import (
+    CHECK_REPORT_TOOL_NAME,
+    COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
+    GET_CURRENT_STEP_TOOL_NAME,
     PROCEDURE_TOOL_NAMES,
     REPORT_ID_PATTERN,
     SEARCH_TOOL_NAME,
+    START_STEP_TIMER_TOOL_NAME,
     TOOLS,
     ToolContext,
     execute_tool,
@@ -51,6 +60,7 @@ DEFAULT_RESPONSE_TIMEOUT_SECONDS = 12.0
 DEFAULT_VAD_THRESHOLD = 0.6
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 log = logging.getLogger(__name__)
+_REPORT_ID_IN_TRANSCRIPT = re.compile(r"SR-[0-9]{8}-[0-9A-Fa-f]{6}")
 
 
 class NativeRealtimeError(RuntimeError):
@@ -289,6 +299,95 @@ def _submission_text(report: dict[str, Any], result: dict[str, Any]) -> str:
     return text
 
 
+def _report_status_requested(transcript: str, language: str) -> bool:
+    """Recognize a bounded request to read a submitted report's handoff state."""
+    if not isinstance(transcript, str):
+        return False
+    text = transcript.strip().lower()
+    if language == "ko":
+        mentions_report = "보고서" in text or "보고 번호" in text
+        mentions_state = any(
+            token in text for token in ("상태", "처리", "인계", "임계")
+        )
+        asks_to_read = any(
+            token in text for token in ("확인", "알려", "어떻게", "됐", "되었")
+        )
+        return mentions_report and mentions_state and asks_to_read
+    if language == "vi":
+        return (
+            ("báo cáo" in text or "mã báo cáo" in text)
+            and any(token in text for token in ("trạng thái", "bàn giao", "xử lý"))
+        )
+    return (
+        ("report" in text or "report id" in text)
+        and any(token in text for token in ("status", "handoff", "processing"))
+    )
+
+
+def _report_status_text(result: dict[str, Any], language: str) -> str:
+    """Describe Worker state without implying that an .eml was delivered."""
+    report_id = result.get("report_id")
+    if result.get("status") != "success":
+        if result.get("status") == "not_found":
+            return {
+                "ko": f"보고서 {report_id}를 찾을 수 없습니다. 보고 번호를 확인해 주세요.",
+                "en": f"Report {report_id} was not found. Please check the report ID.",
+                "vi": f"Không tìm thấy báo cáo {report_id}. Vui lòng kiểm tra mã báo cáo.",
+            }[language]
+        return {
+            "ko": "보고서 인계 상태를 확인하지 못했습니다. 보고 번호를 확인한 뒤 다시 요청해 주세요.",
+            "en": "I could not check the report handoff status. Verify the report ID and try again.",
+            "vi": "Không thể kiểm tra trạng thái bàn giao. Hãy kiểm tra mã báo cáo và thử lại.",
+        }[language]
+    status = result.get("report_status")
+    status_text = {
+        "queued_for_handoff": {
+            "ko": "관리자 인계 대기 중입니다.",
+            "en": "It is queued for manager handoff.",
+            "vi": "Báo cáo đang chờ bàn giao cho quản lý.",
+        },
+        "processing": {
+            "ko": "관리자 인계문을 작성 중입니다.",
+            "en": "The manager handoff note is being prepared.",
+            "vi": "Ghi chú bàn giao cho quản lý đang được chuẩn bị.",
+        },
+        "retry_pending": {
+            "ko": "관리자 인계문 작성을 다시 시도할 예정입니다.",
+            "en": "The manager handoff note is waiting for another attempt.",
+            "vi": "Ghi chú bàn giao đang chờ được thử lại.",
+        },
+        "handoff_ready": {
+            "ko": "관리자 인계문 준비가 완료되었습니다. 아직 실제 발송을 뜻하지는 않습니다.",
+            "en": "The manager handoff note is ready. This does not mean it was actually sent.",
+            "vi": "Ghi chú bàn giao cho quản lý đã sẵn sàng. Điều này không có nghĩa là đã được gửi.",
+        },
+        "failed": {
+            "ko": "관리자 인계문 작성에 실패했습니다.",
+            "en": "Preparation of the manager handoff note failed.",
+            "vi": "Không thể chuẩn bị ghi chú bàn giao cho quản lý.",
+        },
+    }.get(status)
+    if status_text is None:
+        return {
+            "ko": f"보고서 {report_id}의 현재 인계 상태는 {status}입니다.",
+            "en": f"The current handoff status for report {report_id} is {status}.",
+            "vi": f"Trạng thái bàn giao hiện tại của báo cáo {report_id} là {status}.",
+        }[language]
+    return {
+        "ko": f"보고서 {report_id}는 {status_text['ko']}",
+        "en": f"Report {report_id}: {status_text['en']}",
+        "vi": f"Báo cáo {report_id}: {status_text['vi']}",
+    }[language]
+
+
+def _missing_report_id_text(language: str) -> str:
+    return {
+        "ko": "확인할 보고 번호를 말해 주세요.",
+        "en": "Please provide the report ID to check.",
+        "vi": "Vui lòng cho biết mã báo cáo cần kiểm tra.",
+    }[language]
+
+
 def _procedure_force_text(result: dict[str, Any], language: str) -> str | None:
     state = result.get("state")
     code = result.get("code")
@@ -313,7 +412,10 @@ def _procedure_force_text(result: dict[str, Any], language: str) -> str | None:
     if code == "timer_not_elapsed":
         remaining = result.get("remaining_seconds")
         return {
-            "ko": f"타이머가 아직 끝나지 않았습니다. 약 {remaining}초 남았습니다.",
+            "ko": (
+                f"타이머가 아직 끝나지 않았습니다. 약 {remaining}초 남았습니다. "
+                "타이머가 0초가 된 뒤 “현재 단계를 완료했습니다”라고 다시 말해 주세요."
+            ),
             "en": f"The timer has not finished. About {remaining} seconds remain.",
             "vi": f"Bộ hẹn giờ chưa kết thúc. Còn khoảng {remaining} giây.",
         }[language]
@@ -475,6 +577,7 @@ class NativeRealtimeSession:
         self.stop_requested = False
         self.conversation_id: str | None = None
         self.pending_report: dict[str, Any] | None = None
+        self.latest_report_id: str | None = None
         self.active_response_id: str | None = None
         self.playback_response_id: str | None = None
         self.last_interrupted_response_id: str | None = None
@@ -483,6 +586,7 @@ class NativeRealtimeSession:
         self.responses: dict[str, _ResponseState] = {}
         self.discarded_response_ids: set[str] = set()
         self.completed_call_ids: set[str] = set()
+        self.server_owned_turns: set[int] = set()
         self.turn_id = 0
         self.transcript_finalized = True
         self.latest_transcript = ""
@@ -571,7 +675,9 @@ class NativeRealtimeSession:
         self.responses.clear()
         self.discarded_response_ids.clear()
         self.completed_call_ids.clear()
+        self.server_owned_turns.clear()
         self.pending_report = None
+        self.latest_report_id = None
         self.latest_transcript = ""
         self.transcript_finalized = True
         self.speech_stopped_at = None
@@ -903,6 +1009,10 @@ class NativeRealtimeSession:
                 or self.playback_response_id is not None
             )
             self.turn_id += 1
+            self.server_owned_turns={
+                turn for turn in self.server_owned_turns
+                if turn>=self.turn_id
+            }
             self.transcript_finalized = False
             self.latest_transcript = ""
             self.speech_stopped_at = None
@@ -935,6 +1045,9 @@ class NativeRealtimeSession:
             return
 
         if kind == "input_audio_buffer.speech_stopped":
+            # Fail closed when a provider omits or reorders speech_started:
+            # a Tool must not inherit the prior turn's finalized-transcript flag.
+            self.transcript_finalized = False
             self.speech_stopped_at = self.clock()
             self._response_wait_started_at = self.speech_stopped_at
             self.pending_automatic_turns.append(self.turn_id)
@@ -1001,6 +1114,12 @@ class NativeRealtimeSession:
                 self._response_wait_started_at = None
             if response_turn_id != self.turn_id:
                 self.cancel_next_response = False
+                self.discarded_response_ids.add(response_id)
+                await self._send_json({"type": "response.cancel"})
+                return
+            if response_turn_id in self.server_owned_turns and route=="brain":
+                self.cancel_next_response = False
+                state.cancelled_for_override = True
                 self.discarded_response_ids.add(response_id)
                 await self._send_json({"type": "response.cancel"})
                 return
@@ -1113,98 +1232,238 @@ class NativeRealtimeSession:
             self.latest_transcript,
         )
 
+    def _known_report_id(self, transcript: str) -> str | None:
+        match = _REPORT_ID_IN_TRANSCRIPT.search(transcript)
+        if match is not None:
+            return match.group(0).upper()
+        if self.latest_report_id is not None:
+            return self.latest_report_id
+        controller = self.tool_context.procedure_controller
+        current = getattr(controller, "current", None)
+        if not callable(current):
+            return None
+        try:
+            result = current()
+        except Exception:
+            return None
+        state = result.get("state") if isinstance(result, dict) else None
+        handoff = state.get("handoff") if isinstance(state, dict) else None
+        report_id = handoff.get("report_id") if isinstance(handoff, dict) else None
+        if isinstance(report_id, str) and REPORT_ID_PATTERN.fullmatch(report_id):
+            self.latest_report_id = report_id
+            return report_id
+        return None
+
+    async def _handle_report_status_request(self, transcript: str) -> None:
+        report_id = self._known_report_id(transcript)
+        if report_id is None:
+            await self._schedule_override(
+                _missing_report_id_text(self.current_language),
+                route="deterministic_report",
+            )
+            return
+        await self.sender.text(
+            "tool.call",
+            turn_id=self.turn_id,
+            tool=CHECK_REPORT_TOOL_NAME,
+        )
+        try:
+            result = await asyncio.to_thread(
+                execute_tool,
+                CHECK_REPORT_TOOL_NAME,
+                {"report_id": report_id},
+                self._turn_context(),
+            )
+        except Exception:
+            result = {
+                "status": "error",
+                "report_id": report_id,
+            }
+        if (
+            result.get("status") == "success"
+            and isinstance(result.get("report_id"), str)
+            and REPORT_ID_PATTERN.fullmatch(result["report_id"]) is not None
+        ):
+            self.latest_report_id = result["report_id"]
+        public_fields: dict[str, Any] = {
+            "turn_id": self.turn_id,
+            "tool": CHECK_REPORT_TOOL_NAME,
+            "status": result.get("status", "error"),
+            "report_id": result.get("report_id", report_id),
+        }
+        for key in ("report_status", "attempts", "workflow"):
+            if result.get(key) is not None:
+                public_fields[key] = result[key]
+        await self.sender.text("tool.result", **public_fields)
+        await self._schedule_override(
+            _report_status_text(result, self.current_language),
+            route="deterministic_report",
+        )
+
     async def _handle_server_owned_transcript(self, transcript: str) -> bool:
+        # A reconnect or upstream replay can deliver the same finalized transcript
+        # more than once. Once this turn is server-owned, never bind that utterance
+        # to the newly advanced current step and execute it again.
+        if self.turn_id in self.server_owned_turns:
+            return True
         emergency = recognize_emergency(transcript)
         if emergency is not None:
+            self.server_owned_turns.add(self.turn_id)
             await self._schedule_override(
                 emergency.response, route="deterministic_emergency"
             )
             return True
-        if self.pending_report is None:
-            return False
-        language = self.pending_report["language"]
-        intent = confirmation_intent(transcript, language)
-        if intent == "cancel":
-            report = self.pending_report
-            self.pending_report = None
-            await self.sender.text(
-                "tool.result",
-                turn_id=self.turn_id,
-                tool=CREATE_REPORT_TOOL_NAME,
-                status="cancelled",
-                report=report,
-            )
-            text = {
-                "ko": "보고서 초안을 취소했습니다.",
-                "en": "The report draft was cancelled.",
-                "vi": "Đã hủy bản nháp báo cáo.",
-            }[language]
-            await self._refresh_instructions()
-            await self._schedule_override(text, route="brain")
+        if _report_status_requested(transcript, self.current_language):
+            self.server_owned_turns.add(self.turn_id)
+            await self._handle_report_status_request(transcript)
             return True
-        if intent == "approve":
-            report = self.pending_report
-            await self.sender.text(
-                "tool.call",
-                turn_id=self.turn_id,
-                tool=CREATE_REPORT_TOOL_NAME,
-                status="submitting",
-            )
-            try:
-                # Report creation is a bounded JSONL append. Keep this dispatch on
-                # the event-loop thread because it now also reads and blocks the
-                # session-owned ProcedureStore SQLite connection.
-                result = execute_tool(
-                    CREATE_REPORT_TOOL_NAME, report, self._turn_context()
-                )
-            except Exception:
-                result = {
-                    "status": "error",
-                    "message": "report submission failed",
-                }
-            succeeded = (
-                result.get("status") == "success"
-                and isinstance(result.get("report_id"), str)
-                and REPORT_ID_PATTERN.fullmatch(result["report_id"]) is not None
-            )
-            if succeeded:
+        if self.pending_report is not None:
+            language = self.pending_report["language"]
+            intent = confirmation_intent(transcript, language)
+            if intent == "cancel":
+                self.server_owned_turns.add(self.turn_id)
+                report = self.pending_report
                 self.pending_report = None
-            fields: dict[str, Any] = {
-                "turn_id": self.turn_id,
-                "tool": CREATE_REPORT_TOOL_NAME,
-                "status": "confirmed" if succeeded else "submission_failed",
-                "report": report,
-            }
-            for key in ("report_id", "report_status"):
-                if result.get(key):
-                    fields[key] = result[key]
-            if isinstance(result.get("procedure_state"), dict):
-                fields["procedure_state"] = result["procedure_state"]
-            fields["procedure_blocked"] = bool(result.get("procedure_blocked"))
-            await self.sender.text("tool.result", **fields)
-            if succeeded and isinstance(result.get("procedure_state"), dict):
                 await self.sender.text(
-                    "procedure.blocked_for_handoff",
+                    "tool.result",
                     turn_id=self.turn_id,
-                    report_id=result.get("report_id"),
-                    state=result["procedure_state"],
+                    tool=CREATE_REPORT_TOOL_NAME,
+                    status="cancelled",
+                    report=report,
                 )
+                text = {
+                    "ko": "보고서 초안을 취소했습니다.",
+                    "en": "The report draft was cancelled.",
+                    "vi": "Đã hủy bản nháp báo cáo.",
+                }[language]
+                await self._refresh_instructions()
+                await self._schedule_override(text, route="deterministic_report")
+                return True
+            if intent == "approve":
+                self.server_owned_turns.add(self.turn_id)
+                report = self.pending_report
                 await self.sender.text(
-                    "procedure.state",
+                    "tool.call",
                     turn_id=self.turn_id,
-                    state=result["procedure_state"],
+                    tool=CREATE_REPORT_TOOL_NAME,
+                    status="submitting",
                 )
+                try:
+                    # Report creation is a bounded JSONL append. Keep this dispatch
+                    # on the event-loop thread because it also reads and blocks the
+                    # session-owned ProcedureStore SQLite connection.
+                    result = execute_tool(
+                        CREATE_REPORT_TOOL_NAME, report, self._turn_context()
+                    )
+                except Exception:
+                    result = {
+                        "status": "error",
+                        "message": "report submission failed",
+                    }
+                succeeded = (
+                    result.get("status") == "success"
+                    and isinstance(result.get("report_id"), str)
+                    and REPORT_ID_PATTERN.fullmatch(result["report_id"]) is not None
+                )
+                if succeeded:
+                    self.pending_report = None
+                    self.latest_report_id = result["report_id"]
+                fields: dict[str, Any] = {
+                    "turn_id": self.turn_id,
+                    "tool": CREATE_REPORT_TOOL_NAME,
+                    "status": "confirmed" if succeeded else "submission_failed",
+                    "report": report,
+                }
+                for key in ("report_id", "report_status"):
+                    if result.get(key):
+                        fields[key] = result[key]
+                if isinstance(result.get("procedure_state"), dict):
+                    fields["procedure_state"] = result["procedure_state"]
+                fields["procedure_blocked"] = bool(result.get("procedure_blocked"))
+                await self.sender.text("tool.result", **fields)
+                if succeeded and isinstance(result.get("procedure_state"), dict):
+                    await self.sender.text(
+                        "procedure.blocked_for_handoff",
+                        turn_id=self.turn_id,
+                        report_id=result.get("report_id"),
+                        state=result["procedure_state"],
+                    )
+                    await self.sender.text(
+                        "procedure.state",
+                        turn_id=self.turn_id,
+                        state=result["procedure_state"],
+                    )
+                await self._refresh_instructions()
+                await self._schedule_override(
+                    _submission_text(report, result),
+                    route="deterministic_report",
+                )
+                return True
+            if not report_correction_requested(transcript, language):
+                self.server_owned_turns.add(self.turn_id)
+                await self._schedule_override(
+                    REPORT_CONFIRMATION_CLARIFICATION_TEXT[language],
+                    route="deterministic_report",
+                )
+                return True
+            return False
+
+        authorized_step_id=authorized_completion_step_id(
+            transcript,self.current_language,
+            self.tool_context.procedure_controller)
+        authorized_timer_step_id=authorized_timer_start_step_id(
+            transcript,self.current_language,
+            self.tool_context.procedure_controller)
+        deterministic_tool=None
+        deterministic_arguments=None
+        if authorized_step_id is not None:
+            deterministic_tool=COMPLETE_CURRENT_STEP_TOOL_NAME
+            deterministic_arguments={"expected_step_id":authorized_step_id}
+        elif authorized_timer_step_id is not None:
+            deterministic_tool=START_STEP_TIMER_TOOL_NAME
+            deterministic_arguments={"expected_step_id":authorized_timer_step_id}
+        elif korean_timer_status_question(transcript,self.current_language):
+            deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
+            deterministic_arguments={}
+        if deterministic_tool is None:
+            return False
+
+        self.server_owned_turns.add(self.turn_id)
+        context=self._turn_context()
+        await self.sender.text(
+            "tool.call",turn_id=self.turn_id,tool=deterministic_tool)
+        try:
+            result=execute_tool(
+                deterministic_tool,deterministic_arguments,context)
+        except Exception:
+            result={
+                "status":"error","code":"procedure_store_unavailable"}
+        public_fields:dict[str,Any]={
+            "turn_id":self.turn_id,
+            "tool":deterministic_tool,
+            "status":result.get("status","error"),
+        }
+        for key in (
+            "operation","idempotent","completed_step_id","recorded_step_id",
+            "timer_step_id","observation","timer","audit_summary",
+            "remaining_seconds",
+        ):
+            if result.get(key) is not None:
+                public_fields[key]=result[key]
+        if isinstance(result.get("state"),dict):
+            public_fields["procedure_state"]=result["state"]
+        if result.get("code"):
+            public_fields["code"]=result["code"]
+        public_fields["procedure_completed"]=bool(result.get("completed"))
+        await self.sender.text("tool.result",**public_fields)
+        await self._emit_procedure_events(
+            deterministic_tool,result,self.turn_id)
+        if isinstance(result.get("state"),dict):
             await self._refresh_instructions()
-            await self._schedule_override(
-                _submission_text(report, result), route="brain"
-            )
-            return True
-        if not report_correction_requested(transcript, language):
-            await self._schedule_override(
-                REPORT_CONFIRMATION_CLARIFICATION_TEXT[language], route="brain"
-            )
-            return True
-        return False
+        await self._schedule_override(
+            deterministic_procedure_text(result,self.current_language),
+            route="deterministic_procedure")
+        return True
 
     async def _schedule_override(self, text: str, *, route: str) -> None:
         self.pending_override = (text, route)
@@ -1353,9 +1612,13 @@ class NativeRealtimeSession:
         ):
             await self.sender.text("native.error", code="invalid_tool_call")
             return
+        if response_id in self.discarded_response_ids:
+            return
         state = self.responses.setdefault(
             response_id, _ResponseState(self.turn_id)
         )
+        if state.turn_id in self.server_owned_turns:
+            return
         if call_id in self.completed_call_ids:
             return
         self.completed_call_ids.add(call_id)
@@ -1397,6 +1660,8 @@ class NativeRealtimeSession:
         context: ToolContext,
         language: str,
     ) -> None:
+        if turn_id in self.server_owned_turns:
+            return
         try:
             arguments = (
                 json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
@@ -1433,6 +1698,13 @@ class NativeRealtimeSession:
             )
 
         model_result = dict(result)
+        if (
+            name == CHECK_REPORT_TOOL_NAME
+            and result.get("status") == "success"
+            and isinstance(result.get("report_id"), str)
+            and REPORT_ID_PATTERN.fullmatch(result["report_id"]) is not None
+        ):
+            self.latest_report_id = result["report_id"]
         if name == SEARCH_TOOL_NAME and result.get("status") == "success":
             model_result["grounding_policy"] = grounding_instruction(context)
         await self._send_json(
@@ -1473,6 +1745,8 @@ class NativeRealtimeSession:
             if forced:
                 state.forced_messages.append(forced)
             await self._emit_procedure_events(name, result, turn_id)
+            if isinstance(result.get("state"),dict):
+                await self._refresh_instructions()
 
         public_fields: dict[str, Any] = {
             "turn_id": turn_id,
@@ -1481,8 +1755,9 @@ class NativeRealtimeSession:
         }
         for key in (
             "report_id", "report_status", "report", "operation", "idempotent",
-            "recorded_step_id", "timer_step_id", "observation", "timer",
-            "audit_summary", "procedure_state", "procedure_blocked",
+            "completed_step_id", "recorded_step_id", "timer_step_id",
+            "observation", "timer", "audit_summary", "remaining_seconds",
+            "procedure_state", "procedure_blocked",
         ):
             if key in result and result[key] is not None:
                 public_fields[key] = result[key]
@@ -1499,6 +1774,10 @@ class NativeRealtimeSession:
                 turn_id=turn_id,
                 code=result["code"],
             )
+            state=result.get("state")
+            if isinstance(state,dict):
+                await self.sender.text(
+                    "procedure.state",turn_id=turn_id,state=state)
             return
         state = result.get("state")
         if not isinstance(state, dict):

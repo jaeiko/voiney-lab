@@ -127,6 +127,107 @@ class ProcedureController:
             },
         }
 
+    def current(self):
+        return {
+            "status":"success",
+            "operation":"read",
+            "state":{
+                "attached":True,
+                "procedure_id":"demo",
+                "title":"Fictional demo",
+                "version":"1",
+                "status":self.row["status"],
+                "total_step_count":1,
+                "completed_step_count":self.row["current_step_index"],
+                "current_step_number":(
+                    1 if self.row["status"]=="active" else None),
+                "current_step_id":(
+                    "blue-card" if self.row["status"]=="active" else None),
+                "current_step_title":(
+                    "Blue card" if self.row["status"]=="active" else None),
+                "approved_current_instruction":(
+                    "Observe the fictional blue card."
+                    if self.row["status"]=="active" else None),
+                "timer":{
+                    "state":"elapsed",
+                    "duration_seconds":10,
+                    "remaining_seconds":0,
+                },
+            },
+        }
+
+
+class TwoStepProcedureController:
+    def __init__(self):
+        self.definition=SimpleNamespace(steps=(
+            SimpleNamespace(step_id="blue-card"),
+            SimpleNamespace(step_id="fixed-timer"),
+        ))
+        self.row={"status":"active","current_step_index":0}
+        self.completions=0
+        self.timer_starts=0
+
+    def _attached(self):
+        return self.definition,self.row
+
+    def _state(self):
+        index=self.row["current_step_index"]
+        current=(
+            self.definition.steps[index].step_id
+            if index<len(self.definition.steps) else None
+        )
+        return {
+            "attached":True,"procedure_id":"demo","title":"Fictional demo",
+            "version":"1","status":self.row["status"],
+            "total_step_count":2,"completed_step_count":index,
+            "current_step_number":index+1 if current else None,
+            "current_step_id":current,
+            "current_step_title":"Fixed timer" if index==1 else "Blue card",
+            "approved_current_instruction":"Use the fictional current step.",
+            "timer":(
+                {
+                    "state":"not_started","duration_seconds":10,
+                    "remaining_seconds":10,
+                }
+                if index==1 else None
+            ),
+        }
+
+    def complete(self,expected_step_id):
+        current=self._state()["current_step_id"]
+        if expected_step_id!=current:
+            return {"status":"error","code":"step_mismatch","state":self._state()}
+        if current=="fixed-timer":
+            return {
+                "status":"error","code":"timer_not_started",
+                "state":self._state(),
+            }
+        self.completions+=1
+        self.row={"status":"active","current_step_index":1}
+        return {
+            "status":"success","operation":"complete","idempotent":False,
+            "completed_step_id":"blue-card","completed":False,
+            "state":self._state(),
+        }
+
+    def start_timer(self,expected_step_id):
+        if expected_step_id!="fixed-timer":
+            return {"status":"error","code":"step_mismatch","state":self._state()}
+        self.timer_starts+=1
+        state=self._state()
+        state["timer"]={
+            "state":"running","duration_seconds":10,"remaining_seconds":10,
+        }
+        return {
+            "status":"success","operation":"start_timer","idempotent":False,
+            "timer_step_id":"fixed-timer",
+            "timer":{"duration_seconds":10},
+            "state":state,
+        }
+
+    def current(self):
+        return {"status":"success","operation":"read","state":self._state()}
+
 
 def context(controller=None):
     return ToolContext(
@@ -766,6 +867,204 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(controller.completions, 1)
 
+    async def test_exact_completion_is_server_routed_and_late_tool_is_ignored(self):
+        controller=ProcedureController()
+        self.session.tool_context=context(controller)
+        self.session.turn_id=4
+        await self.session.handle_upstream_message(response_created("automatic"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"conversation.item.input_audio_transcription.completed",
+            "transcript":"현재 단계를 완료했습니다.",
+        }))
+        self.assertEqual(controller.completions,1)
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.function_call_arguments.done",
+            "response_id":"automatic",
+            "call_id":"late-duplicate",
+            "name":COMPLETE_CURRENT_STEP_TOOL_NAME,
+            "arguments":'{"expected_step_id":"blue-card"}',
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.done","response":{"id":"automatic"},
+        }))
+        self.assertEqual(controller.completions,1)
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count("tool.call"),1)
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count("tool.result"),1)
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.step_completed"),1)
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.completed"),1)
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.state"),1)
+        sent=[json.loads(item) for item in self.upstream.sent
+              if isinstance(item,str)]
+        self.assertEqual(
+            [item["type"] for item in sent].count("response.cancel"),1)
+        force=[item for item in sent
+               if item["type"]=="conversation.item.create"
+               and item["item"]["type"]=="force_message"]
+        self.assertEqual(len(force),1)
+
+    async def test_replayed_final_transcript_cannot_complete_the_next_step(self):
+        controller=TwoStepProcedureController()
+        self.session.tool_context=context(controller)
+        self.session.turn_id=4
+        await self.session.handle_upstream_message(response_created("automatic"))
+        completed=json.dumps({
+            "type":"conversation.item.input_audio_transcription.completed",
+            "transcript":"현재 단계를 완료했습니다.",
+        })
+
+        await self.session.handle_upstream_message(completed)
+        await self.session.handle_upstream_message(completed)
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.done","response":{"id":"automatic"},
+        }))
+
+        self.assertEqual(controller.completions,1)
+        self.assertEqual(controller.row["current_step_index"],1)
+        results=[
+            event for event in self.sender.events
+            if event["type"]=="tool.result"
+        ]
+        self.assertEqual(len(results),1)
+        self.assertEqual(results[0]["status"],"success")
+        self.assertNotIn("code",results[0])
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.step_completed"),
+            1,
+        )
+        sent=[json.loads(item) for item in self.upstream.sent
+              if isinstance(item,str)]
+        force=[
+            item for item in sent
+            if item["type"]=="conversation.item.create"
+            and item["item"]["type"]=="force_message"
+        ]
+        self.assertEqual(len(force),1)
+        self.assertIn(
+            "다음 단계로 이동했습니다",
+            force[0]["item"]["content"][0]["text"],
+        )
+
+    async def test_missing_speech_started_cannot_double_execute_completion(self):
+        controller=TwoStepProcedureController()
+        self.session.tool_context=context(controller)
+        self.session.turn_id=4
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"input_audio_buffer.speech_stopped",
+        }))
+        await self.session.handle_upstream_message(response_created("automatic"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"conversation.item.input_audio_transcription.updated",
+            "transcript":"현재 단계를 완료했습니다",
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.function_call_arguments.done",
+            "response_id":"automatic",
+            "call_id":"model-completion",
+            "name":COMPLETE_CURRENT_STEP_TOOL_NAME,
+            "arguments":'{"expected_step_id":"blue-card"}',
+        }))
+        await asyncio.sleep(0)
+        self.assertEqual(controller.completions,0)
+
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"conversation.item.input_audio_transcription.completed",
+            "transcript":"현재 단계를 완료했습니다.",
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.done","response":{"id":"automatic"},
+        }))
+
+        self.assertEqual(controller.completions,1)
+        self.assertEqual(controller.row["current_step_index"],1)
+        results=[
+            event for event in self.sender.events
+            if event["type"]=="tool.result"
+        ]
+        self.assertEqual(len(results),1)
+        self.assertEqual(results[0]["status"],"success")
+        self.assertNotIn("code",results[0])
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.step_completed"),
+            1,
+        )
+        sent=[json.loads(item) for item in self.upstream.sent
+              if isinstance(item,str)]
+        self.assertTrue(any(
+            item["type"]=="session.update" for item in sent
+        ))
+
+    async def test_exact_timer_start_uses_fresh_server_step_and_fences_model(self):
+        controller=TwoStepProcedureController()
+        controller.row={"status":"active","current_step_index":1}
+        self.session.tool_context=context(controller)
+        self.session.turn_id=5
+        await self.session.handle_upstream_message(response_created("timer"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"conversation.item.input_audio_transcription.completed",
+            "transcript":"고정 타이머를 시작해줘.",
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.function_call_arguments.done",
+            "response_id":"timer",
+            "call_id":"late-stale-timer",
+            "name":START_STEP_TIMER_TOOL_NAME,
+            "arguments":'{"expected_step_id":"blue-card"}',
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.done","response":{"id":"timer"},
+        }))
+
+        self.assertEqual(controller.timer_starts,1)
+        results=[
+            event for event in self.sender.events
+            if event["type"]=="tool.result"
+        ]
+        self.assertEqual(len(results),1)
+        self.assertEqual(results[0]["tool"],START_STEP_TIMER_TOOL_NAME)
+        self.assertEqual(results[0]["timer_step_id"],"fixed-timer")
+        self.assertEqual(
+            [event["type"] for event in self.sender.events].count(
+                "procedure.timer_started"),
+            1,
+        )
+
+    async def test_timer_status_question_reads_fresh_state_without_completion(self):
+        controller=ProcedureController()
+        self.session.tool_context=context(controller)
+        self.session.turn_id=5
+        await self.session.handle_upstream_message(response_created("status"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"conversation.item.input_audio_transcription.completed",
+            "transcript":"왜 0초인데 안 끝나요?",
+        }))
+        await self.session.handle_upstream_message(json.dumps({
+            "type":"response.done","response":{"id":"status"},
+        }))
+        self.assertEqual(controller.completions,0)
+        result=next(
+            event for event in self.sender.events
+            if event["type"]=="tool.result")
+        self.assertEqual(result["tool"],"get_current_step")
+        sent=[json.loads(item) for item in self.upstream.sent
+              if isinstance(item,str)]
+        force=next(
+            item for item in sent
+            if item["type"]=="conversation.item.create"
+            and item["item"]["type"]=="force_message")
+        self.assertIn(
+            "현재 단계를 완료했습니다",
+            force["item"]["content"][0]["text"])
+
     async def test_pending_report_approval_is_server_owned_and_exactly_once(self):
         self.session.pending_report = {
             "location": "F",
@@ -814,6 +1113,153 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             and item["item"]["type"] == "force_message"
         ][-1]
         self.assertIn("SR-20260726-A1B2C3", force["item"]["content"][0]["text"])
+
+    async def test_pending_report_submission_force_response_is_not_cancelled(self):
+        self.session.pending_report = {
+            "location": "F",
+            "summary": "fictional",
+            "urgency": "routine",
+            "exposure_status": "no",
+            "language": "ko",
+        }
+        self.session.turn_id = 2
+        self.session.transcript_finalized = False
+        with patch(
+            "safebridge_voice.native_realtime.execute_tool",
+            return_value={
+                "status": "success",
+                "report_id": "SR-20260726-A1B2C3",
+                "report_status": "queued_for_handoff",
+            },
+        ):
+            await self.session.handle_upstream_message(
+                json.dumps(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": "보고서를 제출해 주세요",
+                    }
+                )
+            )
+            await self.session.handle_upstream_message(response_created("automatic"))
+            await self.session.handle_upstream_message(
+                json.dumps(
+                    {"type": "response.done", "response": {"id": "automatic"}}
+                )
+            )
+            await self.session.handle_upstream_message(response_created("forced"))
+            await self.session.handle_upstream_message(
+                json.dumps(
+                    {
+                        "type": "response.output_audio_transcript.delta",
+                        "response_id": "forced",
+                        "delta": "보고서가 제출되었습니다.",
+                    }
+                )
+            )
+            await self.session.handle_upstream_message(
+                json.dumps({"type": "response.done", "response": {"id": "forced"}})
+            )
+
+        sent = [json.loads(item) for item in self.upstream.sent if isinstance(item, str)]
+        self.assertEqual(
+            [item["type"] for item in sent].count("response.cancel"),
+            1,
+        )
+        created = [
+            event
+            for event in self.sender.events
+            if event["type"] == "native.response.created"
+        ]
+        self.assertEqual(created[-1]["response_id"], "forced")
+        self.assertTrue(
+            any(
+                event["type"] == "reply.delta"
+                and "제출되었습니다" in event.get("text", "")
+                for event in self.sender.events
+            )
+        )
+        done = [
+            event for event in self.sender.events if event["type"] == "turn.done"
+        ][-1]
+        self.assertEqual(done["route"], "deterministic_report")
+
+    async def test_recent_report_status_precedes_stale_draft_and_is_spoken(self):
+        self.session.latest_report_id = "SR-20260726-A1B2C3"
+        self.session.pending_report = {
+            "location": "stale draft",
+            "summary": "must not intercept status",
+            "urgency": "routine",
+            "exposure_status": "no",
+            "language": "ko",
+        }
+        await self.session.handle_upstream_message(
+            json.dumps({"type": "input_audio_buffer.speech_started"})
+        )
+        await self.session.handle_upstream_message(
+            json.dumps({"type": "input_audio_buffer.speech_stopped"})
+        )
+        await self.session.handle_upstream_message(response_created("automatic"))
+
+        result = {
+            "status": "success",
+            "report_id": "SR-20260726-A1B2C3",
+            "report_status": "handoff_ready",
+            "attempts": 1,
+        }
+        with patch(
+            "safebridge_voice.native_realtime.asyncio.to_thread",
+            return_value=result,
+        ) as to_thread:
+            await self.session.handle_upstream_message(
+                json.dumps(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": "방금 보고서의 관리자 임계 상태를 확인해 줘.",
+                    }
+                )
+            )
+        await self.session.handle_upstream_message(
+            json.dumps({"type": "response.done", "response": {"id": "automatic"}})
+        )
+        await self.session.handle_upstream_message(response_created("status-forced"))
+        await self.session.handle_upstream_message(
+            json.dumps(
+                {
+                    "type": "response.output_audio_transcript.delta",
+                    "response_id": "status-forced",
+                    "delta": "관리자 인계문 준비가 완료되었습니다.",
+                }
+            )
+        )
+        await self.session.handle_upstream_message(
+            json.dumps(
+                {"type": "response.done", "response": {"id": "status-forced"}}
+            )
+        )
+
+        to_thread.assert_awaited_once()
+        args = to_thread.await_args.args
+        self.assertEqual(args[1], CHECK_REPORT_TOOL_NAME)
+        self.assertEqual(args[2], {"report_id": "SR-20260726-A1B2C3"})
+        tool_result = [
+            event
+            for event in self.sender.events
+            if event["type"] == "tool.result"
+        ][-1]
+        self.assertEqual(tool_result["tool"], CHECK_REPORT_TOOL_NAME)
+        self.assertEqual(tool_result["report_status"], "handoff_ready")
+        self.assertIsNotNone(self.session.pending_report)
+        self.assertTrue(
+            any(
+                event["type"] == "reply.delta"
+                and "준비가 완료" in event.get("text", "")
+                for event in self.sender.events
+            )
+        )
+        done = [
+            event for event in self.sender.events if event["type"] == "turn.done"
+        ][-1]
+        self.assertEqual(done["route"], "deterministic_report")
 
     async def test_pending_report_approval_emits_linked_workflow_block(self):
         self.session.pending_report = {

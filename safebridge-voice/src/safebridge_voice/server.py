@@ -28,15 +28,22 @@ from safebridge_voice.native_realtime import (
     NativeRealtimeSession,
 )
 from safebridge_voice.tools import (
+    COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
+    GET_CURRENT_STEP_TOOL_NAME,
     PROCEDURE_TOOL_NAMES,
+    START_STEP_TIMER_TOOL_NAME,
     ToolContext,
     check_safety_report_status,
+    execute_tool,
 )
 from safebridge_voice.procedure_definitions import load_procedure_definitions
 from safebridge_voice.procedure_store import ProcedureStore
 from safebridge_voice.procedures import (
-    ProcedureController, authorized_completion_step_id, unattached_procedure_state,
+    ProcedureController, authorized_completion_step_id,
+    authorized_timer_start_step_id,
+    deterministic_procedure_text, korean_timer_status_question,
+    unattached_procedure_state,
 )
 from safebridge_voice.protocol import ProtocolError, audio_segment_start, event, parse_control
 from safebridge_voice.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
@@ -368,8 +375,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                            language=turn_language)
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
     authorized_step_id=None
+    authorized_timer_step_id=None
     if pending is None:
         authorized_step_id=authorized_completion_step_id(
+            transcript,turn_language,session.tool_context.procedure_controller)
+        authorized_timer_step_id=authorized_timer_start_step_id(
             transcript,turn_language,session.tool_context.procedure_controller)
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,
@@ -377,6 +387,114 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                              session.tool_context.procedure_controller,
                              authorized_step_id,
                              transcript)
+    deterministic_tool=None
+    deterministic_arguments=None
+    if authorized_step_id is not None:
+        deterministic_tool=COMPLETE_CURRENT_STEP_TOOL_NAME
+        deterministic_arguments={"expected_step_id":authorized_step_id}
+    elif authorized_timer_step_id is not None:
+        deterministic_tool=START_STEP_TIMER_TOOL_NAME
+        deterministic_arguments={"expected_step_id":authorized_timer_step_id}
+    elif pending is None and korean_timer_status_question(
+            transcript,turn_language):
+        deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
+        deterministic_arguments={}
+    if deterministic_tool is not None:
+        await current_text(
+            "tool.call",turn_id=turn_id,tool=deterministic_tool,round=0)
+        started_tool=clock()
+        try:
+            deterministic_result=execute_tool(
+                deterministic_tool,deterministic_arguments,turn_context)
+        except Exception:
+            deterministic_result={
+                "status":"error","code":"procedure_store_unavailable"}
+        tool_elapsed_ms=round((clock()-started_tool)*1000)
+        timings["tool_ms"]=tool_elapsed_ms
+        fields={
+            "tool":deterministic_tool,
+            "status":deterministic_result.get("status","error"),
+            "elapsed_ms":tool_elapsed_ms,
+            "round":0,
+        }
+        if deterministic_result.get("code"):
+            fields["code"]=deterministic_result["code"]
+        if isinstance(deterministic_result.get("state"),dict):
+            fields["procedure_state"]=deterministic_result["state"]
+        for key in (
+            "operation","idempotent","completed_step_id","recorded_step_id",
+            "timer_step_id","observation","timer","audit_summary",
+            "remaining_seconds",
+        ):
+            if deterministic_result.get(key) is not None:
+                fields[key]=deterministic_result[key]
+        fields["procedure_completed"]=bool(
+            deterministic_result.get("completed"))
+        await current_text("tool.result",turn_id=turn_id,**fields)
+        if deterministic_result.get("code"):
+            await current_text(
+                "procedure.error",turn_id=turn_id,
+                code=deterministic_result["code"])
+        state=deterministic_result.get("state")
+        if isinstance(state,dict):
+            if (not deterministic_result.get("code") and
+                    deterministic_result.get("operation")=="complete" and
+                    not deterministic_result.get("idempotent")):
+                await current_text(
+                    "procedure.step_completed",turn_id=turn_id,
+                    step_id=deterministic_result.get("completed_step_id"))
+                if deterministic_result.get("completed"):
+                    await current_text(
+                        "procedure.completed",turn_id=turn_id,state=state)
+            if (not deterministic_result.get("code") and
+                    deterministic_result.get("operation")=="start_timer" and
+                    not deterministic_result.get("idempotent")):
+                await current_text(
+                    "procedure.timer_started",turn_id=turn_id,
+                    step_id=deterministic_result.get("timer_step_id"),
+                    timer=state.get("timer"))
+            await current_text(
+                "procedure.state",turn_id=turn_id,state=state)
+        text=deterministic_procedure_text(
+            deterministic_result,turn_language)
+        await current_text(
+            "reply.delta",turn_id=turn_id,segment_index=0,text=text)
+        try:
+            timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+            pcm=await asyncio.to_thread(synthesize,text,turn_language)
+            frames=frame_complete_audio(pcm)
+        except Exception:
+            log.exception("deterministic procedure TTS failed")
+            frames=[]
+        segment_count=0
+        output_frames=0
+        playback_started=bool(frames and session.start_playback(turn_id))
+        if playback_started:
+            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+            await current_text(
+                "state.changed",state=session.state.value,turn_id=turn_id)
+            await sender.segment(turn_id,0,frames)
+            segment_count=1
+            output_frames=len(frames)
+        await current_text("reply.complete",turn_id=turn_id,text=text)
+        await current_text(
+            "audio.complete",turn_id=turn_id,segment_count=segment_count)
+        timings["total_ms"]=round((clock()-endpoint)*1000)
+        await current_text(
+            "turn.done",turn_id=turn_id,timings_ms=timings,
+            segment_count=segment_count,input_frames=input_frames,
+            output_frames=output_frames,tools_used=[deterministic_tool],
+            route="deterministic_procedure")
+        if session.is_current(turn_id,generation):
+            session.history.commit([
+                {"role":"user","content":transcript},
+                {"role":"assistant","content":text},
+            ])
+        if not playback_started and session.complete_without_playback(turn_id):
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms)
+        return
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token

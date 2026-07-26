@@ -7,7 +7,9 @@ from safebridge_voice.procedure_definitions import (
 )
 from safebridge_voice.procedure_store import ProcedureStore
 from safebridge_voice.procedures import (
-    KOREAN_COMPLETION_PHRASES, ProcedureController, authorized_completion_step_id,
+    KOREAN_COMPLETION_PHRASES, KOREAN_TIMER_START_PHRASES,
+    ProcedureController, authorized_completion_step_id,
+    authorized_timer_start_step_id,
 )
 from safebridge_voice.tools import (
     COMPLETE_CURRENT_STEP_TOOL_NAME, GET_CURRENT_STEP_TOOL_NAME,
@@ -172,9 +174,13 @@ class ProcedureToolTests(unittest.TestCase):
             self.assertEqual(result["code"],"explicit_confirmation_required")
             self.assertEqual(self.store.get_session(session_id),before_row)
             self.assertEqual(self.store.list_events(session_id),before_events)
-        self.assertEqual(KOREAN_COMPLETION_PHRASES,{
-            "현재 단계를 완료했습니다","이 단계를 완료했습니다","현재 단계 완료했습니다"})
-        authorized=authorized_completion_step_id("현재 단계를 완료했습니다.","ko",controller)
+        for phrase in KOREAN_COMPLETION_PHRASES:
+            self.assertEqual(
+                authorized_completion_step_id(f"{phrase}.","ko",controller),
+                "one",
+            )
+        authorized=authorized_completion_step_id(
+            "현재 단계를 완료했습니다.","ko",controller)
         forced=ToolContext(Path("catalog.sqlite"),"TEST","ko","test_only",
                            procedure_controller=controller,
                            procedure_completion_authorized_step_id=authorized)
@@ -183,6 +189,29 @@ class ProcedureToolTests(unittest.TestCase):
         self.assertEqual(result["state"]["current_step_id"],"two")
         self.assertEqual(len([event for event in self.store.list_events(session_id)
                               if event["event_type"]=="step_completed"]),1)
+
+    def test_timer_start_phrases_bind_only_to_latest_current_step(self):
+        korean=workflow_approved()
+        korean=ProcedureDefinition(
+            korean.schema_version,korean.procedure_id,korean.title,korean.version,
+            korean.facility_id,"ko",korean.approval_status,korean.usage_scope,
+            korean.active,korean.document_id,korean.document_version,"ko",
+            korean.document_source,korean.steps)
+        controller=ProcedureController({"workflow":korean},self.store)
+        context=ToolContext(
+            Path("catalog.sqlite"),"TEST","ko","test_only",
+            procedure_controller=controller)
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,{"procedure_id":"workflow"},context)
+        self.assertIsNone(authorized_timer_start_step_id(
+            "타이머가 얼마나 남았나요?","ko",controller))
+        self.assertIsNone(authorized_timer_start_step_id(
+            "고정 타이머를 시작해줘 그리고 단계를 완료해줘","ko",controller))
+        for phrase in KOREAN_TIMER_START_PHRASES:
+            self.assertEqual(
+                authorized_timer_start_step_id(f"{phrase}.","ko",controller),
+                "observe",
+            )
 
     def test_required_observation_timer_and_audit_summary_gate_completion(self):
         now=[1000.0]
