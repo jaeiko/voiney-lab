@@ -93,7 +93,7 @@ Native 화면은 브라우저 음성 신호 감지와 서버 전송 시작을 �
 연구자 음성 ─┬─ Native Realtime S2S
              └─ STT → Voice Agent + Tool Loop → TTS
                          │
-                         ├─ 승인자료 검색
+                         ├─ SQLite 승인 Gate → Moss 인메모리 검색(선택)
                          ├─ Procedure·관찰·타이머 → procedure_sessions.sqlite
                          └─ 안전 보고 + 현재 단계 → reports/inbox.jsonl
                                                         │
@@ -108,7 +108,7 @@ Voice Tool은 짧은 파일 기록만 수행한다. Worker 전용 Grok Prompt로
 
 | Tool | 역할 |
 |---|---|
-| `search_approved_safety_manual` | 승인된 로컬 데모 자료 검색 |
+| `search_approved_safety_manual` | SQLite 승인 Gate를 통과한 자료 검색 및 선택적 Moss 인메모리 순위화 |
 | `create_safety_report` | 위치·상황·긴급도·노출 여부를 검증하고 Queue에 기록 |
 | `check_safety_report_status` | Queue·재시도·인계문 준비 상태 확인 |
 | `start_procedure` | 서버가 검증한 Procedure 시작 |
@@ -130,6 +130,18 @@ python -m pip install -e .
 ```
 
 `.env`에 자신의 값만 입력한다. `.env`와 API 키는 커밋하지 않는다.
+
+Moss 검색을 사용할 때만 선택 의존성을 추가한다.
+
+```bash
+python -m pip install -e '.[moss]'
+```
+
+Moss는 서버 시작 시 승인 인덱스를 메모리에 올리고, 기존 SQLite가 승인한
+후보 ID 안에서만 hybrid semantic/keyword 순위를 정한다. 자격 증명 누락,
+인덱스 로드 실패, timeout, 알 수 없는 결과 ID가 발생하면 기존 SQLite
+순서로 자동 복귀한다. 인덱스 동기화와 기밀자료 경계는
+[`docs/MOSS_RETRIEVAL.md`](docs/MOSS_RETRIEVAL.md)를 따른다.
 
 ## 실행
 
@@ -244,6 +256,7 @@ python -m compileall -q src tests
 ## 설계 문서
 
 - [`docs/PHASE6_WORKFLOW_COPILOT.md`](docs/PHASE6_WORKFLOW_COPILOT.md)
+- [`docs/MOSS_RETRIEVAL.md`](docs/MOSS_RETRIEVAL.md)
 - [`docs/WEB_WIREFRAMES.md`](docs/WEB_WIREFRAMES.md)
 - [`docs/M2_DISPATCHER_PLAN.md`](docs/M2_DISPATCHER_PLAN.md)
 
@@ -253,6 +266,8 @@ python -m compileall -q src tests
 - Agent는 작업 재개나 안전 판정을 승인하지 않는다.
 - 즉시 위험 시 기존 비상 연락·대피 절차가 우선이다.
 - 실제 SMTP, 인증, 권한 관리, 암호화 저장, 관리자 Dashboard는 구현하지 않았다.
+- Moss 인덱스 생성·갱신은 선택한 section text를 Moss Cloud로 업로드하므로
+  조직이 외부 서비스 사용을 승인한 비기밀 자료에만 사용한다.
 - Worker가 만든 `.eml`은 검토용 Outbox 산출물이며 자동 전송하지 않는다.
 - 실제 마이크, 연구실 소음, 시약명·숫자·단위 STT는 별도 현장 검증이 필요하다.
 ## Fictional Workflow Copilot demo

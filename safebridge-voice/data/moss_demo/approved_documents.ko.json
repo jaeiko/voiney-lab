@@ -1,0 +1,119 @@
+{
+  "documents": [
+    {
+      "document_id": "FICTIONAL-MOSS-DEMO-SDS-KO",
+      "document_family_id": "FICTIONAL-MOSS-DEMO-SDS-FAMILY",
+      "canonical_source_id": "FICTIONAL-MOSS-DEMO-SDS-SOURCE",
+      "canonical_version": "1.0",
+      "document_type": "supplier_sds",
+      "title": "FICTIONAL NON-OPERATIONAL Moss 검색 데모 SDS",
+      "issuer": "SafeBridge Classroom Demo",
+      "manufacturer": "SafeBridge Fictional Materials",
+      "product_name": "가상 용제 MOSS-A100",
+      "product_code": "MOSS-A100",
+      "cas_numbers": [],
+      "version": "1.0",
+      "language": "ko",
+      "facility_id": null,
+      "source_authority": "supplier",
+      "approval_status": "approved",
+      "usage_scope": "demo",
+      "effective_at": "2026-01-01T00:00:00+00:00",
+      "review_due_at": "2030-01-01T00:00:00+00:00",
+      "source_path": "data/moss_demo/approved_documents.ko.json",
+      "source_uri": "demo://fictional/moss/sds-ko",
+      "source_checksum": "sha256:fictional-moss-demo-sds-ko-v1",
+      "translation_status": "original",
+      "active": true,
+      "aliases": [
+        {
+          "alias": "가상 용제 MOSS-A100",
+          "language": "ko",
+          "approved": true,
+          "generic": false
+        },
+        {
+          "alias": "모스 가상 용제",
+          "language": "ko",
+          "approved": true,
+          "generic": false
+        }
+      ],
+      "sections": [
+        {
+          "section_code": "SDS-04",
+          "section_title": "FICTIONAL 응급조치 표시",
+          "page_start": 4,
+          "page_end": 4,
+          "content": "FICTIONAL NON-OPERATIONAL 데모 문구입니다. 실제 응급조치나 안전 지침으로 사용하지 마십시오. 화면에는 가상 용제 MOSS-A100 관련 모의 기록을 관리자에게 확인하라는 문구만 표시합니다.",
+          "topic": "first_aid",
+          "keywords": [
+            "가상",
+            "데모",
+            "응급조치",
+            "MOSS-A100"
+          ]
+        },
+        {
+          "section_code": "SDS-06",
+          "section_title": "FICTIONAL 누출 대응 표시",
+          "page_start": 6,
+          "page_end": 6,
+          "content": "FICTIONAL NON-OPERATIONAL 데모 문구입니다. 실제 누출 대응이나 안전 지침으로 사용하지 마십시오. 화면에는 가상 누출 이벤트를 중단 상태로 기록하고 모의 관리자에게 인계하라는 문구만 표시합니다.",
+          "topic": "spill",
+          "keywords": [
+            "가상",
+            "데모",
+            "누출",
+            "인계",
+            "MOSS-A100"
+          ]
+        }
+      ]
+    },
+    {
+      "document_id": "FICTIONAL-MOSS-DEMO-SOP-KO",
+      "document_family_id": "FICTIONAL-MOSS-DEMO-SOP-FAMILY",
+      "canonical_source_id": "FICTIONAL-MOSS-DEMO-SOP-SOURCE",
+      "canonical_version": "1.0",
+      "document_type": "facility_sop",
+      "title": "FICTIONAL NON-OPERATIONAL Moss 검색 데모 시설 SOP",
+      "issuer": "SafeBridge Classroom Demo",
+      "manufacturer": null,
+      "product_name": null,
+      "product_code": null,
+      "cas_numbers": [],
+      "version": "1.0",
+      "language": "ko",
+      "facility_id": "MOSS-DEMO-FACILITY",
+      "source_authority": "facility",
+      "approval_status": "approved",
+      "usage_scope": "demo",
+      "effective_at": "2026-01-01T00:00:00+00:00",
+      "review_due_at": "2030-01-01T00:00:00+00:00",
+      "source_path": "data/moss_demo/approved_documents.ko.json",
+      "source_uri": "demo://fictional/moss/facility-sop-ko",
+      "source_checksum": "sha256:fictional-moss-demo-sop-ko-v1",
+      "translation_status": "original",
+      "active": true,
+      "aliases": [],
+      "sections": [
+        {
+          "section_code": "DEMO-SPILL",
+          "section_title": "FICTIONAL 시설 누출 인계 표시",
+          "page_start": 1,
+          "page_end": 1,
+          "content": "FICTIONAL NON-OPERATIONAL 데모 문구입니다. 실제 시설 절차가 아닙니다. 모의 화면에서 이벤트 위치와 관찰값을 확인한 뒤 데모 관리자 인계 흐름을 실행합니다.",
+          "topic": "spill",
+          "keywords": [
+            "가상",
+            "시설",
+            "누출",
+            "관리자",
+            "인계"
+          ]
+        }
+      ]
+    }
+  ]
+}

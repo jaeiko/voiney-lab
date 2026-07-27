@@ -125,6 +125,7 @@ def search_safety_documents(
     facility_id: str | None = None,
     topic: str | None = None,
     now: datetime | None = None,
+    max_matches: int = 3,
 ) -> dict[str, Any]:
     """Return verbatim source sections for one explicit runtime usage scope."""
     if (not isinstance(query, str) or not query.strip() or
@@ -137,6 +138,12 @@ def search_safety_documents(
     if not isinstance(topic, str) or topic not in TOPICS:
         return _result("invalid_arguments")
     if now is not None and not isinstance(now, datetime):
+        return _result("invalid_arguments")
+    if (
+        not isinstance(max_matches, int)
+        or isinstance(max_matches, bool)
+        or not 1 <= max_matches <= 100
+    ):
         return _result("invalid_arguments")
     selected_topic = topic
     current_time = now or datetime.now(timezone.utc)
@@ -251,7 +258,7 @@ def search_safety_documents(
                                     item[1]["document_id"], item[1]["version"],
                                     item[2]["page_start"], item[2]["section_code"]))
         matches = []
-        for _, doc, section in rows[:3]:
+        for _, doc, section in rows[:max_matches]:
             matches.append({
                 "document_id": doc["document_id"], "document_family_id": doc["document_family_id"],
                 "canonical_source_id": doc["canonical_source_id"], "canonical_version": doc["canonical_version"],

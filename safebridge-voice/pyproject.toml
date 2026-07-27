@@ -18,6 +18,11 @@ dependencies = [
   "websockets>=14,<17",
 ]
 
+[project.optional-dependencies]
+moss = [
+  "moss>=1.0.0b19,<2",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true

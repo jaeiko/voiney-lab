@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import threading
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from safebridge_voice.retrieval import TOPICS
+
+log = logging.getLogger("safebridge.tools")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = PROJECT_ROOT / "reports"
@@ -487,8 +490,9 @@ def search_approved_safety_manual(
     context: ToolContext | None = None,
     topic: Any = None,
 ) -> dict[str, Any]:
-    """Search SQLite only; the legacy demo JSON is never an implicit fallback."""
+    """Search the approved catalog, optionally reranking safe candidates in Moss."""
     from safebridge_voice.retrieval import search_safety_documents
+    from safebridge_voice.moss_retrieval import get_moss_runtime
 
     blocked = _search_failure("invalid_arguments")
     if (not isinstance(query, str) or not query.strip() or context is None or
@@ -497,12 +501,43 @@ def search_approved_safety_manual(
     if not isinstance(topic, str) or topic not in TOPICS:
         return blocked
     try:
+        runtime = get_moss_runtime()
+        use_moss = runtime is not None and runtime.allows_scope(context.usage_scope)
+        search_options = {
+            "usage_scope": context.usage_scope,
+            "facility_id": context.facility_id,
+            "topic": topic,
+        }
+        if use_moss:
+            search_options["max_matches"] = runtime.settings.candidate_limit
         result = search_safety_documents(
-            query, context.language, context.catalog_path,
-            usage_scope=context.usage_scope, facility_id=context.facility_id, topic=topic,
+            query,
+            context.language,
+            context.catalog_path,
+            **search_options,
         )
         if result.get("status") != "success" or not result.get("answerable"):
             return _search_failure(result.get("status", "error"))
+        raw_matches = result["matches"]
+        retrieval = {"backend": "sqlite"}
+        if use_moss:
+            reranked = runtime.rerank(
+                query,
+                raw_matches,
+                usage_scope=context.usage_scope,
+                topic_routes=TOPICS[topic],
+            )
+            raw_matches = reranked.matches
+            retrieval = {
+                "backend": "moss" if reranked.used else "sqlite_fallback",
+                "elapsed_ms": reranked.elapsed_ms,
+            }
+            log.info(
+                "approved retrieval backend=%s elapsed_ms=%s candidates=%s",
+                retrieval["backend"],
+                reranked.elapsed_ms,
+                len(result["matches"]),
+            )
         allowed = {
             "document_id", "document_type", "title", "issuer", "manufacturer",
             "product_name", "product_code", "cas_numbers", "version", "canonical_version",
@@ -510,8 +545,13 @@ def search_approved_safety_manual(
             "language", "translation_status", "source_uri", "source_checksum",
         }
         matches = [{key: value for key, value in match.items() if key in allowed}
-                   for match in result["matches"]]
-        return {"status": "success", "answerable": True, "matches": matches}
+                   for match in raw_matches[:3]]
+        return {
+            "status": "success",
+            "answerable": True,
+            "matches": matches,
+            "retrieval": retrieval,
+        }
     except Exception:
         return _search_failure("error")
 
