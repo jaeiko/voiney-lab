@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio, logging, os, time
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import requests
@@ -20,6 +21,10 @@ from safebridge_voice.brain import (
 from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
+)
+from safebridge_voice.moss_retrieval import (
+    start_moss_runtime_from_environment,
+    stop_moss_runtime,
 )
 from safebridge_voice.native_realtime import (
     NATIVE_SAMPLE_RATE,
@@ -52,7 +57,19 @@ PROJECT_ROOT=Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("safebridge")
-app=FastAPI(title="SafeBridge Voice")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Warm optional in-memory retrieval without making it a startup dependency."""
+    await asyncio.to_thread(start_moss_runtime_from_environment)
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(stop_moss_runtime)
+
+
+app=FastAPI(title="SafeBridge Voice",lifespan=lifespan)
 STATIC_DIR=Path(__file__).with_name("static")
 
 def normalize_session_language(value:str)->str:
