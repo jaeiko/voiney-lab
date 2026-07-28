@@ -30,6 +30,7 @@ from safebridge_voice.emergency import recognize_emergency
 from safebridge_voice.language import resolve_turn_language
 from safebridge_voice.procedures import (
     authorized_completion_step_id,
+    authorized_observation_arguments,
     authorized_timer_start_step_id,
     deterministic_procedure_text,
     korean_timer_status_question,
@@ -40,6 +41,7 @@ from safebridge_voice.tools import (
     CREATE_REPORT_TOOL_NAME,
     GET_CURRENT_STEP_TOOL_NAME,
     PROCEDURE_TOOL_NAMES,
+    RECORD_STEP_OBSERVATION_TOOL_NAME,
     REPORT_ID_PATTERN,
     SEARCH_TOOL_NAME,
     START_STEP_TIMER_TOOL_NAME,
@@ -472,26 +474,7 @@ def _procedure_force_text(result: dict[str, Any], language: str) -> str | None:
         }[language]
     operation = result.get("operation")
     if operation == "record_observation":
-        observation = result.get("observation")
-        value = observation.get("value") if isinstance(observation, dict) else None
-        spoken_value = str(value) if value is not None and len(str(value)) <= 80 else None
-        return {
-            "ko": (
-                f"관찰값 {spoken_value}을 현재 단계에 그대로 기록했습니다."
-                if spoken_value is not None
-                else "말씀하신 관찰값을 현재 단계에 기록했습니다."
-            ),
-            "en": (
-                f"I recorded the exact observation {spoken_value} for the current step."
-                if spoken_value is not None
-                else "I recorded the observation you reported for the current step."
-            ),
-            "vi": (
-                f"Tôi đã ghi chính xác giá trị quan sát {spoken_value} cho bước hiện tại."
-                if spoken_value is not None
-                else "Tôi đã ghi lại giá trị quan sát bạn báo cáo cho bước hiện tại."
-            ),
-        }[language]
+        return deterministic_procedure_text(result,language)
     if operation == "start_timer":
         timer = state.get("timer") or result.get("timer") or {}
         duration = timer.get("duration_seconds")
@@ -1414,6 +1397,9 @@ class NativeRealtimeSession:
         authorized_timer_step_id=authorized_timer_start_step_id(
             transcript,self.current_language,
             self.tool_context.procedure_controller)
+        observation_arguments=authorized_observation_arguments(
+            transcript,self.current_language,
+            self.tool_context.procedure_controller)
         deterministic_tool=None
         deterministic_arguments=None
         if authorized_step_id is not None:
@@ -1422,6 +1408,9 @@ class NativeRealtimeSession:
         elif authorized_timer_step_id is not None:
             deterministic_tool=START_STEP_TIMER_TOOL_NAME
             deterministic_arguments={"expected_step_id":authorized_timer_step_id}
+        elif observation_arguments is not None:
+            deterministic_tool=RECORD_STEP_OBSERVATION_TOOL_NAME
+            deterministic_arguments=observation_arguments
         elif korean_timer_status_question(transcript,self.current_language):
             deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
             deterministic_arguments={}

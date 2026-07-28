@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,13 +19,23 @@ from safebridge_voice.native_realtime import (
     session_update_payload,
 )
 from safebridge_voice.emergency import KOREAN_EMERGENCY_RESPONSE
+from safebridge_voice.procedure_definitions import (
+    ProcedureDefinition,
+    ProcedureStep,
+    SourceReference,
+)
+from safebridge_voice.procedure_store import ProcedureStore
+from safebridge_voice.procedures import ProcedureController as RealProcedureController
 from safebridge_voice.server import ServerConfig, voice_socket
 from safebridge_voice.tools import (
     CHECK_REPORT_TOOL_NAME,
     COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
+    GET_CURRENT_STEP_TOOL_NAME,
+    RECORD_STEP_OBSERVATION_TOOL_NAME,
     START_STEP_TIMER_TOOL_NAME,
     ToolContext,
+    execute_tool,
 )
 
 
@@ -238,6 +249,38 @@ def context(controller=None):
         "ko",
         controller,
     )
+
+
+def real_observation_workflow(directory, *, subjects=None, start=True):
+    source=SourceReference("DEMO",1,1)
+    schema=(
+        {
+            "type":"text",
+            "required":True,
+            "label":"가상 관찰값",
+            "utterance_subjects":list(subjects),
+        }
+        if subjects is not None else None
+    )
+    definition=ProcedureDefinition(
+        1,"native-observation-demo","FICTIONAL NON-OPERATIONAL Demo","1",
+        "FACILITY","ko","approved","test_only",True,"demo-doc","1","ko",
+        source,
+        (
+            ProcedureStep(
+                "observe",1,"Observe","가상 관찰값을 말해 주세요.",
+                "explicit_confirmation",source,observation_schema=schema),
+        ),
+    )
+    store=ProcedureStore(Path(directory)/"procedure.sqlite")
+    controller=RealProcedureController({definition.procedure_id:definition},store)
+    if start:
+        result=controller.start(
+            definition.procedure_id,facility_id="FACILITY",
+            language="ko",usage_scope="test_only")
+        if result.get("status")!="success":
+            raise AssertionError("failed to start test workflow")
+    return store,controller
 
 
 def config(**overrides):
@@ -1064,6 +1107,334 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "현재 단계를 완료했습니다",
             force["item"]["content"][0]["text"])
+
+    async def test_first_final_observation_is_server_owned_replay_safe_and_fenced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store,controller=real_observation_workflow(
+                directory,
+                subjects=(
+                    "가상 표시창","가상 표시창 색상","가상 표시창 색깔",
+                ),
+            )
+            try:
+                self.session.tool_context=context(controller)
+                self.session.turn_id=4
+                await self.session.handle_upstream_message(
+                    response_created("automatic-observation"))
+                completed=json.dumps({
+                    "type":"conversation.item.input_audio_transcription.completed",
+                    "transcript":"가상 표시창은 빨간색이야.",
+                })
+                await self.session.handle_upstream_message(completed)
+                await self.session.handle_upstream_message(completed)
+
+                for call_id,name,arguments in (
+                    ("late-lookup",GET_CURRENT_STEP_TOOL_NAME,"{}"),
+                    (
+                        "late-observation",
+                        RECORD_STEP_OBSERVATION_TOOL_NAME,
+                        '{"expected_step_id":"observe","value":"파란색"}',
+                    ),
+                ):
+                    await self.session.handle_upstream_message(json.dumps({
+                        "type":"response.function_call_arguments.done",
+                        "response_id":"automatic-observation",
+                        "call_id":call_id,
+                        "name":name,
+                        "arguments":arguments,
+                    }))
+                await self.session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"automatic-observation"},
+                }))
+                await self.session.handle_upstream_message(
+                    response_created("forced-observation"))
+                await self.session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"forced-observation"},
+                }))
+
+                observations=store.list_observations(
+                    controller.attached_session_id,"observe")
+                self.assertEqual(
+                    [item["value"] for item in observations],["빨간색"])
+                self.assertEqual(
+                    controller.current()["state"]["current_step_id"],"observe")
+                event_types=[event["type"] for event in self.sender.events]
+                self.assertEqual(event_types.count("tool.call"),1)
+                self.assertEqual(event_types.count("tool.result"),1)
+                self.assertEqual(
+                    event_types.count("procedure.observation_recorded"),1)
+                self.assertEqual(event_types.count("procedure.state"),1)
+                result=next(
+                    event for event in self.sender.events
+                    if event["type"]=="tool.result")
+                self.assertEqual(
+                    result["tool"],RECORD_STEP_OBSERVATION_TOOL_NAME)
+                self.assertEqual(
+                    result["observation"]["value"],"빨간색")
+                done=next(
+                    event for event in self.sender.events
+                    if event["type"]=="turn.done")
+                self.assertEqual(done["route"],"deterministic_procedure")
+            finally:
+                store.close()
+
+    async def test_identifier_observation_preserves_every_character(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store,controller=real_observation_workflow(
+                directory,subjects=("가상 라벨",))
+            try:
+                self.session.tool_context=context(controller)
+                self.session.turn_id=5
+                await self.session.handle_upstream_message(
+                    response_created("identifier-observation"))
+                await self.session.handle_upstream_message(json.dumps({
+                    "type":"conversation.item.input_audio_transcription.completed",
+                    "transcript":"가상 라벨은 A-170이야.",
+                }))
+                observations=store.list_observations(
+                    controller.attached_session_id,"observe")
+                self.assertEqual(
+                    [item["value"] for item in observations],["A-170"])
+                result=next(
+                    event for event in self.sender.events
+                    if event["type"]=="tool.result")
+                self.assertEqual(result["observation"]["value"],"A-170")
+            finally:
+                store.close()
+
+    async def test_observation_route_rejects_unsafe_states_and_utterances(self):
+        rejected=(
+            "가상 표시창은 빨간색이야?",
+            "가상 표시창은 빨간색인 것 같아.",
+            "오늘 본 색은 빨간색이야.",
+            "가상 표시창은 빨간색이야. 보고서를 만들어 주세요.",
+        )
+        for transcript in rejected:
+            with self.subTest(transcript=transcript), \
+                    tempfile.TemporaryDirectory() as directory:
+                sender=Sender()
+                upstream=Upstream(hold=True)
+                store,controller=real_observation_workflow(
+                    directory,subjects=("가상 표시창",))
+                try:
+                    session=NativeRealtimeSession(
+                        sender,context(controller),config(),clock=self.clock)
+                    await prime(session,upstream)
+                    session.turn_id=1
+                    await session.handle_upstream_message(json.dumps({
+                        "type":"conversation.item.input_audio_transcription.completed",
+                        "transcript":transcript,
+                    }))
+                    self.assertEqual(
+                        store.list_observations(
+                            controller.attached_session_id,"observe"),[])
+                    self.assertFalse(any(
+                        event["type"]=="tool.call"
+                        and event.get("tool")==RECORD_STEP_OBSERVATION_TOOL_NAME
+                        for event in sender.events))
+                finally:
+                    store.close()
+
+        for state in ("no_active","no_schema","blocked","pending_report"):
+            with self.subTest(state=state), \
+                    tempfile.TemporaryDirectory() as directory:
+                sender=Sender()
+                upstream=Upstream(hold=True)
+                store,controller=real_observation_workflow(
+                    directory,
+                    subjects=None if state=="no_schema"
+                    else ("가상 표시창",),
+                    start=state!="no_active",
+                )
+                try:
+                    if state=="blocked":
+                        controller.block_for_handoff(
+                            "SR-20260728-A1B2C3","fictional handoff")
+                    session=NativeRealtimeSession(
+                        sender,context(controller),config(),clock=self.clock)
+                    await prime(session,upstream)
+                    session.turn_id=1
+                    if state=="pending_report":
+                        session.pending_report={
+                            "location":"F","summary":"fictional",
+                            "urgency":"routine","exposure_status":"no",
+                            "language":"ko",
+                        }
+                    await session.handle_upstream_message(json.dumps({
+                        "type":"conversation.item.input_audio_transcription.completed",
+                        "transcript":"가상 표시창은 빨간색이야.",
+                    }))
+                    observations=(
+                        store.list_observations(
+                            controller.attached_session_id,"observe")
+                        if controller.attached_session_id else []
+                    )
+                    self.assertEqual(observations,[])
+                    self.assertFalse(any(
+                        event["type"]=="tool.call"
+                        and event.get("tool")==RECORD_STEP_OBSERVATION_TOOL_NAME
+                        for event in sender.events))
+                finally:
+                    store.close()
+
+    async def _assert_realtime_draft_approval(self, transcript):
+        with tempfile.TemporaryDirectory() as directory:
+            store,controller=real_observation_workflow(
+                directory,subjects=("가상 표시창",))
+            sender=Sender()
+            upstream=Upstream(hold=True)
+            session=NativeRealtimeSession(
+                sender,context(controller),config(),clock=self.clock)
+            await prime(session,upstream)
+            try:
+                await session.handle_upstream_message(json.dumps({
+                    "type":"input_audio_buffer.speech_started",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"input_audio_buffer.speech_stopped",
+                }))
+                await session.handle_upstream_message(
+                    response_created("draft-selection"))
+                await session.handle_upstream_message(json.dumps({
+                    "type":(
+                        "conversation.item."
+                        "input_audio_transcription.completed"
+                    ),
+                    "transcript":(
+                        "제3 실험실 B 작업대의 가상 표시창 이상을 "
+                        "보고해 주세요"
+                    ),
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"response.function_call_arguments.done",
+                    "response_id":"draft-selection",
+                    "call_id":"draft-call",
+                    "name":CREATE_REPORT_TOOL_NAME,
+                    "arguments":json.dumps({
+                        "location":"제3 실험실 B 작업대",
+                        "summary":"가상 표시창이 빨간색임",
+                        "urgency":"urgent",
+                        "exposure_status":"no",
+                    },ensure_ascii=False),
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"draft-selection"},
+                }))
+                draft=session.pending_report
+                self.assertIsNotNone(draft)
+                awaiting=next(
+                    event for event in sender.events
+                    if event["type"]=="tool.result"
+                    and event.get("status")=="awaiting_user_confirmation")
+                self.assertIs(awaiting["report"],draft)
+
+                await session.handle_upstream_message(
+                    response_created("draft-confirmation"))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"draft-confirmation"},
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"input_audio_buffer.speech_started",
+                }))
+                self.assertIs(session.pending_report,draft)
+                await session.handle_upstream_message(json.dumps({
+                    "type":"input_audio_buffer.speech_stopped",
+                }))
+                await session.handle_upstream_message(
+                    response_created("approval-automatic"))
+                approval_event_index=len(sender.events)
+
+                report_result={
+                    "status":"success",
+                    "report_id":"SR-20260728-C1D2E3",
+                    "report_status":"queued_for_handoff",
+                }
+                with patch(
+                    "safebridge_voice.tools.create_safety_report",
+                    return_value=report_result,
+                ) as create, patch(
+                    "safebridge_voice.native_realtime.execute_tool",
+                    wraps=execute_tool,
+                ) as dispatch:
+                    completed=json.dumps({
+                        "type":(
+                            "conversation.item."
+                            "input_audio_transcription.completed"
+                        ),
+                        "transcript":transcript,
+                    })
+                    await session.handle_upstream_message(completed)
+                    await session.handle_upstream_message(completed)
+                    await session.handle_upstream_message(json.dumps({
+                        "type":"response.function_call_arguments.done",
+                        "response_id":"approval-automatic",
+                        "call_id":"late-report-duplicate",
+                        "name":CREATE_REPORT_TOOL_NAME,
+                        "arguments":json.dumps(draft,ensure_ascii=False),
+                    }))
+                dispatch.assert_called_once()
+                self.assertIs(dispatch.call_args.args[1],draft)
+                create.assert_called_once()
+                workflow=create.call_args.kwargs["workflow_context"]
+                self.assertEqual(workflow["procedure_id"],"native-observation-demo")
+                self.assertEqual(workflow["step_id"],"observe")
+
+                await session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"approval-automatic"},
+                }))
+                await session.handle_upstream_message(
+                    response_created("approval-forced"))
+                await session.handle_upstream_message(json.dumps({
+                    "type":"response.done",
+                    "response":{"id":"approval-forced"},
+                }))
+
+                self.assertIsNone(session.pending_report)
+                approval_events=sender.events[approval_event_index:]
+                event_types=[event["type"] for event in approval_events]
+                self.assertEqual(event_types.count("tool.call"),1)
+                self.assertEqual(event_types.count("tool.result"),1)
+                self.assertEqual(
+                    event_types.count("procedure.blocked_for_handoff"),1)
+                self.assertEqual(event_types.count("procedure.state"),1)
+                confirmed=next(
+                    event for event in approval_events
+                    if event["type"]=="tool.result")
+                self.assertEqual(confirmed["status"],"confirmed")
+                self.assertEqual(
+                    confirmed["report_id"],"SR-20260728-C1D2E3")
+                self.assertTrue(confirmed["procedure_blocked"])
+                self.assertEqual(
+                    confirmed["procedure_state"]["status"],
+                    "blocked_for_handoff",
+                )
+                self.assertEqual(
+                    controller.current()["state"]["status"],
+                    "blocked_for_handoff",
+                )
+                done=next(
+                    event for event in approval_events
+                    if event["type"]=="turn.done")
+                self.assertEqual(done["route"],"deterministic_report")
+            finally:
+                store.close()
+
+    async def test_realtime_draft_approves_ne_submit_without_model(self):
+        await self._assert_realtime_draft_approval("네, 제출해줘.")
+
+    async def test_realtime_draft_approves_spaced_submit_without_model(self):
+        await self._assert_realtime_draft_approval("네, 제출해 줘.")
+
+    async def test_realtime_draft_approves_report_submit_without_model(self):
+        await self._assert_realtime_draft_approval("보고서를 제출해 주세요.")
+
+    async def test_realtime_draft_approves_safe_unicode_variants(self):
+        await self._assert_realtime_draft_approval("네, 제출해\u200b줘．")
 
     async def test_pending_report_approval_is_server_owned_and_exactly_once(self):
         self.session.pending_report = {

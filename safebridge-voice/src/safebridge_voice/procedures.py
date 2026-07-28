@@ -38,6 +38,9 @@ KOREAN_TIMER_START_PHRASES=frozenset({
     "현재 단계 타이머를 시작해 주세요",
 })
 REPORT_ID_PATTERN=re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
+_KOREAN_OBSERVATION_VALUE=(
+    r"(?:[가-힣]+?|[+-]?[A-Za-z0-9]+(?:[._:/+-][A-Za-z0-9]+)*)"
+)
 
 
 def _normalized_korean_command(transcript:str)->str:
@@ -79,6 +82,61 @@ def authorized_timer_start_step_id(
     if _normalized_korean_command(transcript) not in KOREAN_TIMER_START_PHRASES:
         return None
     return _active_step_id(controller)
+
+
+def authorized_observation_arguments(
+    transcript:str,language:str,controller:"ProcedureController"|None
+)->dict[str,Any]|None:
+    """Extract one reviewed, schema-declared Korean observation statement."""
+    if language!="ko" or controller is None or not isinstance(transcript,str):
+        return None
+    attached=getattr(controller,"_attached",None)
+    current=getattr(controller,"current",None)
+    if not callable(attached) or not callable(current):
+        return None
+    try:
+        definition,row=attached()
+        current_result=current()
+    except Exception:
+        return None
+    state=(
+        current_result.get("state")
+        if isinstance(current_result,dict) else None
+    )
+    if (not definition or not row or not isinstance(state,dict) or
+            row.get("status")!="active" or state.get("status")!="active"):
+        return None
+    index=row.get("current_step_index")
+    if (not isinstance(index,int) or isinstance(index,bool) or index<0 or
+            index>=len(definition.steps)):
+        return None
+    step=definition.steps[index]
+    if state.get("current_step_id")!=step.step_id:
+        return None
+    schema=getattr(step,"observation_schema",None)
+    subjects=(
+        schema.get("utterance_subjects")
+        if isinstance(schema,dict) else None
+    )
+    if (not isinstance(schema,dict) or schema.get("required") is not True or
+            schema.get("type")!="text" or not isinstance(subjects,list) or
+            not subjects):
+        return None
+    subject_pattern="|".join(
+        re.escape(subject) for subject in sorted(subjects,key=len,reverse=True)
+    )
+    statement=re.compile(
+        rf"^(?:{subject_pattern})(?:은|는)\s+"
+        rf"(?P<value>{_KOREAN_OBSERVATION_VALUE})"
+        rf"(?:이야|야|이에요|예요|입니다)[.。]?$"
+    )
+    match=statement.fullmatch(transcript.strip())
+    if match is None:
+        return None
+    return {
+        "expected_step_id":step.step_id,
+        "value":match.group("value"),
+    }
 
 
 def korean_timer_status_question(transcript:str,language:str)->bool:
@@ -161,6 +219,27 @@ def deterministic_procedure_text(result:dict[str,Any],language:str)->str:
             "ko":"현재 단계를 완료하고 다음 단계로 이동했습니다.",
             "en":"The current step is complete and the workflow moved to the next step.",
             "vi":"Bước hiện tại đã hoàn thành và quy trình đã chuyển sang bước tiếp theo.",
+        }[language]
+    if result.get("operation")=="record_observation":
+        observation=result.get("observation")
+        value=observation.get("value") if isinstance(observation,dict) else None
+        spoken_value=str(value) if value is not None and len(str(value))<=80 else None
+        return {
+            "ko":(
+                f"관찰값 {spoken_value}을 현재 단계에 그대로 기록했습니다."
+                if spoken_value is not None
+                else "말씀하신 관찰값을 현재 단계에 기록했습니다."
+            ),
+            "en":(
+                f"I recorded the exact observation {spoken_value} for the current step."
+                if spoken_value is not None
+                else "I recorded the observation you reported for the current step."
+            ),
+            "vi":(
+                f"Tôi đã ghi chính xác giá trị quan sát {spoken_value} cho bước hiện tại."
+                if spoken_value is not None
+                else "Tôi đã ghi lại giá trị quan sát bạn báo cáo cho bước hiện tại."
+            ),
         }[language]
     if result.get("operation")=="start_timer":
         timer=result.get("timer")

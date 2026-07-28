@@ -33,7 +33,10 @@
           "observation_schema": {
             "type": "text",
             "required": true,
-            "label": "확인한 가상 라벨"
+            "label": "확인한 가상 라벨",
+            "utterance_subjects": [
+              "가상 라벨"
+            ]
           }
         },
         {
@@ -65,7 +68,12 @@
           "observation_schema": {
             "type": "text",
             "required": true,
-            "label": "가상 표시창 색상"
+            "label": "가상 표시창 색상",
+            "utterance_subjects": [
+              "가상 표시창",
+              "가상 표시창 색상",
+              "가상 표시창 색깔"
+            ]
           }
         }
       ]

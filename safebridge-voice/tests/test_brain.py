@@ -76,6 +76,10 @@ class BrainTests(unittest.TestCase):
             "네, 지금 제출해 주세요.",
             "네 지금 제출해 주세요",
             "지금 작성한 보고 초안 제출해 주세요.",
+            "네, 제출해\u200b줘.",
+            "보고서를\u2060 제출해 주세요.",
+            "\ufeff보고서를 제출해 주세요.\ufeff",
+            "보고서를 제출해 주세요．",
         )
         for transcript in approved:
             with self.subTest(transcript=transcript):
@@ -88,10 +92,20 @@ class BrainTests(unittest.TestCase):
             "내",
             "내 제출해 주세요.",
             "네, 지금 제출해 주세요. 다만 위치를 바꿔 주세요.",
+            "제출해",
+            "보고서를 제출해 주세요 그리고 계속해 주세요",
+            "네 제출해줘 아니요 취소해 주세요",
+            "네 제출해줘 하지만 위치를 수정해 주세요",
+            "그 보고서는 제출해 주세요",
         )
         for transcript in near_misses:
             with self.subTest(transcript=transcript):
                 self.assertIsNone(confirmation_intent(transcript, "ko"))
+
+        self.assertEqual(
+            confirmation_intent("\ufeff보고서를 취소해 주세요.\u2060", "ko"),
+            "cancel",
+        )
 
     def test_report_confirmation_localizes_korean_and_vietnamese_enums(self):
         base={"location":"A","summary":"spill","material_or_equipment":"x"}

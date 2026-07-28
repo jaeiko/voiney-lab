@@ -89,7 +89,7 @@ def _observation(raw: Any, field: str) -> dict[str, Any] | None:
     if raw is None:
         return None
     required_fields={"type","required"}
-    allowed_fields=required_fields|{"label","unit"}
+    allowed_fields=required_fields|{"label","unit","utterance_subjects"}
     if (not isinstance(raw,dict) or not required_fields.issubset(raw) or
             not set(raw).issubset(allowed_fields)):
         raise ProcedureDefinitionError(f"{field} is malformed")
@@ -102,6 +102,19 @@ def _observation(raw: Any, field: str) -> dict[str, Any] | None:
             result["unit"]=_text(raw["unit"],f"{field}.unit")
         else:
             result["unit"]=None
+    if "utterance_subjects" in raw:
+        subjects=raw["utterance_subjects"]
+        if (not isinstance(subjects,list) or not 1<=len(subjects)<=8 or
+                any(not isinstance(item,str) or not item.strip()
+                    or len(item.strip())>80 or "\n" in item or "\r" in item
+                    for item in subjects)):
+            raise ProcedureDefinitionError(
+                f"{field}.utterance_subjects is malformed")
+        normalized=[item.strip() for item in subjects]
+        if len(set(normalized))!=len(normalized):
+            raise ProcedureDefinitionError(
+                f"{field}.utterance_subjects is malformed")
+        result["utterance_subjects"]=normalized
     return result
 
 

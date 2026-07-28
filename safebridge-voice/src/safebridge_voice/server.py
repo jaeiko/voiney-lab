@@ -37,6 +37,7 @@ from safebridge_voice.tools import (
     CREATE_REPORT_TOOL_NAME,
     GET_CURRENT_STEP_TOOL_NAME,
     PROCEDURE_TOOL_NAMES,
+    RECORD_STEP_OBSERVATION_TOOL_NAME,
     START_STEP_TIMER_TOOL_NAME,
     ToolContext,
     check_safety_report_status,
@@ -46,6 +47,7 @@ from safebridge_voice.procedure_definitions import load_procedure_definitions
 from safebridge_voice.procedure_store import ProcedureStore
 from safebridge_voice.procedures import (
     ProcedureController, authorized_completion_step_id,
+    authorized_observation_arguments,
     authorized_timer_start_step_id,
     deterministic_procedure_text, korean_timer_status_question,
     unattached_procedure_state,
@@ -398,6 +400,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             transcript,turn_language,session.tool_context.procedure_controller)
         authorized_timer_step_id=authorized_timer_start_step_id(
             transcript,turn_language,session.tool_context.procedure_controller)
+        observation_arguments=authorized_observation_arguments(
+            transcript,turn_language,session.tool_context.procedure_controller)
+    else:
+        observation_arguments=None
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,
                              session.tool_context.report_language,
@@ -412,6 +418,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     elif authorized_timer_step_id is not None:
         deterministic_tool=START_STEP_TIMER_TOOL_NAME
         deterministic_arguments={"expected_step_id":authorized_timer_step_id}
+    elif observation_arguments is not None:
+        deterministic_tool=RECORD_STEP_OBSERVATION_TOOL_NAME
+        deterministic_arguments=observation_arguments
     elif pending is None and korean_timer_status_question(
             transcript,turn_language):
         deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
@@ -463,6 +472,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 if deterministic_result.get("completed"):
                     await current_text(
                         "procedure.completed",turn_id=turn_id,state=state)
+            if (not deterministic_result.get("code") and
+                    deterministic_result.get("operation")=="record_observation"):
+                await current_text(
+                    "procedure.observation_recorded",turn_id=turn_id,
+                    step_id=deterministic_result.get("recorded_step_id"))
             if (not deterministic_result.get("code") and
                     deterministic_result.get("operation")=="start_timer" and
                     not deterministic_result.get("idempotent")):

@@ -9,6 +9,7 @@ from safebridge_voice.procedure_store import ProcedureStore
 from safebridge_voice.procedures import (
     KOREAN_COMPLETION_PHRASES, KOREAN_TIMER_START_PHRASES,
     ProcedureController, authorized_completion_step_id,
+    authorized_observation_arguments,
     authorized_timer_start_step_id,
 )
 from safebridge_voice.tools import (
@@ -40,6 +41,10 @@ def workflow_approved():
                 "explicit_confirmation",source,
                 observation_schema={
                     "type":"text","required":True,"label":"Fictional display",
+                    "utterance_subjects":[
+                        "가상 라벨","가상 표시창","가상 표시창 색상",
+                        "가상 표시창 색깔",
+                    ],
                 }),
             ProcedureStep(
                 "wait",2,"Wait","Start the fixed fictional timer.",
@@ -212,6 +217,96 @@ class ProcedureToolTests(unittest.TestCase):
                 authorized_timer_start_step_id(f"{phrase}.","ko",controller),
                 "observe",
             )
+
+    def test_korean_observation_grammar_is_schema_bound_and_fail_closed(self):
+        definition=workflow_approved()
+        controller=ProcedureController({"workflow":definition},self.store)
+        context=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=controller)
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,{"procedure_id":"workflow"},context)
+
+        accepted={
+            "가상 라벨은 A-170이야.":"A-170",
+            "가상 표시창은 빨간색이야.":"빨간색",
+            "가상 표시창 색상은 빨간색이야.":"빨간색",
+            "가상 표시창 색깔은 빨간색이야.":"빨간색",
+        }
+        for transcript,value in accepted.items():
+            with self.subTest(transcript=transcript):
+                self.assertEqual(
+                    authorized_observation_arguments(
+                        transcript,"ko",controller),
+                    {"expected_step_id":"observe","value":value},
+                )
+
+        rejected=(
+            "가상 표시창은 빨간색이야?",
+            "가상 표시창은 빨간색인 것 같아.",
+            "오늘 본 색은 빨간색이야.",
+            "빨간색이야.",
+            "가상 표시창은 빨간색이야. 보고서를 만들어 주세요.",
+            "도와줘, 가상 표시창은 빨간색이야.",
+            "가상 표시창은 빨간색이고 라벨은 A-170이야.",
+            "가상 표시창은 빨간색 이야.",
+        )
+        for transcript in rejected:
+            with self.subTest(transcript=transcript):
+                self.assertIsNone(
+                    authorized_observation_arguments(
+                        transcript,"ko",controller))
+
+        unattached=ProcedureController({"workflow":definition},self.store)
+        self.assertIsNone(authorized_observation_arguments(
+            "가상 표시창은 빨간색이야.","ko",unattached))
+
+        no_schema=ProcedureController({"demo":approved()},self.store)
+        no_schema_context=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=no_schema)
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,{"procedure_id":"demo"},
+            no_schema_context)
+        self.assertIsNone(authorized_observation_arguments(
+            "가상 표시창은 빨간색이야.","ko",no_schema))
+
+        controller.block_for_handoff(
+            "SR-20260722-A1B2C3","fictional observation")
+        self.assertIsNone(authorized_observation_arguments(
+            "가상 표시창은 빨간색이야.","ko",controller))
+
+        one_step=ProcedureDefinition(
+            definition.schema_version,definition.procedure_id+"-complete",
+            definition.title,definition.version,definition.facility_id,
+            definition.language,definition.approval_status,
+            definition.usage_scope,definition.active,definition.document_id,
+            definition.document_version,definition.document_language,
+            definition.document_source,(definition.steps[0],),
+        )
+        completed=ProcedureController(
+            {one_step.procedure_id:one_step},self.store)
+        completed_context=ToolContext(
+            Path("catalog.sqlite"),"TEST","en","test_only",
+            procedure_controller=completed)
+        execute_tool(
+            START_PROCEDURE_TOOL_NAME,
+            {"procedure_id":one_step.procedure_id},completed_context)
+        completed.record_observation("observe","빨간색")
+        completed.complete("observe")
+        self.assertIsNone(authorized_observation_arguments(
+            "가상 표시창은 빨간색이야.","ko",completed))
+
+        class StaleController:
+            def _attached(self):
+                return definition,{"status":"active","current_step_index":0}
+            def current(self):
+                return {
+                    "status":"success",
+                    "state":{"status":"active","current_step_id":"wait"},
+                }
+        self.assertIsNone(authorized_observation_arguments(
+            "가상 표시창은 빨간색이야.","ko",StaleController()))
 
     def test_required_observation_timer_and_audit_summary_gate_completion(self):
         now=[1000.0]

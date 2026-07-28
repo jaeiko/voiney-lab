@@ -70,9 +70,21 @@ class ProcedureDefinitionTests(unittest.TestCase):
             self.path, self.catalog, **trusted)
 
     def test_valid_definition_loads_and_instruction_is_immutable_source_text(self):
-        loaded = self.load([definition()])
+        value=definition()
+        value["steps"][0]["observation_schema"]={
+            "type":"text",
+            "required":True,
+            "label":"Fictional marker",
+            "utterance_subjects":["fictional marker"],
+        }
+        loaded = self.load([value])
         self.assertEqual(loaded["fictional-demo-check"].steps[0].instruction,
                          definition()["steps"][0]["approved_spoken_instruction"])
+        self.assertEqual(
+            loaded["fictional-demo-check"].steps[0]
+            .observation_schema["utterance_subjects"],
+            ["fictional marker"],
+        )
 
     def test_duplicate_procedure_and_step_ids_are_rejected(self):
         with self.assertRaises(ProcedureDefinitionError): self.load([definition(), definition()])
@@ -112,6 +124,19 @@ class ProcedureDefinitionTests(unittest.TestCase):
         with self.assertRaises(ProcedureDefinitionError): self.load([bad])
         bad = definition(); bad["steps"][0]["observation_schema"] = {"type": "anything"}
         with self.assertRaises(ProcedureDefinitionError): self.load([bad])
+        for subjects in (
+            [],
+            ["same","same"],
+            [""],
+            ["x\nsubject"],
+            "not-a-list",
+        ):
+            bad=definition()
+            bad["steps"][0]["observation_schema"]={
+                "type":"text","required":True,
+                "utterance_subjects":subjects,
+            }
+            with self.assertRaises(ProcedureDefinitionError): self.load([bad])
         bad = definition(); bad["steps"][0]["approved_spoken_instruction"] = ""
         with self.assertRaises(ProcedureDefinitionError): self.load([bad])
         for changed in (

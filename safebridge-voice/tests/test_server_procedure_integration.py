@@ -260,6 +260,59 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
             ["procedure.timer_started","procedure.state"],
         )
 
+    def test_observations_are_server_owned_on_first_cascade_utterance(self):
+        self.turn(
+            "가상 샘플 점검 워크플로를 시작해 주세요",
+            "start_procedure",json.dumps({"procedure_id":PROCEDURE_ID}),
+        )
+        label,label_client=self.turn(
+            "가상 라벨은 A-170이야.",
+            "get_current_step","{}",
+            answer="모델이 선택한 응답은 사용되면 안 됩니다.",
+        )
+        self.assertEqual(label_client.chat.completions.calls,[])
+        label_result=next(
+            item for item in label.text if item["type"]=="tool.result")
+        self.assertEqual(
+            label_result["tool"],"record_step_observation")
+        self.assertEqual(label_result["observation"]["value"],"A-170")
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(label)],
+            ["procedure.observation_recorded","procedure.state"],
+        )
+        self.assertEqual(
+            next(item for item in label.text
+                 if item["type"]=="turn.done")["route"],
+            "deterministic_procedure",
+        )
+
+        self.complete("demo-label-check")
+        self.controller.start_timer("demo-mix-timer")
+        self.now[0]+=10
+        self.complete("demo-mix-timer")
+        display,display_client=self.turn(
+            "가상 표시창 색깔은 빨간색이야.",
+            "get_current_step","{}",
+            answer="현재 단계만 다시 읽겠습니다.",
+        )
+        self.assertEqual(display_client.chat.completions.calls,[])
+        display_result=next(
+            item for item in display.text if item["type"]=="tool.result")
+        self.assertEqual(
+            display_result["tool"],"record_step_observation")
+        self.assertEqual(
+            display_result["observation"]["value"],"빨간색")
+        self.assertEqual(
+            [item["type"] for item in self.procedure_events(display)],
+            ["procedure.observation_recorded","procedure.state"],
+        )
+        observations=self.store.list_observations(
+            self.controller.attached_session_id)
+        self.assertEqual(
+            [item["value"] for item in observations],
+            ["A-170","빨간색"],
+        )
+
     def test_timer_completion_is_server_owned_and_uses_fresh_deadline(self):
         self.start()
         self.complete("demo-label-check")

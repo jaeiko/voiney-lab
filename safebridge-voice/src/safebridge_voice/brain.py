@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -60,10 +61,18 @@ REPORT_CONFIRMATION_CLARIFICATION_TEXT = {
     ),
 }
 
+_SAFE_CONFIRMATION_FORMAT_CHARACTERS = str.maketrans({
+    "\u200b": None,  # zero-width space
+    "\u2060": None,  # word joiner
+    "\ufeff": None,  # byte-order mark / zero-width no-break space
+})
+
 
 def _normalize_confirmation_text(text: str) -> str:
-    """Normalize punctuation without weakening whole-utterance matching."""
-    without_punctuation = re.sub(r"[,，.!?。？！]+", " ", text)
+    """Normalize safe STT representation variants for exact allow-list matching."""
+    compatible = unicodedata.normalize("NFKC", text)
+    visible = compatible.translate(_SAFE_CONFIRMATION_FORMAT_CHARACTERS)
+    without_punctuation = re.sub(r"[,，.!?。？！]+", " ", visible)
     return " ".join(without_punctuation.split()).casefold()
 
 
