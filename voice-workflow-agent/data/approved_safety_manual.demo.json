@@ -1,0 +1,38 @@
+[
+  {
+    "document_id": "DEMO-GENERAL-001",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["spill", "leak", "chemical", "누출", "화학", "tràn", "hóa chất"],
+    "translations": {
+      "ko": {
+        "title": "화학물질 누출 일반 대응",
+        "section": "즉시 조치",
+        "guidance": "작업을 멈추고 즉각적인 위험에서 벗어나 연구실 관리자 또는 안전 담당자에게 알리십시오. 연구실의 승인된 비상 절차를 따르고 승인된 확인 없이 작업을 재개하지 마십시오."
+      },
+      "vi": {
+        "title": "Ứng phó chung khi hóa chất tràn",
+        "section": "Hành động ngay",
+        "guidance": "Dừng công việc, rời khỏi mối nguy hiểm trước mắt và báo cho người quản lý phòng thí nghiệm hoặc cán bộ an toàn. Làm theo quy trình khẩn cấp đã được phê duyệt của phòng thí nghiệm và không tiếp tục công việc khi chưa có xác nhận được ủy quyền."
+      }
+    }
+  },
+  {
+    "document_id": "DEMO-MACHINE-002",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["machine", "equipment", "noise", "smoke", "기계", "설비", "소음", "연기", "máy", "thiết bị", "khói"],
+    "translations": {
+      "ko": {
+        "title": "설비 이상 징후 일반 대응",
+        "section": "작업 중지와 보고",
+        "guidance": "작업을 멈추고 즉각적인 위험에서 벗어나 연구실 관리자 또는 안전 담당자에게 알리십시오. 승인된 확인 없이 장비를 다시 사용하거나 작업을 재개하지 마십시오."
+      },
+      "vi": {
+        "title": "Ứng phó chung khi thiết bị có dấu hiệu bất thường",
+        "section": "Dừng việc và báo cáo",
+        "guidance": "Dừng công việc, rời khỏi mối nguy hiểm trước mắt và báo cho người quản lý phòng thí nghiệm hoặc cán bộ an toàn. Không sử dụng lại thiết bị hoặc tiếp tục công việc khi chưa có xác nhận được ủy quyền."
+      }
+    }
+  }
+]

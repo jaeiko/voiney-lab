@@ -1,8 +1,8 @@
-# SafeBridge Voice
+# Voice Workflow Agent
 
 **장갑은 그대로, 기록과 인계는 음성으로.**
 
-SafeBridge Voice는 신규 연구자가 승인된 안전 정보를 음성으로 확인하고,  
+Voice Workflow Agent는 신규 연구자가 승인된 안전 정보를 음성으로 확인하고,
 위험·이상 상황을 구조화하여 연구실 관리자에게 인계할 수 있도록 돕는  
 **Hands-free Voice Safety Dispatcher**입니다.
 
@@ -29,7 +29,7 @@ SafeBridge Voice는 신규 연구자가 승인된 안전 정보를 음성으로 
 - 위험 상황을 관리자에게 전달할 때 위치, 긴급도, 노출 여부가 누락될 수 있다.
 - 음성 안내가 끝난 뒤 실제 보고와 관리자 인계가 이어지지 않는다.
 
-SafeBridge Voice는 음성을 입력 인터페이스로 사용하면서도, 중요한 작업은 검증 가능한 Tool과 구조화된 기록으로 처리합니다.
+Voice Workflow Agent는 음성을 입력 인터페이스로 사용하면서도, 중요한 작업은 검증 가능한 Tool과 구조화된 기록으로 처리합니다.
 
 ---
 
@@ -133,7 +133,7 @@ SR-YYYYMMDD-XXXXXX
 사용자:
 아세톤으로 보이는 용액이 바닥에 흘렀어. 어떻게 해야 해?
 
-SafeBridge Voice:
+Voice Workflow Agent:
 승인된 로컬 안전자료를 먼저 검색한 뒤,
 작업 중지와 관리자 연락 등 확인된 내용만 안내합니다.
 ```
@@ -166,7 +166,7 @@ Agent는 이전 대화에 저장된 보고 ID를 이용하여 Queue와 Worker �
 
 ## 안전 설계 원칙
 
-SafeBridge Voice는 다음 경계를 항상 유지하도록 설계되었습니다.
+Voice Workflow Agent는 다음 경계를 항상 유지하도록 설계되었습니다.
 
 - 사용자에게서 듣지 않은 사실은 추측하지 않습니다.
 - 위치, 긴급도, 노출 여부 등 필수 정보가 없으면 다시 질문합니다.
@@ -203,8 +203,8 @@ SafeBridge Voice는 다음 경계를 항상 유지하도록 설계되었습니�
 
 ```text
 voice-ai-course/
-├── safebridge-voice/
-│   ├── src/safebridge_voice/
+├── voice-workflow-agent/
+│   ├── src/voice_workflow_agent/
 │   │   ├── server.py          # FastAPI, WebSocket, STT·TTS 처리
 │   │   ├── brain.py           # Persona, Memory, Tool Loop
 │   │   ├── tools.py           # 안전자료 검색·보고·상태 Tool
@@ -252,8 +252,8 @@ voice-ai-course/
 ```bash
 git clone https://github.com/jaeiko/voice-ai-course.git
 cd voice-ai-course
-git switch project/safebridge-voice
-cd safebridge-voice
+git switch phase6-workflow-copilot
+cd voice-workflow-agent
 ```
 
 가상환경을 만들고 패키지를 설치합니다.
@@ -284,7 +284,7 @@ CHAT_MODEL=grok-4
 WORKER_MODEL=grok-4
 TTS_VOICE=replace-with-an-xai-voice-id
 LAB_MANAGER_EMAIL=lab-manager@example.invalid
-SAFEBRIDGE_FROM_EMAIL=safebridge@example.invalid
+VOICE_WORKFLOW_AGENT_FROM_EMAIL=voice_workflow_agent@example.invalid
 ```
 
 실제 API Key가 포함된 `.env`는 Git에 커밋하지 않습니다.
@@ -298,23 +298,23 @@ Voice Agent와 Safety Handoff Worker를 서로 다른 터미널에서 실행합�
 ### 터미널 1: Voice Agent
 
 ```bash
-cd safebridge-voice
+cd voice-workflow-agent
 source .venv/bin/activate
-uvicorn safebridge_voice.server:app --reload
+uvicorn voice_workflow_agent.server:app --reload
 ```
 
 ### 터미널 2: Safety Handoff Worker
 
 ```bash
-cd safebridge-voice
+cd voice-workflow-agent
 source .venv/bin/activate
-python -m safebridge_voice.worker
+python -m voice_workflow_agent.worker
 ```
 
 현재 Queue에 있는 보고만 처리하고 종료하려면 다음 명령을 사용합니다.
 
 ```bash
-python -m safebridge_voice.worker --once
+python -m voice_workflow_agent.worker --once
 ```
 
 ### 브라우저
@@ -353,15 +353,15 @@ tail -f reports/inbox.jsonl
 테스트는 실제 STT, Grok, TTS 네트워크 호출 없이 실행됩니다.
 
 ```bash
-cd safebridge-voice
+cd voice-workflow-agent
 source .venv/bin/activate
 
 python -m unittest discover -s tests -v
 python -m compileall -q src tests
 
-python -c "from safebridge_voice.server import app"
-python -c "import safebridge_voice.worker"
-python -c "import safebridge_voice.tools"
+python -c "from voice_workflow_agent.server import app"
+python -c "import voice_workflow_agent.worker"
+python -c "import voice_workflow_agent.tools"
 ```
 
 현재 구현 기준으로 **46개의 자동화 테스트**가 다음 영역을 검증합니다.
@@ -420,7 +420,7 @@ python -c "import safebridge_voice.tools"
 
 ## Voice AI 과정과의 관계
 
-SafeBridge Voice는 6주 Real-Time Voice AI Agent 과정에서 학습한 구조를 실제 안전 workflow로 확장한 프로젝트입니다.
+Voice Workflow Agent는 6주 Real-Time Voice AI Agent 과정에서 학습한 구조를 실제 안전 workflow로 확장한 프로젝트입니다.
 
 | 주차 | Milestone | 주요 내용 |
 |---|---|---|
@@ -443,7 +443,7 @@ SafeBridge Voice는 6주 Real-Time Voice AI Agent 과정에서 학습한 구조�
 
 ## 상세 문서
 
-- [SafeBridge Voice 실행 및 데모 가이드](safebridge-voice/README.md)
-- [M2 Dispatcher 설계](safebridge-voice/docs/M2_DISPATCHER_PLAN.md)
-- [Web UI Wireframes](safebridge-voice/docs/WEB_WIREFRAMES.md)
+- [Voice Workflow Agent 실행 및 데모 가이드](voice-workflow-agent/README.md)
+- [M2 Dispatcher 설계](voice-workflow-agent/docs/M2_DISPATCHER_PLAN.md)
+- [Web UI Wireframes](voice-workflow-agent/docs/WEB_WIREFRAMES.md)
 - [전체 강의 계획](SYLLABUS.md)
