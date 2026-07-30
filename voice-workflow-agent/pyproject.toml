@@ -12,6 +12,7 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "openai",
+  "pypdf==6.12.0",
   "python-dotenv",
   "requests",
   "webrtcvad-wheels==2.0.14",
