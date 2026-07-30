@@ -100,7 +100,9 @@ class MossSettings:
             ",".join(sorted(DEFAULT_ALLOWED_SCOPES)),
         )
         allowed_scopes = frozenset(
-            value.strip() for value in raw_scopes.split(",") if value.strip()
+            value.strip().casefold()
+            for value in raw_scopes.split(",")
+            if value.strip()
         )
         if not allowed_scopes or not allowed_scopes.issubset(MOSS_CAPABLE_SCOPES):
             raise ValueError("VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES is invalid")

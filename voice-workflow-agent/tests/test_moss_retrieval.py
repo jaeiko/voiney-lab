@@ -18,6 +18,7 @@ from voice_workflow_agent.moss_retrieval import (
     MossSettings,
     catalog_sections_for_moss,
     moss_document_key,
+    start_moss_runtime_from_environment,
 )
 from voice_workflow_agent.retrieval import search_safety_documents
 from voice_workflow_agent.tools import ToolContext, search_approved_safety_manual
@@ -102,6 +103,39 @@ class MossSettingsTests(unittest.TestCase):
             settings = MossSettings.from_environment()
         self.assertEqual(settings.allowed_scopes, frozenset({"operational"}))
 
+    def test_allowed_scopes_normalize_case_whitespace_and_duplicates(self):
+        base={
+            "VOICE_WORKFLOW_AGENT_MOSS_ENABLED":"true",
+            "MOSS_PROJECT_ID":"project",
+            "MOSS_PROJECT_KEY":"key",
+            "MOSS_INDEX_NAME":"safe-index",
+        }
+        cases=(
+            ("demo",frozenset({"demo"})),
+            ("demo,reference_only",frozenset({"demo","reference_only"})),
+            (" Demo , REFERENCE_ONLY ",frozenset({"demo","reference_only"})),
+            ("demo,DEMO,demo",frozenset({"demo"})),
+        )
+        for raw,expected in cases:
+            with self.subTest(raw=raw),patch.dict(
+                os.environ,
+                {**base,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES":raw},
+                clear=True,
+            ):
+                self.assertEqual(
+                    MossSettings.from_environment().allowed_scopes,
+                    expected,
+                )
+        for raw in (""," , ","demo,unknown"):
+            with self.subTest(raw=raw),patch.dict(
+                os.environ,
+                {**base,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES":raw},
+                clear=True,
+            ),self.assertRaisesRegex(
+                ValueError,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES",
+            ):
+                MossSettings.from_environment()
+
     def test_partial_or_invalid_enabled_configuration_is_rejected(self):
         with patch.dict(
             os.environ,
@@ -110,6 +144,33 @@ class MossSettingsTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 MossSettings.from_environment()
+
+    def test_initialization_failure_keeps_sqlite_fallback_active(self):
+        settings=MossSettings(
+            enabled=True,
+            project_id="test-project",
+            project_key="test-key",
+            index_name="test-index",
+        )
+        with patch(
+            "voice_workflow_agent.moss_retrieval.MossSettings.from_environment",
+            return_value=settings,
+        ), patch(
+            "voice_workflow_agent.moss_retrieval.MossRuntime.start",
+            side_effect=RuntimeError("mock initialization failure"),
+        ), patch(
+            "voice_workflow_agent.moss_retrieval.MossRuntime.close",
+        ) as close, self.assertLogs(
+            "voice_workflow_agent.moss",level="WARNING",
+        ) as captured:
+            runtime=start_moss_runtime_from_environment()
+        self.assertIsNone(runtime)
+        close.assert_called_once()
+        self.assertTrue(any(
+            "Moss initialization failed; SQLite remains active: RuntimeError"
+            in message for message in captured.output
+        ))
+        self.assertFalse(any("test-key" in message for message in captured.output))
 
 
 class MossCatalogExportTests(unittest.TestCase):

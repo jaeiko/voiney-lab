@@ -537,7 +537,8 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             if event["type"] == "native.playback.clear"
         ][-1]
         self.assertEqual(
-            (clear["response_id"], clear["item_id"]), ("old", "item-old")
+            (clear["response_id"], clear["item_id"],clear["turn_id"]),
+            ("old", "item-old",1),
         )
         await self.session.truncate_playback("old", "item-old", 9999)
         truncate = json.loads(self.upstream.sent[-1])
@@ -588,7 +589,8 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ][-1]
         self.assertEqual(clear["reason"], "barge_in")
         self.assertEqual(
-            (clear["response_id"], clear["item_id"]), ("old", "item-old")
+            (clear["response_id"], clear["item_id"],clear["turn_id"]),
+            ("old", "item-old",1),
         )
         self.assertIn("old", self.session.discarded_response_ids)
         self.assertIsNone(self.session.playback_response_id)

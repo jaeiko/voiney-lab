@@ -71,13 +71,27 @@ Phase 6는 독립적으로 존재하던 Procedure와 안전 보고를 하나의 
 
 `.env`에는 기존 `XAI_API_KEY`와 함께 아래 값을 선택적으로 설정할 수 있다.
 
+이름 변경 전의 `SAFEBRIDGE_*` 애플리케이션 키는 읽지 않는다. 최소한
+`VOICE_WORKFLOW_AGENT_SAFETY_CATALOG`과
+`VOICE_WORKFLOW_AGENT_USAGE_SCOPE`를 새 이름으로 설정해야 세션을 시작할 수
+있다. Catalog와 procedure 경로는 절대 경로여야 하며, 디렉터리 이름 변경
+후에는 경로도 `voice-workflow-agent` 위치를 가리키도록 갱신한다.
+
 ```dotenv
+VOICE_WORKFLOW_AGENT_SAFETY_CATALOG=/absolute/path/to/approved_catalog.sqlite
+VOICE_WORKFLOW_AGENT_USAGE_SCOPE=test_only
+VOICE_WORKFLOW_AGENT_FACILITY_ID=
+VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE=ko
+VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES=ko,en,vi
+VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG=
+VOICE_WORKFLOW_AGENT_PROCEDURE_STORE=
+
 XAI_REALTIME_URL=wss://api.x.ai/v1/realtime
 XAI_REALTIME_MODEL=grok-voice-latest
 XAI_REALTIME_VOICE=eve
 XAI_REALTIME_VAD_THRESHOLD=0.6
+XAI_REALTIME_SILENCE_DURATION_MS=1600
 NATIVE_VAD_PREFIX_PADDING_MS=333
-NATIVE_VAD_SILENCE_DURATION_MS=1000
 
 CASCADE_VAD_MODE=3
 CASCADE_VAD_ONSET_VOICED_FRAMES=4
@@ -88,6 +102,16 @@ CASCADE_VAD_MIN_SPEECH_MS=240
 CASCADE_VAD_MAX_UTTERANCE_MS=15000
 CASCADE_VAD_COOLDOWN_MS=300
 ```
+
+| 서버 정책 환경 변수 | 기본값 | 검증 |
+|---|---:|---|
+| `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | 필수 | 비어 있지 않은 절대 경로 |
+| `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` | 필수 | `operational`, `demo`, `reference_only`, `test_only` 중 하나 |
+| `VOICE_WORKFLOW_AGENT_FACILITY_ID` | 없음 | 선택 문자열 |
+| `VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE` | `ko` | `ko`, `en`, `vi` 또는 지원 locale |
+| `VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES` | `ko,en,vi` | 쉼표로 구분한 지원 언어, 기본 언어 포함 |
+| `VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG` | 없음 | Procedure store와 함께 설정한 절대 경로 |
+| `VOICE_WORKFLOW_AGENT_PROCEDURE_STORE` | 없음 | Procedure catalog와 함께 설정한 절대 경로 |
 
 | 환경 변수 | 기본값 | 적용 경로 |
 |---|---:|---|
@@ -100,8 +124,8 @@ CASCADE_VAD_COOLDOWN_MS=300
 | `CASCADE_VAD_MAX_UTTERANCE_MS` | `15000` | Cascade maximum utterance |
 | `CASCADE_VAD_COOLDOWN_MS` | `300` | Cascade post-playback cooldown |
 | `XAI_REALTIME_VAD_THRESHOLD` | `0.6` | Native server VAD threshold |
+| `XAI_REALTIME_SILENCE_DURATION_MS` | `1600` | Native end-of-speech silence; integer `500`~`3000` ms |
 | `NATIVE_VAD_PREFIX_PADDING_MS` | `333` | Native server VAD prefix |
-| `NATIVE_VAD_SILENCE_DURATION_MS` | `1000` | Native server VAD silence |
 
 `XAI_REALTIME_VAD_THRESHOLD`는 기존 xAI server VAD 설정 이름을 그대로
 재사용한다. 허용 범위는 `0.1`~`0.9`다. Cascade의 밀리초 값은 설정한

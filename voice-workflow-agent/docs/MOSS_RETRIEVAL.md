@@ -160,6 +160,11 @@ VOICE_WORKFLOW_AGENT_MOSS_AUTO_REFRESH=false
 VOICE_WORKFLOW_AGENT_MOSS_REFRESH_SECONDS=600
 ```
 
+`VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES`는 쉼표로 구분하며 공백과 대소문자를
+정규화하고 중복을 제거한다. 허용값은 `operational`, `demo`,
+`reference_only`뿐이며 빈 집합이나 알 수 없는 값은 거부하고 SQLite
+fallback을 유지한다.
+
 To use a deliberately approved operational index, the operator must separately
 change:
 

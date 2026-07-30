@@ -104,7 +104,7 @@ class CascadeVadSettings:
 class NativeVadSettings:
     threshold: float=0.6
     prefix_padding_ms: int=333
-    silence_duration_ms: int=1000
+    silence_duration_ms: int=1600
 
     @classmethod
     def from_environment(
@@ -117,7 +117,7 @@ class NativeVadSettings:
             prefix_padding_ms=_integer(
                 env,"NATIVE_VAD_PREFIX_PADDING_MS",333,0,5000),
             silence_duration_ms=_integer(
-                env,"NATIVE_VAD_SILENCE_DURATION_MS",1000,100,10000),
+                env,"XAI_REALTIME_SILENCE_DURATION_MS",1600,500,3000),
         )
 
 

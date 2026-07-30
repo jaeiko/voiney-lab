@@ -1,4 +1,4 @@
-import asyncio, json, unittest
+import asyncio, json, tempfile, unittest
 from unittest.mock import patch
 from collections import deque
 from voice_workflow_agent.audio import FRAME_BYTES
@@ -7,12 +7,14 @@ from voice_workflow_agent.brain import (
     BrainResult,
     SentenceSegment,
 )
+from voice_workflow_agent.document_store import ingest_manifest
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import ListenerSession, ServerConfig, frame_complete_audio, normalize_session_language, run_turn, server_tool_context, transcribe, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import ListenerSession, ServerConfig, ServerConfigurationError, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, TurnState
+from tests.test_retrieval import operational_document
 
 class FakeResponse:
     def __init__(self,content=b"",status=200,content_type="audio/pcm"):
@@ -27,6 +29,13 @@ TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
 
 class ServerTests(unittest.TestCase):
+    def approved_catalog(self,directory,usage_scope="operational"):
+        path=Path(directory)/"approved.sqlite"
+        ingest_manifest({
+            "documents":[operational_document(usage_scope=usage_scope)],
+        },path)
+        return path
+
     def emergency_session(self):
         session=ListenerSession(tool_context=ToolContext(
             Path("/trusted/catalog.sqlite"),None,"ko","operational"))
@@ -410,14 +419,204 @@ class ServerTests(unittest.TestCase):
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
         self.assertEqual(normalize_session_language("vi_VN"), "vi")
-        values={"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":"/trusted/catalog.sqlite",
-                "VOICE_WORKFLOW_AGENT_FACILITY_ID":"FACILITY-A","VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE":"vi-VN",
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"operational"}
-        with patch.dict("os.environ", values, clear=True):
-            context=server_tool_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog=self.approved_catalog(temporary)
+            values={"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
+                    "VOICE_WORKFLOW_AGENT_FACILITY_ID":"FACILITY-A","VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE":"vi-VN",
+                    "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"operational"}
+            with patch.dict("os.environ", values, clear=True):
+                context=server_tool_context()
         self.assertEqual((str(context.catalog_path),context.facility_id,context.language,context.usage_scope),
-                         ("/trusted/catalog.sqlite","FACILITY-A","vi","operational"))
+                         (str(catalog),"FACILITY-A","vi","operational"))
         self.assertEqual(context.report_language,"ko")
+
+    def test_catalog_configuration_requires_usable_file_and_matching_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            catalog=self.approved_catalog(root)
+            base={
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"operational",
+            }
+            with patch.dict("os.environ",base,clear=True):
+                self.assertEqual(server_config().catalog_path,catalog)
+
+            missing=root/"missing.sqlite"
+            with patch.dict("os.environ",{
+                **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(missing),
+            },clear=True),self.assertRaisesRegex(
+                ServerConfigurationError,
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG.*existing regular file",
+            ) as captured:
+                server_config()
+            self.assertIn(str(missing),str(captured.exception))
+
+            with patch.dict("os.environ",{
+                **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":"",
+            },clear=True),self.assertRaisesRegex(
+                ServerConfigurationError,
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must not be empty",
+            ):
+                server_config()
+
+            invalid_file=root/"not-a-catalog.txt"
+            invalid_file.write_text("not sqlite",encoding="utf-8")
+            for target in (root,invalid_file):
+                with self.subTest(target=target),patch.dict("os.environ",{
+                    **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(target),
+                },clear=True),self.assertRaisesRegex(
+                    ServerConfigurationError,
+                    "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+                ):
+                    server_config()
+
+            with patch.dict("os.environ",{
+                **base,"VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+            },clear=True),self.assertRaisesRegex(
+                ServerConfigurationError,
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE.*no approved active documents",
+            ):
+                server_config()
+
+    def test_missing_catalog_rejects_session_with_safe_path_diagnostic(self):
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":'{"type":"session.start","pipeline":"cascade"}'},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+        with tempfile.TemporaryDirectory() as temporary:
+            missing=Path(temporary)/"missing.sqlite"
+            socket=Socket()
+            with patch.dict("os.environ",{
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(missing),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+            },clear=True),patch(
+                "voice_workflow_agent.server.log.warning",
+            ) as warning:
+                asyncio.run(voice_socket(socket))
+            rendered=warning.call_args.args[0] % warning.call_args.args[1:]
+        self.assertIn("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",rendered)
+        self.assertIn(str(missing),rendered)
+        self.assertTrue(any(
+            item.get("message")=="invalid session configuration"
+            for item in socket.sent
+        ))
+        self.assertFalse(any(
+            item["type"]=="session.started" for item in socket.sent
+        ))
+
+    def test_canonical_default_session_start_environment_is_accepted(self):
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":'{"type":"session.start","pipeline":"cascade"}'},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog=self.approved_catalog(temporary,"demo")
+            environment={
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+                "VOICE_WORKFLOW_AGENT_FACILITY_ID":"",
+                "VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG":"",
+                "VOICE_WORKFLOW_AGENT_PROCEDURE_STORE":"",
+            }
+            socket=Socket()
+            with patch.dict("os.environ",environment,clear=True):
+                asyncio.run(voice_socket(socket))
+        started=next(item for item in socket.sent if item["type"]=="session.started")
+        self.assertEqual(started["pipeline"],"cascade")
+        self.assertFalse(any(
+            item.get("message")=="invalid session configuration"
+            for item in socket.sent
+        ))
+
+    def test_canonical_environment_accepts_exact_native_browser_payload(self):
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":'{"type":"session.start","pipeline":"native"}'},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+        instances=[]
+        class Native:
+            def __init__(self,sender,tool_context,native_config,**kwargs):
+                self.config=native_config
+                instances.append(self)
+            async def start(self): pass
+            async def stop(self): pass
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog=self.approved_catalog(temporary,"demo")
+            environment={
+                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+                "XAI_API_KEY":"test-key",
+            }
+            socket=Socket()
+            with patch.dict("os.environ",environment,clear=True), patch(
+                "voice_workflow_agent.server.NativeRealtimeSession",Native,
+            ):
+                asyncio.run(voice_socket(socket))
+        started=next(item for item in socket.sent if item["type"]=="session.started")
+        self.assertEqual(started["pipeline"],"native")
+        self.assertEqual(instances[0].config.model,"grok-voice-latest")
+        self.assertEqual(instances[0].config.voice,"eve")
+        self.assertEqual(instances[0].config.vad_threshold,0.6)
+
+    def test_legacy_renamed_keys_report_safe_session_configuration_stage(self):
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":'{"type":"session.start","pipeline":"native"}'},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+        legacy_environment={
+            "SAFEBRIDGE_SAFETY_CATALOG":"/old/catalog.sqlite",
+            "SAFEBRIDGE_USAGE_SCOPE":"test_only",
+            "XAI_API_KEY":"must-not-appear-in-logs",
+        }
+        socket=Socket()
+        with patch.dict("os.environ",legacy_environment,clear=True), \
+             patch("voice_workflow_agent.server.log.warning") as warning:
+            asyncio.run(voice_socket(socket))
+        error=next(item for item in socket.sent if item["type"]=="error")
+        self.assertEqual(error["message"],"invalid session configuration")
+        rendered=warning.call_args.args[0] % warning.call_args.args[1:]
+        self.assertIn("pipeline=native",rendered)
+        self.assertIn("stage=server_policy",rendered)
+        self.assertIn("exception=ServerConfigurationError",rendered)
+        self.assertIn("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",rendered)
+        self.assertNotIn("must-not-appear-in-logs",rendered)
+
+    def test_invalid_canonical_policy_names_the_safe_fields(self):
+        environment={
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":"/trusted/catalog.sqlite",
+            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"unsupported",
+        }
+        with patch.dict("os.environ",environment,clear=True), \
+             self.assertRaises(ServerConfigurationError) as captured:
+            server_config()
+        self.assertEqual(
+            captured.exception.field_names,
+            ("VOICE_WORKFLOW_AGENT_USAGE_SCOPE",),
+        )
 
     def test_rest_stt_preserves_text_and_provider_language_only(self):
         with patch("voice_workflow_agent.server.requests.post",return_value=FakeResponse()) as post, \

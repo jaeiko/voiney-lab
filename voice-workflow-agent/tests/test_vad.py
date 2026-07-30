@@ -103,6 +103,14 @@ class EndpointDetectorTests(unittest.TestCase):
         self.assertIsNone(detector.process(frame(99)).utterance)
         self.assertEqual(classifier.calls, calls)
 
+    def test_default_cascade_keeps_listening_beyond_ten_seconds(self):
+        decisions=[False,True,True,True,True,False]+[True]*520
+        detector=EndpointDetector(classifier=Decisions(decisions))
+        results=feed(detector,[frame(i) for i in range(len(decisions))])
+        self.assertFalse(any(result.utterance is not None for result in results))
+        self.assertEqual(detector.state,TurnState.USER_SPEAKING)
+        self.assertGreater(detector.buffered_frames,500)
+
     def test_real_adapter_enforces_exact_frame_size(self):
         classifier = WebRtcVadClassifier(3)
         self.assertIsInstance(classifier(bytes(FRAME_BYTES)), bool)

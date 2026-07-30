@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, logging, os, time
+import asyncio, logging, os, sqlite3, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -22,6 +22,7 @@ from voice_workflow_agent.configuration import (
     ConfigurationError,
     VoiceVadSettings,
 )
+from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
     CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
@@ -116,23 +117,96 @@ class ServerConfig:
     procedure_catalog_path:Path|None=None
     procedure_store_path:Path|None=None
 
+class ServerConfigurationError(RuntimeError):
+    """Invalid server policy with safe environment field names for diagnostics."""
+    def __init__(self,message:str,*field_names:str):
+        super().__init__(message)
+        self.field_names=field_names
+
+def validate_approved_catalog(catalog_path:Path,usage_scope:str)->None:
+    """Fail closed unless the configured SQLite catalog is usable for its scope."""
+    rendered=repr(str(catalog_path))
+    if not catalog_path.is_file():
+        raise ServerConfigurationError(
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must point to an existing "
+            f"regular file: {rendered}",
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+        )
+    try:
+        connection=sqlite3.connect(
+            f"{catalog_path.resolve().as_uri()}?mode=ro",uri=True)
+        try:
+            metadata=connection.execute(
+                "SELECT schema_version FROM catalog_metadata").fetchall()
+            if (len(metadata)!=1 or
+                    metadata[0][0]!=CATALOG_SCHEMA_VERSION):
+                raise sqlite3.DatabaseError("unsupported catalog schema")
+            approved=connection.execute(
+                """
+                SELECT COUNT(*) FROM documents
+                WHERE usage_scope=? AND approval_status='approved' AND active=1
+                """,
+                (usage_scope,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise ServerConfigurationError(
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG is not a usable approved "
+            f"catalog: {rendered}",
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+        ) from exc
+    if approved<1:
+        raise ServerConfigurationError(
+            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE has no approved active documents "
+            "in VOICE_WORKFLOW_AGENT_SAFETY_CATALOG: "
+            f"{rendered}",
+            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE",
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+        )
+
 def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
     catalog=os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG","").strip()
     scope=os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE","").strip()
     catalog_path=Path(catalog)
-    if not catalog or not catalog_path.is_absolute() or scope not in (
-        "operational","demo","reference_only","test_only"):
-        raise RuntimeError("safety catalog configuration is incomplete")
+    if not catalog:
+        raise ServerConfigurationError(
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must not be empty",
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+        )
+    if not catalog_path.is_absolute():
+        raise ServerConfigurationError(
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must be an absolute path: "
+            f"{catalog!r}",
+            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+        )
+    invalid_policy_fields=[]
+    if scope not in ("operational","demo","reference_only","test_only"):
+        invalid_policy_fields.append("VOICE_WORKFLOW_AGENT_USAGE_SCOPE")
+    if invalid_policy_fields:
+        raise ServerConfigurationError(
+            "safety catalog configuration is incomplete",
+            *invalid_policy_fields,
+        )
+    validate_approved_catalog(catalog_path,scope)
     facility=os.environ.get("VOICE_WORKFLOW_AGENT_FACILITY_ID","").strip() or None
     raw_allowed=os.environ.get("VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES","ko,en,vi")
     try:
         allowed=frozenset(normalize_session_language(value) for value in raw_allowed.split(",") if value.strip())
         default=normalize_session_language(os.environ.get("VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE","ko"))
     except ValueError as exc:
-        raise RuntimeError("session language configuration is invalid") from exc
+        raise ServerConfigurationError(
+            "session language configuration is invalid",
+            "VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES",
+            "VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE",
+        ) from exc
     if not allowed or default not in allowed:
-        raise RuntimeError("session language configuration is invalid")
+        raise ServerConfigurationError(
+            "session language configuration is invalid",
+            "VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES",
+            "VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE",
+        )
     procedure_catalog=os.environ.get("VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG","").strip()
     procedure_store=os.environ.get("VOICE_WORKFLOW_AGENT_PROCEDURE_STORE","").strip()
     procedure_catalog_path=Path(procedure_catalog) if procedure_catalog else None
@@ -140,7 +214,11 @@ def server_config()->ServerConfig:
     if ((procedure_catalog_path is None)!=(procedure_store_path is None) or
         procedure_catalog_path is not None and
         (not procedure_catalog_path.is_absolute() or not procedure_store_path.is_absolute())):
-        raise RuntimeError("procedure configuration is invalid")
+        raise ServerConfigurationError(
+            "procedure configuration is invalid",
+            "VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG",
+            "VOICE_WORKFLOW_AGENT_PROCEDURE_STORE",
+        )
     return ServerConfig(catalog_path,facility,scope,allowed,default,
                         procedure_catalog_path,procedure_store_path)
 
@@ -695,11 +773,14 @@ async def voice_socket(websocket:WebSocket):
             control=parse_control(message["text"])
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
+                requested_pipeline=control.get("pipeline","cascade")
+                configuration_stage="server_policy"
                 try:
-                    requested_pipeline=control.get("pipeline","cascade")
                     trusted_config=trusted_config or server_config()
+                    configuration_stage="session_language"
                     context=server_tool_context(trusted_config,control.get("language"))
                     if trusted_config.procedure_catalog_path and trusted_config.procedure_store_path:
+                        configuration_stage="procedure_configuration"
                         definitions=load_procedure_definitions(
                             trusted_config.procedure_catalog_path,trusted_config.catalog_path,
                             facility_id=trusted_config.facility_id,
@@ -711,22 +792,40 @@ async def voice_socket(websocket:WebSocket):
                             context.language,context.usage_scope,
                             context.report_language,
                             ProcedureController(definitions,procedure_store))
+                    configuration_stage="session_state"
                     session.set_tool_context(context)
                     if control.get("language") is None:
                         session.set_language_mode("auto")
                     session.start()
                     pipeline=requested_pipeline
                     if pipeline=="native":
+                        configuration_stage="native_environment"
                         native_config=(
                             native_config
                             or NativeRealtimeConfig.from_environment(
                                 vad_settings.native))
+                        configuration_stage="native_session"
                         native_session=NativeRealtimeSession(
                             sender,session.tool_context,native_config,
                             language_mode=session.language_mode,
                             manual_language=session.manual_language)
+                        configuration_stage="native_provider_session"
                         await native_session.start()
-                except (RuntimeError,ValueError,NativeRealtimeError):
+                except (RuntimeError,ValueError,NativeRealtimeError) as exc:
+                    field_names=getattr(exc,"field_names",())
+                    safe_detail=(
+                        str(exc)
+                        if isinstance(exc,ServerConfigurationError)
+                        else "none"
+                    )
+                    log.warning(
+                        "session.start rejected pipeline=%s stage=%s "
+                        "exception=%s fields=%s detail=%s",
+                        requested_pipeline,configuration_stage,
+                        type(exc).__name__,
+                        ",".join(field_names) if field_names else "none",
+                        safe_detail,
+                    )
                     if native_session is not None:
                         await native_session.stop()
                         native_session=None

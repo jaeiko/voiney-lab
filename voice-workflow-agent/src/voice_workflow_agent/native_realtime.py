@@ -89,7 +89,7 @@ class NativeRealtimeConfig:
     base_url: str = "wss://api.x.ai/v1/realtime"
     vad_threshold: float = DEFAULT_VAD_THRESHOLD
     vad_prefix_padding_ms: int=333
-    vad_silence_duration_ms: int=1000
+    vad_silence_duration_ms: int=1600
     reconnect_delays: tuple[float, ...] = DEFAULT_RECONNECT_DELAYS
     response_timeout_seconds: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS
 
@@ -1016,6 +1016,16 @@ class NativeRealtimeSession:
             return
 
         if kind == "input_audio_buffer.speech_started":
+            interrupted_response_id=(
+                self.playback_response_id or self.active_response_id
+            )
+            interrupted_state=(
+                self.responses.get(interrupted_response_id)
+                if interrupted_response_id else None
+            )
+            interrupted_turn_id=(
+                interrupted_state.turn_id if interrupted_state else None
+            )
             interrupted = (
                 self.active_response_id is not None
                 or self.playback_response_id is not None
@@ -1048,6 +1058,7 @@ class NativeRealtimeSession:
                     "native.playback.clear",
                     reason="barge_in",
                     response_id=self.last_interrupted_response_id,
+                    turn_id=interrupted_turn_id,
                     item_id=(
                         self.response_items.get(self.last_interrupted_response_id)
                         if self.last_interrupted_response_id
