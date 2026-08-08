@@ -14,6 +14,25 @@ class ConfigurationError(ValueError):
     """A named environment setting is malformed or outside its safe range."""
 
 
+CASCADE_FILLER_DELAY_ENV = "CASCADE_FILLER_DELAY_MS"
+DEFAULT_CASCADE_FILLER_DELAY_MS = 700
+
+
+def cascade_filler_delay_ms(
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Return one bounded, side-effect-free Cascade filler threshold."""
+
+    env = os.environ if environment is None else environment
+    return _integer(
+        env,
+        CASCADE_FILLER_DELAY_ENV,
+        DEFAULT_CASCADE_FILLER_DELAY_MS,
+        100,
+        5000,
+    )
+
+
 def _integer(
     environment: Mapping[str, str],
     name: str,

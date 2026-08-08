@@ -128,6 +128,30 @@ class ProtocolFileStore:
     def _absolute_path(self, checksum: str) -> Path:
         return self._data_dir / self._relative_path(checksum)
 
+    def object_path(
+        self,
+        checksum: str,
+        *,
+        expected_size: int | None = None,
+    ) -> Path:
+        """Return one verified content-addressed PDF path.
+
+        The caller never supplies a filename or relative path.  Re-verifying
+        the object before exposing its location keeps asset serving bound to
+        the immutable SHA-256 identity used by the Protocol store.
+        """
+
+        verified = self.verify_object(checksum, expected_size=expected_size)
+        path = self._data_dir / verified.relative_path
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(self._data_dir.resolve())
+        except ValueError as exc:
+            raise ProtocolObjectIntegrityError(
+                "Stored Protocol object resolved outside its data directory."
+            ) from exc
+        return resolved
+
     def verify_object(
         self,
         checksum: str,

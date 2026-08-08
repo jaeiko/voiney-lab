@@ -1,15 +1,16 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, logging, math, os, sqlite3, time
+import asyncio, logging, math, os, secrets, sqlite3, tempfile, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 from voice_workflow_agent.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from voice_workflow_agent.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
@@ -21,12 +22,30 @@ from voice_workflow_agent.brain import (
 from voice_workflow_agent.configuration import (
     ConfigurationError,
     VoiceVadSettings,
+    cascade_filler_delay_ms,
 )
+from voice_workflow_agent.cascade_filler import CascadeFiller
 from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolFixture,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
+)
+from voice_workflow_agent.experiment_protocol_analysis import (
+    OpenAICompatibleProtocolAnalysisModel,
+)
+from voice_workflow_agent.experiment_protocol_config import (
+    ProtocolPersistenceSettings,
+)
+from voice_workflow_agent.experiment_protocol_pdf import MAX_PROTOCOL_PDF_BYTES
+from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
+from voice_workflow_agent.protocol_catalog import (
+    ProtocolApprovalError,
+    ProtocolCatalog,
+    ProtocolCatalogError,
+    ProtocolCatalogNotFoundError,
+    ProtocolRegistrationError,
+    SharedSecretApprovalPolicy,
 )
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
@@ -136,6 +155,18 @@ class ServerConfig:
     curated_protocol_fixture_path:Path|None=None
     curated_protocol_provenance_path:Path|None=None
     curated_protocol_source_pdf_path:Path|None=None
+
+
+def _protocol_store_settings()->ProtocolPersistenceSettings:
+    return ProtocolPersistenceSettings.from_environment()
+
+
+def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
+    settings=_protocol_store_settings()
+    if not settings.enabled:
+        raise ProtocolCatalogError("Protocol catalog is disabled.")
+    store=initialize_protocol_store(settings)
+    return ProtocolCatalog(store),store
 
 class ServerConfigurationError(RuntimeError):
     """Invalid server policy with safe environment field names for diagnostics."""
@@ -308,6 +339,213 @@ def frame_complete_audio(pcm:bytes)->list[bytes]:
     if tail is not None: frames.append(tail)
     return frames
 
+
+def _configured_candidate_fixture(config:ServerConfig)->CuratedProtocolFixture|None:
+    if config.curated_protocol_fixture_path is None:
+        return None
+    return load_curated_protocol_fixture(
+        config.curated_protocol_fixture_path,
+        config.curated_protocol_provenance_path,
+        config.curated_protocol_source_pdf_path,
+    )
+
+
+def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
+    return {
+        "protocol_id":fixture.protocol_id,
+        "title":fixture.title,
+        "source_filename":fixture.source_pdf_path.name if fixture.source_pdf_path else "source.pdf",
+        "source_sha256":fixture.source_pdf_sha256,
+        "revision_id":fixture.revision_id,
+        "readiness_status":fixture.draft.readiness.status.value,
+        "approval_status":"development_only_not_final_acceptance",
+        "analysis_status":"validated_curated_fixture",
+        "step_count":len(fixture.steps),
+        "created_at":None,
+        "available_for_execution":True,
+        "development_only":True,
+    }
+
+
+def _catalog_http_error(exc:Exception)->HTTPException:
+    if isinstance(exc,ProtocolCatalogNotFoundError):
+        return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
+    if isinstance(exc,ProtocolApprovalError):
+        return HTTPException(status_code=403,detail=exc.code)
+    if isinstance(exc,ProtocolRegistrationError):
+        return HTTPException(status_code=400,detail=exc.code)
+    return HTTPException(
+        status_code=409 if isinstance(exc,ProtocolCatalogError) else 500,
+        detail=getattr(exc,"code","protocol_catalog_error"),
+    )
+
+
+@app.get("/api/protocols")
+def list_protocol_catalog()->dict[str,object]:
+    """Read catalog metadata only; never trigger automated analysis."""
+
+    entries=[]
+    try:
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None:
+            entries.append(_candidate_catalog_dict(candidate))
+        settings=_protocol_store_settings()
+        if settings.enabled:
+            catalog,store=_open_protocol_catalog()
+            try:
+                entries.extend(item.public_dict() for item in catalog.list_entries())
+            finally:
+                store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+    return {"protocols":entries}
+
+
+@app.get("/api/protocols/{protocol_id}")
+def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
+    try:
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            return _candidate_catalog_dict(candidate)
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.get_entry(protocol_id).public_dict()
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols",status_code=201)
+async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
+    length=request.headers.get("content-length")
+    if length is not None:
+        try:
+            if int(length)>MAX_PROTOCOL_PDF_BYTES:
+                raise HTTPException(
+                    status_code=413,detail="protocol_pdf_too_large")
+        except ValueError as exc:
+            raise HTTPException(status_code=400,detail="invalid_content_length") from exc
+    payload=await request.body()
+    if not payload or len(payload)>MAX_PROTOCOL_PDF_BYTES:
+        raise HTTPException(status_code=413,detail="protocol_pdf_too_large")
+    try:
+        catalog,store=_open_protocol_catalog()
+        try:
+            with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
+                temporary=Path(root)/"upload.pdf"
+                temporary.write_bytes(payload)
+                result=catalog.register(
+                    temporary,
+                    source_filename=filename,
+                    media_type=request.headers.get("content-type",""),
+                )
+            return {
+                "protocol":result.entry.public_dict(),
+                "deduplicated":result.deduplicated,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
+    client=OpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY"),max_retries=0)
+    return OpenAICompatibleProtocolAnalysisModel(
+        client,require_env("PROTOCOL_ANALYSIS_MODEL"))
+
+
+@app.post("/api/protocols/{protocol_id}/analysis")
+async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
+    """The only HTTP boundary that may explicitly request PDF analysis."""
+
+    try:
+        catalog,store=_open_protocol_catalog()
+        try:
+            model=_protocol_analysis_model()
+            entry=await asyncio.to_thread(
+                catalog.analyze,
+                protocol_id,
+                model,
+                analysis_id=f"analysis-{secrets.token_hex(16)}",
+            )
+            return entry.public_dict()
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
+def approve_protocol_revision(
+    protocol_id:str,
+    revision_id:str,
+    x_protocol_approval_token:str|None=Header(default=None),
+)->dict[str,object]:
+    """Service-authorized approval; deliberately absent from the public UI."""
+
+    try:
+        catalog,store=_open_protocol_catalog()
+        try:
+            policy=SharedSecretApprovalPolicy(
+                os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"))
+            return catalog.approve(
+                protocol_id,
+                revision_id,
+                policy=policy,
+                presented_secret=x_protocol_approval_token,
+            ).public_dict()
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/assets/{asset_id}")
+def get_protocol_visual_asset(
+    protocol_id:str,revision_id:str,asset_id:str,
+):
+    try:
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            if candidate.revision_id!=revision_id:
+                raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+            assets=tuple(
+                asset for index in range(len(candidate.steps))
+                if (asset:=candidate.visual_for_step(index)) is not None
+                and asset.asset_id==asset_id)
+            if not assets or candidate.source_pdf_path is None:
+                raise ProtocolCatalogNotFoundError("Protocol visual asset is unknown.")
+            source=candidate.source_pdf_path
+            checksum=assets[0].sha256
+        else:
+            catalog,store=_open_protocol_catalog()
+            try:
+                resolved=catalog.resolve_asset(protocol_id,revision_id,asset_id)
+                source=resolved.path; checksum=resolved.sha256
+            finally:
+                store.close()
+        if not source.is_file():
+            raise ProtocolCatalogNotFoundError("Protocol visual source is unavailable.")
+        return FileResponse(
+            source,
+            media_type="application/pdf",
+            filename=f"{checksum}.pdf",
+            content_disposition_type="inline",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":"sandbox",
+                "X-Protocol-Source-SHA256":checksum,
+            },
+        )
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
 @dataclass(frozen=True)
 class ListenerEvent:
     kind:str
@@ -369,6 +607,7 @@ class ListenerSession:
         self.accepted_mode:str|None=None
         self.accepted_language:str|None=None
         self.accepted_protocol_id:str|None=None
+        self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self._interrupted_generations:set[tuple[int,int]]=set()
@@ -424,18 +663,20 @@ class ListenerSession:
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self.accepted_configuration_id=None; self.accepted_mode=None
         self.accepted_language=None; self.accepted_protocol_id=None
+        self.accepted_revision_id=None
         self._reset_turn_identity()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def accept_configuration(
         self,configuration_id:int,mode:str,language:str,
-        protocol_id:str|None,
+        protocol_id:str|None,revision_id:str|None=None,
     )->None:
         """Record only the exact non-secret configuration accepted by the server."""
         self.accepted_configuration_id=configuration_id
         self.accepted_mode=mode
         self.accepted_language=language
         self.accepted_protocol_id=protocol_id
+        self.accepted_revision_id=revision_id
     def set_curated_protocol_fixture(
         self,fixture:CuratedProtocolFixture|None,
     )->None:
@@ -674,6 +915,22 @@ class LockedSender:
             await self.websocket.send_text(event(
                 "audio.segment.end",turn_id=turn_id,segment_index=index,
                 **({"generation":generation} if generation is not None else {})))
+    async def filler_segment(
+        self,turn_id:int,generation:int,pcm:bytes,configuration_id:int|None,
+    )->None:
+        frames=frame_complete_audio(pcm)
+        if not frames:return
+        async with self.lock:
+            await self.websocket.send_text(event(
+                "filler.audio.start",configuration_id=configuration_id,
+                turn_id=turn_id,generation=generation,
+                frame_count=len(frames),sample_rate=16000,
+                encoding="pcm_s16le"))
+            for frame in frames:await self.websocket.send_bytes(frame)
+            await self.websocket.send_text(event(
+                "filler.audio.end",configuration_id=configuration_id,
+                turn_id=turn_id,generation=generation,
+                frame_count=len(frames)))
     async def native_audio(
         self,turn_id:int,response_id:str,item_id:str|None,pcm:bytes,*,sample_rate:int
     ):
@@ -685,8 +942,9 @@ class LockedSender:
             await self.websocket.send_bytes(pcm)
 
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
-                   input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter)->None:
-    sender=LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
+                   input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter,
+                   sender:LockedSender|None=None,filler:CascadeFiller|None=None)->None:
+    sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
         fields.setdefault("generation",generation)
@@ -700,7 +958,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             turn_id,generation,state,route=route,timings_ms=timings_ms)
         if fields is None: return False
         await sender.text("turn.state",**fields); return True
-    await progress("transcribing")
+    timings["utterance_to_status_ms"]=round((clock()-endpoint)*1000)
+    await progress(
+        "transcribing",
+        timings_ms={"utterance_to_status":timings["utterance_to_status_ms"]})
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
     started=clock(); transcription=await asyncio.to_thread(transcribe,clean_path(source_pcm)); timings["stt"]=round((clock()-started)*1000)
     # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
@@ -714,15 +975,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
-    await progress("routing")
+    timings["route_started_ms"]=round((clock()-endpoint)*1000)
+    await progress(
+        "routing",timings_ms={"route_started":timings["route_started_ms"]})
     emergency=recognize_emergency(transcript)
     if emergency is not None:
         text=emergency.response
+        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
         try:
             await progress("synthesizing",route="deterministic_emergency")
             pcm=await asyncio.to_thread(synthesize,text,emergency.language)
             frames=frame_complete_audio(pcm)
+            if filler is not None:await filler.primary_ready()
         except Exception:
             log.exception("emergency TTS failed")
             await progress("error",route="deterministic_emergency")
@@ -784,6 +1049,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 else CLARIFICATION_TEXT
             )
             text=clarification.get(fallback,clarification["ko"])
+            timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
             await current_text("session.language_confirmation_required",turn_id=turn_id,
                                reason=resolution.reason,languages=["ko","en"])
             await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
@@ -792,6 +1058,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 await progress("synthesizing",route="language_clarification")
                 pcm=await asyncio.to_thread(synthesize,text,fallback)
                 frames=frame_complete_audio(pcm)
+                if filler is not None:await filler.primary_ready()
             except Exception:
                 log.exception("language clarification TTS failed")
                 await progress("error",route="language_clarification")
@@ -829,6 +1096,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         curated=session.curated_protocol_session
         checkpoint=curated._checkpoint()
         try:
+            timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             plan=curated.plan(
                 transcript,turn_id=turn_id,language=turn_language)
@@ -838,6 +1106,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 raise RuntimeError("curated protocol produced no display text")
             if not isinstance(speech_text,str) or not speech_text.strip():
                 raise RuntimeError("curated protocol produced no speech text")
+            timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
             if plan.speech_mode.value=="blocked":
                 session.set_turn_terminal_outcome(
                     turn_id,generation,"blocked")
@@ -845,6 +1114,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await progress("synthesizing",route="curated_protocol")
             pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
             frames=frame_complete_audio(pcm)
+            if filler is not None:await filler.primary_ready()
             if not frames or not session.start_playback(turn_id):
                 raise RuntimeError("curated protocol produced no playable audio")
         except BaseException:
@@ -857,7 +1127,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await current_text(
             "protocol.fixture.state",turn_id=turn_id,
             configuration_id=session.accepted_configuration_id,
-            state=curated.state(),action=plan.action.value)
+            state=curated.state(spoken_summary=plan.spoken_summary),
+            action=plan.action.value)
         await current_text(
             "reply.delta",turn_id=turn_id,segment_index=0,text=display_text)
         await current_text(
@@ -978,6 +1249,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "procedure.state",turn_id=turn_id,state=state)
         text=deterministic_procedure_text(
             deterministic_result,turn_language)
+        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
         if deterministic_result.get("code"):
             session.set_turn_terminal_outcome(turn_id,generation,"blocked")
         await current_text(
@@ -987,6 +1259,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await progress("synthesizing",route="deterministic_procedure")
             pcm=await asyncio.to_thread(synthesize,text,turn_language)
             frames=frame_complete_audio(pcm)
+            if filler is not None:await filler.primary_ready()
         except Exception:
             log.exception("deterministic procedure TTS failed")
             await progress("error",route="deterministic_procedure")
@@ -1031,6 +1304,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         nonlocal first_sentence
         if not first_sentence:
             first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
+            timings["primary_text_ready_ms"]=timings["first_sentence_ms"]
             await progress("composing",route="brain")
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
         await queue.put(segment)
@@ -1089,6 +1363,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             pcm=await asyncio.to_thread(synthesize,segment.text,turn_language); frames=frame_complete_audio(pcm)
             if not session.is_current(turn_id,generation):return
             if not first_audio:
+                if filler is not None:await filler.primary_ready()
                 if not session.start_playback(turn_id):return
                 first_audio=True; timings["first_audio_ms"]=round((clock()-endpoint)*1000)
                 await progress(
@@ -1122,7 +1397,33 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
 
 async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0):
     generation=session.turn_generations.get(turn_id,session.generation)
-    try: await run_turn(websocket,session,source_pcm,turn_id,input_frames,voiced_frames)
+    sender=LockedSender(websocket)
+    language=(session.accepted_language or session.manual_language or
+              (session.tool_context.language if session.tool_context else "ko"))
+    async def filler_event(kind:str,**fields):
+        await sender.text(
+            kind,configuration_id=session.accepted_configuration_id,**fields)
+    async def filler_audio(target_turn:int,target_generation:int,pcm:bytes):
+        await sender.filler_segment(
+            target_turn,target_generation,pcm,session.accepted_configuration_id)
+    async def filler_clear(target_turn:int,target_generation:int):
+        await sender.text(
+            "filler.audio.clear",
+            configuration_id=session.accepted_configuration_id,
+            turn_id=target_turn,generation=target_generation,
+            reason="primary_audio_ready")
+    filler=CascadeFiller(
+        turn_id=turn_id,generation=generation,language=language,
+        delay_ms=cascade_filler_delay_ms(),
+        synthesize=lambda text,selected:asyncio.to_thread(
+            synthesize,text,selected),
+        send_audio=filler_audio,send_event=filler_event,
+        send_clear=filler_clear,is_current=session.is_current,
+        clock=session.clock)
+    filler.start()
+    try: await run_turn(
+        websocket,session,source_pcm,turn_id,input_frames,voiced_frames,
+        sender=sender,filler=filler)
     except asyncio.CancelledError: session.cascade_failed(turn_id); raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
     except Exception:
@@ -1138,6 +1439,8 @@ async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voic
         await websocket.send_text(event(
             "state.changed",state=session.state.value,turn_id=turn_id,
             generation=generation))
+    finally:
+        await filler.cancel()
 
 async def cancel_cascade_generation(
     websocket:WebSocket,session:ListenerSession,task:asyncio.Task|None,
@@ -1228,6 +1531,7 @@ async def voice_socket(websocket:WebSocket):
                     context=server_tool_context(trusted_config,control["language"])
                     selected_curated_fixture=None
                     selected_procedure_definitions=None
+                    selected_revision_id=None
                     selection_failure=None
                     if requested_mode=="cascade":
                         if requested_protocol_id is None:
@@ -1242,6 +1546,30 @@ async def voice_socket(websocket:WebSocket):
                                 )
                                 if curated_fixture.protocol_id==requested_protocol_id:
                                     selected_curated_fixture=curated_fixture
+                                    selected_revision_id=getattr(
+                                        curated_fixture,"revision_id",
+                                        f"fixture-{requested_protocol_id}")
+                            if selected_curated_fixture is None:
+                                settings=_protocol_store_settings()
+                                if settings.enabled:
+                                    configuration_stage="protocol_catalog"
+                                    catalog,protocol_store=_open_protocol_catalog()
+                                    try:
+                                        try:
+                                            entry=catalog.get_entry(requested_protocol_id)
+                                        except ProtocolCatalogNotFoundError:
+                                            entry=None
+                                        if entry is not None:
+                                            if entry.available_for_execution:
+                                                selected_curated_fixture=(
+                                                    catalog.load_executable_fixture(
+                                                        requested_protocol_id))
+                                                selected_revision_id=entry.revision_id
+                                            else:
+                                                selection_failure=(
+                                                    "protocol_selection_unavailable")
+                                    finally:
+                                        protocol_store.close()
                             if (selected_curated_fixture is None and
                                     trusted_config.procedure_catalog_path and
                                     trusted_config.procedure_store_path):
@@ -1254,6 +1582,10 @@ async def voice_socket(websocket:WebSocket):
                                     usage_scope=trusted_config.usage_scope)
                                 if requested_protocol_id in definitions:
                                     selected_procedure_definitions=definitions
+                                    selection_failure=None
+                                    selected_revision_id=(
+                                        f"approved-procedure-"
+                                        f"{definitions[requested_protocol_id].version}")
                             if (selected_curated_fixture is None and
                                     selected_procedure_definitions is None):
                                 selection_failure=(
@@ -1313,7 +1645,7 @@ async def voice_socket(websocket:WebSocket):
                         await native_session.start()
                     session.accept_configuration(
                         configuration_id,pipeline,context.language,
-                        requested_protocol_id)
+                        requested_protocol_id,selected_revision_id)
                 except (RuntimeError,ValueError,NativeRealtimeError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
@@ -1351,13 +1683,15 @@ async def voice_socket(websocket:WebSocket):
                         ),
                     ))
                     continue
-                await websocket.send_text(event(
-                    "session.ready",
-                    configuration_id=session.accepted_configuration_id,
-                    mode=session.accepted_mode,
-                    language=session.accepted_language,
-                    protocol_id=session.accepted_protocol_id,
-                ))
+                ready_fields={
+                    "configuration_id":session.accepted_configuration_id,
+                    "mode":session.accepted_mode,
+                    "language":session.accepted_language,
+                    "protocol_id":session.accepted_protocol_id,
+                }
+                if session.accepted_protocol_id is not None:
+                    ready_fields["revision_id"]=session.accepted_revision_id
+                await websocket.send_text(event("session.ready",**ready_fields))
                 if session.curated_protocol_session is not None:
                     await websocket.send_text(event(
                         "protocol.fixture.state",

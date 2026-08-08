@@ -626,10 +626,18 @@ class ServerTests(unittest.TestCase):
         class Fixture:
             def __init__(self):
                 self.protocol_id=protocol_id
+                self.revision_id="fixture-test-revision"
+                self.development_only=True
                 self.title="Candidate A development fixture"
-                self.steps=(SimpleNamespace(source_label="1",step_id="step-1"),)
+                self.steps=(SimpleNamespace(
+                    source_label="1",step_id="step-1",
+                    instruction_source_text="Exact source instruction.",
+                    evidence=SimpleNamespace(source_page_number=1),
+                    warnings=(),
+                ),)
                 self.draft=SimpleNamespace(readiness=SimpleNamespace(
                     status=SimpleNamespace(value="analysis_required")))
+            def visual_for_step(self,index): return None
 
         class Socket:
             def __init__(self):
@@ -664,6 +672,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(ready,{
             "type":"session.ready","configuration_id":7,"mode":"cascade",
             "language":"ko","protocol_id":protocol_id,
+            "revision_id":"fixture-test-revision",
         })
         curated_state=next(
             item for item in socket.sent

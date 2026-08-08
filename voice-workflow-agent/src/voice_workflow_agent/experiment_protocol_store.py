@@ -687,6 +687,46 @@ class ProtocolStore:
         ).fetchone()
         return ExperimentRecord(**dict(row)) if row is not None else None
 
+    def list_experiments(self) -> tuple[ExperimentRecord, ...]:
+        """List immutable experiment identities without creating new state."""
+
+        return tuple(
+            ExperimentRecord(**dict(row))
+            for row in self._connection.execute(
+                "SELECT * FROM experiments ORDER BY created_at,experiment_id"
+            )
+        )
+
+    def get_pdf_object(self, checksum: str) -> PdfObjectRecord | None:
+        if not isinstance(checksum, str) or not _LOWERCASE_SHA256.fullmatch(
+            checksum
+        ):
+            raise ProtocolObjectIntegrityError(
+                "Stored Protocol object checksum is malformed."
+            )
+        row = self._connection.execute(
+            "SELECT * FROM pdf_objects WHERE checksum=?", (checksum,)
+        ).fetchone()
+        return PdfObjectRecord(**dict(row)) if row is not None else None
+
+    def find_protocol_revision_by_checksum(
+        self,
+        checksum: str,
+    ) -> ProtocolRevisionRecord | None:
+        if not isinstance(checksum, str) or not _LOWERCASE_SHA256.fullmatch(
+            checksum
+        ):
+            raise ProtocolObjectIntegrityError(
+                "Stored Protocol object checksum is malformed."
+            )
+        row = self._connection.execute(
+            """SELECT * FROM protocol_revisions
+            WHERE pdf_checksum=?
+            ORDER BY created_at,experiment_id,revision_number LIMIT 1""",
+            (checksum,),
+        ).fetchone()
+        return ProtocolRevisionRecord(**dict(row)) if row is not None else None
+
     def list_protocol_revisions(
         self,
         experiment_id: str,
@@ -716,6 +756,8 @@ class ProtocolStore:
         self,
         experiment_id: str,
         source_pdf: str | Path | None,
+        *,
+        original_filename: str | None = None,
     ) -> ExperimentCreation:
         _identifier(experiment_id, experiment=True)
         if source_pdf is None:
@@ -730,6 +772,20 @@ class ProtocolStore:
         except ProtocolFileStoreError:
             raise
         now = _now()
+        recorded_filename = (
+            stored.original_filename
+            if original_filename is None
+            else _text(original_filename, "Protocol source filename is required.")
+        )
+        if (
+            Path(recorded_filename).name != recorded_filename
+            or "/" in recorded_filename
+            or "\\" in recorded_filename
+            or "\x00" in recorded_filename
+        ):
+            raise ProtocolPersistenceError(
+                "Protocol source filename is not a plain filename."
+            )
         self._begin()
         try:
             existing = self.get_experiment(experiment_id)
@@ -759,7 +815,7 @@ class ProtocolStore:
                 (
                     experiment_id,
                     stored.object.checksum,
-                    stored.original_filename,
+                    recorded_filename,
                     now,
                 ),
             )

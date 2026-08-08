@@ -1722,7 +1722,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             tts.call_args.args[0],
             "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
         )
-        closing_state = session.curated_protocol_session.state()
+        closing_state = session.curated_protocol_session.state(
+            spoken_summary="2단계로 이동했습니다. 안내를 화면에 표시했습니다."
+        )
         state_events = [
             item for item in socket.text
             if item["type"] == "protocol.fixture.state"
@@ -2094,6 +2096,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(len(state_events), 1)
         self.assertEqual(
             state_events[0]["state"],
-            session.curated_protocol_session.state(),
+            session.curated_protocol_session.state(
+                spoken_summary=tts.call_args.args[0]
+            ),
         )
         self.assertEqual(state_events[0]["action"], "next")

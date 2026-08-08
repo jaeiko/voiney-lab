@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
@@ -70,6 +71,12 @@ class CuratedProtocolSpeechMode(str, Enum):
     STOP = "stop"
 
 
+class ProtocolVisualKind(str, Enum):
+    FULL_SOURCE_PAGE_PREVIEW = "full_source_page_preview"
+    SOURCE_PAGE_CROP = "source_page_crop"
+    EXTRACTED_SOURCE_IMAGE = "extracted_source_image"
+
+
 @dataclass(frozen=True)
 class CuratedProtocolFact:
     fact_id: str
@@ -78,11 +85,96 @@ class CuratedProtocolFact:
 
 
 @dataclass(frozen=True)
+class ProtocolVisualAsset:
+    """A source-preserving visual reference; never model-generated content."""
+
+    asset_id: str
+    protocol_id: str
+    revision_id: str
+    kind: str
+    source_document_id: str
+    source_page: int
+    mime_type: str
+    sha256: str
+    alt_text: str
+    normalized_bounding_box: tuple[float, float, float, float] | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            ProtocolVisualKind(self.kind)
+        except ValueError as exc:
+            raise CuratedProtocolFixtureError(
+                "Protocol visual kind is unsupported."
+            ) from exc
+        if self.normalized_bounding_box is not None and (
+            len(self.normalized_bounding_box) != 4
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or value < 0
+                or value > 1
+                for value in self.normalized_bounding_box
+            )
+            or (
+                self.normalized_bounding_box[0]
+                + self.normalized_bounding_box[2]
+                > 1
+            )
+            or (
+                self.normalized_bounding_box[1]
+                + self.normalized_bounding_box[3]
+                > 1
+            )
+        ):
+            raise CuratedProtocolFixtureError(
+                "Protocol visual bounding box is invalid."
+            )
+
+    def public_dict(self) -> dict[str, object]:
+        encoded_protocol = quote(self.protocol_id, safe="")
+        encoded_revision = quote(self.revision_id, safe="")
+        encoded_asset = quote(self.asset_id, safe="")
+        return {
+            "asset_id": self.asset_id,
+            "protocol_id": self.protocol_id,
+            "revision_id": self.revision_id,
+            "kind": self.kind,
+            "source_document_id": self.source_document_id,
+            "source_page": self.source_page,
+            "mime_type": self.mime_type,
+            "sha256": self.sha256,
+            "alt_text": self.alt_text,
+            "normalized_bounding_box": self.normalized_bounding_box,
+            "url": (
+                f"/api/protocols/{encoded_protocol}/revisions/"
+                f"{encoded_revision}/assets/{encoded_asset}"
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class CuratedProtocolFixture:
     draft: ProtocolAnalysisDraft
     status: str
     ordered_step_labels: tuple[str, ...]
     fixture_sha256: str
+    revision_id: str = ""
+    development_only: bool = True
+    source_pdf_path: Path | None = None
+    source_pdf_sha256: str | None = None
+    source_filename: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.revision_id:
+            object.__setattr__(
+                self, "revision_id", f"fixture-{self.fixture_sha256[:20]}"
+            )
+        if self.source_pdf_sha256 is None:
+            object.__setattr__(
+                self,
+                "source_pdf_sha256",
+                self.draft.protocol.metadata.file_checksum,
+            )
 
     @property
     def protocol_id(self) -> str:
@@ -154,6 +246,30 @@ class CuratedProtocolFixture:
                 ))
         return tuple(facts)
 
+    def visual_for_step(self, index: int) -> ProtocolVisualAsset | None:
+        """Return a safe full-page fallback for the step's exact evidence page."""
+
+        if self.source_pdf_path is None:
+            return None
+        step = self.steps[index]
+        page = step.evidence.source_page_number
+        if not isinstance(page, int) or page <= 0:
+            return None
+        checksum = self.source_pdf_sha256
+        if not isinstance(checksum, str) or len(checksum) != 64:
+            return None
+        return ProtocolVisualAsset(
+            asset_id=f"source-page-{page}",
+            protocol_id=self.protocol_id,
+            revision_id=self.revision_id,
+            kind=ProtocolVisualKind.FULL_SOURCE_PAGE_PREVIEW.value,
+            source_document_id=checksum,
+            source_page=page,
+            mime_type="application/pdf",
+            sha256=checksum,
+            alt_text=f"Source PDF page {page} preview",
+        )
+
 
 @dataclass(frozen=True)
 class CuratedProtocolTurnPlan:
@@ -173,6 +289,14 @@ class CuratedProtocolTurnPlan:
         """Compatibility alias for the authoritative user-facing display."""
 
         return self.display_text
+
+    @property
+    def display_summary(self) -> str | None:
+        return self.display_text
+
+    @property
+    def spoken_summary(self) -> str | None:
+        return self.speech_text
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -341,6 +465,8 @@ def load_curated_protocol_fixture(
         status=DEVELOPMENT_FIXTURE_STATUS,
         ordered_step_labels=labels,
         fixture_sha256=fixture_sha256,
+        source_pdf_path=source_pdf_file.resolve(),
+        source_pdf_sha256=extraction.sha256,
     )
 
 
@@ -456,7 +582,15 @@ def _question_is_supported(
     return _select_verified_fact(transcript, facts) is not None
 
 
-def _unsupported_fact_reply(language: str) -> str:
+def _unsupported_fact_reply(
+    language: str, *, development_only: bool = True
+) -> str:
+    if not development_only:
+        return {
+            "en": "The approved revision has no authorized answer for this question at the current step.",
+            "vi": "Bản sửa đổi đã duyệt không có câu trả lời được phép cho câu hỏi này ở bước hiện tại.",
+            "ko": "승인된 리비전의 현재 단계에는 이 질문에 대해 허용된 답변이 없습니다.",
+        }.get(language, "현재 단계에는 허용된 답변이 없습니다.")
     return {
         "en": (
             "The verified development fixture has no authorized answer for "
@@ -482,29 +616,33 @@ def _control_speech(
     label: str,
     *,
     resumed: bool = False,
+    development_only: bool = True,
 ) -> str:
+    english_subject = "Development fixture" if development_only else "Protocol"
     if language == "en":
         if action is CuratedProtocolAction.START:
             verb = "redisplayed" if resumed else "displayed"
-            return f"Development fixture step {label} guidance is {verb} on screen."
+            return f"{english_subject} step {label} guidance is {verb} on screen."
         if action is CuratedProtocolAction.CURRENT:
             return f"The current step is {label}. Its guidance is displayed on screen."
         if action is CuratedProtocolAction.REPEAT:
             return f"Current step {label} guidance is displayed again on screen."
         return f"Moved to step {label}. Its guidance is displayed on screen."
     if language == "vi":
+        subject = "dữ liệu phát triển" if development_only else "quy trình"
         if action is CuratedProtocolAction.START:
             verb = "hiển thị lại" if resumed else "hiển thị"
-            return f"Hướng dẫn bước {label} của dữ liệu phát triển đã được {verb} trên màn hình."
+            return f"Hướng dẫn bước {label} của {subject} đã được {verb} trên màn hình."
         if action is CuratedProtocolAction.CURRENT:
             return f"Hiện tại là bước {label}. Hướng dẫn được hiển thị trên màn hình."
         if action is CuratedProtocolAction.REPEAT:
             return f"Hướng dẫn bước {label} hiện tại đã được hiển thị lại trên màn hình."
         return f"Đã chuyển sang bước {label}. Hướng dẫn được hiển thị trên màn hình."
+    korean_subject = "개발용 픽스처 " if development_only else ""
     if action is CuratedProtocolAction.START:
         if resumed:
-            return f"개발용 픽스처 {label}단계 안내를 화면에 다시 표시했습니다."
-        return f"개발용 픽스처 {label}단계 안내를 화면에 표시했습니다."
+            return f"{korean_subject}{label}단계 안내를 화면에 다시 표시했습니다."
+        return f"{korean_subject}{label}단계 안내를 화면에 표시했습니다."
     if action is CuratedProtocolAction.CURRENT:
         return f"현재 {label}단계입니다. 안내를 화면에 표시했습니다."
     if action is CuratedProtocolAction.REPEAT:
@@ -518,16 +656,20 @@ def _step_reply(
     text: str,
     *,
     prefix: str,
+    development_only: bool = True,
 ) -> str:
     if language == "en":
-        return f"{prefix} Development fixture step {label}: {text}"
+        noun = "Development fixture step" if development_only else "Protocol step"
+        return f"{prefix} {noun} {label}: {text}"
     if language == "vi":
-        return f"{prefix} Bước {label} của dữ liệu phát triển: {text}"
-    return f"{prefix} 개발용 픽스처 {label}단계: {text}"
+        noun = "dữ liệu phát triển" if development_only else "quy trình"
+        return f"{prefix} Bước {label} của {noun}: {text}"
+    noun = "개발용 픽스처 " if development_only else ""
+    return f"{prefix} {noun}{label}단계: {text}"
 
 
 class CuratedProtocolSession:
-    """Server-owned, in-memory state for one development fixture."""
+    """Server-owned in-memory state for one validated structured fixture."""
 
     def __init__(self, fixture: CuratedProtocolFixture) -> None:
         self.fixture = fixture
@@ -593,13 +735,20 @@ class CuratedProtocolSession:
         ) = checkpoint
         self._replay = dict(replay)
 
-    def state(self) -> dict[str, object]:
+    def state(self, *, spoken_summary: str | None = None) -> dict[str, object]:
         steps = self.fixture.steps
+        current_step = steps[self.current_index] if self.active else None
+        current_visual = (
+            self.fixture.visual_for_step(self.current_index)
+            if self.active
+            else None
+        )
         return {
             "attached": True,
             "protocol_id": self.fixture.protocol_id,
+            "revision_id": self.fixture.revision_id,
             "display_name": self.fixture.title,
-            "development_only": True,
+            "development_only": self.fixture.development_only,
             "readiness_status": self.fixture.draft.readiness.status.value,
             "active": self.active,
             "current_step_label": (
@@ -612,6 +761,44 @@ class CuratedProtocolSession:
             "at_final_step": self.active and self.current_index == len(steps) - 1,
             "block_reason": self._block_reason,
             "revision": self._revision,
+            "display_summary": (
+                current_step.instruction_source_text
+                if current_step is not None
+                else None
+            ),
+            "spoken_summary": spoken_summary,
+            "source_filename": (
+                getattr(self.fixture, "source_filename", None)
+                or (
+                    self.fixture.source_pdf_path.name
+                    if getattr(self.fixture, "source_pdf_path", None) is not None
+                    else None
+                )
+            ),
+            "source_sha256": getattr(self.fixture, "source_pdf_sha256", None),
+            "source_page_refs": (
+                [current_step.evidence.source_page_number]
+                if current_step is not None
+                else []
+            ),
+            "visual_assets": (
+                [current_visual.public_dict()]
+                if current_visual is not None
+                else []
+            ),
+            "visual_status": (
+                "available"
+                if current_visual is not None
+                else "unavailable"
+            ),
+            "warning_texts": (
+                [item.source_text for item in current_step.warnings]
+                if current_step is not None
+                else []
+            ),
+            # Warning severity is not represented in the canonical domain.
+            # Keep ordinary warnings visible without inventing a critical cue.
+            "critical_warning_texts": [],
         }
 
     def _current_step_readiness_blocker(
@@ -656,6 +843,12 @@ class CuratedProtocolSession:
                 "vi": "Phiên quy trình dùng dữ liệu phát triển đã kết thúc.",
                 "ko": "개발용 픽스처 프로토콜 세션을 종료했습니다.",
             }.get(language, "개발용 픽스처 프로토콜 세션을 종료했습니다.")
+            if not self.fixture.development_only:
+                response = {
+                    "en": "The protocol session has ended without a completion claim.",
+                    "vi": "Phiên quy trình đã kết thúc mà không xác nhận hoàn thành.",
+                    "ko": "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
+                }.get(language, "프로토콜 세션을 종료했습니다.")
             plan = CuratedProtocolTurnPlan(
                 action=action,
                 display_text=response,
@@ -679,6 +872,7 @@ class CuratedProtocolSession:
                 step.source_label,
                 step.instruction_source_text,
                 prefix="Starting or resuming." if language == "en" else "시작하거나 재개합니다.",
+                development_only=self.fixture.development_only,
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.START,
@@ -688,6 +882,7 @@ class CuratedProtocolSession:
                     language,
                     step.source_label,
                     resumed=resumed,
+                    development_only=self.fixture.development_only,
                 ),
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=self.fixture.facts_for_step(self.current_index),
@@ -736,6 +931,12 @@ class CuratedProtocolSession:
                     language,
                     "현재 단계는 실행 제어가 해결될 때까지 진행할 수 없습니다.",
                 )
+                if not self.fixture.development_only:
+                    response = {
+                        "en": "The current step cannot advance because its execution control is unresolved or unsupported. It was not marked complete.",
+                        "vi": "Bước hiện tại không thể tiếp tục vì điều khiển thực hiện chưa được giải quyết hoặc chưa được hỗ trợ. Bước chưa được đánh dấu hoàn thành.",
+                        "ko": "현재 단계의 실행 제어가 해결되지 않았거나 지원되지 않아 진행할 수 없습니다. 이 단계는 완료 처리되지 않았습니다.",
+                    }.get(language, "현재 단계는 실행 제어가 해결될 때까지 진행할 수 없습니다.")
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
                     display_text=response,
@@ -759,6 +960,7 @@ class CuratedProtocolSession:
                     prefix=(
                         prefix if language == "en" else "한 단계 이동했습니다."
                     ),
+                    development_only=self.fixture.development_only,
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
@@ -767,6 +969,7 @@ class CuratedProtocolSession:
                         CuratedProtocolAction.NEXT,
                         language,
                         step.source_label,
+                        development_only=self.fixture.development_only,
                     ),
                     speech_mode=CuratedProtocolSpeechMode.CONTROL,
                     facts=self.fixture.facts_for_step(self.current_index),
@@ -786,6 +989,7 @@ class CuratedProtocolSession:
                         if language == "en"
                         else "마지막 단계이며 더 진행하지 않습니다."
                     ),
+                    development_only=self.fixture.development_only,
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
@@ -825,6 +1029,7 @@ class CuratedProtocolSession:
                         else "현재 단계입니다."
                     )
                 ),
+                development_only=self.fixture.development_only,
             )
             plan = CuratedProtocolTurnPlan(
                 action=action,
@@ -833,6 +1038,7 @@ class CuratedProtocolSession:
                     action,
                     language,
                     step.source_label,
+                    development_only=self.fixture.development_only,
                 ),
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=self.fixture.facts_for_step(self.current_index),
@@ -869,7 +1075,10 @@ class CuratedProtocolSession:
                     fact_id=selected_fact.fact_id,
                 )
             else:
-                response = _unsupported_fact_reply(language)
+                response = _unsupported_fact_reply(
+                    language,
+                    development_only=self.fixture.development_only,
+                )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.UNSUPPORTED,
                     display_text=response,
