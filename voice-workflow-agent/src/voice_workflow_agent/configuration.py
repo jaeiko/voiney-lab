@@ -67,6 +67,12 @@ class CascadeVadSettings:
     minimum_speech_ms: int=240
     maximum_utterance_ms: int=15000
     cooldown_ms: int=300
+    playback_onset_voiced_frames: int=12
+    playback_onset_window_frames: int=15
+    listening_onset_voiced_frames: int=8
+    listening_onset_window_frames: int=12
+    listening_resume_voiced_frames: int=6
+    listening_resume_window_frames: int=10
 
     @classmethod
     def from_environment(
@@ -88,6 +94,18 @@ class CascadeVadSettings:
                 env,"CASCADE_VAD_MAX_UTTERANCE_MS",15000,20,300000),
             cooldown_ms=_integer(
                 env,"CASCADE_VAD_COOLDOWN_MS",300,0,10000),
+            playback_onset_voiced_frames=_integer(
+                env,"CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES",12,1,100),
+            playback_onset_window_frames=_integer(
+                env,"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES",15,1,100),
+            listening_onset_voiced_frames=_integer(
+                env,"CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES",8,1,100),
+            listening_onset_window_frames=_integer(
+                env,"CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES",12,1,100),
+            listening_resume_voiced_frames=_integer(
+                env,"CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES",6,1,100),
+            listening_resume_window_frames=_integer(
+                env,"CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES",10,1,100),
         )
         if settings.onset_voiced_frames>settings.onset_window_frames:
             raise ConfigurationError(
@@ -97,6 +115,21 @@ class CascadeVadSettings:
             raise ConfigurationError(
                 "CASCADE_VAD_MIN_SPEECH_MS cannot exceed "
                 "CASCADE_VAD_MAX_UTTERANCE_MS")
+        if (settings.playback_onset_voiced_frames>
+                settings.playback_onset_window_frames):
+            raise ConfigurationError(
+                "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES cannot exceed "
+                "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES")
+        if (settings.listening_onset_voiced_frames>
+                settings.listening_onset_window_frames):
+            raise ConfigurationError(
+                "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES cannot exceed "
+                "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES")
+        if (settings.listening_resume_voiced_frames>
+                settings.listening_resume_window_frames):
+            raise ConfigurationError(
+                "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES cannot exceed "
+                "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES")
         return settings
 
 

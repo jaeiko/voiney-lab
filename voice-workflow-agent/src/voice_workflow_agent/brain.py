@@ -21,6 +21,18 @@ from voice_workflow_agent.tools import (
 
 MAX_TOOL_ROUNDS = 4
 
+CURATED_PROTOCOL_FACT_SELECTION_PROMPT = (
+    "Select exactly one supplied development-fixture fact that directly answers "
+    "the user for a short, speech-friendly response. Use only the supplied fact "
+    "identifiers. Preserve critical numbers, units, symbols, and scientific "
+    "notation. Never invent a quantity, "
+    "material, condition, warning, action, or outcome. Never claim an action was "
+    "performed or that the fixture is finally approved. Preserve the selected "
+    "fact exactly; the server, not the model, owns workflow state. If no supplied "
+    "fact answers the question, select unsupported so the server can say that "
+    "the information is not present in the development fixture."
+)
+
 APPROVAL_PHRASES = {
     "ko": frozenset({
         "네",
@@ -244,6 +256,98 @@ class BrainResult:
     tool_ms: int | None = None
     tools_used: list[str] = field(default_factory=list)
     source_references: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CuratedProtocolAnswer:
+    """A validated fact selection; spoken text remains server-supplied."""
+
+    fact_id: str
+    text: str
+    messages: tuple[dict[str, Any], ...]
+
+
+async def select_curated_protocol_answer(
+    client: Any,
+    transcript: str,
+    *,
+    language: str,
+    protocol_id: str,
+    protocol_title: str,
+    step_label: str,
+    facts: tuple[tuple[str, str, str], ...],
+) -> CuratedProtocolAnswer:
+    """Select one exact current-step fact without tools or free-form claims."""
+
+    if not facts:
+        raise RuntimeError("curated protocol context is empty")
+    fact_map = {fact_id: text for fact_id, _, text in facts}
+    if len(fact_map) != len(facts) or any(
+        re.fullmatch(r"[a-z][a-z0-9_]{0,63}", fact_id) is None
+        for fact_id in fact_map
+    ):
+        raise RuntimeError("curated protocol fact identifiers are invalid")
+    allowed = tuple(fact_map) + ("unsupported",)
+    context = {
+        "development_only": True,
+        "protocol_id": protocol_id,
+        "protocol_title": protocol_title,
+        "current_step_label": step_label,
+        "facts": [
+            {"fact_id": fact_id, "kind": kind, "text": text}
+            for fact_id, kind, text in facts
+        ],
+    }
+    messages = (
+        {"role": "system", "content": CURATED_PROTOCOL_FACT_SELECTION_PROMPT},
+        {"role": "system", "content": trusted_language_instruction(language)},
+        {
+            "role": "system",
+            "content": json.dumps(
+                context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        },
+        {"role": "user", "content": transcript},
+    )
+    response = await client.chat.completions.create(
+        model=client.model,
+        messages=list(messages),
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "curated_protocol_fact_selection_v1",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "fact_id": {"type": "string", "enum": list(allowed)},
+                    },
+                    "required": ["fact_id"],
+                },
+            },
+        },
+        temperature=0,
+    )
+    content = _field(
+        _field(_field(response, "choices", [None])[0], "message", {}),
+        "content",
+    )
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("curated protocol answer is not valid JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"fact_id"}:
+        raise RuntimeError("curated protocol answer has an invalid shape")
+    fact_id = payload["fact_id"]
+    if fact_id == "unsupported":
+        return CuratedProtocolAnswer(fact_id, "", messages)
+    if not isinstance(fact_id, str) or fact_id not in fact_map:
+        raise RuntimeError("curated protocol answer selected an invalid fact")
+    return CuratedProtocolAnswer(fact_id, fact_map[fact_id], messages)
 
 
 def retrieval_failure_text(status: str, language: str) -> str:

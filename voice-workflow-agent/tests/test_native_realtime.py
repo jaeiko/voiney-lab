@@ -1870,7 +1870,9 @@ class NativeServerRoutingTests(unittest.TestCase):
                     (
                         {
                             "text": (
-                                '{"type":"session.start","pipeline":"native"}'
+                                '{"type":"session.start","mode":"native",'
+                                '"language":"ko","protocol_id":null,'
+                                '"configuration_id":1}'
                             )
                         },
                         {"bytes": b"\x00\x00"},
@@ -1959,7 +1961,7 @@ class NativeServerRoutingTests(unittest.TestCase):
             asyncio.run(voice_socket(socket))
         self.assertEqual(len(instances), 2)
         self.assertEqual(instances[0].started, 1)
-        self.assertEqual(instances[0].language_mode, "auto")
+        self.assertEqual(instances[0].language_mode, "manual")
         self.assertEqual(instances[0].audio, [b"\x00\x00"])
         self.assertEqual(instances[0].truncations, [("r1", "i1", 10)])
         self.assertEqual(instances[0].playback_endings, ["r1"])

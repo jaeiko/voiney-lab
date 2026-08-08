@@ -86,6 +86,7 @@
     .turn>b{grid-column:1/-1;color:var(--forest);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase}
     .turn .label{color:var(--muted);font-size:.74rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
     .turn .reply{font-weight:650}
+    .turn .turn-status{grid-column:2;color:var(--forest);font-size:.78rem;font-weight:800}
     .turn .tools{grid-column:2;color:var(--forest-2);font-size:.78rem;font-weight:700}
     .turn .stats{grid-column:2;color:var(--muted);font-size:.72rem}
     .turn .error{grid-column:2;color:var(--red);font-size:.8rem}
@@ -94,7 +95,7 @@
     @media(max-width:980px){
       .voice-panel{grid-template-columns:1fr}.capabilities{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-grid{grid-template-columns:minmax(0,1.25fr) minmax(17rem,.75fr)}}
     @media(max-width:720px){
-      .workflow-grid,.example-strip{grid-template-columns:1fr}.voice-console{grid-template-columns:auto 1fr}.controls{grid-column:1/-1}.controls button{flex:1}.workflow-details{grid-template-columns:1fr}.turn{grid-template-columns:1fr}.turn .tools,.turn .stats,.turn .error{grid-column:1}.turn .label{margin-top:.35rem}}
+      .workflow-grid,.example-strip{grid-template-columns:1fr}.voice-console{grid-template-columns:auto 1fr}.controls{grid-column:1/-1}.controls button{flex:1}.workflow-details{grid-template-columns:1fr}.turn{grid-template-columns:1fr}.turn .turn-status,.turn .tools,.turn .stats,.turn .error{grid-column:1}.turn .label{margin-top:.35rem}}
     @media(max-width:520px){.topbar,.shell{padding-left:.85rem;padding-right:.85rem}.session-badge{display:none}.voice-panel{padding:1.2rem}.capabilities{grid-template-columns:1fr}h1{font-size:2.35rem}}
   </style>
 </head>
@@ -129,19 +130,24 @@
           </div>
           <div class="language-controls">
             <select id="pipeline-mode" aria-label="음성 처리 방식">
-              <option value="native" selected>Native Speech-to-Speech</option>
-              <option value="cascade">Cascade 비교 모드</option>
+              <option value="cascade" selected>Cascade · Candidate A 개발 모드</option>
+              <option value="native">Native Speech-to-Speech 비교 모드</option>
             </select>
-            <span id="language-status">Automatic · 확인 대기</span>
+            <span id="language-status">Manual · Korean · 한국어</span>
             <select id="language-mode" aria-label="언어 모드">
-              <option value="auto" selected>Automatic</option>
-              <option value="manual">Manual</option>
+              <option value="manual" selected>Manual</option>
+              <option value="auto">Automatic</option>
             </select>
-            <select id="manual-language" aria-label="수동 언어" hidden>
+            <select id="manual-language" aria-label="수동 언어">
               <option value="ko">한국어</option>
               <option value="en">English</option>
               <option value="vi">Tiếng Việt</option>
             </select>
+            <select id="protocol-id" aria-label="개발용 프로토콜">
+              <option value="">프로토콜을 선택하지 않음</option>
+              <option value="candidate-a-curated-development-v1" selected>Candidate A · 개발용 픽스처</option>
+            </select>
+            <span id="session-configuration-status">서버 확인 대기</span>
             <button id="new-user" type="button">New user · 대화 초기화</button>
             <span id="language-confirmation" hidden>Language confirmation required · 언어를 선택하고 다시 말씀해 주세요.</span>
           </div>
@@ -205,13 +211,16 @@
 <script>
 const $=id=>document.getElementById(id);
 let socket,micContext,micWorkletNode,micSource,micStream,playContext,sessionActive=false;
-let receiving=null,receivedFrames=[],activeTurn=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
+let receiving=null,receivedFrames=[],activeTurn=null,activeCascadeGeneration=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
 let pipelineMode="native",receivingNative=null,activeNativeResponseId=null,activeNativeItemId=null,nativeResponseDone=false,nativeAwaitingContinuation=false,nativePlaybackAcked=false,nativeScheduledEnd=0,nativePlaybackStartedAt=null,nativeScheduledMs=0;
 const nativeSources=new Set();
 const interruptedTurns=new Set();
+const interruptedCascadeTurns=new Set();
+const turnProgress=new Map(),turnServerGenerations=new Map();
 let nativeReadyDetail=null,micSignalSeen=false;
 let acknowledgedLanguageMode="auto",acknowledgedLanguage=null;
-let procedureState={attached:false};
+let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
+let procedureState={attached:false},curatedProtocolState={attached:false},curatedStateRevision=-1;
 let workflowTimerHandle=null,lastReportId=null,reportPollHandle=null;
 const queued=new Map(),turns=new Map();
 const UI={
@@ -220,9 +229,13 @@ const UI={
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인",start_procedure:"승인 절차 시작",get_current_step:"현재 절차 단계 확인",complete_current_step:"현재 절차 단계 완료",record_step_observation:"현재 단계 관찰 기록",start_step_timer:"현재 단계 타이머 시작",get_workflow_summary:"워크플로 감사 요약"};
+const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
+const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
+const TURN_ROUTE_LABELS={approved_information:"승인된 정보",brain:"일반 응답",curated_protocol:"개발용 절차",deterministic_emergency:"긴급 응답",deterministic_procedure:"승인 절차",language_clarification:"언어 확인"};
+const TURN_STATE_TRANSITIONS={listening:new Set(["transcribing","cancelled","error"]),transcribing:new Set(["routing","cancelled","error"]),routing:new Set(["checking_protocol","checking_approved_information","composing","synthesizing","cancelled","error"]),checking_protocol:new Set(["synthesizing","cancelled","error"]),checking_approved_information:new Set(["composing","synthesizing","cancelled","error"]),composing:new Set(["checking_approved_information","synthesizing","cancelled","error"]),synthesizing:new Set(["playing","cancelled","error"]),playing:new Set(["complete","blocked","cancelled","error"])};
 const TOOL_ERROR_LABELS={observation_evidence_mismatch:"음성 원문과 관찰값 불일치",observation_required:"필수 관찰값 없음",timer_not_configured:"현재 단계에 타이머 없음",timer_not_started:"타이머 시작 필요",timer_not_elapsed:"타이머 진행 중",procedure_blocked_for_handoff:"관리자 인계로 진행 차단",explicit_confirmation_required:"명시적 단계 완료 확인 필요",step_mismatch:"현재 단계 불일치",observation_not_allowed:"현재 단계에서 관찰 기록 불가",observation_value_invalid:"관찰값 형식 오류",procedure_store_unavailable:"워크플로 저장소 오류",no_active_procedure:"진행 중인 워크플로 없음"};
 const REPORT_LABELS={awaiting_user_confirmation:"사용자 제출 확인 대기",submitting:"보고서 제출 중",confirmed:"제출 확인됨",submission_failed:"제출에 실패했습니다. 다시 승인하거나 취소할 수 있습니다.",cancelled:"보고 초안 취소됨",queued_for_handoff:"관리자 인계 대기",processing:"관리자 인계문 작성 중",retry_pending:"인계문 작성 재시도 대기",handoff_ready:"관리자 인계문 준비 완료",failed:"인계문 작성 실패"};
-function renderState(state,detail=""){const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];$("start").disabled=view[1];$("stop").disabled=view[2];$("pipeline-mode").disabled=!["IDLE","ERROR"].includes(visibleState);const dot=document.querySelector?.(".session-dot");if(dot)dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#23a872":visibleState==="ERROR"?"#b53b32":"#8ea199";}
+function renderState(state,detail=""){const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];$("start").disabled=view[1];$("stop").disabled=view[2];const configurationLocked=!["IDLE","ERROR"].includes(visibleState);for(const id of ["pipeline-mode","language-mode","manual-language","protocol-id"])$(id).disabled=configurationLocked;const dot=document.querySelector?.(".session-dot");if(dot)dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#23a872":visibleState==="ERROR"?"#b53b32":"#8ea199";}
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function stopWorkflowTimer(){if(workflowTimerHandle!==null){clearInterval(workflowTimerHandle);workflowTimerHandle=null;}}
 function updateWorkflowTimer(){
@@ -248,8 +261,29 @@ function startReportPolling(reportId){
  reportPollHandle?.unref?.();
 }
 function nativePlayedAudioMs(){if(nativePlaybackStartedAt===null||!playContext)return 0;const now=Number.isFinite(playContext.currentTime)?playContext.currentTime:nativePlaybackStartedAt;return Math.round(Math.max(0,Math.min(nativeScheduledMs,(now-nativePlaybackStartedAt)*1000)));}
-function clearPlayback(){playbackEpoch++;if(activeSource){activeSource.onended=null;try{activeSource.stop();}catch(_){}try{activeSource.disconnect();}catch(_){}activeSource=null;}for(const source of nativeSources){source.onended=null;try{source.stop();}catch(_){}try{source.disconnect();}catch(_){}}nativeSources.clear();receiving=null;receivingNative=null;receivedFrames=[];queued.clear();activeTurn=null;audioComplete=false;turnComplete=false;playing=false;nextSegment=0;activeNativeResponseId=null;activeNativeItemId=null;nativeResponseDone=false;nativeAwaitingContinuation=false;nativePlaybackAcked=false;nativeScheduledEnd=0;nativePlaybackStartedAt=null;nativeScheduledMs=0;}
-function resetSessionUI(){clearPlayback();stopWorkflowTimer();stopReportPolling();lastReportId=null;turns.clear();interruptedTurns.clear();$("log").replaceChildren();const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 접수된 보고 없음";$("last-report-state").textContent="음성으로 이상상황을 보고하면 여기에 표시됩니다.";renderProcedureState({attached:false});}
+function resetCascadePlayback(){if(activeSource){activeSource.onended=null;try{activeSource.stop();}catch(_){}try{activeSource.disconnect();}catch(_){}activeSource=null;}receiving=null;receivedFrames=[];queued.clear();activeTurn=null;activeCascadeGeneration=null;audioComplete=false;turnComplete=false;playing=false;nextSegment=0;}
+function clearPlayback(){playbackEpoch++;resetCascadePlayback();for(const source of nativeSources){source.onended=null;try{source.stop();}catch(_){}try{source.disconnect();}catch(_){}}nativeSources.clear();receivingNative=null;activeNativeResponseId=null;activeNativeItemId=null;nativeResponseDone=false;nativeAwaitingContinuation=false;nativePlaybackAcked=false;nativeScheduledEnd=0;nativePlaybackStartedAt=null;nativeScheduledMs=0;}
+function interruptCascadePlayback(turnId,generation){if(turnId!==activeTurn||!Number.isInteger(generation)||generation!==activeCascadeGeneration)return false;playbackEpoch++;resetCascadePlayback();return true;}
+function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;renderProcedureState({attached:false});}
+function resetSessionUI(){clearPlayback();stopWorkflowTimer();stopReportPolling();lastReportId=null;turns.clear();turnProgress.clear();turnServerGenerations.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();$("log").replaceChildren();const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 접수된 보고 없음";$("last-report-state").textContent="음성으로 이상상황을 보고하면 여기에 표시됩니다.";invalidateCuratedProtocolState();}
+function renderCuratedProtocolState(message){
+ const value=message?.state,accepted=acceptedSessionConfiguration,nonempty=v=>typeof v==="string"&&v.trim().length>0;
+ if(!accepted||message.configuration_id!==accepted.configuration_id||accepted.mode!=="cascade"||!value||typeof value!=="object")return;
+ const valid=value.attached===true&&value.protocol_id===accepted.protocol_id&&nonempty(value.protocol_id)&&nonempty(value.display_name)&&value.development_only===true&&["analysis_required","guidance_ready"].includes(value.readiness_status)&&typeof value.active==="boolean"&&Number.isInteger(value.total_steps)&&value.total_steps>0&&typeof value.at_final_step==="boolean"&&(value.block_reason===null||nonempty(value.block_reason))&&Number.isInteger(value.revision)&&value.revision>=0;
+ const activeValid=value.active?nonempty(value.current_step_label)&&nonempty(value.current_step_id):value.current_step_label===null&&value.current_step_id===null;
+ if(!valid||!activeValid||value.revision<=curatedStateRevision)return;
+ curatedProtocolState={...value};curatedStateRevision=value.revision;procedureState={attached:false};stopWorkflowTimer();
+ $("procedure-title").textContent=value.display_name;
+ $("procedure-meta").textContent=`개발용 · 최종 승인 아님 · ${value.protocol_id}`;
+ const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?"진행 중 · 개발용":"선택됨 · 대기";
+ $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
+ $("procedure-progress").textContent=value.active?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
+ $("procedure-step-title").textContent=value.active?`Step ${value.current_step_label}`:"";$("procedure-instruction").textContent="";
+ $("procedure-source").textContent="개발용 픽스처 · 출처 세부정보 미표시";$("procedure-timer").textContent="지원되지 않음";$("procedure-observation").textContent="자동 관찰 없음";
+ const blockLabels={unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계"};
+ $("procedure-handoff").textContent=blocked?`진행 제한 · ${blockLabels[value.block_reason]||value.block_reason}`:"연결된 인계 없음";
+ $("procedure-audit").textContent=`준비 상태 ${value.readiness_status} · 개발용`;
+}
 function renderProcedureState(value){
  if(!value||typeof value!=="object"||typeof value.attached!=="boolean")return;
  if(!value.attached){stopWorkflowTimer();procedureState={attached:false};$("procedure-title").textContent="연결된 절차 없음";$("procedure-meta").textContent="서버가 승인 절차 상태를 전송하면 표시됩니다.";$("procedure-status").textContent="대기";$("procedure-status").className="";$("procedure-progress").textContent="";$("procedure-step-title").textContent="";$("procedure-instruction").textContent="";$("procedure-source").textContent="—";$("procedure-timer").textContent="—";$("procedure-observation").textContent="—";$("procedure-handoff").textContent="—";$("procedure-audit").textContent="—";return;}
@@ -273,27 +307,47 @@ function renderProcedureState(value){
  startWorkflowTimer();
 }
 async function closeAudio(){if(micWorkletNode){micWorkletNode.port.onmessage=null;try{micWorkletNode.port.postMessage({type:"stop"});}catch(_){}try{micWorkletNode.disconnect();}catch(_){}micWorkletNode=null;}if(micSource){try{micSource.disconnect();}catch(_){}micSource=null;}if(micStream){for(const track of micStream.getTracks())track.stop();micStream=null;}for(const context of [micContext,playContext])if(context&&context.state!=="closed")try{await context.close();}catch(_){}micContext=null;playContext=null;micSignalSeen=false;}
-function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const node=document.createElement("section");node.className="turn";node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">Voice Workflow Agent</div><div class="reply"></div><div class="label">Tool</div><div class="tools">사용된 Tool 없음</div><div class="stats"></div><div class="error"></div>`;$("log").prepend(node);turns.set(key,node);return node;}
+function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const node=document.createElement("section");node.className="turn";node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">Voice Workflow Agent</div><div class="reply"></div><div class="label">Status</div><div class="turn-status"></div><div class="label">Tool</div><div class="tools">사용된 Tool 없음</div><div class="stats"></div><div class="error"></div>`;$("log").prepend(node);turns.set(key,node);return node;}
+function turnProgressKey(turnId,serverGeneration){return `${serverGeneration}:${turnId}`;}
+function turnBrowserKey(turnId,browserGeneration=sessionGeneration){return `${browserGeneration}:${turnId}`;}
+function validTurnStateTransition(previous,next){if(previous===null)return !["complete","blocked"].includes(next);return TURN_STATE_TRANSITIONS[previous]?.has(next)===true;}
+function applyTurnState(message,browserGeneration=sessionGeneration){
+ const accepted=acceptedSessionConfiguration,state=message?.state,route=message?.route,browserKey=turnBrowserKey(message?.turn_id,browserGeneration);
+ const timings=message?.timings_ms,timingsValid=timings===undefined||(timings&&typeof timings==="object"&&!Array.isArray(timings)&&Object.entries(timings).every(([name,value])=>typeof name==="string"&&name.length>0&&Number.isFinite(value)&&value>=0));
+ if(!accepted||accepted.mode!=="cascade"||message.configuration_id!==accepted.configuration_id||!Number.isInteger(message.turn_id)||message.turn_id<=0||!Number.isInteger(message.generation)||message.generation<0||!Number.isInteger(message.revision)||message.revision<=0||!Object.prototype.hasOwnProperty.call(TURN_STATE_LABELS,state)||(route!==undefined&&!Object.prototype.hasOwnProperty.call(TURN_ROUTE_LABELS,route))||!timingsValid)return false;
+ const knownGeneration=turnServerGenerations.get(browserKey);if(knownGeneration!==undefined&&knownGeneration!==message.generation)return false;if(cascadeTurnInterrupted(message)&&state!=="cancelled")return false;
+ const key=turnProgressKey(message.turn_id,message.generation),previous=turnProgress.get(key);if(previous&&(message.revision<=previous.revision||TURN_TERMINAL_STATES.has(previous.state)))return false;if(!validTurnStateTransition(previous?.state??null,state))return false;
+ turnServerGenerations.set(browserKey,message.generation);turnProgress.set(key,{revision:message.revision,state,terminal:TURN_TERMINAL_STATES.has(state),route:route||previous?.route||null});
+ const node=turnNode(message.turn_id,browserGeneration),routeLabel=route?TURN_ROUTE_LABELS[route]:"";node.querySelector(".turn-status").textContent=`${TURN_STATE_LABELS[state]}${routeLabel?` · ${routeLabel}`:""}`;
+ if(state==="cancelled")node.querySelector(".error").textContent="중단됨";else if(state==="blocked")node.querySelector(".error").textContent="차단됨";else if(state==="error")node.querySelector(".error").textContent="오류";
+ return true;
+}
+function removeTurnProgress(id,browserGeneration,serverGeneration){const browserKey=turnBrowserKey(id,browserGeneration),known=turnServerGenerations.get(browserKey),target=serverGeneration===null?known:serverGeneration;if(Number.isInteger(target))turnProgress.delete(turnProgressKey(id,target));if(serverGeneration===null||known===serverGeneration)turnServerGenerations.delete(browserKey);}
+function removeProvisionalTurn(id,browserGeneration=sessionGeneration,serverGeneration=null){const key=turnBrowserKey(id,browserGeneration),node=turns.get(key);if(!node||node.querySelector(".transcript").textContent!=="듣는 중…"||node.querySelector(".reply").textContent.trim())return false;node.remove();turns.delete(key);removeTurnProgress(id,browserGeneration,serverGeneration);if(id===activeTurn&&(serverGeneration===null||serverGeneration===activeCascadeGeneration)){playbackEpoch++;resetCascadePlayback();}return true;}
+function removeProvisionalTurns(browserGeneration=sessionGeneration){for(const [key,node] of [...turns]){if(!key.startsWith(`${browserGeneration}:`)||node.querySelector(".transcript").textContent!=="듣는 중…"||node.querySelector(".reply").textContent.trim())continue;const id=Number(key.slice(key.indexOf(":")+1));node.remove();turns.delete(key);removeTurnProgress(id,browserGeneration,null);}}
+function cascadeTurnKey(turnId,generation){return `${generation}:${turnId}`;}
+function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_id)&&Number.isInteger(message?.generation)&&interruptedCascadeTurns.has(cascadeTurnKey(message.turn_id,message.generation));}
+function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
 function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
-async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;sessionActive=false;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
+async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",current=new WebSocket(scheme+"://"+location.host+"/ws");socket=current;current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
  const length=Math.max(1,Math.round(input.length*targetRate/sourceRate)),output=new Int16Array(length);
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
  return output;
 }
 async function ensureAudio(generation){
- if(!micWorkletNode){if(typeof AudioWorkletNode!=="function")throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:false}});try{
+ if(!micWorkletNode){if(typeof AudioWorkletNode!=="function")throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");const supported=navigator.mediaDevices.getSupportedConstraints?.()||null,audioConstraints={channelCount:1};for(const name of ["echoCancellation","noiseSuppression","autoGainControl"]){if(!supported||supported[name]===true)audioConstraints[name]=true;}micStream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});try{
  micContext=new AudioContext();if(!micContext.audioWorklet?.addModule)throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");await micContext.audioWorklet.addModule("/mic-capture-worklet.js");if(generation!==sessionGeneration)throw new Error("마이크 시작이 취소되었습니다.");const targetRate=pipelineMode==="native"?24000:16000;
  micSource=micContext.createMediaStreamSource(micStream);micWorkletNode=new AudioWorkletNode(micContext,"voice-workflow-mic-capture",{numberOfInputs:1,numberOfOutputs:0,channelCount:1,channelCountMode:"explicit"});
  micWorkletNode.port.onmessage=e=>{if(generation!==sessionGeneration||!sessionActive||socket?.readyState!==WebSocket.OPEN||!(e.data instanceof ArrayBuffer))return;const f=new Float32Array(e.data);if(pipelineMode==="native"&&!micSignalSeen){let energy=0;for(let i=0;i<f.length;i++)energy+=f[i]*f[i];if(Math.sqrt(energy/f.length)>=.008){micSignalSeen=true;if(visibleState==="LISTENING")$("status").textContent="마이크 음성 신호 감지됨 · 듣고 있습니다…";}}const p=resamplePcm16(f,micContext.sampleRate,targetRate);socket.send(p.buffer);};micSource.connect(micWorkletNode);
  }catch(error){await closeAudio();throw error;}}
  playContext||=new AudioContext();await Promise.all([micContext.resume(),playContext.resume()]);
 }
-async function startSession(){const generation=sessionGeneration;pipelineMode=$("pipeline-mode").value;nativeReadyDetail=null;micSignalSeen=false;renderState("CONNECTING");try{resetSessionUI();if(!socket||socket.readyState!==WebSocket.OPEN)await init(generation);if(generation!==sessionGeneration)return;await ensureAudio(generation);if(generation!==sessionGeneration)return;const fields={pipeline:pipelineMode};if($("language-mode").value==="manual")fields.language=$("manual-language").value;sendControl("session.start",fields);}catch(e){if(generation===sessionGeneration)fail(e);}}
-function requestLanguageMode(){const mode=$("language-mode").value;if(mode==="auto")sendControl("session.set_language_mode",{mode:"auto"});else sendControl("session.set_language_mode",{mode:"manual",language:$("manual-language").value});}
+async function startSession(){const generation=sessionGeneration;pipelineMode=$("pipeline-mode").value;nativeReadyDetail=null;micSignalSeen=false;sessionActive=false;acceptedSessionConfiguration=null;const configuration_id=++nextConfigurationId,pending={configuration_id,mode:pipelineMode,language:$("manual-language").value,protocol_id:$("protocol-id").value||null};pendingSessionConfiguration=pending;$("session-configuration-status").textContent="서버가 설정을 확인하고 있어요";renderState("CONNECTING");try{resetSessionUI();if(!socket||socket.readyState!==WebSocket.OPEN)await init(generation);if(generation!==sessionGeneration||pendingSessionConfiguration!==pending)return;sendControl("session.start",pending);}catch(e){if(generation===sessionGeneration)fail(e);}}
+function requestLanguageMode(){const mode=$("language-mode").value;$("manual-language").hidden=mode!=="manual";if(!sessionActive){$("language-status").textContent=mode==="manual"?"Manual · 선택 대기":"Automatic · 세션 시작 시 명시 언어가 필요합니다";return;}if(mode==="auto")sendControl("session.set_language_mode",{mode:"auto"});else sendControl("session.set_language_mode",{mode:"manual",language:$("manual-language").value});}
 function renderLanguageState(mode,language){acknowledgedLanguageMode=mode;acknowledgedLanguage=language||null;$("language-mode").value=mode;$("manual-language").hidden=mode!=="manual";const names={ko:"Korean · 한국어",en:"English",vi:"Vietnamese"};$("language-status").textContent=(mode==="auto"?"Automatic":"Manual")+" · "+(names[language]||"확인 대기");}
 function newUser(){if(!sessionActive)return;sendControl("session.reset");}
-async function stopSession(){sessionActive=false;sessionGeneration++;sendControl("session.stop");clearPlayback();stopWorkflowTimer();stopReportPolling();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
+async function stopSession(){const wasActive=sessionActive;sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function pump(generation=sessionGeneration){
  if(generation!==sessionGeneration)return;
@@ -324,17 +378,30 @@ async function onMessage(e,generation,current){
  if(generation!==sessionGeneration||socket!==current)return;
  if(typeof e.data!=="string"){
   if(receivingNative){const metadata=receivingNative;receivingNative=null;await enqueueNativeAudio(e.data,metadata,generation);return;}
-  if(receiving&&receiving.turn_id===activeTurn)receivedFrames.push(e.data);return;
+  if(receiving&&receiving.turn_id===activeTurn)receivedFrames.push(e.data);
+  return;
  }
  const m=JSON.parse(e.data);
  if(m.type==="ready"&&visibleState==="IDLE")renderState("IDLE");
- if(m.type==="session.started"){sessionActive=true;pipelineMode=m.pipeline||pipelineMode;renderState("LISTENING",pipelineMode==="native"&&nativeReadyDetail?nativeReadyDetail:"");}
- if(m.type==="session.stopped"){sessionActive=false;renderState("IDLE");}
+ if(m.type==="session.ready"){
+  const pending=pendingSessionConfiguration,valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&m.protocol_id===pending.protocol_id;
+  if(!valid)return;
+  acceptedSessionConfiguration={configuration_id:m.configuration_id,mode:m.mode,language:m.language,protocol_id:m.protocol_id};pendingSessionConfiguration=null;pipelineMode=m.mode;renderLanguageState("manual",m.language);$("pipeline-mode").value=m.mode;$("protocol-id").value=m.protocol_id||"";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id}`:"서버 확인 완료 · 프로토콜 미선택";
+  try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;renderState("LISTENING",pipelineMode==="native"&&nativeReadyDetail?nativeReadyDetail:"");
+ }
+ if(m.type==="session.configuration_required"){
+  if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
+  pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
+ }
+ if(m.type==="session.started"&&acceptedSessionConfiguration){pipelineMode=m.pipeline||pipelineMode;}
+ if(m.type==="session.stopped"){sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);$("language-confirmation").hidden=true;}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);$("language-confirmation").hidden=true;}
  if(m.type==="session.language_confirmation_required"){$("language-confirmation").hidden=false;$("language-status").textContent="Language confirmation required";}
  if(m.type==="session.reset"){resetSessionUI();}
  if(m.type==="procedure.state")renderProcedureState(m.state);
+ if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="report.status"){if(m.report_id)$("last-report-id").textContent=m.report_id;const label=REPORT_LABELS[m.report_status]||m.report_status||"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
  if(m.type==="native.state"&&sessionActive&&UI[m.state])renderState(m.state);
  if(m.type==="native.ready"){nativeReadyDetail=m.reconnected?"음성 연결이 실제로 복구되었습니다.":"Native 음성 세션이 준비되었습니다.";if(sessionActive)renderState("LISTENING",nativeReadyDetail);}
@@ -346,21 +413,28 @@ async function onMessage(e,generation,current){
  if(m.type==="native.playback.clear"){
   const responseId=m.response_id||activeNativeResponseId,itemId=m.item_id||activeNativeItemId,played=nativePlayedAudioMs();if(m.reason==="tool_validation"&&m.turn_id)turnNode(m.turn_id,generation).querySelector(".reply").textContent="";if(m.reason==="barge_in"&&Number.isInteger(m.turn_id)){interruptedTurns.add(m.turn_id);turnNode(m.turn_id,generation).querySelector(".reply").textContent="사용자 개입으로 중단됨";}clearPlayback();if(m.reason==="barge_in"&&responseId&&itemId)sendControl("native.playback.truncate",{response_id:responseId,item_id:itemId,audio_end_ms:played});if(sessionActive)renderState(m.reason==="barge_in"?"INTERRUPTING":m.reason==="tool_validation"?"THINKING":"RECONNECTING");
  }
+ if(m.type==="cascade.playback.clear"){
+  const accepted=acceptedSessionConfiguration,key=cascadeTurnKey(m.turn_id,m.generation),valid=accepted&&accepted.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&Number.isInteger(m.generation)&&Number.isInteger(m.superseding_turn_id)&&Number.isInteger(m.superseding_generation)&&m.reason==="accepted_speech_onset"&&m.state==="cancelled";
+  if(!valid||interruptedCascadeTurns.has(key)||m.turn_id!==activeTurn||m.generation!==activeCascadeGeneration||!applyTurnState(m,generation)||!interruptCascadePlayback(m.turn_id,m.generation))return;
+  interruptedCascadeTurns.add(key);if(sessionActive)renderState("INTERRUPTING");
+ }
  if(m.type==="native.audio.delta"&&m.response_id===activeNativeResponseId)receivingNative=m;
  if(m.type==="native.response.done"&&m.response_id===activeNativeResponseId){nativeResponseDone=true;nativeAwaitingContinuation=m.awaiting_tool_continuation===true;finishNativePlayback();}
  if(m.type==="native.input.dropped")$("status").textContent="재연결 중 일부 음성이 제외되었습니다. 다시 말씀해 주세요.";
  if(m.type==="native.failure"){if(globalThis.speechSynthesis&&globalThis.SpeechSynthesisUtterance){const utterance=new SpeechSynthesisUtterance(m.message);speechSynthesis.cancel();speechSynthesis.speak(utterance);}fail(m.message||"음성 연결 복구 실패");}
- if(m.type==="state.changed"&&sessionActive&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");
- if(m.type==="turn.processing"&&sessionActive)renderState("THINKING");
- if(m.type==="speech.start"){activeTurn=m.turn_id;turnNode(m.turn_id,generation);}
- if(m.type==="transcript")turnNode(m.turn_id,generation).querySelector(".transcript").textContent=m.text;
- if(m.type==="reply.delta"&&m.turn_id===activeTurn&&!interruptedTurns.has(m.turn_id))turnNode(m.turn_id,generation).querySelector(".reply").textContent+=m.text+" ";
+ if(m.type==="state.changed"&&sessionActive&&!cascadeTurnInterrupted(m)&&(!Number.isInteger(m.turn_id)||currentCascadeMessage(m))&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");
+ if(m.type==="turn.processing"&&sessionActive&&!cascadeTurnInterrupted(m)&&(activeTurn===null||currentCascadeMessage(m)))renderState("THINKING");
+ if(m.type==="speech.start"){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;if(Number.isInteger(m.generation)){const key=turnBrowserKey(m.turn_id,generation),known=turnServerGenerations.get(key);if(known===undefined)turnServerGenerations.set(key,m.generation);}turnNode(m.turn_id,generation);}
+ if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
+ if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m))turnNode(m.turn_id,generation).querySelector(".transcript").textContent=m.text;
+ if(m.type==="turn.state")applyTurnState(m,generation);
+ if(m.type==="reply.delta"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&!interruptedTurns.has(m.turn_id))turnNode(m.turn_id,generation).querySelector(".reply").textContent+=m.text+" ";
  if(m.type==="tool.call"||m.type==="tool.result")updateToolView(m);
- if(m.type==="audio.segment.start"){if(activeTurn===null)activeTurn=m.turn_id;if(m.turn_id!==activeTurn||m.segment_index<nextSegment)return;receiving=m;receivedFrames=[];}
- if(m.type==="audio.segment.end"&&receiving&&m.turn_id===activeTurn&&m.segment_index===receiving.segment_index){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}
- if(m.type==="audio.complete"&&m.turn_id===activeTurn){audioComplete=true;pump(generation);}
- if(m.type==="turn.done"){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",pipeline=m.pipeline==="native"?"Native":"Cascade",stt=m.pipeline==="native"?"":` · STT ${t.stt} ms`,segments=m.pipeline==="native"?"":` · ${m.segment_count}개 문장`;turnNode(m.turn_id,generation).querySelector(".stats").textContent=`경로 ${m.route} · ${pipeline}${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;if(m.turn_id===activeTurn&&m.pipeline!=="native"){turnComplete=true;pump(generation);}}
- if(m.type==="playback.completed"&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
+ if(m.type==="audio.segment.start"){if(cascadeTurnInterrupted(m))return;if(activeTurn===null){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;}if(!currentCascadeMessage(m)||m.segment_index<nextSegment)return;receiving=m;receivedFrames=[];}
+ if(m.type==="audio.segment.end"&&!cascadeTurnInterrupted(m)&&receiving&&currentCascadeMessage(m)&&m.segment_index===receiving.segment_index&&(!Number.isInteger(m.generation)||m.generation===receiving.generation)){queued.set(m.segment_index,join(receivedFrames));receiving=null;receivedFrames=[];pump(generation);}
+ if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}
+ if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",pipeline=m.pipeline==="native"?"Native":"Cascade",stt=m.pipeline==="native"?"":` · STT ${t.stt} ms`,segments=m.pipeline==="native"?"":` · ${m.segment_count}개 문장`;turnNode(m.turn_id,generation).querySelector(".stats").textContent=`경로 ${m.route} · ${pipeline}${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;if(currentCascadeMessage(m)&&m.pipeline!=="native"){turnComplete=true;pump(generation);}}
+ if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
  if(m.type==="error"){renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(m.message,m.turn_id);}
 }
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();

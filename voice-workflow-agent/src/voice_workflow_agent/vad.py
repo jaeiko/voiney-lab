@@ -38,6 +38,12 @@ class VadConfig:
     minimum_voiced_frames: int = 12
     maximum_utterance_frames: int = 750
     cooldown_ms: int = 300
+    playback_onset_voiced_frames: int = 12
+    playback_onset_window_frames: int = 15
+    listening_onset_voiced_frames: int = 8
+    listening_onset_window_frames: int = 12
+    listening_resume_voiced_frames: int = 6
+    listening_resume_window_frames: int = 10
 
     @classmethod
     def from_settings(cls,settings:CascadeVadSettings)->"VadConfig":
@@ -53,6 +59,18 @@ class VadConfig:
             maximum_utterance_frames=milliseconds_to_frames(
                 settings.maximum_utterance_ms),
             cooldown_ms=settings.cooldown_ms,
+            playback_onset_voiced_frames=(
+                settings.playback_onset_voiced_frames),
+            playback_onset_window_frames=(
+                settings.playback_onset_window_frames),
+            listening_onset_voiced_frames=(
+                settings.listening_onset_voiced_frames),
+            listening_onset_window_frames=(
+                settings.listening_onset_window_frames),
+            listening_resume_voiced_frames=(
+                settings.listening_resume_voiced_frames),
+            listening_resume_window_frames=(
+                settings.listening_resume_window_frames),
         )
 
     def __post_init__(self) -> None:
@@ -60,6 +78,15 @@ class VadConfig:
             raise ValueError("WebRTC VAD mode must be 0, 1, 2, or 3")
         if not 0 < self.onset_voiced_frames <= self.onset_window_frames:
             raise ValueError("invalid onset threshold")
+        if not (0 < self.playback_onset_voiced_frames
+                <= self.playback_onset_window_frames):
+            raise ValueError("invalid playback onset threshold")
+        if not (0 < self.listening_onset_voiced_frames
+                <= self.listening_onset_window_frames):
+            raise ValueError("invalid listening onset threshold")
+        if not (0 < self.listening_resume_voiced_frames
+                <= self.listening_resume_window_frames):
+            raise ValueError("invalid listening resume threshold")
         for name in ("prefix_frames", "endpoint_silence_frames", "minimum_voiced_frames",
                      "maximum_utterance_frames"):
             if getattr(self, name) <= 0:
@@ -95,12 +122,23 @@ class EndpointDetector:
     """Turn exact PCM frames into one bounded, exactly-once utterance commit."""
 
     def __init__(self, config: VadConfig | None = None,
-                 classifier: Callable[[bytes], bool] | None = None) -> None:
+                 classifier: Callable[[bytes], bool] | None = None,
+                 *,listening_onset:bool=False) -> None:
         self.config = config or VadConfig()
         self.classifier = classifier or WebRtcVadClassifier(self.config.mode)
+        self.listening_onset=bool(listening_onset)
+        self.onset_voiced_frames=(
+            self.config.listening_onset_voiced_frames
+            if self.listening_onset else self.config.onset_voiced_frames)
+        self.onset_window_frames=(
+            self.config.listening_onset_window_frames
+            if self.listening_onset else self.config.onset_window_frames)
         self.state = TurnState.IDLE
         self._prefix: deque[tuple[bytes, bool]] = deque(maxlen=self.config.prefix_frames)
-        self._onset: deque[bool] = deque(maxlen=self.config.onset_window_frames)
+        self._onset: deque[bool] = deque(maxlen=self.onset_window_frames)
+        self._resume: deque[bool] = deque(
+            maxlen=self.config.listening_resume_window_frames)
+        self._resume_voiced_frames=0
         self._utterance: list[tuple[bytes, bool]] = []
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
@@ -114,6 +152,8 @@ class EndpointDetector:
         self.state = state
         self._prefix.clear()
         self._onset.clear()
+        self._resume.clear()
+        self._resume_voiced_frames=0
         self._utterance.clear()
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
@@ -129,34 +169,59 @@ class EndpointDetector:
         if self.state == TurnState.IDLE:
             self._prefix.append((frame, voiced))
             self._onset.append(voiced)
-            if (len(self._onset) == self.config.onset_window_frames
-                    and sum(self._onset) >= self.config.onset_voiced_frames):
+            if (len(self._onset) == self.onset_window_frames
+                    and sum(self._onset) >= self.onset_voiced_frames):
                 self.state = TurnState.USER_SPEAKING
                 self._utterance = list(self._prefix)
                 self.voiced_frames = sum(flag for _, flag in self._utterance)
                 self.consecutive_silence_frames = self._trailing_silence()
                 self._prefix.clear()
                 self._onset.clear()
+                self._resume.clear()
+                self._resume_voiced_frames=0
                 log.info("speech.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
                 return EndpointResult(speech_started=True, voiced_frames=self.voiced_frames,
                                       total_frames=len(self._utterance))
             return EndpointResult()
 
         self._utterance.append((frame, voiced))
-        if voiced:
-            if self.consecutive_silence_frames: log.info("speech.resumed")
-            self.voiced_frames += 1
-            self.consecutive_silence_frames = 0
+        if not self.consecutive_silence_frames:
+            if voiced:
+                self.voiced_frames += 1
+            else:
+                self.consecutive_silence_frames = 1
+                self._resume.clear()
+                self._resume.append(False)
+                self._resume_voiced_frames=0
+                log.info("silence.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
         else:
             self.consecutive_silence_frames += 1
-            if self.consecutive_silence_frames == 1: log.info("silence.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
+            self._resume.append(voiced)
+            if voiced:
+                self._resume_voiced_frames += 1
 
         forced = len(self._utterance) >= self.config.maximum_utterance_frames
         endpoint = self.consecutive_silence_frames >= self.config.endpoint_silence_frames
         if forced or endpoint:
             log.info("speech.ended input_audio_ms=%s grace_ms=%s", (len(self._utterance) - self.consecutive_silence_frames) * FRAME_MS, self.config.endpoint_silence_frames * FRAME_MS)
             return self._commit(forced=forced)
+        if (self.consecutive_silence_frames
+                and len(self._resume) == self.config.listening_resume_window_frames
+                and sum(self._resume) >= self.config.listening_resume_voiced_frames):
+            self.voiced_frames += self._resume_voiced_frames
+            self.consecutive_silence_frames = self._trailing_resume_silence()
+            self._resume.clear()
+            self._resume_voiced_frames=0
+            log.info("speech.resumed")
         return EndpointResult()
+
+    def _trailing_resume_silence(self) -> int:
+        count=0
+        for voiced in reversed(self._resume):
+            if voiced:
+                break
+            count+=1
+        return count
 
     def _trailing_silence(self) -> int:
         count = 0

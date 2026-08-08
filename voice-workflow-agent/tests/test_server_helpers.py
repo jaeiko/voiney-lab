@@ -1,4 +1,5 @@
 import asyncio, json, tempfile, unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from collections import deque
 from voice_workflow_agent.audio import FRAME_BYTES
@@ -11,9 +12,9 @@ from voice_workflow_agent.document_store import ingest_manifest
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import ListenerSession, ServerConfig, ServerConfigurationError, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import EndpointDetector, TurnState
+from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
 
 class FakeResponse:
@@ -410,11 +411,65 @@ class ServerTests(unittest.TestCase):
                    return_value=Transcription("Approved information please.","en")), \
              patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0"), \
              patch("voice_workflow_agent.server.stream_brain_turn",side_effect=fake_brain), \
-             patch("voice_workflow_agent.server.AsyncOpenAI"):
+             patch("voice_workflow_agent.server.AsyncOpenAI"), \
+             patch("voice_workflow_agent.server.require_env",return_value="test"):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         done=next(item for item in socket.text if item["type"]=="turn.done")
         self.assertEqual(done["route"],"brain")
         self.assertIn("first_audio_ms",done["timings_ms"])
+
+    def test_generic_progress_uses_only_observed_generation_and_tool_boundaries(self):
+        session=self.emergency_session()
+        session.language_mode="manual"; session.manual_language="ko"
+        session.turn_generations[1]=session.generation
+        session.accept_configuration(73,"cascade","ko","approved-demo")
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+        socket=Socket()
+        async def fake_brain(client,history,transcript,sentence,mark_token,
+                             tool_event,tool_context):
+            await tool_event("tool.call",{
+                "tool":"search_approved_safety_manual","round":0})
+            await tool_event("tool.result",{
+                "tool":"search_approved_safety_manual","round":0,
+                "status":"success","elapsed_ms":1})
+            await sentence(SentenceSegment(0,"승인된 정보에 근거한 응답입니다."))
+            return BrainResult(
+                [{"role":"user","content":transcript},
+                 {"role":"assistant","content":"승인된 정보에 근거한 응답입니다."}],
+                "승인된 정보에 근거한 응답입니다.",1,
+                ["search_approved_safety_manual"],
+            )
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("승인된 정보를 알려 주세요","ko"),
+        ), patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ), patch(
+            "voice_workflow_agent.server.stream_brain_turn",
+            side_effect=fake_brain,
+        ), patch(
+            "voice_workflow_agent.server.AsyncOpenAI",
+        ), patch(
+            "voice_workflow_agent.server.require_env",return_value="test",
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        progress=[item for item in socket.text if item["type"]=="turn.state"]
+        self.assertEqual([item["state"] for item in progress],[
+            "transcribing","routing","composing",
+            "checking_approved_information","composing","synthesizing",
+            "playing",
+        ])
+        self.assertEqual(
+            next(item for item in progress
+                 if item["state"]=="checking_approved_information")["route"],
+            "approved_information")
+        self.assertNotIn("checking_protocol",[item["state"] for item in progress])
+        visible=json.dumps(progress,ensure_ascii=False)
+        for forbidden in ("prompt","reasoning","arguments","Traceback"):
+            self.assertNotIn(forbidden,visible)
 
     def test_server_owned_tool_context_and_language_normalization(self):
         self.assertEqual(normalize_session_language("ko-KR"), "ko")
@@ -483,7 +538,12 @@ class ServerTests(unittest.TestCase):
             def __init__(self):
                 self.sent=[]
                 self.messages=iter((
-                    {"text":'{"type":"session.start","pipeline":"cascade"}'},
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"cascade",
+                        "language":"ko","protocol_id":
+                            "candidate-a-curated-development-v1",
+                        "configuration_id":1,
+                    })},
                     {"type":"websocket.disconnect","code":1000},
                 ))
             async def accept(self): pass
@@ -510,12 +570,17 @@ class ServerTests(unittest.TestCase):
             item["type"]=="session.started" for item in socket.sent
         ))
 
-    def test_canonical_default_session_start_environment_is_accepted(self):
+    def test_cascade_without_configured_protocol_requires_selection(self):
         class Socket:
             def __init__(self):
                 self.sent=[]
                 self.messages=iter((
-                    {"text":'{"type":"session.start","pipeline":"cascade"}'},
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"cascade",
+                        "language":"ko","protocol_id":
+                            "candidate-a-curated-development-v1",
+                        "configuration_id":1,
+                    })},
                     {"type":"websocket.disconnect","code":1000},
                 ))
             async def accept(self): pass
@@ -533,19 +598,204 @@ class ServerTests(unittest.TestCase):
             socket=Socket()
             with patch.dict("os.environ",environment,clear=True):
                 asyncio.run(voice_socket(socket))
-        started=next(item for item in socket.sent if item["type"]=="session.started")
-        self.assertEqual(started["pipeline"],"cascade")
+        required=next(
+            item for item in socket.sent
+            if item["type"]=="session.configuration_required")
+        self.assertEqual(required,{
+            "type":"session.configuration_required",
+            "configuration_id":1,"mode":"cascade","language":"ko",
+            "protocol_id":None,"reason":"protocol_selection_unavailable",
+        })
+        self.assertFalse(any(
+            item["type"] in ("session.ready","session.started")
+            for item in socket.sent
+        ))
         self.assertFalse(any(
             item.get("message")=="invalid session configuration"
             for item in socket.sent
         ))
+
+    def test_cascade_exact_curated_configuration_is_acknowledged_without_persistence(self):
+        protocol_id="candidate-a-curated-development-v1"
+        placeholder=Path("/tmp/offline-session-contract")
+        config=ServerConfig(
+            placeholder,None,"test_only",frozenset({"ko"}),"ko",
+            None,None,placeholder,placeholder,placeholder,
+        )
+
+        class Fixture:
+            def __init__(self):
+                self.protocol_id=protocol_id
+                self.title="Candidate A development fixture"
+                self.steps=(SimpleNamespace(source_label="1",step_id="step-1"),)
+                self.draft=SimpleNamespace(readiness=SimpleNamespace(
+                    status=SimpleNamespace(value="analysis_required")))
+
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"cascade",
+                        "language":"ko","protocol_id":protocol_id,
+                        "configuration_id":7,
+                    })},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+
+        socket=Socket()
+        with patch(
+            "voice_workflow_agent.server.server_config",return_value=config,
+        ), patch(
+            "voice_workflow_agent.server.load_curated_protocol_fixture",
+            return_value=Fixture(),
+        ) as fixture_loader, patch(
+            "voice_workflow_agent.server.ProcedureStore",
+        ) as procedure_store, patch(
+            "voice_workflow_agent.server.load_procedure_definitions",
+        ) as procedure_loader, patch(
+            "voice_workflow_agent.server.NativeRealtimeSession",
+        ) as native_session:
+            asyncio.run(voice_socket(socket))
+        ready=next(item for item in socket.sent if item["type"]=="session.ready")
+        self.assertEqual(ready,{
+            "type":"session.ready","configuration_id":7,"mode":"cascade",
+            "language":"ko","protocol_id":protocol_id,
+        })
+        curated_state=next(
+            item for item in socket.sent
+            if item["type"]=="protocol.fixture.state")
+        self.assertEqual(curated_state["configuration_id"],7)
+        self.assertEqual(curated_state["action"],"attached")
+        self.assertEqual(curated_state["state"]["protocol_id"],protocol_id)
+        self.assertEqual(curated_state["state"]["revision"],1)
+        self.assertTrue(curated_state["state"]["active"])
+        self.assertEqual(curated_state["state"]["current_step_label"],"1")
+        self.assertFalse(any(
+            item["type"]=="turn.state" for item in socket.sent
+        ))
+        started=next(item for item in socket.sent if item["type"]=="session.started")
+        self.assertEqual(started["pipeline"],"cascade")
+        fixture_loader.assert_called_once_with(placeholder,placeholder,placeholder)
+        procedure_store.assert_not_called()
+        procedure_loader.assert_not_called()
+        native_session.assert_not_called()
+
+    def test_curated_loading_failure_is_sanitized_and_never_becomes_ready(self):
+        protocol_id="candidate-a-curated-development-v1"
+        placeholder=Path("/tmp/offline-session-contract")
+        config=ServerConfig(
+            placeholder,None,"test_only",frozenset({"ko"}),"ko",
+            None,None,placeholder,placeholder,placeholder,
+        )
+
+        class Socket:
+            def __init__(self):
+                self.sent=[]
+                self.messages=iter((
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"cascade",
+                        "language":"ko","protocol_id":protocol_id,
+                        "configuration_id":9,
+                    })},
+                    {"type":"websocket.disconnect","code":1000},
+                ))
+            async def accept(self): pass
+            async def send_text(self,value): self.sent.append(json.loads(value))
+            async def receive(self): return next(self.messages)
+
+        socket=Socket()
+        with patch(
+            "voice_workflow_agent.server.server_config",return_value=config,
+        ), patch(
+            "voice_workflow_agent.server.load_curated_protocol_fixture",
+            side_effect=ValueError("private malformed-fixture detail"),
+        ), patch(
+            "voice_workflow_agent.server.ProcedureStore",
+        ) as procedure_store, patch(
+            "voice_workflow_agent.server.AsyncOpenAI",
+            side_effect=AssertionError("LLM must not run"),
+        ):
+            asyncio.run(voice_socket(socket))
+
+        failure=next(item for item in socket.sent if item["type"]=="error")
+        self.assertEqual(
+            failure["message"],"선택된 프로토콜을 불러오지 못했습니다.")
+        self.assertNotIn("검증된 개발용 픽스처",failure["message"])
+        self.assertFalse(any(
+            item["type"] in ("session.ready","session.started")
+            for item in socket.sent
+        ))
+        procedure_store.assert_not_called()
+
+    def test_cascade_null_or_unknown_protocol_never_becomes_ready(self):
+        protocol_id="candidate-a-curated-development-v1"
+        placeholder=Path("/tmp/offline-session-contract")
+        config=ServerConfig(
+            placeholder,None,"test_only",frozenset({"ko"}),"ko",
+            None,None,placeholder,placeholder,placeholder,
+        )
+
+        class Fixture:
+            def __init__(self): self.protocol_id=protocol_id
+
+        for selected,reason in (
+            (None,"protocol_selection_required"),
+            ("unknown-development-protocol","protocol_selection_unknown"),
+        ):
+            with self.subTest(selected=selected):
+                class Socket:
+                    def __init__(self):
+                        self.sent=[]
+                        self.messages=iter((
+                            {"text":json.dumps({
+                                "type":"session.start","mode":"cascade",
+                                "language":"ko","protocol_id":selected,
+                                "configuration_id":8,
+                            })},
+                            {"type":"websocket.disconnect","code":1000},
+                        ))
+                    async def accept(self): pass
+                    async def send_text(self,value): self.sent.append(json.loads(value))
+                    async def receive(self): return next(self.messages)
+
+                socket=Socket()
+                with patch(
+                    "voice_workflow_agent.server.server_config",return_value=config,
+                ), patch(
+                    "voice_workflow_agent.server.load_curated_protocol_fixture",
+                    return_value=Fixture(),
+                ), patch(
+                    "voice_workflow_agent.server.ProcedureStore",
+                ) as procedure_store, patch(
+                    "voice_workflow_agent.server.NativeRealtimeSession",
+                ) as native_session:
+                    asyncio.run(voice_socket(socket))
+                required=next(
+                    item for item in socket.sent
+                    if item["type"]=="session.configuration_required")
+                self.assertEqual(required["reason"],reason)
+                self.assertEqual(required["protocol_id"],None)
+                self.assertFalse(any(
+                    item["type"] in ("session.ready","session.started")
+                    for item in socket.sent
+                ))
+                procedure_store.assert_not_called()
+                native_session.assert_not_called()
 
     def test_canonical_environment_accepts_exact_native_browser_payload(self):
         class Socket:
             def __init__(self):
                 self.sent=[]
                 self.messages=iter((
-                    {"text":'{"type":"session.start","pipeline":"native"}'},
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"native",
+                        "language":"ko","protocol_id":None,
+                        "configuration_id":1,
+                    })},
                     {"type":"websocket.disconnect","code":1000},
                 ))
             async def accept(self): pass
@@ -572,6 +822,11 @@ class ServerTests(unittest.TestCase):
                 asyncio.run(voice_socket(socket))
         started=next(item for item in socket.sent if item["type"]=="session.started")
         self.assertEqual(started["pipeline"],"native")
+        ready=next(item for item in socket.sent if item["type"]=="session.ready")
+        self.assertEqual(ready,{
+            "type":"session.ready","configuration_id":1,"mode":"native",
+            "language":"ko","protocol_id":None,
+        })
         self.assertEqual(instances[0].config.model,"grok-voice-latest")
         self.assertEqual(instances[0].config.voice,"eve")
         self.assertEqual(instances[0].config.vad_threshold,0.6)
@@ -581,7 +836,11 @@ class ServerTests(unittest.TestCase):
             def __init__(self):
                 self.sent=[]
                 self.messages=iter((
-                    {"text":'{"type":"session.start","pipeline":"native"}'},
+                    {"text":json.dumps({
+                        "type":"session.start","mode":"native",
+                        "language":"ko","protocol_id":None,
+                        "configuration_id":1,
+                    })},
                     {"type":"websocket.disconnect","code":1000},
                 ))
             async def accept(self): pass
@@ -750,8 +1009,399 @@ class ServerTests(unittest.TestCase):
         for response in (FakeResponse(b"bad",400), FakeResponse(b"{}",content_type="application/json"), FakeResponse(), FakeResponse(b"x")):
             with self.assertRaises(RuntimeError): validate_tts_pcm(response)
 
-    def test_frames_during_processing_and_agent_are_ignored(self):
-        session=ListenerSession(EndpointDetector(classifier=Decisions(TURN))); session.start(); end=next(x for x in session.accept_chunk(b"".join(frame(i) for i in range(len(TURN)))) if x.kind=="speech.end"); self.assertEqual(session.accept_chunk(frame(9)*4), []); session.start_playback(end.turn_id); self.assertEqual(session.accept_chunk(frame(9)*4), [])
+    def test_subthreshold_frames_do_not_interrupt_processing_or_playback(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
+            endpoint_silence_frames=2,minimum_voiced_frames=2,
+            maximum_utterance_frames=20,cooldown_ms=0,
+        )
+        session=ListenerSession(
+            EndpointDetector(config,classifier=lambda _:False))
+        session.start(); session.active_turn_id=1
+        session.turn_generations[1]=session.generation
+        session.detector.state=TurnState.PROCESSING
+        session._interrupt_detector=EndpointDetector(
+            config,classifier=lambda _:False)
+        self.assertEqual(session.accept_chunk(frame(9)*6), [])
+        session.detector.state=TurnState.AGENT_SPEAKING
+        session._interrupt_detector=EndpointDetector(
+            config,classifier=lambda _:False)
+        self.assertEqual(session.accept_chunk(frame(9)*6), [])
+
+    def test_idle_listening_threshold_isolated_from_interrupt_profiles(self):
+        config=VadConfig(
+            onset_voiced_frames=4,onset_window_frames=6,prefix_frames=15,
+            endpoint_silence_frames=12,minimum_voiced_frames=8,
+            maximum_utterance_frames=80,cooldown_ms=0,
+            playback_onset_voiced_frames=12,
+            playback_onset_window_frames=15,
+            listening_onset_voiced_frames=8,
+            listening_onset_window_frames=12,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=Decisions([True] * 7 + [False] * 5),
+            listening_onset=True))
+        session.start()
+        opening_generation=session.generation
+        curated_marker=object()
+        session.curated_protocol_session=curated_marker
+        events=session.accept_chunk(
+            b"".join(frame(i) for i in range(12)))
+        self.assertEqual(events,[])
+        self.assertEqual(session.generation,opening_generation)
+        self.assertEqual(session.next_turn_id,1)
+        self.assertIsNone(session.active_turn_id)
+        self.assertIs(session.curated_protocol_session,curated_marker)
+        self.assertEqual(
+            (session.detector.onset_voiced_frames,
+             session.detector.onset_window_frames),(8,12))
+        processing=session._new_interrupt_detector()
+        self.assertEqual(
+            (processing.onset_voiced_frames,processing.onset_window_frames),
+            (4,6))
+        playback=session._new_interrupt_detector(playback=True)
+        self.assertEqual(
+            (playback.onset_voiced_frames,playback.onset_window_frames),
+            (12,15))
+
+    def test_rejected_idle_onset_allocates_no_turn_or_transcription(self):
+        config=VadConfig(
+            onset_voiced_frames=4,onset_window_frames=6,prefix_frames=15,
+            endpoint_silence_frames=12,minimum_voiced_frames=8,
+            maximum_utterance_frames=80,cooldown_ms=0,
+            listening_onset_voiced_frames=8,
+            listening_onset_window_frames=12,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=Decisions([True] * 7 + [False] * 5),
+            listening_onset=True))
+        session.start(); session.accept_configuration(
+            91,"cascade","ko","candidate-a-curated-development-v1")
+        class Socket:
+            def __init__(self):
+                self.text=[]
+                self.messages=[
+                    {"bytes":b"".join(frame(i) for i in range(12))},
+                    {"type":"websocket.disconnect","code":1000},
+                ]
+            async def accept(self): return None
+            async def receive(self): return self.messages.pop(0)
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): raise AssertionError("no audio output")
+            async def close(self,**kwargs): return None
+        socket=Socket()
+        with patch(
+            "voice_workflow_agent.server.ListenerSession",return_value=session,
+        ), patch(
+            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            return_value=SimpleNamespace(cascade=object()),
+        ), patch(
+            "voice_workflow_agent.server.VadConfig.from_settings",
+            return_value=config,
+        ), patch(
+            "voice_workflow_agent.server.transcribe",
+        ) as transcription:
+            asyncio.run(voice_socket(socket))
+        transcription.assert_not_called()
+        emitted_types=[item["type"] for item in socket.text]
+        self.assertNotIn("speech.start",emitted_types)
+        self.assertNotIn("speech.end",emitted_types)
+        self.assertNotIn("turn.state",emitted_types)
+        self.assertNotIn("cascade.playback.clear",emitted_types)
+
+    def test_real_speech_after_rejected_noise_preserves_first_frame_once(self):
+        config=VadConfig(
+            onset_voiced_frames=4,onset_window_frames=6,prefix_frames=15,
+            endpoint_silence_frames=12,minimum_voiced_frames=8,
+            maximum_utterance_frames=80,cooldown_ms=0,
+            listening_onset_voiced_frames=8,
+            listening_onset_window_frames=12,
+        )
+        rejected_noise=[True] * 7 + [False] * 5
+        separating_silence=[False] * 12
+        real_speech=[True] * 8 + [False] * 4
+        endpoint=[False] * 12
+        decisions=(rejected_noise + separating_silence + real_speech + endpoint)
+        session=ListenerSession(EndpointDetector(
+            config,classifier=Decisions(decisions),listening_onset=True))
+        session.start()
+        events=session.accept_chunk(b"".join(
+            frame(i) for i in range(len(decisions))))
+        self.assertEqual(
+            [item.kind for item in events],["speech.start","speech.end"])
+        utterance=events[-1].result.utterance
+        self.assertIsNotNone(utterance)
+        chunks=[
+            utterance[index:index + FRAME_BYTES]
+            for index in range(0,len(utterance),FRAME_BYTES)
+        ]
+        first_real=frame(len(rejected_noise) + len(separating_silence))
+        self.assertEqual(chunks.count(first_real),1)
+        self.assertNotIn(frame(0),chunks)
+        self.assertNotIn(frame(6),chunks)
+        self.assertEqual(session.next_turn_id,2)
+
+    def test_playback_onset_requires_sustained_speech_and_preserves_prefix(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=15,
+            endpoint_silence_frames=2,minimum_voiced_frames=10,
+            maximum_utterance_frames=40,cooldown_ms=0,
+            playback_onset_voiced_frames=12,
+            playback_onset_window_frames=15,
+        )
+
+        for pattern in (
+            [True]+[False]*14,
+            [True,False]*7+[False],
+            [True]*10+[False]*5,
+            [True]*11+[False]*4,
+        ):
+            with self.subTest(pattern=pattern):
+                candidate=ListenerSession(EndpointDetector(
+                    config,classifier=Decisions(pattern)))
+                candidate.start(); candidate.active_turn_id=1
+                candidate.turn_generations[1]=candidate.generation
+                candidate.detector.state=TurnState.PROCESSING
+                self.assertTrue(candidate.start_playback(1))
+                self.assertEqual(candidate.accept_chunk(
+                    b"".join(frame(i) for i in range(15))),[])
+                self.assertEqual(candidate.next_turn_id,1)
+
+        following=[False,True,True]+[True]*8+[False]*2
+        noise=ListenerSession(EndpointDetector(
+            config,classifier=Decisions(
+                [True]*11+[False]*4+following)))
+        noise.start(); noise.active_turn_id=1
+        noise.turn_generations[1]=noise.generation
+        noise.detector.state=TurnState.PROCESSING
+        self.assertTrue(noise.start_playback(1))
+        opening_generation=noise.generation
+        self.assertEqual(
+            noise.accept_chunk(b"".join(frame(i) for i in range(15))),[])
+        self.assertEqual(noise.generation,opening_generation)
+        self.assertEqual(noise.active_turn_id,1)
+        self.assertTrue(noise.playback_ended(1))
+        self.assertEqual(noise.next_turn_id,1)
+        resumed=noise.accept_chunk(
+            b"".join(frame(100+i) for i in range(len(following))))
+        self.assertEqual(
+            [item.kind for item in resumed],["speech.start","speech.end"])
+        self.assertTrue(resumed[-1].result.utterance.startswith(frame(100)))
+
+        decisions=[True]*12+[False]*4
+        speech=ListenerSession(EndpointDetector(
+            config,classifier=Decisions(decisions)))
+        speech.start(); speech.active_turn_id=1
+        speech.turn_generations[1]=speech.generation
+        speech.detector.state=TurnState.PROCESSING
+        self.assertTrue(speech.start_playback(1))
+        events=speech.accept_chunk(
+            b"".join(frame(20+i) for i in range(len(decisions))))
+        self.assertEqual(
+            [item.kind for item in events],
+            ["assistant.interrupted","speech.start","speech.end"],
+        )
+        self.assertEqual(events[1].result.total_frames,15)
+        self.assertTrue(events[2].result.utterance.startswith(frame(20)))
+        self.assertEqual(
+            len([item for item in events
+                 if item.kind=="assistant.interrupted"]),1)
+        self.assertEqual(speech.state,TurnState.PROCESSING)
+        self.assertEqual(
+            speech.detector.config.onset_window_frames,
+            config.onset_window_frames,
+        )
+
+        processing_pattern=[True]*10+[False]*2
+        processing=ListenerSession(EndpointDetector(
+            config,classifier=Decisions(processing_pattern)))
+        processing.start(); processing.active_turn_id=1
+        processing.turn_generations[1]=processing.generation
+        processing.detector.state=TurnState.PROCESSING
+        processing_events=processing.accept_chunk(
+            b"".join(frame(200+i) for i in range(len(processing_pattern))))
+        self.assertEqual(
+            [item.kind for item in processing_events],
+            ["assistant.interrupted","speech.start","speech.end"],
+        )
+        self.assertEqual(processing_events[1].result.total_frames,3)
+        self.assertTrue(
+            processing_events[-1].result.utterance.startswith(frame(200)))
+    def test_accepted_onset_emits_one_server_owned_listening_state(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
+            endpoint_silence_frames=3,minimum_voiced_frames=2,
+            maximum_utterance_frames=20,cooldown_ms=0,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=Decisions([False,True,True])))
+        session.start(); session.accept_configuration(
+            81,"cascade","ko","candidate-a-curated-development-v1")
+        class Socket:
+            def __init__(self):
+                self.text=[]; self.messages=[
+                    {"bytes":frame(7)*3},
+                    {"type":"websocket.disconnect","code":1000},
+                ]
+            async def accept(self): return None
+            async def receive(self): return self.messages.pop(0)
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): raise AssertionError("no audio output")
+            async def close(self,**kwargs): return None
+        socket=Socket()
+        with patch(
+            "voice_workflow_agent.server.ListenerSession",
+            return_value=session,
+        ), patch(
+            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            return_value=SimpleNamespace(cascade=object()),
+        ), patch(
+            "voice_workflow_agent.server.VadConfig.from_settings",
+            return_value=config,
+        ):
+            asyncio.run(voice_socket(socket))
+        starts=[item for item in socket.text if item["type"]=="speech.start"]
+        states=[item for item in socket.text if item["type"]=="turn.state"]
+        self.assertEqual(len(starts),1)
+        self.assertEqual(len(states),1)
+        self.assertEqual(states[0]["state"],"listening")
+        self.assertEqual(states[0]["revision"],1)
+        self.assertEqual(
+            (states[0]["configuration_id"],states[0]["turn_id"],
+             states[0]["generation"]),
+            (81,starts[0]["turn_id"],starts[0]["generation"]),
+        )
+
+    def test_playback_ack_is_the_success_terminal_boundary(self):
+        now=[10.0]
+        config=VadConfig(cooldown_ms=0)
+        session=ListenerSession(EndpointDetector(config),clock=lambda:now[0])
+        session.start(); session.accept_configuration(
+            82,"cascade","ko","candidate-a-curated-development-v1")
+        session.active_turn_id=1; session.turn_generations[1]=session.generation
+        session.turn_committed_at[1]=9.0
+        session.detector.state=TurnState.PROCESSING
+        for state in ("transcribing","routing","synthesizing"):
+            self.assertIsNotNone(session.advance_turn_progress(
+                1,session.generation,state))
+        self.assertTrue(session.start_playback(1))
+        playing=session.advance_turn_progress(1,session.generation,"playing")
+        self.assertEqual(playing["state"],"playing")
+        class Socket:
+            def __init__(self):
+                self.text=[]; self.messages=[
+                    {"text":json.dumps({"type":"playback.ended","turn_id":1})},
+                    {"type":"websocket.disconnect","code":1000},
+                ]
+            async def accept(self): return None
+            async def receive(self): return self.messages.pop(0)
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): raise AssertionError("no audio output")
+            async def close(self,**kwargs): return None
+        socket=Socket(); now[0]=10.5
+        with patch(
+            "voice_workflow_agent.server.ListenerSession",return_value=session,
+        ), patch(
+            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            return_value=SimpleNamespace(cascade=object()),
+        ), patch(
+            "voice_workflow_agent.server.VadConfig.from_settings",
+            return_value=config,
+        ):
+            asyncio.run(voice_socket(socket))
+        terminal=next(item for item in socket.text
+                      if item["type"]=="turn.state")
+        self.assertEqual(terminal["state"],"complete")
+        self.assertEqual(terminal["revision"],5)
+        self.assertEqual(
+            terminal["timings_ms"]["playback_completion"],1500)
+        cooldown=next(item for item in socket.text
+                      if item["type"]=="state.changed")
+        self.assertEqual(cooldown["state"],TurnState.COOLDOWN.value)
+        self.assertEqual(session.state,TurnState.IDLE)
+
+    def test_accepted_onset_supersedes_one_generation_and_finalizes_new_turn(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
+            endpoint_silence_frames=2,minimum_voiced_frames=2,
+            maximum_utterance_frames=20,cooldown_ms=0,
+        )
+        session=ListenerSession(
+            EndpointDetector(config,classifier=lambda _:False))
+        session.start(); old_generation=session.generation
+        session.active_turn_id=1; session.turn_generations[1]=old_generation
+        session.detector.state=TurnState.AGENT_SPEAKING
+        session._interrupt_detector=EndpointDetector(
+            config,classifier=Decisions([False,True,True,True,False,False]))
+        events=session.accept_chunk(frame(8)*6)
+        self.assertEqual(
+            [item.kind for item in events],
+            ["assistant.interrupted","speech.start","speech.end"],
+        )
+        interruption,start,end=events
+        self.assertEqual(interruption.turn_id,1)
+        self.assertEqual(interruption.generation,old_generation)
+        self.assertEqual(interruption.superseding_turn_id,start.turn_id)
+        self.assertEqual(interruption.superseding_generation,start.generation)
+        self.assertEqual(start.turn_id,end.turn_id)
+        self.assertEqual(start.generation,end.generation)
+        self.assertGreater(start.generation,old_generation)
+        self.assertEqual(
+            len([item for item in events
+                 if item.kind=="assistant.interrupted"]),1)
+        self.assertFalse(session.playback_ended(1))
+
+        ordinary=ListenerSession(EndpointDetector(
+            config,classifier=Decisions([False,True,True,True,False,False])))
+        ordinary.start()
+        ordinary_events=ordinary.accept_chunk(frame(7)*6)
+        self.assertEqual(
+            [item.kind for item in ordinary_events],
+            ["speech.start","speech.end"],
+        )
+
+        isolated=ListenerSession(
+            EndpointDetector(config,classifier=lambda _:False))
+        isolated.start(); isolated.active_turn_id=1
+        isolated.turn_generations[1]=isolated.generation
+        isolated.detector.state=TurnState.AGENT_SPEAKING
+        self.assertEqual(isolated.generation,old_generation)
+        self.assertEqual(isolated.active_turn_id,1)
+
+    def test_generation_owner_cancels_task_before_one_browser_clear(self):
+        class Socket:
+            def __init__(self): self.sent=[]
+            async def send_text(self,value): self.sent.append(json.loads(value))
+        async def scenario():
+            started=asyncio.Event()
+            async def generation():
+                started.set()
+                await asyncio.Future()
+            task=asyncio.create_task(generation())
+            await started.wait()
+            session=ListenerSession(); session.accepted_configuration_id=19
+            session.turn_generations[4]=8
+            self.assertIsNotNone(session.advance_turn_progress(
+                4,8,"playing",route="curated_protocol"))
+            interruption=ListenerEvent(
+                "assistant.interrupted",4,
+                EndpointResult(speech_started=True),
+                generation=8,superseding_turn_id=5,
+                superseding_generation=9,
+            )
+            socket=Socket()
+            await cancel_cascade_generation(
+                socket,session,task,interruption)
+            self.assertTrue(task.cancelled())
+            self.assertEqual(socket.sent,[{
+                "type":"cascade.playback.clear",
+                "configuration_id":19,"turn_id":4,"generation":8,
+                "revision":2,"state":"cancelled",
+                "route":"curated_protocol",
+                "superseding_turn_id":5,"superseding_generation":9,
+                "reason":"accepted_speech_onset",
+            }])
+        asyncio.run(scenario())
 
     def test_stop_clears_history(self):
         session=ListenerSession(); session.history.pending_report={"location":"before start"}; session.start(); self.assertIsNone(session.history.pending_report); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}]); session.history.pending_report={"location":"before stop"}

@@ -131,6 +131,7 @@ class ProtocolMetadata:
     source_uri: str | None = None
     license: str | None = None
     source_status: str | None = None
+    evidence: SourceEvidence | None = None
 
     @property
     def original_filename(self) -> str:
@@ -410,6 +411,7 @@ class ExperimentProtocol:
     equipment: tuple[Equipment, ...] = ()
     sections: tuple[ProtocolSection, ...] = ()
     constructs: tuple[WorkflowConstruct, ...] = ()
+    description: SourceStatement | None = None
 
 
 @dataclass(frozen=True)
@@ -966,6 +968,18 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
         _optional_text(
             getattr(protocol.metadata, field_name),
             f"metadata.{field_name}",
+        )
+    if protocol.metadata.evidence is not None:
+        _validate_evidence(
+            protocol.metadata.evidence,
+            protocol.metadata.pdf,
+            "metadata.evidence",
+        )
+    if protocol.description is not None:
+        _validate_statement(
+            protocol.description,
+            protocol.metadata.pdf,
+            "description",
         )
 
     for index, prerequisite in enumerate(protocol.before_start):

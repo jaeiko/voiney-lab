@@ -844,6 +844,87 @@ class ProtocolStore:
             (analysis_id,),
         ).fetchone()
 
+    def _append_analysis_revision_write(
+        self,
+        experiment_id: str,
+        protocol_revision_number: int,
+        analysis_id: str,
+        payload_json: str,
+        payload_sha256: str,
+        readiness: domain.ReadinessAssessment,
+        capability_policy_id: str,
+        reason_codes_json: str,
+        now: str,
+    ) -> tuple[int, bool]:
+        """Write one analysis inside the caller-owned transaction."""
+
+        existing = self._analysis_row_by_id(analysis_id)
+        if existing is not None:
+            if (
+                existing["experiment_id"] == experiment_id
+                and existing["protocol_revision_number"]
+                == protocol_revision_number
+                and existing["payload_sha256"] == payload_sha256
+            ):
+                return existing["analysis_revision_number"], True
+            raise DuplicateProtocolIdentifierError(
+                "Analysis identifier already has different content."
+            )
+        payload_row = self._connection.execute(
+            "SELECT * FROM analysis_payloads WHERE payload_sha256=?",
+            (payload_sha256,),
+        ).fetchone()
+        if payload_row is None:
+            self._execute_write(
+                """INSERT INTO analysis_payloads
+                (payload_sha256,analysis_schema_version,payload_json,created_at)
+                VALUES (?,?,?,?)""",
+                (
+                    payload_sha256,
+                    ANALYSIS_SCHEMA_VERSION,
+                    payload_json,
+                    now,
+                ),
+            )
+        elif (
+            payload_row["payload_json"] != payload_json
+            or payload_row["analysis_schema_version"]
+            != ANALYSIS_SCHEMA_VERSION
+        ):
+            raise ProtocolSerializationError(
+                "Analysis payload identity conflicts with stored content."
+            )
+        row = self._connection.execute(
+            """SELECT COALESCE(MAX(analysis_revision_number),0)+1
+            FROM analysis_revisions
+            WHERE experiment_id=? AND protocol_revision_number=?""",
+            (experiment_id, protocol_revision_number),
+        ).fetchone()
+        analysis_revision_number = int(row[0])
+        self._execute_write(
+            """INSERT INTO analysis_revisions
+            (experiment_id,protocol_revision_number,
+             analysis_revision_number,analysis_id,payload_sha256,
+             analysis_schema_version,capability_policy_id,
+             readiness_status,readiness_label,
+             readiness_reason_codes_json,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                experiment_id,
+                protocol_revision_number,
+                analysis_revision_number,
+                analysis_id,
+                payload_sha256,
+                ANALYSIS_SCHEMA_VERSION,
+                capability_policy_id,
+                readiness.status.value,
+                readiness.label,
+                reason_codes_json,
+                now,
+            ),
+        )
+        return analysis_revision_number, False
+
     def append_analysis_revision(
         self,
         experiment_id: str,
@@ -876,76 +957,26 @@ class ProtocolStore:
         now = _now()
         self._begin()
         try:
-            existing = self._analysis_row_by_id(analysis_id)
-            if existing is not None:
-                if (
-                    existing["experiment_id"] == experiment_id
-                    and existing["protocol_revision_number"]
-                    == protocol_revision_number
-                    and existing["payload_sha256"] == payload_sha256
-                ):
-                    self._connection.rollback()
-                    return self.get_analysis_revision(
-                        experiment_id,
-                        protocol_revision_number,
-                        existing["analysis_revision_number"],
-                    )
-                raise DuplicateProtocolIdentifierError(
-                    "Analysis identifier already has different content."
+            analysis_revision_number, replayed = (
+                self._append_analysis_revision_write(
+                    experiment_id,
+                    protocol_revision_number,
+                    analysis_id,
+                    payload_json,
+                    payload_sha256,
+                    readiness,
+                    capability_policy_id,
+                    reason_codes_json,
+                    now,
                 )
-            payload_row = self._connection.execute(
-                "SELECT * FROM analysis_payloads WHERE payload_sha256=?",
-                (payload_sha256,),
-            ).fetchone()
-            if payload_row is None:
-                self._execute_write(
-                    """INSERT INTO analysis_payloads
-                    (payload_sha256,analysis_schema_version,payload_json,created_at)
-                    VALUES (?,?,?,?)""",
-                    (
-                        payload_sha256,
-                        ANALYSIS_SCHEMA_VERSION,
-                        payload_json,
-                        now,
-                    ),
-                )
-            elif (
-                payload_row["payload_json"] != payload_json
-                or payload_row["analysis_schema_version"]
-                != ANALYSIS_SCHEMA_VERSION
-            ):
-                raise ProtocolSerializationError(
-                    "Analysis payload identity conflicts with stored content."
-                )
-            row = self._connection.execute(
-                """SELECT COALESCE(MAX(analysis_revision_number),0)+1
-                FROM analysis_revisions
-                WHERE experiment_id=? AND protocol_revision_number=?""",
-                (experiment_id, protocol_revision_number),
-            ).fetchone()
-            analysis_revision_number = int(row[0])
-            self._execute_write(
-                """INSERT INTO analysis_revisions
-                (experiment_id,protocol_revision_number,
-                 analysis_revision_number,analysis_id,payload_sha256,
-                 analysis_schema_version,capability_policy_id,
-                 readiness_status,readiness_label,
-                 readiness_reason_codes_json,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (
+            )
+            if replayed:
+                self._connection.rollback()
+                return self.get_analysis_revision(
                     experiment_id,
                     protocol_revision_number,
                     analysis_revision_number,
-                    analysis_id,
-                    payload_sha256,
-                    ANALYSIS_SCHEMA_VERSION,
-                    capability_policy_id,
-                    readiness.status.value,
-                    readiness.label,
-                    reason_codes_json,
-                    now,
-                ),
-            )
+                )
             self._connection.commit()
         except ProtocolPersistenceError:
             self._rollback()
@@ -958,6 +989,98 @@ class ProtocolStore:
         return self.get_analysis_revision(
             experiment_id,
             protocol_revision_number,
+            analysis_revision_number,
+        )
+
+    def create_experiment_with_analysis(
+        self,
+        experiment_id: str,
+        source_pdf: str | Path,
+        analysis_id: str,
+        protocol: domain.ExperimentProtocol,
+        readiness: domain.ReadinessAssessment,
+        capability_policy_id: str,
+    ) -> AnalysisRevisionRecord:
+        """Atomically create an experiment and its initial analysis records."""
+
+        _identifier(experiment_id, experiment=True)
+        _identifier(analysis_id)
+        stored = self.file_store.store(source_pdf)
+        if protocol.metadata.file_checksum != stored.object.checksum:
+            raise UnknownProtocolReferenceError(
+                "Structured analysis does not match the selected Protocol bytes."
+            )
+        payload_json, payload_sha256 = serialize_analysis(
+            protocol,
+            readiness,
+            capability_policy_id,
+        )
+        reason_codes_json = _canonical_json(list(readiness.reason_codes))
+        now = _now()
+        self._begin()
+        try:
+            existing_experiment = self.get_experiment(experiment_id)
+            if existing_experiment is None:
+                self._pdf_record(stored, now)
+                self._execute_write(
+                    """INSERT INTO experiments
+                    (experiment_id,created_at,initial_protocol_revision)
+                    VALUES (?,?,1)""",
+                    (experiment_id, now),
+                )
+                self._execute_write(
+                    """INSERT INTO protocol_revisions
+                    (experiment_id,revision_number,pdf_checksum,
+                     original_filename,created_at)
+                    VALUES (?,1,?,?,?)""",
+                    (
+                        experiment_id,
+                        stored.object.checksum,
+                        stored.original_filename,
+                        now,
+                    ),
+                )
+            else:
+                revision = self.get_protocol_revision(experiment_id, 1)
+                if (
+                    revision is None
+                    or revision.pdf_checksum != stored.object.checksum
+                ):
+                    raise DuplicateProtocolIdentifierError(
+                        "Experiment identifier already has different content."
+                    )
+            analysis_revision_number, replayed = (
+                self._append_analysis_revision_write(
+                    experiment_id,
+                    1,
+                    analysis_id,
+                    payload_json,
+                    payload_sha256,
+                    readiness,
+                    capability_policy_id,
+                    reason_codes_json,
+                    now,
+                )
+            )
+            if replayed and existing_experiment is not None:
+                self._connection.rollback()
+                return self.get_analysis_revision(
+                    experiment_id,
+                    1,
+                    analysis_revision_number,
+                )
+            self._connection.commit()
+        except (ProtocolPersistenceError, ProtocolFileStoreError):
+            self._rollback()
+            raise
+        except sqlite3.Error as exc:
+            self._rollback()
+            raise ProtocolTransactionError(
+                "Experiment analysis transaction failed."
+            ) from exc
+        return self.get_analysis_revision(
+            experiment_id,
+            1,
             analysis_revision_number,
         )
 

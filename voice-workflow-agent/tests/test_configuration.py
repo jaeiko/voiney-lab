@@ -27,6 +27,18 @@ class VadConfigurationTests(unittest.TestCase):
         self.assertEqual(
             VadConfig.from_settings(settings.cascade),
             VadConfig())
+        self.assertEqual(
+            (settings.cascade.playback_onset_voiced_frames,
+             settings.cascade.playback_onset_window_frames),
+            (12,15),
+        )
+        self.assertEqual(
+            (settings.cascade.listening_onset_voiced_frames,
+             settings.cascade.listening_onset_window_frames,
+             settings.cascade.listening_resume_voiced_frames,
+             settings.cascade.listening_resume_window_frames),
+            (8,12,6,10),
+        )
 
     def test_every_cascade_and_native_setting_can_be_overridden(self):
         environment={
@@ -38,6 +50,12 @@ class VadConfigurationTests(unittest.TestCase):
             "CASCADE_VAD_MIN_SPEECH_MS":"281",
             "CASCADE_VAD_MAX_UTTERANCE_MS":"16001",
             "CASCADE_VAD_COOLDOWN_MS":"450",
+            "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"11",
+            "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"14",
+            "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"9",
+            "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"13",
+            "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"7",
+            "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"11",
             "XAI_REALTIME_VAD_THRESHOLD":"0.45",
             "NATIVE_VAD_PREFIX_PADDING_MS":"444",
             "XAI_REALTIME_SILENCE_DURATION_MS":"1200",
@@ -45,7 +63,8 @@ class VadConfigurationTests(unittest.TestCase):
         settings=VoiceVadSettings.from_environment(environment)
         self.assertEqual(
             settings.cascade,
-            CascadeVadSettings(2,5,8,321,777,281,16001,450))
+            CascadeVadSettings(
+                2,5,8,321,777,281,16001,450,11,14,9,13,7,11))
         self.assertEqual(
             settings.native,
             NativeVadSettings(0.45,444,1200))
@@ -58,6 +77,18 @@ class VadConfigurationTests(unittest.TestCase):
                 config.maximum_utterance_frames,
             ),
             (17,39,15,801),
+        )
+        self.assertEqual(
+            (config.playback_onset_voiced_frames,
+             config.playback_onset_window_frames),
+            (11,14),
+        )
+        self.assertEqual(
+            (config.listening_onset_voiced_frames,
+             config.listening_onset_window_frames,
+             config.listening_resume_voiced_frames,
+             config.listening_resume_window_frames),
+            (9,13,7,11),
         )
 
     def test_invalid_numeric_values_name_the_setting(self):
@@ -90,6 +121,41 @@ class VadConfigurationTests(unittest.TestCase):
                 },
                 "cannot exceed",
             ),
+            (
+                {
+                    "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"13",
+                    "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"12",
+                },
+                "PLAYBACK_ONSET_VOICED_FRAMES cannot exceed",
+            ),
+            ({"CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"0"},
+             "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES"),
+            ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"-1"},
+             "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+            ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"101"},
+             "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+            (
+                {
+                    "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"13",
+                    "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"12",
+                },
+                "LISTENING_ONSET_VOICED_FRAMES cannot exceed",
+            ),
+            (
+                {
+                    "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"11",
+                    "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"10",
+                },
+                "LISTENING_RESUME_VOICED_FRAMES cannot exceed",
+            ),
+            ({"CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"0"},
+             "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES"),
+            ({"CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"101"},
+             "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES"),
+            ({"CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"-1"},
+             "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES"),
+            ({"CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"101"},
+             "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES"),
             (
                 {
                     "CASCADE_VAD_MIN_SPEECH_MS":"2000",
@@ -173,6 +239,20 @@ class VadStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages),1)
         self.assertIn("cascade_mode=3",messages[0])
         self.assertIn("cascade_prefix_ms=300",messages[0])
+        self.assertIn(
+            "cascade_processing_onset_voiced_frames=4",messages[0])
+        self.assertIn(
+            "cascade_processing_onset_window_frames=6",messages[0])
+        self.assertIn(
+            "cascade_listening_onset_voiced_frames=8",messages[0])
+        self.assertIn(
+            "cascade_listening_onset_window_frames=12",messages[0])
+        self.assertIn(
+            "cascade_listening_resume_voiced_frames=6",messages[0])
+        self.assertIn(
+            "cascade_listening_resume_window_frames=10",messages[0])
+        self.assertIn("cascade_playback_onset_voiced_frames=12",messages[0])
+        self.assertIn("cascade_playback_onset_window_frames=15",messages[0])
         self.assertIn("native_threshold=0.6",messages[0])
         self.assertIn("native_silence_duration_ms=1600",messages[0])
         self.assertNotIn("API_KEY",messages[0])

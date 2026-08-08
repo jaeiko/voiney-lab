@@ -1,9 +1,9 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, logging, os, sqlite3, time
+import asyncio, logging, math, os, sqlite3, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
@@ -21,6 +21,12 @@ from voice_workflow_agent.brain import (
 from voice_workflow_agent.configuration import (
     ConfigurationError,
     VoiceVadSettings,
+)
+from voice_workflow_agent.curated_protocol import (
+    CuratedProtocolAction,
+    CuratedProtocolFixture,
+    CuratedProtocolSession,
+    load_curated_protocol_fixture,
 )
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
@@ -72,16 +78,27 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
     native=settings.native
     log.info(
         "vad.configuration "
-        "cascade_mode=%d cascade_onset_voiced_frames=%d "
-        "cascade_onset_window_frames=%d cascade_prefix_ms=%d "
+        "cascade_mode=%d cascade_processing_onset_voiced_frames=%d "
+        "cascade_processing_onset_window_frames=%d "
+        "cascade_listening_onset_voiced_frames=%d "
+        "cascade_listening_onset_window_frames=%d "
+        "cascade_listening_resume_voiced_frames=%d "
+        "cascade_listening_resume_window_frames=%d cascade_prefix_ms=%d "
         "cascade_endpoint_silence_ms=%d cascade_min_speech_ms=%d "
         "cascade_max_utterance_ms=%d cascade_cooldown_ms=%d "
+        "cascade_playback_onset_voiced_frames=%d "
+        "cascade_playback_onset_window_frames=%d "
         "native_threshold=%s native_prefix_padding_ms=%d "
         "native_silence_duration_ms=%d",
         cascade.mode,cascade.onset_voiced_frames,cascade.onset_window_frames,
+        cascade.listening_onset_voiced_frames,
+        cascade.listening_onset_window_frames,
+        cascade.listening_resume_voiced_frames,
+        cascade.listening_resume_window_frames,
         cascade.prefix_ms,cascade.endpoint_silence_ms,
         cascade.minimum_speech_ms,cascade.maximum_utterance_ms,
-        cascade.cooldown_ms,native.threshold,native.prefix_padding_ms,
+        cascade.cooldown_ms,cascade.playback_onset_voiced_frames,
+        cascade.playback_onset_window_frames,native.threshold,native.prefix_padding_ms,
         native.silence_duration_ms,
     )
 
@@ -116,6 +133,9 @@ class ServerConfig:
     default_language:str
     procedure_catalog_path:Path|None=None
     procedure_store_path:Path|None=None
+    curated_protocol_fixture_path:Path|None=None
+    curated_protocol_provenance_path:Path|None=None
+    curated_protocol_source_pdf_path:Path|None=None
 
 class ServerConfigurationError(RuntimeError):
     """Invalid server policy with safe environment field names for diagnostics."""
@@ -219,8 +239,27 @@ def server_config()->ServerConfig:
             "VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG",
             "VOICE_WORKFLOW_AGENT_PROCEDURE_STORE",
         )
+    curated_fixture=os.environ.get(
+        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE","").strip()
+    curated_provenance=os.environ.get(
+        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE","").strip()
+    curated_source_pdf=os.environ.get(
+        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF","").strip()
+    curated_values=(curated_fixture,curated_provenance,curated_source_pdf)
+    curated_paths=tuple(Path(value) if value else None for value in curated_values)
+    if any(curated_paths) and (
+        not all(curated_paths)
+        or any(path is not None and not path.is_absolute() for path in curated_paths)
+    ):
+        raise ServerConfigurationError(
+            "curated development protocol configuration is invalid",
+            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE",
+            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE",
+            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF",
+        )
     return ServerConfig(catalog_path,facility,scope,allowed,default,
-                        procedure_catalog_path,procedure_store_path)
+                        procedure_catalog_path,procedure_store_path,
+                        curated_paths[0],curated_paths[1],curated_paths[2])
 
 def server_tool_context(
     config:ServerConfig|None=None,
@@ -271,12 +310,52 @@ def frame_complete_audio(pcm:bytes)->list[bytes]:
 
 @dataclass(frozen=True)
 class ListenerEvent:
-    kind:str; turn_id:int; result:EndpointResult
+    kind:str
+    turn_id:int
+    result:EndpointResult
+    generation:int|None=None
+    superseding_turn_id:int|None=None
+    superseding_generation:int|None=None
+
+TURN_PROGRESS_TERMINAL_STATES=frozenset({
+    "complete","blocked","cancelled","error",
+})
+TURN_PROGRESS_SAFE_ROUTES=frozenset({
+    "approved_information","brain","curated_protocol",
+    "deterministic_emergency","deterministic_procedure",
+    "language_clarification",
+})
+TURN_PROGRESS_TRANSITIONS={
+    "listening":frozenset({"transcribing","cancelled","error"}),
+    "transcribing":frozenset({"routing","cancelled","error"}),
+    "routing":frozenset({
+        "checking_protocol","checking_approved_information","composing",
+        "synthesizing","cancelled","error",
+    }),
+    "checking_protocol":frozenset({"synthesizing","cancelled","error"}),
+    "checking_approved_information":frozenset({
+        "composing","synthesizing","cancelled","error",
+    }),
+    "composing":frozenset({
+        "checking_approved_information","synthesizing","cancelled","error",
+    }),
+    "synthesizing":frozenset({"playing","cancelled","error"}),
+    "playing":frozenset({"complete","blocked","cancelled","error"}),
+}
+
+@dataclass
+class TurnProgress:
+    revision:int=0
+    state:str|None=None
+    route:str|None=None
+    terminal_outcome:str="complete"
 
 class ListenerSession:
     def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.perf_counter,
-                 tool_context:ToolContext|None=None)->None:
-        self.detector=detector or EndpointDetector(); self.clock=clock; self.active=False
+                 tool_context:ToolContext|None=None,
+                 curated_protocol_session:CuratedProtocolSession|None=None)->None:
+        self.detector=detector or EndpointDetector(listening_onset=True)
+        self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
         self.cooldown_until=0.0; self.endpoint_at=0.0; self.history=ConversationHistory(); self.generation=0
         self.tool_context=tool_context
@@ -285,29 +364,95 @@ class ListenerSession:
         self.last_confirmed_language=None
         self.turn_committed_at:dict[int,float]={}
         self.playback_completion_metrics:dict[int,int]={}
+        self.curated_protocol_session=curated_protocol_session
+        self.accepted_configuration_id:int|None=None
+        self.accepted_mode:str|None=None
+        self.accepted_language:str|None=None
+        self.accepted_protocol_id:str|None=None
+        self.turn_generations:dict[int,int]={}
+        self.turn_progress:dict[tuple[int,int],TurnProgress]={}
+        self._interrupted_generations:set[tuple[int,int]]=set()
+        self._cascade_vad_config=self.detector.config
+        self._vad_classifier=self.detector.classifier
+        self._listening_onset=self.detector.listening_onset
+        self._interrupt_detector=self._new_interrupt_detector()
+        self._interrupt_framer=FrameBuffer()
     @property
     def state(self): return self.detector.state
+    def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
+        config=self._cascade_vad_config
+        if playback:
+            config=replace(
+                config,
+                onset_voiced_frames=config.playback_onset_voiced_frames,
+                onset_window_frames=config.playback_onset_window_frames,
+            )
+        return EndpointDetector(
+            config,
+            classifier=self._vad_classifier,
+            listening_onset=False,
+        )
+    def _restore_primary_detector(self,state:TurnState)->None:
+        self.detector=EndpointDetector(
+            self._cascade_vad_config,classifier=self._vad_classifier,
+            listening_onset=self._listening_onset)
+        self.detector.reset(state)
+    def _reset_interrupt_input(self,*,playback:bool=False)->None:
+        self._interrupt_detector=self._new_interrupt_detector(playback=playback)
+        self._interrupt_framer=FrameBuffer()
+    def _reset_turn_identity(self)->None:
+        self.turn_generations.clear()
+        self.turn_progress.clear()
+        self._interrupted_generations.clear()
+        self._reset_interrupt_input()
     def start(self):
         self.generation+=1
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
-        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
+        self.history.reset()
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
+        self._reset_turn_identity()
+        if self.curated_protocol_session is not None:
+            self.curated_protocol_session.reset()
     def stop(self):
         self.generation+=1
         self.active=False; self.active_turn_id=None; self.cooldown_until=0
-        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
+        self.history.reset()
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
+        self.accepted_configuration_id=None; self.accepted_mode=None
+        self.accepted_language=None; self.accepted_protocol_id=None
+        self._reset_turn_identity()
+        if self.curated_protocol_session is not None:
+            self.curated_protocol_session.reset()
+    def accept_configuration(
+        self,configuration_id:int,mode:str,language:str,
+        protocol_id:str|None,
+    )->None:
+        """Record only the exact non-secret configuration accepted by the server."""
+        self.accepted_configuration_id=configuration_id
+        self.accepted_mode=mode
+        self.accepted_language=language
+        self.accepted_protocol_id=protocol_id
+    def set_curated_protocol_fixture(
+        self,fixture:CuratedProtocolFixture|None,
+    )->None:
+        self.curated_protocol_session=(
+            CuratedProtocolSession(fixture) if fixture is not None else None)
+        self.reset_sensitive_state()
     def set_tool_context(self,context:ToolContext)->None:
         """Change trusted language and clear all language-sensitive session state."""
         self.generation+=1
         self.tool_context=context
         self.active_turn_id=None; self.cooldown_until=0
-        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
+        self.history.reset()
         self.language_mode="manual"; self.manual_language=context.language
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
+        self._reset_turn_identity()
     def set_language_mode(self,mode:str,context:ToolContext|None=None)->None:
         if mode=="manual":
             if context is None: raise ValueError("manual mode requires context")
@@ -317,44 +462,180 @@ class ListenerSession:
         self.language_mode="auto"; self.manual_language=None
     def reset_sensitive_state(self)->None:
         self.generation+=1; self.active_turn_id=None; self.cooldown_until=0
-        self.framer=FrameBuffer(); self.detector.reset(); self.history.reset()
+        self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
+        self.history.reset()
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
+        self._reset_turn_identity()
     def is_current(self,turn_id:int,generation:int)->bool:
         return self.active and self.generation==generation and self.active_turn_id==turn_id
+    def advance_turn_progress(
+        self,turn_id:int,generation:int,state:str,*,route:str|None=None,
+        timings_ms:dict[str,int|float]|None=None,
+    )->dict|None:
+        """Advance one exact Cascade turn through an observable server boundary."""
+        if (not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0
+                or not isinstance(generation,int) or isinstance(generation,bool)
+                or generation<0 or state not in TURN_PROGRESS_TRANSITIONS
+                and state not in TURN_PROGRESS_TERMINAL_STATES):
+            return None
+        known_generation=self.turn_generations.get(turn_id)
+        if known_generation is not None and known_generation!=generation:
+            return None
+        if known_generation is None:
+            self.turn_generations[turn_id]=generation
+        if route is not None and route not in TURN_PROGRESS_SAFE_ROUTES:
+            return None
+        safe_timings=None
+        if timings_ms is not None:
+            if (not isinstance(timings_ms,dict) or any(
+                    not isinstance(name,str) or not name or
+                    not isinstance(value,(int,float)) or isinstance(value,bool) or
+                    not math.isfinite(value) or value<0
+                    for name,value in timings_ms.items())):
+                return None
+            safe_timings=dict(timings_ms)
+        identity=(turn_id,generation)
+        progress=self.turn_progress.setdefault(identity,TurnProgress())
+        if progress.state in TURN_PROGRESS_TERMINAL_STATES or state==progress.state:
+            return None
+        if progress.state is None:
+            if state in {"complete","blocked"}:
+                return None
+        elif state not in TURN_PROGRESS_TRANSITIONS.get(progress.state,frozenset()):
+            return None
+        progress.revision+=1
+        progress.state=state
+        if route is not None:
+            progress.route=route
+        fields={
+            "configuration_id":self.accepted_configuration_id,
+            "turn_id":turn_id,
+            "generation":generation,
+            "revision":progress.revision,
+            "state":state,
+        }
+        if progress.route is not None:
+            fields["route"]=progress.route
+        if safe_timings:
+            fields["timings_ms"]=safe_timings
+        return fields
+    def set_turn_terminal_outcome(
+        self,turn_id:int,generation:int,outcome:str,
+    )->bool:
+        if outcome not in {"complete","blocked"}:
+            return False
+        progress=self.turn_progress.get((turn_id,generation))
+        if progress is None or progress.state in TURN_PROGRESS_TERMINAL_STATES:
+            return False
+        progress.terminal_outcome=outcome
+        return True
+    def turn_terminal_outcome(self,turn_id:int,generation:int)->str:
+        progress=self.turn_progress.get((turn_id,generation))
+        return progress.terminal_outcome if progress is not None else "complete"
     def refresh_cooldown(self):
         if self.state==TurnState.COOLDOWN and self.clock()>=self.cooldown_until:
-            self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset(); return True
+            self.active_turn_id=None; self.framer=FrameBuffer()
+            self._restore_primary_detector(TurnState.IDLE)
+            self._reset_interrupt_input(); return True
         return False
     def accept_chunk(self,chunk:bytes)->list[ListenerEvent]:
         if not self.active:return []
         self.refresh_cooldown()
+        if self.state in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
+            return self._accept_interrupt_chunk(chunk)
         if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):return []
         output=[]
         for frame in self.framer.push(chunk):
             result=self.detector.process(frame)
             if result.speech_started:
                 self.active_turn_id=self.next_turn_id; self.next_turn_id+=1
-                output.append(ListenerEvent("speech.start",self.active_turn_id,result))
+                self.turn_generations[self.active_turn_id]=self.generation
+                output.append(ListenerEvent(
+                    "speech.start",self.active_turn_id,result,self.generation))
             if result.rejected:
-                output.append(ListenerEvent("speech.rejected",self.active_turn_id or 0,result))
+                output.append(ListenerEvent(
+                    "speech.rejected",self.active_turn_id or 0,result,
+                    self.turn_generations.get(self.active_turn_id or 0,
+                                              self.generation)))
                 self.active_turn_id=None; self.framer=FrameBuffer()
             elif result.utterance is not None:
                 if self.active_turn_id is None: raise RuntimeError("committed utterance has no turn_id")
                 self.endpoint_at=self.clock()
                 self.turn_committed_at[self.active_turn_id]=self.endpoint_at
-                output.append(ListenerEvent("speech.end",self.active_turn_id,result)); self.framer=FrameBuffer()
+                output.append(ListenerEvent(
+                    "speech.end",self.active_turn_id,result,
+                    self.turn_generations[self.active_turn_id]))
+                self.framer=FrameBuffer(); self._reset_interrupt_input()
             if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING): break
+        return output
+    def _accept_interrupt_chunk(self,chunk:bytes)->list[ListenerEvent]:
+        output=[]
+        detector=self._interrupt_detector
+        framer=self._interrupt_framer
+        adopted=False
+        for frame in framer.push(chunk):
+            result=detector.process(frame)
+            if result.speech_started and not adopted:
+                interrupted_turn_id=self.active_turn_id
+                if interrupted_turn_id is None:
+                    detector.reset(); framer=FrameBuffer()
+                    self._reset_interrupt_input()
+                    return []
+                interrupted_generation=self.turn_generations.get(
+                    interrupted_turn_id,self.generation)
+                identity=(interrupted_turn_id,interrupted_generation)
+                if identity in self._interrupted_generations:
+                    continue
+                self._interrupted_generations.add(identity)
+                self.generation+=1
+                superseding_turn_id=self.next_turn_id
+                self.next_turn_id+=1
+                self.active_turn_id=superseding_turn_id
+                self.turn_generations[superseding_turn_id]=self.generation
+                self.detector=detector
+                self.framer=framer
+                self._reset_interrupt_input()
+                adopted=True
+                output.append(ListenerEvent(
+                    "assistant.interrupted",interrupted_turn_id,result,
+                    interrupted_generation,superseding_turn_id,
+                    self.generation))
+                output.append(ListenerEvent(
+                    "speech.start",superseding_turn_id,result,self.generation))
+            if not adopted:
+                continue
+            if result.rejected:
+                output.append(ListenerEvent(
+                    "speech.rejected",self.active_turn_id or 0,result,
+                    self.generation))
+                self.active_turn_id=None; self.framer=FrameBuffer()
+                self._restore_primary_detector(TurnState.IDLE)
+            elif result.utterance is not None:
+                if self.active_turn_id is None:
+                    raise RuntimeError("committed interruption has no turn_id")
+                self.endpoint_at=self.clock()
+                self.turn_committed_at[self.active_turn_id]=self.endpoint_at
+                output.append(ListenerEvent(
+                    "speech.end",self.active_turn_id,result,self.generation))
+                self._restore_primary_detector(TurnState.PROCESSING)
+                self.framer=FrameBuffer(); self._reset_interrupt_input()
+            if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):
+                break
         return output
     def start_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
-        self.detector.state=TurnState.AGENT_SPEAKING; return True
+        self.detector.state=TurnState.AGENT_SPEAKING
+        self._reset_interrupt_input(playback=True)
+        return True
     def playback_ended(self,turn_id:int)->bool:
         if self.state!=TurnState.AGENT_SPEAKING or turn_id!=self.active_turn_id:return False
         received_at=self.clock()
         committed_at=self.turn_committed_at.get(turn_id)
-        self.detector.reset(TurnState.COOLDOWN); self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
+        self._restore_primary_detector(TurnState.COOLDOWN)
+        self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
         self.framer=FrameBuffer()
+        self._reset_interrupt_input()
         if committed_at is not None and turn_id not in self.playback_completion_metrics:
             self.playback_completion_metrics[turn_id]=max(
                 0,round((received_at-committed_at)*1000))
@@ -363,25 +644,36 @@ class ListenerSession:
         return self.playback_completion_metrics.get(turn_id)
     def cascade_failed(self,turn_id:int):
         if turn_id==self.active_turn_id:
-            self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset()
+            self.active_turn_id=None; self.framer=FrameBuffer()
+            self._restore_primary_detector(TurnState.IDLE)
+            self._reset_interrupt_input()
     def reject_empty_transcript(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
-        self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset(TurnState.COOLDOWN)
+        self.active_turn_id=None; self.framer=FrameBuffer()
+        self._restore_primary_detector(TurnState.COOLDOWN)
+        self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
     def complete_without_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
-        self.active_turn_id=None; self.framer=FrameBuffer(); self.detector.reset(TurnState.COOLDOWN)
+        self.active_turn_id=None; self.framer=FrameBuffer()
+        self._restore_primary_detector(TurnState.COOLDOWN)
+        self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
 
 class LockedSender:
     def __init__(self,websocket): self.websocket=websocket; self.lock=asyncio.Lock()
     async def text(self,kind:str,**fields):
         async with self.lock: await self.websocket.send_text(event(kind,**fields))
-    async def segment(self,turn_id:int,index:int,frames:list[bytes]):
+    async def segment(
+        self,turn_id:int,index:int,frames:list[bytes],generation:int|None=None,
+    ):
         async with self.lock:
-            await self.websocket.send_text(audio_segment_start(turn_id,index,len(frames)))
+            await self.websocket.send_text(audio_segment_start(
+                turn_id,index,len(frames),generation=generation))
             for frame in frames: await self.websocket.send_bytes(frame)
-            await self.websocket.send_text(event("audio.segment.end",turn_id=turn_id,segment_index=index))
+            await self.websocket.send_text(event(
+                "audio.segment.end",turn_id=turn_id,segment_index=index,
+                **({"generation":generation} if generation is not None else {})))
     async def native_audio(
         self,turn_id:int,response_id:str,item_id:str|None,pcm:bytes,*,sample_rate:int
     ):
@@ -397,7 +689,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     sender=LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
+        fields.setdefault("generation",generation)
         await sender.text(kind,**fields); return True
+    async def progress(
+        state:str,*,route:str|None=None,
+        timings_ms:dict[str,int|float]|None=None,
+    )->bool:
+        if not session.is_current(turn_id,generation): return False
+        fields=session.advance_turn_progress(
+            turn_id,generation,state,route=route,timings_ms=timings_ms)
+        if fields is None: return False
+        await sender.text("turn.state",**fields); return True
+    await progress("transcribing")
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
     started=clock(); transcription=await asyncio.to_thread(transcribe,clean_path(source_pcm)); timings["stt"]=round((clock()-started)*1000)
     # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
@@ -411,15 +714,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
+    await progress("routing")
     emergency=recognize_emergency(transcript)
     if emergency is not None:
         text=emergency.response
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
         try:
+            await progress("synthesizing",route="deterministic_emergency")
             pcm=await asyncio.to_thread(synthesize,text,emergency.language)
             frames=frame_complete_audio(pcm)
         except Exception:
             log.exception("emergency TTS failed")
+            await progress("error",route="deterministic_emergency")
             await current_text("reply.complete",turn_id=turn_id,text=text)
             await current_text("audio.complete",turn_id=turn_id,segment_count=0)
             timings["total_ms"]=round((clock()-endpoint)*1000)
@@ -433,8 +739,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             return
         if session.start_playback(turn_id):
             timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+            await progress(
+                "playing",route="deterministic_emergency",
+                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
             await current_text("state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames)
+            await sender.segment(turn_id,0,frames,generation)
             await current_text("reply.complete",turn_id=turn_id,text=text)
             await current_text("audio.complete",turn_id=turn_id,segment_count=1)
             timings["total_ms"]=round((clock()-endpoint)*1000)
@@ -478,11 +787,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await current_text("session.language_confirmation_required",turn_id=turn_id,
                                reason=resolution.reason,languages=["ko","en"])
             await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text)
+            session.set_turn_terminal_outcome(turn_id,generation,"blocked")
             try:
+                await progress("synthesizing",route="language_clarification")
                 pcm=await asyncio.to_thread(synthesize,text,fallback)
                 frames=frame_complete_audio(pcm)
             except Exception:
                 log.exception("language clarification TTS failed")
+                await progress("error",route="language_clarification")
                 await current_text("reply.complete",turn_id=turn_id,text=text)
                 await current_text("audio.complete",turn_id=turn_id,segment_count=0)
                 timings["total_ms"]=round((clock()-endpoint)*1000)
@@ -496,8 +808,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 return
             if session.start_playback(turn_id):
                 timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+                await progress(
+                    "playing",route="language_clarification",
+                    timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
                 await current_text("state.changed",state=session.state.value,turn_id=turn_id)
-                await sender.segment(turn_id,0,frames)
+                await sender.segment(turn_id,0,frames,generation)
                 await current_text("reply.complete",turn_id=turn_id,text=text)
                 await current_text("audio.complete",turn_id=turn_id,segment_count=1)
                 timings["total_ms"]=round((clock()-endpoint)*1000)
@@ -510,6 +825,62 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    if session.curated_protocol_session is not None:
+        curated=session.curated_protocol_session
+        checkpoint=curated._checkpoint()
+        try:
+            await progress("checking_protocol",route="curated_protocol")
+            plan=curated.plan(
+                transcript,turn_id=turn_id,language=turn_language)
+            display_text=plan.display_text
+            speech_text=plan.speech_text
+            if not isinstance(display_text,str) or not display_text.strip():
+                raise RuntimeError("curated protocol produced no display text")
+            if not isinstance(speech_text,str) or not speech_text.strip():
+                raise RuntimeError("curated protocol produced no speech text")
+            if plan.speech_mode.value=="blocked":
+                session.set_turn_terminal_outcome(
+                    turn_id,generation,"blocked")
+            timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+            await progress("synthesizing",route="curated_protocol")
+            pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
+            frames=frame_complete_audio(pcm)
+            if not frames or not session.start_playback(turn_id):
+                raise RuntimeError("curated protocol produced no playable audio")
+        except BaseException:
+            curated._restore(checkpoint)
+            raise
+        timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+        await progress(
+            "playing",route="curated_protocol",
+            timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
+        await current_text(
+            "protocol.fixture.state",turn_id=turn_id,
+            configuration_id=session.accepted_configuration_id,
+            state=curated.state(),action=plan.action.value)
+        await current_text(
+            "reply.delta",turn_id=turn_id,segment_index=0,text=display_text)
+        await current_text(
+            "state.changed",state=session.state.value,turn_id=turn_id)
+        await sender.segment(turn_id,0,frames,generation)
+        await current_text(
+            "reply.complete",turn_id=turn_id,text=display_text)
+        await current_text(
+            "audio.complete",turn_id=turn_id,segment_count=1)
+        timings["total_ms"]=round((clock()-endpoint)*1000)
+        await current_text(
+            "turn.done",turn_id=turn_id,timings_ms=timings,
+            segment_count=1,input_frames=input_frames,
+            output_frames=len(frames),tools_used=[],
+            route="curated_protocol",result_kind=plan.action.value,
+            fact_id=plan.fact_id,speech_mode=plan.speech_mode.value,
+            critical_warning_present=plan.critical_warning_text is not None)
+        if session.is_current(turn_id,generation):
+            session.history.commit([
+                {"role":"user","content":transcript},
+                {"role":"assistant","content":display_text},
+            ])
+        return
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
     authorized_step_id=None
     authorized_timer_step_id=None
@@ -544,6 +915,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
         deterministic_arguments={}
     if deterministic_tool is not None:
+        await progress("checking_protocol",route="deterministic_procedure")
         await current_text(
             "tool.call",turn_id=turn_id,tool=deterministic_tool,round=0)
         started_tool=clock()
@@ -606,23 +978,30 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "procedure.state",turn_id=turn_id,state=state)
         text=deterministic_procedure_text(
             deterministic_result,turn_language)
+        if deterministic_result.get("code"):
+            session.set_turn_terminal_outcome(turn_id,generation,"blocked")
         await current_text(
             "reply.delta",turn_id=turn_id,segment_index=0,text=text)
         try:
             timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+            await progress("synthesizing",route="deterministic_procedure")
             pcm=await asyncio.to_thread(synthesize,text,turn_language)
             frames=frame_complete_audio(pcm)
         except Exception:
             log.exception("deterministic procedure TTS failed")
+            await progress("error",route="deterministic_procedure")
             frames=[]
         segment_count=0
         output_frames=0
         playback_started=bool(frames and session.start_playback(turn_id))
         if playback_started:
             timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+            await progress(
+                "playing",route="deterministic_procedure",
+                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
             await current_text(
                 "state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames)
+            await sender.segment(turn_id,0,frames,generation)
             segment_count=1
             output_frames=len(frames)
         await current_text("reply.complete",turn_id=turn_id,text=text)
@@ -650,10 +1029,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if not first_token: first_token=True; timings["first_grok_token_ms"]=round((clock()-endpoint)*1000)
     async def sentence(segment:SentenceSegment):
         nonlocal first_sentence
-        if not first_sentence: first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
+        if not first_sentence:
+            first_sentence=True; timings["first_sentence_ms"]=round((clock()-endpoint)*1000)
+            await progress("composing",route="brain")
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=segment.segment_index,text=segment.text): return
         await queue.put(segment)
     async def tool_event(kind,fields):
+        if (kind=="tool.call" and
+                fields.get("tool")=="search_approved_safety_manual"):
+            await progress(
+                "checking_approved_information",route="approved_information")
         if not await current_text(kind,turn_id=turn_id,**fields): return
         if kind=="tool.result" and fields.get("tool") in PROCEDURE_TOOL_NAMES:
             state=fields.get("procedure_state")
@@ -698,18 +1083,25 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         while True:
             segment=await queue.get()
             if segment is None:return
-            if "first_tts_request_ms" not in timings: timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+            if "first_tts_request_ms" not in timings:
+                timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+                await progress("synthesizing",route="brain")
             pcm=await asyncio.to_thread(synthesize,segment.text,turn_language); frames=frame_complete_audio(pcm)
             if not session.is_current(turn_id,generation):return
             if not first_audio:
                 if not session.start_playback(turn_id):return
                 first_audio=True; timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+                await progress(
+                    "playing",route="brain",
+                    timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
                 if not await current_text("state.changed",state=session.state.value,turn_id=turn_id): return
             if not session.is_current(turn_id,generation): return
-            await sender.segment(turn_id,segment.segment_index,frames)
+            await sender.segment(
+                turn_id,segment.segment_index,frames,generation)
             output_frames+=len(frames); segment_count+=1
     consumer=asyncio.create_task(consume())
     try:
+        await progress("composing",route="brain")
         client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("CHAT_MODEL")
         result=await stream_brain_turn(client,session.history,transcript,sentence,mark_token,tool_event,
                                        tool_context=turn_context)
@@ -729,13 +1121,46 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             except asyncio.QueueEmpty: break
 
 async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0):
+    generation=session.turn_generations.get(turn_id,session.generation)
     try: await run_turn(websocket,session,source_pcm,turn_id,input_frames,voiced_frames)
     except asyncio.CancelledError: session.cascade_failed(turn_id); raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
-    except Exception as exc:
-        log.exception("voice turn failed"); session.cascade_failed(turn_id)
-        await websocket.send_text(event("error",turn_id=turn_id,message=str(exc)))
-        await websocket.send_text(event("state.changed",state=session.state.value,turn_id=turn_id))
+    except Exception:
+        log.exception("voice turn failed")
+        progress=session.advance_turn_progress(
+            turn_id,generation,"error")
+        session.cascade_failed(turn_id)
+        if progress is not None:
+            await websocket.send_text(event("turn.state",**progress))
+        await websocket.send_text(event(
+            "error",turn_id=turn_id,generation=generation,
+            message="voice turn processing failed"))
+        await websocket.send_text(event(
+            "state.changed",state=session.state.value,turn_id=turn_id,
+            generation=generation))
+
+async def cancel_cascade_generation(
+    websocket:WebSocket,session:ListenerSession,task:asyncio.Task|None,
+    interruption:ListenerEvent,
+)->None:
+    """Cancel one superseded Cascade task, then clear that browser generation."""
+    if interruption.kind!="assistant.interrupted":
+        raise ValueError("Cascade cancellation requires an interruption event")
+    if task is not None and not task.done():
+        task.cancel()
+        try: await task
+        except (asyncio.CancelledError,WebSocketDisconnect): pass
+    progress=session.advance_turn_progress(
+        interruption.turn_id,interruption.generation,"cancelled")
+    if progress is None:
+        return
+    await websocket.send_text(event(
+        "cascade.playback.clear",
+        **progress,
+        superseding_turn_id=interruption.superseding_turn_id,
+        superseding_generation=interruption.superseding_generation,
+        reason="accepted_speech_onset",
+    ))
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
@@ -748,7 +1173,9 @@ async def voice_socket(websocket:WebSocket):
             "error",message=f"invalid VAD configuration: {exc}"))
         await websocket.close(code=1008,reason="invalid VAD configuration")
         return
-    session=ListenerSession(EndpointDetector(config)); task=None; trusted_config=None; procedure_store=None
+    session=ListenerSession(EndpointDetector(
+        config,listening_onset=True)); task=None; trusted_config=None; procedure_store=None
+    curated_fixture=None
     sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
     await websocket.send_text(event("ready",sample_rate=16000,native_sample_rate=NATIVE_SAMPLE_RATE,
                                     pipelines=["cascade","native"],frame_ms=20,
@@ -765,7 +1192,25 @@ async def voice_socket(websocket:WebSocket):
                     continue
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 for item in session.accept_chunk(message["bytes"]):
-                    await websocket.send_text(event(item.kind,turn_id=item.turn_id,state=session.state.value,voiced_frames=item.result.voiced_frames,total_frames=item.result.total_frames,duration_ms=item.result.total_frames*20,reason=item.result.rejection_reason,forced=item.result.forced))
+                    if item.kind=="assistant.interrupted":
+                        await cancel_cascade_generation(
+                            websocket,session,task,item)
+                        task=None
+                        continue
+                    await websocket.send_text(event(
+                        item.kind,turn_id=item.turn_id,
+                        generation=item.generation,state=session.state.value,
+                        voiced_frames=item.result.voiced_frames,
+                        total_frames=item.result.total_frames,
+                        duration_ms=item.result.total_frames*20,
+                        reason=item.result.rejection_reason,
+                        forced=item.result.forced))
+                    if item.kind=="speech.start":
+                        progress=session.advance_turn_progress(
+                            item.turn_id,item.generation,"listening")
+                        if progress is not None:
+                            await websocket.send_text(event(
+                                "turn.state",**progress))
                     if item.kind=="speech.end":
                         task=asyncio.create_task(run_turn_safely(websocket,session,item.result.utterance or b"",item.turn_id,item.result.total_frames,item.result.voiced_frames))
                 continue
@@ -773,31 +1218,86 @@ async def voice_socket(websocket:WebSocket):
             control=parse_control(message["text"])
             if control["type"]=="session.start":
                 if session.active:raise ProtocolError("session already active")
-                requested_pipeline=control.get("pipeline","cascade")
+                requested_mode=control["mode"]
+                configuration_id=control["configuration_id"]
+                requested_protocol_id=control["protocol_id"]
                 configuration_stage="server_policy"
                 try:
                     trusted_config=trusted_config or server_config()
                     configuration_stage="session_language"
-                    context=server_tool_context(trusted_config,control.get("language"))
-                    if trusted_config.procedure_catalog_path and trusted_config.procedure_store_path:
+                    context=server_tool_context(trusted_config,control["language"])
+                    selected_curated_fixture=None
+                    selected_procedure_definitions=None
+                    selection_failure=None
+                    if requested_mode=="cascade":
+                        if requested_protocol_id is None:
+                            selection_failure="protocol_selection_required"
+                        else:
+                            if trusted_config.curated_protocol_fixture_path is not None:
+                                configuration_stage="curated_protocol_fixture"
+                                curated_fixture=curated_fixture or load_curated_protocol_fixture(
+                                    trusted_config.curated_protocol_fixture_path,
+                                    trusted_config.curated_protocol_provenance_path,
+                                    trusted_config.curated_protocol_source_pdf_path,
+                                )
+                                if curated_fixture.protocol_id==requested_protocol_id:
+                                    selected_curated_fixture=curated_fixture
+                            if (selected_curated_fixture is None and
+                                    trusted_config.procedure_catalog_path and
+                                    trusted_config.procedure_store_path):
+                                configuration_stage="procedure_configuration"
+                                definitions=load_procedure_definitions(
+                                    trusted_config.procedure_catalog_path,
+                                    trusted_config.catalog_path,
+                                    facility_id=trusted_config.facility_id,
+                                    language=context.language,
+                                    usage_scope=trusted_config.usage_scope)
+                                if requested_protocol_id in definitions:
+                                    selected_procedure_definitions=definitions
+                            if (selected_curated_fixture is None and
+                                    selected_procedure_definitions is None):
+                                selection_failure=(
+                                    "protocol_selection_unknown"
+                                    if (trusted_config.curated_protocol_fixture_path or
+                                        trusted_config.procedure_catalog_path)
+                                    else "protocol_selection_unavailable")
+                    elif requested_protocol_id is not None:
+                        selection_failure="protocol_selection_not_supported_for_mode"
+                    elif (trusted_config.procedure_catalog_path and
+                            trusted_config.procedure_store_path):
                         configuration_stage="procedure_configuration"
-                        definitions=load_procedure_definitions(
-                            trusted_config.procedure_catalog_path,trusted_config.catalog_path,
+                        selected_procedure_definitions=load_procedure_definitions(
+                            trusted_config.procedure_catalog_path,
+                            trusted_config.catalog_path,
                             facility_id=trusted_config.facility_id,
                             language=context.language,
                             usage_scope=trusted_config.usage_scope)
+                    if selection_failure is not None:
+                        await websocket.send_text(event(
+                            "session.configuration_required",
+                            configuration_id=configuration_id,
+                            mode=requested_mode,
+                            language=context.language,
+                            protocol_id=None,
+                            reason=selection_failure,
+                        ))
+                        continue
+                    if selected_procedure_definitions is not None:
+                        configuration_stage="procedure_configuration"
                         procedure_store=procedure_store or ProcedureStore(trusted_config.procedure_store_path)
                         context=ToolContext(
                             context.catalog_path,context.facility_id,
                             context.language,context.usage_scope,
                             context.report_language,
-                            ProcedureController(definitions,procedure_store))
+                            ProcedureController(
+                                selected_procedure_definitions,procedure_store))
                     configuration_stage="session_state"
                     session.set_tool_context(context)
-                    if control.get("language") is None:
-                        session.set_language_mode("auto")
+                    session.set_curated_protocol_fixture(selected_curated_fixture)
                     session.start()
-                    pipeline=requested_pipeline
+                    if session.curated_protocol_session is not None:
+                        session.curated_protocol_session.activate_configured()
+                    pipeline=requested_mode
                     if pipeline=="native":
                         configuration_stage="native_environment"
                         native_config=(
@@ -811,6 +1311,9 @@ async def voice_socket(websocket:WebSocket):
                             manual_language=session.manual_language)
                         configuration_stage="native_provider_session"
                         await native_session.start()
+                    session.accept_configuration(
+                        configuration_id,pipeline,context.language,
+                        requested_protocol_id)
                 except (RuntimeError,ValueError,NativeRealtimeError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
@@ -821,7 +1324,7 @@ async def voice_socket(websocket:WebSocket):
                     log.warning(
                         "session.start rejected pipeline=%s stage=%s "
                         "exception=%s fields=%s detail=%s",
-                        requested_pipeline,configuration_stage,
+                        requested_mode,configuration_stage,
                         type(exc).__name__,
                         ",".join(field_names) if field_names else "none",
                         safe_detail,
@@ -830,8 +1333,38 @@ async def voice_socket(websocket:WebSocket):
                         await native_session.stop()
                         native_session=None
                     session.stop()
-                    await websocket.send_text(event("error",message="invalid session configuration"))
+                    load_failed=configuration_stage=="curated_protocol_fixture"
+                    load_failure_messages={
+                        "ko":"선택된 프로토콜을 불러오지 못했습니다.",
+                        "vi":"Không thể tải quy trình đã chọn.",
+                        "en":"The selected protocol could not be loaded.",
+                    }
+                    await websocket.send_text(event(
+                        "error",
+                        message=(
+                            load_failure_messages.get(
+                                context.language,
+                                load_failure_messages["en"],
+                            )
+                            if load_failed
+                            else "invalid session configuration"
+                        ),
+                    ))
                     continue
+                await websocket.send_text(event(
+                    "session.ready",
+                    configuration_id=session.accepted_configuration_id,
+                    mode=session.accepted_mode,
+                    language=session.accepted_language,
+                    protocol_id=session.accepted_protocol_id,
+                ))
+                if session.curated_protocol_session is not None:
+                    await websocket.send_text(event(
+                        "protocol.fixture.state",
+                        configuration_id=session.accepted_configuration_id,
+                        state=session.curated_protocol_session.state(),
+                        action="attached",
+                    ))
                 await websocket.send_text(event("session.started",state=session.state.value,
                                                 pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
@@ -927,7 +1460,18 @@ async def voice_socket(websocket:WebSocket):
                     workflow=result.get("workflow"),
                 ))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
+                generation=session.turn_generations.get(
+                    control["turn_id"],session.generation)
                 playback_completion_ms=session.playback_completion_ms(control["turn_id"])
+                progress=session.advance_turn_progress(
+                    control["turn_id"],generation,
+                    session.turn_terminal_outcome(control["turn_id"],generation),
+                    timings_ms=(
+                        {"playback_completion":playback_completion_ms}
+                        if playback_completion_ms is not None else None),
+                )
+                if progress is not None:
+                    await websocket.send_text(event("turn.state",**progress))
                 if playback_completion_ms is not None:
                     log.info(
                         "playback.completed pipeline=cascade turn_id=%s "
@@ -936,8 +1480,12 @@ async def voice_socket(websocket:WebSocket):
                     await websocket.send_text(event(
                         "playback.completed",pipeline="cascade",
                         turn_id=control["turn_id"],
+                        generation=generation,
                         playback_completion_ms=playback_completion_ms))
-                await websocket.send_text(event("state.changed",state=session.state.value,turn_id=control["turn_id"],cooldown_ms=config.cooldown_ms))
+                await websocket.send_text(event(
+                    "state.changed",state=session.state.value,
+                    turn_id=control["turn_id"],generation=generation,
+                    cooldown_ms=config.cooldown_ms))
             elif control["type"]=="native.playback.truncate" and native_session is not None:
                 await native_session.truncate_playback(
                     control["response_id"],control["item_id"],control["audio_end_ms"])

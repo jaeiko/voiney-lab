@@ -12,15 +12,36 @@ def parse_control(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc: raise ProtocolError("control message must be valid JSON") from exc
     if not isinstance(message,dict) or not isinstance(message.get("type"),str): raise ProtocolError("control message needs a string type")
     if message["type"]=="session.start":
+        mode=message.get("mode")
+        legacy_pipeline=message.get("pipeline")
+        if mode is not None and legacy_pipeline is not None and mode!=legacy_pipeline:
+            raise ProtocolError("session.start mode and pipeline disagree")
+        mode=mode if mode is not None else legacy_pipeline
+        if mode not in ("cascade","native"):
+            raise ProtocolError("session.start mode must be cascade or native")
         language=message.get("language")
-        pipeline=message.get("pipeline")
-        if language is not None and not isinstance(language,str):
-            raise ProtocolError("session.start language must be a string")
-        if pipeline is not None and pipeline not in ("cascade","native"):
-            raise ProtocolError("session.start pipeline must be cascade or native")
-        return {"type":"session.start",
-                **({"language":language} if language is not None else {}),
-                **({"pipeline":pipeline} if pipeline is not None else {})}
+        if not isinstance(language,str) or not language.strip():
+            raise ProtocolError("session.start language must be a non-empty string")
+        if "protocol_id" not in message:
+            raise ProtocolError("session.start needs an explicit protocol_id")
+        protocol_id=message["protocol_id"]
+        if protocol_id is not None and (
+            not isinstance(protocol_id,str)
+            or not protocol_id
+            or protocol_id!=protocol_id.strip()
+        ):
+            raise ProtocolError("session.start protocol_id must be null or an exact non-empty string")
+        configuration_id=message.get("configuration_id")
+        if (not isinstance(configuration_id,int) or isinstance(configuration_id,bool)
+                or configuration_id<=0):
+            raise ProtocolError("session.start needs a positive configuration_id")
+        return {
+            "type":"session.start",
+            "mode":mode,
+            "language":language,
+            "protocol_id":protocol_id,
+            "configuration_id":configuration_id,
+        }
     if message["type"]=="session.set_language":
         language=message.get("language")
         if not isinstance(language,str): raise ProtocolError("session.set_language needs a string language")
@@ -71,9 +92,22 @@ def parse_control(raw: str) -> dict[str, Any]:
 def event(event_type: str, **fields: Any) -> str:
     return json.dumps({"type":event_type,**fields},ensure_ascii=False,separators=(",",":"))
 
-def audio_segment_start(turn_id:int,segment_index:int,frame_count:int,sample_rate:int=16000)->str:
-    if turn_id<=0 or segment_index<0 or frame_count<0: raise ProtocolError("invalid outbound audio metadata")
-    return event("audio.segment.start",turn_id=turn_id,segment_index=segment_index,frame_count=frame_count,sample_rate=sample_rate,encoding="pcm_s16le",frame_ms=20)
+def audio_segment_start(
+    turn_id:int,segment_index:int,frame_count:int,sample_rate:int=16000,
+    generation:int|None=None,
+)->str:
+    if (turn_id<=0 or segment_index<0 or frame_count<0 or
+            (generation is not None and
+             (not isinstance(generation,int) or isinstance(generation,bool)
+              or generation<0))):
+        raise ProtocolError("invalid outbound audio metadata")
+    fields={
+        "turn_id":turn_id,"segment_index":segment_index,
+        "frame_count":frame_count,"sample_rate":sample_rate,
+        "encoding":"pcm_s16le","frame_ms":20,
+    }
+    if generation is not None: fields["generation"]=generation
+    return event("audio.segment.start",**fields)
 
 def audio_start(stream:str,frame_count:int,turn_id:int,sample_rate:int=16000)->str:
     if not stream: raise ProtocolError("invalid outbound audio metadata")

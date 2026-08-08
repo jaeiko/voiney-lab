@@ -586,7 +586,11 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
             def __init__(self):
                 self.sent = []
                 self.messages = iter((
-                    {"text": '{"type":"session.start","language":"ko"}'},
+                    {"text": json.dumps({
+                        "type":"session.start","mode":"cascade",
+                        "language":"ko","protocol_id":PROCEDURE_ID,
+                        "configuration_id":1,
+                    })},
                     {"text": '{"type":"session.reset"}'},
                     {"type": "websocket.disconnect"},
                 ))
