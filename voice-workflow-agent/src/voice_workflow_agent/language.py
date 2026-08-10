@@ -35,6 +35,27 @@ def normalize_provider_language(value: Any) -> str | None:
 class Transcription:
     text: str
     detected_language: str | None
+    confidence: float | None = None
+    no_speech_probability: float | None = None
+    alternatives: tuple[str, ...] = ()
+
+
+def transcription_quality_issue(transcription: Transcription) -> str | None:
+    """Use provider quality metadata only when it is actually supplied."""
+
+    if (
+        transcription.no_speech_probability is not None
+        and 0 <= transcription.no_speech_probability <= 1
+        and transcription.no_speech_probability >= 0.8
+    ):
+        return "provider_no_speech_probability"
+    if (
+        transcription.confidence is not None
+        and 0 <= transcription.confidence <= 1
+        and transcription.confidence <= 0.25
+    ):
+        return "provider_low_confidence"
+    return None
 
 
 @dataclass(frozen=True)

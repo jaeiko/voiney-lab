@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -222,6 +223,27 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             endpoint.kwargs["tools"][0]["filters"]["allowed_domains"],
             ["osha.gov"],
         )
+
+    async def test_external_adapter_has_one_bounded_request(self):
+        class Responses:
+            def __init__(self):
+                self.calls = 0
+
+            async def create(self, **_kwargs):
+                self.calls += 1
+                await asyncio.sleep(0.02)
+                return SimpleNamespace(output_text="", output=[])
+
+        responses = Responses()
+        client = SimpleNamespace(responses=responses)
+        with self.assertRaises(asyncio.TimeoutError):
+            await XaiAuthoritativeWebSearch(
+                client,
+                ExternalReferenceSettings(
+                    True, ("osha.gov",), "fake", timeout_seconds=0.001
+                ),
+            ).search("laboratory safety", language="ko")
+        self.assertEqual(responses.calls, 1)
 
 
 if __name__ == "__main__":

@@ -886,14 +886,31 @@ class ServerTests(unittest.TestCase):
             ("VOICE_WORKFLOW_AGENT_USAGE_SCOPE",),
         )
 
-    def test_rest_stt_preserves_text_and_provider_language_only(self):
+    def test_rest_stt_preserves_optional_provider_quality_without_inventing_it(self):
         with patch("voice_workflow_agent.server.requests.post",return_value=FakeResponse()) as post, \
              patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
             result=transcribe(b"\0\0")
         self.assertEqual((result.text,result.detected_language),
                          ("short test utterance","ko"))
-        self.assertFalse(hasattr(result,"confidence"))
+        self.assertIsNone(result.confidence)
+        self.assertIsNone(result.no_speech_probability)
+        self.assertEqual(result.alternatives,())
         self.assertTrue(post.call_args.args[0].endswith("/stt"))
+
+        quality_response=FakeResponse()
+        quality_response.json=lambda:{
+            "text":" uncertain ","language":"Korean","confidence":0.2,
+            "no_speech_probability":0.85,
+            "alternatives":["대안 하나","대안 둘",7,"대안 셋","ignored"],
+        }
+        with patch(
+            "voice_workflow_agent.server.requests.post",
+            return_value=quality_response,
+        ),patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
+            quality=transcribe(b"\0\0")
+        self.assertEqual(quality.confidence,0.2)
+        self.assertEqual(quality.no_speech_probability,0.85)
+        self.assertEqual(quality.alternatives,("대안 하나","대안 둘"))
 
     def test_sessions_have_independent_korean_and_english_contexts(self):
         config=ServerConfig(Path("/trusted/catalog.sqlite"),"F","operational",

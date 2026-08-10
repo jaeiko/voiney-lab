@@ -339,15 +339,11 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
                 with self.assertRaises(CuratedProtocolFixtureError):
                     load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
 
-    def test_verified_visual_manifest_selects_crops_and_safe_diagram_fallback(self):
+    def test_verified_visual_manifest_selects_only_source_crops(self):
         step_one = self.fixture.visual_for_step(0)
         step_seven = self.fixture.visual_for_step(6)
         step_nine = self.fixture.visual_for_step(8)
-        self.assertEqual(step_one.kind, "generated_schematic")
-        self.assertEqual(step_one.mime_type, "image/svg+xml")
-        self.assertIn("원본 이미지 아님", step_one.label)
-        self.assertNotIn("localhost", step_one.public_dict()["url"])
-        self.assertNotIn("file://", step_one.public_dict()["source_page_url"])
+        self.assertIsNone(step_one)
         self.assertEqual((step_seven.kind, step_seven.mime_type), (
             "source_crop", "image/png",
         ))
@@ -358,7 +354,7 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
         self.assertEqual(step_nine.source_page, 6)
         self.assertNotIn("candidate-a-step-01", self.fixture.visual_manifest)
         self.assertIn("candidate-a-step-07", self.fixture.visual_manifest)
-        for index in (0, 6, 8):
+        for index in (6, 8):
             asset, content = self.fixture.visual_content(index)
             self.assertTrue(content)
             self.assertEqual(hashlib.sha256(content).hexdigest(), asset.sha256)
@@ -371,7 +367,7 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
             "voice_workflow_agent.server._configured_candidate_fixture",
             return_value=self.fixture,
         ):
-            for index in (0, 6, 8):
+            for index in (6, 8):
                 asset, content = self.fixture.visual_content(index)
                 response = get_protocol_visual_asset(
                     self.fixture.protocol_id,
@@ -1189,6 +1185,183 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(inactive.action, CuratedProtocolAction.INACTIVE)
         self.assertIn("시작해 주세요", inactive.response_text)
 
+    def test_real_voice_completion_only_forms_advance_atomically_once(self):
+        phrases = (
+            "현재 단계를 완료했어요.",
+            "이 단계 완료했어.",
+            "여기까지 다 했어요.",
+            "지금 단계는 끝났습니다.",
+            "방금 작업 마쳤어.",
+            "I completed the current step.",
+            "This step is finished.",
+        )
+        for turn_id, phrase in enumerate(phrases, 900):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = 1
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.NEXT)
+                self.assertTrue(plan.reported_completion)
+                self.assertEqual(plan.intent_kind, "report_completion")
+                self.assertEqual(session.current_index, 2)
+                self.assertEqual(
+                    session.plan(phrase, turn_id=turn_id, language="ko"), plan
+                )
+                self.assertEqual(session.current_index, 2)
+
+    def test_completion_only_preserves_ambiguous_and_readiness_boundaries(self):
+        ambiguous = CuratedProtocolSession(self.fixture)
+        ambiguous.active = True
+        opening = ambiguous.state()
+        plan = ambiguous.plan(
+            "거의 끝난 것 같아.", turn_id=920, language="ko"
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertEqual(ambiguous.state(), opening)
+        for turn_id, index in enumerate((6, 8, 19), 921):
+            with self.subTest(step=index + 1):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = index
+                plan = session.plan(
+                    "현재 단계를 완료했어요.", turn_id=turn_id, language="ko"
+                )
+                self.assertEqual(plan.action, CuratedProtocolAction.NEXT)
+                self.assertEqual(plan.speech_mode, CuratedProtocolSpeechMode.BLOCKED)
+                self.assertEqual(session.current_index, index)
+
+    def test_detail_planner_uses_admitted_facts_without_invented_method(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = 3
+        opening = session.state()
+        plan = session.plan(
+            "지금 단계에서 뭘 해야 하는지 자세히 알려줘.",
+            turn_id=930,
+            language="ko",
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertIn("무엇을 제거하나요", plan.display_text)
+        self.assertIn("젤 밴드는 튜브에 남습니다", plan.display_text)
+        self.assertIn("제거 도구", plan.display_text)
+        self.assertNotIn("피펫", plan.display_text)
+        self.assertNotEqual(
+            " ".join(plan.primary_text.split()),
+            " ".join(self.fixture.localized_fact(
+                self.fixture.steps[3].step_id, "current_step"
+            ).split()),
+        )
+        self.assertEqual(session.state(), opening)
+
+    def test_fully_destained_explanation_uses_all_page_five_evidence(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = 6
+        opening = session.state()
+        plan = session.plan(
+            "젤 밴드가 완전히 탈색된다는 게 무슨 의미야?",
+            turn_id=931,
+            language="ko",
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertIn("투명", plan.display_text)
+        self.assertIn("두 번의 사이클", plan.display_text)
+        self.assertIn("고정 반복 횟수", plan.display_text)
+        self.assertIn("expected_result_1", plan.evidence_ids)
+        self.assertIn(5, plan.source_pages)
+        self.assertEqual(session.state(), opening)
+
+    def test_context_audio_safety_and_unreliable_transcript_routes_are_read_only(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = 2
+        opening = session.state()
+        contextual = session.plan(
+            "그거는 어떻게 준비해?", turn_id=940, language="ko"
+        )
+        self.assertEqual(contextual.action, CuratedProtocolAction.QUESTION)
+        self.assertIn("resolved_entity:solution_a", contextual.limitations)
+        safety = session.plan(
+            "여기서 안전하게 실험하려면 어떻게 해야 돼?",
+            turn_id=941,
+            language="ko",
+        )
+        self.assertEqual(safety.action, CuratedProtocolAction.RELATED_QUESTION)
+        replay = session.plan("There's no sound.", turn_id=942, language="ko")
+        self.assertEqual(replay.action, CuratedProtocolAction.AUDIO_RECOVERY)
+        unreliable = session.plan("わんねーちょ", turn_id=943, language="ko")
+        self.assertEqual(
+            unreliable.action, CuratedProtocolAction.TRANSCRIPT_UNRELIABLE
+        )
+        self.assertEqual(session.state(), opening)
+
+        ambiguous = CuratedProtocolSession(self.fixture)
+        ambiguous.active = True
+        ambiguous.current_index = 1
+        choice = ambiguous.plan(
+            "그 용액은 어떻게 준비해?", turn_id=944, language="ko"
+        )
+        self.assertEqual(choice.action, CuratedProtocolAction.CLARIFY_REFERENCE)
+        self.assertIn("Solution A와 Solution B", choice.display_text)
+
+    def test_source_web_followup_and_search_cancel_are_bounded_read_only_intents(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = 2
+        opening = session.state()
+
+        sources = session.plan("출처 보여줘", turn_id=945, language="ko")
+        self.assertEqual(sources.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertEqual(sources.intent_kind, "show_sources")
+        self.assertTrue(sources.evidence_ids)
+
+        no_context = CuratedProtocolSession(self.fixture)
+        no_context.active = True
+        no_context_opening = no_context.state()
+        clarify = no_context.plan(
+            "웹에서 더 찾아봐", turn_id=946, language="ko"
+        )
+        self.assertEqual(clarify.action, CuratedProtocolAction.CLARIFY_REFERENCE)
+        self.assertEqual(no_context.state(), no_context_opening)
+
+        question = "여기서 진짜 안전 수칙 있어?"
+        related = session.plan(question, turn_id=947, language="ko")
+        self.assertEqual(related.action, CuratedProtocolAction.RELATED_QUESTION)
+        followup = session.plan("웹에서 더 찾아봐", turn_id=948, language="ko")
+        self.assertEqual(followup.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertEqual(followup.requested_followup, "search_external_reference")
+        self.assertEqual(session.reference_query_for("웹에서 더 찾아봐", followup), question)
+
+        cancelled = session.plan("방금 검색 취소해", turn_id=949, language="ko")
+        self.assertEqual(cancelled.action, CuratedProtocolAction.CANCEL_READONLY)
+        self.assertEqual(cancelled.intent_kind, "cancel_readonly_operation")
+        self.assertEqual(session.state(), opening)
+
+        session.reset()
+        session.activate_configured()
+        after_reset = session.plan("웹에서 더 찾아봐", turn_id=950, language="ko")
+        self.assertEqual(after_reset.action, CuratedProtocolAction.CLARIFY_REFERENCE)
+
+    def test_provider_quality_metadata_cannot_override_clear_stop(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        unreliable = session.plan(
+            "일반 발화", turn_id=950, language="ko",
+            transcript_quality="provider_low_confidence",
+        )
+        self.assertEqual(
+            unreliable.action, CuratedProtocolAction.TRANSCRIPT_UNRELIABLE
+        )
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        stopped = session.plan(
+            "프로토콜 종료해줘", turn_id=951, language="ko",
+            transcript_quality="provider_low_confidence",
+        )
+        self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
+        self.assertFalse(session.active)
+
 
 class CuratedProtocolBrainTests(unittest.TestCase):
     def test_fact_selector_is_strict_tool_free_and_returns_only_supplied_text(self):
@@ -1345,6 +1518,84 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertNotIn("reply.complete", event_types)
         self.assertNotIn("turn.done", event_types)
 
+    def test_completion_only_bypasses_every_knowledge_provider_and_advances_once(self):
+        session = self.make_session(index=1)
+        socket = Socket()
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("현재 단계를 완료했어요.", "ko"),
+        ), patch(
+            "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+        ) as tts, patch(
+            "voice_workflow_agent.server.AsyncOpenAI",
+            side_effect=AssertionError("provider must not be constructed"),
+        ), patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            side_effect=AssertionError("retrieval must not run"),
+        ), patch(
+            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",
+            side_effect=AssertionError("web search must not run"),
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+        self.assertEqual(session.curated_protocol_session.current_index, 2)
+        self.assertEqual(tts.call_count, 1)
+        done = next(item for item in socket.text if item["type"] == "turn.done")
+        self.assertEqual(done["intent_kind"], "report_completion")
+        self.assertTrue(done["reported_completion"])
+        self.assertEqual(done["tools_used"], [])
+        operation = next(
+            item for item in socket.text if item["type"] == "server.operation"
+        )
+        self.assertEqual(operation["operation"], "completion_and_next_transition")
+
+    def test_audio_help_and_unreliable_transcript_are_read_only_and_tool_free(self):
+        for turn_id, transcription, expected in (
+            (1, Transcription("There's no sound.", "en"), "audio_recovery"),
+            (1, Transcription("わんねーちょ", "ja"), "transcript_unreliable"),
+            (
+                1,
+                Transcription("불분명한 발화", "ko", confidence=0.1),
+                "transcript_unreliable",
+            ),
+        ):
+            with self.subTest(expected=expected, text=transcription.text):
+                session = self.make_session(index=2)
+                socket = Socket()
+
+                async def immediate(function, *args, **kwargs):
+                    return function(*args, **kwargs)
+
+                with patch(
+                    "voice_workflow_agent.server.transcribe",
+                    return_value=transcription,
+                ), patch(
+                    "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+                ), patch(
+                    "voice_workflow_agent.server.AsyncOpenAI",
+                    side_effect=AssertionError("provider must not be constructed"),
+                ), patch(
+                    "voice_workflow_agent.server.search_approved_lab_references",
+                    side_effect=AssertionError("retrieval must not run"),
+                ), patch(
+                    "voice_workflow_agent.server.asyncio.to_thread",
+                    side_effect=immediate,
+                ):
+                    asyncio.run(run_turn(socket, session, b"\0\0", turn_id, 1))
+                self.assertEqual(session.curated_protocol_session.current_index, 2)
+                done = next(
+                    item for item in socket.text if item["type"] == "turn.done"
+                )
+                self.assertEqual(done["result_kind"], expected)
+                self.assertEqual(done["tools_used"], [])
+
     def run_question(
         self,
         *,
@@ -1484,7 +1735,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL":"offline-test-model",
         },clear=False),patch(
             "voice_workflow_agent.server.transcribe",
-            return_value=Transcription("현재 단계 알려줘","ko"),
+            return_value=Transcription(
+                "이 단계를 이해하기 쉽게 그림으로 보여줘.", "ko"
+            ),
         ),patch(
             "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
         ),patch(
@@ -2708,7 +2961,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.fixture.steps[1].step_id, "current_step"
             ),
             step_two,
-            "현재 단계와 사용 가능한 참고자료에서 답변할 근거를 충분히 찾지 못했습니다. 필요한 내용을 조금 더 구체적으로 말씀해 주세요.",
+            "현재 단계에서 확인되는 활성 프로토콜 내용은 화면에 그대로 유지했습니다. 질문하신 추가 내용은 현재 승인된 근거에서 확인되지 않았습니다. 필요한 재료나 조건을 한 가지 지정해 주시면 그 항목을 확인하겠습니다.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:4])

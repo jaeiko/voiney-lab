@@ -79,7 +79,8 @@ from voice_workflow_agent.protocol_catalog import (
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
-    CLARIFICATION_TEXT, Transcription, normalize_provider_language, resolve_turn_language,
+    CLARIFICATION_TEXT, Transcription, normalize_provider_language,
+    resolve_turn_language, transcription_quality_issue,
 )
 from voice_workflow_agent.moss_retrieval import (
     start_moss_runtime_from_environment,
@@ -348,8 +349,27 @@ def transcribe(pcm:bytes)->Transcription:
     response.raise_for_status()
     payload=response.json()
     text=payload.get("text","")
-    return Transcription(text.strip() if isinstance(text,str) else "",
-                         normalize_provider_language(payload.get("language")))
+    confidence=payload.get("confidence")
+    if not isinstance(confidence,(int,float)) or isinstance(confidence,bool) or not 0<=confidence<=1:
+        confidence=None
+    no_speech=payload.get("no_speech_probability")
+    if not isinstance(no_speech,(int,float)) or isinstance(no_speech,bool) or not 0<=no_speech<=1:
+        no_speech=None
+    alternatives=payload.get("alternatives",())
+    if not isinstance(alternatives,list):
+        alternatives=()
+    else:
+        alternatives=tuple(
+            value.strip() for value in alternatives[:3]
+            if isinstance(value,str) and value.strip()
+        )
+    return Transcription(
+        text.strip() if isinstance(text,str) else "",
+        normalize_provider_language(payload.get("language")),
+        float(confidence) if confidence is not None else None,
+        float(no_speech) if no_speech is not None else None,
+        alternatives,
+    )
 
 def validate_tts_pcm(response:requests.Response)->bytes:
     if not response.ok:
@@ -1413,7 +1433,7 @@ async def _queue_curated_generated_visual(
             await sender.text(
                 "protocol.visual.state",**identity,status="visual_failed",
                 visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                fallback="structured_schematic")
+                fallback="none")
 
     task=asyncio.create_task(worker())
     session.track_visual_task(task)
@@ -1586,51 +1606,60 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             plan=curated.plan(
-                transcript,turn_id=turn_id,language=turn_language)
+                transcript,turn_id=turn_id,language=turn_language,
+                transcript_quality=transcription_quality_issue(transcription))
             if plan.action is CuratedProtocolAction.RELATED_QUESTION and curated.active:
                 step = curated.fixture.steps[curated.current_index]
                 facts = curated.fixture.facts_for_step(curated.current_index)
+                resolved_query = curated.reference_query_for(transcript, plan)
+                if resolved_query is None:
+                    raise RuntimeError("related reference query is unavailable")
                 reference_query="\n".join((
-                    transcript,step.instruction_source_text,
+                    resolved_query,step.instruction_source_text,
                     *(fact.text for fact in facts),
                 ))
                 client=None
-                try:
-                    client=AsyncOpenAI(
-                        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                        max_retries=0)
-                    client.model=require_env("CHAT_MODEL")
-                    answer=await answer_curated_protocol_question(
-                        client,
-                        transcript,
-                        language=turn_language,
-                        protocol_id=curated.fixture.protocol_id,
-                        protocol_title=curated.fixture.title,
-                        step_id=step.step_id,
-                        step_label=step.source_label,
-                        facts=tuple(
-                            (fact.fact_id,fact.kind,fact.text,fact.source_page)
-                            for fact in facts
-                        ),
-                    )
-                    if not session.is_current(turn_id,generation):
-                        curated._restore(checkpoint)
-                        return
-                    if answer.intent != "unsupported":
-                        plan=curated.apply_grounded_answer(
-                            turn_id=turn_id,
+                force_external=(
+                    plan.requested_followup=="search_external_reference"
+                )
+                if not force_external:
+                    try:
+                        client=AsyncOpenAI(
+                            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                            max_retries=0)
+                        client.model=require_env("CHAT_MODEL")
+                        answer=await answer_curated_protocol_question(
+                            client,
+                            resolved_query,
                             language=turn_language,
-                            primary_text=answer.primary_text,
-                            evidence_ids=answer.evidence_ids,
-                            inference_labels=answer.inference_labels,
-                            unsupported_parts=answer.unsupported_parts,
+                            protocol_id=curated.fixture.protocol_id,
+                            protocol_title=curated.fixture.title,
+                            step_id=step.step_id,
+                            step_label=step.source_label,
+                            facts=tuple(
+                                (fact.fact_id,fact.kind,fact.text,fact.source_page)
+                                for fact in facts
+                            ),
                         )
-                except Exception:
-                    log.info(
-                        "curated grounded QA failed closed turn_id=%s",turn_id)
+                        if not session.is_current(turn_id,generation):
+                            curated._restore(checkpoint)
+                            return
+                        if answer.intent != "unsupported":
+                            plan=curated.apply_grounded_answer(
+                                turn_id=turn_id,
+                                language=turn_language,
+                                primary_text=answer.primary_text,
+                                evidence_ids=answer.evidence_ids,
+                                inference_labels=answer.inference_labels,
+                                unsupported_parts=answer.unsupported_parts,
+                            )
+                    except Exception:
+                        log.info(
+                            "curated grounded QA failed closed turn_id=%s",turn_id)
                 if (
                     plan.action is CuratedProtocolAction.RELATED_QUESTION
                     and session.tool_context is not None
+                    and not force_external
                 ):
                     await progress(
                         "checking_approved_information",
@@ -1646,6 +1675,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         protocol_id=curated.fixture.protocol_id,
                         top_k=5,
                     )
+                    if not session.is_current(turn_id,generation):
+                        curated._restore(checkpoint)
+                        return
                     reference_elapsed=round((clock()-reference_started)*1000)
                     reference_backend=(
                         reference_result.get("retrieval",{}).get("backend")
@@ -1715,6 +1747,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                     reference_query,language=turn_language)
                         except Exception:
                             result={"status":"error","matches":[]}
+                        if not session.is_current(turn_id,generation):
+                            curated._restore(checkpoint)
+                            return
                         external_elapsed=round((clock()-external_started)*1000)
                         await current_text(
                             "tool.result",turn_id=turn_id,
@@ -1771,6 +1806,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.FULL_DETAIL:(
                 "current_step_elaboration"
                 if plan.intent_kind=="step_elaboration"
+                else "expected_result_explanation"
+                if plan.intent_kind=="expected_result_explanation"
                 else "current_step_full_detail"
             ),
             CuratedProtocolAction.NEXT:"next_step_transition",
@@ -1783,7 +1820,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "verified_fact_read"),
             CuratedProtocolAction.RELATED_QUESTION:"related_question_unresolved",
             CuratedProtocolAction.VISUAL_REQUEST:"instructional_visual_request",
+            CuratedProtocolAction.AUDIO_RECOVERY:"audio_replay_request",
+            CuratedProtocolAction.TRANSCRIPT_UNRELIABLE:"transcript_retry_required",
+            CuratedProtocolAction.CANCEL_READONLY:"readonly_operation_cancelled",
             CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
+            CuratedProtocolAction.CLARIFY_REFERENCE:"reference_clarification_required",
             CuratedProtocolAction.OFF_TOPIC:"scope_reminder",
             CuratedProtocolAction.UNSUPPORTED:"unsupported_question",
             CuratedProtocolAction.STOP:"protocol_stop",
@@ -1818,6 +1859,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "reply.complete",turn_id=turn_id,text=display_text)
         await current_text(
             "audio.complete",turn_id=turn_id,segment_count=1)
+        if plan.action is CuratedProtocolAction.AUDIO_RECOVERY:
+            await current_text(
+                "audio.replay.request",turn_id=turn_id,
+                replay_count=1,state_mutation=False)
+        else:
+            await current_text(
+                "audio.replay.available",turn_id=turn_id,
+                replay_count=1,state_mutation=False)
         timings["total_ms"]=round((clock()-endpoint)*1000)
         await current_text(
             "turn.done",turn_id=turn_id,timings_ms=timings,
@@ -1829,11 +1878,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             intent_kind=plan.intent_kind,
             reported_completion=plan.reported_completion,
             requested_transition=plan.requested_transition)
-        if plan.action in {
-            CuratedProtocolAction.START,CuratedProtocolAction.CURRENT,
-            CuratedProtocolAction.REPEAT,CuratedProtocolAction.FULL_DETAIL,
-            CuratedProtocolAction.NEXT,CuratedProtocolAction.VISUAL_REQUEST,
-        }:
+        if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
             try:
                 visual_settings=GeneratedVisualSettings.from_environment()
             except ValueError:

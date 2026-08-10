@@ -4,6 +4,7 @@ from voice_workflow_agent.language import (
     Transcription,
     normalize_provider_language,
     resolve_turn_language,
+    transcription_quality_issue,
 )
 
 
@@ -19,8 +20,23 @@ class LanguageTests(unittest.TestCase):
 
     def test_transcription_has_no_fabricated_confidence(self):
         result = Transcription("hello", "en")
-        self.assertFalse(hasattr(result, "confidence"))
+        self.assertIsNone(result.confidence)
+        self.assertIsNone(result.no_speech_probability)
+        self.assertEqual(result.alternatives, ())
         self.assertFalse(hasattr(result, "language_confidence"))
+        self.assertIsNone(transcription_quality_issue(result))
+        self.assertEqual(
+            transcription_quality_issue(
+                Transcription("uncertain", "en", confidence=0.2)
+            ),
+            "provider_low_confidence",
+        )
+        self.assertEqual(
+            transcription_quality_issue(
+                Transcription("", None, no_speech_probability=0.9)
+            ),
+            "provider_no_speech_probability",
+        )
 
     def test_manual_mode_is_authoritative(self):
         result = resolve_turn_language(

@@ -33,6 +33,7 @@ class GeneratedVisualSettings:
     enabled: bool
     model: str = "grok-imagine-image-quality"
     max_bytes: int = 5_000_000
+    timeout_seconds: float = 60.0
 
     @classmethod
     def from_environment(cls) -> "GeneratedVisualSettings":
@@ -45,7 +46,16 @@ class GeneratedVisualSettings:
         ).strip()
         if not model or len(model) > 128:
             raise ValueError("generated visual model is invalid")
-        return cls(True, model)
+        timeout_raw = os.environ.get(
+            "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS", "60"
+        ).strip()
+        try:
+            timeout_seconds = float(timeout_raw)
+        except ValueError as exc:
+            raise ValueError("generated visual timeout is invalid") from exc
+        if not 5 <= timeout_seconds <= 120:
+            raise ValueError("generated visual timeout is invalid")
+        return cls(True, model, 5_000_000, timeout_seconds)
 
 
 @dataclass(frozen=True)
@@ -218,11 +228,14 @@ class XaiImageGenerator:
         self.settings = settings
 
     async def generate(self, specification: VisualSpecification) -> bytes:
-        response = await self.client.images.generate(
-            model=self.settings.model,
-            prompt=specification.prompt(),
-            response_format="b64_json",
-            extra_body={"aspect_ratio": specification.aspect_ratio},
+        response = await asyncio.wait_for(
+            self.client.images.generate(
+                model=self.settings.model,
+                prompt=specification.prompt(),
+                response_format="b64_json",
+                extra_body={"aspect_ratio": specification.aspect_ratio},
+            ),
+            timeout=self.settings.timeout_seconds,
         )
         data = getattr(response, "data", None)
         encoded = getattr(data[0], "b64_json", None) if data else None

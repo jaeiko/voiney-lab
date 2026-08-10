@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import tempfile
 import threading
@@ -19,6 +18,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent import server as server_module
 from voice_workflow_agent.curated_protocol import (
+    CuratedProtocolFixtureError,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
@@ -349,57 +349,21 @@ class ProtocolCatalogTests(unittest.TestCase):
                 )
         model.analyze.assert_not_called()
 
-    def test_visual_is_verified_schematic_and_asset_lookup_is_strict(self):
+    def test_missing_original_visual_does_not_create_automatic_schematic(self):
         approved = self._approve(self.alpha, "alpha.pdf")
         fixture = self.catalog.load_executable_fixture(approved.protocol_id)
-        asset = fixture.visual_for_step(0)
-        self.assertIsNotNone(asset)
-        self.assertEqual(asset.kind, "generated_schematic")
-        self.assertEqual(asset.source_page, 1)
-        verified_asset, verified_content = fixture.visual_content(0)
-        self.assertEqual(verified_asset, asset)
-        self.assertEqual(asset.sha256, hashlib.sha256(verified_content).hexdigest())
-        resolved = self.catalog.resolve_asset(
-            approved.protocol_id, approved.revision_id, asset.asset_id
-        )
-        self.assertEqual(resolved.path.read_bytes(), self.alpha.read_bytes())
+        self.assertIsNone(fixture.visual_for_step(0))
+        with self.assertRaises(CuratedProtocolFixtureError):
+            fixture.visual_content(0)
         with self.assertRaises(ProtocolCatalogNotFoundError):
             self.catalog.resolve_asset(
                 approved.protocol_id, approved.revision_id, "../source-page-1"
             )
         with self.assertRaises(ProtocolCatalogNotFoundError):
             self.catalog.resolve_asset(
-                approved.protocol_id, "pdf-999-analysis-999", asset.asset_id
+                approved.protocol_id, "pdf-999-analysis-999", "missing-asset"
             )
 
-        store_handle = Mock()
-        with patch(
-            "voice_workflow_agent.server.server_config",
-            return_value=SimpleNamespace(),
-        ), patch(
-            "voice_workflow_agent.server._configured_candidate_fixture",
-            return_value=None,
-        ), patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
-            return_value=(self.catalog, store_handle),
-        ):
-            response = get_protocol_visual_asset(
-                approved.protocol_id, approved.revision_id, asset.asset_id
-            )
-        self.assertEqual(
-            response.headers["x-protocol-source-sha256"], approved.source_sha256
-        )
-        self.assertEqual(response.headers["x-protocol-source-page"], "1")
-        self.assertEqual(
-            response.headers["x-protocol-visual-kind"], "generated_schematic"
-        )
-        self.assertEqual(response.headers["x-protocol-asset-sha256"], asset.sha256)
-        self.assertEqual(response.media_type, "image/svg+xml")
-        self.assertEqual(response.body, verified_content)
-        self.assertIn(b"verified action", response.body)
-        self.assertNotIn(b"Source page 1", response.body)
-        self.assertNotIn(str(resolved.path).encode(), response.body)
-        store_handle.close.assert_called_once()
         source_store_handle = Mock()
         with patch(
             "voice_workflow_agent.server.server_config",

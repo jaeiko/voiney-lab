@@ -57,8 +57,11 @@ status have separate authorization and side-effect contracts.
 
 ## Generated instructional illustrations
 
-Visual selection is source crop, validated generated-image cache, new generated
-image, conservative schematic, then text. Generation is feature-flagged and uses
+Visual selection is a verified source crop by default and, only after an explicit
+visual request, a validated generated-image cache or a new generated image.
+There is no automatic explanatory schematic. When neither source nor generated
+image is available, the UI keeps the grounded text and shows a compact
+no-original-visual status. Generation is feature-flagged and uses
 the xAI `/v1/images/generations` contract with the configured model (default
 `grok-imagine-image-quality`) and base64 output. The prompt is built only from a
 validated server-authored specification of current-step facts; raw user text and
@@ -161,14 +164,114 @@ PYTHONDONTWRITEBYTECODE=1 PYTHON_DOTENV_DISABLED=1 \
 5. Confirm private-use extraction glyphs never appear in visible instructions;
    verify parentheses, hyphens, time colons, `mm³`, `µL`, and `37°C` render
    correctly. The underlying fixture and evidence must remain byte-identical.
-6. At a step with a verified source crop, confirm no generated replacement runs.
-   At a step without one, confirm text and TTS arrive before any asynchronous
-   generated illustration, the later patch stays on the same Turn, and the image
-   is labelled AI-generated and non-source. A cache hit must not appear as a new
-   Provider Tool call.
+6. At a step with a verified source crop, explicitly request a visual and confirm
+   no generated replacement runs. At a step without one, first confirm routine
+   navigation shows no automatic schematic. Then explicitly request a visual and
+   confirm text and TTS arrive before any asynchronous generated illustration,
+   the later patch stays on the same Turn, and the image is labelled AI-generated
+   and non-source. A cache hit must not appear as a new Provider Tool call.
 7. Confirm an approved-reference question either cites an actually approved active
    document or fails closed. The catalog currently configured on this VM contains
    fictional demo records only and is not Candidate A operational guidance.
 8. Record the outcome table and preservation fingerprints. Passing this checklist
    is development Acceptance evidence only; it is not final protocol approval,
    automated-ingestion acceptance, production-safety validation, or Native parity.
+
+## Exact Candidate A launch and optional live features
+
+Run the existing launcher from the VM. It verifies the Candidate A PDF identity,
+loads the exact curated fixture/provenance, and materializes only the already
+reviewed development catalog entry before starting one Uvicorn worker:
+
+```bash
+cd /home/student/voice-ai-course/voice-workflow-agent
+./scripts/run_candidate_a.sh
+```
+
+The launcher is deliberately the owner of the Candidate A paths. Do not duplicate
+those paths in `.env`, and do not edit `.env` for Acceptance. The normal page is:
+
+```text
+http://localhost:8000/
+```
+
+When the browser runs on the Mac and the application runs in the VM, open one
+terminal on the Mac and replace only the operator-owned VM host value:
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 student@<VM_HOST>
+```
+
+Optional authoritative search is disabled by default. A separately authorized
+manual run may export only these non-secret controls before invoking the launcher:
+
+```bash
+export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true
+export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS='osha.gov,cdc.gov'
+export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL='grok-4.5'
+export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
+```
+
+The domain list above is an operator-visible example, not a blanket authority
+decision. Confirm the institution/manufacturer domains appropriate to the actual
+question. Live use also requires the already configured xAI credential through
+the normal secret loader; never print it. One Turn makes at most one domain-filtered
+Responses web-search request and revalidates every returned HTTPS citation.
+
+Optional image generation is also disabled by default. For the single explicit
+manual visual request, the non-secret controls are:
+
+```bash
+export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
+export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL='grok-imagine-image-quality'
+export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS=60
+```
+
+Do not enable either feature merely to run offline tests. Automated tests use
+fakes and make zero paid calls.
+
+## Real-failure regression matrix
+
+In one fresh Cascade/Korean session, speak each phrase once and wait for the
+complete answer. Record raw speech separately from the normalized STT transcript.
+
+| Phrase | Expected result |
+| --- | --- |
+| `현재 단계를 완료했어요.` | one atomic completion/advance; no retrieval |
+| `이 단계 완료했어.` | one atomic completion/advance; no retrieval |
+| `현재 단계를 완료했어, 다음 단계로 안내해줘.` | one atomic transition, never two |
+| `거의 끝난 것 같아.` | short confirmation request; no mutation |
+| `이 단계를 좀 더 자세히 설명해 줘.` | concise Korean speech plus richer admitted evidence on screen |
+| `젤 밴드가 완전히 탈색된다는 게 무슨 의미야?` | transparent endpoint, usual two cycles, Step 7 remains blocked |
+| `그 용액은 어떻게 준비해?` | dominant recent entity or explicit A/B clarification |
+| `여기서 진짜 안전 수칙 있어?` | protocol → approved catalog → optional authoritative web; no mutation |
+| `출처 보여줘` | existing exact evidence displayed; no state operation |
+| `웹에서 더 찾아봐` | one external follow-up only when a prior related question and feature exist |
+| `방금 검색 취소해` | read-only lookup cancellation acknowledgment; protocol remains active |
+| `소리가 안 나요.` / `There's no sound.` | last replayable answer once plus visible Replay control |
+| `わんねーちょ` in Korean Manual mode | transcript retry, unless an explicit stop was clearly recognized |
+| `혹시 융프라우 다녀오셨나요?` | short scope reminder; current step preserved |
+
+For Steps 7, 9, and 20, completion language must still return the existing
+fail-closed execution-control reason. Neither an explanation, source crop,
+external result, nor generated image can approve those boundaries.
+
+## Glove-first browser checks
+
+Use headphones, one Whale tab, one WebSocket, Cascade mode, Korean Manual mode,
+and the exact Candidate A development protocol. At both 100% and 125% zoom:
+
+1. Confirm the current-step pane and newest Turn remain visible together.
+2. Produce at least 15 Turns; only the bounded chat viewport should scroll.
+3. Scroll upward and allow a late search/visual patch; focus and scroll anchor
+   must remain stable and the new-update affordance must appear.
+4. Confirm every historical Turn still exposes route, server operation, real
+   service calls, status, bilingual evidence, citations, limitations, timing,
+   filler, replay, and visual state.
+5. Confirm routine Steps without original images show no SVG/canvas/arrow or
+   blank visual space. Historical generated images remain bounded thumbnails.
+6. Confirm derived display and TTS show `1 mm³`, `(AMBIC)`, and `00:15:00`
+   without boxed private-use glyphs; the exact raw evidence remains unchanged.
+7. Record STT, detected language/quality metadata, route, state before/after,
+   operation count, source tier, spoken/written answer, citations, and the
+   existing STT/answer/first-audio/playback/retrieval/visual timing fields.

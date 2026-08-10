@@ -98,3 +98,27 @@ External reference search is disabled by default. Enabling it requires both the
 feature flag and an explicit authoritative-domain allowlist. External results are
 labelled non-protocol, cannot alter Candidate A state, cannot resolve Steps 7, 9,
 or 20, and must retain their canonical URL and retrieval time.
+
+The live xAI Responses adapter additionally requires:
+
+- `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true`;
+- one to five comma-separated authority domains in
+  `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS`;
+- a non-empty `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL` (default
+  `grok-4.5`);
+- a bounded `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
+  1 and 30 seconds.
+
+Each Turn is limited to one web-search request with SDK retries disabled. Returned
+URLs are independently required to be HTTPS and inside the configured domains.
+Google Custom Search and YouTube discovery are not part of this catalog or answer
+path.
+
+## 7. Candidate A usefulness gate
+
+The local audit on 2026-08-10 found two active approved demo documents and three
+active sections in `demo` scope. The representative Candidate A/acetonitrile
+precaution query returned zero matches. Therefore the live local catalog is not
+useful Candidate A evidence. Do not claim internal-RAG success until a real
+reviewed laboratory manifest is staged, audited, and explicitly configured by
+the operator using Sections 1–4.
