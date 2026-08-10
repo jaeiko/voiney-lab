@@ -1,0 +1,174 @@
+# Candidate A real-voice Acceptance architecture
+
+This document records the implementation boundary adopted from the authoritative
+local worktree. Candidate A remains a development-only, `analysis_required`
+curated fixture. Nothing in this design approves it, persists procedure state, or
+changes the fail-closed execution controls at Steps 7, 9, and 20.
+
+## Routing and state ownership
+
+Cascade routing is ordered as follows: explicit stop; start/current/repeat;
+structured completion-and-next; other deterministic workflow controls; current
+step facts; approved laboratory references; explicitly enabled authoritative web
+references; and finally a bounded related-unsupported or off-topic response.
+The server, never an LLM or retriever, validates and applies a transition. A
+compound completion report is represented separately from its single requested
+`next` transition so one utterance cannot advance twice. Ambiguous completion
+language asks for confirmation without changing state. Off-topic speech is a
+read-only route result and preserves protocol, step, language, and session.
+
+Reviewed semantic normalization removes harmless punctuation, fillers, duplicate
+speech tokens, and spacing variation before deterministic matching. It does not
+perform fuzzy protocol-name or state inference. Natural repeat paraphrases remain
+spoken-guidance replay only. A Step 3 reference to Solution A, A solution, AMBIC,
+or an unambiguous "that solution" resolves to the exact adjacent Step 2 verified
+fact; ambiguous entities ask for clarification rather than entering retrieval.
+Named-step elaboration is a read-only Tier 0 view and never changes the current
+step.
+
+## Knowledge sources and ingestion
+
+The existing explicit safety-document manifest, schema-validated SQLite catalog,
+and approved/active/version/facility filters remain the policy authority. A shared
+retriever projection adds stable chunk identities, ranked evidence, citation
+metadata, deduplication, and read-only filters without creating a second approval
+store. The deterministic SQLite backend is always available for offline tests.
+The installed `moss` SDK is the `usemoss/moss` retrieval runtime; it may rerank
+only candidates already admitted by the SQLite authority. Its index is opt-in,
+cloud-backed at creation/load time, and never receives documents unless the
+existing explicit sync command and configuration are used.
+
+An optional xAI Responses web-search adapter is disabled by default. When enabled,
+it requires a laboratory-related query and one to five configured authoritative
+domains. HTTPS URL, domain, citation, and relevance checks happen before content is
+accepted. Retrieved text is untrusted data: it cannot supply instructions to the
+agent, request tools, expose secrets, or mutate workflow state. Internal and web
+answers retain origin, source identity, exact excerpts, citations, backend, scores,
+limitations, and the owning session/turn/generation. Korean primary text is spoken;
+source excerpts and citations remain display-only.
+
+The model-facing Tool registry remains nine unique schemas. The broad approved
+laboratory reference search, authoritative web search, and generated-visual job
+are internal server operations rather than additional model Tools. Nine is an
+intentional exception to the preferred eight because the existing approved
+ProcedureStore workflow has distinct read, transition, observation, timer, and
+audit capabilities, while safety lookup, confirmed report creation, and report
+status have separate authorization and side-effect contracts.
+
+## Generated instructional illustrations
+
+Visual selection is source crop, validated generated-image cache, new generated
+image, conservative schematic, then text. Generation is feature-flagged and uses
+the xAI `/v1/images/generations` contract with the configured model (default
+`grok-imagine-image-quality`) and base64 output. The prompt is built only from a
+validated server-authored specification of current-step facts; raw user text and
+web content are excluded. MIME, magic bytes, dimensions, size, document hash, and
+cache key are validated. Assets are served by an opaque same-origin ID and are
+labelled as AI-generated, non-source presentation material.
+
+The accepted text/audio path never waits for image generation. A background job is
+started or joined after the primary response boundary and patches only the owning
+configuration, turn, generation, protocol, step, and source hash. Cancellation,
+reset, disconnect, or identity mismatch discards the result. Image success or
+failure cannot authorize completion, navigation, or a readiness change.
+
+## Conversation viewport and latency
+
+Turns remain one canonical record. Transcript, bilingual answer, citations,
+status, filler, route, server operation, real Tool calls, timing, and visual updates
+patch that record idempotently. The browser renders oldest-to-newest in a bounded,
+responsive chat viewport. It follows new content only while the reader is near the
+bottom; otherwise it preserves the scroll anchor and offers a new-update control.
+Late visuals reserve space and never move keyboard focus.
+
+Measured server boundaries remain separate: STT, answer ready, first TTS request,
+first playable audio, playback completion, retrieval, visual requested, and visual
+ready. Failures are fail-closed and visible in the originating Turn. No timing is
+inferred from animation, elapsed UI time, or model reasoning.
+
+The glove-first workspace places the active procedure and compact visual beside
+the bounded chat viewport. Setup controls follow that active area. The removed
+standalone processing card is not a loss of state: each Turn already consumes the
+server-authored monotonic lifecycle. A presentation-only normalizer repairs only
+known extraction glyphs (`(`, `)`, `-`, `:`) and renders `mm3` as `mm³`; the
+fixture, evidence excerpts, hashes, citations, and speech payload remain
+unchanged.
+
+## Real-audio validation plan
+
+Automated tests use text, fake audio boundaries, and mocked Provider clients; they
+do not prove microphone recognition. Run the following matrix with one fresh
+Cascade/Korean/Candidate A browser session and headphones. Speak once per row,
+wait for playback to finish, and never retry inside a measured run.
+
+| Korean phrase | Expected route | Expected operation | State requirement |
+| --- | --- | --- | --- |
+| `프로토콜을 시작해 줘` | `curated_protocol` | start | active at Step 1 |
+| `현재 단계 알려줘` | `curated_protocol` | current | unchanged |
+| `다시 한번 설명해 줘` | `curated_protocol` | repeat | unchanged |
+| `현재 현재 단계를 완료했어 다음 단계로 안내해 줘` | `curated_protocol` | compound next | exactly one advance |
+| `이 단계 끝났어. 다음으로 넘어가요.` | `curated_protocol` | compound next | exactly one advance |
+| `3단계를 좀 더 자세히 설명해 줘` | `curated_protocol` | current-step elaboration | unchanged; Tier 0 only |
+| `그 용액은 어떻게 준비해?` | `curated_protocol` | verified fact or clarification | unchanged; exact fact ID only |
+| `AMBIC은 어떻게 준비해?` | `curated_protocol` | verified fact or clarification | unchanged; exact fact ID only |
+| `2단계 할 때 주의사항 같은 거 있어?` | related reference | approved retrieval or fail closed | unchanged |
+| `혹시 융프라우 다녀오셨나요?` | off topic | scope reminder | active step preserved |
+| `프로토콜 종료해 줘` | `curated_protocol` | stop | inactive, never completed |
+
+At Steps 7, 9, and 20, repeat the compound-next phrase and verify a blocked
+response, no completion assertion, and no index change. A clearer paraphrase is a
+test input, never permission to resolve those execution controls.
+
+For every turn retain a sanitized record with: audio asset ID (not raw audio),
+normalized transcript, detected language, route, operation, step before/after,
+fact ID or retrieval origin, tool events that actually ran, terminal state,
+STT/answer-ready/first-audio/playback/visual timings, and pass/fail reason. Also
+capture request counts, retries, redirects, database fingerprints, repository
+fingerprints, and the fixture/source/schema identities. Never retain credentials,
+headers, prompts, complete Provider bodies, raw PDF text, or evidence excerpts in
+telemetry.
+
+Rerunnable offline checks are:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHON_DOTENV_DISABLED=1 \
+  .venv/bin/python -B -m unittest \
+  tests.test_curated_protocol_cascade \
+  tests.test_approved_references \
+  tests.test_generated_visuals \
+  tests.test_frontend -v
+
+.venv/bin/python -B scripts/audit_approved_catalog.py \
+  --db /absolute/path/to/catalog.sqlite \
+  --scope reference_only \
+  --query "2단계 acetonitrile 주의사항"
+```
+
+## Mac and Whale manual checklist
+
+1. Use one Whale tab, one WebSocket connection, Cascade mode, Korean, and the
+   exact Candidate A development protocol ID. Confirm `session.ready` before
+   enabling the microphone.
+2. Use a headset. Do not refresh, reconnect, open a second tab, or speak during
+   playback/cooldown. Stop immediately on duplicate endpoints or responses.
+3. Verify the active-step panel and compact visual remain beside the bounded chat;
+   setup controls follow them. Produce at least 15 Turns and confirm the page does
+   not grow with the conversation.
+4. Scroll upward, create a late Tool/visual update, and confirm the viewport keeps
+   its reading position and offers the new-update control. Confirm all bilingual
+   answer, source, citation, route, operation, Tool, filler, timing, status, and
+   visual details remain accessible.
+5. Confirm private-use extraction glyphs never appear in visible instructions;
+   verify parentheses, hyphens, time colons, `mm³`, `µL`, and `37°C` render
+   correctly. The underlying fixture and evidence must remain byte-identical.
+6. At a step with a verified source crop, confirm no generated replacement runs.
+   At a step without one, confirm text and TTS arrive before any asynchronous
+   generated illustration, the later patch stays on the same Turn, and the image
+   is labelled AI-generated and non-source. A cache hit must not appear as a new
+   Provider Tool call.
+7. Confirm an approved-reference question either cites an actually approved active
+   document or fails closed. The catalog currently configured on this VM contains
+   fictional demo records only and is not Candidate A operational guidance.
+8. Record the outcome table and preservation fingerprints. Passing this checklist
+   is development Acceptance evidence only; it is not final protocol approval,
+   automated-ingestion acceptance, production-safety validation, or Native parity.

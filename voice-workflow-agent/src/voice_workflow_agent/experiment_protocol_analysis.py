@@ -889,6 +889,40 @@ def parse_protocol_analysis_response(
     )
 
 
+def validate_protocol_analysis_evidence(
+    protocol: domain.ExperimentProtocol,
+    extraction: ProtocolPdfExtraction,
+) -> tuple[domain.ExperimentProtocol, int]:
+    """Revalidate one decoded Protocol against one exact PDF extraction.
+
+    Chunk merging uses this same production evidence, claim, deferred-state,
+    and domain boundary after restoring the full source extraction.  It is an
+    additive entry point over the existing fail-closed validators; it does not
+    relax response decoding or evidence normalization.
+    """
+
+    verified_protocol, evidence_count = _verify_evidence_tree(
+        protocol,
+        extraction,
+    )
+    _verify_claim_tree(verified_protocol, extraction)
+    _reject_deferred_state(verified_protocol)
+    try:
+        domain.validate_protocol(verified_protocol)
+    except domain.ProtocolValidationError as exc:
+        if exc.code in {
+            domain.ProtocolValidationCode.INVALID_SOURCE_PAGE,
+            domain.ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
+        }:
+            raise ProtocolAnalysisEvidenceError(
+                "Structured Protocol evidence failed source verification."
+            ) from exc
+        raise ProtocolAnalysisResponseError(
+            "Structured Protocol failed deterministic domain validation."
+        ) from exc
+    return verified_protocol, evidence_count
+
+
 def analyze_protocol_extraction(
     extraction: ProtocolPdfExtraction,
     model: ProtocolAnalysisModel,

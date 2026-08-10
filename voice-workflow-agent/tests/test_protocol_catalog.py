@@ -6,21 +6,30 @@ import asyncio
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import httpx
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import CuratedProtocolSession
+from voice_workflow_agent import server as server_module
+from voice_workflow_agent.curated_protocol import (
+    CuratedProtocolSession,
+    load_curated_protocol_fixture,
+)
 from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisDraft,
     ProtocolAnalysisInputTooLargeError,
 )
-from voice_workflow_agent.experiment_protocol_config import ProtocolPersistenceSettings
+from voice_workflow_agent.experiment_protocol_config import (
+    ProtocolFeatureDisabledError,
+    ProtocolPersistenceSettings,
+)
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
 from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
 from voice_workflow_agent.protocol_catalog import (
@@ -35,7 +44,12 @@ from voice_workflow_agent.protocol_catalog import (
 )
 from voice_workflow_agent.server import (
     ServerConfig,
+    get_protocol_analysis_status,
+    get_protocol_source_page,
     get_protocol_visual_asset,
+    list_protocol_catalog,
+    log_protocol_catalog_runtime_configuration,
+    trigger_protocol_analysis,
     voice_socket,
 )
 
@@ -255,6 +269,42 @@ class ProtocolCatalogTests(unittest.TestCase):
             )
         analyze.assert_called_once()
 
+
+    def test_analysis_endpoint_owns_store_in_worker_and_status_is_read_only(self):
+        entry = self.catalog.register(
+            self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
+        ).entry
+        draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
+        settings = ProtocolPersistenceSettings(True, self.root / "catalog")
+        caller_thread = threading.get_ident()
+        open_threads: list[int] = []
+
+        def open_catalog():
+            open_threads.append(threading.get_ident())
+            store = initialize_protocol_store(settings)
+            return ProtocolCatalog(store), store
+
+        model = Mock()
+        with patch(
+            "voice_workflow_agent.server._open_protocol_catalog",
+            side_effect=open_catalog,
+        ), patch(
+            "voice_workflow_agent.server._protocol_analysis_model",
+            return_value=model,
+        ), patch(
+            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            return_value=draft,
+        ) as analyze:
+            response = asyncio.run(trigger_protocol_analysis(entry.protocol_id))
+            status = get_protocol_analysis_status(entry.protocol_id)
+
+        self.assertEqual(response["analysis_status"], "review_required")
+        self.assertEqual(status["state"], "review_required")
+        self.assertEqual(status["total_chunks"], 0)
+        self.assertNotEqual(open_threads[0], caller_thread)
+        self.assertEqual(open_threads[-1], caller_thread)
+        analyze.assert_called_once()
+
     def test_analysis_failure_is_persisted_safely_and_remains_unavailable(self):
         entry = self.catalog.register(
             self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
@@ -299,14 +349,16 @@ class ProtocolCatalogTests(unittest.TestCase):
                 )
         model.analyze.assert_not_called()
 
-    def test_visual_is_exact_pdf_page_fallback_and_asset_lookup_is_strict(self):
+    def test_visual_is_verified_schematic_and_asset_lookup_is_strict(self):
         approved = self._approve(self.alpha, "alpha.pdf")
         fixture = self.catalog.load_executable_fixture(approved.protocol_id)
         asset = fixture.visual_for_step(0)
         self.assertIsNotNone(asset)
-        self.assertEqual(asset.kind, "full_source_page_preview")
+        self.assertEqual(asset.kind, "generated_schematic")
         self.assertEqual(asset.source_page, 1)
-        self.assertEqual(asset.sha256, hashlib.sha256(self.alpha.read_bytes()).hexdigest())
+        verified_asset, verified_content = fixture.visual_content(0)
+        self.assertEqual(verified_asset, asset)
+        self.assertEqual(asset.sha256, hashlib.sha256(verified_content).hexdigest())
         resolved = self.catalog.resolve_asset(
             approved.protocol_id, approved.revision_id, asset.asset_id
         )
@@ -334,12 +386,55 @@ class ProtocolCatalogTests(unittest.TestCase):
             response = get_protocol_visual_asset(
                 approved.protocol_id, approved.revision_id, asset.asset_id
             )
-        self.assertEqual(Path(response.path), resolved.path)
         self.assertEqual(
             response.headers["x-protocol-source-sha256"], approved.source_sha256
         )
-        self.assertEqual(response.media_type, "application/pdf")
+        self.assertEqual(response.headers["x-protocol-source-page"], "1")
+        self.assertEqual(
+            response.headers["x-protocol-visual-kind"], "generated_schematic"
+        )
+        self.assertEqual(response.headers["x-protocol-asset-sha256"], asset.sha256)
+        self.assertEqual(response.media_type, "image/svg+xml")
+        self.assertEqual(response.body, verified_content)
+        self.assertIn(b"verified action", response.body)
+        self.assertNotIn(b"Source page 1", response.body)
+        self.assertNotIn(str(resolved.path).encode(), response.body)
         store_handle.close.assert_called_once()
+        source_store_handle = Mock()
+        with patch(
+            "voice_workflow_agent.server.server_config",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "voice_workflow_agent.server._configured_candidate_fixture",
+            return_value=None,
+        ), patch(
+            "voice_workflow_agent.server._open_protocol_catalog",
+            return_value=(self.catalog, source_store_handle),
+        ):
+            source_page = get_protocol_source_page(
+                approved.protocol_id, approved.revision_id, 1
+            )
+        self.assertIn(b"Source page 1", source_page.body)
+        self.assertEqual(
+            source_page.headers["x-protocol-source-sha256"],
+            approved.source_sha256,
+        )
+        source_store_handle.close.assert_called_once()
+        with patch(
+            "voice_workflow_agent.server.server_config",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "voice_workflow_agent.server._configured_candidate_fixture",
+            return_value=None,
+        ), patch(
+            "voice_workflow_agent.server._open_protocol_catalog",
+            return_value=(self.catalog, Mock()),
+        ):
+            with self.assertRaises(Exception) as unknown:
+                get_protocol_visual_asset(
+                    approved.protocol_id,approved.revision_id,
+                    "source-page-999")
+        self.assertEqual(getattr(unknown.exception,"status_code",None),404)
 
     def test_catalog_revision_is_acknowledged_and_frozen_for_one_listener(self):
         approved = self._approve(self.alpha, "alpha.pdf")
@@ -414,6 +509,362 @@ class ProtocolCatalogTests(unittest.TestCase):
         procedure_store.assert_not_called()
         analysis_model.assert_not_called()
         store_handle.close.assert_called_once()
+
+
+class CandidateDevelopmentBootstrapTests(unittest.TestCase):
+    """The controlled Candidate A runtime is explicit and development-only."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        repository = Path(__file__).resolve().parents[1]
+        self.fixture = load_curated_protocol_fixture(
+            repository
+            / "data/development_protocols/candidate_a_curated_analysis.json",
+            repository
+            / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
+            Path("/home/student/protocol-test-files/in-gel-digestion.pdf"),
+        )
+        self.settings = ProtocolPersistenceSettings(
+            True, self.root / "candidate-a-live-acceptance"
+        )
+        self.store = initialize_protocol_store(self.settings)
+        self.catalog = ProtocolCatalog(self.store)
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self.temp.cleanup()
+
+    def test_bootstrap_is_idempotent_provenance_bound_and_never_approved(self):
+        first = self.catalog.bootstrap_development_fixture(self.fixture)
+        second = self.catalog.bootstrap_development_fixture(self.fixture)
+
+        self.assertFalse(first.deduplicated)
+        self.assertTrue(second.deduplicated)
+        self.assertEqual(first.entry.protocol_id, self.fixture.protocol_id)
+        self.assertEqual(second.entry.revision_id, first.entry.revision_id)
+        self.assertEqual(first.entry.readiness_status, "analysis_required")
+        self.assertEqual(first.entry.approval_status, "unapproved")
+        self.assertFalse(first.entry.available_for_execution)
+        self.assertTrue(
+            self.catalog.development_fixture_is_materialized(self.fixture)
+        )
+        self.assertEqual(len(self.store.list_experiments()), 1)
+        self.assertEqual(
+            len(self.store.list_protocol_revisions(self.fixture.protocol_id)), 1
+        )
+        self.assertEqual(
+            len(self.store.list_analysis_revisions(self.fixture.protocol_id, 1)), 1
+        )
+        events = self.store.list_events(self.fixture.protocol_id)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, "development_fixture_materialized")
+        self.assertTrue(events[0].payload["development_only"])
+        self.assertFalse(events[0].payload["final_approval"])
+        self.assertNotIn("approved", {event.event_type for event in events})
+
+        duplicate = self.catalog.register(
+            self.fixture.source_pdf_path,
+            source_filename="Candidate A.pdf",
+            media_type="application/pdf",
+        )
+        self.assertTrue(duplicate.deduplicated)
+        self.assertEqual(duplicate.entry.protocol_id, self.fixture.protocol_id)
+        self.assertEqual(duplicate.entry.revision_id, first.entry.revision_id)
+
+    def test_public_catalog_projects_candidate_exactly_once_and_logs_paths(self):
+        self.catalog.bootstrap_development_fixture(self.fixture)
+        self.store.close()
+
+        def open_catalog():
+            store = initialize_protocol_store(self.settings)
+            return ProtocolCatalog(store), store
+
+        with patch.object(
+            server_module, "server_config", return_value=SimpleNamespace()
+        ), patch.object(
+            server_module,
+            "_configured_candidate_fixture",
+            return_value=self.fixture,
+        ), patch.object(
+            server_module,
+            "_protocol_store_settings",
+            return_value=self.settings,
+        ), patch.object(
+            server_module, "_open_protocol_catalog", side_effect=open_catalog
+        ), patch.object(
+            server_module, "_protocol_analysis_model"
+        ) as provider_factory, patch.object(
+            server_module, "ProcedureStore"
+        ) as procedure_store:
+            payload = list_protocol_catalog()
+            with self.assertLogs("voice_workflow_agent", level="INFO") as logs:
+                log_protocol_catalog_runtime_configuration()
+
+        matching = [
+            item
+            for item in payload["protocols"]
+            if item["protocol_id"] == self.fixture.protocol_id
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["revision_id"], self.fixture.revision_id)
+        self.assertEqual(
+            matching[0]["approval_status"],
+            "development_only_not_final_acceptance",
+        )
+        self.assertTrue(matching[0]["development_only"])
+        rendered = "\n".join(logs.output)
+        self.assertIn(
+            str(self.settings.data_dir / "protocol_workspace.sqlite"), rendered
+        )
+        self.assertIn(
+            str(self.settings.data_dir / "objects" / "sha256"), rendered
+        )
+        self.assertIn("visible_protocols=1", rendered)
+        provider_factory.assert_not_called()
+        procedure_store.assert_not_called()
+
+        # tearDown owns a live handle; reopen it after the endpoint closed its own.
+        self.store = initialize_protocol_store(self.settings)
+
+    def test_candidate_launcher_uses_isolated_catalog_without_reload(self):
+        repository = Path(__file__).resolve().parents[1]
+        launcher = (repository / "scripts/run_candidate_a.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"',
+            launcher,
+        )
+        self.assertIn(
+            'export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"', launcher
+        )
+        self.assertIn(
+            'export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"', launcher
+        )
+        self.assertIn("bootstrap_development_fixture(fixture)", launcher)
+        self.assertIn("--host 0.0.0.0", launcher)
+        self.assertNotIn("--reload", launcher)
+
+
+class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
+    """Exercise the browser's real raw-body registration HTTP contract."""
+
+    async def asyncSetUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.data_dir = self.root / "protocol-store"
+        self.provider_factory = Mock(
+            side_effect=AssertionError("registration must not create a Provider")
+        )
+
+    async def asyncTearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _open_catalog(self):
+        store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.data_dir)
+        )
+        return ProtocolCatalog(store), store
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: object = None,
+        content_type: str = "application/pdf",
+        catalog_factory=None,
+    ) -> httpx.Response:
+        factory = catalog_factory or self._open_catalog
+        transport = httpx.ASGITransport(app=server_module.app)
+        with (
+            patch.object(server_module, "_open_protocol_catalog", factory),
+            patch.object(
+                server_module,
+                "_protocol_analysis_model",
+                self.provider_factory,
+            ),
+        ):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                return await client.request(
+                    method,
+                    url,
+                    content=content,
+                    headers={"Content-Type": content_type},
+                )
+
+    def _assert_store_empty(self) -> None:
+        store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.data_dir)
+        )
+        try:
+            self.assertEqual(store.list_experiments(), ())
+        finally:
+            store.close()
+        objects = tuple(
+            (self.data_dir / "objects" / "sha256").glob("*/*.pdf")
+        )
+        self.assertEqual(objects, ())
+
+    async def test_valid_candidate_registration_status_and_duplicate_are_provider_free(self):
+        synthetic = self.root / "synthetic.pdf"
+        synthetic_bytes = write_text_pdf(
+            synthetic,
+            "Protocol Synthetic\nSection preparation\n1. Add solution.",
+            title="Protocol Synthetic",
+        )
+
+        first = await self._request(
+            "POST",
+            "/api/protocols?filename=synthetic.pdf",
+            content=synthetic_bytes,
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+        first_payload = first.json()
+        self.assertFalse(first_payload["deduplicated"])
+        protocol_id = first_payload["protocol"]["protocol_id"]
+
+        status = await self._request(
+            "GET",
+            f"/api/protocols/{protocol_id}/analysis/status",
+            content_type="application/json",
+        )
+        self.assertEqual(status.status_code, 200, status.text)
+        self.assertEqual(status.json()["state"], "structured_analysis_ready")
+
+        duplicate = await self._request(
+            "POST",
+            "/api/protocols?filename=renamed.pdf",
+            content=synthetic_bytes,
+        )
+        self.assertEqual(duplicate.status_code, 201, duplicate.text)
+        self.assertTrue(duplicate.json()["deduplicated"])
+        self.assertEqual(
+            duplicate.json()["protocol"]["protocol_id"], protocol_id
+        )
+
+        candidate = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+        candidate_response = await self._request(
+            "POST",
+            "/api/protocols?filename=in-gel-digestion.pdf",
+            content=candidate.read_bytes(),
+        )
+        self.assertEqual(candidate_response.status_code, 201, candidate_response.text)
+        self.assertEqual(
+            candidate_response.json()["protocol"]["source_sha256"],
+            "63d81102fb644fca21e1c2296b566987756f2964ece06758fe52c73ba9c00bd9",
+        )
+        self.provider_factory.assert_not_called()
+
+    async def test_malformed_empty_and_non_pdf_requests_fail_safely_without_assets(self):
+        valid_path = self.root / "valid.pdf"
+        valid = write_text_pdf(
+            valid_path,
+            "Enough valid source text for parsing.",
+            title="Valid",
+        )
+        cases = (
+            (valid[:-64], 422, "invalid_pdf", "truncated.pdf"),
+            (
+                b"%PDF-1.4\n1 0 obj\n<< /Length 5 >>\nstream\nabc",
+                422,
+                "invalid_pdf",
+                "missing-trailer.pdf",
+            ),
+            (b"", 422, "invalid_pdf", "empty.pdf"),
+            (
+                b"plain text renamed as PDF",
+                415,
+                "unsupported_pdf_media_type",
+                "renamed.pdf",
+            ),
+        )
+        for body, expected_status, expected_code, filename in cases:
+            with self.subTest(filename=filename):
+                response = await self._request(
+                    "POST",
+                    f"/api/protocols?filename={filename}",
+                    content=body,
+                )
+                self.assertEqual(response.status_code, expected_status, response.text)
+                self.assertEqual(response.json(), {"detail": expected_code})
+        self._assert_store_empty()
+        self.provider_factory.assert_not_called()
+
+    async def test_streamed_limit_media_feature_and_unexpected_errors_are_stable(self):
+        async def oversized_chunks():
+            yield b"%PDF-1.4\n"
+            yield b"x" * 128
+
+        with patch.object(server_module, "MAX_PROTOCOL_PDF_BYTES", 64):
+            oversized = await self._request(
+                "POST",
+                "/api/protocols?filename=oversized.pdf",
+                content=oversized_chunks(),
+            )
+        self.assertEqual(oversized.status_code, 413, oversized.text)
+        self.assertEqual(
+            oversized.json(), {"detail": "protocol_pdf_too_large"}
+        )
+
+        unsupported = await self._request(
+            "POST",
+            "/api/protocols?filename=renamed.pdf",
+            content=b"not a PDF",
+            content_type="text/plain",
+        )
+        self.assertEqual(unsupported.status_code, 415, unsupported.text)
+        self.assertEqual(
+            unsupported.json(), {"detail": "unsupported_pdf_media_type"}
+        )
+
+        valid_path = self.root / "available.pdf"
+        valid = write_text_pdf(
+            valid_path,
+            "Enough valid source text for registration.",
+            title="Available",
+        )
+        unavailable = await self._request(
+            "POST",
+            "/api/protocols?filename=available.pdf",
+            content=valid,
+            catalog_factory=Mock(
+                side_effect=ProtocolFeatureDisabledError("disabled")
+            ),
+        )
+        self.assertEqual(unavailable.status_code, 503, unavailable.text)
+        self.assertEqual(
+            unavailable.json(), {"detail": "protocol_catalog_unavailable"}
+        )
+
+        internal = await self._request(
+            "POST",
+            "/api/protocols?filename=available.pdf",
+            content=valid,
+            catalog_factory=Mock(side_effect=RuntimeError("sensitive path")),
+        )
+        self.assertEqual(internal.status_code, 500, internal.text)
+        self.assertEqual(internal.json(), {"detail": "protocol_catalog_error"})
+        self.assertNotIn("sensitive", internal.text)
+        self.provider_factory.assert_not_called()
+
+    async def test_text_empty_valid_pdf_enters_ocr_required_lifecycle(self):
+        scanned = self.root / "scanned.pdf"
+        scanned_bytes = write_text_pdf(scanned, None, title="Scanned")
+        response = await self._request(
+            "POST",
+            "/api/protocols?filename=scanned.pdf",
+            content=scanned_bytes,
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(
+            response.json()["protocol"]["analysis_status"], "ocr_required"
+        )
+        self.provider_factory.assert_not_called()
 
 
 if __name__ == "__main__":

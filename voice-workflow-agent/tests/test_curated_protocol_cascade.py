@@ -6,6 +6,8 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ from voice_workflow_agent.audio import FRAME_BYTES
 from voice_workflow_agent.brain import (
     BrainResult,
     SentenceSegment,
+    answer_curated_protocol_question,
     select_curated_protocol_answer,
 )
 from voice_workflow_agent.curated_protocol import (
@@ -24,6 +27,7 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolFixtureError,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
+    classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.experiment_protocol_analysis import (
@@ -37,6 +41,8 @@ from voice_workflow_agent.server import (
     ListenerSession,
     ServerConfig,
     cancel_cascade_generation,
+    get_protocol_source_page,
+    get_protocol_visual_asset,
     run_turn,
     run_turn_safely,
     voice_socket,
@@ -75,6 +81,31 @@ class RecordingClient:
         self.model = "offline-model"
         self.chat = SimpleNamespace(
             completions=RecordingCompletions(fact_id, error)
+        )
+
+
+class GroundedCompletions:
+    def __init__(self, payload: dict, error: Exception | None = None):
+        self.payload = payload
+        self.error = error
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(
+                content=json.dumps(self.payload, ensure_ascii=False)
+            )
+        )])
+
+
+class GroundedClient:
+    def __init__(self, payload: dict, error: Exception | None = None):
+        self.model = "offline-model"
+        self.chat = SimpleNamespace(
+            completions=GroundedCompletions(payload, error)
         )
 
 
@@ -308,6 +339,117 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
                 with self.assertRaises(CuratedProtocolFixtureError):
                     load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
 
+    def test_verified_visual_manifest_selects_crops_and_safe_diagram_fallback(self):
+        step_one = self.fixture.visual_for_step(0)
+        step_seven = self.fixture.visual_for_step(6)
+        step_nine = self.fixture.visual_for_step(8)
+        self.assertEqual(step_one.kind, "generated_schematic")
+        self.assertEqual(step_one.mime_type, "image/svg+xml")
+        self.assertIn("원본 이미지 아님", step_one.label)
+        self.assertNotIn("localhost", step_one.public_dict()["url"])
+        self.assertNotIn("file://", step_one.public_dict()["source_page_url"])
+        self.assertEqual((step_seven.kind, step_seven.mime_type), (
+            "source_crop", "image/png",
+        ))
+        self.assertEqual((step_nine.kind, step_nine.mime_type), (
+            "source_crop", "image/jpeg",
+        ))
+        self.assertEqual(step_seven.source_page, 5)
+        self.assertEqual(step_nine.source_page, 6)
+        self.assertNotIn("candidate-a-step-01", self.fixture.visual_manifest)
+        self.assertIn("candidate-a-step-07", self.fixture.visual_manifest)
+        for index in (0, 6, 8):
+            asset, content = self.fixture.visual_content(index)
+            self.assertTrue(content)
+            self.assertEqual(hashlib.sha256(content).hexdigest(), asset.sha256)
+
+    def test_candidate_visual_endpoints_serve_exact_assets_and_secondary_pages(self):
+        with patch(
+            "voice_workflow_agent.server.server_config",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "voice_workflow_agent.server._configured_candidate_fixture",
+            return_value=self.fixture,
+        ):
+            for index in (0, 6, 8):
+                asset, content = self.fixture.visual_content(index)
+                response = get_protocol_visual_asset(
+                    self.fixture.protocol_id,
+                    self.fixture.revision_id,
+                    asset.asset_id,
+                )
+                self.assertEqual(response.body, content)
+                self.assertEqual(
+                    response.headers["x-protocol-visual-kind"], asset.kind
+                )
+                self.assertEqual(
+                    response.headers["x-protocol-asset-sha256"], asset.sha256
+                )
+            page = get_protocol_source_page(
+                self.fixture.protocol_id, self.fixture.revision_id, 5
+            )
+            self.assertIn(b"Source page 5", page.body)
+            with self.assertRaises(Exception) as unknown_page:
+                get_protocol_source_page(
+                    self.fixture.protocol_id, self.fixture.revision_id, 99
+                )
+            self.assertEqual(
+                getattr(unknown_page.exception, "status_code", None), 404
+            )
+            with self.assertRaises(Exception) as traversal:
+                get_protocol_visual_asset(
+                    self.fixture.protocol_id,
+                    self.fixture.revision_id,
+                    "../source-crop-5-125",
+                )
+            self.assertEqual(getattr(traversal.exception, "status_code", None), 404)
+
+    def test_localization_is_identity_bound_and_preserves_numeric_units(self):
+        self.assertEqual(len(self.fixture.localizations), 36)
+        translated = self.fixture.localized_fact(
+            "candidate-a-step-03", "current_step"
+        )
+        for marker in ("500 µL", "Solution A", "37°C", "800 rpm"):
+            self.assertIn(marker, translated)
+        self.assertEqual(self.fixture.source_pdf_sha256, self.provenance["candidate_sha256"])
+
+    def test_localization_rejects_added_numeric_value_or_wrong_source_identity(self):
+        original = json.loads(
+            FIXTURE.with_name(
+                "candidate_a_curated_analysis.localization.ko.json"
+            ).read_text(encoding="utf-8")
+        )
+        for mutation in ("numeric", "identity"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fixture = root / FIXTURE.name
+                provenance = root / PROVENANCE.name
+                localization = root / (
+                    "candidate_a_curated_analysis.localization.ko.json"
+                )
+                fixture.write_bytes(FIXTURE.read_bytes())
+                provenance.write_bytes(PROVENANCE.read_bytes())
+                payload = copy.deepcopy(original)
+                if mutation == "numeric":
+                    payload["translations"][
+                        "candidate-a-step-03/current_step"
+                    ] += " 999 µL"
+                else:
+                    payload["document_sha256"] = "0" * 64
+                localization.write_text(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(CuratedProtocolFixtureError):
+                    load_curated_protocol_fixture(
+                        fixture, provenance, SOURCE_PDF
+                    )
+
 
 class CuratedProtocolSessionTests(unittest.TestCase):
     @classmethod
@@ -332,6 +474,161 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         stopped = session.plan("종료", turn_id=5, language="ko")
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.state()["active"])
+
+    def test_compound_completion_and_next_is_structured_and_advances_once(self):
+        phrases = (
+            "현재 현재 단계를 완료했어 다음 단계로 안내해 줘",
+            "현재 단계를 완료했어. 다음 단계로 안내해 줘.",
+            "이 단계 끝냈어요. 다음으로 넘어가요.",
+            "이 단계 끝났어 다음 단계로 알려줘",
+            "다 했어. 다음 단계 알려줘.",
+            "현재 작업 완료. 다음 단계 진행해 줘.",
+            "여기까지 했고 이제 다음으로 가자.",
+            "I finished this step. Take me to the next one.",
+            "This step is complete; what comes next?",
+        )
+        for turn_id, phrase in enumerate(phrases, 500):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.activate_configured()
+                intent = classify_curated_control_intent(
+                    phrase,
+                    language="en" if phrase.startswith(("I ", "This ")) else "ko",
+                )
+                self.assertEqual(intent.intent_kind, "completion_and_next")
+                self.assertTrue(intent.reported_completion)
+                self.assertEqual(intent.requested_transition, "next")
+                plan = session.plan(
+                    phrase,
+                    turn_id=turn_id,
+                    language=intent.language,
+                )
+                self.assertEqual(plan.action, CuratedProtocolAction.NEXT)
+                self.assertTrue(plan.reported_completion)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.current_index, 1)
+                self.assertEqual(plan.step_label, "2")
+                self.assertEqual(session.plan(
+                    phrase,
+                    turn_id=turn_id,
+                    language=intent.language,
+                ), plan)
+                self.assertEqual(session.current_index, 1)
+
+    def test_ambiguous_completion_and_off_topic_are_non_mutating(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        session.current_index = 1
+        opening = session._checkpoint()
+
+        ambiguous = session.plan(
+            "이 단계가 완료된 것 같은데 다음으로 가도 될까?",
+            turn_id=600,
+            language="ko",
+        )
+        self.assertEqual(
+            ambiguous.action,
+            CuratedProtocolAction.CLARIFY_COMPLETION,
+        )
+        self.assertIn("상태는 변경하지 않았습니다", ambiguous.display_text)
+        self.assertEqual(session.current_index, 1)
+
+        for turn_id, phrase in enumerate((
+            "혹시 융프라우 다녀오셨나요?",
+            "오늘 여행 가기 좋은 날인가요?",
+            '문서에서 "stop"이라는 영어 단어는 무슨 뜻이야?',
+        ), 601):
+            with self.subTest(phrase=phrase):
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.OFF_TOPIC)
+                self.assertFalse(plan.state_changed)
+                self.assertIn("진행 중인 실험 절차", plan.display_text)
+                self.assertNotIn("픽스처", plan.display_text)
+                self.assertEqual(session.current_index, 1)
+                self.assertTrue(session.active)
+
+        self.assertEqual(session.active, opening[0])
+        self.assertEqual(session.current_index, opening[1])
+
+    def test_repeat_paraphrases_are_deterministic_and_non_mutating(self):
+        for turn_id, phrase in enumerate((
+            "다시 한 번 말해줘",
+            "방금 설명 반복해줘",
+            "아까 안내 다시 말해줘",
+            "Please explain that again",
+        ), 700):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = 2
+                opening = session.state()
+                plan = session.plan(
+                    phrase,
+                    turn_id=turn_id,
+                    language="en" if phrase.startswith("Please") else "ko",
+                )
+                self.assertEqual(plan.action, CuratedProtocolAction.REPEAT)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.state(), opening)
+
+    def test_named_step_elaboration_uses_tier_zero_without_mutation(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = 2
+        opening = session.state()
+        plan = session.plan(
+            "3단계에 대해 조금만 더 자세하게 설명해줄 수 있어?",
+            turn_id=710,
+            language="ko",
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertEqual(plan.intent_kind, "step_elaboration")
+        self.assertEqual(plan.target_step, "3")
+        self.assertEqual(
+            plan.speech_text,
+            self.fixture.localized_fact("candidate-a-step-03", "current_step"),
+        )
+        self.assertIn(self.fixture.steps[2].instruction_source_text, plan.display_text)
+        self.assertEqual(session.state(), opening)
+
+    def test_step_three_contextual_solution_a_aliases_use_adjacent_verified_fact(self):
+        for turn_id, phrase in enumerate((
+            "A 용액은 어떻게 만들어?",
+            "그 용액은 어떻게 준비해?",
+            "AMBIC은 어떻게 준비해?",
+        ), 720):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = 2
+                opening = session.state()
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.QUESTION)
+                self.assertEqual(plan.intent_kind, "contextual_protocol_entity")
+                self.assertEqual(
+                    plan.fact_id,
+                    "candidate-a-step-02/current_step",
+                )
+                self.assertIn("Solution A", plan.source_texts[0])
+                self.assertIn("AMBIC", plan.speech_text)
+                self.assertEqual(session.state(), opening)
+
+    def test_current_step_question_variants_precede_grounded_qa_without_mutation(self):
+        phrases = (
+            "현재 단계가 뭐야?",
+            "현재 단계 다시 알려줘.",
+            "현재 단계를 다시 알려줘.",
+            "지금 무슨 단계야?",
+        )
+        for turn_id, phrase in enumerate(phrases, 100):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = 2
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.CURRENT)
+                self.assertEqual(session.current_index, 2)
+                self.assertEqual(plan.step_label, "3")
 
     def test_explicit_korean_workflow_forms_and_projection_revisions(self):
         session = CuratedProtocolSession(self.fixture)
@@ -424,7 +721,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     self.assertNotIn("검증된 개발용 픽스처", plan.display_text)
                     self.assertEqual(
                         plan.speech_text,
-                        "개발용 픽스처 1단계 안내를 화면에 표시했습니다.",
+                        "1단계 안내를 화면에 표시했습니다.",
                     )
                     self.assertEqual(session.current_index, 0)
                     self.assertEqual(session.state(), opening)
@@ -444,7 +741,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                         turn_id=turn_id,
                         language="ko",
                     ).action,
-                    CuratedProtocolAction.UNSUPPORTED,
+                    CuratedProtocolAction.RELATED_QUESTION,
                 )
 
     def test_stopped_protocol_requires_an_explicit_restart(self):
@@ -473,7 +770,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             (
                 "프로토콜을 시작해 줘",
                 CuratedProtocolAction.START,
-                "개발용 픽스처 1단계 안내를 화면에 표시했습니다.",
+                "1단계 안내를 화면에 표시했습니다.",
             ),
             (
                 "현재 단계 알려줘",
@@ -506,7 +803,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(resume.action, CuratedProtocolAction.START)
         self.assertEqual(
             resume.speech_text,
-            "개발용 픽스처 1단계 안내를 화면에 다시 표시했습니다.",
+            "1단계 안내를 화면에 다시 표시했습니다.",
         )
         self.assertFalse(resume.state_changed)
         self.assertEqual(session.state(), opening)
@@ -528,7 +825,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     detail.action,
                     CuratedProtocolAction.FULL_DETAIL,
                 )
-                self.assertEqual(detail.display_text, canonical)
+                self.assertIn(canonical, detail.display_text)
+                self.assertIn("답변 · 한국어 참고 번역", detail.display_text)
                 self.assertEqual(detail.speech_text, canonical)
                 self.assertEqual(
                     detail.speech_mode,
@@ -659,7 +957,14 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 plan = session.plan(
                     transcript, turn_id=turn_id, language="ko"
                 )
-                self.assertEqual(plan.action, CuratedProtocolAction.UNSUPPORTED)
+                self.assertIn(plan.action, {
+                    CuratedProtocolAction.RELATED_QUESTION,
+                    CuratedProtocolAction.OFF_TOPIC,
+                })
+                self.assertNotIn(plan.action, {
+                    CuratedProtocolAction.NEXT,
+                    CuratedProtocolAction.STOP,
+                })
                 self.assertEqual(session.state(), opening)
 
     def test_real_fixture_binding_does_not_share_listener_state(self):
@@ -726,8 +1031,14 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(supported.action, CuratedProtocolAction.QUESTION)
         self.assertEqual(supported.fact_id, "current_step")
         self.assertEqual(len(supported.facts), 1)
-        self.assertEqual(supported.display_text, supported.facts[0].text)
-        self.assertEqual(supported.speech_text, supported.facts[0].text)
+        self.assertIn(supported.facts[0].text, supported.display_text)
+        self.assertIn("답변 · 한국어 참고 번역", supported.display_text)
+        self.assertEqual(
+            supported.speech_text,
+            self.fixture.localized_fact(
+                self.fixture.steps[2].step_id, "current_step"
+            ),
+        )
         self.assertEqual(
             supported.speech_mode,
             CuratedProtocolSpeechMode.VERIFIED_FACT,
@@ -735,14 +1046,36 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         unrelated = self.fixture.steps[3].instruction_source_text
         self.assertNotIn(unrelated, "\n".join(fact.text for fact in supported.facts))
         unsupported = session.plan("달의 질량은?", turn_id=2, language="ko")
-        self.assertEqual(unsupported.action, CuratedProtocolAction.UNSUPPORTED)
-        self.assertIn("허용된 답변이 없습니다", unsupported.response_text)
+        self.assertEqual(unsupported.action, CuratedProtocolAction.OFF_TOPIC)
+        self.assertIn("관련 실험실 자료", unsupported.response_text)
+        self.assertNotIn("픽스처", unsupported.response_text)
         self.assertEqual(unsupported.display_text, unsupported.speech_text)
         self.assertEqual(
             unsupported.speech_mode,
-            CuratedProtocolSpeechMode.BLOCKED,
+            CuratedProtocolSpeechMode.CONTROL,
         )
         self.assertIsNone(unsupported.fact_id)
+
+    def test_solution_a_question_separates_exact_source_display_from_korean_speech(self):
+        session=CuratedProtocolSession(self.fixture)
+        session.active=True
+        session.current_index=1
+        opening=session.state()
+
+        plan=session.plan(
+            "용액 A는 어떻게 준비해?",turn_id=91,language="ko")
+
+        source=self.fixture.steps[1].instruction_source_text
+        self.assertEqual(plan.action,CuratedProtocolAction.QUESTION)
+        self.assertEqual(plan.fact_id,"current_step")
+        self.assertIn(source,plan.display_text)
+        self.assertIn("한국어 참고 번역",plan.display_text)
+        self.assertIn("답변 · 한국어 참고 번역",plan.display_text)
+        self.assertIn("2 parts",plan.display_text)
+        self.assertIn("Solution A",plan.speech_text)
+        self.assertNotIn(source,plan.speech_text)
+        self.assertIn("Solution B",plan.speech_text)
+        self.assertEqual(session.state(),opening)
 
     def test_supported_question_routing_uses_server_authored_fact_kinds(self):
         cases = (
@@ -824,7 +1157,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             turn_id=21,
             language="ko",
         )
-        self.assertEqual(unavailable.action, CuratedProtocolAction.UNSUPPORTED)
+        self.assertEqual(unavailable.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertIn("현재 단계", unavailable.response_text)
         self.assertNotIn(solution.facts[0].text, unavailable.response_text)
 
@@ -845,8 +1178,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             language="ko",
         )
 
-        self.assertEqual(ambiguous.action, CuratedProtocolAction.UNSUPPORTED)
-        self.assertEqual(future.action, CuratedProtocolAction.UNSUPPORTED)
+        self.assertEqual(ambiguous.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertEqual(future.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertEqual(session.state(), opening)
         inactive = CuratedProtocolSession(self.fixture).plan(
             "현재 온도는?",
@@ -901,6 +1234,69 @@ class CuratedProtocolBrainTests(unittest.TestCase):
         ))
         self.assertEqual((unsupported.fact_id, unsupported.text), ("unsupported", ""))
 
+    def test_grounded_qa_is_current_step_cited_numeric_safe_and_tool_free(self):
+        client = GroundedClient({
+            "intent": "grounded_explanation",
+            "target_step_id": "candidate-a-step-03",
+            "primary_text": "Solution A 500 µL를 사용하고 37°C에서 진행합니다.",
+            "claims": [{
+                "text": "검증된 원문에는 Solution A 500 µL와 37°C가 명시되어 있습니다.",
+                "evidence_ids": ["current_step"],
+                "inference_label": "direct_source_fact",
+            }],
+            "unsupported_parts": [],
+        })
+        answer = asyncio.run(answer_curated_protocol_question(
+            client,
+            "이 단계에서 용액은 얼마나 넣어?",
+            language="ko",
+            protocol_id="fixture",
+            protocol_title="Development fixture",
+            step_id="candidate-a-step-03",
+            step_label="3",
+            facts=((
+                "current_step", "step",
+                "Wash with Solution A 500 µL at 37°C.", 4,
+            ),),
+        ))
+        self.assertEqual(answer.evidence_ids, ("current_step",))
+        self.assertEqual(answer.target_step_id, "candidate-a-step-03")
+        call = client.chat.completions.calls[0]
+        self.assertEqual(call["temperature"], 0)
+        self.assertTrue(call["response_format"]["json_schema"]["strict"])
+        self.assertNotIn("tools", call)
+
+    def test_grounded_qa_rejects_wrong_evidence_step_and_invented_quantity(self):
+        base = {
+            "intent": "grounded_explanation",
+            "target_step_id": "candidate-a-step-03",
+            "primary_text": "Solution A 700 µL를 사용합니다.",
+            "claims": [{
+                "text": "Solution A 700 µL",
+                "evidence_ids": ["current_step"],
+                "inference_label": "direct_source_fact",
+            }],
+            "unsupported_parts": [],
+        }
+        with self.assertRaises(RuntimeError):
+            asyncio.run(answer_curated_protocol_question(
+                GroundedClient(base), "얼마나?", language="ko",
+                protocol_id="fixture", protocol_title="Development fixture",
+                step_id="candidate-a-step-03", step_label="3",
+                facts=(("current_step", "step", "Solution A 500 µL", 4),),
+            ))
+        invalid = copy.deepcopy(base)
+        invalid["target_step_id"] = "candidate-a-step-04"
+        invalid["primary_text"] = "Solution A 500 µL"
+        invalid["claims"][0]["text"] = "Solution A 500 µL"
+        with self.assertRaises(RuntimeError):
+            asyncio.run(answer_curated_protocol_question(
+                GroundedClient(invalid), "얼마나?", language="ko",
+                protocol_id="fixture", protocol_title="Development fixture",
+                step_id="candidate-a-step-03", step_label="3",
+                facts=(("current_step", "step", "Solution A 500 µL", 4),),
+            ))
+
 
 class CuratedProtocolServerCascadeTests(unittest.TestCase):
     @classmethod
@@ -936,7 +1332,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             classifier=lambda _: next(decisions),
         )
         frame_count = 14 + session.detector.config.endpoint_silence_frames
-        return session.accept_chunk(b"\0" * FRAME_BYTES * frame_count)
+        candidates=session.accept_chunk(b"\0" * FRAME_BYTES * frame_count)
+        ready=next(
+            item for item in candidates
+            if item.kind=="barge_in_audio_ready")
+        return [*candidates,*session.commit_interrupt_candidate(ready)]
 
     def assert_no_accepted_curated_events(self, socket: Socket) -> None:
         event_types = {item["type"] for item in socket.text}
@@ -948,7 +1348,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
     def run_question(
         self,
         *,
-        client: RecordingClient | None = None,
+        client: RecordingClient | GroundedClient | None = None,
         tts_side_effect=None,
         transcript: str = "이 작업의 온도는?",
         index: int = 2,
@@ -970,7 +1370,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return_value=client,
         ) as llm, patch(
             "voice_workflow_agent.server.require_env",
-            side_effect=AssertionError("Provider configuration must not be read"),
+            return_value="offline-test-value",
         ), patch(
             "voice_workflow_agent.server.asyncio.to_thread",
             side_effect=immediate,
@@ -1036,6 +1436,181 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIsNone(session.advance_turn_progress(
             1,session.generation,"error"))
 
+    def test_generated_visual_is_queued_after_answer_audio_and_patches_same_turn(self):
+        from voice_workflow_agent.curated_protocol import _png_rgb
+        from voice_workflow_agent.generated_visuals import GeneratedVisualAsset
+
+        session=self.make_session(index=0)
+        socket=Socket()
+        listening=session.advance_turn_progress(1,session.generation,"listening")
+        socket.text.append({"type":"turn.state",**listening})
+
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+
+        async def fake_image_generate(self,specification):
+            self.client.called_specification=specification
+            return _png_rgb(64,64,b"\xff\xff\xff"*64*64)
+
+        async def fake_obtain(specification,settings,generate):
+            content=await generate(specification)
+            content_hash=hashlib.sha256(content).hexdigest()
+            return GeneratedVisualAsset(
+                asset_id=content_hash,cache_key=specification.cache_key(settings.model),
+                protocol_id=specification.protocol_id,
+                revision_id=specification.revision_id,
+                step_id=specification.step_id,step_label=specification.step_label,
+                source_document_hash=specification.document_sha256,
+                source_page=specification.source_page,
+                source_evidence_ids=specification.source_evidence_ids,
+                mime_type="image/png",content_sha256=content_hash,
+                byte_size=len(content),width=64,height=64,content=content,
+            ),False
+
+        async def scenario():
+            await run_turn(socket,session,b"\0\0",1,1)
+            for _ in range(10):
+                await asyncio.sleep(0)
+                if any(
+                    item.get("type")=="protocol.visual.state"
+                    and item.get("status")=="visual_ready"
+                    for item in socket.text
+                ):
+                    break
+
+        fake_client=SimpleNamespace(images=SimpleNamespace())
+        with patch.dict(os.environ,{
+            "VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED":"true",
+            "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL":"offline-test-model",
+        },clear=False),patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("현재 단계 알려줘","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",return_value=fake_client,
+        ),patch(
+            "voice_workflow_agent.server.require_env",
+            return_value="offline-test-value",
+        ),patch(
+            "voice_workflow_agent.server.XaiImageGenerator.generate",
+            new=fake_image_generate,
+        ),patch(
+            "voice_workflow_agent.server.GENERATED_VISUALS.obtain",
+            side_effect=fake_obtain,
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(scenario())
+
+        kinds=[item["type"] for item in socket.text]
+        pending=next(
+            index for index,item in enumerate(socket.text)
+            if item["type"]=="protocol.visual.state"
+            and item["status"]=="visual_pending")
+        ready=next((
+            index for index,item in enumerate(socket.text)
+            if item["type"]=="protocol.visual.state"
+            and item["status"]=="visual_ready"),None)
+        self.assertIsNotNone(ready,socket.text)
+        self.assertLess(kinds.index("reply.delta"),pending)
+        self.assertLess(kinds.index("audio.segment.start"),pending)
+        self.assertLess(pending,ready)
+        visual=socket.text[ready]
+        self.assertEqual(
+            (visual["turn_id"],visual["generation"],visual["step_id"]),
+            (1,session.generation,"candidate-a-step-01"),
+        )
+        self.assertEqual(
+            visual["asset"]["url"],
+            f"/api/generated-visuals/{visual['asset']['asset_id']}",
+        )
+        self.assertEqual(kinds.count("tool.call"),1)
+        self.assertEqual(kinds.count("tool.result"),1)
+
+    def test_verified_source_crop_suppresses_generated_visual_specification(self):
+        from voice_workflow_agent.server import _curated_visual_specification
+
+        source_session=CuratedProtocolSession(self.fixture)
+        source_session.active=True
+        source_session.current_index=6
+        self.assertEqual(
+            self.fixture.visual_for_step(6).kind,"source_crop")
+        self.assertIsNone(_curated_visual_specification(source_session))
+        source_session.current_index=0
+        self.assertIsNotNone(_curated_visual_specification(source_session))
+
+    def test_related_question_uses_approved_reference_without_state_mutation(self):
+        session=self.make_session(index=1)
+        socket=Socket()
+        citation={
+            "chunk_id":"a"*64,"document_id":"approved-reference-1",
+            "document_sha256":"b"*64,"document_title":"Approved Lab Guide",
+            "document_version":"1","page_number":4,"section":"handling",
+            "source_language":"en","approval_status":"approved",
+            "original_excerpt":"Keep the fictional container closed.",
+        }
+        match={
+            **citation,"language":"en","original_text":citation["original_excerpt"],
+            "score":2.0,"version":"1","source_checksum":"b"*64,
+            "section_code":"handling",
+        }
+        grounded=SimpleNamespace(intent="unsupported")
+        approved=SimpleNamespace(
+            primary_text="추가 승인 참고자료에 따르면 용기를 닫아 두세요.",
+            citations=(citation,),limitations=("활성 프로토콜의 일부가 아닙니다.",),
+        )
+
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+
+        with patch.dict(os.environ,{},clear=True),patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("2단계 할 때 주의사항 같은 거 있어?","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ) as tts,patch(
+            "voice_workflow_agent.server.AsyncOpenAI",
+            return_value=SimpleNamespace(model="offline"),
+        ),patch(
+            "voice_workflow_agent.server.require_env",
+            return_value="offline-test-value",
+        ),patch(
+            "voice_workflow_agent.server.answer_curated_protocol_question",
+            return_value=grounded,
+        ),patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status":"success","answerable":True,"matches":[match],
+                "retrieval":{"backend":"sqlite"},
+            },
+        ) as retrieval,patch(
+            "voice_workflow_agent.server.answer_approved_reference_question",
+            return_value=approved,
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+
+        self.assertEqual(session.curated_protocol_session.current_index,1)
+        self.assertTrue(session.curated_protocol_session.active)
+        retrieval.assert_called_once()
+        calls=[item for item in socket.text if item["type"]=="tool.call"]
+        results=[item for item in socket.text if item["type"]=="tool.result"]
+        self.assertEqual([item["tool"] for item in calls],[
+            "search_approved_lab_references",
+        ])
+        self.assertEqual(results[0]["retrieval_backend"],"sqlite")
+        reply=next(item for item in socket.text if item["type"]=="reply.delta")
+        self.assertEqual(reply["answer_origin"],"approved_lab_corpus")
+        self.assertEqual(reply["citations"],[citation])
+        self.assertIn("추가 승인 참고자료",tts.call_args.args[0])
+        operation=next(
+            item for item in socket.text if item["type"]=="server.operation")
+        self.assertEqual(operation["operation"],"approved_reference_qa")
+
     def test_fresh_configured_proceed_uses_full_turn_ledger_and_step_one(self):
         session = self.make_session(index=0)
         session.curated_protocol_session = CuratedProtocolSession(self.fixture)
@@ -1060,7 +1635,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             side_effect=AssertionError("LLM must not run"),
         ), patch(
             "voice_workflow_agent.server.require_env",
-            side_effect=AssertionError("Provider configuration must not be read"),
+            return_value="offline-test-value",
         ), patch(
             "voice_workflow_agent.server.asyncio.to_thread",
             side_effect=immediate,
@@ -1095,7 +1670,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn(self.fixture.steps[0].instruction_source_text, display)
         self.assertEqual(
             tts.call_args.args[0],
-            "개발용 픽스처 1단계 안내를 화면에 표시했습니다.",
+            "1단계 안내를 화면에 표시했습니다.",
         )
         self.assertNotIn("검증된 개발용 픽스처", display)
         self.assertTrue(session.playback_ended(1))
@@ -1192,6 +1767,47 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(next_terminal["state"], "complete")
 
+    def test_live_compound_next_and_off_topic_bypass_llm_and_preserve_state_safety(self):
+        compound_session, compound_socket, compound_client, _, _, _ = self.run_question(
+            transcript="현재 현재 단계를 완료했어 다음 단계로 안내해 줘",
+            index=0,
+        )
+        compound_done = next(
+            item for item in compound_socket.text if item["type"] == "turn.done"
+        )
+        compound_operation = next(
+            item for item in compound_socket.text
+            if item["type"] == "server.operation"
+        )
+        self.assertEqual(compound_session.curated_protocol_session.current_index, 1)
+        self.assertEqual(compound_done["intent_kind"], "completion_and_next")
+        self.assertTrue(compound_done["reported_completion"])
+        self.assertEqual(compound_done["requested_transition"], "next")
+        self.assertEqual(
+            compound_operation["operation"],
+            "completion_and_next_transition",
+        )
+        self.assertEqual(compound_client.chat.completions.calls, [])
+
+        off_session, off_socket, off_client, _, _, _ = self.run_question(
+            transcript="혹시 융프라우 다녀오셨나요?",
+            index=1,
+        )
+        off_reply = next(
+            item["text"] for item in off_socket.text
+            if item["type"] == "reply.delta"
+        )
+        off_operation = next(
+            item for item in off_socket.text
+            if item["type"] == "server.operation"
+        )
+        self.assertTrue(off_session.curated_protocol_session.active)
+        self.assertEqual(off_session.curated_protocol_session.current_index, 1)
+        self.assertIn("관련 실험실 자료", off_reply)
+        self.assertNotIn("픽스처", off_reply)
+        self.assertEqual(off_operation["operation"], "scope_reminder")
+        self.assertEqual(off_client.chat.completions.calls, [])
+
         stop_session, stop_socket, stop_client, _, _, _ = self.run_question(
             transcript="중지해 줘."
         )
@@ -1217,6 +1833,50 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             stop_session.turn_terminal_outcome(1, stop_session.generation),
         )
         self.assertEqual(stop_terminal["state"], "complete")
+
+    def test_live_paraphrase_and_context_routes_bypass_llm_and_retrieval(self):
+        cases = (
+            ("다시 한 번 말해줘", 2, "repeat", 2, None),
+            ("이 단계 끝났어 다음 단계로 알려줘", 0, "next", 1, None),
+            (
+                "3단계에 대해 조금만 더 자세하게 설명해줄 수 있어?",
+                2,
+                "full_detail",
+                2,
+                None,
+            ),
+            (
+                "그 용액은 어떻게 준비해?",
+                2,
+                "question",
+                2,
+                "candidate-a-step-02/current_step",
+            ),
+        )
+        with patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            side_effect=AssertionError("deterministic Tier 0 route must not retrieve"),
+        ):
+            for transcript, index, result_kind, closing_index, fact_id in cases:
+                with self.subTest(transcript=transcript):
+                    session, socket, client, _, _, _ = self.run_question(
+                        transcript=transcript,
+                        index=index,
+                    )
+                    done = next(
+                        item for item in socket.text if item["type"] == "turn.done"
+                    )
+                    self.assertEqual(done["result_kind"], result_kind)
+                    self.assertEqual(done["fact_id"], fact_id)
+                    self.assertEqual(
+                        session.curated_protocol_session.current_index,
+                        closing_index,
+                    )
+                    self.assertEqual(client.chat.completions.calls, [])
+                    self.assertEqual(
+                        [item for item in socket.text if item["type"] == "tool.call"],
+                        [],
+                    )
 
     def test_subthreshold_playback_candidate_preserves_curated_checkpoint(self):
         session = self.make_session(index=0)
@@ -1331,13 +1991,21 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         tts.assert_called_once()
         self.assertEqual(
             tts.call_args.args[0],
-            self.fixture.steps[2].instruction_source_text,
+            self.fixture.localized_fact(
+                self.fixture.steps[2].step_id, "current_step"
+            ),
         )
         self.assertTrue(socket.binary)
         display = next(
             item for item in socket.text if item["type"] == "reply.delta"
         )
-        self.assertEqual(display["text"], self.fixture.steps[2].instruction_source_text)
+        self.assertIn(self.fixture.steps[2].instruction_source_text, display["text"])
+        self.assertEqual(
+            display["primary_text"],
+            self.fixture.localized_fact(
+                self.fixture.steps[2].step_id, "current_step"
+            ),
+        )
         done = next(item for item in socket.text if item["type"] == "turn.done")
         self.assertEqual(done["route"], "curated_protocol")
         self.assertEqual(done["result_kind"], "question")
@@ -1348,19 +2016,63 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 2)
 
     def test_unsupported_question_returns_only_bounded_server_response(self):
+        client = GroundedClient({
+            "intent": "unsupported",
+            "target_step_id": "candidate-a-step-03",
+            "primary_text": "",
+            "claims": [],
+            "unsupported_parts": ["현재 단계 근거에 없음"],
+        })
         session, socket, client, _, tts, llm = self.run_question(
-            client=RecordingClient(error=AssertionError("LLM must not run")),
+            client=client,
             transcript="달의 질량은?",
         )
         spoken = tts.call_args.args[0]
         llm.assert_not_called()
-        self.assertEqual(client.chat.completions.calls, [])
-        self.assertIn("허용된 답변이 없습니다", spoken)
+        self.assertEqual(len(client.chat.completions.calls), 0)
+        self.assertIn("관련 실험실 자료", spoken)
+        self.assertNotIn("픽스처", spoken)
         self.assertNotIn(self.fixture.steps[2].instruction_source_text, spoken)
         done = next(item for item in socket.text if item["type"] == "turn.done")
-        self.assertEqual(done["result_kind"], "unsupported")
+        self.assertEqual(done["result_kind"], "off_topic")
         self.assertIsNone(done["fact_id"])
         self.assertEqual(session.curated_protocol_session.current_index, 2)
+
+    def test_grounded_question_uses_current_step_only_and_never_mutates_state(self):
+        client = GroundedClient({
+            "intent": "grounded_explanation",
+            "target_step_id": "candidate-a-step-03",
+            "primary_text": "현재 단계에서는 Solution A 500 µL를 사용합니다.",
+            "claims": [{
+                "text": "원문에 Solution A 500 µL가 명시되어 있습니다.",
+                "evidence_ids": ["current_step"],
+                "inference_label": "direct_source_fact",
+            }],
+            "unsupported_parts": [],
+        })
+        session, socket, client, _, tts, llm = self.run_question(
+            client=client,
+            transcript="이 단계에서 용액은 얼마나 넣어?",
+        )
+        self.assertEqual(session.curated_protocol_session.current_index, 2)
+        self.assertEqual(len(client.chat.completions.calls), 1)
+        llm.assert_called_once()
+        context = json.dumps(
+            client.chat.completions.calls[0]["messages"], ensure_ascii=False
+        )
+        self.assertIn("candidate-a-step-03", context)
+        self.assertNotIn("candidate-a-step-04", context)
+        self.assertEqual(
+            tts.call_args.args[0],
+            "현재 단계에서는 Solution A 500 µL를 사용합니다.",
+        )
+        reply = next(item for item in socket.text if item["type"] == "reply.delta")
+        self.assertEqual(reply["evidence_ids"], ["current_step"])
+        self.assertEqual(reply["source_pages"], [4])
+        self.assertEqual(reply["translation_status"], "grounded_model")
+        operation = next(item for item in socket.text
+                         if item["type"] == "server.operation")
+        self.assertEqual(operation["operation"], "grounded_qa")
 
     def test_stt_failure_or_empty_transcript_prevents_llm_tts_and_state_change(self):
         for mode in ("failure", "empty"):
@@ -1772,8 +2484,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ("start", True, "1", 1, None),
             ("current", True, "1", 1, None),
             ("question", True, "1", 1, "warning_1"),
-            ("unsupported", True, "1", 1, None),
-            ("unsupported", True, "1", 1, None),
+            ("off_topic", True, "1", 1, None),
+            ("related_question", True, "1", 1, None),
             ("next", True, "2", 2, None),
             ("stop", False, None, 3, None),
         )
@@ -1967,7 +2679,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("next", None),
                 ("question", "current_step"),
                 ("full_detail", None),
-                ("unsupported", None),
+                ("related_question", None),
                 ("stop", None),
             ],
         )
@@ -1988,14 +2700,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         step_two = self.fixture.steps[1].instruction_source_text
         spoken = [call.args[0] for call in tts.call_args_list]
         self.assertEqual(spoken, [
-            "개발용 픽스처 1단계 안내를 화면에 표시했습니다.",
+            "1단계 안내를 화면에 표시했습니다.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
             "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            self.fixture.localized_fact(
+                self.fixture.steps[1].step_id, "current_step"
+            ),
             step_two,
-            step_two,
-            "검증된 개발용 픽스처의 현재 단계에는 이 질문에 대해 허용된 답변이 없습니다.",
-            "개발용 픽스처 프로토콜 세션을 종료했습니다.",
+            "현재 단계와 사용 가능한 참고자료에서 답변할 근거를 충분히 찾지 못했습니다. 필요한 내용을 조금 더 구체적으로 말씀해 주세요.",
+            "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:4])
         self.assertNotIn(step_two, spoken[:4])
@@ -2026,12 +2740,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         for index in (0, 1, 2):
             self.assertIn(step_one, replies[index])
         self.assertIn(step_two, replies[3])
-        self.assertEqual(replies[4], step_two)
-        self.assertEqual(replies[5], step_two)
+        self.assertIn(step_two, replies[4])
+        self.assertIn("한국어 참고 번역", replies[4])
+        self.assertIn("답변 · 한국어 참고 번역", replies[4])
+        self.assertIn("Solution A", replies[4])
+        self.assertIn(step_two, replies[5])
         self.assertNotIn(step_two, replies[6])
         self.assertEqual(
             replies[7],
-            "개발용 픽스처 프로토콜 세션을 종료했습니다.",
+            "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         )
         states = [
             item for item in socket.text
@@ -2056,7 +2773,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("next", True, "2", 2, None),
                 ("question", True, "2", 2, None),
                 ("full_detail", True, "2", 2, None),
-                ("unsupported", True, "2", 2, None),
+                ("related_question", True, "2", 2, None),
                 ("stop", False, None, 3, None),
             ],
         )

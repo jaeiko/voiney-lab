@@ -37,6 +37,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))
+        constraints={
+            "type":"client.audio_constraints",
+            "requested":{
+                "echoCancellation":True,"noiseSuppression":True,
+                "autoGainControl":False,
+            },
+            "actual":{
+                "echoCancellation":True,"noiseSuppression":None,
+                "autoGainControl":False,
+            },
+        }
+        self.assertEqual(parse_control(json.dumps(constraints)),constraints)
         self.assertEqual(parse_control(json.dumps({
             "type":"native.playback.truncate","response_id":"r1",
             "item_id":"i1","audio_end_ms":120})),{
@@ -65,6 +77,12 @@ class ProtocolTests(unittest.TestCase):
             {"type":"native.playback.ended","response_id":""},
             {"type":"report.status.get","report_id":"not-a-report"},
             {"type":"report.status.get","report_id":7},
+            {"type":"client.audio_constraints","requested":{},"actual":{}},
+            {"type":"client.audio_constraints","requested":{
+                "echoCancellation":True,"noiseSuppression":True,
+                "autoGainControl":True,"extra":False},"actual":{
+                "echoCancellation":True,"noiseSuppression":True,
+                "autoGainControl":True}},
         ):
             with self.assertRaises(ProtocolError): parse_control(json.dumps(payload))
     def test_segment_contract(self):

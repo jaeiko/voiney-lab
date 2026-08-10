@@ -26,6 +26,7 @@ STATUS_DIR = REPORTS_DIR / "status"
 OUTBOX_DIR = PROJECT_ROOT / "outbox"
 
 SEARCH_TOOL_NAME = "search_approved_safety_manual"
+APPROVED_LAB_REFERENCE_TOOL_NAME = "search_approved_lab_references"
 CREATE_REPORT_TOOL_NAME = "create_safety_report"
 CHECK_REPORT_TOOL_NAME = "check_safety_report_status"
 START_PROCEDURE_TOOL_NAME = "start_procedure"
@@ -423,6 +424,30 @@ TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL,
          START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL,
          RECORD_STEP_OBSERVATION_TOOL,START_STEP_TIMER_TOOL,
          GET_WORKFLOW_SUMMARY_TOOL]
+PROVIDER_TOOL_NAMES = tuple(
+    tool["function"]["name"] for tool in TOOLS
+)
+if len(PROVIDER_TOOL_NAMES) != len(set(PROVIDER_TOOL_NAMES)):
+    raise RuntimeError("Provider-facing Tool names must be unique.")
+
+# This inventory is intentionally derived beside the schemas so tests and
+# operator audits cannot mistake internal service operations for model Tools.
+PROVIDER_TOOL_DECISIONS = {
+    SEARCH_TOOL_NAME: "retained: legacy approved safety lookup used by generic sessions",
+    CREATE_REPORT_TOOL_NAME: "retained: explicit confirmed safety-report write",
+    CHECK_REPORT_TOOL_NAME: "retained: read-only report status",
+    START_PROCEDURE_TOOL_NAME: "retained: approved ProcedureStore start",
+    GET_CURRENT_STEP_TOOL_NAME: "retained: approved ProcedureStore current-step read",
+    COMPLETE_CURRENT_STEP_TOOL_NAME: "retained: approved ProcedureStore transition",
+    RECORD_STEP_OBSERVATION_TOOL_NAME: "retained: transcript-bound observation write",
+    START_STEP_TIMER_TOOL_NAME: "retained: server-authorized timer start",
+    GET_WORKFLOW_SUMMARY_TOOL_NAME: "retained: read-only workflow audit",
+}
+INTERNAL_SERVICE_OPERATIONS = frozenset({
+    APPROVED_LAB_REFERENCE_TOOL_NAME,
+    "search_authoritative_web",
+    "generate_instructional_visual",
+})
 
 
 @dataclass(frozen=True)
@@ -554,6 +579,72 @@ def search_approved_safety_manual(
         }
     except Exception:
         return _search_failure("error")
+
+
+def search_approved_lab_references(
+    query: Any,
+    *,
+    context: ToolContext | None = None,
+    protocol_id: str | None = None,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """Search approved read-only lab references for one protocol-related turn."""
+
+    from voice_workflow_agent.moss_retrieval import get_moss_runtime
+    from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
+
+    if (
+        not isinstance(query, str) or not query.strip()
+        or context is None or context.catalog_path is None
+        or context.language not in {"ko", "en", "vi"}
+        or protocol_id is not None and (
+            not isinstance(protocol_id, str) or not protocol_id.strip()
+        )
+    ):
+        return _search_failure("invalid_arguments")
+    result = retrieve_approved_lab_documents(
+        query,
+        context.catalog_path,
+        filters={
+            "approval_status": "approved",
+            "protocol_id": protocol_id,
+            "lab_scope": context.usage_scope,
+            "facility_id": context.facility_id,
+        },
+        top_k=top_k,
+    )
+    if result.get("status") != "success" or not result.get("answerable"):
+        return _search_failure(str(result.get("status", "error")))
+    matches = list(result["matches"])
+    retrieval = dict(result.get("retrieval") or {"backend": "sqlite"})
+    try:
+        runtime = get_moss_runtime()
+        if runtime is not None and runtime.allows_scope(context.usage_scope):
+            reranked = runtime.rerank(
+                query,
+                matches,
+                usage_scope=context.usage_scope,
+                topic_routes=(
+                    ("facility_sop", None),
+                    ("supplier_sds", None),
+                    ("equipment_manual", None),
+                    ("regulatory_reference", None),
+                ),
+                result_limit=min(top_k, len(matches)),
+            )
+            matches = reranked.matches
+            retrieval = {
+                "backend": "moss" if reranked.used else "sqlite_fallback",
+                "elapsed_ms": reranked.elapsed_ms,
+            }
+    except Exception:
+        retrieval = {"backend": "sqlite_fallback"}
+    return {
+        "status": "success",
+        "answerable": True,
+        "matches": matches[:top_k],
+        "retrieval": retrieval,
+    }
 
 
 def _clean_text(value: Any, field: str, maximum: int = 500) -> tuple[str | None, str | None]:

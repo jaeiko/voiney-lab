@@ -7,6 +7,9 @@ from unittest.mock import patch
 from voice_workflow_agent.tools import (
     CHECK_REPORT_TOOL,
     CREATE_REPORT_TOOL,
+    INTERNAL_SERVICE_OPERATIONS,
+    PROVIDER_TOOL_DECISIONS,
+    PROVIDER_TOOL_NAMES,
     SEARCH_TOOL,
     TOOLS,
     ToolContext,
@@ -48,6 +51,13 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(
             CHECK_REPORT_TOOL["function"]["parameters"]["required"], ["report_id"]
         )
+        self.assertEqual(PROVIDER_TOOL_NAMES, tuple(by_name))
+        self.assertEqual(set(PROVIDER_TOOL_DECISIONS), set(by_name))
+        self.assertEqual(len(PROVIDER_TOOL_NAMES), len(set(PROVIDER_TOOL_NAMES)))
+        self.assertGreaterEqual(len(PROVIDER_TOOL_NAMES), 3)
+        self.assertLessEqual(len(PROVIDER_TOOL_NAMES), 11)
+        self.assertNotIn("search_approved_lab_references", by_name)
+        self.assertIn("search_approved_lab_references", INTERNAL_SERVICE_OPERATIONS)
 
     def test_model_facing_descriptions_define_selection_and_safety_contracts(self):
         by_name = {tool["function"]["name"]: tool["function"] for tool in TOOLS}

@@ -71,6 +71,21 @@ def parse_control(raw: str) -> dict[str, Any]:
         turn_id=message.get("turn_id")
         if not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0: raise ProtocolError("playback.ended needs a positive integer turn_id")
         return {"type":"playback.ended","turn_id":turn_id}
+    if message["type"]=="client.audio_constraints":
+        requested=message.get("requested")
+        actual=message.get("actual")
+        names={"echoCancellation","noiseSuppression","autoGainControl"}
+        if (not isinstance(requested,dict) or set(requested)!=names or
+                any(not isinstance(requested[name],bool) for name in names) or
+                not isinstance(actual,dict) or set(actual)!=names or
+                any(actual[name] is not None and
+                    not isinstance(actual[name],bool) for name in names)):
+            raise ProtocolError("client.audio_constraints metadata is invalid")
+        return {
+            "type":"client.audio_constraints",
+            "requested":{name:requested[name] for name in sorted(names)},
+            "actual":{name:actual[name] for name in sorted(names)},
+        }
     if message["type"]=="native.playback.truncate":
         response_id=message.get("response_id")
         item_id=message.get("item_id")

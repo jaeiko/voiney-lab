@@ -1208,12 +1208,18 @@ class ServerTests(unittest.TestCase):
             b"".join(frame(20+i) for i in range(len(decisions))))
         self.assertEqual(
             [item.kind for item in events],
-            ["assistant.interrupted","speech.start","speech.end"],
+            ["barge_in_candidate","barge_in_audio_ready"],
         )
-        self.assertEqual(events[1].result.total_frames,15)
-        self.assertTrue(events[2].result.utterance.startswith(frame(20)))
+        committed=speech.commit_interrupt_candidate(events[-1])
         self.assertEqual(
-            len([item for item in events
+            [item.kind for item in committed],
+            ["assistant.interrupted","barge_in_committed",
+             "speech.start","speech.end"],
+        )
+        self.assertGreaterEqual(committed[2].result.total_frames,12)
+        self.assertTrue(committed[3].result.utterance.startswith(frame(20)))
+        self.assertEqual(
+            len([item for item in committed
                  if item.kind=="assistant.interrupted"]),1)
         self.assertEqual(speech.state,TurnState.PROCESSING)
         self.assertEqual(
@@ -1231,11 +1237,13 @@ class ServerTests(unittest.TestCase):
             b"".join(frame(200+i) for i in range(len(processing_pattern))))
         self.assertEqual(
             [item.kind for item in processing_events],
-            ["assistant.interrupted","speech.start","speech.end"],
+            ["barge_in_candidate","barge_in_audio_ready"],
         )
-        self.assertEqual(processing_events[1].result.total_frames,3)
+        processing_committed=processing.commit_interrupt_candidate(
+            processing_events[-1])
+        self.assertGreaterEqual(processing_committed[2].result.total_frames,10)
         self.assertTrue(
-            processing_events[-1].result.utterance.startswith(frame(200)))
+            processing_committed[-1].result.utterance.startswith(frame(200)))
     def test_accepted_onset_emits_one_server_owned_listening_state(self):
         config=VadConfig(
             onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
@@ -1345,9 +1353,15 @@ class ServerTests(unittest.TestCase):
         events=session.accept_chunk(frame(8)*6)
         self.assertEqual(
             [item.kind for item in events],
-            ["assistant.interrupted","speech.start","speech.end"],
+            ["barge_in_candidate","barge_in_audio_ready"],
         )
-        interruption,start,end=events
+        committed=session.commit_interrupt_candidate(events[-1])
+        self.assertEqual(
+            [item.kind for item in committed],
+            ["assistant.interrupted","barge_in_committed",
+             "speech.start","speech.end"],
+        )
+        interruption,_,start,end=committed
         self.assertEqual(interruption.turn_id,1)
         self.assertEqual(interruption.generation,old_generation)
         self.assertEqual(interruption.superseding_turn_id,start.turn_id)
@@ -1356,7 +1370,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(start.generation,end.generation)
         self.assertGreater(start.generation,old_generation)
         self.assertEqual(
-            len([item for item in events
+            len([item for item in committed
                  if item.kind=="assistant.interrupted"]),1)
         self.assertFalse(session.playback_ended(1))
 
@@ -1408,9 +1422,109 @@ class ServerTests(unittest.TestCase):
                 "revision":2,"state":"cancelled",
                 "route":"curated_protocol",
                 "superseding_turn_id":5,"superseding_generation":9,
-                "reason":"accepted_speech_onset",
+                "reason":"confirmed_speech",
             }])
         asyncio.run(scenario())
+
+    def test_rejected_barge_in_candidate_preserves_playback_and_generation(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
+            endpoint_silence_frames=2,minimum_voiced_frames=8,
+            maximum_utterance_frames=30,cooldown_ms=0,
+            playback_onset_voiced_frames=2,
+            playback_onset_window_frames=3,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=lambda _:False))
+        session.start(); opening_generation=session.generation
+        session.active_turn_id=1
+        session.turn_generations[1]=opening_generation
+        session.detector.state=TurnState.PROCESSING
+        self.assertTrue(session.start_playback(1))
+        session._interrupt_detector=EndpointDetector(
+            config,classifier=Decisions(
+                [True,True,False,False,False]))
+
+        events=session.accept_chunk(frame(9)*5)
+
+        self.assertEqual(
+            [item.kind for item in events],
+            ["barge_in_candidate","barge_in_rejected"],
+        )
+        self.assertEqual(events[-1].reason,"minimum_voiced_frames")
+        self.assertEqual(session.generation,opening_generation)
+        self.assertEqual(session.active_turn_id,1)
+        self.assertEqual(session.next_turn_id,1)
+        self.assertEqual(session.state,TurnState.AGENT_SPEAKING)
+        self.assertTrue(session.playback_ended(1))
+
+    def test_empty_transcript_barge_in_candidate_never_clears_playback(self):
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
+            endpoint_silence_frames=2,minimum_voiced_frames=2,
+            maximum_utterance_frames=30,cooldown_ms=0,
+            playback_onset_voiced_frames=2,
+            playback_onset_window_frames=3,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=lambda _:False))
+        session.start(); opening_generation=session.generation
+        session.active_turn_id=1
+        session.turn_generations[1]=opening_generation
+        session.detector.state=TurnState.PROCESSING
+        self.assertTrue(session.start_playback(1))
+        session._interrupt_detector=EndpointDetector(
+            config,classifier=Decisions(
+                [False,True,True,True,False,False]))
+        class Socket:
+            def __init__(self):
+                self.text=[]
+                self.at_rejection=None
+                self.messages=[
+                    {"bytes":frame(11)*6},
+                    {"type":"websocket.disconnect","code":1000},
+                ]
+            async def accept(self): return None
+            async def receive(self): return self.messages.pop(0)
+            async def send_text(self,value):
+                parsed=json.loads(value)
+                self.text.append(parsed)
+                if parsed["type"]=="barge_in_rejected":
+                    self.at_rejection=(
+                        session.generation,session.active_turn_id,
+                        session.state)
+            async def send_bytes(self,value): raise AssertionError("no audio output")
+            async def close(self,**kwargs): return None
+        socket=Socket()
+        with patch(
+            "voice_workflow_agent.server.ListenerSession",
+            return_value=session,
+        ), patch(
+            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            return_value=SimpleNamespace(cascade=object()),
+        ), patch(
+            "voice_workflow_agent.server.VadConfig.from_settings",
+            return_value=config,
+        ), patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("", "ko"),
+        ) as transcription:
+            asyncio.run(voice_socket(socket))
+        transcription.assert_called_once()
+        kinds=[item["type"] for item in socket.text]
+        self.assertEqual(kinds.count("barge_in_candidate"),1)
+        self.assertEqual(kinds.count("barge_in_rejected"),1)
+        self.assertNotIn("barge_in_committed",kinds)
+        self.assertNotIn("assistant.interrupted",kinds)
+        self.assertNotIn("cascade.playback.clear",kinds)
+        rejection=next(
+            item for item in socket.text
+            if item["type"]=="barge_in_rejected")
+        self.assertEqual(rejection["reason"],"empty_transcript")
+        self.assertEqual(
+            socket.at_rejection,
+            (opening_generation,1,TurnState.AGENT_SPEAKING),
+        )
 
     def test_stop_clears_history(self):
         session=ListenerSession(); session.history.pending_report={"location":"before start"}; session.start(); self.assertIsNone(session.history.pending_report); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}]); session.history.pending_report={"location":"before stop"}

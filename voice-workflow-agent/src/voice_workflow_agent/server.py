@@ -1,14 +1,15 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, logging, math, os, secrets, sqlite3, tempfile, time
+import asyncio, logging, math, os, secrets, sqlite3, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
 from voice_workflow_agent.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
@@ -16,6 +17,8 @@ from voice_workflow_agent.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
     SentenceSegment,
+    answer_approved_reference_question,
+    answer_curated_protocol_question,
     confirmation_intent,
     stream_brain_turn,
 )
@@ -29,21 +32,47 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolFixture,
     CuratedProtocolSession,
+    ProtocolVisualKind,
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
 )
 from voice_workflow_agent.experiment_protocol_config import (
+    ProtocolConfigurationError,
+    ProtocolFeatureDisabledError,
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import MAX_PROTOCOL_PDF_BYTES
-from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
+from voice_workflow_agent.experiment_protocol_pdf import (
+    PDF_MEDIA_TYPE,
+    MAX_PROTOCOL_PDF_BYTES,
+    ProtocolPdfEncryptedError,
+    ProtocolPdfError,
+    ProtocolPdfMalformedError,
+    ProtocolPdfTooLargeError,
+    ProtocolPdfTypeError,
+    extract_protocol_pdf,
+)
+from voice_workflow_agent.experiment_protocol_store import (
+    PROTOCOL_DATABASE_FILENAME,
+    initialize_protocol_store,
+)
+from voice_workflow_agent.external_references import (
+    ExternalReferenceSettings,
+    XaiAuthoritativeWebSearch,
+)
+from voice_workflow_agent.generated_visuals import (
+    GENERATED_VISUALS,
+    GeneratedVisualSettings,
+    VisualSpecification,
+    XaiImageGenerator,
+)
 from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogError,
     ProtocolCatalogNotFoundError,
+    ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
@@ -63,6 +92,7 @@ from voice_workflow_agent.native_realtime import (
     NativeRealtimeSession,
 )
 from voice_workflow_agent.tools import (
+    APPROVED_LAB_REFERENCE_TOOL_NAME,
     COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
     GET_CURRENT_STEP_TOOL_NAME,
@@ -72,6 +102,7 @@ from voice_workflow_agent.tools import (
     ToolContext,
     check_safety_report_status,
     execute_tool,
+    search_approved_lab_references,
 )
 from voice_workflow_agent.procedure_definitions import load_procedure_definitions
 from voice_workflow_agent.procedure_store import ProcedureStore
@@ -126,6 +157,7 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
 async def lifespan(_: FastAPI):
     """Warm optional in-memory retrieval without making it a startup dependency."""
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
+    await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     await asyncio.to_thread(start_moss_runtime_from_environment)
     try:
         yield
@@ -164,7 +196,7 @@ def _protocol_store_settings()->ProtocolPersistenceSettings:
 def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     settings=_protocol_store_settings()
     if not settings.enabled:
-        raise ProtocolCatalogError("Protocol catalog is disabled.")
+        raise ProtocolCatalogUnavailableError("Protocol catalog is disabled.")
     store=initialize_protocol_store(settings)
     return ProtocolCatalog(store),store
 
@@ -367,7 +399,84 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
     }
 
 
+def _public_protocol_catalog_entries(
+)->tuple[list[dict[str,object]],ProtocolPersistenceSettings,bool]:
+    """Resolve visible catalog entries without analysis or approval side effects."""
+
+    config=server_config()
+    candidate=_configured_candidate_fixture(config)
+    entries=[]
+    if candidate is not None:
+        entries.append(_candidate_catalog_dict(candidate))
+    settings=_protocol_store_settings()
+    if not settings.enabled:
+        return entries,settings,candidate is not None
+    catalog,store=_open_protocol_catalog()
+    try:
+        for item in catalog.list_entries():
+            if candidate is not None and item.protocol_id==candidate.protocol_id:
+                if catalog.development_fixture_is_materialized(candidate):
+                    continue
+                raise ProtocolCatalogUnavailableError(
+                    "Configured development fixture conflicts with catalog state."
+                )
+            public=item.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                item.protocol_id).public_dict()
+            entries.append(public)
+    finally:
+        store.close()
+    return entries,settings,candidate is not None
+
+
+def log_protocol_catalog_runtime_configuration()->None:
+    """Log only sanitized protocol backend identity and visible entry count."""
+
+    try:
+        entries,settings,development_fixture_enabled=(
+            _public_protocol_catalog_entries()
+        )
+        if settings.enabled and settings.data_dir is not None:
+            data_dir=settings.data_dir.resolve()
+            backend="sqlite+curated_fixture" if development_fixture_enabled else "sqlite"
+            catalog_path=str(data_dir/PROTOCOL_DATABASE_FILENAME)
+            asset_root=str(data_dir/"objects"/"sha256")
+        else:
+            backend="curated_fixture_only" if development_fixture_enabled else "disabled"
+            catalog_path="disabled"
+            asset_root="disabled"
+        log.info(
+            "protocol.catalog.configuration backend=%s catalog_path=%s "
+            "asset_root=%s visible_protocols=%d development_fixtures_enabled=%s",
+            backend,catalog_path,asset_root,len(entries),development_fixture_enabled,
+        )
+    except Exception as exc:
+        log.warning(
+            "protocol.catalog.configuration unavailable error=%s",
+            type(exc).__name__,
+        )
+
+
 def _catalog_http_error(exc:Exception)->HTTPException:
+    if isinstance(exc,ProtocolPdfTooLargeError):
+        return HTTPException(status_code=413,detail="protocol_pdf_too_large")
+    if isinstance(exc,ProtocolPdfTypeError):
+        return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
+    if isinstance(exc,ProtocolPdfMalformedError):
+        return HTTPException(status_code=422,detail="invalid_pdf")
+    if isinstance(exc,ProtocolPdfEncryptedError):
+        return HTTPException(status_code=422,detail="encrypted_pdf")
+    if isinstance(exc,ProtocolPdfError):
+        return HTTPException(status_code=422,detail="invalid_pdf")
+    if isinstance(
+        exc,
+        (
+            ProtocolCatalogUnavailableError,
+            ProtocolConfigurationError,
+            ProtocolFeatureDisabledError,
+        ),
+    ):
+        return HTTPException(status_code=503,detail="protocol_catalog_unavailable")
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolApprovalError):
@@ -380,23 +489,41 @@ def _catalog_http_error(exc:Exception)->HTTPException:
     )
 
 
+async def _spool_protocol_pdf_upload(
+    request:Request,
+    destination:Path,
+    *,
+    max_bytes:int|None=None,
+)->int:
+    """Write one bounded raw PDF request without buffering it in memory."""
+
+    limit=MAX_PROTOCOL_PDF_BYTES if max_bytes is None else max_bytes
+    byte_size=0
+    try:
+        with destination.open("xb") as stream:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                byte_size+=len(chunk)
+                if byte_size>limit:
+                    raise HTTPException(
+                        status_code=413,detail="protocol_pdf_too_large")
+                stream.write(chunk)
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
+    if byte_size==0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=422,detail="invalid_pdf")
+    return byte_size
+
+
 @app.get("/api/protocols")
 def list_protocol_catalog()->dict[str,object]:
     """Read catalog metadata only; never trigger automated analysis."""
 
-    entries=[]
     try:
-        config=server_config()
-        candidate=_configured_candidate_fixture(config)
-        if candidate is not None:
-            entries.append(_candidate_catalog_dict(candidate))
-        settings=_protocol_store_settings()
-        if settings.enabled:
-            catalog,store=_open_protocol_catalog()
-            try:
-                entries.extend(item.public_dict() for item in catalog.list_entries())
-            finally:
-                store.close()
+        entries,_,_=_public_protocol_catalog_entries()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
     return {"protocols":entries}
@@ -411,7 +538,10 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
             return _candidate_catalog_dict(candidate)
         catalog,store=_open_protocol_catalog()
         try:
-            return catalog.get_entry(protocol_id).public_dict()
+            public=catalog.get_entry(protocol_id).public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
         finally:
             store.close()
     except Exception as exc:
@@ -420,40 +550,47 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
 
 @app.post("/api/protocols",status_code=201)
 async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
+    media_type=request.headers.get("content-type","").casefold().split(";",1)[0].strip()
+    if media_type!=PDF_MEDIA_TYPE:
+        raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
         try:
-            if int(length)>MAX_PROTOCOL_PDF_BYTES:
+            parsed_length=int(length)
+            if parsed_length<0:
+                raise ValueError
+            if parsed_length>MAX_PROTOCOL_PDF_BYTES:
                 raise HTTPException(
                     status_code=413,detail="protocol_pdf_too_large")
         except ValueError as exc:
             raise HTTPException(status_code=400,detail="invalid_content_length") from exc
-    payload=await request.body()
-    if not payload or len(payload)>MAX_PROTOCOL_PDF_BYTES:
-        raise HTTPException(status_code=413,detail="protocol_pdf_too_large")
-    try:
-        catalog,store=_open_protocol_catalog()
+    with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
+        temporary=Path(root)/"upload.pdf"
+        await _spool_protocol_pdf_upload(request,temporary)
         try:
-            with tempfile.TemporaryDirectory(prefix="protocol-registration-") as root:
-                temporary=Path(root)/"upload.pdf"
-                temporary.write_bytes(payload)
+            catalog,store=_open_protocol_catalog()
+            try:
                 result=catalog.register(
                     temporary,
                     source_filename=filename,
-                    media_type=request.headers.get("content-type",""),
+                    media_type=media_type,
                 )
-            return {
-                "protocol":result.entry.public_dict(),
-                "deduplicated":result.deduplicated,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
+                return {
+                    "protocol":result.entry.public_dict(),
+                    "deduplicated":result.deduplicated,
+                }
+            finally:
+                store.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _catalog_http_error(exc) from exc
 
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
-    client=OpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY"),max_retries=0)
+    client=OpenAI(
+        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+        max_retries=0,timeout=120.0)
     return OpenAICompatibleProtocolAnalysisModel(
         client,require_env("PROTOCOL_ANALYSIS_MODEL"))
 
@@ -462,17 +599,37 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
 async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
     """The only HTTP boundary that may explicitly request PDF analysis."""
 
+    def run_explicit_analysis()->dict[str,object]:
+        # SQLite connections are thread-affine.  Construct and close the
+        # catalog in the same worker that performs bounded Provider work.
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.analyze(
+                protocol_id,
+                _protocol_analysis_model(),
+                analysis_id=f"analysis-{secrets.token_hex(16)}",
+            )
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    try:
+        return await asyncio.to_thread(run_explicit_analysis)
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/analysis/status")
+def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
+    """Read persisted lifecycle state without starting or resuming analysis."""
+
     try:
         catalog,store=_open_protocol_catalog()
         try:
-            model=_protocol_analysis_model()
-            entry=await asyncio.to_thread(
-                catalog.analyze,
-                protocol_id,
-                model,
-                analysis_id=f"analysis-{secrets.token_hex(16)}",
-            )
-            return entry.public_dict()
+            return catalog.analysis_run_status(protocol_id).public_dict()
         finally:
             store.close()
     except Exception as exc:
@@ -514,35 +671,157 @@ def get_protocol_visual_asset(
         if candidate is not None and candidate.protocol_id==protocol_id:
             if candidate.revision_id!=revision_id:
                 raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
-            assets=tuple(
-                asset for index in range(len(candidate.steps))
+            matches=tuple(
+                (index,asset) for index in range(len(candidate.steps))
                 if (asset:=candidate.visual_for_step(index)) is not None
                 and asset.asset_id==asset_id)
-            if not assets or candidate.source_pdf_path is None:
+            if len(matches)!=1 or candidate.source_pdf_path is None:
                 raise ProtocolCatalogNotFoundError("Protocol visual asset is unknown.")
-            source=candidate.source_pdf_path
-            checksum=assets[0].sha256
+            index,asset=matches[0]
+            resolved_asset,content=candidate.visual_content(index)
+            if resolved_asset!=asset:
+                raise ProtocolCatalogUnavailableError(
+                    "Protocol visual identity changed.")
+            return Response(
+                content=content,
+                media_type=asset.mime_type,
+                headers={
+                    "Cache-Control":"private, no-store",
+                    "X-Content-Type-Options":"nosniff",
+                    "Content-Security-Policy":(
+                        "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                    "Content-Disposition":(
+                        f'inline; filename="{asset.asset_id}"'),
+                    "X-Protocol-Source-SHA256":asset.source_document_id,
+                    "X-Protocol-Asset-SHA256":asset.sha256,
+                    "X-Protocol-Source-Page":str(asset.source_page),
+                    "X-Protocol-Visual-Kind":asset.kind,
+                },
+            )
         else:
             catalog,store=_open_protocol_catalog()
             try:
-                resolved=catalog.resolve_asset(protocol_id,revision_id,asset_id)
-                source=resolved.path; checksum=resolved.sha256
+                fixture=catalog.load_executable_fixture(protocol_id)
+                if fixture.revision_id!=revision_id:
+                    raise ProtocolCatalogNotFoundError(
+                        "Protocol revision is unknown.")
+                matches=tuple(
+                    (index,asset) for index in range(len(fixture.steps))
+                    if (asset:=fixture.visual_for_step(index)) is not None
+                    and asset.asset_id==asset_id)
+                if len(matches)!=1:
+                    raise ProtocolCatalogNotFoundError(
+                        "Protocol visual asset is unknown.")
+                index,asset=matches[0]
+                resolved_asset,content=fixture.visual_content(index)
+                if resolved_asset!=asset:
+                    raise ProtocolCatalogUnavailableError(
+                        "Protocol visual identity changed.")
             finally:
                 store.close()
-        if not source.is_file():
-            raise ProtocolCatalogNotFoundError("Protocol visual source is unavailable.")
-        return FileResponse(
-            source,
-            media_type="application/pdf",
-            filename=f"{checksum}.pdf",
-            content_disposition_type="inline",
+        return Response(
+            content=content,
+            media_type=asset.mime_type,
             headers={
                 "Cache-Control":"private, no-store",
                 "X-Content-Type-Options":"nosniff",
-                "Content-Security-Policy":"sandbox",
-                "X-Protocol-Source-SHA256":checksum,
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "Content-Disposition":(
+                    f'inline; filename="{asset.asset_id}"'),
+                "X-Protocol-Source-SHA256":asset.source_document_id,
+                "X-Protocol-Asset-SHA256":asset.sha256,
+                "X-Protocol-Source-Page":str(asset.source_page),
+                "X-Protocol-Visual-Kind":asset.kind,
             },
         )
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/generated-visuals/{asset_id}")
+def get_generated_visual_asset(asset_id:str):
+    """Serve one validated generated image through an opaque same-origin ID."""
+
+    asset=GENERATED_VISUALS.get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404,detail="Generated visual is unknown.")
+    return Response(
+        content=asset.content,media_type=asset.mime_type,
+        headers={
+            "Cache-Control":"private, max-age=3600, immutable",
+            "X-Content-Type-Options":"nosniff",
+            "Content-Security-Policy":"default-src 'none'; sandbox",
+            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
+            "X-Generated-Visual-SHA256":asset.content_sha256,
+            "X-Protocol-Source-SHA256":asset.source_document_hash,
+            "X-Protocol-Visual-Kind":"generated_instructional",
+        },
+    )
+
+
+@app.get(
+    "/api/protocols/{protocol_id}/revisions/{revision_id}/source-pages/{source_page}"
+)
+def get_protocol_source_page(
+    protocol_id:str,revision_id:str,source_page:int,
+):
+    """Secondary same-origin exact-page view; it is never labelled a source image."""
+
+    try:
+        config=server_config()
+        candidate=_configured_candidate_fixture(config)
+        if candidate is not None and candidate.protocol_id==protocol_id:
+            fixture=candidate
+        else:
+            catalog,store=_open_protocol_catalog()
+            try:
+                fixture=catalog.load_executable_fixture(protocol_id)
+            finally:
+                store.close()
+        if (
+            fixture.revision_id!=revision_id
+            or fixture.source_pdf_path is None
+            or fixture.source_pdf_sha256 is None
+        ):
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        extraction=extract_protocol_pdf(fixture.source_pdf_path)
+        if extraction.sha256!=fixture.source_pdf_sha256:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source identity changed.")
+        page=next((item for item in extraction.pages
+                   if item.source_page_number==source_page),None)
+        if page is None:
+            raise ProtocolCatalogNotFoundError("Protocol source page is unknown.")
+        lines=[]
+        for raw_line in page.text.replace("\r\n","\n").replace("\r","\n").split("\n"):
+            cleaned="".join(character for character in raw_line
+                            if character in "\t" or ord(character)>=32)
+            lines.extend(textwrap.wrap(
+                cleaned,88,replace_whitespace=False,drop_whitespace=False) or [""])
+        height=max(840,96+len(lines)*22)
+        text_nodes="".join(
+            f'<text x="48" y="{82+index*22}">{xml_escape(line)}</text>'
+            for index,line in enumerate(lines))
+        preview=(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="{height}" '
+            f'viewBox="0 0 900 {height}" role="img" aria-label="Source page {source_page}">'
+            '<rect width="100%" height="100%" fill="#fffdf8"/>'
+            f'<text x="48" y="42" font-family="sans-serif" font-size="18" '
+            f'font-weight="700">Source page {source_page}</text>'
+            '<g font-family="ui-monospace,monospace" font-size="15" fill="#17211b">'
+            f'{text_nodes}</g></svg>').encode("utf-8")
+        return Response(
+            content=preview,media_type="image/svg+xml",
+            headers={
+                "Cache-Control":"private, no-store",
+                "X-Content-Type-Options":"nosniff",
+                "Content-Security-Policy":(
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+                "X-Protocol-Source-SHA256":extraction.sha256,
+                "X-Protocol-Source-Page":str(source_page),
+            })
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
@@ -554,6 +833,8 @@ class ListenerEvent:
     generation:int|None=None
     superseding_turn_id:int|None=None
     superseding_generation:int|None=None
+    reason:str|None=None
+    latency_ms:int|None=None
 
 TURN_PROGRESS_TERMINAL_STATES=frozenset({
     "complete","blocked","cancelled","error",
@@ -570,7 +851,9 @@ TURN_PROGRESS_TRANSITIONS={
         "checking_protocol","checking_approved_information","composing",
         "synthesizing","cancelled","error",
     }),
-    "checking_protocol":frozenset({"synthesizing","cancelled","error"}),
+    "checking_protocol":frozenset({
+        "checking_approved_information","synthesizing","cancelled","error",
+    }),
     "checking_approved_information":frozenset({
         "composing","synthesizing","cancelled","error",
     }),
@@ -610,12 +893,16 @@ class ListenerSession:
         self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
+        self.visual_tasks:set[asyncio.Task]=set()
         self._interrupted_generations:set[tuple[int,int]]=set()
         self._cascade_vad_config=self.detector.config
         self._vad_classifier=self.detector.classifier
         self._listening_onset=self.detector.listening_onset
         self._interrupt_detector=self._new_interrupt_detector()
         self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity:tuple[int,int]|None=None
+        self._interrupt_candidate_started_at:float|None=None
+        self._interrupt_candidate_endpoint_at:float|None=None
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -639,11 +926,31 @@ class ListenerSession:
     def _reset_interrupt_input(self,*,playback:bool=False)->None:
         self._interrupt_detector=self._new_interrupt_detector(playback=playback)
         self._interrupt_framer=FrameBuffer()
+        self._interrupt_candidate_identity=None
+        self._interrupt_candidate_started_at=None
+        self._interrupt_candidate_endpoint_at=None
     def _reset_turn_identity(self)->None:
+        for task in tuple(self.visual_tasks):
+            task.cancel()
+        self.visual_tasks.clear()
         self.turn_generations.clear()
         self.turn_progress.clear()
         self._interrupted_generations.clear()
         self._reset_interrupt_input()
+    def owns_visual_result(
+        self,turn_id:int,generation:int,configuration_id:int|None,
+        protocol_id:str,
+    )->bool:
+        return bool(
+            self.active
+            and self.accepted_configuration_id==configuration_id
+            and self.accepted_protocol_id==protocol_id
+            and self.turn_generations.get(turn_id)==generation
+            and (turn_id,generation) not in self._interrupted_generations
+        )
+    def track_visual_task(self,task:asyncio.Task)->None:
+        self.visual_tasks.add(task)
+        task.add_done_callback(self.visual_tasks.discard)
     def start(self):
         self.generation+=1
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
@@ -814,13 +1121,11 @@ class ListenerSession:
         output=[]
         detector=self._interrupt_detector
         framer=self._interrupt_framer
-        adopted=False
         for frame in framer.push(chunk):
             result=detector.process(frame)
-            if result.speech_started and not adopted:
+            if result.speech_started:
                 interrupted_turn_id=self.active_turn_id
                 if interrupted_turn_id is None:
-                    detector.reset(); framer=FrameBuffer()
                     self._reset_interrupt_input()
                     return []
                 interrupted_generation=self.turn_generations.get(
@@ -828,42 +1133,100 @@ class ListenerSession:
                 identity=(interrupted_turn_id,interrupted_generation)
                 if identity in self._interrupted_generations:
                     continue
-                self._interrupted_generations.add(identity)
-                self.generation+=1
-                superseding_turn_id=self.next_turn_id
-                self.next_turn_id+=1
-                self.active_turn_id=superseding_turn_id
-                self.turn_generations[superseding_turn_id]=self.generation
-                self.detector=detector
-                self.framer=framer
-                self._reset_interrupt_input()
-                adopted=True
+                self._interrupt_candidate_identity=identity
+                self._interrupt_candidate_started_at=self.clock()
                 output.append(ListenerEvent(
-                    "assistant.interrupted",interrupted_turn_id,result,
-                    interrupted_generation,superseding_turn_id,
-                    self.generation))
-                output.append(ListenerEvent(
-                    "speech.start",superseding_turn_id,result,self.generation))
-            if not adopted:
-                continue
+                    "barge_in_candidate",interrupted_turn_id,result,
+                    interrupted_generation))
             if result.rejected:
+                candidate=self._interrupt_candidate_identity
+                latency=(
+                    max(0,round((self.clock()-
+                                 self._interrupt_candidate_started_at)*1000))
+                    if self._interrupt_candidate_started_at is not None
+                    else None)
                 output.append(ListenerEvent(
-                    "speech.rejected",self.active_turn_id or 0,result,
-                    self.generation))
-                self.active_turn_id=None; self.framer=FrameBuffer()
-                self._restore_primary_detector(TurnState.IDLE)
+                    "barge_in_rejected",
+                    candidate[0] if candidate else self.active_turn_id or 0,
+                    result,
+                    candidate[1] if candidate else self.generation,
+                    reason=result.rejection_reason,latency_ms=latency))
+                self._reset_interrupt_input(
+                    playback=self.state==TurnState.AGENT_SPEAKING)
+                break
             elif result.utterance is not None:
-                if self.active_turn_id is None:
-                    raise RuntimeError("committed interruption has no turn_id")
-                self.endpoint_at=self.clock()
-                self.turn_committed_at[self.active_turn_id]=self.endpoint_at
+                candidate=self._interrupt_candidate_identity
+                if candidate is None:
+                    self._reset_interrupt_input(
+                        playback=self.state==TurnState.AGENT_SPEAKING)
+                    continue
+                self._interrupt_candidate_endpoint_at=self.clock()
+                latency=(
+                    max(0,round((self._interrupt_candidate_endpoint_at-
+                                 self._interrupt_candidate_started_at)*1000))
+                    if self._interrupt_candidate_started_at is not None
+                    else None)
                 output.append(ListenerEvent(
-                    "speech.end",self.active_turn_id,result,self.generation))
-                self._restore_primary_detector(TurnState.PROCESSING)
-                self.framer=FrameBuffer(); self._reset_interrupt_input()
-            if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):
+                    "barge_in_audio_ready",candidate[0],result,candidate[1],
+                    latency_ms=latency))
+            if detector.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):
                 break
         return output
+    def reject_interrupt_candidate(
+        self,event:ListenerEvent,reason:str,
+    )->ListenerEvent|None:
+        identity=self._interrupt_candidate_identity
+        if (event.kind!="barge_in_audio_ready" or identity is None or
+                identity!=(event.turn_id,event.generation)):
+            return None
+        rejected=replace(
+            event.result,utterance=None,rejected=True,
+            rejection_reason=reason)
+        self._reset_interrupt_input(
+            playback=self.state==TurnState.AGENT_SPEAKING)
+        return ListenerEvent(
+            "barge_in_rejected",event.turn_id,rejected,event.generation,
+            reason=reason,latency_ms=event.latency_ms)
+    def commit_interrupt_candidate(
+        self,event:ListenerEvent,
+    )->list[ListenerEvent]:
+        identity=self._interrupt_candidate_identity
+        if (event.kind!="barge_in_audio_ready" or identity is None or
+                identity!=(event.turn_id,event.generation) or
+                self.active_turn_id!=event.turn_id or
+                self.turn_generations.get(event.turn_id)!=event.generation or
+                self.state not in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING)
+                or identity in self._interrupted_generations):
+            return []
+        self._interrupted_generations.add(identity)
+        candidate_endpoint_at=self._interrupt_candidate_endpoint_at
+        self.generation+=1
+        superseding_turn_id=self.next_turn_id
+        self.next_turn_id+=1
+        self.active_turn_id=superseding_turn_id
+        self.turn_generations[superseding_turn_id]=self.generation
+        self._restore_primary_detector(TurnState.PROCESSING)
+        self.framer=FrameBuffer()
+        self.endpoint_at=candidate_endpoint_at or self.clock()
+        self.turn_committed_at[superseding_turn_id]=self.endpoint_at
+        latency=event.latency_ms
+        self._reset_interrupt_input()
+        return [
+            ListenerEvent(
+                "assistant.interrupted",event.turn_id,event.result,
+                event.generation,superseding_turn_id,self.generation,
+                reason="confirmed_speech",latency_ms=latency),
+            ListenerEvent(
+                "barge_in_committed",event.turn_id,event.result,
+                event.generation,superseding_turn_id,self.generation,
+                reason="confirmed_speech",latency_ms=latency),
+            ListenerEvent(
+                "speech.start",superseding_turn_id,event.result,
+                self.generation),
+            ListenerEvent(
+                "speech.end",superseding_turn_id,event.result,
+                self.generation),
+        ]
     def start_playback(self,turn_id:int)->bool:
         if self.state!=TurnState.PROCESSING or turn_id!=self.active_turn_id:return False
         self.detector.state=TurnState.AGENT_SPEAKING
@@ -941,9 +1304,125 @@ class LockedSender:
                 byte_length=len(pcm)))
             await self.websocket.send_bytes(pcm)
 
+
+def _curated_visual_specification(
+    curated:CuratedProtocolSession,
+) -> VisualSpecification|None:
+    fixture=curated.fixture
+    if not curated.active or fixture.source_pdf_sha256 is None:
+        return None
+    index=curated.current_index
+    existing=fixture.visual_for_step(index)
+    if existing is not None and existing.kind==ProtocolVisualKind.SOURCE_CROP.value:
+        return None
+    step=fixture.steps[index]
+    facts=fixture.facts_for_step(index)
+    return VisualSpecification(
+        document_sha256=fixture.source_pdf_sha256,
+        protocol_id=fixture.protocol_id,
+        revision_id=fixture.revision_id,
+        step_id=step.step_id,
+        step_label=step.source_label,
+        source_page=step.evidence.source_page_number,
+        source_evidence_ids=tuple(fact.fact_id for fact in facts),
+        action_summary=step.instruction_source_text,
+        verified_materials=tuple(
+            fact.text for fact in facts if fact.kind=="material"),
+        verified_tools=tuple(
+            fact.text for fact in facts if fact.kind=="equipment"),
+        verified_relations=(step.instruction_source_text,),
+        forbidden_inferences=(
+            "unverified colors","unverified equipment","unverified PPE",
+            "unverified quantities","unverified results","completion status",
+        ),
+    )
+
+
+async def _queue_curated_generated_visual(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    endpoint:float,clock:Callable[[],float],
+    specification:VisualSpecification,
+    settings:GeneratedVisualSettings,
+) -> None:
+    configuration_id=session.accepted_configuration_id
+    job_id=specification.cache_key(settings.model)
+    identity={
+        "configuration_id":configuration_id,"turn_id":turn_id,
+        "generation":generation,"protocol_id":specification.protocol_id,
+        "step_id":specification.step_id,
+        "source_document_hash":specification.document_sha256,
+        "visual_job_id":job_id,
+    }
+    if not session.owns_visual_result(
+        turn_id,generation,configuration_id,specification.protocol_id):
+        return
+    await sender.text(
+        "protocol.visual.state",**identity,status="visual_pending",
+        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
+
+    async def worker() -> None:
+        provider_called=False
+        provider_started=0.0
+
+        async def generate(spec:VisualSpecification)->bytes:
+            nonlocal provider_called,provider_started
+            provider_called=True
+            provider_started=clock()
+            if session.owns_visual_result(
+                turn_id,generation,configuration_id,specification.protocol_id):
+                await sender.text(
+                    "tool.call",**identity,tool="generate_instructional_visual",
+                    round=2)
+            client=AsyncOpenAI(
+                base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                max_retries=0)
+            return await XaiImageGenerator(client,settings).generate(spec)
+
+        try:
+            asset,cache_hit=await GENERATED_VISUALS.obtain(
+                specification,settings,generate)
+            if not session.owns_visual_result(
+                turn_id,generation,configuration_id,specification.protocol_id):
+                return
+            elapsed=max(0,round((clock()-endpoint)*1000))
+            if provider_called:
+                await sender.text(
+                    "tool.result",**identity,
+                    tool="generate_instructional_visual",round=2,
+                    status="success",
+                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
+            await sender.text(
+                "protocol.visual.state",**identity,
+                status="visual_cache_hit" if cache_hit else "visual_ready",
+                visual_ready_ms=elapsed,asset=asset.public_dict())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "generated visual failed closed turn_id=%s error=%s",
+                turn_id,type(exc).__name__)
+            if not session.owns_visual_result(
+                turn_id,generation,configuration_id,specification.protocol_id):
+                return
+            if provider_called:
+                await sender.text(
+                    "tool.result",**identity,
+                    tool="generate_instructional_visual",round=2,
+                    status="error",
+                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
+            await sender.text(
+                "protocol.visual.state",**identity,status="visual_failed",
+                visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                fallback="structured_schematic")
+
+    task=asyncio.create_task(worker())
+    session.track_visual_task(task)
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter,
-                   sender:LockedSender|None=None,filler:CascadeFiller|None=None)->None:
+                   sender:LockedSender|None=None,filler:CascadeFiller|None=None,
+                   accepted_transcription:Transcription|None=None,
+                   accepted_stt_ms:int|None=None)->None:
     sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
@@ -963,7 +1442,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "transcribing",
         timings_ms={"utterance_to_status":timings["utterance_to_status_ms"]})
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
-    started=clock(); transcription=await asyncio.to_thread(transcribe,clean_path(source_pcm)); timings["stt"]=round((clock()-started)*1000)
+    if accepted_transcription is None:
+        started=clock()
+        transcription=await asyncio.to_thread(
+            transcribe,clean_path(source_pcm))
+        timings["stt"]=round((clock()-started)*1000)
+    else:
+        transcription=accepted_transcription
+        timings["stt"]=max(0,accepted_stt_ms or 0)
     # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
     # working in manual mode while production returns structured metadata.
     if isinstance(transcription,str):
@@ -1095,11 +1581,160 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     if session.curated_protocol_session is not None:
         curated=session.curated_protocol_session
         checkpoint=curated._checkpoint()
+        curated_tools_used=[]
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             plan=curated.plan(
                 transcript,turn_id=turn_id,language=turn_language)
+            if plan.action is CuratedProtocolAction.RELATED_QUESTION and curated.active:
+                step = curated.fixture.steps[curated.current_index]
+                facts = curated.fixture.facts_for_step(curated.current_index)
+                reference_query="\n".join((
+                    transcript,step.instruction_source_text,
+                    *(fact.text for fact in facts),
+                ))
+                client=None
+                try:
+                    client=AsyncOpenAI(
+                        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                        max_retries=0)
+                    client.model=require_env("CHAT_MODEL")
+                    answer=await answer_curated_protocol_question(
+                        client,
+                        transcript,
+                        language=turn_language,
+                        protocol_id=curated.fixture.protocol_id,
+                        protocol_title=curated.fixture.title,
+                        step_id=step.step_id,
+                        step_label=step.source_label,
+                        facts=tuple(
+                            (fact.fact_id,fact.kind,fact.text,fact.source_page)
+                            for fact in facts
+                        ),
+                    )
+                    if not session.is_current(turn_id,generation):
+                        curated._restore(checkpoint)
+                        return
+                    if answer.intent != "unsupported":
+                        plan=curated.apply_grounded_answer(
+                            turn_id=turn_id,
+                            language=turn_language,
+                            primary_text=answer.primary_text,
+                            evidence_ids=answer.evidence_ids,
+                            inference_labels=answer.inference_labels,
+                            unsupported_parts=answer.unsupported_parts,
+                        )
+                except Exception:
+                    log.info(
+                        "curated grounded QA failed closed turn_id=%s",turn_id)
+                if (
+                    plan.action is CuratedProtocolAction.RELATED_QUESTION
+                    and session.tool_context is not None
+                ):
+                    await progress(
+                        "checking_approved_information",
+                        route="approved_information")
+                    await current_text(
+                        "tool.call",turn_id=turn_id,
+                        tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
+                    reference_started=clock()
+                    reference_result=await asyncio.to_thread(
+                        search_approved_lab_references,
+                        reference_query,
+                        context=session.tool_context,
+                        protocol_id=curated.fixture.protocol_id,
+                        top_k=5,
+                    )
+                    reference_elapsed=round((clock()-reference_started)*1000)
+                    reference_backend=(
+                        reference_result.get("retrieval",{}).get("backend")
+                        if isinstance(reference_result,dict) else None)
+                    await current_text(
+                        "tool.result",turn_id=turn_id,
+                        tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0,
+                        status=reference_result.get("status","error"),
+                        elapsed_ms=reference_elapsed,
+                        retrieval_backend=reference_backend,
+                        match_count=len(reference_result.get("matches",[])))
+                    curated_tools_used.append(APPROVED_LAB_REFERENCE_TOOL_NAME)
+                    matches=tuple(reference_result.get("matches",()))
+                    if reference_result.get("answerable") and matches:
+                        try:
+                            if client is None:
+                                client=AsyncOpenAI(
+                                    base_url=api_url(""),
+                                    api_key=require_env("XAI_API_KEY"),
+                                    max_retries=0)
+                                client.model=require_env("CHAT_MODEL")
+                            await progress("composing",route="approved_information")
+                            reference_answer=await answer_approved_reference_question(
+                                client,transcript,language=turn_language,
+                                protocol_id=curated.fixture.protocol_id,
+                                step_id=step.step_id,evidence=matches)
+                            if not session.is_current(turn_id,generation):
+                                curated._restore(checkpoint)
+                                return
+                            plan=curated.apply_reference_answer(
+                                turn_id=turn_id,language=turn_language,
+                                primary_text=reference_answer.primary_text,
+                                origin="approved_lab_corpus",
+                                citations=reference_answer.citations,
+                                retrieval_backend=reference_backend or "sqlite",
+                                retrieval_scores=tuple(
+                                    float(item["score"]) for item in matches
+                                    if isinstance(item.get("score"),(int,float))
+                                ),
+                                limitations=reference_answer.limitations,
+                            )
+                        except Exception:
+                            log.info(
+                                "approved reference answer failed closed turn_id=%s",
+                                turn_id)
+                if plan.action is CuratedProtocolAction.RELATED_QUESTION:
+                    try:
+                        external_settings=ExternalReferenceSettings.from_environment()
+                    except ValueError:
+                        external_settings=ExternalReferenceSettings(False)
+                    if external_settings.enabled:
+                        external_tool="search_authoritative_web"
+                        await progress(
+                            "checking_approved_information",
+                            route="approved_information")
+                        await current_text(
+                            "tool.call",turn_id=turn_id,
+                            tool=external_tool,round=1)
+                        external_started=clock()
+                        try:
+                            external_client=AsyncOpenAI(
+                                base_url=api_url(""),
+                                api_key=require_env("XAI_API_KEY"),
+                                max_retries=0)
+                            result=await XaiAuthoritativeWebSearch(
+                                external_client,external_settings).search(
+                                    reference_query,language=turn_language)
+                        except Exception:
+                            result={"status":"error","matches":[]}
+                        external_elapsed=round((clock()-external_started)*1000)
+                        await current_text(
+                            "tool.result",turn_id=turn_id,
+                            tool=external_tool,round=1,
+                            status=result.get("status","error"),
+                            elapsed_ms=external_elapsed,
+                            retrieval_backend=result.get("backend"),
+                            match_count=len(result.get("matches",[])))
+                        curated_tools_used.append(external_tool)
+                        if result.get("status")=="success" and result.get("matches"):
+                            plan=curated.apply_reference_answer(
+                                turn_id=turn_id,language=turn_language,
+                                primary_text=result["answer"],
+                                origin="external_authoritative_reference",
+                                citations=tuple(result["matches"]),
+                                retrieval_backend=result["backend"],
+                                limitations=(
+                                    "External guidance cannot modify the active protocol.",
+                                ),
+                            )
             display_text=plan.display_text
             speech_text=plan.speech_text
             if not isinstance(display_text,str) or not display_text.strip():
@@ -1129,8 +1764,53 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             configuration_id=session.accepted_configuration_id,
             state=curated.state(spoken_summary=plan.spoken_summary),
             action=plan.action.value)
+        operation_labels={
+            CuratedProtocolAction.START:"protocol_start",
+            CuratedProtocolAction.CURRENT:"current_step_read",
+            CuratedProtocolAction.REPEAT:"current_step_repeat",
+            CuratedProtocolAction.FULL_DETAIL:(
+                "current_step_elaboration"
+                if plan.intent_kind=="step_elaboration"
+                else "current_step_full_detail"
+            ),
+            CuratedProtocolAction.NEXT:"next_step_transition",
+            CuratedProtocolAction.QUESTION:(
+                "approved_reference_qa"
+                if plan.answer_origin=="approved_lab_corpus" else
+                "external_reference_qa"
+                if plan.answer_origin=="external_authoritative_reference" else
+                "grounded_qa" if plan.translation_status=="grounded_model" else
+                "verified_fact_read"),
+            CuratedProtocolAction.RELATED_QUESTION:"related_question_unresolved",
+            CuratedProtocolAction.VISUAL_REQUEST:"instructional_visual_request",
+            CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
+            CuratedProtocolAction.OFF_TOPIC:"scope_reminder",
+            CuratedProtocolAction.UNSUPPORTED:"unsupported_question",
+            CuratedProtocolAction.STOP:"protocol_stop",
+            CuratedProtocolAction.INACTIVE:"inactive_session_guard",
+        }
+        operation=(
+            "completion_and_next_transition"
+            if plan.action is CuratedProtocolAction.NEXT
+            and plan.reported_completion
+            else operation_labels[plan.action]
+        )
         await current_text(
-            "reply.delta",turn_id=turn_id,segment_index=0,text=display_text)
+            "server.operation",turn_id=turn_id,
+            route="curated_protocol",operation=operation)
+        await current_text(
+            "reply.delta",turn_id=turn_id,segment_index=0,text=display_text,
+            primary_text=plan.primary_text,
+            source_texts=list(plan.source_texts),
+            source_pages=list(plan.source_pages),
+            evidence_ids=list(plan.evidence_ids),
+            translation_status=plan.translation_status,
+            source_language="en",speech_text=speech_text,
+            answer_origin=plan.answer_origin,
+            citations=list(plan.citations),
+            retrieval_backend=plan.retrieval_backend,
+            retrieval_scores=list(plan.retrieval_scores),
+            limitations=list(plan.limitations))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         await sender.segment(turn_id,0,frames,generation)
@@ -1142,10 +1822,30 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         await current_text(
             "turn.done",turn_id=turn_id,timings_ms=timings,
             segment_count=1,input_frames=input_frames,
-            output_frames=len(frames),tools_used=[],
+            output_frames=len(frames),tools_used=curated_tools_used,
             route="curated_protocol",result_kind=plan.action.value,
             fact_id=plan.fact_id,speech_mode=plan.speech_mode.value,
-            critical_warning_present=plan.critical_warning_text is not None)
+            critical_warning_present=plan.critical_warning_text is not None,
+            intent_kind=plan.intent_kind,
+            reported_completion=plan.reported_completion,
+            requested_transition=plan.requested_transition)
+        if plan.action in {
+            CuratedProtocolAction.START,CuratedProtocolAction.CURRENT,
+            CuratedProtocolAction.REPEAT,CuratedProtocolAction.FULL_DETAIL,
+            CuratedProtocolAction.NEXT,CuratedProtocolAction.VISUAL_REQUEST,
+        }:
+            try:
+                visual_settings=GeneratedVisualSettings.from_environment()
+            except ValueError:
+                visual_settings=GeneratedVisualSettings(False)
+            visual_spec=(
+                _curated_visual_specification(curated)
+                if visual_settings.enabled else None)
+            if visual_spec is not None:
+                await _queue_curated_generated_visual(
+                    session=session,sender=sender,turn_id=turn_id,
+                    generation=generation,endpoint=endpoint,clock=clock,
+                    specification=visual_spec,settings=visual_settings)
         if session.is_current(turn_id,generation):
             session.history.commit([
                 {"role":"user","content":transcript},
@@ -1395,7 +2095,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             try: queue.get_nowait()
             except asyncio.QueueEmpty: break
 
-async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0):
+async def run_turn_safely(
+    websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0,
+    *,accepted_transcription:Transcription|None=None,
+    accepted_stt_ms:int|None=None,
+):
     generation=session.turn_generations.get(turn_id,session.generation)
     sender=LockedSender(websocket)
     language=(session.accepted_language or session.manual_language or
@@ -1423,7 +2127,9 @@ async def run_turn_safely(websocket,session,source_pcm,turn_id,input_frames,voic
     filler.start()
     try: await run_turn(
         websocket,session,source_pcm,turn_id,input_frames,voiced_frames,
-        sender=sender,filler=filler)
+        sender=sender,filler=filler,
+        accepted_transcription=accepted_transcription,
+        accepted_stt_ms=accepted_stt_ms)
     except asyncio.CancelledError: session.cascade_failed(turn_id); raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
     except Exception:
@@ -1457,13 +2163,15 @@ async def cancel_cascade_generation(
         interruption.turn_id,interruption.generation,"cancelled")
     if progress is None:
         return
-    await websocket.send_text(event(
-        "cascade.playback.clear",
+    fields={
         **progress,
-        superseding_turn_id=interruption.superseding_turn_id,
-        superseding_generation=interruption.superseding_generation,
-        reason="accepted_speech_onset",
-    ))
+        "superseding_turn_id":interruption.superseding_turn_id,
+        "superseding_generation":interruption.superseding_generation,
+        "reason":"confirmed_speech",
+    }
+    if interruption.latency_ms is not None:
+        fields["barge_in_to_silence_ms"]=interruption.latency_ms
+    await websocket.send_text(event("cascade.playback.clear",**fields))
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
@@ -1494,20 +2202,83 @@ async def voice_socket(websocket:WebSocket):
                     await native_session.send_audio(message["bytes"])
                     continue
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
+                listener_events=[]
+                accepted_interrupts={}
                 for item in session.accept_chunk(message["bytes"]):
+                    if item.kind!="barge_in_audio_ready":
+                        listener_events.append(item)
+                        continue
+                    validation_started=session.clock()
+                    try:
+                        transcription=await asyncio.to_thread(
+                            transcribe,clean_path(item.result.utterance or b""))
+                        if isinstance(transcription,str):
+                            transcription=Transcription(transcription,None)
+                    except Exception:
+                        log.warning(
+                            "barge_in.rejected reason=transcription_failed "
+                            "voiced_frames=%d total_frames=%d",
+                            item.result.voiced_frames,item.result.total_frames)
+                        rejected=session.reject_interrupt_candidate(
+                            item,"transcription_failed")
+                        if rejected is not None:
+                            listener_events.append(rejected)
+                        continue
+                    stt_ms=max(
+                        0,round((session.clock()-validation_started)*1000))
+                    if not transcription.text.strip():
+                        rejected=session.reject_interrupt_candidate(
+                            item,"empty_transcript")
+                        if rejected is not None:
+                            listener_events.append(rejected)
+                        continue
+                    committed=session.commit_interrupt_candidate(item)
+                    if not committed:
+                        rejected=session.reject_interrupt_candidate(
+                            item,"stale_candidate")
+                        if rejected is not None:
+                            listener_events.append(rejected)
+                        continue
+                    end=next(
+                        event_item for event_item in committed
+                        if event_item.kind=="speech.end")
+                    accepted_interrupts[(end.turn_id,end.generation)]=(
+                        transcription,stt_ms)
+                    listener_events.extend(committed)
+                for item in listener_events:
                     if item.kind=="assistant.interrupted":
                         await cancel_cascade_generation(
                             websocket,session,task,item)
                         task=None
                         continue
-                    await websocket.send_text(event(
-                        item.kind,turn_id=item.turn_id,
-                        generation=item.generation,state=session.state.value,
-                        voiced_frames=item.result.voiced_frames,
-                        total_frames=item.result.total_frames,
-                        duration_ms=item.result.total_frames*20,
-                        reason=item.result.rejection_reason,
-                        forced=item.result.forced))
+                    fields={
+                        "turn_id":item.turn_id,
+                        "generation":item.generation,
+                        "state":session.state.value,
+                        "voiced_frames":item.result.voiced_frames,
+                        "total_frames":item.result.total_frames,
+                        "duration_ms":item.result.total_frames*20,
+                        "reason":item.reason or item.result.rejection_reason,
+                        "forced":item.result.forced,
+                    }
+                    if item.superseding_turn_id is not None:
+                        fields["superseding_turn_id"]=item.superseding_turn_id
+                    if item.superseding_generation is not None:
+                        fields["superseding_generation"]=(
+                            item.superseding_generation)
+                    if item.latency_ms is not None:
+                        fields["barge_in_to_silence_ms"]=item.latency_ms
+                    await websocket.send_text(event(item.kind,**fields))
+                    if item.kind in {
+                        "barge_in_candidate","barge_in_committed",
+                        "barge_in_rejected",
+                    }:
+                        log.info(
+                            "%s reason=%s voiced_frames=%d total_frames=%d "
+                            "barge_in_to_silence_ms=%s",
+                            item.kind,fields["reason"],
+                            item.result.voiced_frames,item.result.total_frames,
+                            item.latency_ms)
                     if item.kind=="speech.start":
                         progress=session.advance_turn_progress(
                             item.turn_id,item.generation,"listening")
@@ -1515,7 +2286,16 @@ async def voice_socket(websocket:WebSocket):
                             await websocket.send_text(event(
                                 "turn.state",**progress))
                     if item.kind=="speech.end":
-                        task=asyncio.create_task(run_turn_safely(websocket,session,item.result.utterance or b"",item.turn_id,item.result.total_frames,item.result.voiced_frames))
+                        accepted=accepted_interrupts.get(
+                            (item.turn_id,item.generation))
+                        task=asyncio.create_task(run_turn_safely(
+                            websocket,session,item.result.utterance or b"",
+                            item.turn_id,item.result.total_frames,
+                            item.result.voiced_frames,
+                            accepted_transcription=(
+                                accepted[0] if accepted else None),
+                            accepted_stt_ms=(
+                                accepted[1] if accepted else None)))
                 continue
             if message.get("text") is None:continue
             control=parse_control(message["text"])
@@ -1782,6 +2562,18 @@ async def voice_socket(websocket:WebSocket):
                     native_session=None
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"]=="client.audio_constraints":
+                requested=control["requested"]
+                actual=control["actual"]
+                log.info(
+                    "client.audio_constraints "
+                    "requested_echo_cancellation=%s actual_echo_cancellation=%s "
+                    "requested_noise_suppression=%s actual_noise_suppression=%s "
+                    "requested_auto_gain_control=%s actual_auto_gain_control=%s",
+                    requested["echoCancellation"],actual["echoCancellation"],
+                    requested["noiseSuppression"],actual["noiseSuppression"],
+                    requested["autoGainControl"],actual["autoGainControl"],
+                )
             elif control["type"]=="report.status.get":
                 result=await asyncio.to_thread(
                     check_safety_report_status,control["report_id"])
