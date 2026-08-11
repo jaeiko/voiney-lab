@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"category": "total_steps", "transcript": "이 실험은 총 몇 단계야?", "expected_action": "protocol_query", "expected_scope": "total_steps", "mutates": false},
+    {"category": "total_steps", "transcript": "지금은 총 몇 단계로 이루어져 있어?", "expected_action": "protocol_query", "expected_scope": "total_steps", "mutates": false},
+    {"category": "current_position", "transcript": "현재 몇 번째 단계야?", "expected_action": "protocol_query", "expected_scope": "current_position", "mutates": false},
+    {"category": "remaining_steps", "transcript": "몇 단계 남았어?", "expected_action": "protocol_query", "expected_scope": "remaining_steps", "mutates": false},
+    {"category": "overview", "transcript": "전체 흐름을 요약해 줘.", "expected_action": "protocol_query", "expected_scope": "overview", "mutates": false},
+    {"category": "preparation", "transcript": "시작 전에 무엇을 준비해야 해?", "expected_action": "protocol_query", "expected_scope": "preparation", "mutates": false},
+    {"category": "safety", "transcript": "전체 안전수칙을 알려줘.", "expected_action": "protocol_query", "expected_scope": "safety", "mutates": false},
+    {"category": "specific_step", "transcript": "12단계 설명해 줘", "expected_action": "full_detail", "mutates": false},
+    {"category": "scientific_definition", "transcript": "AMBIC가 뭐야?", "expected_action": "related_question", "mutates": false},
+    {"category": "scientific_comparison", "transcript": "HPLC water는 일반 물과 어떻게 달라?", "expected_action": "related_question", "mutates": false},
+    {"category": "stop", "transcript": "프로토콜을 종료할게", "expected_action": "stop", "mutates": true},
+    {"category": "stop", "transcript": "여기서 끝낼게", "expected_action": "stop", "mutates": true},
+    {"category": "stop", "transcript": "I'll stop here", "expected_action": "stop", "mutates": true},
+    {"category": "negative_stop", "transcript": "종료 조건이 뭐야?", "forbidden_action": "stop", "mutates": false},
+    {"category": "noise", "transcript": "Cough.", "input_rejected": true, "mutates": false},
+    {"category": "noise", "transcript": "[throat clearing]", "input_rejected": true, "mutates": false},
+    {"category": "noise", "transcript": "keyboard", "input_rejected": true, "mutates": false},
+    {"category": "short_control", "transcript": "다음", "input_rejected": false},
+    {"category": "short_control", "transcript": "중지", "input_rejected": false},
+    {"category": "short_scientific", "transcript": "AMBIC", "input_rejected": false}
+  ]
+}

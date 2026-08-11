@@ -69,6 +69,7 @@ class CuratedProtocolAction(str, Enum):
     CANCEL_READONLY = "cancel_readonly"
     REPORT_ANOMALY = "report_anomaly"
     SHOW_REPORT = "show_report"
+    PROTOCOL_QUERY = "protocol_query"
     CLARIFY_COMPLETION = "clarify_completion"
     CLARIFY_REFERENCE = "clarify_reference"
     OFF_TOPIC = "off_topic"
@@ -836,6 +837,7 @@ class CuratedControlIntent:
     normalized_transcript: str | None = None
     transcript_correction_note: str | None = None
     question_dimensions: tuple[str, ...] = ()
+    protocol_scope: str | None = None
 
 
 _COMPLETION_AND_NEXT_PATTERNS = (
@@ -939,6 +941,24 @@ _EXPECTED_RESULT_PATTERNS = (
 _UNRELIABLE_TRANSCRIPT_PATTERNS = (
     re.compile(r"^[\u3040-\u30ff]{2,12}$"),
     re.compile(r"^(?:yes,?\s+you\s+go|how\s+many\s+months\??\s*it\s+was\s+a\s+year)$"),
+)
+_NATURAL_STOP_PATTERNS = (
+    re.compile(r"^(?:프로토콜(?:을)?\s*)?(?:종료|중단)(?:해\s*줘|할게|할게요|하겠습니다)?$"),
+    re.compile(r"^(?:여기서\s*)?(?:끝낼게|끝낼게요|그만할래|그만할게|그만할게요)$"),
+    re.compile(r"^(?:please\s+)?stop(?:\s+the\s+protocol)?$"),
+    re.compile(r"^(?:i(?:'|’)ll\s+)?stop\s+here$"),
+)
+_PROTOCOL_SCOPE_PATTERNS = (
+    ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|how\s+many\s+steps")),
+    ("current_position", re.compile(r"(?:현재|지금)\s*(?:몇\s*번째|몇)\s*단계|where\s+am\s+i")),
+    ("remaining_steps", re.compile(r"몇\s*단계\s*남|남은\s*단계|steps?\s+(?:are\s+)?remaining")),
+    ("overview", re.compile(r"(?:전체|실험)\s*(?:흐름|과정|프로토콜).*(?:요약|설명)|overview|summari[sz]e\s+the\s+(?:whole\s+)?protocol")),
+    ("preparation", re.compile(r"시작\s*전.*(?:준비|필요)|(?:준비물|재료|장비).*(?:전체|목록)|what.*prepare.*before")),
+    ("safety", re.compile(r"전체\s*(?:안전\s*수칙|주의\s*사항|경고)|protocol.*(?:safety|warnings)")),
+)
+_SPECIFIC_STEP_PATTERN = re.compile(
+    r"^(?:(?P<ko>[1-9]|1[0-9]|2[0-5])\s*단계|step\s*(?P<en>[1-9]|1[0-9]|2[0-5]))"
+    r"(?:는|은|를)?\s*(?:뭐야|무엇|알려|설명|show|explain|what).*$"
 )
 _SOURCE_REQUEST_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:답변의\s*)?(?:출처|근거)(?:를)?\s*(?:보여줘|알려줘|열어줘)$"),
@@ -1075,6 +1095,12 @@ def classify_curated_control_intent(
         transcript, entity_inventory=entity_inventory
     )
     dimensions = question_dimensions(key)
+    if any(pattern.fullmatch(key) for pattern in _NATURAL_STOP_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="workflow_command", action=CuratedProtocolAction.STOP,
+            language=language, allows_state_mutation=True,
+            normalized_transcript=key,
+        )
     exact = _WORKFLOW_COMMANDS.get(key)
     if exact is not None:
         return CuratedControlIntent(
@@ -1091,6 +1117,25 @@ def classify_curated_control_intent(
                 CuratedProtocolAction.START, CuratedProtocolAction.NEXT,
                 CuratedProtocolAction.STOP,
             },
+            normalized_transcript=key,
+        )
+    for scope, pattern in _PROTOCOL_SCOPE_PATTERNS:
+        if pattern.search(key):
+            return CuratedControlIntent(
+                intent_kind=f"protocol_{scope}",
+                action=CuratedProtocolAction.PROTOCOL_QUERY,
+                question_kind="protocol_metadata",
+                language=language,
+                protocol_scope=scope,
+                normalized_transcript=key,
+            )
+    if match := _SPECIFIC_STEP_PATTERN.fullmatch(key):
+        label = match.group("ko") or match.group("en")
+        return CuratedControlIntent(
+            intent_kind="specific_step_lookup",
+            action=CuratedProtocolAction.FULL_DETAIL,
+            requested_followup="explain_step", target_step=label,
+            detail_level="detailed", language=language,
             normalized_transcript=key,
         )
     if any(pattern.search(key) for pattern in _NAVIGATION_PATTERNS):
@@ -1571,6 +1616,135 @@ def _detailed_step_presentation(
         evidence_ids,
         status,
     )
+
+
+def _protocol_query_presentation(
+    fixture: CuratedProtocolFixture,
+    *,
+    current_index: int,
+    scope: str,
+    language: str,
+) -> tuple[str, str, tuple[CuratedProtocolFact, ...]]:
+    """Answer whole-protocol questions from the ordered protected structure."""
+
+    total = len(fixture.steps)
+    current = current_index + 1
+    remaining = total - current
+    facts: list[CuratedProtocolFact] = []
+    if scope in {"total_steps", "current_position", "remaining_steps"}:
+        step = fixture.steps[current_index]
+        facts.append(CuratedProtocolFact(
+            fact_id="protocol_step_inventory",
+            kind="protocol_metadata",
+            text=(
+                f"Ordered protocol step inventory: {total} steps; "
+                f"current source label: {step.source_label}."
+            ),
+            source_page=step.evidence.source_page_number,
+        ))
+        if language == "ko":
+            if scope == "total_steps":
+                speech = f"이 프로토콜은 총 {total}단계입니다. 현재 {current}단계입니다."
+            elif scope == "current_position":
+                speech = f"현재 총 {total}단계 중 {current}단계입니다."
+            else:
+                speech = f"현재 단계 다음으로 {remaining}단계가 남아 있습니다."
+            display = (
+                f"프로토콜 진행 현황\n- 전체: {total}단계\n"
+                f"- 현재: {current}/{total}\n- 현재 단계 이후 남은 단계: {remaining}\n\n"
+                f"출처 · 보호된 순서형 단계 목록 · 현재 원문 p.{step.evidence.source_page_number}"
+            )
+        else:
+            speech = (
+                f"This protocol has {total} steps. You are at step {current}, "
+                f"with {remaining} steps after the current step."
+            )
+            display = speech + (
+                f"\n\nSource · protected ordered step inventory · "
+                f"current source p.{step.evidence.source_page_number}"
+            )
+        return display, speech, tuple(facts)
+
+    if scope == "overview":
+        for index, section in enumerate(fixture.draft.protocol.sections, 1):
+            labels = tuple(step.source_label for step in section.steps)
+            facts.append(CuratedProtocolFact(
+                fact_id=f"protocol_section_{index}", kind="protocol_section",
+                text=(
+                    f"{section.title_source_text}: steps {labels[0]}-{labels[-1]}"
+                ),
+                source_page=section.evidence.source_page_number,
+            ))
+        if language == "ko":
+            speech = (
+                f"전체 {total}단계는 밴드 절단, 탈색, 환원·알킬화, "
+                "트립신 소화, 펩타이드 추출의 다섯 구간으로 진행됩니다."
+            )
+            display = "전체 흐름\n" + "\n".join(
+                f"- {fact.text} · 원문 p.{fact.source_page}"
+                for fact in facts
+            )
+        else:
+            speech = f"The {total}-step protocol is organized into five ordered sections."
+            display = "Protocol overview\n" + "\n".join(
+                f"- {fact.text} · source p.{fact.source_page}" for fact in facts
+            )
+        return display, speech, tuple(facts)
+
+    if scope == "preparation":
+        for index, item in enumerate(fixture.draft.protocol.before_start, 1):
+            facts.append(CuratedProtocolFact(
+                fact_id=f"before_start_{index}", kind="prerequisite",
+                text=item.source_text, source_page=item.evidence.source_page_number,
+            ))
+        for index, item in enumerate(fixture.draft.protocol.materials, 1):
+            facts.append(CuratedProtocolFact(
+                fact_id=f"protocol_material_{index}", kind="material",
+                text=item.name_source_text,
+                source_page=item.evidence.source_page_number,
+            ))
+        for index, item in enumerate(fixture.draft.protocol.equipment, 1):
+            facts.append(CuratedProtocolFact(
+                fact_id=f"protocol_equipment_{index}", kind="equipment",
+                text=item.name_source_text,
+                source_page=item.evidence.source_page_number,
+            ))
+        label = "시작 전 준비" if language == "ko" else "Before-start preparation"
+        display = label + "\n" + "\n".join(
+            f"- {fact.text} · {'원문' if language == 'ko' else 'source'} p.{fact.source_page}"
+            for fact in facts
+        )
+        speech = (
+            "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요."
+            if language == "ko" else
+            "Before starting, prepare a clean surface and tools and review the verified materials and equipment shown on screen."
+        )
+        return display, speech, tuple(facts)
+
+    if scope == "safety":
+        for step in fixture.steps:
+            for index, item in enumerate(step.warnings, 1):
+                facts.append(CuratedProtocolFact(
+                    fact_id=f"step_{step.source_label}_warning_{index}",
+                    kind="warning", text=item.source_text,
+                    source_page=item.evidence.source_page_number,
+                ))
+        if language == "ko":
+            speech = (
+                "활성 프로토콜 전체에서 명시적으로 확인되는 주의사항은 오염 방지를 위해 "
+                "깨끗한 작업면과 도구, 새롭거나 깨끗한 메스, 장갑을 사용하는 것입니다."
+            )
+            missing = "활성 프로토콜은 그 밖의 전체 PPE·화학물질 취급·폐기 규칙을 명시하지 않습니다."
+            display = "전체 안전수칙\n" + "\n".join(
+                f"- {fact.text} · 원문 p.{fact.source_page}" for fact in facts
+            ) + f"\n\n제한\n{missing}"
+        else:
+            speech = "The protocol explicitly warns about contamination control and using clean tools and gloves."
+            display = "Protocol-wide safety\n" + "\n".join(
+                f"- {fact.text} · source p.{fact.source_page}" for fact in facts
+            ) + "\n\nLimitation\nThe active protocol does not specify a complete PPE, chemical-handling, or disposal policy."
+        return display, speech, tuple(facts)
+    raise CuratedProtocolFixtureError("Protocol query scope is unsupported.")
 
 
 def _select_verified_fact(
@@ -2288,6 +2462,34 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
                 requested_followup=intent.requested_followup,
+            )
+        elif command is CuratedProtocolAction.PROTOCOL_QUERY:
+            if intent.protocol_scope is None:
+                raise CuratedProtocolFixtureError(
+                    "Protocol query scope is unavailable."
+                )
+            display, speech, protocol_facts = _protocol_query_presentation(
+                self.fixture, current_index=self.current_index,
+                scope=intent.protocol_scope, language=language,
+            )
+            step = steps[self.current_index]
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PROTOCOL_QUERY,
+                display_text=display, speech_text=speech,
+                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                facts=protocol_facts, step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False, primary_text=speech,
+                source_texts=tuple(fact.text for fact in protocol_facts),
+                source_pages=tuple(fact.source_page for fact in protocol_facts),
+                evidence_ids=tuple(fact.fact_id for fact in protocol_facts),
+                translation_status=(
+                    "deterministic_protocol_structure"
+                    if language == "ko" else "source_language"
+                ),
+                intent_kind=intent.intent_kind,
+                question_kind=intent.question_kind,
+                answer_origin="current_protocol",
             )
         elif command is CuratedProtocolAction.NEXT:
             blocker = self._current_step_readiness_blocker()

@@ -448,6 +448,28 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["pipeline"], "native")
         self.assertEqual(done["route"], "brain")
 
+    async def test_nonlexical_transcript_cancels_preflight_without_a_turn(self):
+        await self.session.handle_upstream_message(
+            json.dumps({"type": "input_audio_buffer.speech_started"})
+        )
+        await self.session.handle_upstream_message(
+            json.dumps({"type": "input_audio_buffer.speech_stopped"})
+        )
+        await self.session.handle_upstream_message(json.dumps({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "[Coughing]",
+        }))
+        await self.session.handle_upstream_message(response_created("noise-r1"))
+        event_types = [event["type"] for event in self.sender.events]
+        self.assertIn("speech.rejected", event_types)
+        self.assertNotIn("transcript", event_types)
+        self.assertNotIn("reply.delta", event_types)
+        self.assertNotIn("turn.done", event_types)
+        sent = [json.loads(item) for item in self.upstream.sent]
+        self.assertEqual(
+            sum(item.get("type") == "response.cancel" for item in sent), 1
+        )
+
     async def test_initial_ready_is_distinct_from_later_configuration_updates(self):
         self.session._awaiting_initial_session_update = True
         self.session._connection_is_reconnect = False
@@ -1765,6 +1787,101 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeReconnectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ten_normal_turns_and_five_barge_ins_share_one_epoch(self):
+        sender = Sender()
+        upstream = Upstream((
+            json.dumps({
+                "type": "conversation.created",
+                "conversation": {"id": "conversation-persistent"},
+            }),
+            json.dumps({"type": "session.updated"}),
+        ), hold=True)
+        connections = 0
+        async def connector(_url, _headers):
+            nonlocal connections
+            connections += 1
+            return upstream
+        session = NativeRealtimeSession(
+            sender, context(), config(), connector=connector,
+            application_session_id="session-persistent-test",
+        )
+        await session.start()
+        try:
+            for index in range(10):
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_started",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_stopped",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": f"일반 질문 {index + 1}입니다",
+                }))
+                response_id = f"normal-{index}"
+                await session.handle_upstream_message(response_created(response_id))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "response.done", "response": {"id": response_id},
+                }))
+            for index in range(5):
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_started",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_stopped",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "길게 설명해 주세요",
+                }))
+                interrupted_id = f"interrupted-{index}"
+                await session.handle_upstream_message(response_created(interrupted_id))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "response.output_item.added",
+                    "response_id": interrupted_id, "item": {"id": f"item-{index}"},
+                }))
+                await session.handle_upstream_message(audio_delta(interrupted_id))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_started",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "input_audio_buffer.speech_stopped",
+                }))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "새 질문입니다",
+                }))
+                next_id = f"after-barge-{index}"
+                await session.handle_upstream_message(response_created(next_id))
+                await session.handle_upstream_message(json.dumps({
+                    "type": "response.done", "response": {"id": next_id},
+                }))
+            self.assertEqual(connections, 1)
+            self.assertEqual(session.connection_epoch, 1)
+            connected = next(
+                event for event in sender.events
+                if event["type"] == "native.connection.state"
+                and event["state"] == "connected"
+            )
+            self.assertEqual(len(connected["application_session_ref"]), 12)
+            self.assertNotIn("session-persistent-test", str(connected))
+            self.assertEqual(sum(
+                event["type"] == "native.playback.clear"
+                for event in sender.events
+            ), 5)
+            self.assertEqual(sum(
+                event["type"] == "native.response.done"
+                and not event.get("awaiting_tool_continuation")
+                for event in sender.events
+            ), 15)
+            self.assertFalse(any(
+                event["type"] == "native.connection.state"
+                and event.get("state") == "reconnect_scheduled"
+                for event in sender.events
+            ))
+        finally:
+            await session.stop()
+
     async def test_unintended_disconnect_resumes_and_stop_cancels_reconnect(self):
         sender = Sender()
         first = Upstream(
@@ -1823,6 +1940,20 @@ class NativeReconnectTests(unittest.IsolatedAsyncioTestCase):
                 and event["state"] == "RECONNECTING"
                 for event in sender.events
             )
+        )
+        connection_events = [
+            event for event in sender.events
+            if event["type"] == "native.connection.state"
+        ]
+        self.assertEqual(
+            [event["epoch_id"] for event in connection_events
+             if event["state"] == "connected"],
+            [1, 2],
+        )
+        self.assertEqual(
+            next(event for event in connection_events
+                 if event["state"] == "closed")["close_initiator"],
+            "provider_stream_end",
         )
         await session.stop()
         self.assertIsNone(session.conversation_id)

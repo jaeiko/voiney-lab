@@ -9,10 +9,14 @@ from voice_workflow_agent.brain import (
     SentenceSegment,
 )
 from voice_workflow_agent.document_store import ingest_manifest
+from voice_workflow_agent.experiment_reports import (
+    ExperimentReportSettings,
+    ExperimentReportStore,
+)
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, export_experiment_report, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
@@ -1657,5 +1661,39 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status["report_status"],"handoff_ready")
         self.assertEqual(status["attempts"],1)
         self.assertEqual(status["workflow"]["step_id"],"observe")
+
+    def test_each_experiment_report_export_has_safe_download_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"reports.sqlite"
+            store=ExperimentReportStore(path)
+            report=store.open_report(
+                session_id="session-export-test",protocol_id="candidate-a",
+                protocol_title="Candidate A",protocol_revision="revision-1",
+                protocol_sha256="6"*64,readiness_status="analysis_required",
+                development_only=True,
+            )
+            store.append_event(
+                report["report_id"],event_key="start-1",
+                event_type="session_started",step_id="step-1",step_label="1",
+            )
+            with patch(
+                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                return_value=ExperimentReportSettings(True,path),
+            ):
+                for format_name,media_type,prefix in (
+                    ("json","application/json",b"{"),
+                    ("md","text/markdown",b"# Experiment report"),
+                    ("csv","text/csv",b"\xef\xbb\xbf"),
+                ):
+                    with self.subTest(format_name=format_name):
+                        response=export_experiment_report(
+                            report["report_id"],format_name)
+                        self.assertTrue(response.body.startswith(prefix))
+                        self.assertTrue(response.media_type.startswith(media_type))
+                        self.assertEqual(response.headers["cache-control"],"no-store")
+                        self.assertEqual(
+                            response.headers["content-disposition"],
+                            f'attachment; filename="{report["report_id"]}.{format_name}"',
+                        )
 
 if __name__=="__main__": unittest.main()

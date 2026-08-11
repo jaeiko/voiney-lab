@@ -112,7 +112,13 @@ The live xAI Responses adapter additionally requires:
 - a non-empty `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL` (default
   `grok-4.5`);
 - a bounded `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
-  1 and 30 seconds.
+  1 and 30 seconds (the Candidate A launcher uses a 12-second total deadline);
+- optional 3-second connect and 8-second read deadlines through
+  `EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
+  `EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
+- an optional validated-result TTL through
+  `EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
+  launcher). Only cited, allowlisted success is cached.
 
 Each Turn is limited to one web-search request with SDK retries disabled. Returned
 URLs are independently required to be HTTPS and inside the configured domains.

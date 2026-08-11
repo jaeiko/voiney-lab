@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -12,6 +14,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import httpx
 
 from voice_workflow_agent.brain import answer_approved_reference_question
 from voice_workflow_agent.document_store import ingest_manifest
@@ -284,14 +288,114 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
 
         responses = Responses()
         client = SimpleNamespace(responses=responses)
-        with self.assertRaises(asyncio.TimeoutError):
-            await XaiAuthoritativeWebSearch(
-                client,
-                ExternalReferenceSettings(
-                    True, ("osha.gov",), "fake", timeout_seconds=0.001
-                ),
-            ).search("laboratory safety", language="ko")
+        result = await XaiAuthoritativeWebSearch(
+            client,
+            ExternalReferenceSettings(
+                True, ("osha.gov",), "fake", timeout_seconds=0.001
+            ),
+        ).search("laboratory safety", language="ko")
+        self.assertEqual(result["status"], "timeout_total")
         self.assertEqual(responses.calls, 1)
+
+    async def test_external_adapter_accepts_server_usage_and_included_sources(self):
+        url = "https://pubchem.ncbi.nlm.nih.gov/compound/7739"
+        response = {
+            "id": "response-safe-1",
+            "output_text": "AMBIC means ammonium bicarbonate.",
+            "output": [{"type": "message", "content": []}],
+            "citations": [{"url": url}],
+            "server_side_tool_usage": {"WEB_SEARCH": 1},
+            "included": [{
+                "type": "web_search_call",
+                "action": {"sources": [{
+                    "url": url, "title": "PubChem",
+                    "snippet": "Ammonium bicarbonate compound record.",
+                }]},
+            }],
+        }
+        class Responses:
+            calls = 0
+            async def create(self, **kwargs):
+                self.calls += 1
+                self.kwargs = kwargs
+                return response
+        endpoint = Responses()
+        adapter = XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=endpoint),
+            ExternalReferenceSettings(
+                True, ("pubchem.ncbi.nlm.nih.gov",), "fake",
+                cache_ttl_seconds=60,
+            ),
+        )
+        first = await adapter.search("unique included-source query", language="ko")
+        second = await adapter.search("unique included-source query", language="ko")
+        self.assertEqual(first["status"], "success")
+        self.assertEqual(first["tool_usage_count"], 1)
+        self.assertEqual(first["provider_request_id"], "response-safe-1")
+        self.assertEqual(first["matches"][0]["canonical_url"], url)
+        self.assertTrue(second["cache_hit"])
+        self.assertEqual(endpoint.calls, 1)
+        self.assertEqual(
+            endpoint.kwargs["timeout"].connect,
+            adapter.settings.connect_timeout_seconds,
+        )
+
+    async def test_external_adapter_distinguishes_tool_and_schema_failures(self):
+        url = "https://www.osha.gov/laboratory"
+        cases = (
+            ({"id": "a", "output_text": f"See [[1]]({url}).",
+              "output": [], "citations": [url]}, "tool_not_executed"),
+            ({"id": "b", "output_text": "No evidence", "output": [{
+                "type": "web_search_call", "status": "failed",
+            }]}, "response_schema_error"),
+            ({"id": "c", "output_text": "No cited evidence", "output": [{
+                "type": "web_search_call", "status": "completed",
+            }]}, "no_allowed_citation"),
+        )
+        for index, (response, expected) in enumerate(cases):
+            with self.subTest(expected=expected):
+                async def create(**_kwargs):
+                    return response
+                result = await XaiAuthoritativeWebSearch(
+                    SimpleNamespace(responses=SimpleNamespace(create=create)),
+                    ExternalReferenceSettings(True, ("osha.gov",), f"fake-{index}"),
+                ).search(f"schema case {index}", language="en")
+                self.assertEqual(result["status"], expected)
+
+    async def test_external_failure_taxonomy_is_stable(self):
+        class StatusError(RuntimeError):
+            def __init__(self, status, message="failure"):
+                super().__init__(message)
+                self.status_code = status
+        class APITimeoutError(RuntimeError):
+            pass
+        request = httpx.Request("POST", "https://api.x.ai/v1/responses")
+        failures = (
+            (socket.gaierror("name resolution"), "dns_error"),
+            (httpx.ConnectTimeout("connect", request=request), "timeout_connect"),
+            (httpx.ReadTimeout("read", request=request), "timeout_read"),
+            (APITimeoutError("Request timed out."), "timeout_read"),
+            (ssl.SSLError("TLS handshake"), "tls_error"),
+            (StatusError(401), "authentication_error"),
+            (StatusError(403), "permission_error"),
+            (StatusError(429), "rate_limited"),
+            (StatusError(503), "provider_5xx"),
+            (StatusError(400, "model not found"), "unsupported_model"),
+            (StatusError(422), "invalid_request"),
+            (ConnectionError("connection reset"), "connect_error"),
+            (RuntimeError("unknown schema"), "response_schema_error"),
+        )
+        for index, (failure, expected) in enumerate(failures):
+            with self.subTest(expected=expected):
+                async def create(**_kwargs):
+                    raise failure
+                result = await XaiAuthoritativeWebSearch(
+                    SimpleNamespace(responses=SimpleNamespace(create=create)),
+                    ExternalReferenceSettings(True, ("osha.gov",), f"fault-{index}"),
+                ).search(f"fault query {index}", language="en")
+                self.assertEqual(result["status"], expected)
+                self.assertEqual(result["attempt_count"], 1)
+                self.assertNotIn("failure", str(result))
 
 
 if __name__ == "__main__":

@@ -40,6 +40,43 @@ class Transcription:
     alternatives: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class InputEventDecision:
+    """Shared post-STT decision made before a user Turn is committed."""
+
+    accepted: bool
+    reason: str | None = None
+
+
+_NON_LEXICAL_EVENT = re.compile(
+    r"^\s*[\[(<{]?\s*(?:"
+    r"cough(?:ing)?|throat[ -]?clear(?:ing)?|clears? throat|sniff(?:ing)?|"
+    r"sneez(?:e|ing)|breath(?:ing)?|laugh(?:ter|ing)?|keyboard|typing|"
+    r"tap(?:ping)?|impact|chair(?: movement)?|noise|silence|music|"
+    r"unintelligible|inaudible|기침(?:\s*소리)?|헛기침|목\s*가다듬는\s*소리|"
+    r"훌쩍(?:임)?|재채기|숨\s*소리|호흡|웃음(?:\s*소리)?|키보드|타자|"
+    r"두드리는\s*소리|충격음|의자\s*소리|소음|무음|음악|알아들을\s*수\s*없음"
+    r")\s*[\])>}]?\s*[.!?。！？]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def classify_input_event(transcription: Transcription) -> InputEventDecision:
+    """Reject only whole-event non-speech labels and explicit provider no-speech.
+
+    The raw transcript remains available to diagnostics.  Substrings in real
+    utterances (for example, "I coughed") are deliberately not rejected, and
+    valid short workflow commands are never classified by length alone.
+    """
+
+    issue = transcription_quality_issue(transcription)
+    if issue == "provider_no_speech_probability":
+        return InputEventDecision(False, issue)
+    if _NON_LEXICAL_EVENT.fullmatch(transcription.text):
+        return InputEventDecision(False, "non_lexical_event")
+    return InputEventDecision(True)
+
+
 def transcription_quality_issue(transcription: Transcription) -> str | None:
     """Use provider quality metadata only when it is actually supplied."""
 

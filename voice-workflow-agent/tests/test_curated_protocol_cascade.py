@@ -37,11 +37,13 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisResponseError,
     parse_protocol_analysis_response,
 )
+from voice_workflow_agent.experiment_reports import ExperimentReportStore
 from voice_workflow_agent.external_references import ExternalReferenceSettings
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.server import (
     ListenerSession,
     ServerConfig,
+    _record_experiment_report_plan,
     cancel_cascade_generation,
     get_protocol_source_page,
     get_protocol_visual_asset,
@@ -1624,6 +1626,124 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(operation["operation"], "completion_and_next_transition")
 
+    def test_report_persists_completed_pre_transition_step_before_tts_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            socket = Socket()
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("현재 단계를 완료했어요.", "ko"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize",
+                side_effect=RuntimeError("synthetic TTS failure"),
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "synthetic TTS"):
+                    asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+            self.assertEqual(session.curated_protocol_session.current_index, 2)
+            self.assertIsNotNone(session.experiment_report_id)
+            report = session.experiment_report_store.get_report(
+                session.experiment_report_id
+            )
+            completed = next(
+                item for item in report["events"]
+                if item["event_type"] == "step_completed"
+            )
+            self.assertEqual(completed["step_id"], self.fixture.steps[1].step_id)
+            self.assertEqual(completed["step_label"], "2")
+            self.assertEqual(
+                completed["payload"]["post_transition_step_id"],
+                self.fixture.steps[2].step_id,
+            )
+            self.assertEqual(
+                completed["payload"]["completion_source"], "user_command"
+            )
+            event = next(
+                item for item in socket.text
+                if item["type"] == "experiment.report.state"
+            )
+            self.assertEqual(event["configuration_id"], 41)
+            self.assertEqual(event["session_id"], session.session_id)
+            self.assertEqual(event["generation"], session.generation)
+
+    def test_cough_label_is_rejected_before_turn_routing_and_reporting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            socket = Socket()
+            opening = session.curated_protocol_session.current_index
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("[Coughing]", "en"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize",
+                side_effect=AssertionError("noise must not reach TTS"),
+            ), patch(
+                "voice_workflow_agent.server.search_approved_lab_references",
+                side_effect=AssertionError("noise must not reach retrieval"),
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+            types = [item["type"] for item in socket.text]
+            self.assertIn("speech.rejected", types)
+            self.assertNotIn("transcript", types)
+            self.assertNotIn("reply.delta", types)
+            self.assertNotIn("turn.done", types)
+            self.assertEqual(session.curated_protocol_session.current_index, opening)
+            self.assertIsNone(session.experiment_report_id)
+            self.assertEqual(session.experiment_report_store.list_reports(), [])
+
+    def test_repeated_natural_stop_finalizes_report_exactly_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            curated = session.curated_protocol_session
+            opening_index = curated.current_index
+            first = curated.plan(
+                "프로토콜을 종료할게", turn_id=1, language="ko"
+            )
+            first_report = _record_experiment_report_plan(
+                session, curated, first, turn_id=1,
+                generation=session.generation,
+                pre_transition_index=opening_index,
+            )
+            second = curated.plan(
+                "프로토콜 종료할게요", turn_id=2, language="ko"
+            )
+            second_report = _record_experiment_report_plan(
+                session, curated, second, turn_id=2,
+                generation=session.generation,
+                pre_transition_index=opening_index,
+            )
+            self.assertTrue(first.state_changed)
+            self.assertFalse(second.state_changed)
+            self.assertEqual(first_report["status"], "stopped")
+            self.assertEqual(second_report["finalization_version"], 1)
+            self.assertEqual(
+                [event["event_type"] for event in second_report["events"]],
+                ["session_stopped", "report_finalized"],
+            )
+            self.assertEqual(
+                second_report["events"][0]["payload"]["stop_reason"],
+                "stopped_by_user",
+            )
+
     def test_internal_miss_escalates_once_to_authoritative_web_without_mutation(self):
         session=self.make_session(index=1)
         session.external_reference_settings=ExternalReferenceSettings(
@@ -1684,9 +1804,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ["search_approved_lab_references","search_authoritative_web"],
         )
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertEqual(reply["answer_origin"],"external_authoritative_reference")
+        self.assertEqual(reply["answer_origin"],"current_protocol")
         self.assertEqual(reply["question_dimensions"],["definition"])
         self.assertIn("HPLC",reply["transcript_correction_note"])
+        supplement=next(
+            item for item in socket.text if item["type"]=="research.result")
+        self.assertEqual(
+            supplement["answer_origin"],"external_authoritative_reference")
 
     def test_web_failure_preserves_local_facts_and_returns_specific_limitation(self):
         session=self.make_session(index=1)
@@ -1741,9 +1865,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(result["status"],"error")
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("현재 프로토콜에서 확인되는 내용",reply["text"])
-        self.assertIn("외부 권위자료 검색을 완료하지 못해",reply["text"])
-        self.assertIn("authoritative_web_search_error",reply["limitations"])
+        self.assertIn("PDF/프로토콜 근거",reply["text"])
+        supplement=next(
+            item for item in socket.text if item["type"]=="research.result")
+        self.assertEqual(supplement["status"],"error")
+        self.assertIn("추가 차원",supplement["limitation"])
         self.assertNotIn("fixture",reply["text"].casefold())
 
     def test_audio_help_and_unreliable_transcript_are_read_only_and_tool_free(self):
@@ -2052,12 +2178,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ])
         self.assertEqual(results[0]["retrieval_backend"],"sqlite")
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertEqual(reply["answer_origin"],"approved_lab_corpus")
-        self.assertEqual(reply["citations"],[citation])
-        self.assertIn("추가 승인 참고자료",tts.call_args.args[0])
+        self.assertEqual(reply["answer_origin"],"current_protocol")
+        supplement=next(
+            item for item in socket.text if item["type"]=="research.result")
+        self.assertEqual(supplement["answer_origin"],"approved_lab_corpus")
+        self.assertEqual(supplement["citations"],[citation])
+        self.assertIn("활성 프로토콜",tts.call_args.args[0])
         operation=next(
             item for item in socket.text if item["type"]=="server.operation")
-        self.assertEqual(operation["operation"],"approved_reference_qa")
+        self.assertEqual(operation["operation"],"related_question_unresolved")
 
     def test_fresh_configured_proceed_uses_full_turn_ledger_and_step_one(self):
         session = self.make_session(index=0)
@@ -2503,24 +2632,39 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             transcript="이 단계에서 용액은 얼마나 넣어?",
         )
         self.assertEqual(session.curated_protocol_session.current_index, 2)
-        self.assertEqual(len(client.chat.completions.calls), 1)
-        llm.assert_called_once()
-        context = json.dumps(
-            client.chat.completions.calls[0]["messages"], ensure_ascii=False
-        )
-        self.assertIn("candidate-a-step-03", context)
-        self.assertNotIn("candidate-a-step-04", context)
-        self.assertEqual(
-            tts.call_args.args[0],
-            "현재 단계에서는 Solution A 500 µL를 사용합니다.",
-        )
+        self.assertEqual(len(client.chat.completions.calls), 0)
+        llm.assert_not_called()
+        self.assertIn("활성 프로토콜", tts.call_args.args[0])
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
-        self.assertEqual(reply["evidence_ids"], ["current_step"])
-        self.assertEqual(reply["source_pages"], [4])
-        self.assertEqual(reply["translation_status"], "grounded_model")
+        self.assertEqual(reply["answer_origin"], "current_protocol")
+        self.assertIn(4, reply["source_pages"])
+        self.assertEqual(
+            reply["translation_status"], "deterministic_protocol_structure")
         operation = next(item for item in socket.text
                          if item["type"] == "server.operation")
-        self.assertEqual(operation["operation"], "grounded_qa")
+        self.assertEqual(operation["operation"], "related_question_unresolved")
+
+    def test_whole_protocol_metadata_is_provider_free_at_position_six(self):
+        session, socket, client, _, tts, llm = self.run_question(
+            transcript="지금은 총 몇 단계로 이루어져 있어?", index=5,
+        )
+        self.assertEqual(session.curated_protocol_session.current_index, 5)
+        llm.assert_not_called()
+        self.assertEqual(len(client.chat.completions.calls), 0)
+        self.assertIn("총 25단계", tts.call_args.args[0])
+        reply = next(item for item in socket.text if item["type"] == "reply.delta")
+        self.assertIn("현재: 6/25", reply["text"])
+        self.assertIn("남은 단계: 19", reply["text"])
+        self.assertEqual(reply["answer_origin"], "current_protocol")
+        self.assertEqual(
+            next(item for item in socket.text
+                 if item["type"] == "server.operation")["operation"],
+            "protocol_structure_read",
+        )
+        self.assertFalse(any(
+            item["type"] in {"tool.call", "research.state", "research.result"}
+            for item in socket.text
+        ))
 
     def test_stt_failure_or_empty_transcript_prevents_llm_tts_and_state_change(self):
         for mode in ("failure", "empty"):
@@ -3140,7 +3284,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "control",
                 "verified_fact",
                 "full_detail",
-                "blocked",
+                "verified_fact",
                 "stop",
             ],
         )
@@ -3156,7 +3300,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.fixture.steps[1].step_id, "current_step"
             ),
             step_two,
-            "현재 단계에서 확인되는 활성 프로토콜 내용은 화면에 그대로 유지했습니다. 질문하신 추가 내용은 현재 승인된 근거에서 확인되지 않았습니다. 필요한 재료나 조건을 한 가지 지정해 주시면 그 항목을 확인하겠습니다.",
+            "활성 프로토콜에서 확인되는 현재 단계 관련 내용을 먼저 화면에 표시했습니다. 부족한 설명은 권위 자료에서 확인할게요.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:4])
@@ -3193,7 +3337,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("답변 · 한국어 참고 번역", replies[4])
         self.assertIn("Solution A", replies[4])
         self.assertIn(step_two, replies[5])
-        self.assertNotIn(step_two, replies[6])
+        # Related research is local-first: verified active/adjacent protocol
+        # evidence is delivered before any optional external supplement.
+        self.assertIn(step_two, replies[6])
         self.assertEqual(
             replies[7],
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",

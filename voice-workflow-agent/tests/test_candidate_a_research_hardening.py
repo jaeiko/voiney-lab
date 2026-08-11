@@ -10,11 +10,13 @@ from pathlib import Path
 from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
+    classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.document_store import ingest_manifest
 from voice_workflow_agent.external_references import plan_research_query
 from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
+from voice_workflow_agent.language import Transcription, classify_input_event
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +97,101 @@ class CandidateAResearchRoutingTests(unittest.TestCase):
         )
         for expected in ("Solution A", "acetonitrile", "PPE", "waste"):
             self.assertIn(expected, query)
+
+    def test_whole_protocol_queries_are_deterministic_and_complete(self):
+        cases = (
+            ("이 실험은 총 몇 단계야?", "protocol_total_steps", "총 25단계"),
+            ("현재 몇 번째 단계야?", "protocol_current_position", "6단계"),
+            ("몇 단계 남았어?", "protocol_remaining_steps", "19단계"),
+            ("전체 흐름을 요약해 줘.", "protocol_overview", "전체 25단계"),
+            ("시작 전에 무엇을 준비해야 해?", "protocol_preparation", "시작 전"),
+            ("전체 안전수칙을 알려줘.", "protocol_safety", "오염 방지"),
+        )
+        for turn, (question, intent_kind, expected) in enumerate(cases, 1):
+            with self.subTest(question=question):
+                session = self.session(5)
+                plan = session.plan(question, turn_id=turn, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.PROTOCOL_QUERY)
+                self.assertEqual(plan.intent_kind, intent_kind)
+                self.assertIn(expected, plan.display_text + plan.speech_text)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.current_index, 5)
+                self.assertEqual(len(self.fixture.steps), 25)
+
+    def test_specific_step_lookup_is_exact_and_does_not_move_current_step(self):
+        session = self.session(5)
+        plan = session.plan("12단계 설명해 줘", turn_id=1, language="ko")
+        self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertEqual(plan.target_step, "12")
+        self.assertEqual(plan.step_label, "12")
+        self.assertIn(self.fixture.steps[11].instruction_source_text, plan.display_text)
+        self.assertEqual(session.current_index, 5)
+        self.assertFalse(plan.state_changed)
+
+    def test_natural_stop_variants_are_anchored_and_high_priority(self):
+        positives = (
+            "프로토콜을 종료할게", "프로토콜 종료할게요", "여기서 끝낼게",
+            "그만할래", "중단해 줘", "stop the protocol", "I'll stop here",
+        )
+        for value in positives:
+            with self.subTest(value=value):
+                intent = classify_curated_control_intent(value, language="ko")
+                self.assertEqual(intent.action, CuratedProtocolAction.STOP)
+                self.assertTrue(intent.allows_state_mutation)
+        negative = classify_curated_control_intent(
+            "종료 조건이 뭐야?", language="ko"
+        )
+        self.assertIsNot(negative.action, CuratedProtocolAction.STOP)
+
+    def test_shared_input_event_classifier_rejects_only_whole_noise_events(self):
+        rejected = (
+            "Cough.", "[coughing]", "(throat clearing)", "Sniffing",
+            "<keyboard>", "chair movement", "Silence", "기침", "[헛기침]",
+            "의자 소리", "음악",
+        )
+        for value in rejected:
+            with self.subTest(value=value):
+                self.assertFalse(
+                    classify_input_event(Transcription(value, "ko")).accepted
+                )
+        for value in ("네", "아니요", "다음", "중지", "stop", "7", "AMBIC", "I coughed"):
+            with self.subTest(value=value):
+                self.assertTrue(
+                    classify_input_event(Transcription(value, "ko")).accepted
+                )
+        self.assertFalse(classify_input_event(Transcription(
+            "다음", "ko", no_speech_probability=0.91
+        )).accepted)
+
+    def test_checked_in_real_failure_corpus_meets_route_and_mutation_targets(self):
+        import json
+        corpus = json.loads((
+            ROOT / "tests/fixtures/candidate_a_grounded_voice_eval.json"
+        ).read_text(encoding="utf-8"))
+        failures = []
+        for index, case in enumerate(corpus["cases"], 1):
+            transcript = case["transcript"]
+            if "input_rejected" in case:
+                actual = not classify_input_event(
+                    Transcription(transcript, "ko")
+                ).accepted
+                if actual != case["input_rejected"]:
+                    failures.append((case["category"], transcript, actual))
+                continue
+            session = self.session(5)
+            opening = session.current_index
+            intent = classify_curated_control_intent(transcript, language="ko")
+            if intent.action.value != case.get("expected_action", intent.action.value):
+                failures.append((case["category"], transcript, intent.action.value))
+            if intent.action.value == case.get("forbidden_action"):
+                failures.append((case["category"], transcript, "forbidden"))
+            if case.get("expected_scope") != intent.protocol_scope:
+                failures.append((case["category"], transcript, intent.protocol_scope))
+            if not case.get("mutates", False):
+                plan = session.plan(transcript, turn_id=index, language="ko")
+                if plan.state_changed or session.current_index != opening:
+                    failures.append((case["category"], transcript, "mutation"))
+        self.assertEqual(failures, [])
 
 
 class CandidateAEvidenceAdmissionTests(unittest.TestCase):

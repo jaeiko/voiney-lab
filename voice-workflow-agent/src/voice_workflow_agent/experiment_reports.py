@@ -7,6 +7,8 @@ It never infers completion, approval, or a laboratory result from model output.
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 import re
@@ -306,6 +308,30 @@ class ExperimentReportStore:
         ]
         return result
 
+    def list_reports(self, *, session_id: str | None = None) -> list[dict[str, Any]]:
+        """List report summaries in stable start order for one development session."""
+
+        parameters: tuple[Any, ...] = ()
+        where = ""
+        if session_id is not None:
+            where = "WHERE session_id=?"
+            parameters = (_clean_identifier(session_id, "session_id"),)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT report_id,session_id,protocol_id,status,started_at,ended_at,
+                       anomaly_count,blocker_count,finalization_version,
+                       development_only
+                  FROM experiment_reports {where}
+                 ORDER BY started_at,report_id
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            {**dict(row), "development_only": bool(row["development_only"])}
+            for row in rows
+        ]
+
     def export_json(self, report_id: str) -> bytes:
         return (
             json.dumps(
@@ -339,6 +365,27 @@ class ExperimentReportStore:
                 + (f" · {detail}" if detail else "")
             )
         return ("\n".join(lines) + "\n").encode()
+
+    def export_csv(self, report_id: str) -> bytes:
+        """Export the stable event timeline as UTF-8 CSV."""
+
+        report = self.get_report(report_id)
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow((
+            "report_id", "event_key", "event_type", "step_id", "step_label",
+            "category", "severity", "confirmation_state", "source_tier",
+            "user_wording", "created_at",
+        ))
+        for event in report["events"]:
+            writer.writerow((
+                report["report_id"], event["event_key"], event["event_type"],
+                event["step_id"] or "", event["step_label"] or "",
+                event["category"] or "", event["severity"] or "",
+                event["confirmation_state"] or "", event["source_tier"] or "",
+                event["user_wording"] or "", event["created_at"],
+            ))
+        return output.getvalue().encode("utf-8-sig")
 
 
 def new_session_id() -> str:

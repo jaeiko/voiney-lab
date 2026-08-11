@@ -104,7 +104,7 @@
     .turn .stats{grid-column:2;color:var(--muted);font-size:.72rem}
     .turn .turn-replay{grid-column:2;justify-self:start;min-height:2.75rem;border:1px solid var(--forest);border-radius:.7rem;background:white;color:var(--forest);padding:.55rem .8rem;font-weight:850;cursor:pointer}.turn .replay-status{grid-column:2;color:var(--muted);font-size:.74rem}
     .turn .error{grid-column:2;color:var(--red);font-size:.8rem}
-    .turn .filler-status{grid-column:2;color:var(--muted);font-size:.72rem}.turn .turn-visual{grid-column:2;min-height:3.5rem}.turn .turn-visual img{aspect-ratio:4/3}.reference-details{margin-top:.45rem;font-size:.75rem;color:var(--muted)}.reference-details summary{cursor:pointer;font-weight:800;color:var(--forest)}
+    .turn .filler-status{grid-column:2;color:var(--muted);font-size:.72rem}.turn .turn-visual{grid-column:2;min-height:3.5rem}.turn .turn-visual img{aspect-ratio:4/3}.reference-details{margin-top:.45rem;font-size:.75rem;color:var(--muted)}.reference-details summary{cursor:pointer;font-weight:800;color:var(--forest)}.research-supplement{margin-top:.55rem;padding:.55rem;border-left:3px solid var(--sage);background:#f4f8f5}.research-supplement b{display:block;color:var(--forest)}
     .label{color:var(--muted)}
     .error{color:var(--red)}
     @media(max-width:980px){
@@ -238,11 +238,13 @@
       <div class="label" id="experiment-report-title">실험 기록 · 개발 세션</div>
       <strong id="last-report-id">아직 열린 실험 기록 없음</strong>
       <div id="last-report-state">세션이 시작되면 서버가 실험 기록 초안을 관리합니다.</div>
+      <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
       <div class="report-actions">
         <button id="show-experiment-report" type="button">실험 기록 보기</button>
         <button id="record-anomaly" type="button">이상 사항 기록</button>
         <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
         <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
+        <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
       </div>
       <div id="pending-report" hidden></div>
     </aside>
@@ -282,7 +284,7 @@ const UI={
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"허용된 외부 권위자료 검색",generate_instructional_visual:"설명용 이미지 생성",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인",start_procedure:"승인 절차 시작",get_current_step:"현재 절차 단계 확인",complete_current_step:"현재 절차 단계 완료",record_step_observation:"현재 단계 관찰 기록",start_step_timer:"현재 단계 타이머 시작",get_workflow_summary:"워크플로 감사 요약"};
-const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 승인 참고자료 질의",external_reference_qa:"외부 권위 참고자료 질의",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단"};
+const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 승인 참고자료 질의",external_reference_qa:"외부 권위 참고자료 질의",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단"};
 const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
 const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
 const TURN_ROUTE_LABELS={approved_information:"승인된 정보",brain:"일반 응답",curated_protocol:"개발용 절차",deterministic_emergency:"긴급 응답",deterministic_procedure:"승인 절차",language_clarification:"언어 확인"};
@@ -309,6 +311,7 @@ function startWorkflowTimer(){
  }
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
+function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${report.report_id} · ${report.status||"unknown"}`;row.appendChild(title);for(const [format,label] of [["json","JSON"],["md","Markdown"],["csv","CSV"]]){const link=document.createElement("a");link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.textContent=`${label} 다운로드`;link.setAttribute("download","");row.appendChild(link);}container.appendChild(row);}return true;}
 function startReportPolling(reportId){
  if(typeof reportId!=="string"||!reportId)return;
  lastReportId=reportId;stopReportPolling();
@@ -337,7 +340,7 @@ function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
 function resetVoiceProcessing(){}
 function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말해 주세요. 서버가 현재 세션을 확인한 뒤에만 상태를 변경합니다.`;}
-function resetSessionUI(){clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();nativePendingTranscripts.clear();stopWorkflowTimer();stopReportPolling();lastReportId=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();toolEvents.clear();visualEvents.clear();turnProgress.clear();turnServerGenerations.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();$("log").replaceChildren();if($("new-chat-update"))$("new-chat-update").hidden=true;const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 열린 실험 기록 없음";$("last-report-state").textContent="세션이 시작되면 서버가 실험 기록 초안을 관리합니다.";for(const id of ["export-report-markdown","export-report-json"]){const link=$(id);if(link){link.removeAttribute?.("href");link.setAttribute?.("aria-disabled","true");}}resetVoiceProcessing();invalidateCuratedProtocolState();}
+function resetSessionUI(){clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();nativePendingTranscripts.clear();stopWorkflowTimer();stopReportPolling();lastReportId=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();toolEvents.clear();visualEvents.clear();turnProgress.clear();turnServerGenerations.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();$("log").replaceChildren();renderExperimentReportList([]);if($("new-chat-update"))$("new-chat-update").hidden=true;const draft=$("pending-report");draft.hidden=true;draft.textContent="";$("last-report-id").textContent="아직 열린 실험 기록 없음";$("last-report-state").textContent="세션이 시작되면 서버가 실험 기록 초안을 관리합니다.";for(const id of ["export-report-markdown","export-report-json","export-report-csv"]){const link=$(id);if(link){link.removeAttribute?.("href");link.setAttribute?.("aria-disabled","true");}}resetVoiceProcessing();invalidateCuratedProtocolState();}
 function renderCuratedProtocolState(message){
  const value=message?.state,accepted=acceptedSessionConfiguration,nonempty=v=>typeof v==="string"&&v.trim().length>0;
  if(!accepted||message.configuration_id!==accepted.configuration_id||accepted.mode!=="cascade"||!value||typeof value!=="object")return;
@@ -402,6 +405,15 @@ renderStructuredReply=function(node,message){
  if(links.length){body.replaceChildren();for(const link of links)body.appendChild(link);}
  return rendered;
 };
+function currentResearchEvent(message,browserGeneration=sessionGeneration){const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);return accepted?.mode==="cascade"&&message?.configuration_id===accepted.configuration_id&&Number.isInteger(message?.turn_id)&&Number.isInteger(message?.generation)&&known===message.generation&&!cascadeTurnInterrupted(message)&&turns.has(browserKey);}
+function applyResearchState(message,browserGeneration=sessionGeneration){if(!currentResearchEvent(message,browserGeneration))return false;const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;const labels={approved_references:"승인된 참고자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중…"};target.textContent=labels[message.phase]||"추가 근거 확인 중…";target.hidden=false;return true;}
+function applyResearchResult(message,browserGeneration=sessionGeneration){
+ if(!currentResearchEvent(message,browserGeneration))return false;
+ const node=turnNode(message.turn_id,browserGeneration),reply=node.querySelector?.(".reply");if(!reply)return false;
+ const snapshot=beginChatPatch(node);let block=reply.querySelector?.(".research-supplement");if(!block){block=document.createElement("div");block.className="research-supplement";reply.appendChild(block);}block.replaceChildren();const heading=document.createElement("b");
+ if(message.status==="success"){const external=message.answer_origin==="external_authoritative_reference";heading.textContent=external?"외부 권위 참고자료 · 활성 프로토콜의 일부가 아님":"추가 승인 참고자료 · 활성 프로토콜의 일부가 아님";const body=document.createElement("span");body.textContent=normalizePresentationText(message.primary_text||"");block.appendChild(heading);block.appendChild(body);if(Array.isArray(message.citations)&&message.citations.length){const details=document.createElement("details");details.className="reference-details";const summary=document.createElement("summary");summary.textContent="추가 근거";details.appendChild(summary);for(const item of message.citations){const line=document.createElement("div");if(external&&typeof item?.canonical_url==="string"&&item.canonical_url.startsWith("https://")){const link=document.createElement("a");link.href=item.canonical_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${item.title||item.domain||"권위 자료"} · ${item.domain||""}`;line.appendChild(link);}else line.textContent=normalizePresentationText(`${item?.document_title||"승인 자료"} · ${item?.section||item?.chunk_id||""}`);details.appendChild(line);}block.appendChild(details);}}
+ else{heading.textContent="추가 근거 확인 제한";const body=document.createElement("span");body.textContent=normalizePresentationText(message.limitation||"추가 근거를 확인하지 못했습니다. 활성 프로토콜 근거는 유지됩니다.");block.appendChild(heading);block.appendChild(body);}const status=node.querySelector?.(".filler-status");if(status&&status.textContent.includes("근거 확인 중"))status.textContent="";finishChatPatch(snapshot,"research");return true;
+}
 function turnProgressKey(turnId,serverGeneration){return `${serverGeneration}:${turnId}`;}
 function turnBrowserKey(turnId,browserGeneration=sessionGeneration){return `${browserGeneration}:${turnId}`;}
 function validTurnStateTransition(previous,next){if(previous===null)return !["complete","blocked"].includes(next);return TURN_STATE_TRANSITIONS[previous]?.has(next)===true;}
@@ -541,9 +553,11 @@ async function onMessage(e,generation,current){
  if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="protocol.visual.state")applyGeneratedVisualState(m,generation);
+ if(m.type==="research.state")applyResearchState(m,generation);
+ if(m.type==="research.result")applyResearchResult(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(m?.turn_id,generation),known=turnServerGenerations.get(browserKey);return accepted?.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&Number.isInteger(m.generation)&&known===m.generation&&!cascadeTurnInterrupted(m);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${report.status} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"]]){const link=$(id);link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
+  const report=m.report;lastReportId=report.report_id;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${report.status} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;renderExperimentReportList(report.reports);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"]]){const link=$(id);link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent())$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";
  if(m.type==="report.status"){if(m.report_id)$("last-report-id").textContent=m.report_id;const label=REPORT_LABELS[m.report_status]||m.report_status||"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}

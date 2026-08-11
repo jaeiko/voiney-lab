@@ -94,12 +94,15 @@ the fallback only for a separate instructional-visual request.
 ## Experiment reports
 
 When `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=true`, Candidate A opens
-one SQLite-backed draft per accepted procedure session. Start, committed step,
-explicit anomaly, block, stop, and finalization events use stable idempotency
-keys. Stop finalizes the draft as stopped/incomplete; it never means successful
-procedure completion. Steps 7, 9, and 20 remain blockers. Markdown and JSON are
-read-only same-origin exports. Runtime databases and report instances are ignored
-and must never be committed.
+one SQLite-backed draft per accepted procedure session. Start, presented step,
+committed completion/navigation, explicit anomaly, block, consulted source,
+system anomaly, stop, and finalization events use stable idempotency keys.
+Accepted state changes are persisted before TTS; a completed event names the
+pre-transition step and carries `completion_source=user_command`. Stop finalizes
+the draft as stopped; it never means successful procedure completion. Steps 7,
+9, and 20 remain blockers. JSON, Markdown, and UTF-8 CSV are read-only same-origin
+exports. Runtime databases and report instances are ignored and must never be
+committed.
 
 The older `create_safety_report` handoff Tool remains a distinct explicit safety
 workflow for its existing callers. Experiment-report persistence, exports,
@@ -161,6 +164,13 @@ wait for playback to finish, and never retry inside a measured run.
 | `2단계 할 때 주의사항 같은 거 있어?` | related reference | approved retrieval or fail closed | unchanged |
 | `혹시 융프라우 다녀오셨나요?` | off topic | scope reminder | active step preserved |
 | `프로토콜 종료해 줘` | `curated_protocol` | stop | inactive, never completed |
+| `지금은 총 몇 단계로 이루어져 있어?` | `curated_protocol` | protocol structure | 25 total; no retrieval |
+| `현재 몇 번째 단계야?` | `curated_protocol` | protocol structure | current/25; unchanged |
+| `몇 단계 남았어?` | `curated_protocol` | protocol structure | remaining after current; unchanged |
+| `전체 흐름을 요약해 줘` | `curated_protocol` | protocol structure | five ordered source sections |
+| `시작 전에 무엇을 준비해야 해?` | `curated_protocol` | protocol structure | verified prerequisites/materials/equipment |
+| `전체 안전수칙을 알려줘` | `curated_protocol` | protocol structure | explicit warnings plus precise limitation |
+| `12단계 설명해 줘` | `curated_protocol` | exact step lookup | Step 12 displayed; current step unchanged |
 
 At Steps 7, 9, and 20, repeat the compound-next phrase and verify a blocked
 response, no completion assertion, and no index change. A clearer paraphrase is a
@@ -259,7 +269,10 @@ Equivalent canonical controls for a separate development launcher are:
 export EXTERNAL_REFERENCES_ENABLED=true
 export EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
 export EXTERNAL_REFERENCE_MODEL='grok-4.5'
-export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
+export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=12
+export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=3
+export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=8
+export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900
 export EXTERNAL_REFERENCE_MAX_CITATIONS=5
 export WEB_VISUAL_SEARCH_ENABLED=true
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
@@ -318,6 +331,10 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `HPLC water가 일반 물하고 뭐가 달라?` | related entity; protocol first, then admitted references; unchanged |
 | `현재 실험 기록을 보여줘` | current report state/export; no workflow mutation |
 | `예상과 다르게 색이 남아 있어` | one explicit anomaly event; no fabricated observation approval |
+| `지금은 총 몇 단계로 이루어져 있어?` at Step 6 | `25`, current `6/25`, remaining `19`; zero retrieval/Provider calls |
+| `프로토콜을 종료할게` | one stopped-by-user transition and one report finalization |
+| `종료 조건이 뭐야?` | a read-only question, never a stop command |
+| `Cough.` / `[throat clearing]` / `keyboard` | `speech.rejected`; no normal Turn, TTS, research, mutation, or report event |
 
 For Steps 7, 9, and 20, completion language must still return the existing
 fail-closed execution-control reason. Neither an explanation, source crop,
@@ -377,3 +394,37 @@ and the exact Candidate A development protocol. At both 100% and 125% zoom:
    reported separately. DOM rendering must not be on the audio scheduling path.
 5. Treat content and audio quality as separate pass/fail axes. This checklist does
    not make Native authoritative for Candidate A workflow execution.
+
+## Grounded protocol, report, and transport evidence fields
+
+1. At Step 6 ask every whole-protocol question above. Record the raw transcript,
+   `intent_kind`, server operation, spoken answer, full display, source pages,
+   current index before/after, internal/tool calls, and Provider request count.
+   Total/current/remaining must be 25, 6/25, and 19 with no search call.
+2. Complete one ordinary step while forcing a development-only TTS failure.
+   Verify the report already contains exactly one `step_completed` event for the
+   pre-transition step and the next step remains committed. Inspect the event's
+   pre/post IDs and `completion_source`.
+3. Stop naturally with `프로토콜을 종료할게`, then repeat it. Verify one
+   `session_stopped`, one `report_finalized`, final status `stopped`, and working
+   per-report JSON/Markdown/CSV downloads. Confirm the report remains available.
+4. While a related-question supplement is running, start a newer valid Turn and
+   then issue a stop command. Verify the earlier request is cancelled or its late
+   result is ignored, the local answer remains visible, and no supplement attaches
+   to the newer Turn.
+5. Speak cough, throat-clear, sniff, keyboard/tap, chair/noise, silence, and music
+   controls. Record VAD/STT metadata when available. Verify whole-event labels are
+   rejected and `네`, `아니요`, `다음`, `중지`, `stop`, a step number, and
+   `AMBIC` are not rejected merely for being short.
+6. In Native comparison mode, record browser connection identity, hashed
+   application-session reference, upstream epoch, model, safe conversation
+   reference, last Provider event, uptime, close initiator/code/reason, and
+   resumption result. Ten ordinary responses must not create a new epoch.
+   Injecting one genuine transient close may create exactly one resumption.
+7. The configurable Native model remains `grok-voice-latest` until the existing
+   account passes a version-specific compatibility probe. Record this as not
+   live-verified rather than changing the model during Acceptance.
+
+Pause was intentionally not added because Candidate A has no authoritative pause
+or timer-checkpoint operation to reuse. Resume continues through the validated
+start/resume command. A client-only Pause control would violate server ownership.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -31,7 +32,11 @@ from voice_workflow_agent.configuration import (
     NativeVadSettings,
 )
 from voice_workflow_agent.emergency import recognize_emergency
-from voice_workflow_agent.language import resolve_turn_language
+from voice_workflow_agent.language import (
+    Transcription,
+    classify_input_event,
+    resolve_turn_language,
+)
 from voice_workflow_agent.procedures import (
     authorized_completion_step_id,
     authorized_observation_arguments,
@@ -549,6 +554,7 @@ class NativeRealtimeSession:
         tool_context: ToolContext,
         config: NativeRealtimeConfig,
         *,
+        application_session_id: str | None = None,
         language_mode: str = "auto",
         manual_language: str | None = None,
         connector: Connector = _default_connector,
@@ -564,6 +570,10 @@ class NativeRealtimeSession:
         self.connector = connector
         self.sleep = sleep
         self.clock = clock
+        self.application_session_ref = (
+            hashlib.sha256(application_session_id.encode()).hexdigest()[:12]
+            if application_session_id else None
+        )
 
         self.stop_requested = False
         self.conversation_id: str | None = None
@@ -607,6 +617,12 @@ class NativeRealtimeSession:
         self._awaiting_initial_session_update = False
         self._input_started = False
         self._response_wait_started_at: float | None = None
+        self.connection_epoch = 0
+        self.connection_epoch_started_at: float | None = None
+        self.last_provider_event_type: str | None = None
+        self.last_close_initiator: str | None = None
+        self.last_close_code: int | None = None
+        self.last_close_reason: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -639,6 +655,7 @@ class NativeRealtimeSession:
 
     async def stop(self) -> None:
         self.stop_requested = True
+        self.last_close_initiator = "application"
         self._ready.clear()
         for task in (self._watchdog, self._runner):
             if task and not task.done():
@@ -861,6 +878,15 @@ class NativeRealtimeSession:
                         reconnect_attempt = 0
                     delay = self.config.reconnect_delays[reconnect_attempt]
                     reconnect_attempt += 1
+                    await self.sender.text(
+                        "native.connection.state",state="reconnect_scheduled",
+                        epoch_id=self.connection_epoch,
+                        application_session_ref=self.application_session_ref,
+                        attempt=reconnect_attempt,delay_ms=round(delay*1000),
+                        close_initiator=self.last_close_initiator or "provider",
+                        close_code=self.last_close_code,
+                        exception_category=type(exc).__name__,
+                    )
                     await self.sleep(delay)
                     continue
                 reconnect_attempt = 0
@@ -896,6 +922,13 @@ class NativeRealtimeSession:
         upstream = await self.connector(
             url, {"Authorization": f"Bearer {self.config.api_key}"}
         )
+        self.connection_epoch += 1
+        epoch_id = self.connection_epoch
+        self.connection_epoch_started_at = self.clock()
+        self.last_provider_event_type = None
+        self.last_close_initiator = None
+        self.last_close_code = None
+        self.last_close_reason = None
         self._upstream = upstream
         self._connection_is_reconnect = reconnecting
         self._awaiting_initial_session_update = True
@@ -908,10 +941,47 @@ class NativeRealtimeSession:
                 pending_report=self.pending_report,
             )
         )
-        async for message in upstream:
-            await self.handle_upstream_message(message)
-            if self.stop_requested:
-                return
+        await self.sender.text(
+            "native.connection.state",state="connected",epoch_id=epoch_id,
+            reconnecting=reconnecting,model=self.config.model,
+            application_session_ref=self.application_session_ref,
+        )
+        try:
+            async for message in upstream:
+                await self.handle_upstream_message(message)
+                if self.stop_requested:
+                    self.last_close_initiator = "application"
+                    return
+            self.last_close_initiator = (
+                "application" if self.stop_requested else "provider_stream_end"
+            )
+        except ConnectionClosed as exc:
+            self.last_close_initiator = "provider"
+            self.last_close_code = getattr(exc, "code", None)
+            raw_reason = getattr(exc, "reason", None)
+            self.last_close_reason = (
+                " ".join(raw_reason.split())[:160]
+                if isinstance(raw_reason, str) and raw_reason else None
+            )
+            raise
+        finally:
+            started = self.connection_epoch_started_at
+            await self.sender.text(
+                "native.connection.state",state="closed",epoch_id=epoch_id,
+                application_session_ref=self.application_session_ref,
+                uptime_ms=(
+                    max(0,round((self.clock()-started)*1000))
+                    if started is not None else None
+                ),
+                close_initiator=self.last_close_initiator or "exception",
+                close_code=self.last_close_code,
+                close_reason=self.last_close_reason,
+                last_provider_event=self.last_provider_event_type,
+                conversation_ref=(
+                    hashlib.sha256(self.conversation_id.encode()).hexdigest()[:12]
+                    if self.conversation_id else None
+                ),
+            )
 
     async def _watchdog_loop(self) -> None:
         try:
@@ -985,6 +1055,7 @@ class NativeRealtimeSession:
             await self.sender.text("native.error", code="invalid_upstream_event")
             return
         kind = message["type"]
+        self.last_provider_event_type = kind[:120]
         log.debug("native upstream event type=%s", kind)
 
         if kind == "conversation.created":
@@ -1108,6 +1179,30 @@ class NativeRealtimeSession:
         if kind == "conversation.item.input_audio_transcription.completed":
             transcript = _event_transcript(message).strip()
             self.latest_transcript = transcript
+            input_decision = classify_input_event(Transcription(transcript, None))
+            if not input_decision.accepted:
+                self.transcript_finalized = False
+                self.preflight_audio.clear()
+                self.preflight_transcript.clear()
+                self.deferred_tool_calls.clear()
+                self.deferred_response_done.clear()
+                self.pending_automatic_turns = deque(
+                    turn for turn in self.pending_automatic_turns
+                    if turn != self.turn_id
+                )
+                # If the provider has already created a response, cancel that
+                # exact response now.  Otherwise suppress the single automatic
+                # response that may arrive after this rejected transcription.
+                self.cancel_next_response = self.active_response_id is None
+                if self.active_response_id is not None:
+                    self.discarded_response_ids.add(self.active_response_id)
+                    await self._send_json({"type": "response.cancel"})
+                await self.sender.text(
+                    "speech.rejected", turn_id=self.turn_id,
+                    reason=input_decision.reason or "non_speech",
+                )
+                await self.sender.text("native.state", state="LISTENING")
+                return
             self.transcript_finalized = True
             await self.sender.text(
                 "transcript", turn_id=self.turn_id, text=transcript
