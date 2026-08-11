@@ -42,6 +42,27 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
+
+
+async def _dedicated_to_thread(function, *args, **kwargs):
+    """Run a worker assertion without leaking asyncio's process-global pool."""
+    result = []
+    errors = []
+
+    def run():
+        try:
+            result.append(function(*args, **kwargs))
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    while worker.is_alive():
+        await asyncio.sleep(0)
+    worker.join()
+    if errors:
+        raise errors[0]
+    return result[0]
 from voice_workflow_agent.server import (
     ServerConfig,
     get_protocol_analysis_status,
@@ -288,6 +309,9 @@ class ProtocolCatalogTests(unittest.TestCase):
         with patch(
             "voice_workflow_agent.server._open_protocol_catalog",
             side_effect=open_catalog,
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=_dedicated_to_thread,
         ), patch(
             "voice_workflow_agent.server._protocol_analysis_model",
             return_value=model,
@@ -644,6 +668,15 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         transport = httpx.ASGITransport(app=server_module.app)
         with (
             patch.object(server_module, "_open_protocol_catalog", factory),
+            patch(
+                "fastapi.routing.run_in_threadpool",
+                side_effect=_dedicated_to_thread,
+            ),
+            patch.object(
+                server_module.asyncio,
+                "to_thread",
+                side_effect=_dedicated_to_thread,
+            ),
             patch.object(
                 server_module,
                 "_protocol_analysis_model",

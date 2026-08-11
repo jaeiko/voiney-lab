@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, logging, math, os, secrets, sqlite3, tempfile, textwrap, time
+import asyncio, hashlib, logging, math, os, secrets, sqlite3, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -32,6 +32,7 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolFixture,
     CuratedProtocolSession,
+    CuratedProtocolSpeechMode,
     ProtocolVisualKind,
     load_curated_protocol_fixture,
 )
@@ -57,15 +58,25 @@ from voice_workflow_agent.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
     initialize_protocol_store,
 )
+from voice_workflow_agent.experiment_reports import (
+    ExperimentReportSettings,
+    ExperimentReportStore,
+    new_session_id,
+)
 from voice_workflow_agent.external_references import (
     ExternalReferenceSettings,
     XaiAuthoritativeWebSearch,
+    plan_research_query,
 )
 from voice_workflow_agent.generated_visuals import (
     GENERATED_VISUALS,
     GeneratedVisualSettings,
     VisualSpecification,
     XaiImageGenerator,
+)
+from voice_workflow_agent.web_visuals import (
+    WebVisualSettings,
+    XaiAuthoritativeImageSearch,
 )
 from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
@@ -780,6 +791,39 @@ def get_generated_visual_asset(asset_id:str):
     )
 
 
+@app.get("/api/experiment-reports/{report_id}.{format_name}")
+def export_experiment_report(report_id:str,format_name:str):
+    """Export one configured report without exposing its database location."""
+
+    try:
+        settings=ExperimentReportSettings.from_environment()
+        if not settings.enabled or settings.database_path is None:
+            raise HTTPException(status_code=404,detail="experiment report unavailable")
+        store=ExperimentReportStore(settings.database_path)
+        if format_name=="json":
+            content=store.export_json(report_id)
+            media_type="application/json"
+        elif format_name=="md":
+            content=store.export_markdown(report_id)
+            media_type="text/markdown; charset=utf-8"
+        else:
+            raise HTTPException(status_code=404,detail="experiment report unavailable")
+    except HTTPException:
+        raise
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(
+            status_code=404,detail="experiment report unavailable"
+        ) from exc
+    return Response(
+        content=content,media_type=media_type,
+        headers={
+            "Cache-Control":"no-store",
+            "Content-Disposition":f'attachment; filename="{report_id}.{format_name}"',
+            "X-Content-Type-Options":"nosniff",
+        },
+    )
+
+
 @app.get(
     "/api/protocols/{protocol_id}/revisions/{revision_id}/source-pages/{source_page}"
 )
@@ -894,7 +938,8 @@ class TurnProgress:
 class ListenerSession:
     def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.perf_counter,
                  tool_context:ToolContext|None=None,
-                 curated_protocol_session:CuratedProtocolSession|None=None)->None:
+                 curated_protocol_session:CuratedProtocolSession|None=None,
+                 experiment_report_store:ExperimentReportStore|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -906,6 +951,9 @@ class ListenerSession:
         self.turn_committed_at:dict[int,float]={}
         self.playback_completion_metrics:dict[int,int]={}
         self.curated_protocol_session=curated_protocol_session
+        self.experiment_report_store=experiment_report_store
+        self.experiment_report_id:str|None=None
+        self.session_id=new_session_id()
         self.accepted_configuration_id:int|None=None
         self.accepted_mode:str|None=None
         self.accepted_language:str|None=None
@@ -979,6 +1027,8 @@ class ListenerSession:
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self._reset_turn_identity()
+        self.session_id=new_session_id()
+        self.experiment_report_id=None
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
     def stop(self):
@@ -1438,6 +1488,192 @@ async def _queue_curated_generated_visual(
     task=asyncio.create_task(worker())
     session.track_visual_task(task)
 
+
+async def _queue_curated_web_visual(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
+    settings:WebVisualSettings,
+) -> None:
+    fixture=curated.fixture
+    step=fixture.steps[curated.current_index]
+    configuration_id=session.accepted_configuration_id
+    job_id=hashlib.sha256(
+        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+    ).hexdigest()
+    identity={
+        "configuration_id":configuration_id,"turn_id":turn_id,
+        "generation":generation,"protocol_id":fixture.protocol_id,
+        "step_id":step.step_id,"source_document_hash":fixture.source_pdf_sha256,
+        "visual_job_id":job_id,
+    }
+    if not session.owns_visual_result(
+        turn_id,generation,configuration_id,fixture.protocol_id):
+        return
+    await sender.text(
+        "protocol.visual.state",**identity,status="web_visual_pending",
+        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
+
+    async def worker() -> None:
+        started=clock()
+        try:
+            await sender.text(
+                "tool.call",**identity,tool="search_authoritative_web",round=2)
+            client=AsyncOpenAI(
+                base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                max_retries=0)
+            query="\n".join((
+                "Find a real, authoritative image example relevant to this laboratory step.",
+                f"Protocol: {fixture.title}",
+                f"Step {step.source_label}: {step.instruction_source_text}",
+                "Do not treat the image as protocol evidence or an observed result.",
+            ))
+            result=await XaiAuthoritativeImageSearch(client,settings).search(query)
+            if not session.owns_visual_result(
+                turn_id,generation,configuration_id,fixture.protocol_id):
+                return
+            elapsed=max(0,round((clock()-started)*1000))
+            if result.get("status")=="success" and result.get("matches"):
+                await sender.text(
+                    "tool.result",**identity,tool="search_authoritative_web",
+                    round=2,status="success",elapsed_ms=elapsed,
+                    retrieval_backend=result.get("backend"),match_count=1)
+                await sender.text(
+                    "protocol.visual.state",**identity,status="web_visual_ready",
+                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                    candidate=result["matches"][0])
+            else:
+                await sender.text(
+                    "tool.result",**identity,tool="search_authoritative_web",
+                    round=2,status="not_found",elapsed_ms=elapsed,match_count=0)
+                await sender.text(
+                    "protocol.visual.state",**identity,status="visual_failed",
+                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                    fallback="none")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "web visual search failed closed turn_id=%s error=%s",
+                turn_id,type(exc).__name__)
+            if session.owns_visual_result(
+                turn_id,generation,configuration_id,fixture.protocol_id):
+                await sender.text(
+                    "tool.result",**identity,tool="search_authoritative_web",
+                    round=2,status="error",
+                    elapsed_ms=max(0,round((clock()-started)*1000)))
+                await sender.text(
+                    "protocol.visual.state",**identity,status="visual_failed",
+                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                    fallback="none")
+
+    task=asyncio.create_task(worker())
+    session.track_visual_task(task)
+
+
+def _open_experiment_report(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+)->dict:
+    store=session.experiment_report_store
+    if store is None:
+        raise RuntimeError("experiment reports are disabled")
+    if session.experiment_report_id is None:
+        report=store.open_report(
+            session_id=session.session_id,
+            protocol_id=curated.fixture.protocol_id,
+            protocol_title=curated.fixture.title,
+            protocol_revision=curated.fixture.revision_id,
+            protocol_sha256=curated.fixture.source_pdf_sha256 or "",
+            readiness_status=curated.fixture.draft.readiness.status.value,
+            development_only=curated.fixture.development_only,
+        )
+        session.experiment_report_id=report["report_id"]
+    return store.get_report(session.experiment_report_id)
+
+
+def _record_experiment_report_plan(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    plan,
+    *,
+    turn_id:int,
+    generation:int,
+)->dict:
+    report=_open_experiment_report(session,curated)
+    store=session.experiment_report_store
+    assert store is not None and session.experiment_report_id is not None
+    event_key=(
+        f"turn-{turn_id}-generation-{generation}-{plan.action.value}"
+    )
+    step=(
+        curated.fixture.steps[curated.current_index]
+        if curated.active else None
+    )
+    step_id=step.step_id if step is not None else None
+    step_label=plan.step_label
+    event_type=None
+    payload={
+        "intent_kind":plan.intent_kind,
+        "state_changed":bool(plan.state_changed),
+        "answer_origin":plan.answer_origin,
+        "development_only":curated.fixture.development_only,
+    }
+    if plan.action is CuratedProtocolAction.START:
+        event_type="session_started"
+    elif plan.action is CuratedProtocolAction.NEXT and plan.state_changed:
+        event_type=(
+            "step_completed" if plan.reported_completion else "step_advanced"
+        )
+    elif plan.action is CuratedProtocolAction.NEXT and plan.speech_mode.value=="blocked":
+        event_type="blocked"
+    elif plan.action is CuratedProtocolAction.REPORT_ANOMALY:
+        event_type="anomaly"
+    elif plan.action is CuratedProtocolAction.STOP:
+        event_type="session_stopped"
+    elif plan.answer_origin in {
+        "approved_lab_corpus","external_authoritative_reference",
+    }:
+        event_type="source_consulted"
+    if event_type is not None:
+        report=store.append_event(
+            session.experiment_report_id,
+            event_key=event_key,
+            event_type=event_type,
+            step_id=step_id,
+            step_label=step_label,
+            user_wording=plan.anomaly_text,
+            category=plan.anomaly_category,
+            severity=("unknown" if plan.reported_anomaly else None),
+            confirmation_state=(
+                "user_reported" if plan.reported_anomaly else None
+            ),
+            source_tier=(
+                plan.answer_origin
+                if plan.answer_origin != "current_protocol" else None
+            ),
+            citation_identities=tuple(
+                hashlib.sha256(str(item).encode()).hexdigest()
+                for item in plan.evidence_ids
+            ),
+            payload=payload,
+        )
+    if plan.action is CuratedProtocolAction.STOP:
+        report=store.finalize(
+            session.experiment_report_id,
+            status="stopped",
+            event_key=f"{event_key}-finalize",
+        )
+    return report
+
+
+def _public_experiment_report_state(report:dict)->dict:
+    return {
+        key:report.get(key) for key in (
+            "report_id","status","started_at","ended_at","anomaly_count",
+            "blocker_count","finalization_version","development_only",
+        )
+    } | {"event_count":len(report.get("events",()))}
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter,
                    sender:LockedSender|None=None,filler:CascadeFiller|None=None,
@@ -1610,14 +1846,23 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 transcript_quality=transcription_quality_issue(transcription))
             if plan.action is CuratedProtocolAction.RELATED_QUESTION and curated.active:
                 step = curated.fixture.steps[curated.current_index]
-                facts = curated.fixture.facts_for_step(curated.current_index)
+                facts = plan.facts or (
+                    curated.related_facts(transcript)
+                    if plan.requested_entity is not None
+                    else curated.fixture.facts_for_step(curated.current_index)
+                )
                 resolved_query = curated.reference_query_for(transcript, plan)
                 if resolved_query is None:
                     raise RuntimeError("related reference query is unavailable")
-                reference_query="\n".join((
-                    resolved_query,step.instruction_source_text,
-                    *(fact.text for fact in facts),
-                ))
+                reference_query=plan_research_query(
+                    resolved_query,
+                    protocol_title=curated.fixture.title,
+                    step_label=step.source_label,
+                    step_text=step.instruction_source_text,
+                    evidence_texts=tuple(fact.text for fact in facts),
+                    requested_entity=plan.requested_entity,
+                    question_kind=plan.question_kind,
+                )
                 client=None
                 force_external=(
                     plan.requested_followup=="search_external_reference"
@@ -1701,7 +1946,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 client.model=require_env("CHAT_MODEL")
                             await progress("composing",route="approved_information")
                             reference_answer=await answer_approved_reference_question(
-                                client,transcript,language=turn_language,
+                            client,resolved_query,language=turn_language,
                                 protocol_id=curated.fixture.protocol_id,
                                 step_id=step.step_id,evidence=matches)
                             if not session.is_current(turn_id,generation):
@@ -1770,6 +2015,33 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                     "External guidance cannot modify the active protocol.",
                                 ),
                             )
+            report_prepared=False
+            if plan.action in {
+                CuratedProtocolAction.REPORT_ANOMALY,
+                CuratedProtocolAction.SHOW_REPORT,
+            }:
+                if session.experiment_report_store is None:
+                    unavailable=(
+                        "실험 기록 기능이 이 세션에서 활성화되지 않았습니다. "
+                        "프로토콜 상태는 변경하지 않았습니다."
+                        if turn_language=="ko" else
+                        "Experiment reporting is not enabled for this session. "
+                        "The protocol state did not change."
+                    )
+                    plan=replace(
+                        plan,display_text=unavailable,speech_text=unavailable,
+                        speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                    )
+                else:
+                    report=await asyncio.to_thread(
+                        _record_experiment_report_plan,
+                        session,curated,plan,
+                        turn_id=turn_id,generation=generation,
+                    )
+                    report_prepared=True
+                    await current_text(
+                        "experiment.report.state",turn_id=turn_id,
+                        report=_public_experiment_report_state(report))
             display_text=plan.display_text
             speech_text=plan.speech_text
             if not isinstance(display_text,str) or not display_text.strip():
@@ -1787,6 +2059,31 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if filler is not None:await filler.primary_ready()
             if not frames or not session.start_playback(turn_id):
                 raise RuntimeError("curated protocol produced no playable audio")
+            if (
+                session.experiment_report_store is not None
+                and not report_prepared
+                and plan.action in {
+                    CuratedProtocolAction.START,
+                    CuratedProtocolAction.NEXT,
+                    CuratedProtocolAction.STOP,
+                    CuratedProtocolAction.QUESTION,
+                }
+            ):
+                try:
+                    report=await asyncio.to_thread(
+                        _record_experiment_report_plan,
+                        session,curated,plan,
+                        turn_id=turn_id,generation=generation,
+                    )
+                    await current_text(
+                        "experiment.report.state",turn_id=turn_id,
+                        report=_public_experiment_report_state(report))
+                except Exception:
+                    log.warning(
+                        "experiment report update failed turn_id=%s",turn_id)
+                    await current_text(
+                        "experiment.report.error",turn_id=turn_id,
+                        code="report_update_failed")
         except BaseException:
             curated._restore(checkpoint)
             raise
@@ -1823,6 +2120,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.AUDIO_RECOVERY:"audio_replay_request",
             CuratedProtocolAction.TRANSCRIPT_UNRELIABLE:"transcript_retry_required",
             CuratedProtocolAction.CANCEL_READONLY:"readonly_operation_cancelled",
+            CuratedProtocolAction.REPORT_ANOMALY:"experiment_anomaly_recorded",
+            CuratedProtocolAction.SHOW_REPORT:"experiment_report_view",
             CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
             CuratedProtocolAction.CLARIFY_REFERENCE:"reference_clarification_required",
             CuratedProtocolAction.OFF_TOPIC:"scope_reminder",
@@ -1879,18 +2178,30 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             reported_completion=plan.reported_completion,
             requested_transition=plan.requested_transition)
         if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
-            try:
-                visual_settings=GeneratedVisualSettings.from_environment()
-            except ValueError:
-                visual_settings=GeneratedVisualSettings(False)
-            visual_spec=(
-                _curated_visual_specification(curated)
-                if visual_settings.enabled else None)
-            if visual_spec is not None:
-                await _queue_curated_generated_visual(
-                    session=session,sender=sender,turn_id=turn_id,
-                    generation=generation,endpoint=endpoint,clock=clock,
-                    specification=visual_spec,settings=visual_settings)
+            existing_visual=curated.fixture.visual_for_step(curated.current_index)
+            if plan.visual_kind=="web_photo" and existing_visual is None:
+                try:
+                    web_visual_settings=WebVisualSettings.from_environment()
+                except ValueError:
+                    web_visual_settings=WebVisualSettings(False)
+                if web_visual_settings.enabled:
+                    await _queue_curated_web_visual(
+                        session=session,sender=sender,turn_id=turn_id,
+                        generation=generation,endpoint=endpoint,clock=clock,
+                        curated=curated,settings=web_visual_settings)
+            elif existing_visual is None:
+                try:
+                    visual_settings=GeneratedVisualSettings.from_environment()
+                except ValueError:
+                    visual_settings=GeneratedVisualSettings(False)
+                visual_spec=(
+                    _curated_visual_specification(curated)
+                    if visual_settings.enabled else None)
+                if visual_spec is not None:
+                    await _queue_curated_generated_visual(
+                        session=session,sender=sender,turn_id=turn_id,
+                        generation=generation,endpoint=endpoint,clock=clock,
+                        specification=visual_spec,settings=visual_settings)
         if session.is_current(turn_id,generation):
             session.history.commit([
                 {"role":"user","content":transcript},
@@ -2224,13 +2535,21 @@ async def voice_socket(websocket:WebSocket):
     try:
         vad_settings=VoiceVadSettings.from_environment()
         config=VadConfig.from_settings(vad_settings.cascade)
+        report_settings=ExperimentReportSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
             "error",message=f"invalid VAD configuration: {exc}"))
         await websocket.close(code=1008,reason="invalid VAD configuration")
         return
-    session=ListenerSession(EndpointDetector(
-        config,listening_onset=True)); task=None; trusted_config=None; procedure_store=None
+    report_store=(
+        ExperimentReportStore(report_settings.database_path)
+        if report_settings.enabled and report_settings.database_path is not None
+        else None
+    )
+    session=ListenerSession(
+        EndpointDetector(config,listening_onset=True),
+        experiment_report_store=report_store,
+    ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
     sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
     await websocket.send_text(event("ready",sample_rate=16000,native_sample_rate=NATIVE_SAMPLE_RATE,
@@ -2660,6 +2979,16 @@ async def voice_socket(websocket:WebSocket):
             elif control["type"]=="native.playback.truncate" and native_session is not None:
                 await native_session.truncate_playback(
                     control["response_id"],control["item_id"],control["audio_end_ms"])
+            elif control["type"]=="native.playback.metrics" and native_session is not None:
+                log.info(
+                    "native.playback.metrics response_id=%s provider_gap_count=%s "
+                    "provider_gap_ms=%s client_underrun_count=%s "
+                    "client_underrun_ms=%s scheduled_chunks=%s audio_context_state=%s",
+                    control["response_id"],control["provider_gap_count"],
+                    control["provider_gap_ms"],control["client_underrun_count"],
+                    control["client_underrun_ms"],control["scheduled_chunks"],
+                    control["audio_context_state"],
+                )
             elif control["type"]=="native.playback.ended" and native_session is not None:
                 completion=await native_session.playback_ended(
                     control["response_id"])

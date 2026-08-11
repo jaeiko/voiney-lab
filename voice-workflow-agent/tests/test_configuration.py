@@ -227,6 +227,11 @@ class VadStartupTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(server,"start_moss_runtime_from_environment"),
             patch.object(server,"stop_moss_runtime"),
+            patch.object(
+                server.asyncio,
+                "to_thread",
+                side_effect=lambda function, *args: function(*args),
+            ),
             patch.dict(os.environ,{},clear=True),
             self.assertLogs("voice_workflow_agent",level="INFO") as captured,
         ):

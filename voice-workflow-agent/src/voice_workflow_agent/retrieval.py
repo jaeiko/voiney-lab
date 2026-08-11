@@ -65,6 +65,7 @@ def retrieve_approved_lab_documents(
     allowed_filters = {
         "approval_status", "protocol_id", "document_id", "language",
         "authority_tier", "lab_scope", "facility_id",
+        "exclude_non_operational",
     }
     if (
         not isinstance(query, str) or not query.strip()
@@ -118,6 +119,7 @@ def retrieve_approved_lab_documents(
         return {"status": "error", "answerable": False, "matches": []}
 
     eligible: list[sqlite3.Row] = []
+    rejections: list[dict[str, str]] = []
     for row in rows:
         if _is_stale(row, current):
             continue
@@ -132,6 +134,19 @@ def retrieve_approved_lab_documents(
         facility = filters.get("facility_id")
         if facility and row["facility_id"] not in (None, facility):
             continue
+        if filters.get("exclude_non_operational") is True:
+            if (
+                row["usage_scope"] == "demo"
+                or str(row["source_uri"] or "").casefold().startswith(
+                    "demo:"
+                )
+            ):
+                rejections.append({
+                    "document_id": str(row["document_id"]),
+                    "section": str(row["section_code"]),
+                    "reason": "non_operational_or_demo",
+                })
+                continue
         # The v2 catalog stores global approved references. A protocol filter
         # narrows the query context but never converts a global document into
         # active-protocol authority.
@@ -202,10 +217,15 @@ def retrieve_approved_lab_documents(
         if len(matches) >= top_k:
             break
     return {
-        "status": "success" if matches else "not_found",
+        "status": (
+            "success" if matches else
+            "no_admissible_evidence" if rejections else
+            "not_found"
+        ),
         "answerable": bool(matches),
         "matches": matches,
         "retrieval": {"backend": "sqlite", "query_terms": len(query_terms)},
+        "rejections": rejections[:20],
     }
 
 

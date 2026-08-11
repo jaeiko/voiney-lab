@@ -102,6 +102,23 @@ def parse_control(raw: str) -> dict[str, Any]:
         if not isinstance(response_id,str) or not response_id:
             raise ProtocolError("native.playback.ended needs a response_id")
         return {"type":"native.playback.ended","response_id":response_id}
+    if message["type"]=="native.playback.metrics":
+        response_id=message.get("response_id")
+        names=("provider_gap_count","provider_gap_ms","client_underrun_count",
+               "client_underrun_ms","scheduled_chunks")
+        audio_context_state=message.get("audio_context_state")
+        if (not isinstance(response_id,str) or not response_id or
+                any(not isinstance(message.get(name),int) or
+                    isinstance(message.get(name),bool) or message[name]<0
+                    for name in names) or
+                audio_context_state not in
+                {"running","suspended","interrupted","closed","unknown"}):
+            raise ProtocolError("native.playback.metrics metadata is invalid")
+        return {
+            "type":"native.playback.metrics","response_id":response_id,
+            **{name:message[name] for name in names},
+            "audio_context_state":audio_context_state,
+        }
     raise ProtocolError(f"unknown control type: {message.get("type")}")
 
 def event(event_type: str, **fields: Any) -> str:

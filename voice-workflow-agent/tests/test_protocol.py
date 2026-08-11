@@ -57,6 +57,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(parse_control(json.dumps({
             "type":"native.playback.ended","response_id":"r1"})),{
                 "type":"native.playback.ended","response_id":"r1"})
+        metrics={
+            "type":"native.playback.metrics","response_id":"r1",
+            "provider_gap_count":1,"provider_gap_ms":12,
+            "client_underrun_count":0,"client_underrun_ms":0,
+            "scheduled_chunks":4,"audio_context_state":"running",
+        }
+        self.assertEqual(parse_control(json.dumps(metrics)),metrics)
         for payload in (
             {"type":"session.start"},
             {"type":"session.start","pipeline":"direct"},
@@ -75,6 +82,10 @@ class ProtocolTests(unittest.TestCase):
             {"type":"native.playback.truncate","response_id":"r1",
              "item_id":"i1","audio_end_ms":True},
             {"type":"native.playback.ended","response_id":""},
+            {"type":"native.playback.metrics","response_id":"r1",
+             "provider_gap_count":0,"provider_gap_ms":0,
+             "client_underrun_count":-1,"client_underrun_ms":0,
+             "scheduled_chunks":1,"audio_context_state":"running"},
             {"type":"report.status.get","report_id":"not-a-report"},
             {"type":"report.status.get","report_id":7},
             {"type":"client.audio_constraints","requested":{},"actual":{}},

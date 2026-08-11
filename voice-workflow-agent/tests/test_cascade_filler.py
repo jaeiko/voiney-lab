@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 import unittest
 
@@ -115,6 +116,7 @@ class CascadeFillerTests(unittest.IsolatedAsyncioTestCase):
         events = []
         audio = []
         clears = []
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         def blocking_tts() -> bytes:
             started.set()
@@ -122,7 +124,9 @@ class CascadeFillerTests(unittest.IsolatedAsyncioTestCase):
             return b"\x00\x00" * 320
 
         async def synthesize(_text, _language):
-            return await asyncio.to_thread(blocking_tts)
+            return await asyncio.get_running_loop().run_in_executor(
+                executor, blocking_tts
+            )
 
         async def send_event(kind, **fields):
             events.append((kind, fields))
@@ -147,11 +151,16 @@ class CascadeFillerTests(unittest.IsolatedAsyncioTestCase):
         filler.start()
         await asyncio.sleep(0)
         gate.set()
-        await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=1.5)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # threading.Event.wait releases the GIL; using it directly avoids a
+        # second scheduling race while the first worker proves TTS is blocked.
+        self.assertTrue(started.wait(timeout=5))
         try:
             await asyncio.wait_for(filler.primary_ready(), timeout=0.25)
         finally:
             release.set()
+            executor.shutdown(wait=True, cancel_futures=True)
         self.assertFalse(audio)
         self.assertFalse(clears)
         self.assertIn(filler.snapshot.outcome, {"cancelled", "skipped"})

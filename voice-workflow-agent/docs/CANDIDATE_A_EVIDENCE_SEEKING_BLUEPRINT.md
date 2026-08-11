@@ -1,7 +1,7 @@
 # Candidate A evidence-seeking hardening blueprint
 
 This blueprint records the implementation boundaries adopted from the
-2026-08-10 real-voice Acceptance failures. Candidate A remains a
+2026-08-10 and 2026-08-11 real-voice Acceptance failures. Candidate A remains a
 development-only, `analysis_required` curated fixture. Cascade remains the
 authoritative workflow runtime; Native is comparison-only.
 
@@ -37,6 +37,22 @@ authoritative workflow runtime; Native is comparison-only.
 - Derived presentation normalization is applied inconsistently. Raw fixture
   and PDF bytes must remain unchanged; normalization belongs only at display
   and TTS boundaries.
+- AMBIC, HPLC water, and solution-composition questions were rejected before
+  the protocol entity/adjacent-step evidence layer because the related-term
+  gate did not recognize those scientific entities.
+- The local catalog's approved flag was treated as sufficient even for its
+  explicit `demo` scope. Retrieval success therefore meant “rows returned,”
+  not “a cited claim was admitted for this protocol and question.”
+- The product had only source-crop and generated-illustration paths. It had no
+  separate rights-aware web-image operation, so a request for a real example
+  could not be represented truthfully.
+- The existing safety handoff Tool creates a report per confirmed model Tool
+  call. It is not a durable, idempotent experiment-session record and cannot be
+  used as an automatic report trigger.
+- Native transcript/audio events sometimes used the mutable current turn after
+  a new user onset. The browser then replaced the interrupted card's answer;
+  its audio scheduler also inserted a fixed 10 ms gap whenever a drained queue
+  restarted, conflating source gaps with client-induced gaps.
 
 ## Adopted architecture
 
@@ -86,6 +102,26 @@ authoritative workflow runtime; Native is comparison-only.
     and visual-ready boundaries remain separate. Slow evidence acquisition may
     emit one truthful Turn-local progress cue. Replay and unreliable-transcript
     recovery are read-only and cannot stop or advance the procedure.
+12. **Evidence admission.** Approval is necessary but insufficient. Runtime
+    guidance rejects `demo`, `test_only`, fictional, and non-operational records,
+    then requires protocol/general scope plus entity and question-dimension
+    support. A rejected local tier may escalate to the enabled domain-restricted
+    web tier; it is never displayed as a successful source.
+13. **Visual roles.** Original protocol media, authoritative web-image source
+    pages, and AI-generated illustrations are separate internal operations. A
+    web result is exposed as a source link unless copying/display rights and
+    bytes can be verified; it is never relabelled as protocol evidence.
+14. **Experiment reports.** A feature-gated SQLite event store keeps one report
+    per Candidate A procedure session. Server-owned start, committed step,
+    anomaly, stop, and finalization triggers use idempotency keys. The export
+    contains protocol identity, events, blockers, and source tiers—not prompts,
+    reasoning, credentials, or raw audio.
+15. **Native ownership.** Provider response/item identity owns every Native
+    text and audio delta. Barge-in preserves received display text, reports
+    played duration for provider truncation, rejects late events, and creates a
+    new card only for committed new content. One AudioContext schedules chunks
+    monotonically without an artificial per-drain delay; provider arrival gaps
+    and client underruns are separate metrics.
 
 ## Reference adoption matrix
 
@@ -96,6 +132,9 @@ authoritative workflow runtime; Native is comparison-only.
 | Google ADK session state | Bounded structured short-term session state | Adapt | Implement locally in `CuratedProtocolSession`; no framework dependency. |
 | xAI Responses web search | Domain-restricted read-only evidence lookup | Adapt existing adapter | Uses the installed OpenAI-compatible client; live use remains feature-gated. |
 | xAI image generation | Base64, source-bound instructional image | Adapt existing adapter | No automatic generation; live use remains feature-gated. |
+| xAI image search + `view_image` | Distinguish real examples from generated illustrations | Adapt behind a rights-safe source-link boundary | No remote-byte copy or hotlink without validated rights; no new dependency. |
+| OpenAI Realtime client events | Cancel, clear output audio, and truncate unheard context | Adapt provider-equivalent semantics | Current provider events differ; browser sends the repository's validated truncate control. |
+| Event-sourced reporting | Idempotent procedure-session record | Implement as a repository-native SQLite service | No model tool or new framework; runtime file remains ignored. |
 | `civiliangame/meet_AGI` | Separate audio transport, session state, recovery, and product UI concerns | Adapt selected patterns | Do not copy its agent framework or multi-agent orchestration. |
 | Google Custom Search JSON API | New search provider | Reject | Closed to new customers and on a published transition path; no dependency added. |
 | YouTube `search.list` | Video discovery metadata | Reject as evidence | Search metadata is not validated laboratory content or a source transcript. |

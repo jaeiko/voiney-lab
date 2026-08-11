@@ -8,10 +8,12 @@ topic gates.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
+import queue
 import sqlite3
 import threading
 import time
@@ -292,6 +294,9 @@ class MossRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._loop_started = threading.Event()
+        self._jobs: queue.Queue[
+            tuple[Callable[[], Any], concurrent.futures.Future[Any]] | None
+        ] = queue.Queue()
         self._ready = False
         self._state_lock = threading.Lock()
 
@@ -308,13 +313,31 @@ class MossRuntime:
         asyncio.set_event_loop(loop)
         self._loop = loop
         self._loop_started.set()
-        loop.run_forever()
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
+        try:
+            while True:
+                job = self._jobs.get()
+                if job is None:
+                    break
+                coroutine_factory, future = job
+                if future.cancelled():
+                    continue
+                try:
+                    result = loop.run_until_complete(coroutine_factory())
+                except BaseException as exc:
+                    if not future.cancelled():
+                        future.set_exception(exc)
+                else:
+                    if not future.cancelled():
+                        future.set_result(result)
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.close()
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._thread is None:
@@ -327,6 +350,17 @@ class MossRuntime:
         if not self._loop_started.wait(timeout=5) or self._loop is None:
             raise RuntimeError("Moss runtime loop did not start")
         return self._loop
+
+    def _submit(
+        self, coroutine_factory: Callable[[], Any], timeout: float
+    ) -> Any:
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        self._jobs.put((coroutine_factory, future))
+        try:
+            return future.result(timeout=timeout)
+        except Exception:
+            future.cancel()
+            raise
 
     def _sdk_types(self) -> tuple[Callable[[str, str], Any], Callable[..., Any]]:
         if self._client_factory is not None and self._query_options_factory is not None:
@@ -356,13 +390,8 @@ class MossRuntime:
             return False
         if self.ready:
             return True
-        loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(self._load(), loop)
-        try:
-            future.result(timeout=self.settings.load_timeout_seconds)
-        except Exception:
-            future.cancel()
-            raise
+        self._ensure_loop()
+        self._submit(self._load, self.settings.load_timeout_seconds)
         with self._state_lock:
             self._ready = True
         log.info("Moss index loaded in memory: %s", self.settings.index_name)
@@ -403,12 +432,13 @@ class MossRuntime:
                 "condition": {"$in": candidate_keys},
             },
         )
-        future = asyncio.run_coroutine_threadsafe(
-            self._client.query(self.settings.index_name, query, options),
-            self._loop,
-        )
         try:
-            result = future.result(timeout=self.settings.query_timeout_seconds)
+            result = self._submit(
+                lambda: self._client.query(
+                    self.settings.index_name, query, options
+                ),
+                self.settings.query_timeout_seconds,
+            )
             moss_order = [
                 item.id for item in getattr(result, "docs", []) if item.id in by_key
             ]
@@ -428,7 +458,6 @@ class MossRuntime:
                 [match for _, match in ranked[:result_limit]], True, elapsed
             )
         except Exception as exc:
-            future.cancel()
             elapsed = round((time.perf_counter() - started) * 1000)
             log.warning(
                 "Moss query failed; using deterministic SQLite order: %s",
@@ -446,14 +475,13 @@ class MossRuntime:
         if loop is None or thread is None:
             return
         if self.ready:
-            future = asyncio.run_coroutine_threadsafe(self._unload(), loop)
             try:
-                future.result(timeout=5)
+                self._submit(self._unload, 5)
             except Exception:
-                future.cancel()
+                pass
         with self._state_lock:
             self._ready = False
-        loop.call_soon_threadsafe(loop.stop)
+        self._jobs.put(None)
         thread.join(timeout=5)
         self._thread = None
         self._loop = None

@@ -390,7 +390,7 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await prime(self.session, self.upstream)
 
     async def asyncTearDown(self):
-        self.session.stop_requested = True
+        await self.session.stop()
 
     async def test_preflight_gates_audio_and_transcript_until_final_transcript(self):
         await self.session.handle_upstream_message(
@@ -525,6 +525,10 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         await self.session.handle_upstream_message(audio_delta("old"))
+        await self.session.handle_upstream_message(json.dumps({
+            "type": "response.output_audio_transcript.delta",
+            "response_id": "old", "delta": "이미 받은 답변",
+        }))
         self.assertEqual(len(self.sender.audio), 1)
         await self.session.handle_upstream_message(
             json.dumps({"type": "input_audio_buffer.speech_started"})
@@ -540,6 +544,12 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             (clear["response_id"], clear["item_id"],clear["turn_id"]),
             ("old", "item-old",1),
         )
+        self.assertEqual(clear["received_text_chars"], len("이미 받은 답변"))
+        old_reply = next(
+            event for event in self.sender.events
+            if event["type"] == "reply.delta" and event["response_id"] == "old"
+        )
+        self.assertEqual(old_reply["turn_id"], 1)
         await self.session.truncate_playback("old", "item-old", 9999)
         truncate = json.loads(self.upstream.sent[-1])
         self.assertEqual(truncate["type"], "conversation.item.truncate")
@@ -760,7 +770,10 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "report_id": "SR-20260722-A1B2C3",
                 "report_status": "queued_for_handoff",
             },
-        ) as execute:
+        ) as execute, patch(
+            "voice_workflow_agent.native_realtime.asyncio.to_thread",
+            side_effect=lambda function, *args: function(*args),
+        ):
             await self.session.handle_upstream_message(call)
             await self.session.handle_upstream_message(call)
             await self.session.handle_upstream_message(
@@ -895,6 +908,9 @@ class NativeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "voice_workflow_agent.native_realtime.execute_tool",
             side_effect=RuntimeError("secret /tmp/private.sqlite SQL failure"),
+        ), patch(
+            "voice_workflow_agent.native_realtime.asyncio.to_thread",
+            side_effect=lambda function, *args: function(*args),
         ):
             await self.session.handle_upstream_message(call)
             await self.session.handle_upstream_message(

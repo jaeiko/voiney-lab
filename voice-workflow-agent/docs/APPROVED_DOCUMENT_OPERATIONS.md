@@ -21,7 +21,9 @@ Validate without writing a database:
 ```
 
 Only a human-reviewed manifest with `approval_status: approved`, `active: true`,
-and an intended non-test usage scope can support an answer.
+and an intended non-test usage scope can support an answer. Runtime admission
+also rejects titles/URIs/scopes marked fictional, demo, synthetic, test-only, or
+non-operational; approval alone does not make such content usable guidance.
 
 ## 2. Build a candidate catalog outside production
 
@@ -101,8 +103,11 @@ or 20, and must retain their canonical URL and retrieval time.
 
 The live xAI Responses adapter additionally requires:
 
-- `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true`;
-- one to five comma-separated authority domains in
+- `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true` (or the documented
+  `EXTERNAL_REFERENCES_ENABLED` alias);
+- a reviewed domain profile such as
+  `EXTERNAL_REFERENCE_DOMAIN_PROFILE=candidate_a`, or one
+  to five comma-separated authority domains in
   `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS`;
 - a non-empty `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL` (default
   `grok-4.5`);

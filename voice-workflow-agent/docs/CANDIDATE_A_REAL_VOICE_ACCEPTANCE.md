@@ -8,9 +8,10 @@ changes the fail-closed execution controls at Steps 7, 9, and 20.
 ## Routing and state ownership
 
 Cascade routing is ordered as follows: explicit stop; start/current/repeat;
-structured completion-and-next; other deterministic workflow controls; current
-step facts; approved laboratory references; explicitly enabled authoritative web
-references; and finally a bounded related-unsupported or off-topic response.
+audio recovery; completion-only/completion-and-next; other deterministic workflow
+controls; anomaly/report/visual requests; current and adjacent protocol entities;
+approved laboratory references; explicitly enabled authoritative web references;
+and finally transcript clarification or a bounded off-topic response.
 The server, never an LLM or retriever, validates and applies a transition. A
 compound completion report is represented separately from its single requested
 `next` transition so one utterance cannot advance twice. Ambiguous completion
@@ -47,6 +48,13 @@ answers retain origin, source identity, exact excerpts, citations, backend, scor
 limitations, and the owning session/turn/generation. Korean primary text is spoken;
 source excerpts and citations remain display-only.
 
+Runtime retrieval hard-rejects records marked `demo`, `test_only`, fictional,
+synthetic, or non-operational. A non-empty result set is not success: at least one
+admitted citation must support an answer claim. The current VM catalog has two
+approved demo documents and three sections, but no admissible Candidate A
+guidance. An internal miss therefore continues to the web tier only when that
+tier is explicitly enabled.
+
 The model-facing Tool registry remains nine unique schemas. The broad approved
 laboratory reference search, authoritative web search, and generated-visual job
 are internal server operations rather than additional model Tools. Nine is an
@@ -75,6 +83,41 @@ configuration, turn, generation, protocol, step, and source hash. Cancellation,
 reset, disconnect, or identity mismatch discards the result. Image success or
 failure cannot authorize completion, navigation, or a readiness change.
 
+Real-image lookup is a separate, disabled-by-default xAI web-search operation.
+It uses image search/understanding only after an explicit request for a real
+photo/example. The server validates an HTTPS allowlisted source page. Because
+the provider response does not establish copying rights for arbitrary remote
+bytes, the implemented safe result is an attributed source-page card; it does
+not hotlink, download, proxy, or relabel a thumbnail. Generated illustration is
+the fallback only for a separate instructional-visual request.
+
+## Experiment reports
+
+When `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=true`, Candidate A opens
+one SQLite-backed draft per accepted procedure session. Start, committed step,
+explicit anomaly, block, stop, and finalization events use stable idempotency
+keys. Stop finalizes the draft as stopped/incomplete; it never means successful
+procedure completion. Steps 7, 9, and 20 remain blockers. Markdown and JSON are
+read-only same-origin exports. Runtime databases and report instances are ignored
+and must never be committed.
+
+The older `create_safety_report` handoff Tool remains a distinct explicit safety
+workflow for its existing callers. Experiment-report persistence, exports,
+retrieval, web/image providers, replay, and cache are internal services and do
+not expand the nine model-facing function schemas.
+
+## Native interruption boundary
+
+Native response/item identity now owns its received text and audio. A confirmed
+barge-in preserves all text already received on the interrupted assistant Turn,
+labels playback as interrupted, reports heard audio duration to the provider-
+equivalent truncate control, clears only matching audio, and rejects late deltas.
+The next user card is created only after meaningful committed input and the next
+assistant card only after a new response begins. The browser reuses one audio
+context, removes the fixed post-drain 10 ms scheduling delay, and reports provider
+arrival gaps separately from client underruns. This is offline event-sequence
+evidence; real Mac/Whale audio continuity still requires manual Acceptance.
+
 ## Conversation viewport and latency
 
 Turns remain one canonical record. Transcript, bilingual answer, citations,
@@ -89,8 +132,9 @@ first playable audio, playback completion, retrieval, visual requested, and visu
 ready. Failures are fail-closed and visible in the originating Turn. No timing is
 inferred from animation, elapsed UI time, or model reasoning.
 
-The glove-first workspace places the active procedure and compact visual beside
-the bounded chat viewport. Setup controls follow that active area. The removed
+The glove-first document order is title/guide, protocol/PDF setup, then the active
+procedure and compact visual beside the bounded chat viewport, followed by voice
+controls and the experiment-report panel. The removed
 standalone processing card is not a loss of state: each Turn already consumes the
 server-authored monotonic lifecycle. A presentation-only normalizer repairs only
 known extraction glyphs (`(`, `)`, `-`, `:`) and renders `mm3` as `mm³`; the
@@ -154,8 +198,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHON_DOTENV_DISABLED=1 \
    enabling the microphone.
 2. Use a headset. Do not refresh, reconnect, open a second tab, or speak during
    playback/cooldown. Stop immediately on duplicate endpoints or responses.
-3. Verify the active-step panel and compact visual remain beside the bounded chat;
-   setup controls follow them. Produce at least 15 Turns and confirm the page does
+3. Verify title/setup/PDF identity remains above the active-step and bounded chat
+   workspace. Produce at least 15 Turns and confirm the page does
    not grow with the conversation.
 4. Scroll upward, create a late Tool/visual update, and confirm the viewport keeps
    its reading position and offers the new-update control. Confirm all bilingual
@@ -207,7 +251,7 @@ manual run may export only these non-secret controls before invoking the launche
 
 ```bash
 export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true
-export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS='osha.gov,cdc.gov'
+export EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
 export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL='grok-4.5'
 export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
 ```
@@ -230,6 +274,20 @@ export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS=60
 Do not enable either feature merely to run offline tests. Automated tests use
 fakes and make zero paid calls.
 
+Optional web-image lookup is also explicit and uses the same authority profile:
+
+```bash
+export WEB_VISUAL_SEARCH_ENABLED=true
+```
+
+The Candidate A launcher enables the experiment-report service at an ignored
+runtime path. For another launcher, use only an ignored absolute path:
+
+```bash
+export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=true
+export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB=/absolute/ignored/runtime/experiment_reports.sqlite
+```
+
 ## Real-failure regression matrix
 
 In one fresh Cascade/Korean session, speak each phrase once and wait for the
@@ -251,6 +309,10 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `소리가 안 나요.` / `There's no sound.` | last replayable answer once plus visible Replay control |
 | `わんねーちょ` in Korean Manual mode | transcript retry, unless an explicit stop was clearly recognized |
 | `혹시 융프라우 다녀오셨나요?` | short scope reminder; current step preserved |
+| `AMBIC가 뭐야?` | related entity; direct definition then current-step relationship; unchanged |
+| `HPLC water가 일반 물하고 뭐가 달라?` | related entity; protocol first, then admitted references; unchanged |
+| `현재 실험 기록을 보여줘` | current report state/export; no workflow mutation |
+| `예상과 다르게 색이 남아 있어` | one explicit anomaly event; no fabricated observation approval |
 
 For Steps 7, 9, and 20, completion language must still return the existing
 fail-closed execution-control reason. Neither an explanation, source crop,
@@ -275,3 +337,17 @@ and the exact Candidate A development protocol. At both 100% and 125% zoom:
 7. Record STT, detected language/quality metadata, route, state before/after,
    operation count, source tier, spoken/written answer, citations, and the
    existing STT/answer/first-audio/playback/retrieval/visual timing fields.
+
+## Native Mac/Whale interruption checklist
+
+1. Select Native comparison mode and request an answer long enough to interrupt.
+2. Barge in after 1–2 seconds. Confirm audible output stops, received answer text
+   stays on the original assistant Turn, and its label says user speech
+   interrupted playback rather than generic stopped.
+3. Confirm the committed new transcript and new response each receive their own
+   cards; false VAD starts and zero-content cancellations create none.
+4. Repeat 10 uninterrupted responses. Inspect the collapsed diagnostics for one
+   reused AudioContext, zero client-underrun count, and provider/source gaps
+   reported separately. DOM rendering must not be on the audio scheduling path.
+5. Treat content and audio quality as separate pass/fail axes. This checklist does
+   not make Native authoritative for Candidate A workflow execution.

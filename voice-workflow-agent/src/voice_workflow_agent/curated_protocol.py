@@ -67,6 +67,8 @@ class CuratedProtocolAction(str, Enum):
     AUDIO_RECOVERY = "audio_recovery"
     TRANSCRIPT_UNRELIABLE = "transcript_unreliable"
     CANCEL_READONLY = "cancel_readonly"
+    REPORT_ANOMALY = "report_anomaly"
+    SHOW_REPORT = "show_report"
     CLARIFY_COMPLETION = "clarify_completion"
     CLARIFY_REFERENCE = "clarify_reference"
     OFF_TOPIC = "off_topic"
@@ -366,6 +368,12 @@ class CuratedProtocolTurnPlan:
     target_step: str | None = None
     intent_confidence: float | None = None
     visual_requested: bool = False
+    visual_kind: str | None = None
+    requested_entity: str | None = None
+    question_kind: str | None = None
+    reported_anomaly: bool = False
+    anomaly_category: str | None = None
+    anomaly_text: str | None = None
     answer_origin: str = "current_protocol"
     citations: tuple[dict[str, object], ...] = ()
     retrieval_backend: str | None = None
@@ -819,6 +827,9 @@ class CuratedControlIntent:
     requires_confirmation: bool = False
     allows_state_mutation: bool = False
     language: str = "ko"
+    reported_anomaly: bool = False
+    anomaly_category: str | None = None
+    visual_kind: str | None = None
 
 
 _COMPLETION_AND_NEXT_PATTERNS = (
@@ -859,6 +870,9 @@ _STEP_ELABORATION_PATTERNS = (
         r".*(?:조금\s*더|더\s*)?(?:자세|상세|설명)"
     ),
     re.compile(
+        r"^단계를?\s*(?:(?:좀|조금)\s*더\s*|더\s*)?(?:자세|상세).*설명"
+    ),
+    re.compile(
         r"(?:explain|describe).*(?:step\s*(?P<label>[0-9]{1,2})|current\s*step)"
         r".*(?:detail|more)?"
     ),
@@ -876,6 +890,36 @@ _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:이|현재)?\s*단계.*(?:그림|삽화|일러스트).*(?:설명|보여|그려)"),
     re.compile(r"(?:그림|삽화|일러스트).*(?:이|현재)?\s*단계"),
     re.compile(r"(?:illustrate|show\s+an?\s+illustration|draw).*(?:this|current)\s+step"),
+)
+_WEB_VISUAL_REQUEST_PATTERNS = (
+    re.compile(r"(?:원본|실제|인터넷|웹).*(?:사진|이미지).*(?:보여|찾아)"),
+    re.compile(r"(?:find|show).*(?:real|web|source).*(?:photo|image)"),
+)
+_TERM_QUESTION_PATTERNS = (
+    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅"), "ambic"),
+    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물"), "hplc_water"),
+    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액"), "solution_a"),
+    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액"), "solution_b"),
+    (re.compile(r"acetonitrile|아세토니트릴"), "acetonitrile"),
+)
+_TERM_QUESTION_DIMENSIONS = frozenset({
+    "뭐", "무엇", "물질", "성분", "구성", "차이", "왜", "역할", "준비",
+    "만들", "일반 물", "증류수", "위험", "주의", "안전",
+    "what", "which", "define", "difference", "why", "role", "contain",
+    "prepare", "hazard", "safe",
+})
+_REPORT_REQUEST_PATTERNS = (
+    re.compile(r"(?:현재\s*)?(?:실험\s*)?(?:기록|보고서).*(?:보여|열어|내보내|export)"),
+    re.compile(r"(?:show|export|open).*(?:experiment\s*)?(?:report|record)"),
+)
+_ANOMALY_PATTERNS = (
+    (re.compile(r"(?:용액|시약).*(?:잘못|틀리게).*(?:넣|준비)"), "reagent_preparation_issue"),
+    (re.compile(r"(?:시료|샘플).*(?:흘렸|쏟았)"), "sample_deviation"),
+    (re.compile(r"(?:색|투명|침전|결과).*(?:남아|이상|다르|예상)"), "protocol_block"),
+    (re.compile(r"(?:오염|contaminat)"), "contamination_concern"),
+    (re.compile(r"(?:장비|기기).*(?:멈췄|고장|이상)"), "equipment_issue"),
+    (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상)"), "timing_temperature_deviation"),
+    (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에)"), "spill_exposure_safety_event"),
 )
 _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:소리가\s*안\s*(?:나|나요|나요)|안\s*들려|음성이\s*재생되지\s*않았어)$"),
@@ -905,7 +949,9 @@ _CANCEL_READONLY_PATTERNS = (
 _PROTOCOL_RELATED_TERMS = frozenset({
     "단계", "프로토콜", "절차", "실험", "용액", "시약", "재료", "장비",
     "주의", "주의사항", "안전", "안전하게", "위험", "경고", "온도", "시간", "겔", "밴드", "세척",
-    "탈색", "탈수", "ambic", "acetonitrile", "solution", "reagent",
+    "탈색", "탈수", "ambic", "ammonium bicarbonate", "hplc water",
+    "hplc", "acetonitrile", "solution", "reagent", "성분", "구성", "역할",
+    "물질", "일반 물", "증류수", "왜",
     "protocol", "procedure", "step", "gel", "destain", "dehydrat",
     "precaution", "warning", "equipment", "material", "temperature",
 })
@@ -1014,14 +1060,40 @@ def classify_curated_control_intent(
             detail_level="detailed",
             language=language,
         )
-    if any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS):
+    if (
+        any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS)
+        or any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+    ):
+        visual_kind = (
+            "web_photo"
+            if any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+            else "instructional_illustration"
+        )
         return CuratedControlIntent(
             intent_kind="visual_request",
             action=CuratedProtocolAction.VISUAL_REQUEST,
             target_step="authoritative_current_step",
             visual_requested=True,
+            visual_kind=visual_kind,
             language=language,
         )
+    if any(pattern.search(key) for pattern in _REPORT_REQUEST_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="show_experiment_report",
+            action=CuratedProtocolAction.SHOW_REPORT,
+            requested_followup="show_experiment_report",
+            language=language,
+        )
+    for pattern, category in _ANOMALY_PATTERNS:
+        if pattern.search(key):
+            return CuratedControlIntent(
+                intent_kind="record_anomaly",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=category,
+            )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
             intent_kind="show_sources",
@@ -1054,6 +1126,26 @@ def classify_curated_control_intent(
             transcript_quality="unreliable_language_mismatch",
             confidence=None,
             confidence_source="no_provider_confidence_conservative_rule",
+            language=language,
+        )
+    requested_entity = next(
+        (entity for pattern, entity in _TERM_QUESTION_PATTERNS if pattern.search(key)),
+        None,
+    )
+    if requested_entity is not None and any(
+        dimension in key for dimension in _TERM_QUESTION_DIMENSIONS
+    ):
+        return CuratedControlIntent(
+            intent_kind="protocol_entity_question",
+            action=CuratedProtocolAction.RELATED_QUESTION,
+            target_step="authoritative_current_step",
+            requested_entity=requested_entity,
+            resolved_entity=requested_entity,
+            question_kind=(
+                "safety"
+                if any(term in key for term in _SAFETY_RELATED_TERMS)
+                else "scientific_definition"
+            ),
             language=language,
         )
     if any(term in key for term in _PROTOCOL_RELATED_TERMS):
@@ -1659,6 +1751,59 @@ class CuratedProtocolSession:
             return self._last_related_query
         return transcript
 
+    def related_facts(self, transcript: str) -> tuple[CuratedProtocolFact, ...]:
+        """Return uniquely identified current/adjacent facts relevant to research."""
+
+        key = _semantic_utterance_key(transcript)
+        entity = next(
+            (name for pattern, name in _TERM_QUESTION_PATTERNS if pattern.search(key)),
+            None,
+        )
+        indexes = {self.current_index}
+        if entity is not None:
+            indexes.update({
+                index for index, step in enumerate(self.fixture.steps)
+                if step.source_label in {"1", "2", "3", "4", "5", "6", "7"}
+            })
+        else:
+            indexes.update(
+                index for index in (self.current_index - 1, self.current_index + 1)
+                if 0 <= index < len(self.fixture.steps)
+            )
+        selected: list[CuratedProtocolFact] = []
+        seen: set[tuple[str, str]] = set()
+        aliases = {
+            "ambic": ("ambic", "ammonium bicarbonate"),
+            "hplc_water": ("hplc water",),
+            "solution_a": ("solution a",),
+            "solution_b": ("solution b",),
+            "acetonitrile": ("acetonitrile",),
+        }.get(entity, ())
+        for index in sorted(indexes):
+            step = self.fixture.steps[index]
+            for fact in self.fixture.facts_for_step(index):
+                lowered = fact.text.casefold()
+                if (
+                    index != self.current_index
+                    and aliases
+                    and not any(alias in lowered for alias in aliases)
+                ):
+                    continue
+                identity = (step.step_id, fact.fact_id)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                selected.append(CuratedProtocolFact(
+                    fact_id=(
+                        fact.fact_id if index == self.current_index else
+                        f"related_{step.source_label}_{fact.fact_id}"
+                    ),
+                    kind=fact.kind,
+                    text=fact.text,
+                    source_page=fact.source_page,
+                ))
+        return tuple(selected[:24])
+
     def state(self, *, spoken_summary: str | None = None) -> dict[str, object]:
         steps = self.fixture.steps
         current_step = steps[self.current_index] if self.active else None
@@ -1926,6 +2071,55 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
             )
+        elif command is CuratedProtocolAction.REPORT_ANOMALY:
+            step = steps[self.current_index]
+            response = {
+                "en": (
+                    f"I recorded the reported issue against step {step.source_label}. "
+                    "The protocol state did not change."
+                ),
+                "vi": (
+                    f"Tôi đã ghi nhận vấn đề được báo cáo ở bước {step.source_label}. "
+                    "Trạng thái quy trình không thay đổi."
+                ),
+                "ko": (
+                    f"말씀하신 이상 사항을 현재 {step.source_label}단계 실험 기록에 남겼습니다. "
+                    "프로토콜 상태는 변경하지 않았습니다."
+                ),
+            }.get(language, "말씀하신 이상 사항을 현재 실험 기록에 남겼습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind=intent.intent_kind,
+                reported_anomaly=True,
+                anomaly_category=intent.anomaly_category,
+                anomaly_text=transcript.strip()[:800],
+            )
+        elif command is CuratedProtocolAction.SHOW_REPORT:
+            step = steps[self.current_index]
+            response = {
+                "en": "The current experiment record is shown below the active workspace.",
+                "vi": "Bản ghi thí nghiệm hiện tại được hiển thị bên dưới không gian làm việc.",
+                "ko": "현재 실험 기록을 작업 영역 아래에 표시했습니다.",
+            }.get(language, "현재 실험 기록을 표시했습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.SHOW_REPORT,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind=intent.intent_kind,
+                requested_followup=intent.requested_followup,
+            )
         elif command is CuratedProtocolAction.NEXT:
             blocker = self._current_step_readiness_blocker()
             if blocker is not None:
@@ -2158,7 +2352,20 @@ class CuratedProtocolSession:
                     "ko": f"현재 {step.source_label}단계의 검증된 원본 시각 자료를 표시합니다.",
                 }.get(language, f"현재 {step.source_label}단계의 원본 시각 자료를 표시합니다.")
             else:
-                control_text = {
+                control_text = ({
+                    "en": (
+                        f"Step {step.source_label} has no verified original visual. "
+                        "An authoritative real-image source will be checked only when web image search is enabled."
+                    ),
+                    "vi": (
+                        f"Bước {step.source_label} không có hình ảnh gốc đã xác minh. "
+                        "Nguồn ảnh thực có thẩm quyền chỉ được kiểm tra khi tìm kiếm ảnh web được bật."
+                    ),
+                    "ko": (
+                        f"현재 {step.source_label}단계에는 검증된 원본 시각 자료가 없습니다. "
+                        "웹 이미지 검색이 활성화된 경우에만 권위 있는 실제 이미지 출처를 확인합니다."
+                    ),
+                } if intent.visual_kind == "web_photo" else {
                     "en": (
                         f"Step {step.source_label} has no verified original visual. "
                         "A separate illustration will be prepared only when image generation is enabled."
@@ -2171,7 +2378,7 @@ class CuratedProtocolSession:
                         f"현재 {step.source_label}단계에는 검증된 원본 시각 자료가 없습니다. "
                         "이미지 생성 기능이 활성화된 경우에만 별도 삽화를 준비합니다."
                     ),
-                }.get(language, f"현재 {step.source_label}단계에는 검증된 원본 시각 자료가 없습니다.")
+                }).get(language, f"현재 {step.source_label}단계에는 검증된 원본 시각 자료가 없습니다.")
             response, primary, sources, pages, evidence_ids, translation_status = (
                 _step_presentation(
                     self.fixture,
@@ -2197,6 +2404,7 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
                 target_step=intent.target_step,
                 visual_requested=True,
+                visual_kind=intent.visual_kind,
             )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
@@ -2388,11 +2596,17 @@ class CuratedProtocolSession:
                 ),
                 display_text=response,speech_text=response,
                 speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-                facts=(),step_label=step.source_label,
+                facts=(
+                    self.related_facts(transcript)
+                    if command is CuratedProtocolAction.RELATED_QUESTION
+                    else ()
+                ),step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
                 state_changed=False,intent_kind=intent.intent_kind,
                 target_step=intent.target_step,answer_origin="unsupported",
                 requested_followup=intent.requested_followup,
+                requested_entity=intent.requested_entity,
+                question_kind=intent.question_kind,
             )
         if opening_projection != (
             self.active,
@@ -2435,9 +2649,7 @@ class CuratedProtocolSession:
         }:
             raise CuratedProtocolFixtureError("Grounded answer does not own this turn.")
         step = self.fixture.steps[self.current_index]
-        fact_map = {
-            fact.fact_id: fact for fact in self.fixture.facts_for_step(self.current_index)
-        }
+        fact_map = {fact.fact_id: fact for fact in opening.facts}
         if not evidence_ids or any(fact_id not in fact_map for fact_id in evidence_ids):
             raise CuratedProtocolFixtureError("Grounded answer evidence is invalid.")
         facts = tuple(fact_map[fact_id] for fact_id in evidence_ids)
@@ -2535,12 +2747,12 @@ class CuratedProtocolSession:
             original_label = "Original" if language == "en" else "원문 · English"
             joined_sources = "\n\n".join(source_texts)
             display = (
-                f"{label}\n{primary_text}\n\n{original_label}\n"
+                f"Direct answer\n{primary_text}\n\n{label}\n\n{original_label}\n"
                 f"{joined_sources}\n\nSources\n{sources}"
             )
-            speech_prefix = (
-                "This is additional approved reference guidance. "
-                if language == "en" else "추가 승인 참고자료 안내입니다. "
+            speech_suffix = (
+                " This is additional approved reference guidance."
+                if language == "en" else " 이 내용은 추가 승인 참고자료 안내입니다."
             )
         else:
             required = {
@@ -2568,16 +2780,16 @@ class CuratedProtocolSession:
                 if language == "en"
                 else "외부 참고자료 · 활성 프로토콜의 일부가 아님"
             )
-            display = f"{label}\n{primary_text}\n\nSources\n{sources}"
-            speech_prefix = (
-                "This is external reference guidance, not the active protocol. "
+            display = f"Direct answer\n{primary_text}\n\n{label}\n\nSources\n{sources}"
+            speech_suffix = (
+                " This is external reference guidance, not the active protocol."
                 if language == "en" else
-                "활성 프로토콜이 아닌 외부 참고자료 안내입니다. "
+                " 이 내용은 활성 프로토콜이 아닌 외부 참고자료 안내입니다."
             )
         plan = CuratedProtocolTurnPlan(
             action=CuratedProtocolAction.QUESTION,
             display_text=display,
-            speech_text=speech_prefix + primary_text,
+            speech_text=primary_text + speech_suffix,
             speech_mode=CuratedProtocolSpeechMode.REFERENCE,
             facts=(),
             step_label=step.source_label,

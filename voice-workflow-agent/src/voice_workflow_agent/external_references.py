@@ -14,6 +14,22 @@ from urllib.parse import urlsplit, urlunsplit
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
 _DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+DOMAIN_PROFILES: dict[str, tuple[str, ...]] = {
+    "candidate_a": (
+        "pubchem.ncbi.nlm.nih.gov",
+        "cdc.gov",
+        "osha.gov",
+        "sigmaaldrich.com",
+        "thermofisher.com",
+    ),
+    "government_safety": (
+        "cdc.gov",
+        "osha.gov",
+        "epa.gov",
+        "pubchem.ncbi.nlm.nih.gov",
+        "echa.europa.eu",
+    ),
+}
 
 
 def _enabled(name: str) -> bool:
@@ -31,19 +47,35 @@ class ExternalReferenceSettings:
     allowed_domains: tuple[str, ...] = ()
     model: str = "grok-4.5"
     timeout_seconds: float = 20.0
+    max_citations: int = 5
+    domain_profile: str | None = None
 
     @classmethod
     def from_environment(cls) -> "ExternalReferenceSettings":
-        enabled = _enabled("VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED")
+        enabled_name = (
+            "EXTERNAL_REFERENCES_ENABLED"
+            if "EXTERNAL_REFERENCES_ENABLED" in os.environ
+            else "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED"
+        )
+        enabled = _enabled(enabled_name)
         if not enabled:
             return cls(False)
+        profile = os.environ.get(
+            "EXTERNAL_REFERENCE_DOMAIN_PROFILE", ""
+        ).strip().casefold() or None
+        configured_domains = os.environ.get(
+            "EXTERNAL_REFERENCE_ALLOWED_DOMAINS",
+            os.environ.get(
+                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS", ""
+            ),
+        )
         domains = tuple(dict.fromkeys(
             item.strip().casefold().rstrip(".")
-            for item in os.environ.get(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS", ""
-            ).split(",")
+            for item in configured_domains.split(",")
             if item.strip()
         ))
+        if not domains and profile is not None:
+            domains = DOMAIN_PROFILES.get(profile, ())
         if not 1 <= len(domains) <= 5 or any(
             _DOMAIN.fullmatch(domain) is None for domain in domains
         ):
@@ -58,7 +90,10 @@ class ExternalReferenceSettings:
                 "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL is invalid"
             )
         timeout_raw = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS", "20"
+            "EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
+            os.environ.get(
+                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS", "20"
+            ),
         ).strip()
         try:
             timeout_seconds = float(timeout_raw)
@@ -70,7 +105,20 @@ class ExternalReferenceSettings:
             raise ValueError(
                 "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS is invalid"
             )
-        return cls(True, domains, model, timeout_seconds)
+        max_citations_raw = os.environ.get(
+            "EXTERNAL_REFERENCE_MAX_CITATIONS", "5"
+        ).strip()
+        try:
+            max_citations = int(max_citations_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "EXTERNAL_REFERENCE_MAX_CITATIONS is invalid"
+            ) from exc
+        if not 1 <= max_citations <= 5:
+            raise ValueError("EXTERNAL_REFERENCE_MAX_CITATIONS is invalid")
+        return cls(
+            True, domains, model, timeout_seconds, max_citations, profile
+        )
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
@@ -173,6 +221,38 @@ class XaiAuthoritativeWebSearch:
         return {
             "status": "success",
             "answer": output_text.strip(),
-            "matches": list(unique.values())[:5],
+            "matches": list(unique.values())[:self.settings.max_citations],
             "backend": "xai_responses_web_search",
         }
+
+
+def plan_research_query(
+    question: str,
+    *,
+    protocol_title: str,
+    step_label: str,
+    step_text: str,
+    evidence_texts: tuple[str, ...],
+    requested_entity: str | None,
+    question_kind: str | None,
+) -> str:
+    """Build one bounded search query from verified context, not a raw fragment."""
+
+    dimensions = {
+        "safety": "chemical handling PPE ventilation exposure spill waste site SDS",
+        "scientific_definition": "definition chemical identity workflow role",
+        "related_knowledge": "laboratory explanation workflow role",
+    }.get(question_kind, "laboratory explanation")
+    admitted = " ".join(
+        text.replace("\n", " ")[:500] for text in evidence_texts[:8]
+    )
+    return "\n".join((
+        f"Question: {question.strip()[:600]}",
+        f"Protocol: {protocol_title[:240]}",
+        f"Current step: {step_label} — {step_text[:800]}",
+        f"Resolved entity: {(requested_entity or 'none')[:120]}",
+        f"Research dimensions: {dimensions}",
+        f"Verified protocol context: {admitted[:1800]}",
+        "Return only claims directly supported by authoritative sources. "
+        "Keep external guidance separate from the active protocol.",
+    ))

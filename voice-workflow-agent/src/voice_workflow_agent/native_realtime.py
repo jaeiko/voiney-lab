@@ -522,6 +522,7 @@ class _ResponseState:
     output_audio_ms: float = 0.0
     final_response_done: bool = False
     playback_completion_recorded: bool = False
+    received_text: str = ""
 
 
 Connector = Callable[[str, dict[str, str]], Awaitable[Any]]
@@ -1064,6 +1065,14 @@ class NativeRealtimeSession:
                         if self.last_interrupted_response_id
                         else None
                     ),
+                    received_text_chars=(
+                        len(interrupted_state.received_text)
+                        if interrupted_state is not None else 0
+                    ),
+                    generated_audio_ms=(
+                        round(interrupted_state.output_audio_ms)
+                        if interrupted_state is not None else 0
+                    ),
                 )
             await self.sender.text("speech.start", turn_id=self.turn_id)
             await self.sender.text(
@@ -1174,7 +1183,10 @@ class NativeRealtimeSession:
                     self.active_item_id = item_id
                 await self.sender.text(
                     "native.output.item",
-                    turn_id=self.turn_id,
+                    turn_id=(
+                        self.responses[response_id].turn_id
+                        if response_id in self.responses else self.turn_id
+                    ),
                     response_id=response_id,
                     item_id=item_id,
                 )
@@ -1207,9 +1219,11 @@ class NativeRealtimeSession:
                         delta
                     )
                     return
+                if state is not None:
+                    state.received_text += delta
                 await self.sender.text(
                     "reply.delta",
-                    turn_id=self.turn_id,
+                    turn_id=state.turn_id if state is not None else self.turn_id,
                     text=delta,
                     response_id=response_id,
                 )
@@ -1598,9 +1612,10 @@ class NativeRealtimeSession:
             ):
                 continue
             for delta in deltas:
+                state.received_text += delta
                 await self.sender.text(
                     "reply.delta",
-                    turn_id=self.turn_id,
+                    turn_id=state.turn_id,
                     text=delta,
                     response_id=response_id,
                 )

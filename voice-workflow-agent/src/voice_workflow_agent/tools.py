@@ -610,6 +610,7 @@ def search_approved_lab_references(
             "protocol_id": protocol_id,
             "lab_scope": context.usage_scope,
             "facility_id": context.facility_id,
+            "exclude_non_operational": True,
         },
         top_k=top_k,
     )

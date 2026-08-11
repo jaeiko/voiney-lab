@@ -30,6 +30,17 @@ TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
 
 class ServerTests(unittest.TestCase):
+    def setUp(self):
+        # These tests exercise server behavior with local fakes, not worker-pool
+        # scheduling. Keep asyncio.run() bounded and leave thread ownership to
+        # the dedicated protocol-catalog concurrency tests.
+        self._to_thread = patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=lambda function, *args: function(*args),
+        )
+        self._to_thread.start()
+        self.addCleanup(self._to_thread.stop)
+
     def approved_catalog(self,directory,usage_scope="operational"):
         path=Path(directory)/"approved.sqlite"
         ingest_manifest({

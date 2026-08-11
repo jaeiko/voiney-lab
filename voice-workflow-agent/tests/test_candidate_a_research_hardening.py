@@ -1,0 +1,150 @@
+"""Regressions derived from Candidate A real-voice research failures."""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+from voice_workflow_agent.curated_protocol import (
+    CuratedProtocolAction,
+    CuratedProtocolSession,
+    load_curated_protocol_fixture,
+)
+from voice_workflow_agent.document_store import ingest_manifest
+from voice_workflow_agent.external_references import plan_research_query
+from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE = FIXTURE.with_suffix(".provenance.json")
+PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+
+
+class CandidateAResearchRoutingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, PDF)
+
+    def session(self, index=0):
+        value = CuratedProtocolSession(self.fixture)
+        value.active = True
+        value.current_index = index
+        return value
+
+    def test_scientific_terms_are_related_questions_with_adjacent_evidence(self):
+        questions = (
+            "AMBIC가 뭐야?", "여기서 AMBIC는 어떤 물질이야?",
+            "HPLC water가 일반 물하고 뭐가 달라?",
+            "왜 HPLC water를 쓰는 거야?",
+            "Solution A는 어떤 성분으로 되어 있어?",
+            "Solution B의 구성은 뭐야?", "아세토니트릴은 여기서 왜 들어가?",
+        )
+        for turn, question in enumerate(questions, 1):
+            with self.subTest(question=question):
+                session = self.session(0)
+                plan = session.plan(question, turn_id=turn, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.RELATED_QUESTION)
+                self.assertFalse(plan.state_changed)
+                self.assertTrue(plan.requested_entity)
+                self.assertTrue(plan.facts)
+                self.assertTrue(any(
+                    "ammonium bicarbonate" in fact.text.casefold()
+                    or "hplc water" in fact.text.casefold()
+                    or "acetonitrile" in fact.text.casefold()
+                    for fact in plan.facts
+                ))
+
+    def test_current_step_detail_is_useful_and_read_only(self):
+        session = self.session(3)
+        plan = session.plan(
+            "단계를 좀 더 자세히 설명해 줘.", turn_id=1, language="ko"
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
+        self.assertFalse(plan.state_changed)
+        self.assertIn("무엇을 제거하나요", plan.display_text)
+        self.assertIn("젤 밴드는 튜브에 남습니다", plan.display_text)
+        self.assertIn("명시되어 있지 않습니다", plan.display_text)
+
+    def test_anomaly_is_read_only_and_report_request_is_distinct(self):
+        session = self.session(3)
+        anomaly = session.plan(
+            "예상과 다르게 색이 남아 있어.", turn_id=1, language="ko"
+        )
+        report = session.plan(
+            "현재 실험 기록을 보여줘.", turn_id=2, language="ko"
+        )
+        self.assertEqual(anomaly.action, CuratedProtocolAction.REPORT_ANOMALY)
+        self.assertTrue(anomaly.reported_anomaly)
+        self.assertFalse(anomaly.state_changed)
+        self.assertEqual(report.action, CuratedProtocolAction.SHOW_REPORT)
+        self.assertFalse(report.state_changed)
+        self.assertEqual(session.current_index, 3)
+
+    def test_safety_query_planner_includes_active_entities(self):
+        query = plan_research_query(
+            "여기서 진짜 안전 수칙 있어?",
+            protocol_title=self.fixture.title,
+            step_label="4",
+            step_text=self.fixture.steps[3].instruction_source_text,
+            evidence_texts=(self.fixture.steps[1].instruction_source_text,),
+            requested_entity="solution_a",
+            question_kind="safety",
+        )
+        for expected in ("Solution A", "acetonitrile", "PPE", "waste"):
+            self.assertIn(expected, query)
+
+
+class CandidateAEvidenceAdmissionTests(unittest.TestCase):
+    def test_demo_records_are_rejected_even_when_ranked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "catalog.sqlite"
+            payload = {
+                "documents": [{
+                    "document_id": "FICTIONAL-MOSS-DEMO-SDS-KO",
+                    "document_family_id": "FICTIONAL-MOSS-DEMO-FAMILY",
+                    "canonical_source_id": "FICTIONAL-MOSS-DEMO-SOURCE",
+                    "title": "FICTIONAL NON-OPERATIONAL demo",
+                    "issuer": "MOSS fictional test fixture",
+                    "document_type": "supplier_sds",
+                    "manufacturer": "MOSS",
+                    "product_name": "MOSS-A100",
+                    "product_code": "MOSS-A100",
+                    "cas_numbers": [], "aliases": [],
+                    "version": "1.0", "canonical_version": "1.0",
+                    "language": "ko", "translation_status": "original",
+                    "translation_of_document_id": None,
+                    "approval_status": "approved", "active": True,
+                    "source_authority": "supplier", "facility_id": None,
+                    "usage_scope": "demo", "effective_at": "2026-01-01T00:00:00+00:00",
+                    "review_due_at": "2028-01-01T00:00:00+00:00",
+                    "source_checksum": "sha256:" + "1" * 64,
+                    "source_uri": "demo://fictional/moss/sds-ko",
+                    "source_path": "data/moss_demo/demo.json",
+                    "sections": [{
+                        "section_code": "SDS-08", "section_title": "안전 주의",
+                        "page_start": 1, "page_end": 1,
+                        "content": "Solution A acetonitrile 안전 PPE 모의 기록",
+                        "topic": "exposure_ppe", "keywords": ["Solution A"],
+                    }],
+                }],
+            }
+            ingest_manifest(payload, db)
+            result = retrieve_approved_lab_documents(
+                "Solution A acetonitrile 안전 PPE", db,
+                filters={
+                    "approval_status": "approved", "lab_scope": "demo",
+                    "exclude_non_operational": True,
+                },
+                now=datetime(2027, 1, 1, tzinfo=timezone.utc),
+            )
+        self.assertEqual(result["status"], "no_admissible_evidence")
+        self.assertFalse(result["answerable"])
+        self.assertEqual(result["matches"], [])
+        self.assertEqual(result["rejections"][0]["reason"], "non_operational_or_demo")
+
+
+if __name__ == "__main__":
+    unittest.main()
