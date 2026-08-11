@@ -630,6 +630,13 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn(
             'export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"', launcher
         )
+        self.assertIn('export EXTERNAL_REFERENCES_ENABLED="true"', launcher)
+        self.assertIn(
+            'export EXTERNAL_REFERENCE_DOMAIN_PROFILE="candidate_a"', launcher
+        )
+        self.assertIn('export WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
+        self.assertIn('export CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
+        self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
         self.assertIn("--host 0.0.0.0", launcher)
         self.assertNotIn("--reload", launcher)

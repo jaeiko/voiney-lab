@@ -29,6 +29,7 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolSpeechMode,
     classify_curated_control_intent,
     load_curated_protocol_fixture,
+    normalize_scientific_query,
 )
 from voice_workflow_agent.experiment_protocol_analysis import (
     ANALYSIS_RESPONSE_SCHEMA,
@@ -36,6 +37,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisResponseError,
     parse_protocol_analysis_response,
 )
+from voice_workflow_agent.external_references import ExternalReferenceSettings
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.server import (
     ListenerSession,
@@ -510,6 +512,72 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     language=intent.language,
                 ), plan)
                 self.assertEqual(session.current_index, 1)
+
+    def test_real_voice_scientific_normalization_and_navigation_are_bounded(self):
+        inventory=("ambic","hplc water","solution a","solution b","acetonitrile")
+        cases=(
+            ("여기서 A M B I C가 뭐야?","ambic",("definition",)),
+            ("여기서 A M P I C가 뭐야?","ambic",("definition",)),
+            ("A M B I C에 대해서 알려줘.","ambic",("definition",)),
+            ("에이엠빅이 뭐야?","ambic",("definition",)),
+            ("여기서 솔루션 A는 뭐야?","solution_a",("definition",)),
+            ("솔루션 B 구성은 뭐야?","solution_b",("definition","composition")),
+            ("PLC water is what?","hplc_water",("definition",)),
+            ("H PLC water가 뭐야?","hplc_water",("definition",)),
+            ("HPLC 워터가 뭐야?","hplc_water",("definition",)),
+            ("겨야 할 안전 수칙은 뭐야?",None,("definition","safety")),
+            ("지켜야 할 안전 수칙은 뭐야?",None,("definition","safety")),
+        )
+        for transcript,entity,dimensions in cases:
+            with self.subTest(transcript=transcript):
+                intent=classify_curated_control_intent(
+                    transcript,language="ko",entity_inventory=inventory,
+                )
+                self.assertEqual(intent.action,CuratedProtocolAction.RELATED_QUESTION)
+                self.assertEqual(intent.requested_entity,entity)
+                self.assertEqual(intent.question_dimensions,dimensions)
+                self.assertFalse(intent.allows_state_mutation)
+        for transcript in (
+            "다음 단계에 대해서 진행해 줘.", "다음 단계로 진행해 줘."
+        ):
+            intent=classify_curated_control_intent(
+                transcript,language="ko",entity_inventory=inventory,
+            )
+            self.assertEqual(intent.action,CuratedProtocolAction.NEXT)
+            self.assertTrue(intent.allows_state_mutation)
+        normalized,entity,_=normalize_scientific_query(
+            "25 mM Solution B를 250 mM로 바꿔?",entity_inventory=inventory,
+        )
+        self.assertIn("25 mm",normalized)
+        self.assertIn("250 mm",normalized)
+        self.assertEqual(entity,"solution_b")
+        untouched,unresolved,note=normalize_scientific_query(
+            "AMPIC가 뭐야?",entity_inventory=("ambic","ampic"),
+        )
+        self.assertIn("ampic",untouched)
+        self.assertIsNone(unresolved)
+        self.assertIsNone(note)
+        labels,_,_=normalize_scientific_query(
+            "Step 3의 Solution A와 Step 8의 Solution B",
+            entity_inventory=inventory,
+        )
+        self.assertIn("step 3",labels)
+        self.assertIn("step 8",labels)
+        self.assertIn("solution a",labels)
+        self.assertIn("solution b",labels)
+
+    def test_bounded_related_followups_reuse_context_or_clarify(self):
+        session=CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        first=session.plan("HPLC 워터가 뭐야?",turn_id=910,language="ko")
+        self.assertEqual(first.action,CuratedProtocolAction.RELATED_QUESTION)
+        follow=session.plan("되는 거 아니야?",turn_id=911,language="ko")
+        self.assertEqual(follow.action,CuratedProtocolAction.RELATED_QUESTION)
+        self.assertIn("HPLC",session.reference_query_for("되는 거 아니야?",follow).upper())
+        external=session.plan("외부 검색은 어떻게?",turn_id=912,language="ko")
+        self.assertEqual(external.requested_followup,"search_external_reference")
+        web=session.plan("웹에서 확인해 줘.",turn_id=913,language="ko")
+        self.assertEqual(web.requested_followup,"search_external_reference")
 
     def test_ambiguous_completion_and_off_topic_are_non_mutating(self):
         session = CuratedProtocolSession(self.fixture)
@@ -1556,6 +1624,128 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(operation["operation"], "completion_and_next_transition")
 
+    def test_internal_miss_escalates_once_to_authoritative_web_without_mutation(self):
+        session=self.make_session(index=1)
+        session.external_reference_settings=ExternalReferenceSettings(
+            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
+            "candidate_a",
+        )
+        socket=Socket();opening=session.curated_protocol_session.current_index
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+        async def unsupported(*args,**kwargs):
+            return SimpleNamespace(
+                intent="unsupported",primary_text="",evidence_ids=(),
+                inference_labels=(),unsupported_parts=("definition",),
+            )
+        class Web:
+            calls=0
+            def __init__(self,*args): pass
+            async def search(self,query,*,language):
+                Web.calls+=1
+                return {
+                    "status":"success","answer":"HPLC water는 분석용 고순도 물입니다.",
+                    "matches":[{
+                        "title":"PubChem","canonical_url":"https://pubchem.ncbi.nlm.nih.gov/",
+                        "domain":"pubchem.ncbi.nlm.nih.gov","retrieved_at":"2026-08-11T00:00:00+00:00",
+                        "source_kind":"external_authoritative_reference",
+                        "relevant_excerpt":"HPLC grade water reference",
+                    }],"backend":"xai_responses_web_search",
+                }
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("H PLC water가 뭐야?","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.answer_curated_protocol_question",
+            side_effect=unsupported,
+        ),patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status":"no_admissible_evidence","answerable":False,
+                "matches":[],"retrieval":{"backend":"sqlite"},
+            },
+        ),patch(
+            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+        ),patch(
+            "voice_workflow_agent.server.require_env",return_value="offline",
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        self.assertEqual(Web.calls,1)
+        self.assertEqual(session.curated_protocol_session.current_index,opening)
+        tools=[item for item in socket.text if item["type"]=="tool.call"]
+        self.assertEqual(
+            [item["tool"] for item in tools],
+            ["search_approved_lab_references","search_authoritative_web"],
+        )
+        reply=next(item for item in socket.text if item["type"]=="reply.delta")
+        self.assertEqual(reply["answer_origin"],"external_authoritative_reference")
+        self.assertEqual(reply["question_dimensions"],["definition"])
+        self.assertIn("HPLC",reply["transcript_correction_note"])
+
+    def test_web_failure_preserves_local_facts_and_returns_specific_limitation(self):
+        session=self.make_session(index=1)
+        session.external_reference_settings=ExternalReferenceSettings(
+            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
+            "candidate_a",
+        )
+        socket=Socket();opening=session.curated_protocol_session.current_index
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+        async def unsupported(*args,**kwargs):
+            return SimpleNamespace(
+                intent="unsupported",primary_text="",evidence_ids=(),
+                inference_labels=(),unsupported_parts=("definition",),
+            )
+        class Web:
+            calls=0
+            def __init__(self,*args): pass
+            async def search(self,query,*,language):
+                Web.calls+=1
+                return {"status":"error","matches":[]}
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("HPLC water가 뭐야?","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.answer_curated_protocol_question",
+            side_effect=unsupported,
+        ),patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status":"no_admissible_evidence","answerable":False,
+                "matches":[],"retrieval":{"backend":"sqlite"},
+            },
+        ),patch(
+            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+        ),patch(
+            "voice_workflow_agent.server.require_env",return_value="offline",
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        self.assertEqual(Web.calls,1)
+        self.assertEqual(session.curated_protocol_session.current_index,opening)
+        result=next(
+            item for item in socket.text
+            if item["type"]=="tool.result"
+            and item["tool"]=="search_authoritative_web"
+        )
+        self.assertEqual(result["status"],"error")
+        reply=next(item for item in socket.text if item["type"]=="reply.delta")
+        self.assertIn("현재 프로토콜에서 확인되는 내용",reply["text"])
+        self.assertIn("외부 권위자료 검색을 완료하지 못해",reply["text"])
+        self.assertIn("authoritative_web_search_error",reply["limitations"])
+        self.assertNotIn("fixture",reply["text"].casefold())
+
     def test_audio_help_and_unreliable_transcript_are_read_only_and_tool_free(self):
         for turn_id, transcription, expected in (
             (1, Transcription("There's no sound.", "en"), "audio_recovery"),
@@ -1689,7 +1879,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
     def test_generated_visual_is_queued_after_answer_audio_and_patches_same_turn(self):
         from voice_workflow_agent.curated_protocol import _png_rgb
-        from voice_workflow_agent.generated_visuals import GeneratedVisualAsset
+        from voice_workflow_agent.generated_visuals import (
+            GeneratedVisualAsset, GeneratedVisualSettings,
+        )
 
         session=self.make_session(index=0)
         socket=Socket()
@@ -1755,6 +1947,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voice_workflow_agent.server.asyncio.to_thread",
             side_effect=immediate,
         ):
+            session.generated_visual_settings=GeneratedVisualSettings(
+                True,"offline-test-model"
+            )
             asyncio.run(scenario())
 
         kinds=[item["type"] for item in socket.text]

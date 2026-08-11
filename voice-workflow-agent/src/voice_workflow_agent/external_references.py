@@ -41,6 +41,42 @@ def _enabled(name: str) -> bool:
     raise ValueError(f"{name} must be a boolean")
 
 
+def _aliased_value(
+    canonical: str,
+    legacy: str,
+    *,
+    default: str | None = None,
+) -> str | None:
+    """Resolve one canonical setting without silently accepting conflicts."""
+
+    canonical_value = os.environ.get(canonical)
+    legacy_value = os.environ.get(legacy)
+    if (
+        canonical_value is not None
+        and legacy_value is not None
+        and canonical_value.strip().casefold()
+        != legacy_value.strip().casefold()
+    ):
+        raise ValueError(f"{canonical} conflicts with legacy {legacy}")
+    if canonical_value is not None:
+        return canonical_value
+    if legacy_value is not None:
+        return legacy_value
+    return default
+
+
+def _aliased_enabled(canonical: str, legacy: str) -> tuple[bool, bool]:
+    raw = _aliased_value(canonical, legacy)
+    if raw is None:
+        return False, False
+    normalized = raw.strip().casefold()
+    if normalized in _TRUE:
+        return True, True
+    if normalized in _FALSE:
+        return False, True
+    raise ValueError(f"{canonical} must be a boolean")
+
+
 @dataclass(frozen=True)
 class ExternalReferenceSettings:
     enabled: bool
@@ -52,23 +88,22 @@ class ExternalReferenceSettings:
 
     @classmethod
     def from_environment(cls) -> "ExternalReferenceSettings":
-        enabled_name = (
-            "EXTERNAL_REFERENCES_ENABLED"
-            if "EXTERNAL_REFERENCES_ENABLED" in os.environ
-            else "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED"
+        enabled, _ = _aliased_enabled(
+            "EXTERNAL_REFERENCES_ENABLED",
+            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED",
         )
-        enabled = _enabled(enabled_name)
         if not enabled:
             return cls(False)
         profile = os.environ.get(
             "EXTERNAL_REFERENCE_DOMAIN_PROFILE", ""
         ).strip().casefold() or None
-        configured_domains = os.environ.get(
+        if profile is not None and profile not in DOMAIN_PROFILES:
+            raise ValueError("EXTERNAL_REFERENCE_DOMAIN_PROFILE is invalid")
+        configured_domains = _aliased_value(
             "EXTERNAL_REFERENCE_ALLOWED_DOMAINS",
-            os.environ.get(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS", ""
-            ),
-        )
+            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS",
+            default="",
+        ) or ""
         domains = tuple(dict.fromkeys(
             item.strip().casefold().rstrip(".")
             for item in configured_domains.split(",")
@@ -82,19 +117,20 @@ class ExternalReferenceSettings:
             raise ValueError(
                 "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS is invalid"
             )
-        model = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL", "grok-4.5"
-        ).strip()
+        model = (_aliased_value(
+            "EXTERNAL_REFERENCE_MODEL",
+            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL",
+            default="grok-4.5",
+        ) or "").strip()
         if not model:
             raise ValueError(
                 "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL is invalid"
             )
-        timeout_raw = os.environ.get(
+        timeout_raw = (_aliased_value(
             "EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
-            os.environ.get(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS", "20"
-            ),
-        ).strip()
+            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
+            default="20",
+        ) or "").strip()
         try:
             timeout_seconds = float(timeout_raw)
         except ValueError as exc:
@@ -120,6 +156,16 @@ class ExternalReferenceSettings:
             True, domains, model, timeout_seconds, max_citations, profile
         )
 
+    def public_capability(self) -> dict[str, Any]:
+        return {
+            "status": "enabled" if self.enabled else "disabled",
+            "authority_profile": self.domain_profile,
+            "allowed_domain_count": len(self.allowed_domains),
+            "model": self.model if self.enabled else None,
+            "timeout_seconds": self.timeout_seconds if self.enabled else None,
+            "max_citations": self.max_citations if self.enabled else None,
+        }
+
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, dict):
@@ -142,6 +188,37 @@ def _canonical_url(value: Any, allowed_domains: tuple[str, ...]) -> str | None:
     ):
         return None
     return urlunsplit(("https", hostname, parsed.path or "/", parsed.query, ""))
+
+
+_INLINE_CITATION = re.compile(r"\[\[[0-9]+\]\]\((https://[^\s)]+)\)")
+
+
+def _response_text(response: Any) -> str:
+    direct = _field(response, "output_text", "")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    parts: list[str] = []
+    for item in _field(response, "output", []) or []:
+        if _field(item, "type") != "message":
+            continue
+        for content in _field(item, "content", []) or []:
+            if _field(content, "type") != "output_text":
+                continue
+            text = _field(content, "text", "")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _supporting_excerpt(text: str, start: Any, end: Any) -> str:
+    if not isinstance(start, int) or not isinstance(end, int):
+        return ""
+    if not 0 <= start < end <= len(text):
+        return ""
+    left = max(0, text.rfind(".", 0, start) + 1)
+    right_period = text.find(".", end)
+    right = len(text) if right_period < 0 else right_period + 1
+    return " ".join(text[left:right].split())[:1000]
 
 
 class XaiAuthoritativeWebSearch:
@@ -179,8 +256,8 @@ class XaiAuthoritativeWebSearch:
             ),
             timeout=self.settings.timeout_seconds,
         )
-        output_text = _field(response, "output_text", "")
-        if not isinstance(output_text, str) or not output_text.strip():
+        output_text = _response_text(response)
+        if not output_text:
             return {"status": "not_found", "matches": []}
         outputs = _field(response, "output", []) or []
         tool_used = any(_field(item, "type") == "web_search_call" for item in outputs)
@@ -201,12 +278,7 @@ class XaiAuthoritativeWebSearch:
                         title = "Authoritative reference"
                     start = _field(citation, "start_index")
                     end = _field(citation, "end_index")
-                    excerpt = ""
-                    if (
-                        isinstance(start, int) and isinstance(end, int)
-                        and 0 <= start < end <= len(output_text)
-                    ):
-                        excerpt = output_text[start:end]
+                    excerpt = _supporting_excerpt(output_text, start, end)
                     citations.append({
                         "title": title.strip()[:300],
                         "canonical_url": url,
@@ -215,6 +287,28 @@ class XaiAuthoritativeWebSearch:
                         "source_kind": "external_authoritative_reference",
                         "relevant_excerpt": excerpt[:1000],
                     })
+        # xAI Responses also exposes inline markdown citations. Admit only URLs
+        # actually referenced by the answer; response.citations alone is a list
+        # of encountered pages and does not prove claim support.
+        encountered = {
+            url
+            for raw in (_field(response, "citations", []) or [])
+            if (url := _canonical_url(raw, self.settings.allowed_domains))
+        }
+        for match in _INLINE_CITATION.finditer(output_text):
+            url = _canonical_url(match.group(1), self.settings.allowed_domains)
+            if url is None or encountered and url not in encountered:
+                continue
+            citations.append({
+                "title": "Authoritative reference",
+                "canonical_url": url,
+                "domain": urlsplit(url).hostname or "",
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "source_kind": "external_authoritative_reference",
+                "relevant_excerpt": _supporting_excerpt(
+                    output_text, match.start(), match.end()
+                ),
+            })
         unique = {item["canonical_url"]: item for item in citations}
         if not tool_used or not unique:
             return {"status": "not_found", "matches": []}
@@ -235,10 +329,11 @@ def plan_research_query(
     evidence_texts: tuple[str, ...],
     requested_entity: str | None,
     question_kind: str | None,
+    question_dimensions: tuple[str, ...] = (),
 ) -> str:
     """Build one bounded search query from verified context, not a raw fragment."""
 
-    dimensions = {
+    dimensions = ", ".join(question_dimensions) or {
         "safety": "chemical handling PPE ventilation exposure spill waste site SDS",
         "scientific_definition": "definition chemical identity workflow role",
         "related_knowledge": "laboratory explanation workflow role",

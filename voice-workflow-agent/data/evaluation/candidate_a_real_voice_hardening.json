@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "cases": [
     {"id": "completion-ko-1", "text": "현재 단계를 완료했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
     {"id": "completion-ko-2", "text": "여기까지 다 했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
@@ -17,6 +17,16 @@
     {"id": "term-solution-a", "text": "Solution A는 어떤 성분으로 되어 있어?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
     {"id": "term-solution-b", "text": "Solution B의 구성은 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
     {"id": "term-acetonitrile", "text": "아세토니트릴은 여기서 왜 들어가?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
+    {"id": "term-ambic-spaced", "text": "A M B I C 가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "normalized_entity": "ambic"},
+    {"id": "term-ambic-korean-stt", "text": "에이엠빅은 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "normalized_entity": "ambic"},
+    {"id": "term-ambic-bounded-typo", "text": "AMBKC가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "normalized_entity": "ambic"},
+    {"id": "term-hplc-spaced", "text": "H PLC water가 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "normalized_entity": "hplc_water"},
+    {"id": "term-hplc-short-stt", "text": "PLC water가 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "normalized_entity": "hplc_water"},
+    {"id": "safety-general-followup", "text": "안전 주의사항을 알려줘", "step_index": 3, "intent": "related_safety_question", "action": "related_question", "mutates": false},
+    {"id": "related-followup", "prior_text": "AMBIC가 뭐야?", "text": "되는 거 아니야?", "step_index": 0, "intent": "related_followup", "action": "related_question", "mutates": false},
+    {"id": "external-followup", "prior_text": "AMBIC가 뭐야?", "text": "외부 검색은 어떻게", "step_index": 0, "intent": "external_reference_followup", "action": "related_question", "mutates": false},
+    {"id": "web-followup", "prior_text": "HPLC water가 뭐야?", "text": "웹에서 확인해 줘", "step_index": 1, "intent": "external_reference_followup", "action": "related_question", "mutates": false},
+    {"id": "navigation-natural", "text": "다음 단계에 대해서 진행해 줘", "step_index": 1, "intent": "workflow_command", "action": "next", "mutates": true},
     {"id": "audio-ko", "text": "소리가 안 나요.", "step_index": 2, "intent": "audio_playback_help", "action": "audio_recovery", "mutates": false},
     {"id": "audio-en", "text": "There's no sound.", "step_index": 2, "intent": "audio_playback_help", "action": "audio_recovery", "mutates": false},
     {"id": "show-sources", "text": "출처 보여줘", "step_index": 2, "intent": "show_sources", "action": "full_detail", "mutates": false},

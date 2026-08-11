@@ -34,6 +34,7 @@ class VadConfig:
     onset_voiced_frames: int = 4
     onset_window_frames: int = 6
     prefix_frames: int = 15
+    barge_in_prefix_frames: int = 40
     endpoint_silence_frames: int = VAD_END_SILENCE_MS // FRAME_MS
     minimum_voiced_frames: int = 12
     maximum_utterance_frames: int = 750
@@ -52,6 +53,8 @@ class VadConfig:
             onset_voiced_frames=settings.onset_voiced_frames,
             onset_window_frames=settings.onset_window_frames,
             prefix_frames=milliseconds_to_frames(settings.prefix_ms),
+            barge_in_prefix_frames=milliseconds_to_frames(
+                settings.barge_in_prefix_ms),
             endpoint_silence_frames=milliseconds_to_frames(
                 settings.endpoint_silence_ms),
             minimum_voiced_frames=milliseconds_to_frames(
@@ -87,7 +90,7 @@ class VadConfig:
         if not (0 < self.listening_resume_voiced_frames
                 <= self.listening_resume_window_frames):
             raise ValueError("invalid listening resume threshold")
-        for name in ("prefix_frames", "endpoint_silence_frames", "minimum_voiced_frames",
+        for name in ("prefix_frames", "barge_in_prefix_frames", "endpoint_silence_frames", "minimum_voiced_frames",
                      "maximum_utterance_frames"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")

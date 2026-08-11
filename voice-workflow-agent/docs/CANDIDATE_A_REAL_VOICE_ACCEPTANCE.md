@@ -246,14 +246,24 @@ terminal on the Mac and replace only the operator-owned VM host value:
 ssh -N -L 8000:127.0.0.1:8000 student@<VM_HOST>
 ```
 
-Optional authoritative search is disabled by default. A separately authorized
-manual run may export only these non-secret controls before invoking the launcher:
+Global authoritative search remains disabled by default. The dedicated Candidate A
+launcher now explicitly enables the reviewed `candidate_a` profile, web-image
+source lookup, and request-only generated visuals. Its non-secret preflight prints
+the capability state and domain count and fails before server startup on conflicting
+aliases or invalid settings. It never prints the credential. Do not add extra
+exports for the normal Candidate A run.
+
+Equivalent canonical controls for a separate development launcher are:
 
 ```bash
-export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true
+export EXTERNAL_REFERENCES_ENABLED=true
 export EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
-export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL='grok-4.5'
-export VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
+export EXTERNAL_REFERENCE_MODEL='grok-4.5'
+export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
+export EXTERNAL_REFERENCE_MAX_CITATIONS=5
+export WEB_VISUAL_SEARCH_ENABLED=true
+export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
+export CASCADE_BARGE_IN_PREFIX_MS=800
 ```
 
 The domain list above is an operator-visible example, not a blanket authority
@@ -262,8 +272,9 @@ question. Live use also requires the already configured xAI credential through
 the normal secret loader; never print it. One Turn makes at most one domain-filtered
 Responses web-search request and revalidates every returned HTTPS citation.
 
-Optional image generation is also disabled by default. For the single explicit
-manual visual request, the non-secret controls are:
+Image generation and web-image lookup remain explicit-request-only even though
+the dedicated launcher makes them available. No visual lookup or generation runs
+on routine step transitions. For another launcher the model/timeout controls are:
 
 ```bash
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
@@ -273,12 +284,6 @@ export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS=60
 
 Do not enable either feature merely to run offline tests. Automated tests use
 fakes and make zero paid calls.
-
-Optional web-image lookup is also explicit and uses the same authority profile:
-
-```bash
-export WEB_VISUAL_SEARCH_ENABLED=true
-```
 
 The Candidate A launcher enables the experiment-report service at an ignored
 runtime path. For another launcher, use only an ignored absolute path:
@@ -337,6 +342,27 @@ and the exact Candidate A development protocol. At both 100% and 125% zoom:
 7. Record STT, detected language/quality metadata, route, state before/after,
    operation count, source tier, spoken/written answer, citations, and the
    existing STT/answer/first-audio/playback/retrieval/visual timing fields.
+
+## Focused Cascade research and barge-in checklist
+
+1. Confirm the setup chips say external search and web-image lookup are available,
+   show `candidate_a`, and expose no key or full query.
+2. Speak `A M B I C가 뭐야?`, `A M P I C가 뭐야?`, `에이엠빅이 뭐야?`,
+   `PLC water is what?`, and `HPLC 워터가 뭐야?`. Confirm a unique bounded
+   correction is shown, the raw transcript remains visible, and the state does not
+   change.
+3. After an internal `no_admissible_evidence`, confirm one real
+   `search_authoritative_web` Tool call/result appears with two to five validated
+   citations. A partial protocol composition must not suppress a requested
+   definition, role, difference, or safety search.
+4. While an answer is speaking, interrupt once with `여기서 지켜야 할 안전 수칙은
+   뭐야?`, then with `HPLC water를 왜 쓰는 거야?`. Confirm playback ducks at
+   the candidate boundary, the committed transcript retains its first meaningful
+   token, rejected cough/tap candidates resume the matching playback, and no
+   provisional Turn card is created.
+5. Repeat once using speakers. If the setup chip says echo cancellation is off or
+   unavailable, record the headphone recommendation rather than treating AEC as
+   active. This speaker run is diagnostic, not a production-safety claim.
 
 ## Native Mac/Whale interruption checklist
 

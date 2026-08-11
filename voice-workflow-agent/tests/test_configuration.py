@@ -46,6 +46,7 @@ class VadConfigurationTests(unittest.TestCase):
             "CASCADE_VAD_ONSET_VOICED_FRAMES":"5",
             "CASCADE_VAD_ONSET_WINDOW_FRAMES":"8",
             "CASCADE_VAD_PREFIX_MS":"321",
+            "CASCADE_BARGE_IN_PREFIX_MS":"860",
             "CASCADE_VAD_ENDPOINT_SILENCE_MS":"777",
             "CASCADE_VAD_MIN_SPEECH_MS":"281",
             "CASCADE_VAD_MAX_UTTERANCE_MS":"16001",
@@ -64,7 +65,7 @@ class VadConfigurationTests(unittest.TestCase):
         self.assertEqual(
             settings.cascade,
             CascadeVadSettings(
-                2,5,8,321,777,281,16001,450,11,14,9,13,7,11))
+                2,5,8,321,860,777,281,16001,450,11,14,9,13,7,11))
         self.assertEqual(
             settings.native,
             NativeVadSettings(0.45,444,1200))
@@ -72,11 +73,12 @@ class VadConfigurationTests(unittest.TestCase):
         self.assertEqual(
             (
                 config.prefix_frames,
+                config.barge_in_prefix_frames,
                 config.endpoint_silence_frames,
                 config.minimum_voiced_frames,
                 config.maximum_utterance_frames,
             ),
-            (17,39,15,801),
+            (17,43,39,15,801),
         )
         self.assertEqual(
             (config.playback_onset_voiced_frames,
@@ -95,6 +97,7 @@ class VadConfigurationTests(unittest.TestCase):
         cases=(
             ("CASCADE_VAD_MODE","not-an-integer","must be an integer"),
             ("CASCADE_VAD_PREFIX_MS","20.5","must be an integer"),
+            ("CASCADE_BARGE_IN_PREFIX_MS","x","must be an integer"),
             ("XAI_REALTIME_VAD_THRESHOLD","not-a-float","must be a number"),
             ("NATIVE_VAD_PREFIX_PADDING_MS","x","must be an integer"),
             ("XAI_REALTIME_SILENCE_DURATION_MS","1.5","must be an integer"),

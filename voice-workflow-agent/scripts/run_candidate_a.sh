@@ -64,6 +64,41 @@ export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
 export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
+export EXTERNAL_REFERENCES_ENABLED="true"
+export EXTERNAL_REFERENCE_DOMAIN_PROFILE="candidate_a"
+export EXTERNAL_REFERENCE_MODEL="grok-4.5"
+export EXTERNAL_REFERENCE_TIMEOUT_SECONDS="20"
+export EXTERNAL_REFERENCE_MAX_CITATIONS="5"
+export WEB_VISUAL_SEARCH_ENABLED="true"
+export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="true"
+export CASCADE_BARGE_IN_PREFIX_MS="800"
+
+echo
+echo "=== Non-secret capability check ==="
+python -B - <<'PY'
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from voice_workflow_agent.external_references import ExternalReferenceSettings
+from voice_workflow_agent.generated_visuals import GeneratedVisualSettings
+from voice_workflow_agent.web_visuals import WebVisualSettings
+
+load_dotenv(Path.cwd() / ".env", override=False)
+references = ExternalReferenceSettings.from_environment()
+web_images = WebVisualSettings.from_environment(references)
+generated = GeneratedVisualSettings.from_environment()
+if references.enabled and not bool(os.environ.get("XAI_API_KEY")):
+    raise SystemExit("[ERROR] XAI_API_KEY is not configured for enabled Candidate A research")
+print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
+print("authority_profile:", references.domain_profile or "custom")
+print("allowed_domain_count:", len(references.allowed_domains))
+print("web_image_search:", "enabled" if web_images.enabled else "disabled")
+print("generated_visuals:", "enabled" if generated.enabled else "disabled")
+print("experiment_reports: enabled")
+print("barge_in_prefix_ms:", os.environ["CASCADE_BARGE_IN_PREFIX_MS"])
+PY
 
 echo
 echo "=== Effective Candidate A paths ==="

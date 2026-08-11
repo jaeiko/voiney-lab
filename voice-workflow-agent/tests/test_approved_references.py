@@ -186,6 +186,54 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             settings = ExternalReferenceSettings.from_environment()
         self.assertEqual(settings.allowed_domains, ("osha.gov", "cdc.gov"))
 
+    def test_external_setting_alias_conflict_and_invalid_profile_fail_loudly(self):
+        with patch.dict(os.environ, {
+            "EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED": "false",
+        }, clear=True), self.assertRaisesRegex(ValueError, "conflicts"):
+            ExternalReferenceSettings.from_environment()
+        with patch.dict(os.environ, {
+            "EXTERNAL_REFERENCES_ENABLED": "true",
+            "EXTERNAL_REFERENCE_DOMAIN_PROFILE": "unknown-profile",
+        }, clear=True), self.assertRaisesRegex(ValueError, "DOMAIN_PROFILE"):
+            ExternalReferenceSettings.from_environment()
+        for name,value in (
+            ("EXTERNAL_REFERENCE_MODEL",""),
+            ("EXTERNAL_REFERENCE_TIMEOUT_SECONDS","31"),
+            ("EXTERNAL_REFERENCE_MAX_CITATIONS","6"),
+        ):
+            with self.subTest(name=name),patch.dict(os.environ, {
+                "EXTERNAL_REFERENCES_ENABLED":"true",
+                "EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
+                name:value,
+            },clear=True),self.assertRaises(ValueError):
+                ExternalReferenceSettings.from_environment()
+
+    async def test_external_adapter_accepts_documented_inline_citation_shape(self):
+        url = "https://pubchem.ncbi.nlm.nih.gov/compound/Ammonium-bicarbonate"
+        response = {
+            "output": [
+                {"type": "web_search_call"},
+                {"type": "message", "content": [{
+                    "type": "output_text",
+                    "text": f"AMBIC is ammonium bicarbonate [[1]]({url}).",
+                    "annotations": [],
+                }]},
+            ],
+            "citations": [url],
+        }
+        endpoint = SimpleNamespace()
+        async def create(**kwargs):
+            endpoint.kwargs = kwargs
+            return response
+        endpoint.create = create
+        result = await XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=endpoint),
+            ExternalReferenceSettings(True, ("pubchem.ncbi.nlm.nih.gov",), "fake"),
+        ).search("AMBIC", language="ko")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["matches"][0]["canonical_url"], url)
+
     async def test_external_adapter_rejects_non_allowlisted_citations(self):
         response = SimpleNamespace(
             output_text="Use the cited official reference.",

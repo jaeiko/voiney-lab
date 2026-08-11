@@ -19,7 +19,7 @@ class FakeResponses:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        return {"output": self.output}
+        return self.output
 
 
 class WebVisualTests(unittest.IsolatedAsyncioTestCase):
@@ -30,15 +30,15 @@ class WebVisualTests(unittest.IsolatedAsyncioTestCase):
         ))
 
     async def test_image_search_is_domain_bound_and_returns_source_link_only(self):
-        responses = FakeResponses([
-            {"type": "web_search_call"},
-            {"type": "message", "content": [{
-                "image_url": "https://pubchem.ncbi.nlm.nih.gov/image.png",
-                "source_url": "https://pubchem.ncbi.nlm.nih.gov/compound/962",
-                "title": "Authoritative compound record",
-                "caption": "Example structure",
-            }]},
-        ])
+        source = "https://pubchem.ncbi.nlm.nih.gov/compound/962"
+        responses = FakeResponses({
+            "output_text": (
+                "![Authoritative compound record]"
+                "(https://pubchem.ncbi.nlm.nih.gov/image.png)"
+            ),
+            "citations": [source],
+            "output": [{"type": "web_search_call"}],
+        })
         result = await XaiAuthoritativeImageSearch(
             SimpleNamespace(responses=responses), self.settings()
         ).search("HPLC water authoritative real image")
@@ -48,20 +48,18 @@ class WebVisualTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("image_url", candidate)
         tool = responses.calls[0]["tools"][0]
         self.assertTrue(tool["enable_image_search"])
-        self.assertTrue(tool["enable_image_understanding"])
+        self.assertNotIn("enable_image_understanding", tool)
         self.assertEqual(
             tool["filters"]["allowed_domains"],
             ["pubchem.ncbi.nlm.nih.gov"],
         )
 
     async def test_unallowlisted_or_rights_unknown_bytes_are_never_exposed(self):
-        responses = FakeResponses([
-            {"type": "web_search_call"},
-            {"type": "message", "content": [{
-                "image_url": "https://attacker.example/image.png",
-                "source_url": "https://pubchem.ncbi.nlm.nih.gov/compound/962",
-            }]},
-        ])
+        responses = FakeResponses({
+            "output_text": "![unsafe](https://attacker.example/image.png)",
+            "citations": ["https://pubchem.ncbi.nlm.nih.gov/compound/962"],
+            "output": [{"type": "web_search_call"}],
+        })
         result = await XaiAuthoritativeImageSearch(
             SimpleNamespace(responses=responses), self.settings()
         ).search("example")

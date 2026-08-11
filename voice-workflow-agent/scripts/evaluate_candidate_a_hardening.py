@@ -53,12 +53,16 @@ def main() -> int:
     audio_total = audio_correct = 0
     related_dead_ends = 0
     unsupported_claims = 0
+    normalization_total = normalization_correct = 0
+    followup_total = followup_correct = 0
     latencies: list[float] = []
     results = []
     for turn_id, case in enumerate(dataset["cases"], 1):
         session = CuratedProtocolSession(fixture)
         session.active = True
         session.current_index = case["step_index"]
+        if prior_text := case.get("prior_text"):
+            session.plan(prior_text, turn_id=turn_id * 1000, language="ko")
         opening_index = session.current_index
         started = time.perf_counter()
         plan = session.plan(case["text"], turn_id=turn_id, language="ko")
@@ -75,6 +79,15 @@ def main() -> int:
         if expected := case.get("resolved_entity"):
             entity_total += 1
             entity_correct += int(f"resolved_entity:{expected}" in plan.limitations)
+        if expected := case.get("normalized_entity"):
+            normalization_total += 1
+            normalization_correct += int(
+                plan.requested_entity == expected
+                and plan.transcript_correction_note is not None
+            )
+        if case.get("prior_text"):
+            followup_total += 1
+            followup_correct += int(route_ok)
         if expected_visual := case.get("visual"):
             visual_total += 1
             source = fixture.visual_for_step(case["step_index"])
@@ -112,6 +125,13 @@ def main() -> int:
         "double_transition_count": double_transitions,
         "contextual_entity_accuracy": (
             entity_correct / entity_total if entity_total else None
+        ),
+        "scientific_term_normalization_accuracy": (
+            normalization_correct / normalization_total
+            if normalization_total else None
+        ),
+        "contextual_followup_accuracy": (
+            followup_correct / followup_total if followup_total else None
         ),
         "original_vs_generated_visual_decision_accuracy": (
             visual_correct / visual_total if visual_total else None

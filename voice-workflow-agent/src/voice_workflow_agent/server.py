@@ -899,6 +899,7 @@ class ListenerEvent:
     superseding_generation:int|None=None
     reason:str|None=None
     latency_ms:int|None=None
+    diagnostics:dict[str,int|float|bool|str]|None=None
 
 TURN_PROGRESS_TERMINAL_STATES=frozenset({
     "complete","blocked","cancelled","error",
@@ -939,7 +940,10 @@ class ListenerSession:
     def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.perf_counter,
                  tool_context:ToolContext|None=None,
                  curated_protocol_session:CuratedProtocolSession|None=None,
-                 experiment_report_store:ExperimentReportStore|None=None)->None:
+                 experiment_report_store:ExperimentReportStore|None=None,
+                 external_reference_settings:ExternalReferenceSettings|None=None,
+                 web_visual_settings:WebVisualSettings|None=None,
+                 generated_visual_settings:GeneratedVisualSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -952,6 +956,11 @@ class ListenerSession:
         self.playback_completion_metrics:dict[int,int]={}
         self.curated_protocol_session=curated_protocol_session
         self.experiment_report_store=experiment_report_store
+        self.external_reference_settings=(
+            external_reference_settings or ExternalReferenceSettings(False))
+        self.web_visual_settings=web_visual_settings or WebVisualSettings(False)
+        self.generated_visual_settings=(
+            generated_visual_settings or GeneratedVisualSettings(False))
         self.experiment_report_id:str|None=None
         self.session_id=new_session_id()
         self.accepted_configuration_id:int|None=None
@@ -971,6 +980,8 @@ class ListenerSession:
         self._interrupt_candidate_identity:tuple[int,int]|None=None
         self._interrupt_candidate_started_at:float|None=None
         self._interrupt_candidate_endpoint_at:float|None=None
+        self._interrupt_candidate_diagnostics:dict[str,int|bool]={}
+        self._microphone_chunk_sequence=0
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -980,6 +991,7 @@ class ListenerSession:
                 config,
                 onset_voiced_frames=config.playback_onset_voiced_frames,
                 onset_window_frames=config.playback_onset_window_frames,
+                prefix_frames=config.barge_in_prefix_frames,
             )
         return EndpointDetector(
             config,
@@ -997,6 +1009,7 @@ class ListenerSession:
         self._interrupt_candidate_identity=None
         self._interrupt_candidate_started_at=None
         self._interrupt_candidate_endpoint_at=None
+        self._interrupt_candidate_diagnostics={}
     def _reset_turn_identity(self)->None:
         for task in tuple(self.visual_tasks):
             task.cancel()
@@ -1159,6 +1172,7 @@ class ListenerSession:
         return False
     def accept_chunk(self,chunk:bytes)->list[ListenerEvent]:
         if not self.active:return []
+        self._microphone_chunk_sequence+=1
         self.refresh_cooldown()
         if self.state in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING):
             return self._accept_interrupt_chunk(chunk)
@@ -1205,9 +1219,23 @@ class ListenerSession:
                     continue
                 self._interrupt_candidate_identity=identity
                 self._interrupt_candidate_started_at=self.clock()
+                self._interrupt_candidate_diagnostics={
+                    "microphone_chunk_sequence":self._microphone_chunk_sequence,
+                    "candidate_onset_monotonic_ms":round(
+                        self._interrupt_candidate_started_at*1000),
+                    "prefix_frames_retained":result.total_frames,
+                    "configured_barge_in_prefix_frames":detector.config.prefix_frames,
+                    "configured_barge_in_prefix_ms":detector.config.prefix_frames*20,
+                    "playback_onset_voiced_frames":(
+                        detector.config.onset_voiced_frames),
+                    "playback_onset_window_frames":(
+                        detector.config.onset_window_frames),
+                    "playback_active":self.state==TurnState.AGENT_SPEAKING,
+                }
                 output.append(ListenerEvent(
                     "barge_in_candidate",interrupted_turn_id,result,
-                    interrupted_generation))
+                    interrupted_generation,
+                    diagnostics=dict(self._interrupt_candidate_diagnostics)))
             if result.rejected:
                 candidate=self._interrupt_candidate_identity
                 latency=(
@@ -1220,7 +1248,8 @@ class ListenerSession:
                     candidate[0] if candidate else self.active_turn_id or 0,
                     result,
                     candidate[1] if candidate else self.generation,
-                    reason=result.rejection_reason,latency_ms=latency))
+                    reason=result.rejection_reason,latency_ms=latency,
+                    diagnostics=dict(self._interrupt_candidate_diagnostics)))
                 self._reset_interrupt_input(
                     playback=self.state==TurnState.AGENT_SPEAKING)
                 break
@@ -1231,6 +1260,12 @@ class ListenerSession:
                         playback=self.state==TurnState.AGENT_SPEAKING)
                     continue
                 self._interrupt_candidate_endpoint_at=self.clock()
+                self._interrupt_candidate_diagnostics[
+                    "candidate_endpoint_monotonic_ms"
+                ]=round(self._interrupt_candidate_endpoint_at*1000)
+                self._interrupt_candidate_diagnostics[
+                    "captured_utterance_frames"
+                ]=result.total_frames
                 latency=(
                     max(0,round((self._interrupt_candidate_endpoint_at-
                                  self._interrupt_candidate_started_at)*1000))
@@ -1238,7 +1273,8 @@ class ListenerSession:
                     else None)
                 output.append(ListenerEvent(
                     "barge_in_audio_ready",candidate[0],result,candidate[1],
-                    latency_ms=latency))
+                    latency_ms=latency,
+                    diagnostics=dict(self._interrupt_candidate_diagnostics)))
             if detector.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):
                 break
         return output
@@ -1256,9 +1292,10 @@ class ListenerSession:
             playback=self.state==TurnState.AGENT_SPEAKING)
         return ListenerEvent(
             "barge_in_rejected",event.turn_id,rejected,event.generation,
-            reason=reason,latency_ms=event.latency_ms)
+            reason=reason,latency_ms=event.latency_ms,
+            diagnostics=dict(event.diagnostics or {}))
     def commit_interrupt_candidate(
-        self,event:ListenerEvent,
+        self,event:ListenerEvent,*,stt_ms:int|None=None,
     )->list[ListenerEvent]:
         identity=self._interrupt_candidate_identity
         if (event.kind!="barge_in_audio_ready" or identity is None or
@@ -1280,16 +1317,22 @@ class ListenerSession:
         self.endpoint_at=candidate_endpoint_at or self.clock()
         self.turn_committed_at[superseding_turn_id]=self.endpoint_at
         latency=event.latency_ms
+        diagnostics=dict(event.diagnostics or {})
+        if stt_ms is not None:
+            diagnostics["barge_in_stt_ms"]=max(0,stt_ms)
+        diagnostics["captured_utterance_frames"]=event.result.total_frames
         self._reset_interrupt_input()
         return [
             ListenerEvent(
                 "assistant.interrupted",event.turn_id,event.result,
                 event.generation,superseding_turn_id,self.generation,
-                reason="confirmed_speech",latency_ms=latency),
+                reason="confirmed_speech",latency_ms=latency,
+                diagnostics=diagnostics),
             ListenerEvent(
                 "barge_in_committed",event.turn_id,event.result,
                 event.generation,superseding_turn_id,self.generation,
-                reason="confirmed_speech",latency_ms=latency),
+                reason="confirmed_speech",latency_ms=latency,
+                diagnostics=diagnostics),
             ListenerEvent(
                 "speech.start",superseding_turn_id,event.result,
                 self.generation),
@@ -1862,6 +1905,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     evidence_texts=tuple(fact.text for fact in facts),
                     requested_entity=plan.requested_entity,
                     question_kind=plan.question_kind,
+                    question_dimensions=plan.question_dimensions,
                 )
                 client=None
                 force_external=(
@@ -1889,7 +1933,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         if not session.is_current(turn_id,generation):
                             curated._restore(checkpoint)
                             return
-                        if answer.intent != "unsupported":
+                        requested_dimensions=set(plan.question_dimensions)
+                        requires_external_dimension=bool(
+                            plan.requested_entity
+                            and requested_dimensions & {
+                                "definition", "role", "difference", "safety",
+                            }
+                            or plan.question_kind=="safety"
+                        )
+                        local_coverage_complete=(
+                            not requires_external_dimension
+                            and not answer.unsupported_parts
+                        )
+                        if answer.intent != "unsupported" and local_coverage_complete:
                             plan=curated.apply_grounded_answer(
                                 turn_id=turn_id,
                                 language=turn_language,
@@ -1969,10 +2025,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 "approved reference answer failed closed turn_id=%s",
                                 turn_id)
                 if plan.action is CuratedProtocolAction.RELATED_QUESTION:
-                    try:
-                        external_settings=ExternalReferenceSettings.from_environment()
-                    except ValueError:
-                        external_settings=ExternalReferenceSettings(False)
+                    external_settings=session.external_reference_settings
                     if external_settings.enabled:
                         external_tool="search_authoritative_web"
                         await progress(
@@ -2015,6 +2068,70 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                     "External guidance cannot modify the active protocol.",
                                 ),
                             )
+                        else:
+                            local_facts=tuple(plan.facts)
+                            local_summary=(
+                                "\n".join(f"- {fact.text}" for fact in local_facts[:4])
+                                if local_facts else "- 확인된 추가 사실 없음"
+                            )
+                            status=result.get("status","error")
+                            if turn_language=="ko":
+                                display=(
+                                    "현재 프로토콜에서 확인되는 내용\n"
+                                    f"{local_summary}\n\n"
+                                    "외부 권위자료 검색을 완료하지 못해 요청하신 추가 "
+                                    "설명을 검증하지 못했습니다. 현재 프로토콜과 단계 "
+                                    "상태는 변경하지 않았습니다."
+                                )
+                                speech=(
+                                    "현재 프로토콜에서 확인되는 내용은 화면에 남겨 "
+                                    "두었습니다. 외부 권위자료 검색이 완료되지 않아 "
+                                    "추가 설명을 검증하지 못했습니다."
+                                )
+                            else:
+                                display=(
+                                    "What the active protocol establishes\n"
+                                    f"{local_summary}\n\n"
+                                    "The authoritative web search did not complete, so "
+                                    "the requested additional explanation could not be "
+                                    "verified. Protocol state was not changed."
+                                )
+                                speech=(
+                                    "The protocol facts remain visible, but the external "
+                                    "search did not complete, so I could not verify the "
+                                    "additional explanation."
+                                )
+                            plan=replace(
+                                plan,display_text=display,speech_text=speech,
+                                limitations=(*plan.limitations,
+                                    f"authoritative_web_search_{status}"),
+                            )
+                    elif (
+                        plan.requested_entity is not None
+                        or plan.question_kind=="safety"
+                        or force_external
+                    ):
+                        local_facts = tuple(plan.facts)
+                        local_summary = (
+                            "\n".join(f"- {fact.text}" for fact in local_facts[:4])
+                            if local_facts else ""
+                        )
+                        unavailable = (
+                            "현재 프로토콜에서 확인되는 내용"
+                            + (f"\n{local_summary}" if local_summary else "은 제한적입니다.")
+                            + "\n\n요청하신 추가 설명은 활성 프로토콜만으로 확인되지 않았고, "
+                            "이 세션에서는 외부 권위자료 검색을 사용할 수 없습니다. "
+                            "프로토콜 상태는 변경하지 않았습니다."
+                            if turn_language == "ko" else
+                            "The active protocol has only partial information for this "
+                            "question, and authoritative web research is unavailable in "
+                            "this session. Protocol state was not changed."
+                        )
+                        plan=replace(
+                            plan,display_text=unavailable,speech_text=unavailable,
+                            limitations=(*plan.limitations,
+                                "authoritative_web_search_disabled"),
+                        )
             report_prepared=False
             if plan.action in {
                 CuratedProtocolAction.REPORT_ANOMALY,
@@ -2150,7 +2267,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             citations=list(plan.citations),
             retrieval_backend=plan.retrieval_backend,
             retrieval_scores=list(plan.retrieval_scores),
-            limitations=list(plan.limitations))
+            limitations=list(plan.limitations),
+            transcript_correction_note=plan.transcript_correction_note,
+            question_dimensions=list(plan.question_dimensions))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         await sender.segment(turn_id,0,frames,generation)
@@ -2180,20 +2299,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
             existing_visual=curated.fixture.visual_for_step(curated.current_index)
             if plan.visual_kind=="web_photo" and existing_visual is None:
-                try:
-                    web_visual_settings=WebVisualSettings.from_environment()
-                except ValueError:
-                    web_visual_settings=WebVisualSettings(False)
+                web_visual_settings=session.web_visual_settings
                 if web_visual_settings.enabled:
                     await _queue_curated_web_visual(
                         session=session,sender=sender,turn_id=turn_id,
                         generation=generation,endpoint=endpoint,clock=clock,
                         curated=curated,settings=web_visual_settings)
             elif existing_visual is None:
-                try:
-                    visual_settings=GeneratedVisualSettings.from_environment()
-                except ValueError:
-                    visual_settings=GeneratedVisualSettings(False)
+                visual_settings=session.generated_visual_settings
                 visual_spec=(
                     _curated_visual_specification(curated)
                     if visual_settings.enabled else None)
@@ -2536,11 +2649,27 @@ async def voice_socket(websocket:WebSocket):
         vad_settings=VoiceVadSettings.from_environment()
         config=VadConfig.from_settings(vad_settings.cascade)
         report_settings=ExperimentReportSettings.from_environment()
+        external_settings=ExternalReferenceSettings.from_environment()
+        web_visual_settings=WebVisualSettings.from_environment(external_settings)
+        generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
-            "error",message=f"invalid VAD configuration: {exc}"))
-        await websocket.close(code=1008,reason="invalid VAD configuration")
+            "error",message=f"invalid non-secret configuration: {exc}"))
+        await websocket.close(code=1008,reason="invalid configuration")
         return
+    research_capabilities={
+        "external_text":external_settings.public_capability(),
+        "web_image":{
+            "status":"enabled" if web_visual_settings.enabled else "disabled",
+        },
+        "generated_visual":{
+            "status":(
+                "enabled" if generated_visual_settings.enabled else "disabled"),
+            "model":(
+                generated_visual_settings.model
+                if generated_visual_settings.enabled else None),
+        },
+    }
     report_store=(
         ExperimentReportStore(report_settings.database_path)
         if report_settings.enabled and report_settings.database_path is not None
@@ -2549,6 +2678,9 @@ async def voice_socket(websocket:WebSocket):
     session=ListenerSession(
         EndpointDetector(config,listening_onset=True),
         experiment_report_store=report_store,
+        external_reference_settings=external_settings,
+        web_visual_settings=web_visual_settings,
+        generated_visual_settings=generated_visual_settings,
     ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
     sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
@@ -2556,7 +2688,9 @@ async def voice_socket(websocket:WebSocket):
                                     pipelines=["cascade","native"],frame_ms=20,
                                     frame_bytes=FRAME_BYTES,vad_mode=config.mode,
                                     endpoint_silence_ms=config.endpoint_silence_frames*20,
-                                    prefix_padding_ms=config.prefix_frames*20))
+                                    prefix_padding_ms=config.prefix_frames*20,
+                                    barge_in_prefix_ms=config.barge_in_prefix_frames*20,
+                                    research_capabilities=research_capabilities))
     try:
         while True:
             message=await websocket.receive()
@@ -2596,7 +2730,7 @@ async def voice_socket(websocket:WebSocket):
                         if rejected is not None:
                             listener_events.append(rejected)
                         continue
-                    committed=session.commit_interrupt_candidate(item)
+                    committed=session.commit_interrupt_candidate(item,stt_ms=stt_ms)
                     if not committed:
                         rejected=session.reject_interrupt_candidate(
                             item,"stale_candidate")
@@ -2632,6 +2766,8 @@ async def voice_socket(websocket:WebSocket):
                             item.superseding_generation)
                     if item.latency_ms is not None:
                         fields["barge_in_to_silence_ms"]=item.latency_ms
+                    if item.diagnostics:
+                        fields.update(item.diagnostics)
                     await websocket.send_text(event(item.kind,**fields))
                     if item.kind in {
                         "barge_in_candidate","barge_in_committed",
@@ -2832,6 +2968,7 @@ async def voice_socket(websocket:WebSocket):
                     "mode":session.accepted_mode,
                     "language":session.accepted_language,
                     "protocol_id":session.accepted_protocol_id,
+                    "research_capabilities":research_capabilities,
                 }
                 if session.accepted_protocol_id is not None:
                     ready_fields["revision_id"]=session.accepted_revision_id

@@ -82,6 +82,7 @@ class CascadeVadSettings:
     onset_voiced_frames: int=4
     onset_window_frames: int=6
     prefix_ms: int=300
+    barge_in_prefix_ms: int=800
     endpoint_silence_ms: int=1000
     minimum_speech_ms: int=240
     maximum_utterance_ms: int=15000
@@ -105,6 +106,8 @@ class CascadeVadSettings:
             onset_window_frames=_integer(
                 env,"CASCADE_VAD_ONSET_WINDOW_FRAMES",6,1,100),
             prefix_ms=_integer(env,"CASCADE_VAD_PREFIX_MS",300,20,5000),
+            barge_in_prefix_ms=_integer(
+                env,"CASCADE_BARGE_IN_PREFIX_MS",800,300,5000),
             endpoint_silence_ms=_integer(
                 env,"CASCADE_VAD_ENDPOINT_SILENCE_MS",1000,20,10000),
             minimum_speech_ms=_integer(

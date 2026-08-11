@@ -680,11 +680,18 @@ class ServerTests(unittest.TestCase):
         ) as native_session:
             asyncio.run(voice_socket(socket))
         ready=next(item for item in socket.sent if item["type"]=="session.ready")
-        self.assertEqual(ready,{
+        self.assertEqual({key:ready[key] for key in (
+            "type","configuration_id","mode","language","protocol_id",
+            "revision_id",
+        )},{
             "type":"session.ready","configuration_id":7,"mode":"cascade",
             "language":"ko","protocol_id":protocol_id,
             "revision_id":"fixture-test-revision",
         })
+        self.assertEqual(
+            ready["research_capabilities"]["external_text"]["status"],
+            "disabled",
+        )
         curated_state=next(
             item for item in socket.sent
             if item["type"]=="protocol.fixture.state")
@@ -843,7 +850,9 @@ class ServerTests(unittest.TestCase):
         started=next(item for item in socket.sent if item["type"]=="session.started")
         self.assertEqual(started["pipeline"],"native")
         ready=next(item for item in socket.sent if item["type"]=="session.ready")
-        self.assertEqual(ready,{
+        self.assertEqual({key:ready[key] for key in (
+            "type","configuration_id","mode","language","protocol_id",
+        )},{
             "type":"session.ready","configuration_id":1,"mode":"native",
             "language":"ko","protocol_id":None,
         })
@@ -1272,6 +1281,49 @@ class ServerTests(unittest.TestCase):
         self.assertGreaterEqual(processing_committed[2].result.total_frames,10)
         self.assertTrue(
             processing_committed[-1].result.utterance.startswith(frame(200)))
+
+    def test_barge_in_has_dedicated_preroll_beyond_idle_prefix(self):
+        decisions=[False]*20+[True]*12+[False]*2
+        config=VadConfig(
+            onset_voiced_frames=2,onset_window_frames=3,prefix_frames=15,
+            barge_in_prefix_frames=40,
+            endpoint_silence_frames=2,minimum_voiced_frames=12,
+            maximum_utterance_frames=80,cooldown_ms=0,
+            playback_onset_voiced_frames=12,
+            playback_onset_window_frames=15,
+        )
+        session=ListenerSession(EndpointDetector(
+            config,classifier=Decisions(decisions)))
+        session.start();session.active_turn_id=1
+        session.turn_generations[1]=session.generation
+        session.detector.state=TurnState.PROCESSING
+        self.assertTrue(session.start_playback(1))
+        pcm=b"".join(frame(index) for index in range(len(decisions)))
+        events=session.accept_chunk(pcm)
+        self.assertEqual(
+            [item.kind for item in events],
+            ["barge_in_candidate","barge_in_audio_ready"],
+        )
+        self.assertEqual(
+            events[0].diagnostics["configured_barge_in_prefix_frames"],40)
+        self.assertEqual(
+            events[0].diagnostics["configured_barge_in_prefix_ms"],800)
+        self.assertEqual(
+            events[0].diagnostics["playback_onset_voiced_frames"],12)
+        self.assertEqual(
+            events[0].diagnostics["playback_onset_window_frames"],15)
+        self.assertIn("candidate_onset_monotonic_ms",events[0].diagnostics)
+        self.assertGreater(events[0].result.total_frames,15)
+        committed=session.commit_interrupt_candidate(events[-1],stt_ms=37)
+        captured=committed[-1].result.utterance
+        self.assertTrue(captured.startswith(frame(0)))
+        self.assertEqual(committed[0].diagnostics["barge_in_stt_ms"],37)
+        self.assertIn(
+            "candidate_endpoint_monotonic_ms",committed[0].diagnostics)
+        self.assertEqual(
+            committed[0].diagnostics["captured_utterance_frames"],
+            events[-1].result.total_frames,
+        )
     def test_accepted_onset_emits_one_server_owned_listening_state(self):
         config=VadConfig(
             onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
