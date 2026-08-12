@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "cases": [
     {"id": "completion-ko-1", "text": "현재 단계를 완료했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
     {"id": "completion-ko-2", "text": "여기까지 다 했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
@@ -40,5 +40,20 @@
     {"id": "report-show", "text": "현재 실험 기록을 보여줘.", "step_index": 3, "intent": "show_experiment_report", "action": "show_report", "mutates": false},
     {"id": "report-anomaly", "text": "예상과 다르게 색이 남아 있어.", "step_index": 3, "intent": "record_anomaly", "action": "report_anomaly", "mutates": false},
     {"id": "blocked-step-7", "text": "현재 단계를 완료했어요.", "step_index": 6, "intent": "report_completion", "action": "next", "mutates": false}
+    ,{"id": "week5-stained-band-visual", "text": "염색된 단백질 밴드가 어떤 걸 의미해? 혹시 그림을 보여줄 수 있어?", "step_index": 0, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["stained_protein_band"], "visual_kind": "instructional_illustration"}
+    ,{"id": "week5-hplc-anbic", "text": "여기서 HPLC water하고 ANBI-C가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water", "ambic"]}
+    ,{"id": "week5-ambic-hplc", "text": "AMBIC와 HPLC water가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["ambic", "hplc_water"]}
+    ,{"id": "week5-jel-tug", "text": "Jel Tug에 관해서 이미지를 보여줄 수 있어.", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
+    ,{"id": "week5-jet-plug", "text": "제트 플러그와 관련해서 이미지를 보여줄 수 있어?", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
+    ,{"id": "week5-gel-plug", "text": "젤 플러그 이미지를 보여줘.", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
+    ,{"id": "week5-completion-corrupt", "text": "장기를 완료했어.", "step_index": 1, "intent": "ambiguous_completion", "action": "clarify_completion", "mutates": false}
+    ,{"id": "week5-completion-reverse", "text": "다음 단계로 안내해 줘. 현재 단계 완료했어.", "step_index": 1, "intent": "completion_and_next", "action": "next", "mutates": true}
+    ,{"id": "week5-completion-forward", "text": "현재 단계 완료했어. 다음 단계 알려줘.", "step_index": 1, "intent": "completion_and_next", "action": "next", "mutates": true}
+    ,{"id": "week5-completion-criteria", "text": "완료 조건이 뭐야?", "step_index": 1, "intent": "completion_criteria_question", "action": "full_detail", "mutates": false}
+    ,{"id": "week5-completion-negated", "text": "아직 완료하지 않았어.", "step_index": 1, "intent": "negated_completion", "action": "off_topic", "mutates": false}
+    ,{"id": "week5-completion-hypothetical", "text": "이 단계를 완료했다고 가정하면 다음은 뭐야?", "step_index": 1, "intent": "hypothetical_completion", "action": "off_topic", "mutates": false}
+    ,{"id": "week5-completion-quoted", "text": "“현재 단계 완료했어”라고 말하면 돼?", "step_index": 1, "intent": "quoted_completion", "action": "off_topic", "mutates": false}
+    ,{"id": "week5-stop-supersedes-research", "text": "프로토콜 중지해줘", "step_index": 1, "intent": "workflow_command", "action": "stop", "mutates": true}
+    ,{"id": "week5-newer-related-question", "text": "HPLC water가 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water"]}
   ]
 }

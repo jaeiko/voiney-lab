@@ -145,3 +145,51 @@ No LLM, retrieved document, webpage, image, replay button, or UI event can
 advance, stop, reset, approve an observation, or resolve Steps 7, 9, or 20.
 Provider-disabled paths must remain useful and truthful without pretending a
 search or image call occurred.
+
+## Week 5 direct-answer and interpretation contract
+
+The 2026-08-12 hardening pass keeps the same authority boundaries while moving
+scientific questions away from a raw-evidence-first presentation:
+
+- The immutable finalized STT text is retained for audit. The xAI batch request
+  sends documented `language=ko` bias and repeated, bounded `keyterm` fields
+  built from the current/adjacent steps plus a small critical vocabulary. It
+  does not rely on undocumented confidence or alternative fields.
+- Scientific normalization returns an ordered `requested_entities` collection.
+  It can transparently repair the reviewed `ANBI-C`/`anbi` → `AMBIC` and
+  `Jel Tug`/`제트 플러그` → `gel plug` variants; it does not fuzzy-rewrite
+  numbers, units, step identifiers, or Solution A/B.
+- Completion and next-step meaning are detected compositionally. Negation,
+  criteria questions, quoted speech, hypothetical language, and ambiguity are
+  classified before the single server-owned transition. A Turn can advance at
+  most one step.
+- A `SourcePlan` identifies which source class may support each requested
+  dimension. An `AnswerEnvelope` leads with a plain Korean definition and
+  current-protocol relationship; exact PDF facts and excerpts remain supporting
+  evidence. Compound questions retain every requested entity in user order.
+- Entity-specific image requests are first-class read-only intents. The planner
+  resolves the entity before source-crop, rights-safe source-page, or explicitly
+  requested generated-illustration selection. It never claims a visual was
+  displayed when no verified visual outcome exists.
+- External research uses one domain-restricted, cancellable Responses stream.
+  Telemetry records first event/text, tool start/end, total time, terminal
+  status, completed search-tool count, and citation admission without payloads
+  or credentials. A URL without a completed search event is not success.
+
+Offline regression commands:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m unittest \
+  tests.test_candidate_a_research_hardening \
+  tests.test_approved_references \
+  tests.test_curated_protocol_cascade \
+  tests.test_server_helpers -v
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B scripts/evaluate_candidate_a_hardening.py
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B scripts/evaluate_candidate_a_grounded_qa.py
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m unittest discover -s tests -v
+```
+
+The evaluator dataset contains the exact Week 5 real-voice transcripts and
+forbidden mutation outcomes. Automated execution uses provider fakes and must
+report zero paid calls. Live Acceptance remains a separate, bounded operator
+step using the documented domain profile and budgets.

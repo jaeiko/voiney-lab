@@ -268,10 +268,10 @@ Equivalent canonical controls for a separate development launcher are:
 ```bash
 export EXTERNAL_REFERENCES_ENABLED=true
 export EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
-export EXTERNAL_REFERENCE_MODEL='grok-4.5'
-export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=12
+export EXTERNAL_REFERENCE_MODEL='grok-4.6'
+export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
 export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=3
-export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=8
+export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=15
 export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900
 export EXTERNAL_REFERENCE_MAX_CITATIONS=5
 export WEB_VISUAL_SEARCH_ENABLED=true
@@ -297,6 +297,35 @@ export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS=60
 
 Do not enable either feature merely to run offline tests. Automated tests use
 fakes and make zero paid calls.
+
+The sanitized diagnostic is offline unless `--live` is present. Each live
+invocation makes exactly one bounded request and reports only timings, event/tool
+counts, terminal state, citation count/domains, and a safe request identifier:
+
+```bash
+source .venv/bin/activate
+python -B scripts/diagnose_candidate_a_research.py --live --query-profile ambic
+python -B scripts/diagnose_candidate_a_research.py --live --query-profile hplc-water
+python -B scripts/diagnose_candidate_a_research.py --live --query-profile solution-a-role
+python -B scripts/diagnose_candidate_a_research.py --live --query-profile step-safety
+```
+
+Run these only with the reviewed profile and existing credential. Stop after the
+four calls; do not paste keys, headers, response bodies, or unrestricted page
+text into Acceptance records.
+
+The bounded 2026-08-12 implementation diagnostic used the full six-text-request
+task budget. One pre-fix stream was manually cancelled when SDK cleanup outlived
+the intended deadline. After cleanup was independently capped, AMBIC, HPLC-water,
+Solution-A-role, and step-safety profiles each returned `timeout_total` at about
+20.06–20.08 seconds with zero Provider events, zero successful tools, and zero
+citations; a final AMBIC comparison at the 30-second hard maximum returned the
+same state at 30.053 seconds. The step-safety request was also repeated outside
+the restricted execution sandbox and behaved identically, so sandbox networking
+was not the differentiator. No live external answer or web image was admitted,
+and no live image-generation call was made. Treat the feature as implemented and
+offline-verified but not live-provider-verified; do not spend further calls until
+the Provider produces a first event within the hard budget.
 
 The Candidate A launcher enables the experiment-report service at an ignored
 runtime path. For another launcher, use only an ignored absolute path:
@@ -329,6 +358,11 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `혹시 융프라우 다녀오셨나요?` | short scope reminder; current step preserved |
 | `AMBIC가 뭐야?` | related entity; direct definition then current-step relationship; unchanged |
 | `HPLC water가 일반 물하고 뭐가 달라?` | related entity; protocol first, then admitted references; unchanged |
+| `여기서 HPLC water하고 ANBI-C가 뭐야?` | ordered HPLC-water and AMBIC answers plus an auditable correction note; unchanged |
+| `염색된 단백질 밴드가 어떤 걸 의미해? 혹시 그림을 보여줄 수 있어?` | direct definition first; the same Turn receives a source visual, source card, or honest unavailable result |
+| `Jel Tug에 관해서 이미지를 보여줄 수 있어.` | contextually resolves gel plug and enters the read-only entity-visual route |
+| `다음 단계로 안내해 줘. 현재 단계 완료했어.` | one atomic transition regardless of clause order; never two |
+| `장기를 완료했어.` | one short current-step completion confirmation; no mutation before confirmation |
 | `현재 실험 기록을 보여줘` | current report state/export; no workflow mutation |
 | `예상과 다르게 색이 남아 있어` | one explicit anomaly event; no fabricated observation approval |
 | `지금은 총 몇 단계로 이루어져 있어?` at Step 6 | `25`, current `6/25`, remaining `19`; zero retrieval/Provider calls |

@@ -110,18 +110,23 @@ The live xAI Responses adapter additionally requires:
   to five comma-separated authority domains in
   `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS`;
 - a non-empty `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL` (default
-  `grok-4.5`);
+  `grok-4.6`);
 - a bounded `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
-  1 and 30 seconds (the Candidate A launcher uses a 12-second total deadline);
-- optional 3-second connect and 8-second read deadlines through
+  1 and 30 seconds (the Candidate A launcher uses a 20-second total deadline);
+- optional 3-second connect and 15-second read deadlines through
   `EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
   `EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
 - an optional validated-result TTL through
   `EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
   launcher). Only cited, allowlisted success is cached.
 
-Each Turn is limited to one web-search request with SDK retries disabled. Returned
-URLs are independently required to be HTTPS and inside the configured domains.
+Each Turn is limited to one web-search request with SDK retries disabled. The
+adapter consumes Responses streaming events so tool start/end and first-event
+timings remain observable, but its overall deadline is still hard-bounded and a
+newer Turn cancels or rejects the old result. Returned URLs are independently
+required to be HTTPS and inside the configured domains. Search is successful
+only when the response reports a completed web-search tool and the admitted
+citations support the returned claims.
 Google Custom Search and YouTube discovery are not part of this catalog or answer
 path.
 

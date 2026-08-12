@@ -43,7 +43,7 @@ step blocker.
 ## External research contract
 
 Live search is explicit and domain-restricted. Defaults for the Candidate A
-launcher are total 12 seconds, connect 3 seconds, read 8 seconds, zero SDK
+launcher are total 20 seconds, connect 3 seconds, read 15 seconds, zero SDK
 retries, five citations maximum, and a 900-second in-memory TTL. Only validated
 cited success is cached. Cache authority never changes from external context.
 
@@ -70,6 +70,13 @@ the sanitized classification `timeout_read` (`APITimeoutError`, one attempt,
 8.724 seconds, zero admitted citations). Consequently the adapter is
 implemented and offline-verified, but successful live evidence admission is not
 verified; the immediate local-answer path remains the user-visible fallback.
+
+The Week 5 adapter now consumes the current streamed Responses event shape and
+`usage.server_side_tool_usage`, instead of treating the legacy root usage field
+as the only proof that search ran. The historical 2026-08-11 measurements above
+remain historical evidence; use the current four-profile command in
+`CANDIDATE_A_REAL_VOICE_ACCEPTANCE.md` before making a new live reliability
+claim.
 
 ## Experiment-report contract
 

@@ -1224,7 +1224,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             language="ko",
         )
         self.assertEqual(unavailable.action, CuratedProtocolAction.RELATED_QUESTION)
-        self.assertIn("현재 단계", unavailable.response_text)
+        self.assertIn("Solution A", unavailable.response_text)
+        self.assertIn(solution.facts[0].text, unavailable.source_texts)
         self.assertNotIn(solution.facts[0].text, unavailable.response_text)
 
     def test_ambiguous_or_future_step_facts_fail_closed_without_mutation(self):
@@ -1865,7 +1866,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(result["status"],"error")
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("PDF/프로토콜 근거",reply["text"])
+        self.assertIn("직접 답변",reply["text"])
+        self.assertIn("HPLC water",reply["primary_text"])
+        self.assertNotIn("Catalog #",reply["text"])
         supplement=next(
             item for item in socket.text if item["type"]=="research.result")
         self.assertEqual(supplement["status"],"error")
@@ -2102,6 +2105,86 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(kinds.count("tool.call"),1)
         self.assertEqual(kinds.count("tool.result"),1)
+
+    def test_entity_visual_is_queued_before_slow_explanatory_research(self):
+        from voice_workflow_agent.generated_visuals import GeneratedVisualSettings
+
+        session=self.make_session(index=0)
+        session.tool_context=None
+        session.generated_visual_settings=GeneratedVisualSettings(
+            True,"offline-test-model")
+        session.external_reference_settings=ExternalReferenceSettings(
+            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
+            "candidate_a",
+        )
+        socket=Socket();order=[]
+
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+
+        async def queued_visual(**kwargs):
+            order.append(("visual",kwargs["turn_id"],kwargs["generation"]))
+
+        class Web:
+            def __init__(self,*args): pass
+            async def search(self,query,*,language):
+                order.append(("research",language))
+                return {"status":"not_found","matches":[]}
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription(
+                "염색된 단백질 밴드가 어떤 걸 의미해? 그림도 보여줘.","ko"
+            ),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server._queue_curated_generated_visual",
+            side_effect=queued_visual,
+        ),patch(
+            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",
+            return_value=SimpleNamespace(),
+        ),patch(
+            "voice_workflow_agent.server.require_env",return_value="offline",
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+
+        self.assertEqual(order[0],("visual",1,session.generation))
+        self.assertEqual(order[1],("research","ko"))
+        reply=next(item for item in socket.text if item["type"]=="reply.delta")
+        self.assertIn("염색된 단백질 밴드",reply["primary_text"])
+        self.assertEqual(reply["requested_entities"],["stained_protein_band"])
+        self.assertFalse(reply.get("state_changed",False))
+
+    def test_entity_visual_disabled_returns_same_turn_unavailable_state(self):
+        session=self.make_session(index=0);session.tool_context=None
+        socket=Socket()
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("젤 플러그 이미지를 보여줘.","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        unavailable=next(
+            item for item in socket.text
+            if item["type"]=="protocol.visual.state"
+        )
+        self.assertEqual(unavailable["status"],"visual_failed")
+        self.assertEqual(unavailable["fallback"],"feature_disabled")
+        self.assertEqual(unavailable["turn_id"],1)
+        self.assertEqual(unavailable["generation"],session.generation)
+        self.assertFalse(any(item["type"]=="tool.call" for item in socket.text))
 
     def test_verified_source_crop_suppresses_generated_visual_specification(self):
         from voice_workflow_agent.server import _curated_visual_specification
@@ -3300,7 +3383,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.fixture.steps[1].step_id, "current_step"
             ),
             step_two,
-            "활성 프로토콜에서 확인되는 현재 단계 관련 내용을 먼저 화면에 표시했습니다. 부족한 설명은 권위 자료에서 확인할게요.",
+            "활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. 추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:4])
@@ -3337,9 +3420,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("답변 · 한국어 참고 번역", replies[4])
         self.assertIn("Solution A", replies[4])
         self.assertIn(step_two, replies[5])
-        # Related research is local-first: verified active/adjacent protocol
-        # evidence is delivered before any optional external supplement.
-        self.assertIn(step_two, replies[6])
+        # Related research is local-first: active/adjacent evidence supports a
+        # direct answer before any optional external supplement.
+        self.assertIn("직접 답변", replies[6])
+        related_reply = [
+            item for item in socket.text if item["type"] == "reply.delta"
+        ][6]
+        self.assertIn(step_two, related_reply["source_texts"])
         self.assertEqual(
             replies[7],
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",

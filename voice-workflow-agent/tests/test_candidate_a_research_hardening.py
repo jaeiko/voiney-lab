@@ -12,6 +12,7 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolSession,
     classify_curated_control_intent,
     load_curated_protocol_fixture,
+    normalize_scientific_request,
 )
 from voice_workflow_agent.document_store import ingest_manifest
 from voice_workflow_agent.external_references import plan_research_query
@@ -58,6 +59,95 @@ class CandidateAResearchRoutingTests(unittest.TestCase):
                     or "acetonitrile" in fact.text.casefold()
                     for fact in plan.facts
                 ))
+
+    def test_week_five_multi_entity_repair_preserves_order_and_audit_note(self):
+        key, entities, note, corrections = normalize_scientific_request(
+            "여기서 HPLC water하고 ANBI-C가 뭐야?"
+        )
+        self.assertEqual(entities, ("hplc_water", "ambic"))
+        self.assertIn("hplc water", key)
+        self.assertIn("ambic", key)
+        self.assertIn("ANBI-C".casefold(), corrections[0][0].casefold())
+        self.assertIn("문맥상 해석", note)
+        session = self.session(0)
+        plan = session.plan(
+            "여기서 HPLC water하고 ANBI-C가 뭐야?",
+            turn_id=90,
+            language="ko",
+        )
+        self.assertEqual(plan.requested_entities, ("hplc_water", "ambic"))
+        self.assertIn("HPLC water", plan.primary_text)
+        self.assertIn("AMBIC", plan.primary_text)
+        self.assertIn("관계", plan.primary_text)
+        self.assertNotIn("Catalog #", plan.display_text)
+        self.assertFalse(plan.state_changed)
+
+    def test_week_five_entity_visual_variants_are_first_class_read_only_intents(self):
+        cases = (
+            ("Jel Tug에 관해서 이미지를 보여줄 수 있어.", "gel_plug"),
+            ("제트 플러그와 관련해서 이미지를 보여줄 수 있어?", "gel_plug"),
+            ("젤 플러그 이미지를 보여줘.", "gel_plug"),
+            ("염색된 단백질 밴드가 어떤 걸 의미해? 혹시 그림을 보여줄 수 있어?", "stained_protein_band"),
+        )
+        for turn, (transcript, entity) in enumerate(cases, 100):
+            with self.subTest(transcript=transcript):
+                session = self.session(2 if entity == "gel_plug" else 0)
+                opening = session.current_index
+                plan = session.plan(transcript, turn_id=turn, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.VISUAL_REQUEST)
+                self.assertEqual(plan.requested_entities, (entity,))
+                self.assertTrue(plan.visual_requested)
+                self.assertTrue(plan.primary_text)
+                self.assertEqual(session.current_index, opening)
+
+    def test_week_five_completion_is_compositional_and_guarded(self):
+        mutating = (
+            "현재 단계를 완료했어.",
+            "지금 단계 끝났어.",
+            "이 단계 다 했어.",
+            "현재 단계 완료했으니 다음 단계 알려줘.",
+            "다음 단계로 안내해 줘. 현재 단계 완료했어.",
+        )
+        for turn, transcript in enumerate(mutating, 120):
+            with self.subTest(transcript=transcript):
+                session = self.session(1)
+                plan = session.plan(transcript, turn_id=turn, language="ko")
+                self.assertTrue(plan.reported_completion)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.current_index, 2)
+                self.assertEqual(session.plan(
+                    transcript, turn_id=turn, language="ko"
+                ), plan)
+                self.assertEqual(session.current_index, 2)
+        guarded = (
+            "완료 조건이 뭐야?",
+            "아직 완료하지 않았어.",
+            "이 단계를 완료했다고 가정하면 다음은 뭐야?",
+            '“현재 단계 완료했어”라고 말하면 돼?',
+            "다음 단계를 완료했다고 기록해 줘",
+        )
+        for turn, transcript in enumerate(guarded, 140):
+            with self.subTest(transcript=transcript):
+                session = self.session(1)
+                plan = session.plan(transcript, turn_id=turn, language="ko")
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.current_index, 1)
+        session = self.session(1)
+        repaired = session.plan("장기를 완료했어.", turn_id=160, language="ko")
+        self.assertEqual(repaired.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertIn("장기", repaired.transcript_correction_note)
+        self.assertEqual(session.current_index, 1)
+
+    def test_dynamic_stt_terms_are_bounded_and_protocol_relevant(self):
+        session = self.session(1)
+        terms = session.stt_keyterms()
+        for expected in (
+            "AMBIC", "HPLC water", "Solution A", "Solution B",
+            "acetonitrile", "gel plug", "현재 단계", "완료",
+        ):
+            self.assertIn(expected, terms)
+        self.assertLessEqual(len(terms), 24)
+        self.assertTrue(all(1 <= len(item) <= 50 for item in terms))
 
     def test_current_step_detail_is_useful_and_read_only(self):
         session = self.session(3)

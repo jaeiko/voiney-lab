@@ -4,6 +4,7 @@ import asyncio, hashlib, logging, math, os, secrets, sqlite3, tempfile, textwrap
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 import requests
@@ -355,9 +356,28 @@ def require_env(name:str)->str:
 def api_url(path:str)->str:
     return os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/" + path.lstrip("/")
 
-def transcribe(pcm:bytes)->Transcription:
+def transcribe(
+    pcm:bytes,
+    *,
+    language:str|None=None,
+    keyterms:tuple[str,...]=(),
+)->Transcription:
+    """Call documented batch STT fields while retaining optional extensions."""
+
+    if language not in {None,"ko","en","vi"}:
+        raise ValueError("STT language is invalid")
+    bounded_keyterms=tuple(dict.fromkeys(
+        value.strip() for value in keyterms
+        if isinstance(value,str) and 1<=len(value.strip())<=50
+    ))[:100]
+    multipart=[]
+    if language is not None:
+        multipart.append(("language",(None,language)))
+    multipart.extend(("keyterm",(None,value)) for value in bounded_keyterms)
+    # xAI documents that language/keyterm fields precede the uploaded file.
+    multipart.append(("file",("utterance.wav",pcm_to_wav(pcm),"audio/wav")))
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
-        files={"file":("utterance.wav",pcm_to_wav(pcm),"audio/wav")},timeout=120)
+        files=multipart,timeout=120)
     response.raise_for_status()
     payload=response.json()
     text=payload.get("text","")
@@ -1539,7 +1559,7 @@ async def _queue_curated_generated_visual(
 async def _queue_curated_web_visual(
     *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
     endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
-    settings:WebVisualSettings,
+    settings:WebVisualSettings,requested_entities:tuple[str,...]=(),
 ) -> None:
     fixture=curated.fixture
     step=fixture.steps[curated.current_index]
@@ -1569,9 +1589,12 @@ async def _queue_curated_web_visual(
                 base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
                 max_retries=0)
             query="\n".join((
-                "Find a real, authoritative image example relevant to this laboratory step.",
+                "Find a real, authoritative image example relevant to this laboratory request.",
                 f"Protocol: {fixture.title}",
                 f"Step {step.source_label}: {step.instruction_source_text}",
+                "Requested entities: " + (
+                    ", ".join(requested_entities) or "current step"
+                ),
                 "Do not treat the image as protocol evidence or an observed result.",
             ))
             result=await XaiAuthoritativeImageSearch(client,settings).search(query)
@@ -1785,8 +1808,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
     if accepted_transcription is None:
         started=clock()
+        stt_language=(
+            session.manual_language
+            if session.language_mode=="manual" else None
+        )
+        stt_keyterms=(
+            session.curated_protocol_session.stt_keyterms()
+            if session.curated_protocol_session is not None else ()
+        )
         transcription=await asyncio.to_thread(
-            transcribe,clean_path(source_pcm))
+            partial(
+                transcribe,clean_path(source_pcm),
+                language=stt_language,keyterms=stt_keyterms,
+            ))
         timings["stt"]=round((clock()-started)*1000)
     else:
         transcription=accepted_transcription
@@ -1947,7 +1981,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 transcript,turn_id=turn_id,language=turn_language,
                 transcript_quality=transcription_quality_issue(transcription))
             research_context=None
-            if plan.action is CuratedProtocolAction.RELATED_QUESTION and curated.active:
+            if (
+                plan.action is CuratedProtocolAction.RELATED_QUESTION
+                or (
+                    plan.action is CuratedProtocolAction.VISUAL_REQUEST
+                    and bool(plan.requested_entities)
+                )
+            ) and curated.active:
                 step=curated.fixture.steps[curated.current_index]
                 facts=plan.facts or curated.related_facts(transcript)
                 resolved_query=curated.reference_query_for(transcript,plan)
@@ -1959,50 +1999,33 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     step_text=step.instruction_source_text,
                     evidence_texts=tuple(fact.text for fact in facts),
                     requested_entity=plan.requested_entity,
+                    requested_entities=plan.requested_entities,
                     question_kind=plan.question_kind,
                     question_dimensions=plan.question_dimensions,
                 )
-                entity_label=(plan.requested_entity or "현재 단계").replace("_"," ")
-                local_lines="\n".join(
-                    f"- {fact.text} · 원문 p.{fact.source_page}"
-                    for fact in facts[:6]
+                envelope=curated.protocol_answer_envelope(
+                    replace(plan,facts=tuple(facts)),language=turn_language)
+                speech=envelope.speech_summary
+                display=(
+                    f"직접 답변\n{envelope.direct_answer}\n\n"
+                    "근거 경계\n활성 프로토콜의 확인된 내용이며, "
+                    "활성화된 경우에만 부족한 설명을 읽기 전용 참고자료에서 확인합니다."
+                    if turn_language=="ko" else
+                    f"Direct answer\n{envelope.direct_answer}\n\nSource boundary\n"
+                    "The active protocol remains authoritative; missing explanation is checked read-only."
                 )
-                if turn_language=="ko":
-                    if plan.question_kind=="safety":
-                        speech=(
-                            "활성 프로토콜의 현재 단계 동작은 먼저 화면에 표시했습니다. "
-                            "추가 안전 근거는 별도로 확인할게요."
-                        )
-                    else:
-                        speech=(
-                            f"활성 프로토콜에서 확인되는 {entity_label} 관련 내용을 "
-                            "먼저 화면에 표시했습니다. 부족한 설명은 권위 자료에서 확인할게요."
-                        )
-                    display=(
-                        "PDF/프로토콜 근거\n"
-                        f"{local_lines or '- 현재 단계에 직접 명시된 추가 사실이 없습니다.'}\n\n"
-                        "외부 근거 확인 중\n"
-                        "활성 프로토콜에 없는 요청 차원만 읽기 전용으로 확인합니다."
-                    )
-                else:
-                    speech=(
-                        "I have shown what the active protocol establishes first. "
-                        "I will check authoritative sources for the missing detail."
-                    )
-                    display=(
-                        "Protocol evidence\n"
-                        f"{local_lines or '- No additional direct fact is stated for this dimension.'}\n\n"
-                        "Authoritative evidence check pending"
-                    )
                 plan=replace(
                     plan,display_text=display,speech_text=speech,
                     speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
-                    facts=tuple(facts),primary_text=speech,
-                    source_texts=tuple(fact.text for fact in facts[:6]),
-                    source_pages=tuple(fact.source_page for fact in facts[:6]),
-                    evidence_ids=tuple(fact.fact_id for fact in facts[:6]),
+                    facts=tuple(facts),primary_text=envelope.direct_answer,
+                    source_texts=tuple(fact.text for fact in facts[:8]),
+                    source_pages=tuple(fact.source_page for fact in facts[:8]),
+                    evidence_ids=tuple(fact.fact_id for fact in facts[:8]),
                     translation_status="deterministic_protocol_structure",
                     answer_origin="current_protocol",
+                    source_plan_scopes=envelope.source_plan.scopes,
+                    unresolved_dimensions=(
+                        envelope.source_plan.unresolved_dimensions),
                 )
                 research_context={
                     "query":resolved_query,"reference_query":reference_query,
@@ -2158,7 +2181,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             retrieval_scores=list(plan.retrieval_scores),
             limitations=list(plan.limitations),
             transcript_correction_note=plan.transcript_correction_note,
-            question_dimensions=list(plan.question_dimensions))
+            transcript_corrections=[
+                {"from":observed,"to":canonical}
+                for observed,canonical in plan.transcript_corrections
+            ],
+            requested_entities=list(plan.requested_entities),
+            question_dimensions=list(plan.question_dimensions),
+            source_plan_scopes=list(plan.source_plan_scopes),
+            unresolved_dimensions=list(plan.unresolved_dimensions))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         await sender.segment(turn_id,0,frames,generation)
@@ -2185,6 +2215,51 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             intent_kind=plan.intent_kind,
             reported_completion=plan.reported_completion,
             requested_transition=plan.requested_transition)
+        # The primary display/audio contract is complete. Explicit visual work
+        # can now run alongside the independent evidence supplement instead of
+        # waiting behind it; both paths retain the same Turn/generation fence.
+        if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
+            existing_visual=curated.fixture.visual_for_step(curated.current_index)
+            if plan.visual_kind=="web_photo" and existing_visual is None:
+                web_visual_settings=session.web_visual_settings
+                if web_visual_settings.enabled:
+                    await _queue_curated_web_visual(
+                        session=session,sender=sender,turn_id=turn_id,
+                        generation=generation,endpoint=endpoint,clock=clock,
+                        curated=curated,settings=web_visual_settings,
+                        requested_entities=plan.requested_entities)
+                else:
+                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
+                    await current_text(
+                        "protocol.visual.state",turn_id=turn_id,
+                        protocol_id=fixture.protocol_id,step_id=step.step_id,
+                        source_document_hash=fixture.source_pdf_sha256,
+                        visual_job_id=hashlib.sha256(
+                            f"web-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                        ).hexdigest(),status="visual_failed",
+                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                        fallback="feature_disabled")
+            elif existing_visual is None:
+                visual_settings=session.generated_visual_settings
+                visual_spec=(
+                    _curated_visual_specification(curated)
+                    if visual_settings.enabled else None)
+                if visual_spec is not None:
+                    await _queue_curated_generated_visual(
+                        session=session,sender=sender,turn_id=turn_id,
+                        generation=generation,endpoint=endpoint,clock=clock,
+                        specification=visual_spec,settings=visual_settings)
+                else:
+                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
+                    await current_text(
+                        "protocol.visual.state",turn_id=turn_id,
+                        protocol_id=fixture.protocol_id,step_id=step.step_id,
+                        source_document_hash=fixture.source_pdf_sha256,
+                        visual_job_id=hashlib.sha256(
+                            f"generated-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                        ).hexdigest(),status="visual_failed",
+                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                        fallback="feature_disabled")
         if research_context is not None and session.is_current(turn_id,generation):
             research_plan=None
             context=research_context
@@ -2280,6 +2355,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     retrieval_backend=result.get("backend"),
                     match_count=len(result.get("matches",[])),
                     provider_request_id=result.get("provider_request_id"),
+                    streaming=bool(result.get("streaming",False)),
+                    provider_event_count=result.get("event_count",0),
+                    provider_tool_event_count=result.get("tool_event_count",0),
+                    first_provider_event_ms=result.get("first_event_ms"),
+                    first_provider_text_ms=result.get("first_text_ms"),
+                    provider_tool_started_ms=result.get("tool_started_ms"),
+                    provider_tool_ended_ms=result.get("tool_ended_ms"),
                 )
                 if result.get("status")=="success" and result.get("matches"):
                     research_plan=curated.apply_reference_answer(
@@ -2343,25 +2425,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         "The protocol evidence remains available, but the additional dimension could not be verified."
                     ),
                 )
-        if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
-            existing_visual=curated.fixture.visual_for_step(curated.current_index)
-            if plan.visual_kind=="web_photo" and existing_visual is None:
-                web_visual_settings=session.web_visual_settings
-                if web_visual_settings.enabled:
-                    await _queue_curated_web_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        curated=curated,settings=web_visual_settings)
-            elif existing_visual is None:
-                visual_settings=session.generated_visual_settings
-                visual_spec=(
-                    _curated_visual_specification(curated)
-                    if visual_settings.enabled else None)
-                if visual_spec is not None:
-                    await _queue_curated_generated_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        specification=visual_spec,settings=visual_settings)
         if session.is_current(turn_id,generation):
             session.history.commit([
                 {"role":"user","content":transcript},

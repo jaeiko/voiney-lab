@@ -49,6 +49,7 @@ def main() -> int:
     mutation_false_positives = 0
     double_transitions = 0
     entity_total = entity_correct = 0
+    multi_entity_total = multi_entity_correct = 0
     visual_total = visual_correct = 0
     audio_total = audio_correct = 0
     related_dead_ends = 0
@@ -84,6 +85,11 @@ def main() -> int:
             normalization_correct += int(
                 plan.requested_entity == expected
                 and plan.transcript_correction_note is not None
+            )
+        if expected := case.get("requested_entities"):
+            multi_entity_total += 1
+            multi_entity_correct += int(
+                plan.requested_entities == tuple(expected)
             )
         if case.get("prior_text"):
             followup_total += 1
@@ -129,6 +135,10 @@ def main() -> int:
         "scientific_term_normalization_accuracy": (
             normalization_correct / normalization_total
             if normalization_total else None
+        ),
+        "requested_entity_recall": (
+            multi_entity_correct / multi_entity_total
+            if multi_entity_total else None
         ),
         "contextual_followup_accuracy": (
             followup_correct / followup_total if followup_total else None

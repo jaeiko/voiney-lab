@@ -297,6 +297,31 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "timeout_total")
         self.assertEqual(responses.calls, 1)
 
+    async def test_stream_cleanup_cannot_defeat_the_terminal_budget(self):
+        class Stream:
+            def __aiter__(self): return self
+            async def __anext__(self):
+                await asyncio.sleep(10)
+            async def close(self):
+                await asyncio.sleep(10)
+        class Responses:
+            calls = 0
+            async def create(self, **_kwargs):
+                self.calls += 1
+                return Stream()
+        responses=Responses();started=asyncio.get_running_loop().time()
+        result=await XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=responses),
+            ExternalReferenceSettings(
+                True,("osha.gov",),"stream-timeout",
+                timeout_seconds=0.01,
+            ),
+        ).search("bounded stream cleanup",language="en")
+        elapsed=asyncio.get_running_loop().time()-started
+        self.assertEqual(result["status"],"timeout_total")
+        self.assertEqual(responses.calls,1)
+        self.assertLess(elapsed,0.5)
+
     async def test_external_adapter_accepts_server_usage_and_included_sources(self):
         url = "https://pubchem.ncbi.nlm.nih.gov/compound/7739"
         response = {
@@ -339,6 +364,63 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             endpoint.kwargs["timeout"].connect,
             adapter.settings.connect_timeout_seconds,
         )
+
+    async def test_external_adapter_consumes_stream_and_retains_safe_tool_timings(self):
+        url = "https://pubchem.ncbi.nlm.nih.gov/compound/7739"
+        final = {
+            "id": "stream-response-1",
+            "output_text": f"AMBIC is ammonium bicarbonate [[1]]({url}).",
+            "output": [
+                {"type": "web_search_call", "status": "completed"},
+                {"type": "message", "content": []},
+            ],
+            "citations": [url],
+            "usage": {"server_side_tool_usage": {"WEB_SEARCH": 1}},
+        }
+        class Stream:
+            def __init__(self):
+                self.closed = False
+                self.events = [
+                    SimpleNamespace(
+                        type="response.output_item.added",
+                        item=SimpleNamespace(type="web_search_call"),
+                    ),
+                    SimpleNamespace(type="response.output_text.delta"),
+                    SimpleNamespace(
+                        type="response.output_item.done",
+                        item=SimpleNamespace(type="web_search_call"),
+                    ),
+                    SimpleNamespace(type="response.completed", response=final),
+                ]
+            def __aiter__(self):
+                self.iterator = iter(self.events)
+                return self
+            async def __anext__(self):
+                try:
+                    return next(self.iterator)
+                except StopIteration:
+                    raise StopAsyncIteration
+            async def close(self):
+                self.closed = True
+        endpoint = SimpleNamespace()
+        async def create(**kwargs):
+            endpoint.kwargs = kwargs
+            endpoint.stream = Stream()
+            return endpoint.stream
+        endpoint.create = create
+        result = await XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=endpoint),
+            ExternalReferenceSettings(
+                True, ("pubchem.ncbi.nlm.nih.gov",), "stream-fake"
+            ),
+        ).search("unique streaming AMBIC query", language="ko")
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["streaming"])
+        self.assertEqual(result["event_count"], 4)
+        self.assertGreaterEqual(result["tool_event_count"], 2)
+        self.assertTrue(endpoint.kwargs["stream"])
+        self.assertEqual(endpoint.kwargs["max_output_tokens"], 800)
+        self.assertTrue(endpoint.stream.closed)
 
     async def test_external_adapter_distinguishes_tool_and_schema_failures(self):
         url = "https://www.osha.gov/laboratory"

@@ -13,7 +13,7 @@ import json
 import re
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -371,6 +371,7 @@ class CuratedProtocolTurnPlan:
     visual_requested: bool = False
     visual_kind: str | None = None
     requested_entity: str | None = None
+    requested_entities: tuple[str, ...] = ()
     question_kind: str | None = None
     reported_anomaly: bool = False
     anomaly_category: str | None = None
@@ -382,7 +383,10 @@ class CuratedProtocolTurnPlan:
     limitations: tuple[str, ...] = ()
     normalized_transcript: str | None = None
     transcript_correction_note: str | None = None
+    transcript_corrections: tuple[tuple[str, str], ...] = ()
     question_dimensions: tuple[str, ...] = ()
+    source_plan_scopes: tuple[str, ...] = ()
+    unresolved_dimensions: tuple[str, ...] = ()
 
     @property
     def response_text(self) -> str | None:
@@ -820,6 +824,7 @@ class CuratedControlIntent:
     requested_followup: str | None = None
     target_step: str | None = None
     requested_entity: str | None = None
+    requested_entities: tuple[str, ...] = ()
     resolved_entity: str | None = None
     question_kind: str | None = None
     detail_level: str = "concise"
@@ -836,8 +841,29 @@ class CuratedControlIntent:
     visual_kind: str | None = None
     normalized_transcript: str | None = None
     transcript_correction_note: str | None = None
+    transcript_corrections: tuple[tuple[str, str], ...] = ()
     question_dimensions: tuple[str, ...] = ()
     protocol_scope: str | None = None
+
+
+@dataclass(frozen=True)
+class SourcePlan:
+    """Claim-scope contract for one read-only protocol answer."""
+
+    scopes: tuple[str, ...]
+    unresolved_dimensions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AnswerEnvelope:
+    """Direct answer first; raw evidence remains supporting material."""
+
+    direct_answer: str
+    speech_summary: str
+    entity_sections: tuple[tuple[str, str], ...]
+    protocol_relevance: str
+    evidence_ids: tuple[str, ...]
+    source_plan: SourcePlan
 
 
 _COMPLETION_AND_NEXT_PATTERNS = (
@@ -865,6 +891,38 @@ _COMPLETION_ONLY_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:작업\s*)?(?:마쳤어|마쳤어요|마쳤습니다)$"),
     re.compile(r"^(?:i\s+)?completed\s+(?:the\s+)?current\s+step$"),
     re.compile(r"^(?:this|the\s+current)\s+step\s+is\s+(?:finished|complete)$"),
+)
+_COMPLETION_CLAIM = re.compile(
+    r"(?:"
+    r"(?:(?:현재|지금|이)\s*)?(?:단계|작업)(?:는|를|가)?\s*"
+    r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까)?|"
+    r"끝(?:났어|났어요|났습니다|냈어|냈어요)?|"
+    r"다\s*했어|다\s*했어요|마쳤어|마쳤어요|마쳤습니다)"
+    r"|(?:i\s+)?(?:completed|finished)\s+(?:this|the\s+current)\s+step"
+    r"|(?:this|the\s+current)\s+step\s+is\s+(?:complete|finished)"
+    r")"
+)
+_NEXT_STEP_REQUEST = re.compile(
+    r"(?:다음(?:\s*단계)?|next(?:\s+step|\s+one)|what\s+comes\s+next)"
+    r".*(?:안내|알려|넘어|진행|가자|show|tell|move|go|proceed)?"
+)
+_NON_MUTATING_COMPLETION = (
+    ("completion_criteria_question", re.compile(
+        r"(?:완료|끝)(?:\s*조건|하려면|이라는\s*건)|"
+        r"(?:condition|criteria).*(?:complete|finish)"
+    )),
+    ("negated_completion", re.compile(
+        r"(?:아직|안)\s*(?:완료|끝)|(?:완료|끝)(?:하지|내지)\s*않|"
+        r"(?:not|haven't|have\s+not)\s+(?:complete|finished|done)"
+    )),
+    ("quoted_completion", re.compile(
+        r"[“\"]?.*(?:완료|끝).*(?:라고\s*말|라고\s*하면|say)|"
+        r"다음\s*단계.*완료.*기록"
+    )),
+    ("hypothetical_completion", re.compile(
+        r"(?:완료|끝).*(?:가정|하면|했다고\s*치면)|"
+        r"(?:if|assuming).*(?:complete|finished)"
+    )),
 )
 _REPEAT_PATTERNS = (
     re.compile(r"(?:다시\s*(?:한\s*번)?\s*(?:말|설명|안내).*(?:해줘|해\s*줄래|해\s*주세요)?)"),
@@ -898,6 +956,9 @@ _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:이|현재)?\s*단계.*(?:그림|삽화|일러스트).*(?:설명|보여|그려)"),
     re.compile(r"(?:그림|삽화|일러스트).*(?:이|현재)?\s*단계"),
     re.compile(r"(?:illustrate|show\s+an?\s+illustration|draw).*(?:this|current)\s+step"),
+    re.compile(r"(?:이미지|사진|그림|삽화|시각\s*자료).*(?:보여|찾아|만들|설명)"),
+    re.compile(r"(?:보여|찾아|만들|설명).*(?:이미지|사진|그림|삽화|시각\s*자료)"),
+    re.compile(r"(?:show|find|make|generate).*(?:image|photo|illustration|visual)"),
 )
 _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:원본|실제|인터넷|웹).*(?:사진|이미지).*(?:보여|찾아)"),
@@ -909,6 +970,8 @@ _TERM_QUESTION_PATTERNS = (
     (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액"), "solution_a"),
     (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액"), "solution_b"),
     (re.compile(r"acetonitrile|아세토니트릴"), "acetonitrile"),
+    (re.compile(r"gel\s*plug|젤\s*플러그"), "gel_plug"),
+    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*밴드"), "stained_protein_band"),
 )
 _TERM_QUESTION_DIMENSIONS = frozenset({
     "뭐", "무엇", "물질", "성분", "구성", "차이", "왜", "역할", "준비",
@@ -943,7 +1006,7 @@ _UNRELIABLE_TRANSCRIPT_PATTERNS = (
     re.compile(r"^(?:yes,?\s+you\s+go|how\s+many\s+months\??\s*it\s+was\s+a\s+year)$"),
 )
 _NATURAL_STOP_PATTERNS = (
-    re.compile(r"^(?:프로토콜(?:을)?\s*)?(?:종료|중단)(?:해\s*줘|할게|할게요|하겠습니다)?$"),
+    re.compile(r"^(?:프로토콜(?:을)?\s*)?(?:종료|중단|중지)(?:해\s*줘|할게|할게요|하겠습니다)?$"),
     re.compile(r"^(?:여기서\s*)?(?:끝낼게|끝낼게요|그만할래|그만할게|그만할게요)$"),
     re.compile(r"^(?:please\s+)?stop(?:\s+the\s+protocol)?$"),
     re.compile(r"^(?:i(?:'|’)ll\s+)?stop\s+here$"),
@@ -995,7 +1058,10 @@ _NAVIGATION_PATTERNS = (
 
 
 def _scientific_entity_inventory(value: tuple[str, ...]) -> tuple[str, ...]:
-    defaults = ("ambic", "hplc water", "solution a", "solution b", "acetonitrile")
+    defaults = (
+        "ambic", "hplc water", "solution a", "solution b", "acetonitrile",
+        "gel plug", "stained protein band",
+    )
     return tuple(dict.fromkeys(value or defaults))
 
 
@@ -1013,12 +1079,14 @@ def _edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def normalize_scientific_query(
+def normalize_scientific_request(
     transcript: str,
     *,
     entity_inventory: tuple[str, ...] = (),
-) -> tuple[str, str | None, str | None]:
-    """Resolve only unique, bounded scientific entities; never numbers or A/B."""
+) -> tuple[
+    str, tuple[str, ...], str | None, tuple[tuple[str, str], ...]
+]:
+    """Resolve ordered known entities while preserving auditable corrections."""
 
     raw = _semantic_utterance_key(transcript)
     key = re.sub(
@@ -1026,9 +1094,32 @@ def normalize_scientific_query(
         lambda match: match.group(0).replace(" ", ""),
         raw,
     )
+    corrections: list[tuple[str, str]] = []
+
+    def repair(pattern: str, replacement: str, label: str) -> None:
+        nonlocal key
+        match = re.search(pattern, key)
+        if match is None:
+            return
+        observed = match.group(0)
+        key = re.sub(pattern, replacement, key)
+        if observed.casefold() != label.casefold():
+            corrections.append((observed, label))
+
+    repair(r"(?<![a-z0-9])anbi[-\s]*c?(?![a-z0-9])", "ambic", "AMBIC")
+    repair(r"(?<![a-z0-9])jel\s+tug(?![a-z0-9])", "gel plug", "gel plug")
+    repair(r"제트\s*플러그", "젤 플러그", "gel plug")
     key = re.sub(r"에이\s*엠\s*빅", "ambic", key)
     key = re.sub(r"솔루션\s*([ab])", r"solution \1", key)
-    key = re.sub(r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)", "hplc water", key)
+    hplc_spaced = re.search(
+        r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)", key
+    )
+    if hplc_spaced is not None:
+        corrections.append((hplc_spaced.group(0), "HPLC water"))
+        key = re.sub(
+            r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)",
+            "hplc water", key,
+        )
     inventory = _scientific_entity_inventory(entity_inventory)
     inventory_tokens = {
         token for entity in inventory for token in entity.split()
@@ -1049,19 +1140,42 @@ def normalize_scientific_query(
     if len(unique) == 1:
         observed, replacement = unique[0]
         key = re.sub(rf"(?<![a-z0-9]){re.escape(observed)}(?![a-z0-9])", replacement, key)
-        correction_note = f"현재 단계의 {replacement.upper()}을 말씀하신 것으로 이해했어요."
-    entity = next(
-        (name for pattern, name in _TERM_QUESTION_PATTERNS if pattern.search(key)),
-        None,
+        corrections.append((observed, replacement.upper()))
+    matches: list[tuple[int, str]] = []
+    for pattern, name in _TERM_QUESTION_PATTERNS:
+        for match in pattern.finditer(key):
+            matches.append((match.start(), name))
+    entities = tuple(dict.fromkeys(
+        name for _, name in sorted(matches, key=lambda item: item[0])
+    ))
+    labels = {
+        "ambic": "AMBIC", "hplc_water": "HPLC water",
+        "solution_a": "Solution A", "solution_b": "Solution B",
+        "acetonitrile": "acetonitrile", "gel_plug": "gel plug",
+        "stained_protein_band": "stained protein band",
+    }
+    if key != raw and not corrections and entities:
+        corrections.append((raw, labels[entities[0]]))
+    corrections = list(dict.fromkeys(corrections))
+    if corrections:
+        correction_note = " / ".join(
+            f'인식된 음성: “{observed}” · 문맥상 해석: “{label}”'
+            for observed, label in corrections
+        )
+    return key, entities, correction_note, tuple(corrections)
+
+
+def normalize_scientific_query(
+    transcript: str,
+    *,
+    entity_inventory: tuple[str, ...] = (),
+) -> tuple[str, str | None, str | None]:
+    """Backward-compatible single-entity view of normalized scientific input."""
+
+    key, entities, correction_note, _ = normalize_scientific_request(
+        transcript, entity_inventory=entity_inventory,
     )
-    if key != raw and correction_note is None and entity:
-        labels = {
-            "ambic": "AMBIC", "hplc_water": "HPLC water",
-            "solution_a": "Solution A", "solution_b": "Solution B",
-            "acetonitrile": "acetonitrile",
-        }
-        correction_note = f"현재 단계의 {labels[entity]}을 말씀하신 것으로 이해했어요."
-    return key, entity, correction_note
+    return key, (entities[0] if entities else None), correction_note
 
 
 def question_dimensions(value: str) -> tuple[str, ...]:
@@ -1088,13 +1202,19 @@ def classify_curated_control_intent(
     language: str,
     entity_inventory: tuple[str, ...] = (),
     recent_related_query: str | None = None,
+    completion_context: bool = False,
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
-    key, normalized_entity, correction_note = normalize_scientific_query(
+    key, normalized_entities, correction_note, corrections = (
+        normalize_scientific_request(
         transcript, entity_inventory=entity_inventory
+        )
     )
+    normalized_entity = normalized_entities[0] if normalized_entities else None
     dimensions = question_dimensions(key)
+    if len(normalized_entities) > 1 and "relationship" not in dimensions:
+        dimensions = (*dimensions, "relationship")
     if any(pattern.fullmatch(key) for pattern in _NATURAL_STOP_PATTERNS):
         return CuratedControlIntent(
             intent_kind="workflow_command", action=CuratedProtocolAction.STOP,
@@ -1137,6 +1257,70 @@ def classify_curated_control_intent(
             requested_followup="explain_step", target_step=label,
             detail_level="detailed", language=language,
             normalized_transcript=key,
+        )
+    non_mutating_completion = next(
+        (kind for kind, pattern in _NON_MUTATING_COMPLETION if pattern.search(key)),
+        None,
+    )
+    completion_claimed = bool(_COMPLETION_CLAIM.search(key))
+    next_requested = bool(_NEXT_STEP_REQUEST.search(key))
+    if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="ambiguous_completion",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            confidence=None,
+            confidence_source="deterministic_ambiguity",
+            requires_confirmation=True,
+            target_step="authoritative_current_step",
+            language=language,
+        )
+    if non_mutating_completion == "completion_criteria_question":
+        return CuratedControlIntent(
+            intent_kind=non_mutating_completion,
+            action=CuratedProtocolAction.FULL_DETAIL,
+            requested_followup="explain_completion_criteria",
+            target_step="authoritative_current_step",
+            detail_level="detailed",
+            language=language,
+            normalized_transcript=key,
+        )
+    if non_mutating_completion is not None:
+        return CuratedControlIntent(
+            intent_kind=non_mutating_completion,
+            action=CuratedProtocolAction.OFF_TOPIC,
+            language=language,
+            normalized_transcript=key,
+        )
+    if completion_claimed:
+        return CuratedControlIntent(
+            intent_kind=(
+                "completion_and_next" if next_requested else "report_completion"
+            ),
+            action=CuratedProtocolAction.NEXT,
+            reported_completion=True,
+            requested_transition="next",
+            requested_followup="describe_new_current_step",
+            target_step="authoritative_current_step",
+            language=language,
+            allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    if completion_context and re.fullmatch(
+        r"장기(?:를|가)?\s*완료(?:했어|했어요|했습니다)", key
+    ):
+        return CuratedControlIntent(
+            intent_kind="ambiguous_completion",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            target_step="authoritative_current_step",
+            confidence_source="bounded_contextual_repair",
+            requires_confirmation=True,
+            language=language,
+            normalized_transcript=key,
+            transcript_correction_note=(
+                '인식된 음성: “장기를 완료했어” · '
+                '문맥상 “현재 단계를 완료했어”인지 확인이 필요합니다.'
+            ),
+            transcript_corrections=(("장기", "현재 단계"),),
         )
     if any(pattern.search(key) for pattern in _NAVIGATION_PATTERNS):
         return CuratedControlIntent(
@@ -1202,16 +1386,6 @@ def classify_curated_control_intent(
                 detail_level="detailed",
                 language=language,
             )
-    if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
-        return CuratedControlIntent(
-            intent_kind="ambiguous_completion",
-            action=CuratedProtocolAction.CLARIFY_COMPLETION,
-            confidence=None,
-            confidence_source="deterministic_ambiguity",
-            requires_confirmation=True,
-            target_step="authoritative_current_step",
-            language=language,
-        )
     if any(pattern.search(key) for pattern in _EXPECTED_RESULT_PATTERNS):
         return CuratedControlIntent(
             intent_kind="expected_result_explanation",
@@ -1228,7 +1402,10 @@ def classify_curated_control_intent(
     ):
         visual_kind = (
             "web_photo"
-            if any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+            if (
+                any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+                or any(term in key for term in ("이미지", "사진", "photo", "image"))
+            )
             else "instructional_illustration"
         )
         return CuratedControlIntent(
@@ -1237,6 +1414,12 @@ def classify_curated_control_intent(
             target_step="authoritative_current_step",
             visual_requested=True,
             visual_kind=visual_kind,
+            requested_entity=normalized_entity,
+            requested_entities=normalized_entities,
+            resolved_entity=normalized_entity,
+            transcript_correction_note=correction_note,
+            transcript_corrections=corrections,
+            question_dimensions=dimensions,
             language=language,
         )
     if any(pattern.search(key) for pattern in _REPORT_REQUEST_PATTERNS):
@@ -1301,6 +1484,7 @@ def classify_curated_control_intent(
             action=CuratedProtocolAction.RELATED_QUESTION,
             target_step="authoritative_current_step",
             requested_entity=requested_entity,
+            requested_entities=normalized_entities,
             resolved_entity=requested_entity,
             question_kind=(
                 "safety"
@@ -1310,6 +1494,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
             transcript_correction_note=correction_note,
+            transcript_corrections=corrections,
             question_dimensions=dimensions,
         )
     if any(term in key for term in _PROTOCOL_RELATED_TERMS):
@@ -1905,12 +2090,35 @@ class CuratedProtocolSession:
             "solution a": ("solution a",),
             "solution b": ("solution b",),
             "acetonitrile": ("acetonitrile",),
+            "gel plug": ("gel plug",),
+            "stained protein band": ("stained protein band",),
         }
         present = [
             entity for entity, terms in aliases.items()
             if any(term in text for term in terms)
         ]
         return tuple(dict.fromkeys((*present, *self._recent_verified_entities)))
+
+    def stt_keyterms(self) -> tuple[str, ...]:
+        """Return a bounded provider vocabulary, never the full protocol text."""
+
+        labels = {
+            "ambic": "AMBIC",
+            "hplc water": "HPLC water",
+            "solution a": "Solution A",
+            "solution b": "Solution B",
+            "acetonitrile": "acetonitrile",
+            "gel plug": "gel plug",
+            "stained protein band": "stained protein band",
+        }
+        scientific = tuple(
+            labels[item] for item in self._entity_inventory() if item in labels
+        )
+        workflow = (
+            "단계", "현재 단계", "다음 단계", "완료",
+            "ammonium bicarbonate",
+        )
+        return tuple(dict.fromkeys((*scientific, *workflow)))[:24]
 
     def _localized_fact(self, step_id: str, fact_id: str) -> str | None:
         """Read optional presentation data without weakening fixture validation."""
@@ -2093,15 +2301,11 @@ class CuratedProtocolSession:
     def related_facts(self, transcript: str) -> tuple[CuratedProtocolFact, ...]:
         """Return uniquely identified current/adjacent facts relevant to research."""
 
-        key, _, _ = normalize_scientific_query(
+        key, entities, _, _ = normalize_scientific_request(
             transcript, entity_inventory=self._entity_inventory()
         )
-        entity = next(
-            (name for pattern, name in _TERM_QUESTION_PATTERNS if pattern.search(key)),
-            None,
-        )
         indexes = {self.current_index}
-        if entity is not None:
+        if entities:
             indexes.update({
                 index for index, step in enumerate(self.fixture.steps)
                 if step.source_label in {"1", "2", "3", "4", "5", "6", "7"}
@@ -2113,22 +2317,29 @@ class CuratedProtocolSession:
             )
         selected: list[CuratedProtocolFact] = []
         seen: set[tuple[str, str]] = set()
-        aliases = {
+        alias_map = {
             "ambic": ("ambic", "ammonium bicarbonate"),
             "hplc_water": ("hplc water",),
             "solution_a": ("solution a",),
             "solution_b": ("solution b",),
             "acetonitrile": ("acetonitrile",),
-        }.get(entity, ())
+            "gel_plug": ("gel plug", "plug of a stained protein band"),
+            "stained_protein_band": ("stained protein band", "gel band"),
+        }
+        aliases = tuple(
+            alias for entity in entities for alias in alias_map.get(entity, ())
+        )
         for index in sorted(indexes):
             step = self.fixture.steps[index]
             for fact in self.fixture.facts_for_step(index):
                 lowered = fact.text.casefold()
                 if (
-                    index != self.current_index
-                    and aliases
-                    and not any(alias in lowered for alias in aliases)
+                    aliases and not any(alias in lowered for alias in aliases)
                 ):
+                    continue
+                if entities and fact.kind in {"material", "equipment"}:
+                    # Product catalog rows are identity evidence, not a direct
+                    # conversational definition or workflow explanation.
                     continue
                 identity = (step.step_id, fact.fact_id)
                 if identity in seen:
@@ -2144,6 +2355,120 @@ class CuratedProtocolSession:
                     source_page=fact.source_page,
                 ))
         return tuple(selected[:24])
+
+    def protocol_answer_envelope(
+        self,
+        plan: CuratedProtocolTurnPlan,
+        *,
+        language: str,
+    ) -> AnswerEnvelope:
+        """Synthesize a direct local answer without expanding source authority."""
+
+        facts = plan.facts
+        evidence_ids = tuple(fact.fact_id for fact in facts[:8])
+        entities = plan.requested_entities or (
+            (plan.requested_entity,) if plan.requested_entity else ()
+        )
+        if language != "ko":
+            direct = (
+                "The active protocol facts relevant to your question are summarized "
+                "below. Missing explanatory dimensions may be checked separately "
+                "when an authoritative read-only source is available."
+            )
+            return AnswerEnvelope(
+                direct, direct, (), "The workflow state is unchanged.",
+                evidence_ids,
+                SourcePlan(("ACTIVE_PROTOCOL",), plan.question_dimensions),
+            )
+        sections: list[tuple[str, str]] = []
+        explanations = {
+            "ambic": (
+                "AMBIC",
+                "AMBIC는 이 프로토콜에서 ammonium bicarbonate를 가리키는 약칭입니다.",
+            ),
+            "hplc_water": (
+                "HPLC water",
+                "HPLC water는 이 프로토콜에서 25mM ammonium bicarbonate(AMBIC) 용액을 만드는 데 쓰이는 물입니다.",
+            ),
+            "solution_a": (
+                "Solution A",
+                "Solution A는 HPLC water로 만든 25mM AMBIC 2 parts와 acetonitrile 1 part를 섞은 세척 용액입니다.",
+            ),
+            "solution_b": (
+                "Solution B",
+                "Solution B는 HPLC water로 만든 25mM AMBIC 용액입니다.",
+            ),
+            "acetonitrile": (
+                "Acetonitrile",
+                "Acetonitrile은 이 프로토콜에서 Solution A에 1 part로 포함되는 성분입니다.",
+            ),
+            "gel_plug": (
+                "Gel plug",
+                "젤 플러그는 이 프로토콜에서 염색된 단백질 밴드에서 잘라 세척·배양하는 작은 젤 조각을 가리킵니다.",
+            ),
+            "stained_protein_band": (
+                "Stained protein band",
+                "염색된 단백질 밴드는 이 프로토콜에서 젤에서 잘라 작은 플러그나 조각으로 만드는 대상입니다.",
+            ),
+        }
+        for entity in entities:
+            if entity in explanations:
+                sections.append(explanations[entity])
+        relation = ""
+        if {"hplc_water", "ambic"}.issubset(entities):
+            relation = (
+                "이 프로토콜에서는 HPLC water에 AMBIC를 녹여 "
+                "Solution A와 B의 기본 용액을 만듭니다."
+            )
+        if plan.question_kind == "safety":
+            step = self.fixture.steps[self.current_index]
+            warnings = tuple(fact for fact in facts if fact.kind == "warning")
+            if warnings:
+                direct = (
+                    f"현재 {step.source_label}단계에는 활성 프로토콜에 명시된 "
+                    "주의사항이 있습니다. 해당 원문을 근거로 표시합니다. "
+                    "추가 지침은 승인되거나 권위 있는 근거가 확인된 경우에만 분리해 안내합니다."
+                )
+            else:
+                direct = (
+                    f"활성 프로토콜의 {step.source_label}단계에는 추가 안전수칙이 "
+                    "직접 명시되어 있지 않습니다. 추가 지침은 현재 단계의 재료와 "
+                    "동작에 맞는 승인 자료나 권위 자료가 확인된 경우에만 분리해 안내합니다."
+                )
+            speech = direct
+        elif sections:
+            direct = "\n".join(f"• {label}: {text}" for label, text in sections)
+            if relation:
+                direct += f"\n\n관계\n{relation}"
+            speech = " ".join(text for _, text in sections[:2])
+            if relation and len(sections) <= 2:
+                speech += " " + relation
+        else:
+            step = self.fixture.steps[self.current_index]
+            localized = self._localized_fact(step.step_id, "current_step")
+            direct = (
+                f"현재 {step.source_label}단계에서 프로토콜이 명시한 내용은 "
+                f"다음과 같습니다: {localized or step.instruction_source_text}"
+            )
+            speech = (
+                f"활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. "
+                "추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다."
+            )
+        unresolved = tuple(dict.fromkeys(
+            dimension for dimension in plan.question_dimensions
+            if dimension in {"definition", "role", "difference", "safety"}
+        ))
+        scopes = ["ACTIVE_PROTOCOL"]
+        if unresolved:
+            scopes.extend(("APPROVED_REFERENCE", "AUTHORITATIVE_EXTERNAL_EXPLANATION"))
+        return AnswerEnvelope(
+            direct_answer=direct,
+            speech_summary=speech,
+            entity_sections=tuple(sections),
+            protocol_relevance=relation,
+            evidence_ids=evidence_ids,
+            source_plan=SourcePlan(tuple(scopes), unresolved),
+        )
 
     def state(self, *, spoken_summary: str | None = None) -> dict[str, object]:
         steps = self.fixture.steps
@@ -2263,6 +2588,7 @@ class CuratedProtocolSession:
             language=language,
             entity_inventory=self._entity_inventory(),
             recent_related_query=self._last_related_query,
+            completion_context=self.active,
         )
         if (
             transcript_quality is not None
@@ -2763,7 +3089,11 @@ class CuratedProtocolSession:
                 display_text=response,
                 speech_text=control_text,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                facts=self.fixture.facts_for_step(self.current_index),
+                facts=(
+                    self.related_facts(transcript)
+                    if intent.requested_entities else
+                    self.fixture.facts_for_step(self.current_index)
+                ),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
                 state_changed=False,
@@ -2776,7 +3106,36 @@ class CuratedProtocolSession:
                 target_step=intent.target_step,
                 visual_requested=True,
                 visual_kind=intent.visual_kind,
+                requested_entity=intent.requested_entity,
+                requested_entities=intent.requested_entities,
+                normalized_transcript=intent.normalized_transcript,
+                transcript_correction_note=intent.transcript_correction_note,
+                transcript_corrections=intent.transcript_corrections,
+                question_dimensions=intent.question_dimensions,
             )
+            if intent.requested_entities:
+                envelope=self.protocol_answer_envelope(plan,language=language)
+                visual_status=(
+                    "검증된 원본 시각 자료를 함께 표시합니다."
+                    if source_visual is not None else
+                    "요청하신 시각 자료를 별도로 확인합니다."
+                )
+                plan=replace(
+                    plan,
+                    display_text=(
+                        f"직접 답변\n{envelope.direct_answer}\n\n"
+                        f"시각 자료\n{visual_status}"
+                    ),
+                    speech_text=envelope.speech_summary,
+                    speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                    primary_text=envelope.direct_answer,
+                    source_texts=tuple(fact.text for fact in plan.facts[:8]),
+                    source_pages=tuple(fact.source_page for fact in plan.facts[:8]),
+                    evidence_ids=tuple(fact.fact_id for fact in plan.facts[:8]),
+                    source_plan_scopes=envelope.source_plan.scopes,
+                    unresolved_dimensions=(
+                        envelope.source_plan.unresolved_dimensions),
+                )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
             response = {
@@ -2805,6 +3164,9 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
                 target_step=intent.target_step,
                 intent_confidence=intent.confidence,
+                normalized_transcript=intent.normalized_transcript,
+                transcript_correction_note=intent.transcript_correction_note,
+                transcript_corrections=intent.transcript_corrections,
             )
         elif self._needs_solution_clarification(transcript):
             step = steps[self.current_index]
@@ -2979,11 +3341,38 @@ class CuratedProtocolSession:
                 target_step=intent.target_step,answer_origin="unsupported",
                 requested_followup=intent.requested_followup,
                 requested_entity=intent.requested_entity,
+                requested_entities=intent.requested_entities,
                 question_kind=intent.question_kind,
                 normalized_transcript=intent.normalized_transcript,
                 transcript_correction_note=intent.transcript_correction_note,
+                transcript_corrections=intent.transcript_corrections,
                 question_dimensions=intent.question_dimensions,
             )
+            if (
+                command is CuratedProtocolAction.RELATED_QUESTION
+                and plan.facts
+                and not missing_followup_query
+            ):
+                envelope=self.protocol_answer_envelope(plan,language=language)
+                plan=replace(
+                    plan,
+                    display_text=(
+                        f"직접 답변\n{envelope.direct_answer}\n\n"
+                        "근거 경계\n활성 프로토콜의 확인된 내용입니다."
+                        if language=="ko" else envelope.direct_answer
+                    ),
+                    speech_text=envelope.speech_summary,
+                    speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                    primary_text=envelope.direct_answer,
+                    source_texts=tuple(fact.text for fact in plan.facts[:8]),
+                    source_pages=tuple(fact.source_page for fact in plan.facts[:8]),
+                    evidence_ids=tuple(fact.fact_id for fact in plan.facts[:8]),
+                    translation_status="deterministic_protocol_structure",
+                    answer_origin="current_protocol",
+                    source_plan_scopes=envelope.source_plan.scopes,
+                    unresolved_dimensions=(
+                        envelope.source_plan.unresolved_dimensions),
+                )
         if opening_projection != (
             self.active,
             self.current_index,
@@ -2993,7 +3382,10 @@ class CuratedProtocolSession:
         self._replay[turn_id] = plan
         for fact in plan.facts:
             lowered = fact.text.casefold()
-            for entity in ("solution a", "solution b", "ambic", "acetonitrile"):
+            for entity in (
+                "solution a", "solution b", "ambic", "acetonitrile",
+                "gel plug", "stained protein band",
+            ):
                 if entity in lowered and entity not in self._recent_verified_entities:
                     self._recent_verified_entities.append(entity)
         self._recent_verified_entities = self._recent_verified_entities[-8:]
@@ -3066,9 +3458,11 @@ class CuratedProtocolSession:
             translation_status="grounded_model",
             intent_kind=opening.intent_kind,
             requested_entity=opening.requested_entity,
+            requested_entities=opening.requested_entities,
             question_kind=opening.question_kind,
             normalized_transcript=opening.normalized_transcript,
             transcript_correction_note=opening.transcript_correction_note,
+            transcript_corrections=opening.transcript_corrections,
             question_dimensions=opening.question_dimensions,
         )
         self._replay[turn_id] = plan
@@ -3091,7 +3485,10 @@ class CuratedProtocolSession:
         opening = self._replay.get(turn_id)
         if (
             opening is None
-            or opening.action is not CuratedProtocolAction.RELATED_QUESTION
+            or opening.action not in {
+                CuratedProtocolAction.RELATED_QUESTION,
+                CuratedProtocolAction.VISUAL_REQUEST,
+            }
             or origin not in {
                 "approved_lab_corpus", "external_authoritative_reference"
             }
@@ -3191,9 +3588,11 @@ class CuratedProtocolSession:
             retrieval_scores=retrieval_scores,
             limitations=limitations,
             requested_entity=opening.requested_entity,
+            requested_entities=opening.requested_entities,
             question_kind=opening.question_kind,
             normalized_transcript=opening.normalized_transcript,
             transcript_correction_note=opening.transcript_correction_note,
+            transcript_corrections=opening.transcript_corrections,
             question_dimensions=opening.question_dimensions,
         )
         self._replay[turn_id] = plan

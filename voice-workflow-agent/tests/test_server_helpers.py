@@ -921,6 +921,25 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result.alternatives,())
         self.assertTrue(post.call_args.args[0].endswith("/stt"))
 
+        with patch(
+            "voice_workflow_agent.server.requests.post",
+            return_value=FakeResponse(),
+        ) as biased_post,patch.dict(
+            "os.environ",{"XAI_API_KEY":"test"},clear=True,
+        ):
+            transcribe(
+                b"\0\0",language="ko",
+                keyterms=("AMBIC","HPLC water","AMBIC","x"*51),
+            )
+        parts=biased_post.call_args.kwargs["files"]
+        self.assertEqual(
+            [(name,value[1] if value[0] is None else value[0])
+             for name,value in parts[:-1]],
+            [("language","ko"),("keyterm","AMBIC"),
+             ("keyterm","HPLC water")],
+        )
+        self.assertEqual(parts[-1][0],"file")
+
         quality_response=FakeResponse()
         quality_response.json=lambda:{
             "text":" uncertain ","language":"Korean","confidence":0.2,

@@ -8,7 +8,9 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from voice_workflow_agent.external_references import (
@@ -29,6 +31,7 @@ def configured_api_key() -> str:
 
 
 async def main() -> int:
+    load_dotenv(Path.cwd() / ".env", override=False)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--live", action="store_true",
@@ -36,7 +39,7 @@ async def main() -> int:
     )
     parser.add_argument(
         "--query-profile",
-        choices=("ambic", "hplc-water"),
+        choices=("ambic", "hplc-water", "solution-a-role", "step-safety"),
         default="ambic",
         help="select one predefined, non-secret Candidate A research diagnostic",
     )
@@ -44,6 +47,14 @@ async def main() -> int:
     queries = {
         "ambic": "ammonium bicarbonate AMBIC definition in-gel digestion proteomics",
         "hplc-water": "HPLC-grade water definition analytical chemistry impurities",
+        "solution-a-role": (
+            "acetonitrile and ammonium bicarbonate purpose during in-gel "
+            "protein-band washing and destaining"
+        ),
+        "step-safety": (
+            "acetonitrile ammonium bicarbonate gel-band solution handling "
+            "laboratory safety PPE ventilation official guidance"
+        ),
     }
     settings = ExternalReferenceSettings.from_environment()
     output: dict[str, object] = {
@@ -80,12 +91,28 @@ async def main() -> int:
         "http_status": result.get("http_status"),
         "attempt_count": result.get("attempt_count", 1),
         "tool_usage_count": result.get("tool_usage_count", 0),
+        "streaming": result.get("streaming", False),
+        "provider_event_count": result.get("event_count", 0),
+        "provider_tool_event_count": result.get("tool_event_count", 0),
+        "first_event_ms": result.get("first_event_ms"),
+        "first_text_ms": result.get("first_text_ms"),
+        "tool_started_ms": result.get("tool_started_ms"),
+        "tool_ended_ms": result.get("tool_ended_ms"),
         "citation_domains": result.get("admitted_domains", []),
         "citation_count": len(result.get("matches", [])),
         "admitted": result.get("status") == "success",
         "provider_request_id": result.get("provider_request_id"),
     })
-    print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+    pending = [
+        task for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and not task.done()
+    ]
+    output["pending_task_count"] = len(pending)
+    output["pending_task_types"] = sorted({
+        getattr(task.get_coro(), "__qualname__", type(task.get_coro()).__name__)
+        for task in pending
+    })
+    print(json.dumps(output, ensure_ascii=False, sort_keys=True), flush=True)
     return 0 if result.get("status") == "success" else 3
 
 
