@@ -100,9 +100,11 @@ system anomaly, stop, and finalization events use stable idempotency keys.
 Accepted state changes are persisted before TTS; a completed event names the
 pre-transition step and carries `completion_source=user_command`. Stop finalizes
 the draft as stopped; it never means successful procedure completion. Steps 7,
-9, and 20 remain blockers. JSON, Markdown, and UTF-8 CSV are read-only same-origin
-exports. Runtime databases and report instances are ignored and must never be
-committed.
+9, and 20 remain blocked on a bare completion claim; an immediate explicit
+user report of their source-defined visible endpoint is recorded before the
+single validated transition. JSON, Markdown, and UTF-8 CSV are read-only
+same-origin exports. Runtime databases and report instances are ignored and
+must never be committed.
 
 The older `create_safety_report` handoff Tool remains a distinct explicit safety
 workflow for its existing callers. Experiment-report persistence, exports,
@@ -172,9 +174,26 @@ wait for playback to finish, and never retry inside a measured run.
 | `전체 안전수칙을 알려줘` | `curated_protocol` | protocol structure | explicit warnings plus precise limitation |
 | `12단계 설명해 줘` | `curated_protocol` | exact step lookup | Step 12 displayed; current step unchanged |
 
-At Steps 7, 9, and 20, repeat the compound-next phrase and verify a blocked
-response, no completion assertion, and no index change. A clearer paraphrase is a
-test input, never permission to resolve those execution controls.
+At Steps 7, 9, and 20, repeat the compound-next phrase. Verify that a bare claim
+does not complete the step and that the agent asks for the exact visible source
+endpoint. Reply once with both a positive and negative controlled observation:
+
+- Step 7 positive: `젤이 완전히 탈색되어 투명해요`; negative:
+  `아직 색이 남아 있어요`.
+- Steps 9 and 20 positive: `젤이 흰색으로 변했고 탈수됐어요`; negative:
+  `아직 투명해요`.
+
+Verify the positive report is persisted before a single transition and that the
+negative report keeps the step current. A model, source image, or generated
+visual must never supply this observation. Also allow the pending question to
+expire and verify a late reply cannot advance a later Turn.
+
+Before the session, verify the browser sends `client.audio_ready` only after its
+playback context is running. The one greeting must name the selected protocol,
+be audible and interruptible, appear once without duplicated text, and not replay
+after reconnect/resume. For an STT-correction run, operators may explicitly
+enable the bounded diagnostic mode from `.env.example`; confirm audio/JSON pairs
+stay under the ignored `data/runtime` directory and delete them after review.
 
 For every turn retain a sanitized record with: audio asset ID (not raw audio),
 normalized transcript, detected language, route, operation, step before/after,
@@ -393,9 +412,10 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `종료 조건이 뭐야?` | a read-only question, never a stop command |
 | `Cough.` / `[throat clearing]` / `keyboard` | `speech.rejected`; no normal Turn, TTS, research, mutation, or report event |
 
-For Steps 7, 9, and 20, completion language must still return the existing
-fail-closed execution-control reason. Neither an explanation, source crop,
-external result, nor generated image can approve those boundaries.
+For Steps 7, 9, and 20, bare completion language must ask for the exact visible
+endpoint and perform zero mutation. Only the user's immediate compatible report
+can satisfy that server gate. Neither an explanation, source crop, external
+result, generated image, nor model output can approve those boundaries.
 
 For a research Turn, verify one terminal status is visible even on failure.
 While it is running, start a newer meaningful Turn: the older Turn must change
@@ -513,7 +533,9 @@ exercised with a real microphone and audible browser output:
    reconnect/resume the same logical session and confirm it does not replay.
 2. `다음 단계로 안내해 줘.` creates no mutation, then `네, 완료했어요.`
    persists once, speaks the verified record acknowledgment first, and
-   transitions exactly once. Repeat with `아니요, 아직 안 했어요.`.
+   transitions exactly once. Repeat with `다음 단계로 이동할게`, `옮겨`,
+   `let's continue`, and `아니요, 아직 안 했어요.`. The progression forms
+   may inherit completion meaning only while that one-Turn gate is owned.
 3. `What is the next step?` gives an English Step N+1 preview with zero
    mutation; `What is the current step?` gives the English current step.
 4. `완료 조건이 뭐야?` explains required/satisfied/missing or explicitly
@@ -530,8 +552,10 @@ exercised with a real microphone and audible browser output:
 9. Start enrichment, then say `아니, 그건 됐고 현재 단계 다시 알려줘.`
    Confirm the local answer/TTS was prompt and the old result is superseded once
    and cannot revive.
-10. At Step 7 attempt completion. Confirm the response names the unsupported
-    observation/completion signal and Steps 7, 9, and 20 remain fail-closed.
+10. At Steps 7, 9, and 20 attempt bare completion. Confirm the agent asks for
+    the exact source endpoint and does not move. Reply with one controlled
+    positive and one negative observation; only the immediate positive report
+    may be persisted and transition exactly once.
 11. Ask `HPLC water와 일반 물의 차이를 설명하고 관련 그림도 보여줘.`
     Confirm Answer+Source+Visual diagnostics, one text/TTS owner, Visual-panel
     image ownership, and zero state mutation.

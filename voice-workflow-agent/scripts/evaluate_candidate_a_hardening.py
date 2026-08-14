@@ -58,6 +58,7 @@ def main() -> int:
     normalization_total = normalization_correct = 0
     followup_total = followup_correct = 0
     confirmation_total = confirmation_correct = 0
+    observation_confirmation_total = observation_confirmation_correct = 0
     brain_total = brain_correct = 0
     latencies: list[float] = []
     results = []
@@ -116,6 +117,12 @@ def main() -> int:
             confirmation_correct += int(
                 (session.pending_completion_confirmation is not None)
                 == case["pending_confirmation"]
+            )
+        if "pending_observation" in case:
+            observation_confirmation_total += 1
+            observation_confirmation_correct += int(
+                (session.pending_observation_confirmation is not None)
+                == case["pending_observation"]
             )
         if "brains" in case:
             brain_total += 1
@@ -177,6 +184,10 @@ def main() -> int:
         "completion_confirmation_state_accuracy": (
             confirmation_correct / confirmation_total
             if confirmation_total else None
+        ),
+        "observation_confirmation_state_accuracy": (
+            observation_confirmation_correct / observation_confirmation_total
+            if observation_confirmation_total else None
         ),
         "brain_activation_accuracy": (
             brain_correct / brain_total if brain_total else None

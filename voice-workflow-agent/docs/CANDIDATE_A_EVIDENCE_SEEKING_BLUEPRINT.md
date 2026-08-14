@@ -142,8 +142,10 @@ authoritative workflow runtime; Native is comparison-only.
 ## Failure boundary
 
 No LLM, retrieved document, webpage, image, replay button, or UI event can
-advance, stop, reset, approve an observation, or resolve Steps 7, 9, or 20.
-Provider-disabled paths must remain useful and truthful without pretending a
+advance, stop, reset, or approve an observation. Steps 7, 9, and 20 remain
+blocked on a bare completion claim; only the user's immediate explicit report
+of the source-defined visible endpoint can pass the server-owned observation
+gate. Provider-disabled paths remain useful and truthful without pretending a
 search or image call occurred.
 
 ## Week 5 direct-answer and interpretation contract
@@ -193,6 +195,39 @@ The evaluator dataset contains the exact Week 5 real-voice transcripts and
 forbidden mutation outcomes. Automated execution uses provider fakes and must
 report zero paid calls. Live Acceptance remains a separate, bounded operator
 step using the documented domain profile and budgets.
+
+## Final real-voice source and observation gates
+
+- Batch STT now uses the documented xAI multipart contract: `format=true`, an
+  explicit manual language when selected, repeated protocol-wide `keyterm`
+  fields, and the audio file last. The bounded list covers Candidate A terms
+  from the full protocol and workflow phrases but contains no operating
+  numbers. Undocumented confidence/alternative fields are not treated as
+  Provider facts.
+- Optional WAV diagnostics are consent-gated and disabled by default. If an
+  operator enables them, audio plus sanitized request/route metadata is kept
+  only below `data/runtime`, oldest pairs are removed at the configured cap,
+  and credentials/headers/Provider bodies are never written.
+- A read-only `ProtocolKnowledgeView` projects the exact PDF-wide purpose,
+  prerequisites, materials, equipment, safety warning, and section structure.
+  It supplies conversational overview answers without making those views a
+  second execution authority.
+- Step 3 keeps `500 µL` and `15 minutes at 37°C with gentle agitation at
+  800 rpm` as the primary instruction. Its approximate `1000 µL` extremely
+  stained-gel note and Thermomixer/room-temperature option are visibly labelled
+  `SOURCE_APPROVED_ALTERNATIVE`; neither is inferred or silently substituted.
+- Steps 7, 9, and 20 remain fail closed on a bare completion claim. The server
+  asks for the exact source-defined visible endpoint. An immediate, compatible
+  user report (Step 7 fully destained/transparent; Steps 9/20 white or whitish
+  and dehydrated) may satisfy the gate through the existing idempotent
+  report-and-transition transaction. A negative, stale, wrong-step, or
+  mismatched response records no completion and advances zero steps. This is a
+  user-reported observation, never machine vision or LLM approval.
+- The proactive greeting is not emitted merely on WebSocket readiness. The
+  browser must first acknowledge a running playback `AudioContext` using the
+  accepted configuration and server generation; duplicates, reconnects, and
+  stale readiness messages cannot replay it. The greeting names the selected
+  protocol and shares one interruptible Turn/audio owner.
 
 ## 2026-08-13 authority and terminal-state refinement
 
@@ -270,9 +305,12 @@ the local implementation before this pass:
 - Report acknowledgment was composed after next-step prose. It is now a
   mandatory server fact created only after existing report persistence succeeds
   and precedes the committed next-step introduction.
-- Step 7 (and Step 9) has an observed repeat-until endpoint but no supported
-  server completion signal. Step 20 retains unresolved source ambiguity. The
-  implementation explains these constraints and does not invent a gate.
+- Steps 7 and 9 have explicit observed repeat-until endpoints, and Step 20 has
+  an explicit visible dehydration endpoint alongside an unresolved repeat-range
+  ambiguity. A bare completion claim now opens a one-Turn, step/revision-bound
+  observation gate. Only the user's compatible positive endpoint report can
+  enter the existing atomic report/transition path; negative or stale reports
+  cannot advance. The model and visual paths never supply the observation.
 - Optional research had a provider deadline but no separate visible enrichment
   budget. A short Turn-owned budget now changes the UI to truthful bounded
   background status; the operation still has one hard terminal result.
@@ -323,14 +361,16 @@ Offline tests prove three-way overlap with a barrier, conditional activation,
 strict output rejection, a non-cancelling primary budget, cancellation, and
 zero external calls. Live model quality and Mac/Whale audio remain separate.
 
-The bounded 2026-08-14 live schema check started exactly three text-only
-OpenAI-compatible chat-completions requests (one per role; no tools, image,
-audio, or workflow operation). The client produced no public terminal before
-the harness was externally stopped at 615.3 seconds. This did **not** verify a
-live role output. It exposed that `asyncio.wait_for()` could wait indefinitely
-for transport cancellation cleanup. The orchestration now passes an explicit
-per-request SDK timeout and uses a non-waiting public deadline that cancels and
-collects late transport cleanup. A cancellation-resistant offline regression
-proves the public terminal returns within its configured budget. No further
-live call was made because the authorized three-request ceiling was exhausted;
-live Provider cleanup remains a manual/operator recheck.
+The bounded 2026-08-14 comparison used eight text-only OpenAI-compatible
+chat-completions requests total—no tools, search, image, audio, or workflow
+operation. Three current `grok-4.6` role calls reached their public timeouts.
+An initial three-role candidate probe consumed three requests, but its runner
+output was not retained and therefore is counted without being treated as
+verification evidence. The final two captured requests used the discovered
+`grok-4.20-0309-non-reasoning` candidate: concurrent typed Answer and Source
+results returned in 5.628 seconds, but the Answer attributed unsupported
+water-purity claims to the Step 2 recipe.
+The server now rejects every Answer output while its deterministic SourcePlan
+has unresolved claim dimensions, preserves the local answer, and waits for
+admitted retrieval instead. Schema validity alone is never evidence. These
+measurements do not verify live authoritative search or microphone/TTS quality.

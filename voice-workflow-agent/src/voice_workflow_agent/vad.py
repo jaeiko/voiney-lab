@@ -118,6 +118,7 @@ class EndpointResult:
     forced: bool = False
     voiced_frames: int = 0
     total_frames: int = 0
+    prefix_frames_retained: int = 0
     rejection_reason: str | None = None
 
 
@@ -146,6 +147,7 @@ class EndpointDetector:
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
         self._committed = False
+        self._prefix_frames_retained = 0
 
     @property
     def buffered_frames(self) -> int:
@@ -161,6 +163,7 @@ class EndpointDetector:
         self.voiced_frames = 0
         self.consecutive_silence_frames = 0
         self._committed = False
+        self._prefix_frames_retained = 0
 
     def process(self, frame: bytes) -> EndpointResult:
         if len(frame) != FRAME_BYTES:
@@ -176,6 +179,7 @@ class EndpointDetector:
                     and sum(self._onset) >= self.onset_voiced_frames):
                 self.state = TurnState.USER_SPEAKING
                 self._utterance = list(self._prefix)
+                self._prefix_frames_retained = len(self._utterance)
                 self.voiced_frames = sum(flag for _, flag in self._utterance)
                 self.consecutive_silence_frames = self._trailing_silence()
                 self._prefix.clear()
@@ -184,7 +188,8 @@ class EndpointDetector:
                 self._resume_voiced_frames=0
                 log.info("speech.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
                 return EndpointResult(speech_started=True, voiced_frames=self.voiced_frames,
-                                      total_frames=len(self._utterance))
+                                      total_frames=len(self._utterance),
+                                      prefix_frames_retained=self._prefix_frames_retained)
             return EndpointResult()
 
         self._utterance.append((frame, voiced))
@@ -247,6 +252,8 @@ class EndpointDetector:
             forced=forced,
             voiced_frames=self.voiced_frames,
             total_frames=len(kept),
+            prefix_frames_retained=min(
+                self._prefix_frames_retained,len(kept)),
             rejection_reason="minimum_voiced_frames"
             if self.voiced_frames < self.config.minimum_voiced_frames else None,
         )

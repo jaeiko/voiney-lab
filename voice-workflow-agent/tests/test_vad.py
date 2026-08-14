@@ -87,9 +87,11 @@ class EndpointDetectorTests(unittest.TestCase):
         detector = EndpointDetector(classifier=Decisions(decisions))
         results = feed(detector, [frame(i) for i in range(len(decisions))])
         utterance = next(result.utterance for result in results if result.utterance is not None)
+        commit = next(result for result in results if result.utterance is not None)
         chunks = [utterance[i:i + FRAME_BYTES] for i in range(0, len(utterance), FRAME_BYTES)]
         self.assertEqual(chunks, [frame(i) for i in range(23)])
         self.assertEqual(len(chunks), len(set(chunks)))
+        self.assertEqual(commit.prefix_frames_retained, 14)
 
     def test_grace_period_resume_is_qualified_and_preserves_audio_once(self):
         config = VadConfig(

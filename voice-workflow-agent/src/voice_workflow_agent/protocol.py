@@ -86,6 +86,23 @@ def parse_control(raw: str) -> dict[str, Any]:
             "requested":{name:requested[name] for name in sorted(names)},
             "actual":{name:actual[name] for name in sorted(names)},
         }
+    if message["type"]=="client.audio_ready":
+        configuration_id=message.get("configuration_id")
+        generation=message.get("generation")
+        state=message.get("audio_context_state")
+        sample_rate=message.get("sample_rate")
+        if (not isinstance(configuration_id,int) or isinstance(configuration_id,bool)
+                or configuration_id<=0 or
+                not isinstance(generation,int) or isinstance(generation,bool)
+                or generation<0 or state!="running" or
+                not isinstance(sample_rate,int) or isinstance(sample_rate,bool)
+                or sample_rate<=0):
+            raise ProtocolError("client.audio_ready metadata is invalid")
+        return {
+            "type":"client.audio_ready","configuration_id":configuration_id,
+            "generation":generation,"audio_context_state":state,
+            "sample_rate":sample_rate,
+        }
     if message["type"]=="native.playback.truncate":
         response_id=message.get("response_id")
         item_id=message.get("item_id")

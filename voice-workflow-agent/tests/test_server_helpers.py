@@ -935,7 +935,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(
             [(name,value[1] if value[0] is None else value[0])
              for name,value in parts[:-1]],
-            [("language","ko"),("keyterm","AMBIC"),
+            [("format","true"),("language","ko"),("keyterm","AMBIC"),
              ("keyterm","HPLC water")],
         )
         self.assertEqual(parts[-1][0],"file")
@@ -951,9 +951,9 @@ class ServerTests(unittest.TestCase):
             return_value=quality_response,
         ),patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
             quality=transcribe(b"\0\0")
-        self.assertEqual(quality.confidence,0.2)
-        self.assertEqual(quality.no_speech_probability,0.85)
-        self.assertEqual(quality.alternatives,("대안 하나","대안 둘"))
+        self.assertIsNone(quality.confidence)
+        self.assertIsNone(quality.no_speech_probability)
+        self.assertEqual(quality.alternatives,())
 
     def test_sessions_have_independent_korean_and_english_contexts(self):
         config=ServerConfig(Path("/trusted/catalog.sqlite"),"F","operational",

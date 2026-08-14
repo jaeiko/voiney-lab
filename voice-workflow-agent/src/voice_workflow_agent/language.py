@@ -35,9 +35,16 @@ def normalize_provider_language(value: Any) -> str | None:
 class Transcription:
     text: str
     detected_language: str | None
+    # xAI's documented batch STT response exposes duration and optional word
+    # timing objects.  The legacy quality fields remain optional compatibility
+    # seams for injected providers/tests; the xAI adapter does not fabricate or
+    # populate them when the REST response does not document them.
     confidence: float | None = None
     no_speech_probability: float | None = None
     alternatives: tuple[str, ...] = ()
+    duration_seconds: float | None = None
+    words: tuple[dict[str, object], ...] = ()
+    response_status: int | None = None
 
 
 @dataclass(frozen=True)

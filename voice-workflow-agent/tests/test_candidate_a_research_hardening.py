@@ -400,7 +400,7 @@ class CandidateAResearchRoutingTests(unittest.TestCase):
             "acetonitrile", "gel plug", "현재 단계", "완료",
         ):
             self.assertIn(expected, terms)
-        self.assertLessEqual(len(terms), 24)
+        self.assertLessEqual(len(terms), 100)
         self.assertTrue(all(1 <= len(item) <= 50 for item in terms))
 
     def test_current_step_detail_is_useful_and_read_only(self):

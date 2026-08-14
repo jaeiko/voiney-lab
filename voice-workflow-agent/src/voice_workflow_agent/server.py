@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, hashlib, logging, math, os, secrets, sqlite3, tempfile, textwrap, time
+import asyncio, hashlib, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -369,6 +369,101 @@ def require_env(name:str)->str:
 def api_url(path:str)->str:
     return os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/" + path.lstrip("/")
 
+
+@dataclass(frozen=True)
+class SttDiagnosticSettings:
+    """Opt-in local audio evidence; disabled and non-persistent by default."""
+
+    enabled:bool=False
+    directory:Path=PROJECT_ROOT / "data/runtime/stt-diagnostics"
+    max_files:int=20
+
+    @classmethod
+    def from_environment(cls)->"SttDiagnosticSettings":
+        raw=os.environ.get(
+            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED","false"
+        ).strip().casefold()
+        if raw not in {"0","1","false","true","no","yes","off","on"}:
+            raise ValueError("STT diagnostic mode must be a boolean")
+        enabled=raw in {"1","true","yes","on"}
+        configured=os.environ.get(
+            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTIC_DIR","").strip()
+        directory=(Path(configured) if configured else cls.directory).resolve()
+        runtime_root=(PROJECT_ROOT / "data/runtime").resolve()
+        if directory != runtime_root and runtime_root not in directory.parents:
+            raise ValueError("STT diagnostic directory must be under data/runtime")
+        maximum=int(os.environ.get(
+            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTIC_MAX_FILES","20"))
+        if not 2<=maximum<=100:
+            raise ValueError("STT diagnostic file limit is outside bounds")
+        return cls(enabled,directory,maximum)
+
+
+def _stt_multipart(
+    pcm:bytes,*,language:str|None,keyterms:tuple[str,...]
+)->tuple[list[tuple[str,tuple]],bytes,tuple[str,...]]:
+    """Build the documented xAI multipart order with the file last."""
+
+    if language not in {None,"ko","en","vi"}:
+        raise ValueError("STT language is invalid")
+    bounded=tuple(dict.fromkeys(
+        value.strip() for value in keyterms
+        if isinstance(value,str) and 1<=len(value.strip())<=50
+    ))[:100]
+    wav=pcm_to_wav(pcm)
+    multipart:list[tuple[str,tuple]]=[("format",(None,"true"))]
+    if language is not None:
+        multipart.append(("language",(None,language)))
+    multipart.extend(("keyterm",(None,value)) for value in bounded)
+    multipart.append(("file",("utterance.wav",wav,"audio/wav")))
+    return multipart,wav,bounded
+
+
+def persist_stt_diagnostic(
+    pcm:bytes,metadata:dict[str,object],*,identity:str,
+    settings:SttDiagnosticSettings|None=None,
+)->tuple[Path,Path]|None:
+    """Persist one consented WAV and sanitized JSON record with bounded retention."""
+
+    selected=settings or SttDiagnosticSettings.from_environment()
+    if not selected.enabled:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}",identity):
+        raise ValueError("STT diagnostic identity is invalid")
+    directory=selected.directory
+    directory.mkdir(parents=True,exist_ok=True)
+    wav=pcm_to_wav(pcm)
+    safe={
+        key:value for key,value in metadata.items()
+        if key in {
+            "configuration_id","session_id","turn_id","generation",
+            "input_sample_rate","frame_count","voiced_frame_count",
+            "duration_ms","endpoint_reason","configured_prefix_frames",
+            "configured_prefix_ms","retained_prefix_frames",
+            "retained_prefix_ms","wav_sha256","wav_byte_count",
+            "stt_endpoint","request_field_order","language","keyterms",
+            "response_status","response_duration_seconds","word_count",
+            "detected_language","raw_transcript","normalized_transcript",
+            "correction_class","clarification_required","intent_kind",
+            "action","mutation_authorized","browser_audio_constraints",
+        }
+    }
+    safe["wav_sha256"]=hashlib.sha256(wav).hexdigest()
+    safe["wav_byte_count"]=len(wav)
+    wav_path=directory / f"{identity}.wav"
+    json_path=directory / f"{identity}.json"
+    wav_path.write_bytes(wav)
+    json_path.write_text(
+        json.dumps(safe,ensure_ascii=False,sort_keys=True,indent=2)+"\n",
+        encoding="utf-8",
+    )
+    records=sorted(directory.glob("*.json"),key=lambda item:item.stat().st_mtime)
+    while len(records)>selected.max_files:
+        old=records.pop(0)
+        old.with_suffix(".wav").unlink(missing_ok=True)
+        old.unlink(missing_ok=True)
+    return wav_path,json_path
+
 def transcribe(
     pcm:bytes,
     *,
@@ -377,43 +472,30 @@ def transcribe(
 )->Transcription:
     """Call documented batch STT fields while retaining optional extensions."""
 
-    if language not in {None,"ko","en","vi"}:
-        raise ValueError("STT language is invalid")
-    bounded_keyterms=tuple(dict.fromkeys(
-        value.strip() for value in keyterms
-        if isinstance(value,str) and 1<=len(value.strip())<=50
-    ))[:100]
-    multipart=[]
-    if language is not None:
-        multipart.append(("language",(None,language)))
-    multipart.extend(("keyterm",(None,value)) for value in bounded_keyterms)
-    # xAI documents that language/keyterm fields precede the uploaded file.
-    multipart.append(("file",("utterance.wav",pcm_to_wav(pcm),"audio/wav")))
+    multipart,_,_= _stt_multipart(pcm,language=language,keyterms=keyterms)
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
         files=multipart,timeout=120)
     response.raise_for_status()
     payload=response.json()
     text=payload.get("text","")
-    confidence=payload.get("confidence")
-    if not isinstance(confidence,(int,float)) or isinstance(confidence,bool) or not 0<=confidence<=1:
-        confidence=None
-    no_speech=payload.get("no_speech_probability")
-    if not isinstance(no_speech,(int,float)) or isinstance(no_speech,bool) or not 0<=no_speech<=1:
-        no_speech=None
-    alternatives=payload.get("alternatives",())
-    if not isinstance(alternatives,list):
-        alternatives=()
-    else:
-        alternatives=tuple(
-            value.strip() for value in alternatives[:3]
-            if isinstance(value,str) and value.strip()
-        )
+    duration=payload.get("duration")
+    if (not isinstance(duration,(int,float)) or isinstance(duration,bool)
+            or duration<0):
+        duration=None
+    raw_words=payload.get("words",())
+    words=tuple(
+        {
+            key:value for key,value in item.items()
+            if key in {"word","start","end","speaker"}
+        }
+        for item in raw_words[:500]
+        if isinstance(item,dict)
+    ) if isinstance(raw_words,list) else ()
     return Transcription(
         text.strip() if isinstance(text,str) else "",
         normalize_provider_language(payload.get("language")),
-        float(confidence) if confidence is not None else None,
-        float(no_speech) if no_speech is not None else None,
-        alternatives,
+        duration_seconds=float(duration) if duration is not None else None,
+        words=words,response_status=response.status_code,
     )
 
 def validate_tts_pcm(response:requests.Response)->bytes:
@@ -1026,6 +1108,8 @@ class ListenerSession:
         self._interrupt_candidate_diagnostics:dict[str,int|bool]={}
         self._microphone_chunk_sequence=0
         self.greeting_emitted=False
+        self.greeting_audio_ready=False
+        self.client_audio_constraints:dict[str,object]={}
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -1087,6 +1171,8 @@ class ListenerSession:
     def start(self):
         self.generation+=1
         self.greeting_emitted=False
+        self.greeting_audio_ready=False
+        self.client_audio_constraints={}
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
@@ -1107,6 +1193,8 @@ class ListenerSession:
         self.accepted_configuration_id=None; self.accepted_mode=None
         self.accepted_language=None; self.accepted_protocol_id=None
         self.accepted_revision_id=None
+        self.greeting_audio_ready=False
+        self.client_audio_constraints={}
         self._reset_turn_identity()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
@@ -1730,6 +1818,9 @@ def _record_experiment_report_plan(
         "development_only":curated.fixture.development_only,
         "pre_transition_step_id":pre_step.step_id if pre_step else None,
         "post_transition_step_id":post_step.step_id if post_step else None,
+        "reported_observation":bool(plan.reported_observation),
+        "observation_predicate":plan.observation_predicate,
+        "observation_outcome":plan.observation_outcome,
     }
     if plan.action is CuratedProtocolAction.START and plan.state_changed:
         event_type="session_started"
@@ -1740,7 +1831,7 @@ def _record_experiment_report_plan(
         if plan.reported_completion:
             payload["completion_source"]="user_command"
     elif plan.action is CuratedProtocolAction.NEXT and plan.speech_mode.value=="blocked":
-        event_type="blocked"
+        event_type=("observation" if plan.reported_observation else "blocked")
     elif plan.action is CuratedProtocolAction.REPORT_ANOMALY:
         event_type="anomaly"
     elif plan.action is CuratedProtocolAction.STOP and plan.state_changed:
@@ -1762,11 +1853,12 @@ def _record_experiment_report_plan(
             event_type=event_type,
             step_id=step_id,
             step_label=step_label,
-            user_wording=plan.anomaly_text,
+            user_wording=(plan.anomaly_text or plan.observation_outcome),
             category=plan.anomaly_category,
             severity=("unknown" if plan.reported_anomaly else None),
             confirmation_state=(
-                "user_reported" if plan.reported_anomaly else None
+                "user_reported"
+                if plan.reported_anomaly or plan.reported_observation else None
             ),
             source_tier=(
                 plan.answer_origin
@@ -1851,29 +1943,43 @@ async def _send_session_greeting(
 ) -> None:
     """Emit one deterministic, interruptible greeting for a logical session."""
 
-    if session.greeting_emitted:
+    if session.greeting_emitted or not session.greeting_audio_ready:
         return
     session.greeting_emitted=True
     greeting_turn_id=2_000_000_000  # Reserved display/audio identity; user turns start at 1.
+    title=(
+        session.curated_protocol_session.fixture.title
+        if session.curated_protocol_session is not None else "the selected protocol"
+    )
     greeting={
-        "ko":"Voice Workflow Agent입니다. 프로토콜 워크플로가 준비되었습니다. 시작하거나 질문해 주세요.",
-        "en":"This is Voice Workflow Agent. The protocol workflow is ready. You can begin or ask a question.",
-        "vi":"Đây là Voice Workflow Agent. Quy trình đã sẵn sàng. Bạn có thể bắt đầu hoặc đặt câu hỏi.",
+        "ko":f"Voice Workflow Agent입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
+        "en":f"This is Voice Workflow Agent. {title} is ready. Would you like to begin, or ask a question first?",
+        "vi":f"Voice Workflow Agent đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
     }.get(language,"Voice Workflow Agent is ready.")
     generation=session.generation
     configuration_id=session.accepted_configuration_id
     greeting_id=hashlib.sha256(
         f"{session.session_id}\x1f{configuration_id}\x1fgreeting-v1".encode()
     ).hexdigest()
+    log.info(
+        "session.greeting.created configuration_id=%s generation=%s greeting_id=%s",
+        configuration_id,generation,greeting_id,
+    )
     await sender.text(
         "session.greeting",configuration_id=configuration_id,
         turn_id=greeting_turn_id,generation=generation,greeting_id=greeting_id,
         text=greeting,language=language,
     )
     try:
+        log.info("session.greeting.tts_started greeting_id=%s",greeting_id)
         pcm=await asyncio.to_thread(synthesize,greeting,language)
         frames=frame_complete_audio(pcm)
+        log.info(
+            "session.greeting.tts_completed greeting_id=%s frame_count=%d",
+            greeting_id,len(frames),
+        )
     except Exception:
+        log.info("session.greeting.tts_failed greeting_id=%s",greeting_id)
         await sender.text(
             "session.greeting.failed",configuration_id=configuration_id,
             turn_id=greeting_turn_id,generation=generation,greeting_id=greeting_id,
@@ -1910,6 +2016,10 @@ async def _send_session_greeting(
         turn_id=greeting_turn_id,generation=generation,state=session.state.value,
     )
     await sender.segment(greeting_turn_id,0,frames,generation)
+    log.info(
+        "session.greeting.segment_sent greeting_id=%s frame_count=%d",
+        greeting_id,len(frames),
+    )
     await sender.text(
         "reply.complete",configuration_id=configuration_id,
         turn_id=greeting_turn_id,generation=generation,text=greeting,
@@ -1928,7 +2038,9 @@ async def _send_session_greeting(
     )
 
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
-                   input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter,
+                   input_frames:int,voiced_frames:int=0,
+                   retained_prefix_frames:int=0,
+                   clock:Callable[[],float]=time.perf_counter,
                    sender:LockedSender|None=None,filler:CascadeFiller|None=None,
                    accepted_transcription:Transcription|None=None,
                    accepted_stt_ms:int|None=None)->None:
@@ -1966,16 +2078,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "transcribing",
         timings_ms={"utterance_to_status":timings["utterance_to_status_ms"]})
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
+    stt_language=(
+        session.manual_language
+        if session.language_mode=="manual" else None
+    )
+    stt_keyterms=(
+        session.curated_protocol_session.stt_keyterms()
+        if session.curated_protocol_session is not None else ()
+    )
     if accepted_transcription is None:
         started=clock()
-        stt_language=(
-            session.manual_language
-            if session.language_mode=="manual" else None
-        )
-        stt_keyterms=(
-            session.curated_protocol_session.stt_keyterms()
-            if session.curated_protocol_session is not None else ()
-        )
         transcription=await asyncio.to_thread(
             partial(
                 transcribe,clean_path(source_pcm),
@@ -2010,6 +2122,67 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
+    cleaned_source=clean_path(source_pcm)
+    diagnostic_wav=pcm_to_wav(cleaned_source)
+    stt_diagnostic_metadata={
+        "configuration_id":session.accepted_configuration_id,
+        "session_id":session.session_id,
+        "turn_id":turn_id,"generation":generation,
+        "input_sample_rate":16000,
+        "frame_count":input_frames,"voiced_frame_count":voiced_frames,
+        "duration_ms":input_frames*20,
+        "endpoint_reason":"accepted_endpoint",
+        "configured_prefix_frames":session.detector.config.prefix_frames,
+        "configured_prefix_ms":session.detector.config.prefix_frames*20,
+        "retained_prefix_frames":max(0,retained_prefix_frames),
+        "retained_prefix_ms":max(0,retained_prefix_frames)*20,
+        "stt_endpoint":"/v1/stt",
+        "request_field_order":[
+            "format","language",*("keyterm" for _ in stt_keyterms),"file"
+        ],
+        "language":stt_language,"keyterms":list(stt_keyterms),
+        "response_status":transcription.response_status,
+        "response_duration_seconds":transcription.duration_seconds,
+        "word_count":len(transcription.words),
+        "detected_language":transcription.detected_language,
+        "raw_transcript":transcript,
+        "normalized_transcript":" ".join(transcript.strip().split()),
+        "correction_class":None,"clarification_required":False,
+        "intent_kind":None,"action":None,"mutation_authorized":False,
+        "browser_audio_constraints":dict(session.client_audio_constraints),
+        "wav_sha256":hashlib.sha256(diagnostic_wav).hexdigest(),
+        "wav_byte_count":len(diagnostic_wav),
+    }
+    await current_text(
+        "stt.diagnostics",turn_id=turn_id,
+        detected_language=transcription.detected_language,
+        input_sample_rate=16000,frame_count=input_frames,
+        voiced_frame_count=voiced_frames,duration_ms=input_frames*20,
+        endpoint_reason="accepted_endpoint",
+        configured_prefix_frames=session.detector.config.prefix_frames,
+        configured_prefix_ms=session.detector.config.prefix_frames*20,
+        response_status=transcription.response_status,
+        response_duration_seconds=transcription.duration_seconds,
+        word_count=len(transcription.words),
+        words=list(transcription.words),
+        stt_endpoint="/v1/stt",
+        wav_sha256=stt_diagnostic_metadata["wav_sha256"],
+        wav_byte_count=stt_diagnostic_metadata["wav_byte_count"],
+        language_bias=stt_language,
+        keyterm_count=len(stt_keyterms),
+        keyterms=list(stt_keyterms),
+        request_field_order=stt_diagnostic_metadata["request_field_order"],
+        retained_prefix_frames=max(0,retained_prefix_frames),
+        retained_prefix_ms=max(0,retained_prefix_frames)*20,
+        browser_audio_constraints=dict(session.client_audio_constraints),
+    )
+    try:
+        persist_stt_diagnostic(
+            cleaned_source,stt_diagnostic_metadata,
+            identity=f"session-{session.session_id}-turn-{turn_id}-g-{generation}",
+        )
+    except (OSError,ValueError):
+        log.warning("opt-in STT diagnostic persistence failed")
     timings["route_started_ms"]=round((clock()-endpoint)*1000)
     await progress(
         "routing",timings_ms={"route_started":timings["route_started_ms"]})
@@ -2147,13 +2320,47 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 transcript_quality=transcription_quality_issue(transcription),
                 configuration_id=session.accepted_configuration_id,
                 generation=generation)
+            stt_diagnostic_metadata.update({
+                "normalized_transcript":(
+                    plan.normalized_transcript
+                    or " ".join(transcript.strip().split())
+                ),
+                "correction_class":(
+                    "bounded_protocol_vocabulary"
+                    if plan.transcript_corrections else None
+                ),
+                "clarification_required":plan.action in {
+                    CuratedProtocolAction.CLARIFY_COMPLETION,
+                    CuratedProtocolAction.CLARIFY_REFERENCE,
+                    CuratedProtocolAction.TRANSCRIPT_UNRELIABLE,
+                },
+                "intent_kind":plan.intent_kind,
+                "action":plan.action.value,
+                "mutation_authorized":bool(plan.state_changed),
+            })
+            await current_text(
+                "turn.interpretation",turn_id=turn_id,
+                raw_transcript=transcript,
+                normalized_transcript=stt_diagnostic_metadata[
+                    "normalized_transcript"],
+                transcript_corrections=[list(item) for item in plan.transcript_corrections],
+                intent_kind=plan.intent_kind,action=plan.action.value,
+                mutation_authorized=bool(plan.state_changed),
+                coreference_status=plan.coreference_status,
+                coreference_reason=plan.coreference_reason,
+            )
+            try:
+                persist_stt_diagnostic(
+                    cleaned_source,stt_diagnostic_metadata,
+                    identity=f"session-{session.session_id}-turn-{turn_id}-g-{generation}",
+                )
+            except (OSError,ValueError):
+                log.warning("opt-in STT diagnostic update failed")
             brain_facts=tuple(plan.facts)
             brain_activation=activation_for(
                 intent_kind=plan.intent_kind,
                 visual_requested=plan.visual_requested,
-                unresolved_dimensions=(
-                    plan.unresolved_dimensions or plan.question_dimensions
-                ),
+                unresolved_dimensions=plan.unresolved_dimensions,
             )
             if (
                 session.multi_brain_settings.enabled
@@ -2215,8 +2422,26 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         and curated.fixture.steps[curated.current_index].step_id
                         ==snapshot.step_id
                     ):
-                        answer_output=answer_terminal.output
-                        if plan.action is CuratedProtocolAction.OPERATIONAL_DEVIATION:
+                        # A schema-valid model response is not evidence.  When
+                        # the deterministic SourcePlan says a requested claim
+                        # dimension is unresolved, supplied local facts cannot
+                        # support prose for that dimension.  Keep the admitted
+                        # deterministic answer and let retrieval resolve it.
+                        # This also blocks a live-observed failure where a model
+                        # cited the recipe while inventing water-purity claims.
+                        if plan.unresolved_dimensions:
+                            await current_text(
+                                "brain.output.rejected",turn_id=turn_id,
+                                role="answer",
+                                reason="unresolved_claim_dimensions",
+                                dimensions=list(plan.unresolved_dimensions),
+                            )
+                        else:
+                            answer_output=answer_terminal.output
+                        if (
+                            answer_output is not None
+                            and plan.action is CuratedProtocolAction.OPERATIONAL_DEVIATION
+                        ):
                             plan=replace(
                                 plan,
                                 display_text=(
@@ -2228,7 +2453,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                     "Answer Brain output cannot authorize the deviation.",
                                 ))),
                             )
-                        else:
+                        elif answer_output is not None:
                             plan=replace(
                                 plan,
                                 display_text=answer_output.display_answer,
@@ -2441,6 +2666,21 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         )
                         session.set_turn_terminal_outcome(
                             turn_id,generation,"blocked")
+                    elif (
+                        plan.action is CuratedProtocolAction.NEXT
+                        and plan.reported_observation
+                    ):
+                        failed=(
+                            "관찰 결과를 실험 기록에 저장하지 못했습니다. 현재 단계는 그대로 유지합니다."
+                            if turn_language=="ko" else
+                            "The observation could not be saved to the experiment record. The current step remains unchanged."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                        )
+                        session.set_turn_terminal_outcome(
+                            turn_id,generation,"blocked")
                     log.warning(
                         "experiment report update failed turn_id=%s",turn_id)
                     await current_text(
@@ -2453,9 +2693,32 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         and plan.reported_completion
                     ):
                         acknowledgment=(
-                            "현재 단계 완료를 실험 기록에 반영했습니다."
+                            (
+                                "말씀한 관찰 결과와 현재 단계 완료를 실험 기록에 반영했습니다."
+                                if plan.reported_observation else
+                                "현재 단계 완료를 실험 기록에 반영했습니다."
+                            )
                             if turn_language=="ko" else
-                            "I added the current-step completion to the experiment record."
+                            (
+                                "I added the reported observation and current-step completion to the experiment record."
+                                if plan.reported_observation else
+                                "I added the current-step completion to the experiment record."
+                            )
+                        )
+                        plan=replace(
+                            plan,
+                            display_text=f"{acknowledgment}\n\n{plan.display_text}",
+                            speech_text=f"{acknowledgment} {plan.speech_text}",
+                        )
+                    elif (
+                        plan.action is CuratedProtocolAction.NEXT
+                        and plan.reported_observation
+                        and plan.observation_predicate == "negative"
+                    ):
+                        acknowledgment=(
+                            "말씀한 관찰 결과를 현재 단계 실험 기록에 남겼습니다."
+                            if turn_language=="ko" else
+                            "I added the reported observation to the current-step experiment record."
                         )
                         plan=replace(
                             plan,
@@ -2636,7 +2899,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     elapsed_ms=terminal.elapsed_ms,
                 )
                 if terminal.status=="success" and owned and isinstance(terminal.output,expected):
-                    if role=="answer": late_answer_output=terminal.output
+                    if role=="answer":
+                        if plan.unresolved_dimensions:
+                            await current_text(
+                                "brain.output.rejected",turn_id=turn_id,
+                                role="answer",
+                                reason="unresolved_claim_dimensions",
+                                dimensions=list(plan.unresolved_dimensions),
+                            )
+                        else:
+                            late_answer_output=terminal.output
                     elif role=="source": source_output=terminal.output
                     else: visual_output=terminal.output
             if isinstance(late_answer_output,AnswerBrainOutput):
@@ -3229,6 +3501,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
 
 async def run_turn_safely(
     websocket,session,source_pcm,turn_id,input_frames,voiced_frames=0,
+    retained_prefix_frames=0,
     *,accepted_transcription:Transcription|None=None,
     accepted_stt_ms:int|None=None,
 ):
@@ -3259,6 +3532,7 @@ async def run_turn_safely(
     filler.start()
     try: await run_turn(
         websocket,session,source_pcm,turn_id,input_frames,voiced_frames,
+        retained_prefix_frames,
         sender=sender,filler=filler,
         accepted_transcription=accepted_transcription,
         accepted_stt_ms=accepted_stt_ms)
@@ -3441,6 +3715,8 @@ async def voice_socket(websocket:WebSocket):
                         "state":session.state.value,
                         "voiced_frames":item.result.voiced_frames,
                         "total_frames":item.result.total_frames,
+                        "prefix_frames_retained":(
+                            item.result.prefix_frames_retained),
                         "duration_ms":item.result.total_frames*20,
                         "reason":item.reason or item.result.rejection_reason,
                         "forced":item.result.forced,
@@ -3491,6 +3767,7 @@ async def voice_socket(websocket:WebSocket):
                             websocket,session,item.result.utterance or b"",
                             item.turn_id,item.result.total_frames,
                             item.result.voiced_frames,
+                            item.result.prefix_frames_retained,
                             accepted_transcription=(
                                 accepted[0] if accepted else None),
                             accepted_stt_ms=(
@@ -3665,6 +3942,7 @@ async def voice_socket(websocket:WebSocket):
                     continue
                 ready_fields={
                     "configuration_id":session.accepted_configuration_id,
+                    "generation":session.generation,
                     "mode":session.accepted_mode,
                     "language":session.accepted_language,
                     "protocol_id":session.accepted_protocol_id,
@@ -3684,10 +3962,6 @@ async def voice_socket(websocket:WebSocket):
                                                 pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
-                if pipeline=="cascade" and not session.greeting_emitted:
-                    session.track_visual_task(asyncio.create_task(
-                        _send_session_greeting(
-                            sender,session,language=context.language)))
             elif control["type"]=="session.set_language":
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))
@@ -3783,6 +4057,9 @@ async def voice_socket(websocket:WebSocket):
             elif control["type"]=="client.audio_constraints":
                 requested=control["requested"]
                 actual=control["actual"]
+                session.client_audio_constraints={
+                    "requested":dict(requested),"actual":dict(actual),
+                }
                 log.info(
                     "client.audio_constraints "
                     "requested_echo_cancellation=%s actual_echo_cancellation=%s "
@@ -3792,6 +4069,35 @@ async def voice_socket(websocket:WebSocket):
                     requested["noiseSuppression"],actual["noiseSuppression"],
                     requested["autoGainControl"],actual["autoGainControl"],
                 )
+            elif control["type"]=="client.audio_ready":
+                valid=bool(
+                    session.active and session.accepted_mode=="cascade"
+                    and control["configuration_id"]
+                    ==session.accepted_configuration_id
+                    and control["generation"]==session.generation
+                )
+                if not valid:
+                    log.info(
+                        "client.audio_ready rejected configuration_id=%s generation=%s",
+                        control["configuration_id"],control["generation"],
+                    )
+                    continue
+                if session.greeting_audio_ready:
+                    log.info(
+                        "client.audio_ready duplicate configuration_id=%s generation=%s",
+                        control["configuration_id"],control["generation"],
+                    )
+                    continue
+                session.greeting_audio_ready=True
+                log.info(
+                    "client.audio_ready accepted configuration_id=%s generation=%s sample_rate=%s",
+                    control["configuration_id"],control["generation"],
+                    control["sample_rate"],
+                )
+                session.track_visual_task(asyncio.create_task(
+                    _send_session_greeting(
+                        sender,session,
+                        language=session.accepted_language or "ko")))
             elif control["type"]=="report.status.get":
                 result=await asyncio.to_thread(
                     check_safety_report_status,control["report_id"])

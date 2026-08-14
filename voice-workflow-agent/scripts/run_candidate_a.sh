@@ -89,6 +89,9 @@ export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
 export WEB_VISUAL_SEARCH_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="true"
 export CASCADE_BARGE_IN_PREFIX_MS="800"
+# Raw microphone evidence remains off unless the operator explicitly opts in
+# before startup with VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED=true. Any
+# configured diagnostic directory must remain below data/runtime and is ignored.
 
 echo
 echo "=== Non-secret capability check ==="

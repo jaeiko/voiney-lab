@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.audio import FRAME_BYTES
+from voice_workflow_agent.audio import FRAME_BYTES, pcm_to_wav
 from voice_workflow_agent.brain import (
     BrainResult,
     SentenceSegment,
@@ -1113,11 +1113,12 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     label,
                 )
                 self.assertFalse(blocked.state_changed)
-                self.assertIn("has not been marked complete", blocked.response_text)
-                self.assertIn(
-                    session.state()["block_reason"],
-                    ("unsupported_repeat_until", "unresolved_ambiguity"),
+                self.assertEqual(
+                    blocked.action, CuratedProtocolAction.CLARIFY_COMPLETION
                 )
+                self.assertIn("I will not record completion", blocked.response_text)
+                self.assertIsNotNone(session.pending_observation_confirmation)
+                self.assertIsNone(session.state()["block_reason"])
 
     def test_supported_question_has_only_current_context_and_unsupported_is_bounded(self):
         session = CuratedProtocolSession(self.fixture)
@@ -1328,8 +1329,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 plan = session.plan(
                     "현재 단계를 완료했어요.", turn_id=turn_id, language="ko"
                 )
-                self.assertEqual(plan.action, CuratedProtocolAction.NEXT)
-                self.assertEqual(plan.speech_mode, CuratedProtocolSpeechMode.BLOCKED)
+                self.assertEqual(
+                    plan.action, CuratedProtocolAction.CLARIFY_COMPLETION
+                )
+                self.assertEqual(plan.intent_kind, "observation_confirmation_required")
+                self.assertIsNotNone(session.pending_observation_confirmation)
                 self.assertEqual(session.current_index, index)
 
     def test_detail_planner_uses_admitted_facts_without_invented_method(self):
@@ -1595,6 +1599,45 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         session.detector.state = TurnState.PROCESSING
         return session
 
+    def test_stt_diagnostics_bind_exact_wav_prefix_and_documented_fields(self):
+        session = self.make_session(index=1)
+        socket = Socket()
+        pcm = b"\0\0"
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription(
+                "현재 단계 알려줘", "ko", duration_seconds=0.02,
+                words=({"word": "현재", "start": 0.0, "end": 0.02},),
+                response_status=200,
+            ),
+        ), patch(
+            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(
+                socket, session, pcm, 1, 1, 1, 1,
+            ))
+        diagnostic = next(
+            item for item in socket.text if item["type"] == "stt.diagnostics"
+        )
+        wav = pcm_to_wav(pcm)
+        self.assertEqual(
+            diagnostic["wav_sha256"], hashlib.sha256(wav).hexdigest()
+        )
+        self.assertEqual(diagnostic["wav_byte_count"], len(wav))
+        self.assertEqual(diagnostic["retained_prefix_frames"], 1)
+        self.assertEqual(diagnostic["request_field_order"][0], "format")
+        self.assertEqual(diagnostic["request_field_order"][-1], "file")
+        self.assertIn("AMBIC", diagnostic["keyterms"])
+        self.assertEqual(diagnostic["response_status"], 200)
+        self.assertEqual(diagnostic["word_count"], 1)
+
     def accept_barge_in(self, session: ListenerSession):
         decisions = iter(
             [False, True, True, True, True, False]
@@ -1665,6 +1708,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         session = ListenerSession(tool_context=context)
         session.start()
         session.accept_configuration(41, "cascade", "ko", self.fixture.protocol_id)
+        session.greeting_audio_ready = True
         socket = Socket()
 
         async def immediate(function, *args, **kwargs):
@@ -1780,6 +1824,17 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         states = [item for item in socket.text if item["type"] == "brain.state"]
         self.assertEqual(states[0]["roles"], ["answer", "source", "visual"])
         self.assertEqual(states[-1]["status"], "complete")
+        rejected = [
+            item for item in socket.text
+            if item["type"] == "brain.output.rejected"
+        ]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["reason"], "unresolved_claim_dimensions")
+        reply = next(item for item in socket.text if item["type"] == "reply.delta")
+        self.assertNotEqual(
+            reply["primary_text"],
+            "활성 프로토콜은 HPLC water의 용액 준비 역할만 확인합니다.",
+        )
         done = next(item for item in socket.text if item["type"] == "turn.done")
         self.assertEqual(done["brains_enabled"], ["answer", "source", "visual"])
         self.assertEqual(done["tools_used"], [])
@@ -1975,12 +2030,91 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             )
             self.assertFalse(plan.state_changed)
             self.assertEqual(curated.current_index, 6)
-            self.assertIn("blocked", [
-                event["event_type"] for event in report["events"]
-            ])
+            self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+            self.assertIsNotNone(curated.pending_observation_confirmation)
             self.assertNotIn("step_completed", [
                 event["event_type"] for event in report["events"]
             ])
+
+    def test_source_observation_persists_once_before_steps_7_9_20_advance(self):
+        cases = (
+            (6, "젤이 완전히 탈색되어 투명해요"),
+            (8, "젤이 흰색으로 변했고 탈수됐어요"),
+            (19, "젤이 흰색으로 변했고 탈수됐어요"),
+        )
+        for index, observation in cases:
+            with self.subTest(step=self.fixture.steps[index].source_label), tempfile.TemporaryDirectory() as directory:
+                session = self.make_session(index=index)
+                session.experiment_report_store = ExperimentReportStore(
+                    Path(directory) / "reports.sqlite"
+                )
+                curated = session.curated_protocol_session
+                curated.plan(
+                    "현재 단계를 완료했어요", turn_id=1, language="ko",
+                    configuration_id=41, generation=session.generation,
+                )
+                plan = curated.plan(
+                    observation, turn_id=2, language="ko",
+                    configuration_id=41, generation=session.generation,
+                )
+                report = _record_experiment_report_plan(
+                    session, curated, plan, turn_id=2,
+                    generation=session.generation,
+                    pre_transition_index=index,
+                )
+                completed = [
+                    event for event in report["events"]
+                    if event["event_type"] == "step_completed"
+                ]
+                self.assertEqual(len(completed), 1)
+                self.assertEqual(completed[0]["user_wording"], observation)
+                self.assertEqual(
+                    completed[0]["payload"]["observation_predicate"],
+                    "positive",
+                )
+                self.assertEqual(curated.current_index, index + 1)
+
+    def test_observation_persistence_failure_restores_steps_7_9_20(self):
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        cases = (
+            (6, "젤이 완전히 탈색되어 투명해요"),
+            (8, "젤이 흰색으로 변했고 탈수됐어요"),
+            (19, "젤이 흰색으로 변했고 탈수됐어요"),
+        )
+        for index, observation in cases:
+            with self.subTest(step=self.fixture.steps[index].source_label), tempfile.TemporaryDirectory() as directory:
+                session = self.make_session(index=index)
+                session.experiment_report_store = ExperimentReportStore(
+                    Path(directory) / "reports.sqlite"
+                )
+                curated = session.curated_protocol_session
+                curated.plan(
+                    "현재 단계를 완료했어요", turn_id=1, language="ko",
+                    configuration_id=41, generation=session.generation,
+                )
+                session.active_turn_id = 2
+                session.turn_generations[2] = session.generation
+                session.detector.state = TurnState.PROCESSING
+                socket = Socket()
+                with patch(
+                    "voice_workflow_agent.server.transcribe",
+                    return_value=Transcription(observation, "ko"),
+                ), patch(
+                    "voice_workflow_agent.server.synthesize",
+                    return_value=b"\0\0",
+                ) as tts, patch(
+                    "voice_workflow_agent.server._record_experiment_report_plan",
+                    side_effect=RuntimeError("synthetic persistence failure"),
+                ), patch(
+                    "voice_workflow_agent.server.asyncio.to_thread",
+                    side_effect=immediate,
+                ):
+                    asyncio.run(run_turn(socket, session, b"\0\0", 2, 1))
+                self.assertEqual(curated.current_index, index)
+                self.assertIn("저장하지 못해", tts.call_args.args[0])
+                self.assertNotIn("실험 기록에 반영", tts.call_args.args[0])
 
     def test_anomaly_acknowledgement_requires_report_persistence(self):
         async def immediate(function, *args, **kwargs):
@@ -3530,7 +3664,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             (
                 6,
                 "현재 단계를 완료했어. 다음 단계로 안내해 줘",
-                "next",
+                "clarify_completion",
                 None,
                 True,
             ),
@@ -3811,6 +3945,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.ready = asyncio.Event()
                 self.disconnect = asyncio.Event()
                 self.receive_count = 0
+                self.server_generation = 0
 
             async def accept(self):
                 return None
@@ -3825,12 +3960,21 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                         "protocol_id": self_protocol_id,
                         "configuration_id": configuration_id,
                     })}
+                if self.receive_count == 2:
+                    return {"text": json.dumps({
+                        "type": "client.audio_ready",
+                        "configuration_id": configuration_id,
+                        "generation": self.server_generation,
+                        "audio_context_state": "running",
+                        "sample_rate": 48000,
+                    })}
                 await self.disconnect.wait()
                 return {"type": "websocket.disconnect", "code": 1000}
 
             async def send_text(self, value: str) -> None:
                 await super().send_text(value)
                 if self.text[-1]["type"] == "session.ready":
+                    self.server_generation = self.text[-1]["generation"]
                     self.ready.set()
 
         self_protocol_id = self.fixture.protocol_id
@@ -3842,7 +3986,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "현재 단계를 완료했어. 단계로 넘어가죠",
             "용액 A는 어떻게 준비해?",
             "현재 단계 전체를 읽어줘",
-            "필요한 재료는?",
+            "프로토콜 전체 재료 목록을 알려줘",
             "프로토콜 종료해줘",
         )
 
@@ -3852,8 +3996,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def scenario():
             server_task = asyncio.create_task(voice_socket(socket))
             await asyncio.wait_for(socket.ready.wait(), timeout=5)
-            await asyncio.sleep(0)
+            for _ in range(20):
+                if captured and captured[0].greeting_emitted:
+                    break
+                await asyncio.sleep(0)
             session = captured[0]
+            self.assertTrue(session.greeting_emitted)
+            self.assertTrue(session.playback_ended(2_000_000_000))
             for turn_id in range(1, len(transcripts) + 1):
                 session.active_turn_id = turn_id
                 session.detector.state = TurnState.PROCESSING
@@ -3916,7 +4065,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("next", None),
                 ("question", "current_step"),
                 ("full_detail", None),
-                ("related_question", None),
+                ("protocol_query", None),
                 ("stop", None),
             ],
         )
@@ -3938,7 +4087,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         step_two = self.fixture.steps[1].instruction_source_text
         spoken = [call.args[0] for call in tts.call_args_list]
         self.assertEqual(spoken, [
-            "Voice Workflow Agent입니다. 프로토콜 워크플로가 준비되었습니다. 시작하거나 질문해 주세요.",
+            f"Voice Workflow Agent입니다. 선택한 {self.fixture.title} "
+            "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
             "1단계 안내를 화면에 표시했습니다.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
@@ -3947,7 +4097,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.fixture.steps[1].step_id, "current_step"
             ),
             step_two,
-            "활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. 추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다.",
+            "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:5])
@@ -3986,9 +4136,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("답변 · 한국어 참고 번역", replies[4])
         self.assertIn("Solution A", replies[4])
         self.assertIn(step_two, replies[5])
-        # Related research is local-first: active/adjacent evidence supports a
-        # direct answer before any optional external supplement.
-        self.assertIn("직접 답변", replies[6])
+        # Protocol-wide inventory is a deterministic PDF-wide view; it does not
+        # trigger optional retrieval or alter the active step.
+        self.assertIn("검증된 재료", replies[6])
+        self.assertIn("Acetonitrile", replies[6])
         related_reply = [
             item for item in socket.text if item["type"] == "reply.delta"
         ][6]
@@ -4020,7 +4171,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("next", True, "2", 2, None),
                 ("question", True, "2", 2, None),
                 ("full_detail", True, "2", 2, None),
-                ("related_question", True, "2", 2, None),
+                ("protocol_query", True, "2", 2, None),
                 ("stop", False, None, 3, None),
             ],
         )
@@ -4054,7 +4205,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
         self.assertEqual(client.chat.completions.calls, [])
         self.assertEqual(session.curated_protocol_session.current_index, 6)
-        self.assertIn("완료 처리되지 않았습니다", tts.call_args.args[0])
+        self.assertIn("관찰 결과", tts.call_args.args[0])
         state_events = [
             item for item in socket.text
             if item["type"] == "protocol.fixture.state"
@@ -4066,4 +4217,4 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 spoken_summary=tts.call_args.args[0]
             ),
         )
-        self.assertEqual(state_events[0]["action"], "next")
+        self.assertEqual(state_events[0]["action"], "clarify_completion")
