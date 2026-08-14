@@ -72,6 +72,20 @@ export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="3"
 export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="15"
 export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS="900"
 export EXTERNAL_REFERENCE_MAX_CITATIONS="5"
+export EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
+# PROJECT-ENGINEERING: three bounded read-only planning/answering roles run
+# conditionally; course-explicit state/tool guardrails remain server enforced.
+export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="true"
+export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL="grok-4.6"
+export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
+export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
+export VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
+# CLASS-EXPLICIT: model prose cannot gain workflow or evidence authority.
+# PROJECT-ENGINEERING: this development launcher enables one bounded Grok-only
+# background tier; production/operator launchers may keep the feature disabled.
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="true"
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL="grok-4.6"
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
 export WEB_VISUAL_SEARCH_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="true"
 export CASCADE_BARGE_IN_PREFIX_MS="800"
@@ -84,17 +98,26 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from voice_workflow_agent.external_references import ExternalReferenceSettings
+from voice_workflow_agent.external_references import (
+    ExternalReferenceSettings,
+    SupplementalKnowledgeSettings,
+)
 from voice_workflow_agent.generated_visuals import GeneratedVisualSettings
+from voice_workflow_agent.multi_brain import MultiBrainSettings
 from voice_workflow_agent.web_visuals import WebVisualSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
 references = ExternalReferenceSettings.from_environment()
 web_images = WebVisualSettings.from_environment(references)
 generated = GeneratedVisualSettings.from_environment()
+supplemental = SupplementalKnowledgeSettings.from_environment()
+multi_brain = MultiBrainSettings.from_environment()
 if references.enabled and not bool(os.environ.get("XAI_API_KEY")):
     raise SystemExit("[ERROR] XAI_API_KEY is not configured for enabled Candidate A research")
 print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
+print("supplemental_model_knowledge:", "enabled" if supplemental.enabled else "disabled")
+print("hybrid_multi_brain:", "enabled" if multi_brain.enabled else "disabled")
+print("primary_answer_budget_seconds:", multi_brain.primary_answer_budget_seconds)
 print("authority_profile:", references.domain_profile or "custom")
 print("allowed_domain_count:", len(references.allowed_domains))
 print("web_image_search:", "enabled" if web_images.enabled else "disabled")

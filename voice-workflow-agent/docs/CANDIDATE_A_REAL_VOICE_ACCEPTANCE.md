@@ -274,6 +274,9 @@ export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=3
 export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=15
 export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900
 export EXTERNAL_REFERENCE_MAX_CITATIONS=5
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
 export WEB_VISUAL_SEARCH_ENABLED=true
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
 export CASCADE_BARGE_IN_PREFIX_MS=800
@@ -327,6 +330,17 @@ and no live image-generation call was made. Treat the feature as implemented and
 offline-verified but not live-provider-verified; do not spend further calls until
 the Provider produces a first event within the hard budget.
 
+The 2026-08-13 isolation matrix supersedes only the “no first event” diagnosis,
+not the live-success status. A text-only `grok-4.6` Responses stream completed
+in 3.218 seconds (first event 1.344 seconds; first text 2.329 seconds). A raw
+PubChem-domain web-search stream then produced 15 tool-related events but no
+completed response, answer text, or admitted citation before the 25.003-second
+public deadline. Two of the three authorized requests were used; the matrix
+stopped early because the lower raw-web boundary failed. Authoritative external
+answer success remains **not live-provider-verified**. The optional general
+model tier may be checked separately only for non-operational background and
+must retain its non-authoritative label.
+
 The Candidate A launcher enables the experiment-report service at an ignored
 runtime path. For another launcher, use only an ignored absolute path:
 
@@ -345,6 +359,9 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `현재 단계를 완료했어요.` | one atomic completion/advance; no retrieval |
 | `이 단계 완료했어.` | one atomic completion/advance; no retrieval |
 | `현재 단계를 완료했어, 다음 단계로 안내해줘.` | one atomic transition, never two |
+| `다음 단계로 안내해 줘.` / `Guide me to the next step.` | ask whether the current step is complete; no transition and no report event |
+| `네.` immediately after that question | one validated transition and one persisted completion event |
+| `아니, 아직 안 끝났어.` immediately after that question | keep the step and clear the pending confirmation |
 | `거의 끝난 것 같아.` | short confirmation request; no mutation |
 | `이 단계를 좀 더 자세히 설명해 줘.` | concise Korean speech plus richer admitted evidence on screen |
 | `젤 밴드가 완전히 탈색된다는 게 무슨 의미야?` | transparent endpoint, usual two cycles, Step 7 remains blocked |
@@ -358,6 +375,12 @@ complete answer. Record raw speech separately from the normalized STT transcript
 | `혹시 융프라우 다녀오셨나요?` | short scope reminder; current step preserved |
 | `AMBIC가 뭐야?` | related entity; direct definition then current-step relationship; unchanged |
 | `HPLC water가 일반 물하고 뭐가 달라?` | related entity; protocol first, then admitted references; unchanged |
+| `AMBIC에서 bicarbonate는 왜 중요한 거야?` | related role question; protocol/evidence ladder, never generic off-topic |
+| `그 물을 왜 사용하는 거야?` after HPLC-water answer | resolve the one bounded recent entity; unchanged |
+| `젤 플러그가 왜 완전히 탈색되어야 해?` | related expected-result question; Step 7 remains blocked |
+| `염색된 단백질 밴드에서 케라틴 오염이 왜 문제가 돼?` | related safety question; no anomaly/report event and no model-only safety answer |
+| `HPLC water 대신 일반 증류수를 써도 돼?` | preserve the protocol requirement; never approve substitution from supplemental knowledge |
+| `다음 여행지는 어디가 좋아?` | bounded off-topic response; zero research and mutation |
 | `여기서 HPLC water하고 ANBI-C가 뭐야?` | ordered HPLC-water and AMBIC answers plus an auditable correction note; unchanged |
 | `염색된 단백질 밴드가 어떤 걸 의미해? 혹시 그림을 보여줄 수 있어?` | direct definition first; the same Turn receives a source visual, source card, or honest unavailable result |
 | `Jel Tug에 관해서 이미지를 보여줄 수 있어.` | contextually resolves gel plug and enters the read-only entity-visual route |
@@ -374,12 +397,21 @@ For Steps 7, 9, and 20, completion language must still return the existing
 fail-closed execution-control reason. Neither an explanation, source crop,
 external result, nor generated image can approve those boundaries.
 
+For a research Turn, verify one terminal status is visible even on failure.
+While it is running, start a newer meaningful Turn: the older Turn must change
+to “새 요청으로 이전 근거 확인 종료,” and a later Provider success must not
+revive or replace it. If the optional supplemental tier runs, its Turn must say
+“일반 모델 설명 · 확인된 권위 근거 없음,” expose no citation, and keep the
+workflow/report state unchanged.
+
 ## Glove-first browser checks
 
 Use headphones, one Whale tab, one WebSocket, Cascade mode, Korean Manual mode,
 and the exact Candidate A development protocol. At both 100% and 125% zoom:
 
-1. Confirm the current-step pane and newest Turn remain visible together.
+1. Confirm Procedure and Original/Related Visual are the primary side-by-side
+   panels and the bounded Turn history appears below them. At narrow/mobile
+   width the two primary panels must stack without horizontal overflow.
 2. Produce at least 15 Turns; only the bounded chat viewport should scroll.
 3. Scroll upward and allow a late search/visual patch; focus and scroll anchor
    must remain stable and the new-update affordance must appear.
@@ -439,6 +471,11 @@ and the exact Candidate A development protocol. At both 100% and 125% zoom:
    Verify the report already contains exactly one `step_completed` event for the
    pre-transition step and the next step remains committed. Inspect the event's
    pre/post IDs and `completion_source`.
+   In a separate isolated failure injection, make report persistence fail before
+   TTS: the spoken/displayed answer must say that the completion could not be
+   committed, the previous step must remain current, and neither “실험 기록에
+   반영” nor a `step_completed` event may appear. A bare next-step confirmation
+   question must create no report draft or event.
 3. Stop naturally with `프로토콜을 종료할게`, then repeat it. Verify one
    `session_stopped`, one `report_finalized`, final status `stopped`, and working
    per-report JSON/Markdown/CSV downloads. Confirm the report remains available.
@@ -462,3 +499,52 @@ and the exact Candidate A development protocol. At both 100% and 125% zoom:
 Pause was intentionally not added because Candidate A has no authoritative pause
 or timer-checkpoint operation to reuse. Resume continues through the validated
 start/resume command. A client-only Pause control would violate server ownership.
+
+## Final hybrid Cascade Mac/Whale checklist (2026-08-14)
+
+Start with `scripts/run_candidate_a.sh`, one Whale tab, headphones, Cascade,
+Korean Manual mode, and the exact Candidate A development fixture. Record raw
+STT, resolved Turn language, route/hard gate, state/report counts before and
+after, enabled brain roles, source scopes, speech/display text, first audio,
+total time, and terminal source/visual status. These remain manual until
+exercised with a real microphone and audible browser output:
+
+1. A new usable session speaks one short Korean greeting. Interrupt it;
+   reconnect/resume the same logical session and confirm it does not replay.
+2. `다음 단계로 안내해 줘.` creates no mutation, then `네, 완료했어요.`
+   persists once, speaks the verified record acknowledgment first, and
+   transitions exactly once. Repeat with `아니요, 아직 안 했어요.`.
+3. `What is the next step?` gives an English Step N+1 preview with zero
+   mutation; `What is the current step?` gives the English current step.
+4. `완료 조건이 뭐야?` explains required/satisfied/missing or explicitly
+   unspecified criteria without a raw procedure dump.
+5. Ask `HPLC water가 뭐야?` then `그거 일반 물이랑 뭐가 다른데?`;
+   ask `AMBIC가 뭐야?` then `그거는 왜 여기서 사용하는 거야?`.
+6. Ask `800 rpm이 무슨 뜻이야?`; confirm scientific scope and zero mutation.
+7. At Step 3 ask `37도 대신 35도로 해도 돼?`; confirm approved 37°C is
+   restated, the deviation is not authorized, and state is unchanged.
+8. In isolated report cases say `예상과 다르게 아직 색이 남아 있어.`,
+   `물질 색깔이 조금 이상해.`, and `색깔이 변형됐어.`. Confirm consistent
+   assertion handling and post-persistence acknowledgment. Then ask `색깔이
+   변하는 건 무슨 의미야?` and confirm no anomaly write.
+9. Start enrichment, then say `아니, 그건 됐고 현재 단계 다시 알려줘.`
+   Confirm the local answer/TTS was prompt and the old result is superseded once
+   and cannot revive.
+10. At Step 7 attempt completion. Confirm the response names the unsupported
+    observation/completion signal and Steps 7, 9, and 20 remain fail-closed.
+11. Ask `HPLC water와 일반 물의 차이를 설명하고 관련 그림도 보여줘.`
+    Confirm Answer+Source+Visual diagnostics, one text/TTS owner, Visual-panel
+    image ownership, and zero state mutation.
+12. At 100%, 125%, and mobile width verify Procedure and Visual are primary,
+    Turn history scrolls below, the report is compact, late patches preserve
+    focus/scroll, and no full visual/protocol dump is duplicated in a Turn.
+
+Do not mark live xAI authoritative search, generated images, real microphone,
+audible TTS, perceived latency, or Whale layout verified from offline fakes.
+
+The 2026-08-14 three-role live schema check used the entire three-request text
+budget and was stopped after 615.3 seconds without a typed terminal result.
+The resulting transport-deadline repair is offline-verified, but the live role
+contract is not. Before Mac Acceptance, rerun one explicitly approved bounded
+role request and verify that the SDK timeout and public terminal both close it;
+do not infer this from the cancellation-resistant fake.

@@ -13,6 +13,7 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
+from voice_workflow_agent.multi_brain import activation_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,17 +57,33 @@ def main() -> int:
     unsupported_claims = 0
     normalization_total = normalization_correct = 0
     followup_total = followup_correct = 0
+    confirmation_total = confirmation_correct = 0
+    brain_total = brain_correct = 0
     latencies: list[float] = []
     results = []
     for turn_id, case in enumerate(dataset["cases"], 1):
         session = CuratedProtocolSession(fixture)
         session.active = True
         session.current_index = case["step_index"]
+        language = case.get("language", "ko")
+        base_turn_id = turn_id * 10
         if prior_text := case.get("prior_text"):
-            session.plan(prior_text, turn_id=turn_id * 1000, language="ko")
+            session.plan(
+                prior_text,
+                turn_id=base_turn_id,
+                language=language,
+                configuration_id=1,
+                generation=base_turn_id,
+            )
         opening_index = session.current_index
         started = time.perf_counter()
-        plan = session.plan(case["text"], turn_id=turn_id, language="ko")
+        plan = session.plan(
+            case["text"],
+            turn_id=base_turn_id + 1,
+            language=language,
+            configuration_id=1,
+            generation=base_turn_id + 1,
+        )
         latencies.append((time.perf_counter() - started) * 1000)
         changed = session.current_index != opening_index or not session.active
         route_ok = (
@@ -94,6 +111,20 @@ def main() -> int:
         if case.get("prior_text"):
             followup_total += 1
             followup_correct += int(route_ok)
+        if "pending_confirmation" in case:
+            confirmation_total += 1
+            confirmation_correct += int(
+                (session.pending_completion_confirmation is not None)
+                == case["pending_confirmation"]
+            )
+        if "brains" in case:
+            brain_total += 1
+            activation = activation_for(
+                intent_kind=plan.intent_kind,
+                visual_requested=plan.visual_requested,
+                unresolved_dimensions=plan.unresolved_dimensions,
+            )
+            brain_correct += int(list(activation.roles) == case["brains"])
         if expected_visual := case.get("visual"):
             visual_total += 1
             source = fixture.visual_for_step(case["step_index"])
@@ -142,6 +173,13 @@ def main() -> int:
         ),
         "contextual_followup_accuracy": (
             followup_correct / followup_total if followup_total else None
+        ),
+        "completion_confirmation_state_accuracy": (
+            confirmation_correct / confirmation_total
+            if confirmation_total else None
+        ),
+        "brain_activation_accuracy": (
+            brain_correct / brain_total if brain_total else None
         ),
         "original_vs_generated_visual_decision_accuracy": (
             visual_correct / visual_total if visual_total else None

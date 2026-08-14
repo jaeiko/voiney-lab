@@ -193,3 +193,144 @@ The evaluator dataset contains the exact Week 5 real-voice transcripts and
 forbidden mutation outcomes. Automated execution uses provider fakes and must
 report zero paid calls. Live Acceptance remains a separate, bounded operator
 step using the documented domain profile and budgets.
+
+## 2026-08-13 authority and terminal-state refinement
+
+The following boundaries are **CLASS-EXPLICIT** principles: deterministic
+workflow state is separate from explanatory model output; tool/provider work is
+bounded and observable; evidence authority is visible; and slow work remains
+owned by its originating Turn. The concrete regexes, event names, SQLite store,
+deadline values, and two-panel desktop layout are **PROJECT-ENGINEERING**
+decisions for this FastAPI/Cascade implementation.
+
+- A bare `다음 단계로 안내해 줘` or `Guide me to the next step` creates a
+  server-owned `PendingCompletionConfirmation`. It is bound to configuration,
+  step ID/index, workflow revision, requesting Turn, and generation. It causes
+  no mutation or report event. Only an immediate valid affirmative response can
+  reuse the existing atomic completion transition; a negative or incompatible
+  response clears it. Reset, stop, transition, version/configuration change,
+  and blocker handling invalidate it.
+- Completion/anomaly wording is now downstream of the existing report-store
+  call. A completion persistence failure restores the pre-transition curated
+  checkpoint and returns a blocked, truthful response. Successful persistence
+  precedes both the user-visible acknowledgment and TTS. Replayed event keys
+  remain idempotent; a TTS failure after persistence does not undo the report.
+- Scientific follow-ups first reuse ordered normalized entities and the bounded
+  most-recent related entity. `bicarbonate`, destaining purpose, and keratin
+  contamination therefore enter the read-only source-planning path rather than
+  generic off-topic handling. Contamination/prevention is classified as a
+  safety dimension, not a model-only conceptual gap.
+- Every begun research operation emits at most one terminal result with the
+  exact `(configuration, turn, generation)` identity. Public terminal classes
+  are success, failure, timeout, cancelled, superseded, and unavailable. Stop
+  and a newer accepted Turn terminally close the old operation; the browser
+  records that terminal state and rejects every later result for the same key.
+- `SUPPLEMENTAL_MODEL_KNOWLEDGE` is an optional, separately configured source
+  class after all admitted authoritative tiers fail. It uses no search tool,
+  produces no citation, and is visibly/spokenly qualified as general model
+  background without admitted authority. Safety, preparation, substitution,
+  quantities, conditions, completion criteria, and workflow operations are
+  categorically ineligible.
+- At desktop widths the Procedure and Original/Related Visual panes form the
+  primary two-column region. Turn history follows below in a bounded viewport.
+  The primary Turn answer remains concise; original excerpts, citations,
+  server operation, tool/service records, and latency stay accessible through
+  expandable evidence/diagnostic details.
+
+The bounded live isolation matrix on 2026-08-13 made two xAI requests. A
+text-only `grok-4.6` Responses stream completed (first event 1.344 s, first text
+2.329 s, total 3.218 s). A raw PubChem-domain web-search stream reached 15 tool
+events but produced no completed response or admitted citation before the
+25.003 s public deadline. This proves model text availability and a live
+search-tool boundary, but it does not prove authoritative web-answer success.
+The application therefore keeps authoritative web status fail-closed and uses
+the supplemental tier only for eligible non-operational explanation.
+
+## 2026-08-14 hybrid multi-brain Cascade hardening
+
+The first incorrect layers from the latest real-voice run were confirmed in
+the local implementation before this pass:
+
+- `CuratedProtocolSession.plan()` over-fenced pending confirmation and then
+  allowed an immediate affirmative to fall into ordinary intent routing. The
+  pending gate is now evaluated before generic scope, is compatible only with
+  the next Turn and a non-older generation, and reuses the existing atomic
+  completion/report/transition path.
+- `classify_curated_control_intent()` did not distinguish next-step action,
+  next-step information, and completion-criteria information. It also lacked
+  scientific scope for rpm/incubation and a deterministic operational-deviation
+  class. These are now separate server-policy actions.
+- The old related-entity fields retained names but not an owned semantic focus
+  and comparison/dimension context. `ProtocolDiscourseContext` now retains only
+  bounded verified entities, topic, language, Turn/generation/revision, and is
+  cleared or superseded on incompatible state changes.
+- Anomaly classification was phrase-sensitive. Assertion variants and an
+  explicit non-assertion guard now feed the existing server report gate; the
+  classifier still cannot persist an event.
+- Report acknowledgment was composed after next-step prose. It is now a
+  mandatory server fact created only after existing report persistence succeeds
+  and precedes the committed next-step introduction.
+- Step 7 (and Step 9) has an observed repeat-until endpoint but no supported
+  server completion signal. Step 20 retains unresolved source ambiguity. The
+  implementation explains these constraints and does not invent a gate.
+- Optional research had a provider deadline but no separate visible enrichment
+  budget. A short Turn-owned budget now changes the UI to truthful bounded
+  background status; the operation still has one hard terminal result.
+- `renderCuratedProtocolState()` duplicated full visuals in Turns, and report
+  content was permanently expanded. The Visual pane now owns the image, the
+  Turn keeps a compact outcome, and report details expand on demand.
+- No session greeting or actual three-role model boundary existed. A deterministic
+  once-per-logical-session greeting and the typed orchestration below now exist.
+
+### Authority and conditional activation
+
+The course-explicit principle is that prompts request behavior while server
+state, tool schemas, output gates, persistence, and tests enforce it. The names
+**Answer Brain**, **Source Brain**, and **Visual Brain**, the activation matrix,
+immutable snapshot, and timing values are project-specific engineering choices
+for this Cascade application—not instructor mandates.
+
+`multi_brain.py` starts only roles required by a semantic Turn. Clear stop,
+navigation, completion, and report commands never construct a brain client.
+Independent enabled roles are scheduled concurrently:
+
+- Answer returns concise speech and richer display prose using only supplied
+  evidence IDs. Unknown evidence, new operational numbers, completion claims,
+  or persistence claims are rejected.
+- Source returns a bounded entity/dimension/scope/query proposal. The server
+  reconstructs the contextual query and alone executes/adjudicates retrieval.
+- Visual returns only whether a visual helps, one supplied entity, and one
+  requested visual class. The server visual gate owns provenance and execution.
+
+Every call is bound to configuration, logical session, Turn, generation,
+workflow revision, source hash, and step identity. Source and Visual cannot
+speak; Answer cannot write state. The server is the only primary-answer/TTS
+owner. The Answer role has a 1.25-second primary budget by default; if it is
+still running, a deterministic admitted local answer is spoken first and safe
+late prose can patch the same Turn as written-only enrichment. Each role retains
+its hard timeout and is cancelled/fenced when ownership changes.
+
+```bash
+VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED=false
+VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL=grok-4.6
+VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
+VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS=8
+VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS=6
+EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS=4
+```
+
+Offline tests prove three-way overlap with a barrier, conditional activation,
+strict output rejection, a non-cancelling primary budget, cancellation, and
+zero external calls. Live model quality and Mac/Whale audio remain separate.
+
+The bounded 2026-08-14 live schema check started exactly three text-only
+OpenAI-compatible chat-completions requests (one per role; no tools, image,
+audio, or workflow operation). The client produced no public terminal before
+the harness was externally stopped at 615.3 seconds. This did **not** verify a
+live role output. It exposed that `asyncio.wait_for()` could wait indefinitely
+for transport cancellation cleanup. The orchestration now passes an explicit
+per-request SDK timeout and uses a non-waiting public deadline that cancels and
+collects late transport cleanup. A cancellation-resistant offline regression
+proves the public terminal returns within its configured budget. No further
+live call was made because the authorized three-request ceiling was exhausted;
+live Provider cleanup remains a manual/operator recheck.

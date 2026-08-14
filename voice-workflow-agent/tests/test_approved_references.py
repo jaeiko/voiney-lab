@@ -21,7 +21,9 @@ from voice_workflow_agent.brain import answer_approved_reference_question
 from voice_workflow_agent.document_store import ingest_manifest
 from voice_workflow_agent.external_references import (
     ExternalReferenceSettings,
+    SupplementalKnowledgeSettings,
     XaiAuthoritativeWebSearch,
+    XaiSupplementalKnowledge,
 )
 from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
 from voice_workflow_agent.tools import ToolContext, search_approved_lab_references
@@ -186,9 +188,15 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {
             "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED": "true",
             "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
+            "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
         }, clear=True):
             settings = ExternalReferenceSettings.from_environment()
         self.assertEqual(settings.allowed_domains, ("osha.gov", "cdc.gov"))
+        self.assertEqual(settings.user_visible_enrichment_budget_seconds, 2.5)
+        self.assertLess(
+            settings.user_visible_enrichment_budget_seconds,
+            settings.timeout_seconds,
+        )
 
     def test_external_setting_alias_conflict_and_invalid_profile_fail_loudly(self):
         with patch.dict(os.environ, {
@@ -212,6 +220,70 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 name:value,
             },clear=True),self.assertRaises(ValueError):
                 ExternalReferenceSettings.from_environment()
+        with patch.dict(os.environ, {
+            "EXTERNAL_REFERENCES_ENABLED":"true",
+            "EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
+            "EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
+            "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
+        },clear=True),self.assertRaises(ValueError):
+            ExternalReferenceSettings.from_environment()
+
+    def test_supplemental_settings_are_separate_and_explicit(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(
+                SupplementalKnowledgeSettings.from_environment().enabled
+            )
+        with patch.dict(os.environ, {
+            "SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED": "true",
+            "SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL": "grok-test",
+            "SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS": "7",
+        }, clear=True):
+            settings = SupplementalKnowledgeSettings.from_environment()
+        self.assertTrue(settings.enabled)
+        self.assertEqual(settings.model, "grok-test")
+        self.assertEqual(settings.timeout_seconds, 7.0)
+        self.assertEqual(
+            settings.public_capability()["authority"],
+            "supplemental_model_knowledge",
+        )
+
+    async def test_supplemental_adapter_has_no_tools_or_citations(self):
+        class Responses:
+            calls = 0
+            async def create(self, **kwargs):
+                self.calls += 1
+                self.kwargs = kwargs
+                return SimpleNamespace(
+                    id="safe-response-id",
+                    output_text="AMBIC is a common abbreviation for ammonium bicarbonate.",
+                )
+
+        responses = Responses()
+        result = await XaiSupplementalKnowledge(
+            SimpleNamespace(responses=responses),
+            SupplementalKnowledgeSettings(True, "grok-test", 2.0),
+        ).explain("AMBIC의 일반적인 뜻은 뭐야?", language="ko")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            result["backend"],
+            "xai_responses_supplemental_model_knowledge",
+        )
+        self.assertEqual(responses.calls, 1)
+        self.assertNotIn("tools", responses.kwargs)
+        self.assertNotIn("include", responses.kwargs)
+
+    async def test_supplemental_adapter_rejects_operational_values(self):
+        class Responses:
+            async def create(self, **_kwargs):
+                return SimpleNamespace(
+                    output_text="Use HPLC water instead for this laboratory step."
+                )
+
+        result = await XaiSupplementalKnowledge(
+            SimpleNamespace(responses=Responses()),
+            SupplementalKnowledgeSettings(True, "grok-test", 2.0),
+        ).explain("Explain the background.", language="en")
+        self.assertEqual(result["status"], "response_rejected")
 
     async def test_external_adapter_accepts_documented_inline_citation_shape(self):
         url = "https://pubchem.ncbi.nlm.nih.gov/compound/Ammonium-bicarbonate"

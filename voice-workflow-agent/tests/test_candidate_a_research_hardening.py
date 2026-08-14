@@ -15,7 +15,11 @@ from voice_workflow_agent.curated_protocol import (
     normalize_scientific_request,
 )
 from voice_workflow_agent.document_store import ingest_manifest
-from voice_workflow_agent.external_references import plan_research_query
+from voice_workflow_agent.external_references import (
+    SupplementalKnowledgeSettings,
+    plan_research_query,
+    supplemental_knowledge_allowed,
+)
 from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
 from voice_workflow_agent.language import Transcription, classify_input_event
 
@@ -59,6 +63,256 @@ class CandidateAResearchRoutingTests(unittest.TestCase):
                     or "acetonitrile" in fact.text.casefold()
                     for fact in plan.facts
                 ))
+
+    def test_new_scientific_followups_are_read_only_before_off_topic_fallback(self):
+        questions = (
+            ("AMBIC에서 bicarbonate는 왜 중요한 거야?", "ambic", "role"),
+            ("HPLC water는 일반 물과 어떤 차이가 있어?", "hplc_water", "difference"),
+            ("젤 플러그가 왜 완전히 탈색되어야 해?", "gel_plug", "expected_result"),
+            ("염색된 단백질 밴드에서 케라틴 오염이 왜 문제가 돼?", "stained_protein_band", "safety"),
+        )
+        for turn, (question, entity, dimension) in enumerate(questions, 200):
+            with self.subTest(question=question):
+                session = self.session(1)
+                opening = session.current_index
+                plan = session.plan(question, turn_id=turn, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.RELATED_QUESTION)
+                self.assertIn(entity, plan.requested_entities)
+                self.assertIn(dimension, plan.question_dimensions)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.current_index, opening)
+
+        session = self.session(1)
+        first = session.plan(
+            "HPLC water는 일반 물과 어떤 차이가 있어?",
+            turn_id=210,
+            language="ko",
+        )
+        followup = session.plan(
+            "그 물을 왜 사용하는 거야?", turn_id=211, language="ko"
+        )
+        self.assertEqual(first.requested_entities, ("hplc_water",))
+        self.assertEqual(followup.requested_entities, ("hplc_water",))
+        self.assertEqual(followup.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertFalse(followup.state_changed)
+
+        unrelated = self.session(1).plan(
+            "다음 여행지는 어디가 좋아?", turn_id=212, language="ko"
+        )
+        self.assertEqual(unrelated.action, CuratedProtocolAction.OFF_TOPIC)
+        self.assertFalse(unrelated.state_changed)
+
+    def test_next_step_confirmation_is_server_owned_bounded_and_one_turn_only(self):
+        for language, transcript in (
+            ("ko", "다음 단계로 안내해 줘."),
+            ("en", "Guide me to the next step."),
+        ):
+            with self.subTest(language=language):
+                session = self.session(1)
+                opening = session.current_index
+                request = session.plan(
+                    transcript,
+                    turn_id=1,
+                    language=language,
+                    configuration_id=7,
+                    generation=3,
+                )
+                self.assertEqual(
+                    request.action, CuratedProtocolAction.CLARIFY_COMPLETION
+                )
+                self.assertFalse(request.state_changed)
+                self.assertEqual(session.current_index, opening)
+                self.assertIsNotNone(session.pending_completion_confirmation)
+                confirmed = session.plan(
+                    "네." if language == "ko" else "Yes.",
+                    turn_id=2,
+                    language=language,
+                    configuration_id=7,
+                    generation=3,
+                )
+                self.assertEqual(confirmed.action, CuratedProtocolAction.NEXT)
+                self.assertTrue(confirmed.reported_completion)
+                self.assertTrue(confirmed.state_changed)
+                self.assertEqual(session.current_index, opening + 1)
+                self.assertEqual(
+                    session.plan(
+                        "네." if language == "ko" else "Yes.",
+                        turn_id=2,
+                        language=language,
+                        configuration_id=7,
+                        generation=3,
+                    ),
+                    confirmed,
+                )
+                self.assertEqual(session.current_index, opening + 1)
+
+        declined = self.session(1)
+        declined.plan(
+            "다음 단계로 안내해 줘", turn_id=1, language="ko",
+            configuration_id=7, generation=1,
+        )
+        result = declined.plan(
+            "아니, 아직 안 끝났어", turn_id=2, language="ko",
+            configuration_id=7, generation=2,
+        )
+        self.assertEqual(result.action, CuratedProtocolAction.DECLINE_COMPLETION)
+        self.assertEqual(declined.current_index, 1)
+        self.assertIsNone(declined.pending_completion_confirmation)
+
+        stale = self.session(1)
+        stale.plan(
+            "다음 단계로 안내해 줘", turn_id=1, language="ko",
+            configuration_id=7, generation=1,
+        )
+        stale_yes = stale.plan(
+            "네.", turn_id=2, language="ko",
+            configuration_id=8, generation=2,
+        )
+        self.assertNotEqual(stale_yes.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(stale.current_index, 1)
+        self.assertIsNone(stale.pending_completion_confirmation)
+
+        old_generation = self.session(1)
+        old_generation.plan(
+            "다음 단계로 안내해 줘", turn_id=1, language="ko",
+            configuration_id=7, generation=5,
+        )
+        rejected_old_yes = old_generation.plan(
+            "네.", turn_id=2, language="ko",
+            configuration_id=7, generation=4,
+        )
+        self.assertNotEqual(rejected_old_yes.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(old_generation.current_index, 1)
+
+        incompatible = self.session(1)
+        incompatible.plan(
+            "다음 단계로 안내해 줘", turn_id=1, language="ko",
+            configuration_id=7, generation=1,
+        )
+        current = incompatible.plan(
+            "현재 단계 알려줘", turn_id=2, language="ko",
+            configuration_id=7, generation=2,
+        )
+        self.assertEqual(current.action, CuratedProtocolAction.CURRENT)
+        self.assertIsNone(incompatible.pending_completion_confirmation)
+        later_yes = incompatible.plan(
+            "네.", turn_id=3, language="ko",
+            configuration_id=7, generation=3,
+        )
+        self.assertNotEqual(later_yes.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(incompatible.current_index, 1)
+
+    def test_navigation_information_completion_criteria_and_language_are_distinct(self):
+        session = self.session(1)
+        opening = session.state()
+        preview = session.plan(
+            "What is the next step?", turn_id=1, language="en",
+        )
+        self.assertEqual(preview.action, CuratedProtocolAction.NEXT_INFORMATION)
+        self.assertEqual(preview.intent_kind, "next_step_information")
+        self.assertIn("Preview", preview.speech_text)
+        self.assertIn("Step 3", preview.speech_text)
+        self.assertIsNone(session.pending_completion_confirmation)
+        self.assertEqual(session.state(), opening)
+
+        current = session.plan(
+            "What is the current step?", turn_id=2, language="en",
+        )
+        self.assertEqual(current.action, CuratedProtocolAction.CURRENT)
+        self.assertIn("current step is 2", current.speech_text)
+        criteria = session.plan(
+            "완료 조건이 뭐야?", turn_id=3, language="ko",
+        )
+        self.assertEqual(
+            criteria.action, CuratedProtocolAction.COMPLETION_CRITERIA,
+        )
+        self.assertIn("완료 기준", criteria.speech_text)
+        self.assertNotEqual(
+            criteria.display_text.strip(),
+            self.fixture.steps[1].instruction_source_text.strip(),
+        )
+        self.assertEqual(session.state(), opening)
+
+    def test_bounded_coreference_answers_requested_dimension_before_source_dump(self):
+        session = self.session(1)
+        session.plan("HPLC water가 뭐야?", turn_id=1, language="ko")
+        difference = session.plan(
+            "그거 일반 물이랑 뭐가 다른데?", turn_id=2, language="ko",
+        )
+        self.assertEqual(difference.requested_entities, ("hplc_water",))
+        self.assertIn("difference", difference.question_dimensions)
+        self.assertIn("일반 물", difference.speech_text)
+        self.assertIn("별도 권위 자료", difference.speech_text)
+
+        session.plan("AMBIC가 뭐야?", turn_id=3, language="ko")
+        role = session.plan(
+            "그거는 왜 여기서 사용하는 거야?", turn_id=4, language="ko",
+        )
+        self.assertEqual(role.requested_entities, ("ambic",))
+        self.assertIn("role", role.question_dimensions)
+        self.assertIn("Solution A와 B", role.speech_text)
+
+        session.plan(
+            "Solution A와 Solution B 차이가 뭐야?",
+            turn_id=5, language="ko",
+        )
+        first = session.plan(
+            "그중 첫 번째는 왜 여기서 사용해?",
+            turn_id=6, language="ko",
+        )
+        self.assertEqual(first.requested_entities, ("solution_a",))
+        self.assertFalse(first.state_changed)
+
+    def test_scientific_scope_deviations_and_anomaly_assertions_are_separated(self):
+        session = self.session(2)
+        opening = session.state()
+        rpm = session.plan(
+            "800 rpm이 무엇인지 설명해줄 수 있어?",
+            turn_id=1, language="ko",
+        )
+        self.assertEqual(rpm.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertEqual(rpm.requested_entities, ("rpm",))
+        self.assertIn("기기 설정값", rpm.speech_text)
+        deviation = session.plan(
+            "37도 대신 35도로 해도 돼?", turn_id=2, language="ko",
+        )
+        self.assertEqual(
+            deviation.action, CuratedProtocolAction.OPERATIONAL_DEVIATION,
+        )
+        self.assertIn("37°C", deviation.speech_text)
+        self.assertIn("승인할 수 없습니다", deviation.speech_text)
+        self.assertEqual(session.state(), opening)
+
+        anomaly = session.plan(
+            "색깔이 변형됐어.", turn_id=3, language="ko",
+        )
+        self.assertEqual(anomaly.action, CuratedProtocolAction.REPORT_ANOMALY)
+        question = session.plan(
+            "색깔이 변하는 건 무슨 의미야?", turn_id=4, language="ko",
+        )
+        self.assertEqual(question.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertFalse(question.state_changed)
+        self.assertEqual(session.state(), opening)
+
+    def test_supplemental_model_knowledge_is_nonauthoritative_and_nonoperational(self):
+        self.assertTrue(supplemental_knowledge_allowed(
+            "AMBIC의 일반적인 역할은 뭐야?", ("role",)
+        ))
+        for query, dimensions in (
+            ("HPLC water 대신 일반 증류수를 써도 돼?", ("role",)),
+            ("추가 안전 수칙을 알려줘", ("safety",)),
+            ("25 mM 대신 50 mM를 써도 돼?", ("difference",)),
+            ("완료 조건은 뭐야?", ("related_knowledge",)),
+        ):
+            with self.subTest(query=query):
+                self.assertFalse(supplemental_knowledge_allowed(
+                    query, dimensions
+                ))
+        capability = SupplementalKnowledgeSettings(
+            True, "grok-4.6", 8.0
+        ).public_capability()
+        self.assertEqual(capability["authority"], "supplemental_model_knowledge")
+        self.assertNotIn("authoritative", capability["authority"])
 
     def test_week_five_multi_entity_repair_preserves_order_and_audit_note(self):
         key, entities, note, corrections = normalize_scientific_request(

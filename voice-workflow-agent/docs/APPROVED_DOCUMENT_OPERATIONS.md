@@ -130,6 +130,59 @@ citations support the returned claims.
 Google Custom Search and YouTube discovery are not part of this catalog or answer
 path.
 
+### Supplemental model knowledge is not a retrieval backend
+
+`SUPPLEMENTAL_MODEL_KNOWLEDGE` is a separately gated last resort for a narrow
+conceptual dimension after the protocol, original source, approved catalog, and
+enabled authoritative web tier do not answer it. It is never indexed into the
+approved catalog and never gains document or URL citations.
+
+```bash
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
+export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
+```
+
+The Candidate A development launcher enables this option so the live demo can
+provide explicitly qualified general definitions when ordinary xAI text is
+available but web search is not terminally useful. It remains ineligible for
+safety controls, preparation instructions, substitutions, numerical operating
+values, completion criteria, or any state mutation. The UI label is “일반 모델
+설명 · 확인된 권위 근거 없음”; there is no citation list and no claim of
+verification. Disable it to exercise a strict evidence-only run.
+
+Research status is Turn/generation owned. Once a result reaches `success`,
+`failed`, `timeout`, `cancelled`, `superseded`, or `unavailable`, neither the
+server nor browser accepts another result for that identity. A newer accepted
+Turn and session stop terminally close any older in-flight research operation.
+
+The provider total deadline and visible enrichment budget are intentionally
+different. Configure `EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS` below the
+total timeout (the Candidate A launcher uses 4 and 20 seconds). Crossing the
+shorter budget removes the primary spinner and reports bounded background work;
+it creates neither a second request nor a second terminal result.
+
+### Optional read-only multi-brain planning
+
+The Candidate A launcher can enable the project-specific typed Answer, Source,
+and Visual roles. They are internal LLM operations, not workflow function tools
+or evidence backends. They receive a bounded immutable snapshot, cannot persist
+or mutate state, and cannot make evidence-admission decisions. Keep them disabled
+in an evidence-only run:
+
+```bash
+export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED=false
+export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL='grok-4.6'
+export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
+export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS=8
+export VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS=6
+```
+
+The short primary budget is not a provider timeout. It lets admitted local text
+and TTS proceed while a bounded Answer call may later add written detail. The
+browser reports these as read-only brain diagnostics, never as fake Tools or
+server operations.
+
 ## 7. Candidate A usefulness gate
 
 The local audit on 2026-08-10 found two active approved demo documents and three

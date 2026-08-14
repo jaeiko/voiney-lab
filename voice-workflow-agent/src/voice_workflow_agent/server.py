@@ -66,8 +66,11 @@ from voice_workflow_agent.experiment_reports import (
 )
 from voice_workflow_agent.external_references import (
     ExternalReferenceSettings,
+    SupplementalKnowledgeSettings,
     XaiAuthoritativeWebSearch,
+    XaiSupplementalKnowledge,
     plan_research_query,
+    supplemental_knowledge_allowed,
 )
 from voice_workflow_agent.generated_visuals import (
     GENERATED_VISUALS,
@@ -98,6 +101,16 @@ from voice_workflow_agent.language import (
 from voice_workflow_agent.moss_retrieval import (
     start_moss_runtime_from_environment,
     stop_moss_runtime,
+)
+from voice_workflow_agent.multi_brain import (
+    AnswerBrainOutput,
+    BrainFact,
+    BrainSnapshot,
+    HybridMultiBrain,
+    MultiBrainSettings,
+    SourceBrainOutput,
+    VisualBrainOutput,
+    activation_for,
 )
 from voice_workflow_agent.native_realtime import (
     NATIVE_SAMPLE_RATE,
@@ -966,8 +979,10 @@ class ListenerSession:
                  curated_protocol_session:CuratedProtocolSession|None=None,
                  experiment_report_store:ExperimentReportStore|None=None,
                  external_reference_settings:ExternalReferenceSettings|None=None,
+                 supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  web_visual_settings:WebVisualSettings|None=None,
-                 generated_visual_settings:GeneratedVisualSettings|None=None)->None:
+                 generated_visual_settings:GeneratedVisualSettings|None=None,
+                 multi_brain_settings:MultiBrainSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -982,9 +997,12 @@ class ListenerSession:
         self.experiment_report_store=experiment_report_store
         self.external_reference_settings=(
             external_reference_settings or ExternalReferenceSettings(False))
+        self.supplemental_knowledge_settings=(
+            supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
         self.web_visual_settings=web_visual_settings or WebVisualSettings(False)
         self.generated_visual_settings=(
             generated_visual_settings or GeneratedVisualSettings(False))
+        self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
         self.experiment_report_id:str|None=None
         self.session_id=new_session_id()
         self.accepted_configuration_id:int|None=None
@@ -995,6 +1013,7 @@ class ListenerSession:
         self.turn_generations:dict[int,int]={}
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self.visual_tasks:set[asyncio.Task]=set()
+        self.research_operations:set[tuple[int,int]]=set()
         self._interrupted_generations:set[tuple[int,int]]=set()
         self._cascade_vad_config=self.detector.config
         self._vad_classifier=self.detector.classifier
@@ -1006,6 +1025,7 @@ class ListenerSession:
         self._interrupt_candidate_endpoint_at:float|None=None
         self._interrupt_candidate_diagnostics:dict[str,int|bool]={}
         self._microphone_chunk_sequence=0
+        self.greeting_emitted=False
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -1038,10 +1058,18 @@ class ListenerSession:
         for task in tuple(self.visual_tasks):
             task.cancel()
         self.visual_tasks.clear()
+        self.research_operations.clear()
         self.turn_generations.clear()
         self.turn_progress.clear()
         self._interrupted_generations.clear()
         self._reset_interrupt_input()
+    def begin_research(self,turn_id:int,generation:int)->None:
+        self.research_operations.add((turn_id,generation))
+    def finish_research(self,turn_id:int,generation:int)->bool:
+        identity=(turn_id,generation)
+        if identity not in self.research_operations:return False
+        self.research_operations.remove(identity)
+        return True
     def owns_visual_result(
         self,turn_id:int,generation:int,configuration_id:int|None,
         protocol_id:str,
@@ -1058,6 +1086,7 @@ class ListenerSession:
         task.add_done_callback(self.visual_tasks.discard)
     def start(self):
         self.generation+=1
+        self.greeting_emitted=False
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
@@ -1767,6 +1796,137 @@ def _public_experiment_report_state(report:dict)->dict:
         )
     } | {"event_count":len(report.get("events",()))}
 
+
+def _research_terminal_status(status:str)->str:
+    if status == "success": return "success"
+    if status in {"cancelled","superseded"}: return status
+    if status in {"disabled","unavailable","credentials_unavailable"}:
+        return "unavailable"
+    if status.startswith("timeout_"): return "timeout"
+    return "failed"
+
+
+async def _finish_research_operation(
+    sender:LockedSender,
+    session:ListenerSession,
+    turn_id:int,
+    generation:int,
+    status:str,
+    **fields,
+)->bool:
+    """Emit exactly one terminal result for one owned read-only operation."""
+
+    if not session.finish_research(turn_id,generation): return False
+    await sender.text(
+        "research.result",
+        configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,
+        generation=generation,
+        status=status,
+        terminal_status=_research_terminal_status(status),
+        correlation_id=f"research-{generation}-{turn_id}",
+        **fields,
+    )
+    return True
+
+
+async def _finish_all_research_operations(
+    sender:LockedSender,
+    session:ListenerSession,
+    status:str,
+)->None:
+    for turn_id,generation in tuple(session.research_operations):
+        await _finish_research_operation(
+            sender,session,turn_id,generation,status,
+            limitation=(
+                "새 요청으로 이전 근거 확인을 종료했습니다."
+                if status=="superseded" else
+                "근거 확인이 취소되었습니다."
+            ),
+        )
+
+
+async def _send_session_greeting(
+    sender:LockedSender,session:ListenerSession,*,language:str,
+) -> None:
+    """Emit one deterministic, interruptible greeting for a logical session."""
+
+    if session.greeting_emitted:
+        return
+    session.greeting_emitted=True
+    greeting_turn_id=2_000_000_000  # Reserved display/audio identity; user turns start at 1.
+    greeting={
+        "ko":"Voice Workflow Agent입니다. 프로토콜 워크플로가 준비되었습니다. 시작하거나 질문해 주세요.",
+        "en":"This is Voice Workflow Agent. The protocol workflow is ready. You can begin or ask a question.",
+        "vi":"Đây là Voice Workflow Agent. Quy trình đã sẵn sàng. Bạn có thể bắt đầu hoặc đặt câu hỏi.",
+    }.get(language,"Voice Workflow Agent is ready.")
+    generation=session.generation
+    configuration_id=session.accepted_configuration_id
+    greeting_id=hashlib.sha256(
+        f"{session.session_id}\x1f{configuration_id}\x1fgreeting-v1".encode()
+    ).hexdigest()
+    await sender.text(
+        "session.greeting",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,greeting_id=greeting_id,
+        text=greeting,language=language,
+    )
+    try:
+        pcm=await asyncio.to_thread(synthesize,greeting,language)
+        frames=frame_complete_audio(pcm)
+    except Exception:
+        await sender.text(
+            "session.greeting.failed",configuration_id=configuration_id,
+            turn_id=greeting_turn_id,generation=generation,greeting_id=greeting_id,
+            reason="tts_unavailable",
+        )
+        return
+    if (
+        not frames or not session.active
+        or session.accepted_configuration_id!=configuration_id
+        or session.active_turn_id is not None
+        or session.state is not TurnState.IDLE
+    ):
+        await sender.text(
+            "session.greeting.cancelled",configuration_id=configuration_id,
+            turn_id=greeting_turn_id,generation=generation,
+            greeting_id=greeting_id,reason="superseded_by_session_activity",
+        )
+        return
+    session.active_turn_id=greeting_turn_id
+    session.turn_generations[greeting_turn_id]=generation
+    session.turn_committed_at[greeting_turn_id]=session.clock()
+    session.detector.state=TurnState.PROCESSING
+    if not session.start_playback(greeting_turn_id):
+        return
+    await sender.text(
+        "reply.delta",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,segment_index=0,text=greeting,
+        primary_text=greeting,speech_text=greeting,
+        answer_origin="server_greeting",source_texts=[],source_pages=[],
+        evidence_ids=[],translation_status="not_applicable",
+    )
+    await sender.text(
+        "state.changed",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,state=session.state.value,
+    )
+    await sender.segment(greeting_turn_id,0,frames,generation)
+    await sender.text(
+        "reply.complete",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,text=greeting,
+    )
+    await sender.text(
+        "audio.complete",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,segment_count=1,
+    )
+    await sender.text(
+        "turn.done",configuration_id=configuration_id,
+        turn_id=greeting_turn_id,generation=generation,route="server_greeting",
+        pipeline="cascade",result_kind="greeting",fact_id=None,
+        speech_mode="control",
+        segment_count=1,input_frames=0,output_frames=len(frames),
+        tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},
+    )
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,clock:Callable[[],float]=time.perf_counter,
                    sender:LockedSender|None=None,filler:CascadeFiller|None=None,
@@ -1973,13 +2133,113 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         curated_tools_used=[]
         report_prepared=False
         plan=None
+        brain_run=None
+        brain_activation=None
+        brain_terminals={}
+        answer_output=None
+        brain_snapshot=None
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             pre_transition_index=curated.current_index
             plan=curated.plan(
                 transcript,turn_id=turn_id,language=turn_language,
-                transcript_quality=transcription_quality_issue(transcription))
+                transcript_quality=transcription_quality_issue(transcription),
+                configuration_id=session.accepted_configuration_id,
+                generation=generation)
+            brain_facts=tuple(plan.facts)
+            brain_activation=activation_for(
+                intent_kind=plan.intent_kind,
+                visual_requested=plan.visual_requested,
+                unresolved_dimensions=(
+                    plan.unresolved_dimensions or plan.question_dimensions
+                ),
+            )
+            if (
+                session.multi_brain_settings.enabled
+                and brain_activation.roles
+                and brain_facts
+                and curated.active
+            ):
+                step=curated.fixture.steps[curated.current_index]
+                brain_client=AsyncOpenAI(
+                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                    max_retries=0)
+                snapshot=BrainSnapshot(
+                    configuration_id=session.accepted_configuration_id,
+                    session_id=session.session_id,
+                    turn_id=turn_id,generation_id=generation,
+                    workflow_revision=curated.state()["revision"],
+                    protocol_id=curated.fixture.protocol_id,
+                    document_sha256=curated.fixture.source_pdf_sha256 or "",
+                    step_id=step.step_id,step_index=curated.current_index,
+                    language=turn_language,transcript=transcript,
+                    intent_kind=plan.intent_kind,
+                    question_kind=plan.question_kind,
+                    requested_entities=plan.requested_entities,
+                    question_dimensions=plan.question_dimensions,
+                    facts=tuple(BrainFact(
+                        fact.fact_id,fact.kind,fact.text,fact.source_page)
+                        for fact in brain_facts[:24]
+                    ),
+                )
+                brain_snapshot=snapshot
+                brain_run=HybridMultiBrain(
+                    brain_client,session.multi_brain_settings,clock=clock,
+                ).start(snapshot,brain_activation)
+                await current_text(
+                    "brain.state",turn_id=turn_id,status="running",
+                    roles=list(brain_activation.roles),
+                    workflow_revision=snapshot.workflow_revision,
+                    step_id=snapshot.step_id,
+                )
+                # A slow model may enrich this Turn later, but it may not hold
+                # the first locally grounded browser answer or TTS hostage.
+                answer_terminal=await brain_run.terminal(
+                    "answer",
+                    timeout=session.multi_brain_settings.primary_answer_budget_seconds,
+                )
+                if answer_terminal is not None:
+                    brain_terminals["answer"]=answer_terminal
+                    timings["answer_brain_ms"]=answer_terminal.elapsed_ms
+                    await current_text(
+                        "brain.state",turn_id=turn_id,role="answer",
+                        status=answer_terminal.status,
+                        elapsed_ms=answer_terminal.elapsed_ms,
+                    )
+                    if (
+                        answer_terminal.status=="success"
+                        and isinstance(answer_terminal.output,AnswerBrainOutput)
+                        and session.is_current(turn_id,generation)
+                        and curated.state()["revision"]==snapshot.workflow_revision
+                        and curated.fixture.steps[curated.current_index].step_id
+                        ==snapshot.step_id
+                    ):
+                        answer_output=answer_terminal.output
+                        if plan.action is CuratedProtocolAction.OPERATIONAL_DEVIATION:
+                            plan=replace(
+                                plan,
+                                display_text=(
+                                    f"{plan.display_text}\n\nGeneral background (read-only)\n"
+                                    f"{answer_output.display_answer}"
+                                ),
+                                limitations=tuple(dict.fromkeys((
+                                    *plan.limitations,*answer_output.limitations,
+                                    "Answer Brain output cannot authorize the deviation.",
+                                ))),
+                            )
+                        else:
+                            plan=replace(
+                                plan,
+                                display_text=answer_output.display_answer,
+                                speech_text=answer_output.spoken_answer,
+                                primary_text=answer_output.display_answer,
+                                evidence_ids=answer_output.evidence_ids,
+                                limitations=tuple(dict.fromkeys((
+                                    *plan.limitations,*answer_output.limitations,
+                                ))),
+                                translation_status="answer_brain_grounded",
+                            )
             research_context=None
             if (
                 plan.action is CuratedProtocolAction.RELATED_QUESTION
@@ -2027,16 +2287,55 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     unresolved_dimensions=(
                         envelope.source_plan.unresolved_dimensions),
                 )
+                if isinstance(answer_output,AnswerBrainOutput):
+                    plan=replace(
+                        plan,
+                        display_text=answer_output.display_answer,
+                        speech_text=answer_output.spoken_answer,
+                        primary_text=answer_output.display_answer,
+                        evidence_ids=answer_output.evidence_ids,
+                        limitations=tuple(dict.fromkeys((
+                            *plan.limitations,*answer_output.limitations,
+                        ))),
+                        translation_status="answer_brain_grounded",
+                    )
                 research_context={
                     "query":resolved_query,"reference_query":reference_query,
                     "step":step,"facts":tuple(facts),
                     "force_external":plan.requested_followup=="search_external_reference",
                 }
+                session.begin_research(turn_id,generation)
                 await current_text(
                     "research.state",turn_id=turn_id,status="pending",
                     phase="approved_references",
                     correlation_id=f"research-{generation}-{turn_id}",
                 )
+                async def enrichment_budget_notice()->None:
+                    budget=(
+                        session.external_reference_settings.user_visible_enrichment_budget_seconds
+                        if session.external_reference_settings.enabled else 4.0
+                    )
+                    await asyncio.sleep(budget)
+                    if (
+                        (turn_id,generation) in session.research_operations
+                        and session.is_current(turn_id,generation)
+                    ):
+                        await current_text(
+                            "research.state",turn_id=turn_id,
+                            status="background_bounded",
+                            phase="optional_enrichment",
+                            user_visible_budget_ms=round(budget*1000),
+                            total_deadline_ms=round(min(30.0,max(
+                                10.0,
+                                (session.external_reference_settings.timeout_seconds
+                                 if session.external_reference_settings.enabled else 0.0)
+                                +(session.supplemental_knowledge_settings.timeout_seconds
+                                  if session.supplemental_knowledge_settings.enabled else 0.0),
+                            ))*1000),
+                            correlation_id=f"research-{generation}-{turn_id}",
+                        )
+                session.track_visual_task(asyncio.create_task(
+                    enrichment_budget_notice()))
             if plan.action in {
                 CuratedProtocolAction.REPORT_ANOMALY,
                 CuratedProtocolAction.SHOW_REPORT,
@@ -2054,14 +2353,41 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         speech_mode=CuratedProtocolSpeechMode.BLOCKED,
                     )
                 else:
-                    report=await asyncio.to_thread(
-                        _record_experiment_report_plan,
-                        session,curated,plan,
-                        turn_id=turn_id,generation=generation,
-                        pre_transition_index=pre_transition_index,
-                    )
-                    report_prepared=True
-                    await report_state(report)
+                    try:
+                        report=await asyncio.to_thread(
+                            _record_experiment_report_plan,
+                            session,curated,plan,
+                            turn_id=turn_id,generation=generation,
+                            pre_transition_index=pre_transition_index,
+                        )
+                    except Exception:
+                        failed=(
+                            "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다. "
+                            "프로토콜 상태는 변경하지 않았습니다."
+                            if turn_language=="ko" else
+                            "The experiment record could not be saved, so the issue was not acknowledged as recorded. The protocol state did not change."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                        )
+                        await current_text(
+                            "experiment.report.error",turn_id=turn_id,
+                            code="report_persistence_failed")
+                    else:
+                        report_prepared=True
+                        acknowledged=(
+                            f"말씀하신 이상 사항을 현재 {plan.step_label}단계 실험 기록에 남겼습니다. "
+                            "프로토콜 상태는 변경하지 않았습니다."
+                            if turn_language=="ko" else
+                            f"The reported issue was added to the experiment record for step {plan.step_label}. The protocol state did not change."
+                        )
+                        plan=replace(
+                            plan,display_text=acknowledged,
+                            speech_text=acknowledged,
+                            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                        )
+                        await report_state(report)
             display_text=plan.display_text
             speech_text=plan.speech_text
             if not isinstance(display_text,str) or not display_text.strip():
@@ -2080,6 +2406,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     CuratedProtocolAction.STOP,CuratedProtocolAction.QUESTION,
                     CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
                     CuratedProtocolAction.FULL_DETAIL,
+                    CuratedProtocolAction.NEXT_INFORMATION,
+                    CuratedProtocolAction.COMPLETION_CRITERIA,
+                    CuratedProtocolAction.OPERATIONAL_DEVIATION,
                     CuratedProtocolAction.PROTOCOL_QUERY,
                 }
             ):
@@ -2091,13 +2420,58 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         pre_transition_index=pre_transition_index,
                     )
                     report_prepared=True
-                    await report_state(report)
                 except Exception:
+                    if (
+                        plan.action is CuratedProtocolAction.NEXT
+                        and plan.state_changed
+                    ):
+                        curated._restore(checkpoint)
+                        failed=(
+                            "실험 기록을 저장하지 못해 단계 완료와 이동을 확정하지 않았습니다. 현재 단계를 유지합니다."
+                            if turn_language=="ko" else
+                            "The experiment record could not be saved, so completion and transition were not committed. The current step is unchanged."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                            state_changed=False,step_label=(
+                                curated.fixture.steps[curated.current_index].source_label),
+                            primary_text=None,source_texts=(),source_pages=(),
+                            evidence_ids=(),translation_status="not_applicable",
+                        )
+                        session.set_turn_terminal_outcome(
+                            turn_id,generation,"blocked")
                     log.warning(
                         "experiment report update failed turn_id=%s",turn_id)
                     await current_text(
                         "experiment.report.error",turn_id=turn_id,
-                        code="report_update_failed")
+                        code="report_persistence_failed")
+                else:
+                    if (
+                        plan.action is CuratedProtocolAction.NEXT
+                        and plan.state_changed
+                        and plan.reported_completion
+                    ):
+                        acknowledgment=(
+                            "현재 단계 완료를 실험 기록에 반영했습니다."
+                            if turn_language=="ko" else
+                            "I added the current-step completion to the experiment record."
+                        )
+                        plan=replace(
+                            plan,
+                            display_text=f"{acknowledgment}\n\n{plan.display_text}",
+                            speech_text=f"{acknowledgment} {plan.speech_text}",
+                        )
+                    await report_state(report)
+            # Report persistence is the acknowledgement gate.  Re-read the
+            # possibly replaced plan only after that gate so neither display
+            # nor TTS can use pre-persistence success language.
+            display_text=plan.display_text
+            speech_text=plan.speech_text
+            if not isinstance(display_text,str) or not display_text.strip():
+                raise RuntimeError("curated protocol produced no display text")
+            if not isinstance(speech_text,str) or not speech_text.strip():
+                raise RuntimeError("curated protocol produced no speech text")
             timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
             await progress("synthesizing",route="curated_protocol")
             pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
@@ -2106,9 +2480,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if not frames or not session.start_playback(turn_id):
                 raise RuntimeError("curated protocol produced no playable audio")
         except asyncio.CancelledError:
+            if brain_run is not None:
+                brain_run.cancel()
             curated._restore(checkpoint)
             raise
         except BaseException:
+            if brain_run is not None:
+                brain_run.cancel()
             if not (
                 report_prepared and plan is not None
                 and bool(plan.state_changed)
@@ -2135,6 +2513,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 if plan.intent_kind=="expected_result_explanation"
                 else "current_step_full_detail"
             ),
+            CuratedProtocolAction.NEXT_INFORMATION:"next_step_preview",
+            CuratedProtocolAction.COMPLETION_CRITERIA:"completion_criteria_read",
+            CuratedProtocolAction.OPERATIONAL_DEVIATION:"operational_deviation_refused",
             CuratedProtocolAction.NEXT:"next_step_transition",
             CuratedProtocolAction.QUESTION:(
                 "approved_reference_qa"
@@ -2152,6 +2533,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.SHOW_REPORT:"experiment_report_view",
             CuratedProtocolAction.PROTOCOL_QUERY:"protocol_structure_read",
             CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
+            CuratedProtocolAction.DECLINE_COMPLETION:"completion_confirmation_declined",
             CuratedProtocolAction.CLARIFY_REFERENCE:"reference_clarification_required",
             CuratedProtocolAction.OFF_TOPIC:"scope_reminder",
             CuratedProtocolAction.UNSUPPORTED:"unsupported_question",
@@ -2214,13 +2596,77 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             critical_warning_present=plan.critical_warning_text is not None,
             intent_kind=plan.intent_kind,
             reported_completion=plan.reported_completion,
-            requested_transition=plan.requested_transition)
+            requested_transition=plan.requested_transition,
+            brains_enabled=(
+                list(brain_activation.roles) if brain_activation else []),
+            brain_terminals={
+                role:{"status":terminal.status,"elapsed_ms":terminal.elapsed_ms}
+                for role,terminal in brain_terminals.items()
+            })
+        source_output=None
+        visual_output=None
+        if brain_run is not None and brain_snapshot is not None:
+            late_answer_output=None
+            roles_to_finish=[]
+            if "answer" not in brain_terminals:
+                roles_to_finish.append(("answer",AnswerBrainOutput))
+            roles_to_finish.extend((
+                ("source",SourceBrainOutput),("visual",VisualBrainOutput),
+            ))
+            for role,expected in roles_to_finish:
+                terminal=await brain_run.terminal(role)
+                if terminal is None:
+                    continue
+                brain_terminals[role]=terminal
+                timings[f"{role}_brain_ms"]=terminal.elapsed_ms
+                if not session.is_current(turn_id,generation):
+                    brain_run.cancel()
+                    return
+                current_revision=curated.state()["revision"]
+                current_step=curated.fixture.steps[curated.current_index]
+                owned=(
+                    current_revision==brain_snapshot.workflow_revision
+                    and current_step.step_id==brain_snapshot.step_id
+                    and session.accepted_configuration_id
+                    ==brain_snapshot.configuration_id
+                )
+                await current_text(
+                    "brain.state",turn_id=turn_id,role=role,
+                    status=(terminal.status if owned else "stale_rejected"),
+                    elapsed_ms=terminal.elapsed_ms,
+                )
+                if terminal.status=="success" and owned and isinstance(terminal.output,expected):
+                    if role=="answer": late_answer_output=terminal.output
+                    elif role=="source": source_output=terminal.output
+                    else: visual_output=terminal.output
+            if isinstance(late_answer_output,AnswerBrainOutput):
+                # Written-only same-Turn enrichment. The browser keeps the
+                # already spoken primary answer and renders this in details.
+                await current_text(
+                    "brain.answer.enrichment",turn_id=turn_id,
+                    status="ready",display_answer=late_answer_output.display_answer,
+                    evidence_ids=list(late_answer_output.evidence_ids),
+                    limitations=list(late_answer_output.limitations),
+                )
+            await current_text(
+                "brain.state",turn_id=turn_id,status="complete",
+                roles=list(brain_activation.roles),
+            )
         # The primary display/audio contract is complete. Explicit visual work
         # can now run alongside the independent evidence supplement instead of
         # waiting behind it; both paths retain the same Turn/generation fence.
         if plan.action is CuratedProtocolAction.VISUAL_REQUEST:
             existing_visual=curated.fixture.visual_for_step(curated.current_index)
-            if plan.visual_kind=="web_photo" and existing_visual is None:
+            visual_kind=plan.visual_kind
+            if isinstance(visual_output,VisualBrainOutput):
+                visual_kind={
+                    "authoritative_external_reference":"web_photo",
+                    "generated_instructional_illustration":"instructional_illustration",
+                    "original_source_visual":"original_source",
+                    "approved_visual":"original_source",
+                    "no_visual":"no_visual",
+                }[visual_output.preferred_class]
+            if visual_kind=="web_photo" and existing_visual is None:
                 web_visual_settings=session.web_visual_settings
                 if web_visual_settings.enabled:
                     await _queue_curated_web_visual(
@@ -2239,7 +2685,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         ).hexdigest(),status="visual_failed",
                         visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                         fallback="feature_disabled")
-            elif existing_visual is None:
+            elif existing_visual is None and visual_kind!="no_visual":
                 visual_settings=session.generated_visual_settings
                 visual_spec=(
                     _curated_visual_specification(curated)
@@ -2260,9 +2706,52 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         ).hexdigest(),status="visual_failed",
                         visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                         fallback="feature_disabled")
+            elif existing_visual is None and visual_kind=="no_visual":
+                fixture=curated.fixture;step=fixture.steps[curated.current_index]
+                await current_text(
+                    "protocol.visual.state",turn_id=turn_id,
+                    protocol_id=fixture.protocol_id,step_id=step.step_id,
+                    source_document_hash=fixture.source_pdf_sha256,
+                    visual_job_id=hashlib.sha256(
+                        f"no-visual\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                    ).hexdigest(),status="visual_failed",
+                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                    fallback="planner_no_visual")
         if research_context is not None and session.is_current(turn_id,generation):
             research_plan=None
             context=research_context
+            if (
+                isinstance(source_output,SourceBrainOutput)
+                and source_output.needs_research
+                and source_output.query
+            ):
+                # The Source Brain proposes terms only. Rebuild the final
+                # query through the deterministic context planner before any
+                # retriever/provider sees it.
+                context={**context,"reference_query":plan_research_query(
+                    source_output.query,
+                    protocol_title=curated.fixture.title,
+                    step_label=context["step"].source_label,
+                    step_text=context["step"].instruction_source_text,
+                    evidence_texts=tuple(fact.text for fact in context["facts"]),
+                    requested_entity=plan.requested_entity,
+                    requested_entities=plan.requested_entities,
+                    question_kind=plan.question_kind,
+                    question_dimensions=plan.question_dimensions,
+                )}
+            research_budget=min(30.0,max(
+                10.0,
+                (
+                    session.external_reference_settings.timeout_seconds
+                    if session.external_reference_settings.enabled else 0.0
+                ) + (
+                    session.supplemental_knowledge_settings.timeout_seconds
+                    if session.supplemental_knowledge_settings.enabled else 0.0
+                ),
+            ))
+            research_deadline=clock()+research_budget
+            def research_remaining(cap:float)->float:
+                return max(0.05,min(cap,research_deadline-clock()))
             if session.tool_context is not None and not context["force_external"]:
                 await current_text(
                     "research.state",turn_id=turn_id,status="running",
@@ -2273,11 +2762,20 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "tool.call",turn_id=turn_id,
                     tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
                 reference_started=clock()
-                reference_result=await asyncio.to_thread(
-                    search_approved_lab_references,
-                    context["reference_query"],context=session.tool_context,
-                    protocol_id=curated.fixture.protocol_id,top_k=5,
-                )
+                try:
+                    reference_result=await asyncio.wait_for(
+                        asyncio.to_thread(
+                            search_approved_lab_references,
+                            context["reference_query"],context=session.tool_context,
+                            protocol_id=curated.fixture.protocol_id,top_k=5,
+                        ),
+                        timeout=research_remaining(3.0),
+                    )
+                except asyncio.TimeoutError:
+                    reference_result={
+                        "status":"timeout_read","answerable":False,
+                        "matches":[],"retrieval":{"backend":"sqlite"},
+                    }
                 if not session.is_current(turn_id,generation):
                     return
                 reference_elapsed=round((clock()-reference_started)*1000)
@@ -2299,10 +2797,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             base_url=api_url(""),
                             api_key=require_env("XAI_API_KEY"),max_retries=0)
                         client.model=require_env("CHAT_MODEL")
-                        answer=await answer_approved_reference_question(
-                            client,context["query"],language=turn_language,
-                            protocol_id=curated.fixture.protocol_id,
-                            step_id=context["step"].step_id,evidence=matches)
+                        answer=await asyncio.wait_for(
+                            answer_approved_reference_question(
+                                client,context["query"],language=turn_language,
+                                protocol_id=curated.fixture.protocol_id,
+                                step_id=context["step"].step_id,evidence=matches),
+                            timeout=research_remaining(8.0),
+                        )
                         if session.is_current(turn_id,generation):
                             research_plan=curated.apply_reference_answer(
                                 turn_id=turn_id,language=turn_language,
@@ -2334,11 +2835,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     external_client=AsyncOpenAI(
                         base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
                         max_retries=0)
-                    result=await XaiAuthoritativeWebSearch(
-                        external_client,session.external_reference_settings,
-                    ).search(context["reference_query"],language=turn_language)
+                    result=await asyncio.wait_for(
+                        XaiAuthoritativeWebSearch(
+                            external_client,session.external_reference_settings,
+                        ).search(
+                            context["reference_query"],language=turn_language),
+                        timeout=research_remaining(
+                            session.external_reference_settings.timeout_seconds),
+                    )
                 except asyncio.CancelledError:
                     raise
+                except asyncio.TimeoutError:
+                    result={"status":"timeout_total","matches":[]}
                 except Exception as exc:
                     log.warning(
                         "authoritative research failed turn_id=%s category=%s",
@@ -2374,10 +2882,54 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             "External guidance cannot modify the active protocol.",
                         ),
                     )
-            if research_plan is not None and session.is_current(turn_id,generation):
+            supplemental_result=None
+            if (
+                research_plan is None
+                and session.supplemental_knowledge_settings.enabled
+                and supplemental_knowledge_allowed(
+                    context["query"],plan.question_dimensions)
+            ):
                 await current_text(
-                    "research.result",turn_id=turn_id,status="success",
+                    "research.state",turn_id=turn_id,status="running",
+                    phase="supplemental_model",
                     correlation_id=f"research-{generation}-{turn_id}",
+                )
+                supplemental_started=clock()
+                try:
+                    supplemental_client=AsyncOpenAI(
+                        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                        max_retries=0)
+                    supplemental_result=await asyncio.wait_for(
+                        XaiSupplementalKnowledge(
+                            supplemental_client,
+                            session.supplemental_knowledge_settings,
+                        ).explain(
+                            context["reference_query"],language=turn_language),
+                        timeout=research_remaining(
+                            session.supplemental_knowledge_settings.timeout_seconds),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    supplemental_result={"status":"timeout_total"}
+                except Exception as exc:
+                    log.info(
+                        "supplemental explanation failed turn_id=%s category=%s",
+                        turn_id,type(exc).__name__)
+                    supplemental_result={"status":"provider_error"}
+                if not session.is_current(turn_id,generation):
+                    return
+                if supplemental_result.get("status")=="success":
+                    research_plan=curated.apply_supplemental_answer(
+                        turn_id=turn_id,language=turn_language,
+                        primary_text=supplemental_result["answer"],
+                        retrieval_backend=supplemental_result["backend"],
+                    )
+                timings["supplemental_model_ms"]=round(
+                    (clock()-supplemental_started)*1000)
+            if research_plan is not None and session.is_current(turn_id,generation):
+                await _finish_research_operation(
+                    sender,session,turn_id,generation,"success",
                     primary_text=research_plan.primary_text,
                     answer_origin=research_plan.answer_origin,
                     citations=list(research_plan.citations),
@@ -2395,7 +2947,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             elif session.is_current(turn_id,generation):
                 status=(
                     result.get("status","disabled")
-                    if isinstance(result,dict) else "disabled"
+                    if isinstance(result,dict) else
+                    supplemental_result.get("status","disabled")
+                    if isinstance(supplemental_result,dict) else "disabled"
                 )
                 if (
                     session.experiment_report_store is not None
@@ -2416,9 +2970,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         payload={"status":status,"state_mutation":False},
                     )
                     await report_state(report)
-                await current_text(
-                    "research.result",turn_id=turn_id,status=status,
-                    correlation_id=f"research-{generation}-{turn_id}",
+                await _finish_research_operation(
+                    sender,session,turn_id,generation,status,
                     limitation=(
                         "활성 프로토콜 근거는 유지했지만 요청한 추가 차원을 권위 자료에서 확인하지 못했습니다."
                         if turn_language=="ko" else
@@ -2709,9 +3262,19 @@ async def run_turn_safely(
         sender=sender,filler=filler,
         accepted_transcription=accepted_transcription,
         accepted_stt_ms=accepted_stt_ms)
-    except asyncio.CancelledError: session.cascade_failed(turn_id); raise
+    except asyncio.CancelledError:
+        await _finish_research_operation(
+            sender,session,turn_id,generation,"cancelled",
+            limitation="근거 확인이 취소되었습니다.",
+        )
+        session.cascade_failed(turn_id)
+        raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
     except Exception:
+        await _finish_research_operation(
+            sender,session,turn_id,generation,"failed",
+            limitation="근거 확인이 오류로 종료되었습니다.",
+        )
         log.exception("voice turn failed")
         progress=session.advance_turn_progress(
             turn_id,generation,"error")
@@ -2760,6 +3323,8 @@ async def voice_socket(websocket:WebSocket):
         config=VadConfig.from_settings(vad_settings.cascade)
         report_settings=ExperimentReportSettings.from_environment()
         external_settings=ExternalReferenceSettings.from_environment()
+        supplemental_settings=SupplementalKnowledgeSettings.from_environment()
+        multi_brain_settings=MultiBrainSettings.from_environment()
         web_visual_settings=WebVisualSettings.from_environment(external_settings)
         generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
@@ -2769,6 +3334,7 @@ async def voice_socket(websocket:WebSocket):
         return
     research_capabilities={
         "external_text":external_settings.public_capability(),
+        "supplemental_model":supplemental_settings.public_capability(),
         "web_image":{
             "status":"enabled" if web_visual_settings.enabled else "disabled",
         },
@@ -2779,6 +3345,7 @@ async def voice_socket(websocket:WebSocket):
                 generated_visual_settings.model
                 if generated_visual_settings.enabled else None),
         },
+        "multi_brain":multi_brain_settings.public_capability(),
     }
     report_store=(
         ExperimentReportStore(report_settings.database_path)
@@ -2789,8 +3356,10 @@ async def voice_socket(websocket:WebSocket):
         EndpointDetector(config,listening_onset=True),
         experiment_report_store=report_store,
         external_reference_settings=external_settings,
+        supplemental_knowledge_settings=supplemental_settings,
         web_visual_settings=web_visual_settings,
         generated_visual_settings=generated_visual_settings,
+        multi_brain_settings=multi_brain_settings,
     ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
     sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
@@ -2902,6 +3471,8 @@ async def voice_socket(websocket:WebSocket):
                         # utterance owns the session; cancel the old read-only
                         # request instead of merely waiting for and discarding it.
                         if task is not None and not task.done():
+                            await _finish_all_research_operations(
+                                sender,session,"superseded")
                             task.cancel()
                             try:
                                 await task
@@ -3113,6 +3684,10 @@ async def voice_socket(websocket:WebSocket):
                                                 pipeline=pipeline))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
+                if pipeline=="cascade" and not session.greeting_emitted:
+                    session.track_visual_task(asyncio.create_task(
+                        _send_session_greeting(
+                            sender,session,language=context.language)))
             elif control["type"]=="session.set_language":
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))
@@ -3127,7 +3702,10 @@ async def voice_socket(websocket:WebSocket):
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid session language"))
                     continue
-                if task and not task.done(): task.cancel()
+                if task and not task.done():
+                    await _finish_all_research_operations(
+                        sender,session,"cancelled")
+                    task.cancel()
                 session.set_tool_context(context)
                 if native_session is not None:
                     await native_session.update_language(
@@ -3151,7 +3729,10 @@ async def voice_socket(websocket:WebSocket):
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid language mode"))
                     continue
-                if task and not task.done(): task.cancel()
+                if task and not task.done():
+                    await _finish_all_research_operations(
+                        sender,session,"cancelled")
+                    task.cancel()
                 if native_session is not None and session.tool_context is not None:
                     await native_session.update_language(
                         session.tool_context,language_mode=session.language_mode,
@@ -3162,7 +3743,10 @@ async def voice_socket(websocket:WebSocket):
                 if not session.active:
                     await websocket.send_text(event("error",message="session is not active"))
                     continue
-                if task and not task.done(): task.cancel()
+                if task and not task.done():
+                    await _finish_all_research_operations(
+                        sender,session,"cancelled")
+                    task.cancel()
                 session.reset_sensitive_state()
                 if session.tool_context and session.tool_context.procedure_controller:
                     session.tool_context.procedure_controller.detach()
@@ -3187,7 +3771,10 @@ async def voice_socket(websocket:WebSocket):
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
-                if task and not task.done(): task.cancel()
+                if task and not task.done():
+                    await _finish_all_research_operations(
+                        sender,session,"cancelled")
+                    task.cancel()
                 if native_session is not None:
                     await native_session.stop()
                     native_session=None

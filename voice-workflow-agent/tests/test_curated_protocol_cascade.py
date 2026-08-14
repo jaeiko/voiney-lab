@@ -38,11 +38,17 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
 )
 from voice_workflow_agent.experiment_reports import ExperimentReportStore
-from voice_workflow_agent.external_references import ExternalReferenceSettings
+from voice_workflow_agent.external_references import (
+    ExternalReferenceSettings,
+    SupplementalKnowledgeSettings,
+)
 from voice_workflow_agent.language import Transcription
+from voice_workflow_agent.multi_brain import MultiBrainSettings
 from voice_workflow_agent.server import (
     ListenerSession,
+    LockedSender,
     ServerConfig,
+    _send_session_greeting,
     _record_experiment_report_plan,
     cancel_cascade_generation,
     get_protocol_source_page,
@@ -467,11 +473,17 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(repeat.action, CuratedProtocolAction.REPEAT)
         self.assertFalse(current.state_changed)
         self.assertFalse(repeat.state_changed)
-        advanced = session.plan("다음", turn_id=4, language="ko")
-        replay = session.plan("다음", turn_id=4, language="ko")
+        confirmation = session.plan("다음", turn_id=4, language="ko")
+        self.assertEqual(
+            confirmation.action, CuratedProtocolAction.CLARIFY_COMPLETION
+        )
+        self.assertFalse(confirmation.state_changed)
+        self.assertEqual(session.state()["current_step_label"], "1")
+        advanced = session.plan("네.", turn_id=5, language="ko")
+        replay = session.plan("네.", turn_id=5, language="ko")
         self.assertEqual(advanced, replay)
         self.assertEqual(session.state()["current_step_label"], "2")
-        stopped = session.plan("종료", turn_id=5, language="ko")
+        stopped = session.plan("종료", turn_id=6, language="ko")
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.state()["active"])
 
@@ -545,8 +557,10 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             intent=classify_curated_control_intent(
                 transcript,language="ko",entity_inventory=inventory,
             )
-            self.assertEqual(intent.action,CuratedProtocolAction.NEXT)
-            self.assertTrue(intent.allows_state_mutation)
+            self.assertEqual(
+                intent.action,CuratedProtocolAction.CLARIFY_COMPLETION
+            )
+            self.assertFalse(intent.allows_state_mutation)
         normalized,entity,_=normalize_scientific_query(
             "25 mM Solution B를 250 mM로 바꿔?",entity_inventory=inventory,
         )
@@ -720,17 +734,23 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             self.assertEqual(session.state()["revision"], 1)
             self.assertEqual(session.state()["current_step_label"], "1")
 
-        advanced = session.plan("단계로 넘어가죠", turn_id=6, language="ko")
+        requested = session.plan("단계로 넘어가죠", turn_id=6, language="ko")
+        self.assertEqual(
+            requested.action, CuratedProtocolAction.CLARIFY_COMPLETION
+        )
+        self.assertEqual(session.state()["current_step_label"], "1")
+        self.assertEqual(session.state()["revision"], 1)
+        advanced = session.plan("네.", turn_id=7, language="ko")
         self.assertEqual(advanced.action, CuratedProtocolAction.NEXT)
         self.assertEqual(session.state()["current_step_label"], "2")
         self.assertEqual(session.state()["revision"], 2)
         self.assertEqual(session.plan(
-            "단계로 넘어가죠", turn_id=6, language="ko"
+            "네.", turn_id=7, language="ko"
         ), advanced)
         self.assertEqual(session.state()["current_step_label"], "2")
 
         stopped = session.plan(
-            "프로토콜을 종료해 줘", turn_id=7, language="ko"
+            "프로토콜을 종료해 줘", turn_id=8, language="ko"
         )
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.state()["active"])
@@ -944,7 +964,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 ("다시 말해 줘", "다시 말해줘"),
             ),
             (
-                CuratedProtocolAction.NEXT,
+                CuratedProtocolAction.CLARIFY_COMPLETION,
                 (
                     "다음 단계로 넘어가 줘",
                     "다음 단계로 넘어가죠",
@@ -1046,7 +1066,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             "프로토콜을 시작해 줘", turn_id=1, language="ko"
         )
         first.curated_protocol_session.plan(
-            "다음 단계로 넘어가 줘", turn_id=2, language="ko"
+            "현재 단계를 완료했어. 다음 단계로 넘어가 줘",
+            turn_id=2,
+            language="ko",
         )
         self.assertEqual(first.curated_protocol_session.current_index, 1)
         self.assertEqual(second.curated_protocol_session.current_index, 0)
@@ -1056,7 +1078,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         session = CuratedProtocolSession(self.fixture)
         session.active = True
         session.current_index = 24
-        final = session.plan("다음", turn_id=1, language="ko")
+        final = session.plan(
+            "현재 단계를 완료했어. 다음 단계로 안내해 줘",
+            turn_id=1,
+            language="ko",
+        )
         self.assertEqual(session.state()["current_step_label"], "25")
         self.assertTrue(final.final_step)
         self.assertFalse(final.state_changed)
@@ -1076,7 +1102,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 session.active = True
                 session.current_index = by_label[label]
 
-                blocked = session.plan("next", turn_id=turn_id, language="en")
+                blocked = session.plan(
+                    "I completed this step. Guide me to the next step.",
+                    turn_id=turn_id,
+                    language="en",
+                )
 
                 self.assertEqual(
                     session.state()["current_step_label"],
@@ -1591,6 +1621,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
     def test_completion_only_bypasses_every_knowledge_provider_and_advances_once(self):
         session = self.make_session(index=1)
+        session.multi_brain_settings = MultiBrainSettings(
+            True, "offline-model", 2, 2, .2,
+        )
         socket = Socket()
 
         async def immediate(function, *args, **kwargs):
@@ -1626,6 +1659,373 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             item for item in socket.text if item["type"] == "server.operation"
         )
         self.assertEqual(operation["operation"], "completion_and_next_transition")
+
+    def test_session_greeting_is_once_per_logical_session_and_interruptible(self):
+        context = ToolContext(Path("/unused/offline-catalog"), None, "ko", "test_only")
+        session = ListenerSession(tool_context=context)
+        session.start()
+        session.accept_configuration(41, "cascade", "ko", self.fixture.protocol_id)
+        socket = Socket()
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        async def scenario():
+            sender = LockedSender(socket)
+            await _send_session_greeting(sender, session, language="ko")
+            await _send_session_greeting(sender, session, language="ko")
+
+        with patch(
+            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+        ) as tts, patch(
+            "voice_workflow_agent.server.asyncio.to_thread", side_effect=immediate,
+        ):
+            asyncio.run(scenario())
+
+        greetings = [item for item in socket.text if item["type"] == "session.greeting"]
+        self.assertEqual(len(greetings), 1)
+        self.assertEqual(tts.call_count, 1)
+        self.assertEqual(greetings[0]["turn_id"], 2_000_000_000)
+        self.assertEqual(session.next_turn_id, 1)
+        self.assertEqual(session.state, TurnState.AGENT_SPEAKING)
+        events = self.accept_barge_in(session)
+        self.assertTrue(any(item.kind == "barge_in_audio_ready" for item in events))
+
+    def test_read_only_three_brain_server_path_is_concurrent_and_state_fenced(self):
+        session = self.make_session(index=1)
+        session.multi_brain_settings = MultiBrainSettings(
+            True, "offline-model", 2, 2, .5,
+        )
+        socket = Socket()
+        opening = session.curated_protocol_session.state()
+
+        class Completions:
+            def __init__(self):
+                self.entered = 0
+                self.active = 0
+                self.maximum_active = 0
+                self.release = asyncio.Event()
+
+            async def create(self, **kwargs):
+                self.entered += 1
+                self.active += 1
+                self.maximum_active = max(self.maximum_active, self.active)
+                if self.entered == 3:
+                    self.release.set()
+                await asyncio.wait_for(self.release.wait(), timeout=1)
+                self.active -= 1
+                schema = kwargs["response_format"]["json_schema"]
+                name = schema["name"]
+                properties = schema["schema"]["properties"]
+                if "answer" in name:
+                    ids = properties["evidence_ids"]["items"]["enum"]
+                    payload = {
+                        "spoken_answer": "두 물의 차이는 활성 프로토콜 밖의 설명이 필요합니다.",
+                        "display_answer": "활성 프로토콜은 HPLC water의 용액 준비 역할만 확인합니다.",
+                        "evidence_ids": ids[:1],
+                        "limitations": ["일반 물과의 품질 차이는 별도 근거가 필요합니다."],
+                    }
+                elif "source" in name:
+                    payload = {
+                        "entities": properties["entities"]["items"]["enum"][:1],
+                        "dimensions": properties["dimensions"]["items"]["enum"][:1],
+                        "scopes": ["ACTIVE_PROTOCOL"],
+                        "query": "HPLC water comparison",
+                        "needs_research": False,
+                    }
+                else:
+                    payload = {
+                        "helps": False,
+                        "entity": None,
+                        "preferred_class": "no_visual",
+                        "reason_code": "insufficient_evidence",
+                    }
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(payload)),
+                )])
+
+        completions = Completions()
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription(
+                "HPLC water와 일반 물의 차이를 설명하고 관련 그림도 보여줘.",
+                "ko",
+            ),
+        ), patch(
+            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+        ) as tts, patch(
+            "voice_workflow_agent.server.AsyncOpenAI", return_value=client,
+        ), patch(
+            "voice_workflow_agent.server.require_env", return_value="offline",
+        ), patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status": "no_admissible_evidence", "answerable": False,
+                "matches": [], "retrieval": {"backend": "sqlite"},
+            },
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+        self.assertGreaterEqual(completions.maximum_active, 3)
+        self.assertEqual(session.curated_protocol_session.state(), opening)
+        self.assertEqual(tts.call_count, 1)
+        states = [item for item in socket.text if item["type"] == "brain.state"]
+        self.assertEqual(states[0]["roles"], ["answer", "source", "visual"])
+        self.assertEqual(states[-1]["status"], "complete")
+        done = next(item for item in socket.text if item["type"] == "turn.done")
+        self.assertEqual(done["brains_enabled"], ["answer", "source", "visual"])
+        self.assertEqual(done["tools_used"], [])
+
+    def test_bare_next_asks_confirmation_without_report_or_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            socket = Socket()
+
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("다음 단계로 안내해 줘.", "ko"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+            ) as tts, patch(
+                "voice_workflow_agent.server.AsyncOpenAI",
+                side_effect=AssertionError("provider must not be constructed"),
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+            self.assertEqual(session.curated_protocol_session.current_index, 1)
+            self.assertIsNotNone(
+                session.curated_protocol_session.pending_completion_confirmation
+            )
+            self.assertEqual(session.experiment_report_store.list_reports(), [])
+            self.assertFalse(any(
+                item["type"] == "experiment.report.state"
+                for item in socket.text
+            ))
+            done = next(item for item in socket.text if item["type"] == "turn.done")
+            self.assertEqual(done["result_kind"], "clarify_completion")
+            self.assertIn("완료하셨나요", tts.call_args.args[0])
+            self.assertNotIn("실험 기록", tts.call_args.args[0])
+
+    def test_completion_report_acknowledgement_follows_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            order = []
+
+            class OrderedSocket(Socket):
+                async def send_text(self, value: str) -> None:
+                    parsed = json.loads(value)
+                    if parsed["type"] == "reply.delta":
+                        order.append("reply")
+                    await super().send_text(value)
+
+            socket = OrderedSocket()
+
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            def persist(*args, **kwargs):
+                order.append("persist")
+                return _record_experiment_report_plan(*args, **kwargs)
+
+            def tts(text, language):
+                order.append("tts")
+                self.assertIn("실험 기록에 반영", text)
+                return b"\0\0"
+
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("현재 단계를 완료했어요.", "ko"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize", side_effect=tts,
+            ), patch(
+                "voice_workflow_agent.server._record_experiment_report_plan",
+                side_effect=persist,
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+            self.assertEqual(order.count("persist"), 1)
+            self.assertLess(order.index("persist"), order.index("tts"))
+            self.assertLess(order.index("persist"), order.index("reply"))
+            reply = next(
+                item["text"] for item in socket.text
+                if item["type"] == "reply.delta"
+            )
+            self.assertIn("실험 기록에 반영", reply)
+            report = session.experiment_report_store.get_report(
+                session.experiment_report_id
+            )
+            self.assertEqual(
+                len([event for event in report["events"]
+                     if event["event_type"] == "step_completed"]),
+                1,
+            )
+
+    def test_completion_persistence_failure_rolls_back_without_success_language(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            socket = Socket()
+
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("현재 단계를 완료했어요.", "ko"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+            ) as tts, patch(
+                "voice_workflow_agent.server._record_experiment_report_plan",
+                side_effect=RuntimeError("synthetic persistence failure"),
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+            self.assertEqual(session.curated_protocol_session.current_index, 1)
+            self.assertIn("저장하지 못해", tts.call_args.args[0])
+            self.assertNotIn("기록에 반영", tts.call_args.args[0])
+            reply = next(
+                item["text"] for item in socket.text
+                if item["type"] == "reply.delta"
+            )
+            self.assertIn("현재 단계를 유지", reply)
+            self.assertNotIn("기록에 반영", reply)
+            self.assertEqual(
+                session.turn_terminal_outcome(1, session.generation), "blocked"
+            )
+
+    def test_completion_report_replay_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=1)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            curated = session.curated_protocol_session
+            pre_transition_index = curated.current_index
+            plan = curated.plan(
+                "현재 단계를 완료했어요.",
+                turn_id=1,
+                language="ko",
+                configuration_id=41,
+                generation=session.generation,
+            )
+            first = _record_experiment_report_plan(
+                session, curated, plan,
+                turn_id=1, generation=session.generation,
+                pre_transition_index=pre_transition_index,
+            )
+            replay = _record_experiment_report_plan(
+                session, curated, plan,
+                turn_id=1, generation=session.generation,
+                pre_transition_index=pre_transition_index,
+            )
+            for report in (first, replay):
+                self.assertEqual(
+                    len([event for event in report["events"]
+                         if event["event_type"] == "step_completed"]),
+                    1,
+                )
+            self.assertEqual(curated.current_index, 2)
+
+    def test_step_seven_block_records_no_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=6)
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            curated = session.curated_protocol_session
+            plan = curated.plan(
+                "현재 단계를 완료했어. 다음 단계로 안내해 줘",
+                turn_id=1,
+                language="ko",
+                configuration_id=41,
+                generation=session.generation,
+            )
+            report = _record_experiment_report_plan(
+                session, curated, plan,
+                turn_id=1, generation=session.generation,
+                pre_transition_index=6,
+            )
+            self.assertFalse(plan.state_changed)
+            self.assertEqual(curated.current_index, 6)
+            self.assertIn("blocked", [
+                event["event_type"] for event in report["events"]
+            ])
+            self.assertNotIn("step_completed", [
+                event["event_type"] for event in report["events"]
+            ])
+
+    def test_anomaly_acknowledgement_requires_report_persistence(self):
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                session = self.make_session(index=3)
+                session.experiment_report_store = ExperimentReportStore(
+                    Path(directory) / "reports.sqlite"
+                )
+                socket = Socket()
+                patches = {
+                    "side_effect": RuntimeError("synthetic persistence failure")
+                } if failure else {
+                    "side_effect": _record_experiment_report_plan
+                }
+                with patch(
+                    "voice_workflow_agent.server.transcribe",
+                    return_value=Transcription(
+                        "예상과 다르게 색이 남아 있어.", "ko"
+                    ),
+                ), patch(
+                    "voice_workflow_agent.server.synthesize",
+                    return_value=b"\0\0",
+                ) as tts, patch(
+                    "voice_workflow_agent.server._record_experiment_report_plan",
+                    **patches,
+                ), patch(
+                    "voice_workflow_agent.server.asyncio.to_thread",
+                    side_effect=immediate,
+                ):
+                    asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+                if failure:
+                    self.assertIn("저장하지 못해", tts.call_args.args[0])
+                    self.assertNotIn("기록에 남겼습니다", tts.call_args.args[0])
+                    self.assertEqual(
+                        session.experiment_report_store.list_reports(), []
+                    )
+                else:
+                    self.assertIn("기록에 남겼습니다", tts.call_args.args[0])
+                    report = session.experiment_report_store.get_report(
+                        session.experiment_report_id
+                    )
+                    self.assertEqual(report["anomaly_count"], 1)
 
     def test_report_persists_completed_pre_transition_step_before_tts_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1812,6 +2212,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             item for item in socket.text if item["type"]=="research.result")
         self.assertEqual(
             supplement["answer_origin"],"external_authoritative_reference")
+        self.assertEqual(supplement["terminal_status"], "success")
+        self.assertEqual(
+            len([item for item in socket.text
+                 if item["type"] == "research.result"]),
+            1,
+        )
 
     def test_web_failure_preserves_local_facts_and_returns_specific_limitation(self):
         session=self.make_session(index=1)
@@ -1872,8 +2278,135 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         supplement=next(
             item for item in socket.text if item["type"]=="research.result")
         self.assertEqual(supplement["status"],"error")
+        self.assertEqual(supplement["terminal_status"], "failed")
+        self.assertEqual(
+            len([item for item in socket.text
+                 if item["type"] == "research.result"]),
+            1,
+        )
         self.assertIn("추가 차원",supplement["limitation"])
         self.assertNotIn("fixture",reply["text"].casefold())
+
+    def test_model_only_supplement_is_labelled_citation_free_and_read_only(self):
+        session=self.make_session(index=1)
+        session.external_reference_settings=ExternalReferenceSettings(False)
+        session.supplemental_knowledge_settings=SupplementalKnowledgeSettings(
+            True,"offline-supplement",2.0,
+        )
+        socket=Socket();opening=session.curated_protocol_session.current_index
+
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+
+        async def unsupported(*args,**kwargs):
+            return SimpleNamespace(
+                intent="unsupported",primary_text="",evidence_ids=(),
+                inference_labels=(),unsupported_parts=("role",),
+            )
+
+        class Supplement:
+            calls=0
+            def __init__(self,*args): pass
+            async def explain(self,query,*,language):
+                Supplement.calls+=1
+                return {
+                    "status":"success",
+                    "answer":"중탄산 이온은 완충 계열의 일반 화학 개념입니다.",
+                    "backend":"xai_responses_supplemental_model_knowledge",
+                }
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription(
+                "AMBIC에서 bicarbonate는 왜 중요한 거야?","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.answer_curated_protocol_question",
+            side_effect=unsupported,
+        ),patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status":"no_admissible_evidence","answerable":False,
+                "matches":[],"retrieval":{"backend":"sqlite"},
+            },
+        ),patch(
+            "voice_workflow_agent.server.XaiSupplementalKnowledge",Supplement,
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+        ),patch(
+            "voice_workflow_agent.server.require_env",return_value="offline",
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+
+        self.assertEqual(Supplement.calls,1)
+        self.assertEqual(session.curated_protocol_session.current_index,opening)
+        result=next(
+            item for item in socket.text if item["type"]=="research.result")
+        self.assertEqual(result["status"],"success")
+        self.assertEqual(result["terminal_status"],"success")
+        self.assertEqual(result["answer_origin"],"supplemental_model_knowledge")
+        self.assertEqual(result["citations"],[])
+        self.assertNotIn("권위",result["primary_text"])
+        self.assertFalse(any(
+            item.get("tool") == "search_authoritative_web"
+            for item in socket.text
+        ))
+
+    def test_operational_substitution_never_uses_model_only_supplement(self):
+        session=self.make_session(index=1)
+        session.external_reference_settings=ExternalReferenceSettings(False)
+        session.supplemental_knowledge_settings=SupplementalKnowledgeSettings(
+            True,"offline-supplement",2.0,
+        )
+        socket=Socket()
+
+        async def immediate(function,*args,**kwargs):
+            return function(*args,**kwargs)
+
+        async def unsupported(*args,**kwargs):
+            return SimpleNamespace(
+                intent="unsupported",primary_text="",evidence_ids=(),
+                inference_labels=(),unsupported_parts=("substitution",),
+            )
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription(
+                "HPLC water 대신 일반 증류수를 써도 돼?","ko"),
+        ),patch(
+            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+        ),patch(
+            "voice_workflow_agent.server.answer_curated_protocol_question",
+            side_effect=unsupported,
+        ),patch(
+            "voice_workflow_agent.server.search_approved_lab_references",
+            return_value={
+                "status":"no_admissible_evidence","answerable":False,
+                "matches":[],"retrieval":{"backend":"sqlite"},
+            },
+        ),patch(
+            "voice_workflow_agent.server.XaiSupplementalKnowledge",
+            side_effect=AssertionError("operational supplement must not run"),
+        ),patch(
+            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+        ),patch(
+            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+        ):
+            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
+        # Operational deviations terminate at the deterministic authority gate:
+        # there is no evidence search to misrepresent as a provider operation.
+        self.assertFalse(any(
+            item["type"] in {"research.state", "research.result"}
+            for item in socket.text
+        ))
+        response=next(
+            item for item in socket.text if item["type"]=="reply.delta")
+        self.assertIn("승인할 수 없습니다",response["text"])
+        self.assertIn("HPLC water",response["text"])
+        self.assertEqual(session.curated_protocol_session.current_index,1)
 
     def test_audio_help_and_unreliable_transcript_are_read_only_and_tool_free(self):
         for turn_id, transcription, expected in (
@@ -2115,7 +2648,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             True,"offline-test-model")
         session.external_reference_settings=ExternalReferenceSettings(
             True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
-            "candidate_a",
+            "candidate_a",user_visible_enrichment_budget_seconds=.005,
         )
         socket=Socket();order=[]
 
@@ -2128,6 +2661,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         class Web:
             def __init__(self,*args): pass
             async def search(self,query,*,language):
+                await asyncio.sleep(.02)
                 order.append(("research",language))
                 return {"status":"not_found","matches":[]}
 
@@ -2160,6 +2694,17 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("염색된 단백질 밴드",reply["primary_text"])
         self.assertEqual(reply["requested_entities"],["stained_protein_band"])
         self.assertFalse(reply.get("state_changed",False))
+        bounded=next(
+            item for item in socket.text
+            if item["type"]=="research.state"
+            and item.get("status")=="background_bounded"
+        )
+        self.assertEqual(bounded["phase"],"optional_enrichment")
+        self.assertEqual(bounded["user_visible_budget_ms"],5)
+        self.assertEqual(
+            len([item for item in socket.text if item["type"]=="research.result"]),
+            1,
+        )
 
     def test_entity_visual_disabled_returns_same_turn_unavailable_state(self):
         session=self.make_session(index=0);session.tool_context=None
@@ -2397,7 +2942,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
     def test_live_next_and_stop_transcripts_use_deterministic_curated_route(self):
         next_session, next_socket, next_client, _, next_tts, _ = (
             self.run_question(
-                transcript="다음 단계를 진행해 줘.", index=0
+                transcript="현재 단계를 완료했어. 다음 단계를 진행해 줘.", index=0
             )
         )
         next_done = next(
@@ -2572,7 +3117,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
         with patch(
             "voice_workflow_agent.server.transcribe",
-            return_value=Transcription("다음 단계로 넘어가 줘","ko"),
+            return_value=Transcription(
+                "현재 단계를 완료했어. 다음 단계로 넘어가 줘", "ko"
+            ),
         ), patch(
             "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
         ), patch(
@@ -2828,7 +3375,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             with patch(
                 "voice_workflow_agent.server.transcribe",
-                return_value=Transcription("다음 단계를 진행해 줘.", "ko"),
+                return_value=Transcription(
+                    "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
+                ),
             ), patch(
                 "voice_workflow_agent.server.synthesize",
                 side_effect=RuntimeError("offline TTS failure"),
@@ -2859,7 +3408,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             workflow = session.curated_protocol_session
             with patch(
                 "voice_workflow_agent.server.transcribe",
-                return_value=Transcription("다음 단계를 진행해 줘.", "ko"),
+                return_value=Transcription(
+                    "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
+                ),
             ), patch(
                 "voice_workflow_agent.server.synthesize",
                 return_value=b"\0\0",
@@ -2910,7 +3461,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         with patch(
             "voice_workflow_agent.server.transcribe",
             side_effect=[
-                Transcription("다음 단계를 진행해 줘.", "ko"),
+                Transcription(
+                    "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
+                ),
                 Transcription("현재 단계 알려줘", "ko"),
             ],
         ), patch(
@@ -2974,7 +3527,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         cases = (
             (2, "현재 단계 전체를 읽어줘", "full_detail", None, True),
             (2, "이 작업의 온도는?", "question", "current_step", True),
-            (6, "다음", "next", None, True),
+            (
+                6,
+                "현재 단계를 완료했어. 다음 단계로 안내해 줘",
+                "next",
+                None,
+                True,
+            ),
             (2, "프로토콜 종료해줘", "stop", None, False),
         )
 
@@ -3091,7 +3650,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with patch(
             "voice_workflow_agent.server.transcribe",
-            return_value=Transcription("다음 단계를 진행해 줘.", "ko"),
+            return_value=Transcription(
+                "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
+            ),
         ), patch(
             "voice_workflow_agent.server.synthesize",
             return_value=b"\0\0",
@@ -3152,7 +3713,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "주의 사항은?",
             "달의 질량은?",
             "용액 A는 어떻게 준비해?",
-            "단계로 넘어가죠",
+            "현재 단계를 완료했어. 단계로 넘어가죠",
             "프로토콜 종료해줘",
         )
         expected = (
@@ -3278,7 +3839,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "프로토콜을 시작해 줘",
             "현재 단계 알려줘",
             "다시 말해줘",
-            "단계로 넘어가죠",
+            "현재 단계를 완료했어. 단계로 넘어가죠",
             "용액 A는 어떻게 준비해?",
             "현재 단계 전체를 읽어줘",
             "필요한 재료는?",
@@ -3348,6 +3909,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(
             [(item["result_kind"], item["fact_id"]) for item in done],
             [
+                ("greeting", None),
                 ("start", None),
                 ("current", None),
                 ("repeat", None),
@@ -3365,6 +3927,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "control",
                 "control",
                 "control",
+                "control",
                 "verified_fact",
                 "full_detail",
                 "verified_fact",
@@ -3375,6 +3938,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         step_two = self.fixture.steps[1].instruction_source_text
         spoken = [call.args[0] for call in tts.call_args_list]
         self.assertEqual(spoken, [
+            "Voice Workflow Agent입니다. 프로토콜 워크플로가 준비되었습니다. 시작하거나 질문해 주세요.",
             "1단계 안내를 화면에 표시했습니다.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
@@ -3386,9 +3950,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. 추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
-        self.assertNotIn(step_one, spoken[:4])
-        self.assertNotIn(step_two, spoken[:4])
-        default_control_speech = (*spoken[:4], spoken[-1])
+        self.assertNotIn(step_one, spoken[:5])
+        self.assertNotIn(step_two, spoken[:5])
+        default_control_speech = (*spoken[:5], spoken[-1])
         fixture_facts = (
             *self.fixture.facts_for_step(0),
             *self.fixture.facts_for_step(1),
@@ -3412,6 +3976,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             item["text"] for item in socket.text
             if item["type"] == "reply.delta"
         ]
+        self.assertEqual(replies[0], spoken[0])
+        replies = replies[1:]
         for index in (0, 1, 2):
             self.assertIn(step_one, replies[index])
         self.assertIn(step_two, replies[3])
@@ -3472,7 +4038,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with patch(
             "voice_workflow_agent.server.transcribe",
-            return_value=Transcription("다음", "ko"),
+            return_value=Transcription(
+                "현재 단계를 완료했어. 다음 단계로 안내해 줘", "ko"
+            ),
         ), patch(
             "voice_workflow_agent.server.synthesize",
             return_value=b"\0\0",

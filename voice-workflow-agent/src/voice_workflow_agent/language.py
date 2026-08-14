@@ -153,7 +153,31 @@ def resolve_turn_language(
     manual_language: str | None = None,
 ) -> LanguageResolution:
     """Resolve one turn without consulting model output or Tool arguments."""
+    explicit = None
+    lowered = transcript.casefold()
+    if re.search(r"(?:한국어로|in\s+korean)", lowered):
+        explicit = "ko"
+    elif re.search(r"(?:영어로|in\s+english)", lowered):
+        explicit = "en"
+    elif re.search(r"(?:베트남어로|in\s+vietnamese)", lowered):
+        explicit = "vi"
+    if explicit is not None:
+        return LanguageResolution(explicit)
     if mode == "manual":
+        if manual_language not in SUPPORTED_LANGUAGES:
+            return LanguageResolution(None, "invalid_manual_language")
+        # Manual mode biases STT and the pre-turn greeting. A clearly complete
+        # utterance still owns this Turn's response language, which keeps a
+        # code-switched voice exchange natural without changing session state.
+        if has_language_bearing_content(transcript):
+            ko, en, vi = _signals(transcript)
+            korean = ko >= 8 or bool(_KO_ENDINGS.search(transcript))
+            english = en >= 2
+            vietnamese = vi >= 2
+            if sum((korean, english, vietnamese)) == 1:
+                return LanguageResolution(
+                    "ko" if korean else "en" if english else "vi"
+                )
         if manual_language in SUPPORTED_LANGUAGES:
             return LanguageResolution(manual_language)
         return LanguageResolution(None, "invalid_manual_language")

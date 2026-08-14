@@ -1,7 +1,7 @@
 {
-  "version": 4,
+  "version": 6,
   "cases": [
-    {"id": "completion-ko-1", "text": "현재 단계를 완료했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
+    {"id": "completion-ko-1", "text": "현재 단계를 완료했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true, "brains": []},
     {"id": "completion-ko-2", "text": "여기까지 다 했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
     {"id": "completion-en", "text": "I completed the current step.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
     {"id": "compound-ko", "text": "현재 단계를 완료했어, 다음 단계로 안내해줘.", "step_index": 1, "intent": "completion_and_next", "action": "next", "mutates": true},
@@ -12,7 +12,7 @@
     {"id": "context-solution-a", "text": "그거는 어떻게 준비해?", "step_index": 2, "intent": "contextual_protocol_entity", "action": "question", "mutates": false, "resolved_entity": "solution_a"},
     {"id": "context-ambiguous", "text": "그 용액은 어떻게 준비해?", "step_index": 1, "intent": "ambiguous_protocol_entity", "action": "clarify_reference", "mutates": false},
     {"id": "safety-related", "text": "여기서 진짜 안전 수칙 있어?", "step_index": 2, "intent": "related_safety_question", "action": "related_question", "mutates": false},
-    {"id": "term-ambic", "text": "여기서 말하는 AMBIC가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
+    {"id": "term-ambic", "text": "여기서 말하는 AMBIC가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "brains": ["answer", "source"]},
     {"id": "term-hplc-water", "text": "여기서 말하는 HPLC water가 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
     {"id": "term-solution-a", "text": "Solution A는 어떤 성분으로 되어 있어?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
     {"id": "term-solution-b", "text": "Solution B의 구성은 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false},
@@ -26,7 +26,7 @@
     {"id": "related-followup", "prior_text": "AMBIC가 뭐야?", "text": "되는 거 아니야?", "step_index": 0, "intent": "related_followup", "action": "related_question", "mutates": false},
     {"id": "external-followup", "prior_text": "AMBIC가 뭐야?", "text": "외부 검색은 어떻게", "step_index": 0, "intent": "external_reference_followup", "action": "related_question", "mutates": false},
     {"id": "web-followup", "prior_text": "HPLC water가 뭐야?", "text": "웹에서 확인해 줘", "step_index": 1, "intent": "external_reference_followup", "action": "related_question", "mutates": false},
-    {"id": "navigation-natural", "text": "다음 단계에 대해서 진행해 줘", "step_index": 1, "intent": "workflow_command", "action": "next", "mutates": true},
+    {"id": "navigation-natural", "text": "다음 단계에 대해서 진행해 줘", "step_index": 1, "intent": "next_step_confirmation_required", "action": "clarify_completion", "mutates": false, "pending_confirmation": true},
     {"id": "audio-ko", "text": "소리가 안 나요.", "step_index": 2, "intent": "audio_playback_help", "action": "audio_recovery", "mutates": false},
     {"id": "audio-en", "text": "There's no sound.", "step_index": 2, "intent": "audio_playback_help", "action": "audio_recovery", "mutates": false},
     {"id": "show-sources", "text": "출처 보여줘", "step_index": 2, "intent": "show_sources", "action": "full_detail", "mutates": false},
@@ -45,15 +45,38 @@
     ,{"id": "week5-ambic-hplc", "text": "AMBIC와 HPLC water가 뭐야?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["ambic", "hplc_water"]}
     ,{"id": "week5-jel-tug", "text": "Jel Tug에 관해서 이미지를 보여줄 수 있어.", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
     ,{"id": "week5-jet-plug", "text": "제트 플러그와 관련해서 이미지를 보여줄 수 있어?", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
-    ,{"id": "week5-gel-plug", "text": "젤 플러그 이미지를 보여줘.", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo"}
+    ,{"id": "week5-gel-plug", "text": "젤 플러그 이미지를 보여줘.", "step_index": 2, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["gel_plug"], "visual_kind": "web_photo", "brains": ["answer", "visual"]}
     ,{"id": "week5-completion-corrupt", "text": "장기를 완료했어.", "step_index": 1, "intent": "ambiguous_completion", "action": "clarify_completion", "mutates": false}
     ,{"id": "week5-completion-reverse", "text": "다음 단계로 안내해 줘. 현재 단계 완료했어.", "step_index": 1, "intent": "completion_and_next", "action": "next", "mutates": true}
     ,{"id": "week5-completion-forward", "text": "현재 단계 완료했어. 다음 단계 알려줘.", "step_index": 1, "intent": "completion_and_next", "action": "next", "mutates": true}
-    ,{"id": "week5-completion-criteria", "text": "완료 조건이 뭐야?", "step_index": 1, "intent": "completion_criteria_question", "action": "full_detail", "mutates": false}
+    ,{"id": "week5-completion-criteria", "text": "완료 조건이 뭐야?", "step_index": 1, "intent": "completion_criteria_question", "action": "completion_criteria", "mutates": false}
     ,{"id": "week5-completion-negated", "text": "아직 완료하지 않았어.", "step_index": 1, "intent": "negated_completion", "action": "off_topic", "mutates": false}
     ,{"id": "week5-completion-hypothetical", "text": "이 단계를 완료했다고 가정하면 다음은 뭐야?", "step_index": 1, "intent": "hypothetical_completion", "action": "off_topic", "mutates": false}
     ,{"id": "week5-completion-quoted", "text": "“현재 단계 완료했어”라고 말하면 돼?", "step_index": 1, "intent": "quoted_completion", "action": "off_topic", "mutates": false}
     ,{"id": "week5-stop-supersedes-research", "text": "프로토콜 중지해줘", "step_index": 1, "intent": "workflow_command", "action": "stop", "mutates": true}
     ,{"id": "week5-newer-related-question", "text": "HPLC water가 뭐야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water"]}
+    ,{"id": "next-confirm-ko", "text": "다음 단계로 안내해 줘.", "step_index": 1, "intent": "next_step_confirmation_required", "action": "clarify_completion", "mutates": false, "pending_confirmation": true}
+    ,{"id": "next-confirm-en", "text": "Guide me to the next step.", "language": "en", "step_index": 1, "intent": "next_step_confirmation_required", "action": "clarify_completion", "mutates": false, "pending_confirmation": true}
+    ,{"id": "next-confirm-yes", "prior_text": "다음 단계로 안내해 줘.", "text": "네.", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
+    ,{"id": "next-confirm-explicit-yes", "prior_text": "다음 단계로 안내해 줘.", "text": "응, 현재 단계 완료했어.", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
+    ,{"id": "next-confirm-no", "prior_text": "다음 단계로 안내해 줘.", "text": "아니, 아직 안 끝났어.", "step_index": 1, "intent": "pending_completion_declined", "action": "decline_completion", "mutates": false, "pending_confirmation": false}
+    ,{"id": "science-bicarbonate-role", "text": "AMBIC에서 bicarbonate는 왜 중요한 거야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["ambic"]}
+    ,{"id": "science-hplc-difference", "text": "HPLC water는 일반 물과 어떤 차이가 있어?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water"]}
+    ,{"id": "science-hplc-pronoun", "prior_text": "HPLC water는 일반 물과 어떤 차이가 있어?", "text": "그 물을 왜 사용하는 거야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water"]}
+    ,{"id": "science-destain-purpose", "text": "젤 플러그가 왜 완전히 탈색되어야 해?", "step_index": 6, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["gel_plug"]}
+    ,{"id": "science-keratin-contamination", "text": "염색된 단백질 밴드에서 케라틴 오염이 왜 문제가 돼?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["stained_protein_band", "contamination"]}
+    ,{"id": "science-operational-substitution", "text": "HPLC water 대신 일반 증류수를 써도 돼?", "step_index": 1, "intent": "operational_deviation", "action": "operational_deviation", "mutates": false}
+    ,{"id": "off-topic-travel-next", "text": "다음 여행지는 어디가 좋아?", "step_index": 1, "intent": "off_topic", "action": "off_topic", "mutates": false}
+    ,{"id": "pending-confirm-natural", "prior_text": "다음 단계로 안내해 줘.", "text": "네, 완료했어요.", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
+    ,{"id": "next-information-en", "text": "What is the next step?", "language": "en", "step_index": 1, "intent": "next_step_information", "action": "next_information", "mutates": false}
+    ,{"id": "current-information-en", "text": "What is the current step?", "language": "en", "step_index": 1, "intent": "current_step_information", "action": "current", "mutates": false}
+    ,{"id": "coreference-hplc-difference", "prior_text": "HPLC water가 뭐야?", "text": "그거 일반 물이랑 뭐가 다른데?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["hplc_water"]}
+    ,{"id": "coreference-ambic-role", "prior_text": "AMBIC가 뭐야?", "text": "그거는 왜 여기서 사용하는 거야?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["ambic"]}
+    ,{"id": "coreference-comparison-first", "prior_text": "Solution A와 Solution B 차이가 뭐야?", "text": "그중 첫 번째는 왜 여기서 사용해?", "step_index": 1, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["solution_a"]}
+    ,{"id": "science-rpm", "text": "800 rpm이 무엇인지 설명해줄 수 있어?", "step_index": 2, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "requested_entities": ["rpm"]}
+    ,{"id": "operational-temperature", "text": "37도 대신 35도로 해도 돼?", "step_index": 2, "intent": "operational_deviation", "action": "operational_deviation", "mutates": false}
+    ,{"id": "anomaly-color-variant", "text": "색깔이 변형됐어.", "step_index": 3, "intent": "record_anomaly", "action": "report_anomaly", "mutates": false}
+    ,{"id": "color-information-readonly", "text": "색깔이 변하는 건 무슨 의미야?", "step_index": 3, "intent": "related_question", "action": "related_question", "mutates": false}
+    ,{"id": "hybrid-three-brain", "text": "HPLC water와 일반 물의 차이를 설명하고 관련 그림도 보여줘.", "step_index": 1, "intent": "visual_request", "action": "visual_request", "mutates": false, "requested_entities": ["hplc_water"], "brains": ["answer", "source", "visual"]}
   ]
 }

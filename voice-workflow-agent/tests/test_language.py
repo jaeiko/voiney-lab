@@ -38,12 +38,21 @@ class LanguageTests(unittest.TestCase):
             "provider_no_speech_probability",
         )
 
-    def test_manual_mode_is_authoritative(self):
+    def test_manual_mode_is_default_but_clear_current_utterance_owns_response(self):
         result = resolve_turn_language(
             "Please show the approved spill procedure.", "en",
             mode="manual", manual_language="ko",
         )
-        self.assertEqual(result.language, "ko")
+        self.assertEqual(result.language, "en")
+        korean = resolve_turn_language(
+            "현재 단계를 알려 주세요.", "ko",
+            mode="manual", manual_language="en",
+        )
+        self.assertEqual(korean.language, "ko")
+        neutral = resolve_turn_language(
+            "AMBIC", "en", mode="manual", manual_language="ko",
+        )
+        self.assertEqual(neutral.language, "ko")
 
     def test_product_labels_do_not_override_provider_dominant_language(self):
         korean = resolve_turn_language(
