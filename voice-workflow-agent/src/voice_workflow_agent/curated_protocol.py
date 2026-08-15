@@ -76,6 +76,7 @@ class CuratedProtocolAction(str, Enum):
     CLARIFY_COMPLETION = "clarify_completion"
     DECLINE_COMPLETION = "decline_completion"
     CLARIFY_REFERENCE = "clarify_reference"
+    CLARIFY_PARAMETER = "clarify_parameter"
     OFF_TOPIC = "off_topic"
     UNSUPPORTED = "unsupported"
     STOP = "stop"
@@ -397,11 +398,15 @@ class CuratedProtocolTurnPlan:
     question_dimensions: tuple[str, ...] = ()
     source_plan_scopes: tuple[str, ...] = ()
     unresolved_dimensions: tuple[str, ...] = ()
+    unresolved_claim_ids: tuple[str, ...] = ()
     coreference_status: str | None = None
     coreference_reason: str | None = None
     reported_observation: bool = False
     observation_predicate: str | None = None
     observation_outcome: str | None = None
+    claim_requests: tuple["ClaimRequest", ...] = ()
+    plausibility_status: str | None = None
+    plausibility_reason: str | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -822,7 +827,9 @@ def _semantic_utterance_key(value: str) -> str:
     """Normalize harmless speech variation without fuzzy intent inference."""
 
     key = _utterance_key(value)
-    key = re.sub(r"[,.!?。！？;:]", " ", key)
+    # Decimal points are operational tokens, not punctuation. Preserve them so
+    # 1.5 mL cannot become the unrelated value 5 mL during routing.
+    key = re.sub(r"(?<!\d)\.(?!\d)|[,!?。！？;:]", " ", key)
     key = re.sub(r"^(?:어+|음+|저기)\s+", "", key)
     key = re.sub(r"\b(현재|이제)\s+\1\b", r"\1", key)
     return " ".join(key.split())
@@ -864,6 +871,107 @@ class CuratedControlIntent:
     reported_observation: bool = False
     observation_predicate: str | None = None
     observation_outcome: str | None = None
+    claim_requests: tuple["ClaimRequest", ...] = ()
+    plausibility_status: str | None = None
+    plausibility_reason: str | None = None
+
+
+class DiscourseFocusKind(str, Enum):
+    """Bounded semantic focus; it carries no workflow authority."""
+
+    NONE = "none"
+    ENTITY = "entity"
+    PROTOCOL_PURPOSE = "protocol_purpose"
+    PROTOCOL_BENEFIT = "protocol_benefit"
+    CURRENT_STEP_ACTION = "current_step_action"
+    CURRENT_STEP_PARAMETER = "current_step_parameter"
+    OBSERVATION_PREDICATE = "observation_predicate"
+    COMPARISON = "comparison"
+    SAFETY = "safety"
+
+
+class ClaimTargetType(str, Enum):
+    ENTITY = "entity"
+    PROTOCOL_PROPOSITION = "protocol_proposition"
+    ACTION = "action"
+    PARAMETER = "parameter"
+    RATIO = "ratio"
+    OBSERVATION = "observation"
+    COMPARISON = "comparison"
+    SAFETY = "safety"
+
+
+class ClaimAdmissionStatus(str, Enum):
+    LOCAL_SUPPORTED = "local_supported"
+    RESEARCH_REQUIRED = "research_required"
+    UNSUPPORTED_OPERATIONAL = "unsupported_operational"
+    CLARIFICATION_REQUIRED = "clarification_required"
+
+
+@dataclass(frozen=True)
+class ClaimRequest:
+    """One independently admitted or unresolved question claim."""
+
+    claim_id: str
+    target_type: ClaimTargetType
+    target_id: str
+    dimension: str
+    required_authority: str
+    evidence_ids: tuple[str, ...] = ()
+    admission_status: ClaimAdmissionStatus = ClaimAdmissionStatus.RESEARCH_REQUIRED
+    local_answer: str | None = None
+    unresolved_reason: str | None = None
+    operational: bool = False
+
+
+@dataclass(frozen=True)
+class StepParameterBinding:
+    parameter_id: str
+    value: str
+    unit: str
+    role: str
+    action_id: str | None
+    evidence_id: str
+    source_page: int
+    source_approved_alternative: bool = False
+
+
+@dataclass(frozen=True)
+class StepActionBinding:
+    action_id: str
+    action_type: str
+    target_id: str | None
+    evidence_id: str
+    source_page: int
+    source_text: str
+
+
+@dataclass(frozen=True)
+class StepRatioBinding:
+    ratio_id: str
+    mixture_id: str
+    components: tuple[tuple[str, int], ...]
+    evidence_id: str
+    source_page: int
+
+
+@dataclass(frozen=True)
+class StepSemanticFrame:
+    """Read-only index derived from canonical evidence, never a second authority."""
+
+    step_id: str
+    step_label: str
+    parameters: tuple[StepParameterBinding, ...]
+    actions: tuple[StepActionBinding, ...]
+    ratios: tuple[StepRatioBinding, ...]
+    observation_predicate_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptPlausibility:
+    status: str
+    reason_code: str
+    observed_tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -872,6 +980,7 @@ class SourcePlan:
 
     scopes: tuple[str, ...]
     unresolved_dimensions: tuple[str, ...] = ()
+    unresolved_claim_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -884,6 +993,7 @@ class AnswerEnvelope:
     protocol_relevance: str
     evidence_ids: tuple[str, ...]
     source_plan: SourcePlan
+    admitted_claim_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -964,6 +1074,9 @@ class PendingObservationConfirmation:
     workflow_revision: int
     requested_turn_id: int
     requested_generation: int | None
+    predicate_id: str
+    affirmative_outcome: str = "positive"
+    negative_outcome: str = "negative"
 
 
 @dataclass(frozen=True)
@@ -979,6 +1092,9 @@ class ProtocolDiscourseContext:
     turn_id: int | None = None
     generation: int | None = None
     workflow_revision: int | None = None
+    focus_kind: DiscourseFocusKind = DiscourseFocusKind.NONE
+    proposition_ids: tuple[str, ...] = ()
+    source_evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1246,7 +1362,16 @@ _PROTOCOL_SCOPE_PATTERNS = (
     ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|how\s+many\s+steps")),
     ("current_position", re.compile(r"(?:현재|지금)\s*(?:몇\s*번째|몇)\s*단계|where\s+am\s+i")),
     ("remaining_steps", re.compile(r"몇\s*단계\s*남|남은\s*단계|steps?\s+(?:are\s+)?remaining")),
-    ("purpose", re.compile(r"(?:실험|프로토콜).*(?:목표|목적|뭐\s*하는)|대체\s*이게\s*뭐\s*하는\s*실험|what\s+is\s+the\s+(?:goal|purpose|objective)|what.*experiment.*for")),
+    ("purpose", re.compile(
+        r"(?:실험|프로토콜).*(?:목표|목적|뭐\s*하는|무슨\s*실험|어떤\s*실험|"
+        r"무엇을\s*(?:위한|하는)|어떤\s*일을\s*하는)|"
+        r"대체\s*이게\s*뭐\s*하는\s*실험|"
+        r"what\s+(?:kind\s+of\s+)?(?:experiment|protocol).*(?:is\s+this|does\s+this\s+do|for|accomplish)|"
+        r"(?:could\s+you\s+)?(?:tell|explain)(?:\s+me)?.*what\s+kind\s+of\s+"
+        r"(?:experiment|protocol)\s+this\s+is|"
+        r"what.*(?:protocol|experiment).*(?:meant|intended).*(?:do|accomplish)|"
+        r"what\s+is\s+the\s+(?:goal|purpose|objective)|what.*experiment.*for"
+    )),
     ("overview", re.compile(r"(?:전체|실험)\s*(?:흐름|과정|프로토콜).*(?:요약|설명)|overview|summari[sz]e\s+the\s+(?:whole\s+)?protocol")),
     ("materials", re.compile(r"(?:전체|프로토콜)\s*(?:재료|시약).*(?:목록|뭐|알려)|(?:what|list)\s+(?:all\s+)?(?:protocol\s+)?(?:materials|reagents)")),
     ("equipment", re.compile(r"(?:전체|프로토콜)\s*(?:장비|기기).*(?:목록|뭐|알려)|(?:what|list)\s+(?:all\s+)?(?:protocol\s+)?(?:equipment|instruments)")),
@@ -1304,6 +1429,7 @@ _NEXT_INFORMATION_PATTERNS = (
 )
 _CURRENT_INFORMATION_PATTERNS = (
     re.compile(r"^(?:what(?:'s|\s+is)\s+(?:the\s+)?current\s+step)$"),
+    re.compile(r"^(?:(?:이\s*)?실험에서\s*)?(?:지금|현재)\s*단계(?:는|가)?\s*(?:뭐야|무엇|어디야)$"),
 )
 _OPERATIONAL_DEVIATION_PATTERNS = (
     re.compile(
@@ -1462,6 +1588,236 @@ def question_dimensions(value: str) -> tuple[str, ...]:
     return tuple(dimensions or ("related_knowledge",))
 
 
+_DERIVED_SOURCE_GLYPHS = str.maketrans({
+    "\ue081": "(", "\ue082": ")", "\ue088": "-", "\ue092": ":",
+})
+_PARAMETER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>mm3|mm³|µL|uL|mL|ml|mM|°C|C|도|rpm|min|minutes?|분|시간|%)"
+    r"(?![A-Za-z0-9])",
+    re.I,
+)
+_BARE_NUMBER_PATTERN = re.compile(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])")
+
+
+def _derived_source_text(value: str) -> str:
+    """Normalize only an in-memory derived view; raw evidence stays untouched."""
+
+    return value.translate(_DERIVED_SOURCE_GLYPHS).replace("mm3", "mm³")
+
+
+def _parameter_role(unit: str, text: str) -> str:
+    normalized = unit.casefold().replace("ul", "µl").replace("μ", "µ")
+    if normalized in {"°c", "c"}:
+        return "incubation_temperature"
+    if normalized in {"min", "minute", "minutes", "분", "시간"}:
+        return "incubation_duration"
+    if normalized == "rpm":
+        return "agitation_speed"
+    if normalized == "ml" and "tube" in text.casefold():
+        return "vessel_capacity"
+    if normalized == "µl":
+        return "solution_volume"
+    if normalized == "mm":
+        return "concentration"
+    if normalized == "mm³":
+        return "gel_piece_size"
+    return "operational_parameter"
+
+
+def _action_type(text: str) -> str | None:
+    lowered = text.casefold()
+    for action_type, terms in (
+        ("remove_discard", ("remove", "discard", "제거", "버리")),
+        ("incubate", ("incubat", "배양")),
+        ("wash", ("wash", "세척")),
+        ("prepare", ("prepare", "준비")),
+        ("place", ("place", "넣")),
+        ("cut", ("cut", "excise", "slice", "자르", "절취")),
+        ("repeat", ("repeat", "반복")),
+    ):
+        if any(term in lowered for term in terms):
+            return action_type
+    return None
+
+
+def _target_from_text(text: str) -> str | None:
+    lowered = text.casefold()
+    for target, terms in (
+        ("solution_a", ("solution a",)),
+        ("solution_b", ("solution b",)),
+        ("gel_plug", ("gel plug", "gel band", "stained protein band")),
+        ("acetonitrile", ("acetonitrile",)),
+        ("sample_material", ("material", "sample")),
+    ):
+        if any(term in lowered for term in terms):
+            return target
+    return None
+
+
+def build_step_semantic_frame(
+    fixture: CuratedProtocolFixture,
+    step_index: int,
+) -> StepSemanticFrame:
+    """Index canonical step facts for read-only semantic binding."""
+
+    step = fixture.steps[step_index]
+    parameters: list[StepParameterBinding] = []
+    actions: list[StepActionBinding] = []
+    ratios: list[StepRatioBinding] = []
+    for fact in fixture.facts_for_step(step_index):
+        derived = _derived_source_text(fact.text)
+        semantic_fact = fact.kind in {"step", "note"}
+        action_type = _action_type(derived) if semantic_fact else None
+        action_id = f"{fact.fact_id}:{action_type}" if action_type else None
+        if action_type:
+            actions.append(StepActionBinding(
+                action_id=action_id or fact.fact_id,
+                action_type=action_type,
+                target_id=_target_from_text(derived),
+                evidence_id=fact.fact_id,
+                source_page=fact.source_page,
+                source_text=fact.text,
+            ))
+        for ordinal, match in enumerate(
+            _PARAMETER_PATTERN.finditer(derived) if semantic_fact else (), 1
+        ):
+            unit = match.group("unit").replace("uL", "µL")
+            parameters.append(StepParameterBinding(
+                parameter_id=f"{fact.fact_id}:parameter:{ordinal}",
+                value=match.group("value"),
+                unit=unit,
+                role=_parameter_role(unit, derived),
+                action_id=action_id,
+                evidence_id=fact.fact_id,
+                source_page=fact.source_page,
+                source_approved_alternative=fact.kind == "note",
+            ))
+        ratio = re.search(
+            r"(?P<first>\d+)\s+parts?\s+of\s+25\s*mM\s+ammonium\s+bicarbonate"
+            r".*?mixed\s+with\s+(?P<second>\d+)\s+part\s+acetonitrile",
+            derived,
+            re.I | re.S,
+        )
+        if ratio:
+            ratios.append(StepRatioBinding(
+                ratio_id=f"{fact.fact_id}:solution_a_ratio",
+                mixture_id="solution_a",
+                components=(("ambic_solution", int(ratio.group("first"))),
+                            ("acetonitrile", int(ratio.group("second")))),
+                evidence_id=fact.fact_id,
+                source_page=fact.source_page,
+            ))
+    predicate = (
+        f"candidate_a_step_{step.source_label}_endpoint"
+        if step.source_label in {"7", "9", "20"} else None
+    )
+    deduplicated: dict[tuple[str, str, str], StepParameterBinding] = {}
+    for item in parameters:
+        normalized_unit = item.unit.casefold().replace("μ", "µ")
+        normalized_unit = {
+            "c": "°c", "°c": "°c", "도": "°c",
+            "ul": "µl", "µl": "µl",
+        }.get(normalized_unit, normalized_unit)
+        deduplicated.setdefault(
+            (item.value, normalized_unit, item.role), item
+        )
+    deduplicated_parameters = tuple(deduplicated.values())
+    return StepSemanticFrame(
+        step.step_id, step.source_label, deduplicated_parameters, tuple(actions),
+        tuple(ratios), predicate,
+    )
+
+
+def assess_transcript_plausibility(
+    transcript: str,
+    frame: StepSemanticFrame,
+) -> TranscriptPlausibility:
+    """Classify operational tokens without rewriting any user value."""
+
+    def canonical_token(value: str, unit: str) -> str:
+        normalized_unit = unit.casefold().replace("μ", "µ")
+        normalized_unit = {
+            "c": "°c", "°c": "°c", "도": "°c",
+            "분": "min", "minute": "min", "minutes": "min",
+            "ul": "µl", "µl": "µl",
+        }.get(normalized_unit, normalized_unit)
+        return f"{value}{normalized_unit}".replace(" ", "")
+
+    key = _semantic_utterance_key(transcript)
+    source_tokens = {
+        canonical_token(item.value, item.unit)
+        for item in frame.parameters
+    }
+    parameter_matches = tuple(_PARAMETER_PATTERN.finditer(key))
+    observed = tuple(
+        canonical_token(match.group("value"), match.group("unit"))
+        for match in parameter_matches
+    )
+    exact = tuple(token for token in observed if token in source_tokens)
+    alternatives = {
+        canonical_token(item.value, item.unit)
+        for item in frame.parameters if item.source_approved_alternative
+    }
+    if observed and all(token in source_tokens for token in observed):
+        status = "source_approved_alternative" if any(
+            token in alternatives for token in observed
+        ) else "exact_compatible"
+        return TranscriptPlausibility(status, status, observed)
+    comparison = bool(re.search(
+        r"(?:대신|말고|차이|비교|instead|rather\s+than|different)", key
+    ))
+    if observed and exact and comparison:
+        return TranscriptPlausibility(
+            "plausible_explanatory_comparison",
+            "active_value_and_proposed_value_kept_distinct",
+            observed,
+        )
+    bare = tuple(
+        match.group(0)
+        for match in _BARE_NUMBER_PATTERN.finditer(key)
+        if not any(
+            parameter.start() <= match.start() < parameter.end()
+            for parameter in parameter_matches
+        )
+        and not re.match(r"\s*(?:단계|step\b)", key[match.end():])
+    )
+    operational_frame = bool(re.search(
+        r"(?:섞|비율|넣|사용|설정|온도|시간|회전|단계|해도\s*돼|"
+        r"mix|ratio|use|set|temperature|duration|step)", key
+    ))
+    if operational_frame and (
+        any(token not in source_tokens for token in observed)
+        or (bare and not observed)
+    ):
+        tokens = observed or bare
+        return TranscriptPlausibility(
+            "incompatible_suspicious", "value_not_bound_to_current_step", tokens
+        )
+    return TranscriptPlausibility("not_applicable", "no_operational_token", observed)
+
+
+def _binary_frame_reply(value: str) -> str | None:
+    """Interpret a short answer only after a server-owned binary question."""
+
+    key = _semantic_utterance_key(value)
+    if re.fullmatch(
+        r"(?:(?:네|예|응|그래|맞아|맞아요|물론)(?:\s+|$))*"
+        r"(?:(?:전부|모두)\s*)?(?:다\s*(?:했어|했어요|끝냈어|끝냈어요)|"
+        r"마쳤어|마쳤어요|끝냈어|끝냈어요|"
+        r"완료(?:했어|했어요|했습니다)?|했어|했어요|됐어|됐어요)?"
+        r"|yes(?:\s+i\s+(?:did|finished))?|done|correct|that(?:'|’)s\s+right",
+        key,
+    ) and key:
+        return "affirmative"
+    if re.fullmatch(
+        r"(?:아니|아니요|아직|아직\s*아니야|아직\s*안\s*(?:했어|됐어|끝났어)|"
+        r"no|not\s+yet|no,?\s+not\s+yet)", key,
+    ):
+        return "negative"
+    return None
+
+
 def classify_curated_control_intent(
     transcript: str,
     *,
@@ -1495,6 +1851,31 @@ def classify_curated_control_intent(
             intent_kind="workflow_command", action=CuratedProtocolAction.STOP,
             language=language, allows_state_mutation=True,
             normalized_transcript=key,
+        )
+    purpose_followup = bool(
+        discourse_context is not None
+        and discourse_context.focus_kind in {
+            DiscourseFocusKind.PROTOCOL_PURPOSE,
+            DiscourseFocusKind.PROTOCOL_BENEFIT,
+        }
+        and re.search(
+            r"(?:그(?:게|것|거|게는)|그\s*(?:목적|장점)|왜\s*(?:유용|중요)|"
+            r"장점|어떤\s*도움|why\s+(?:is\s+)?that\s+(?:useful|important)|"
+            r"how\s+does\s+that\s+help|why\s+does\s+that\s+matter)", key,
+        )
+    )
+    if purpose_followup:
+        return CuratedControlIntent(
+            intent_kind="protocol_purpose_followup",
+            action=CuratedProtocolAction.RELATED_QUESTION,
+            requested_followup="explain_protocol_benefit",
+            target_step="authoritative_current_step",
+            question_kind="protocol_benefit",
+            language=language,
+            normalized_transcript=key,
+            question_dimensions=("rationale",),
+            coreference_status=CoreferenceStatus.RESOLVED.value,
+            coreference_reason="recent_admitted_protocol_purpose",
         )
     if (
         not normalized_entities
@@ -1870,6 +2251,24 @@ def classify_curated_control_intent(
             question_dimensions=dimensions,
             coreference_status=coreference.status.value,
             coreference_reason=coreference.reason_code,
+        )
+    if (
+        _PARAMETER_PATTERN.search(key)
+        and re.search(
+            r"(?:뭐|무엇|왜|역할|의미|값|설명|what|why|mean|explain|for)", key
+        )
+    ):
+        return CuratedControlIntent(
+            intent_kind="current_step_parameter_question",
+            action=CuratedProtocolAction.RELATED_QUESTION,
+            target_step="authoritative_current_step",
+            question_kind="parameter",
+            language=language,
+            normalized_transcript=key,
+            question_dimensions=("role",),
+            requested_entity=normalized_entity,
+            requested_entities=normalized_entities,
+            resolved_entity=normalized_entity,
         )
     if any(term in key for term in _PROTOCOL_RELATED_TERMS):
         question_kind = (
@@ -2510,11 +2909,362 @@ class CuratedProtocolSession:
         )
         workflow = (
             "프로토콜 시작", "현재 단계", "다음 단계", "다음 단계 미리보기",
-            "완료", "현재 단계 완료", "완료 조건", "다시 알려줘", "프로토콜 중단",
+            "완료", "현재 단계 완료", "완료했어요", "다 했어요", "완료 조건",
+            "네", "아니요", "다시 알려줘", "프로토콜 중단",
             "이상 사항 기록", "관찰 결과", "완전히 탈색", "투명해요",
-            "흰색으로 변했어요", "아직 색이 남아 있어요",
+            "투명한가요", "흰색으로 변했어요", "아직 색이 남아 있어요",
         )
         return tuple(dict.fromkeys((*scientific, *workflow)))[:100]
+
+    def current_step_semantic_frame(self) -> StepSemanticFrame:
+        return build_step_semantic_frame(self.fixture, self.current_index)
+
+    def _semantic_claim_requests(
+        self,
+        transcript: str,
+        intent: CuratedControlIntent,
+        *,
+        language: str,
+    ) -> tuple[ClaimRequest, ...]:
+        """Decompose read-only questions into independently admitted claims."""
+
+        if not self.active or intent.action not in {
+            CuratedProtocolAction.RELATED_QUESTION,
+            CuratedProtocolAction.PROTOCOL_QUERY,
+            CuratedProtocolAction.OPERATIONAL_DEVIATION,
+            CuratedProtocolAction.VISUAL_REQUEST,
+        }:
+            return ()
+        key = intent.normalized_transcript or _semantic_utterance_key(transcript)
+        frame = self.current_step_semantic_frame()
+        facts = self.related_facts(transcript)
+        knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
+        claims: list[ClaimRequest] = []
+
+        def add(
+            target_type: ClaimTargetType,
+            target_id: str,
+            dimension: str,
+            *,
+            evidence_ids: tuple[str, ...] = (),
+            local_answer: str | None = None,
+            unresolved_reason: str | None = None,
+            operational: bool = False,
+            authority: str = "ACTIVE_PROTOCOL",
+            status: ClaimAdmissionStatus | None = None,
+        ) -> None:
+            claim_id = f"claim-{len(claims)+1}-{target_type.value}-{target_id}-{dimension}"
+            claims.append(ClaimRequest(
+                claim_id=claim_id,
+                target_type=target_type,
+                target_id=target_id,
+                dimension=dimension,
+                required_authority=authority,
+                evidence_ids=evidence_ids,
+                admission_status=status or (
+                    ClaimAdmissionStatus.LOCAL_SUPPORTED
+                    if local_answer and evidence_ids
+                    else ClaimAdmissionStatus.RESEARCH_REQUIRED
+                ),
+                local_answer=local_answer,
+                unresolved_reason=unresolved_reason,
+                operational=operational,
+            ))
+
+        if intent.protocol_scope == "purpose":
+            answer = (
+                "이 프로토콜은 젤 안의 단백질을 소화해 Evotip과 질량분석에 사용할 시료를 준비하는 실험입니다."
+                if language == "ko" else
+                "This protocol prepares in-gel digests for loading onto Evotips and mass-spectrometry analysis."
+            )
+            add(
+                ClaimTargetType.PROTOCOL_PROPOSITION, "protocol_purpose", "purpose",
+                evidence_ids=(knowledge.purpose.fact_id,), local_answer=answer,
+            )
+        elif intent.question_kind == "protocol_benefit":
+            answer = (
+                "이 과정이 유용한 이유는 젤 안의 단백질을 소화한 뒤 Evotip과 질량분석으로 이어질 수 있는 시료 상태를 만들기 때문입니다."
+                if language == "ko" else
+                "It is useful because it turns protein in the gel into an in-gel digest that the source says is ready for Evotips and mass-spectrometry analysis."
+            )
+            add(
+                ClaimTargetType.PROTOCOL_PROPOSITION, "protocol_purpose",
+                "rationale", evidence_ids=(knowledge.purpose.fact_id,),
+                local_answer=answer,
+            )
+
+        action_words = bool(re.search(
+            r"(?:discard|remove|버리|제거|씻|wash|incubat|배양|넣|place|cut|자르)", key
+        ))
+        ratio_words = bool(re.search(
+            r"(?:비율|parts?|ratio|몇\s*대\s*몇|\d+\s*대\s*\d+|대\s*일|:\s*1)",
+            key,
+        ))
+        entity_answers = {
+            "ambic": (
+                "AMBIC는 ammonium bicarbonate를 가리키는 약칭이며, 이 프로토콜에서는 Solution A와 B의 구성 성분입니다."
+                if language == "ko" else
+                "AMBIC is the protocol's abbreviation for ammonium bicarbonate and is a component of Solutions A and B."
+            ),
+            "hplc_water": (
+                "HPLC water는 이 프로토콜에서 25 mM AMBIC 용액을 만드는 물로 사용됩니다."
+                if language == "ko" else
+                "In this protocol, HPLC water is used to prepare the 25 mM AMBIC solution."
+            ),
+            "solution_a": (
+                "Solution A는 HPLC water로 만든 25 mM AMBIC 2 parts와 acetonitrile 1 part의 혼합물입니다."
+                if language == "ko" else
+                "Solution A is 2 parts 25 mM AMBIC in HPLC water mixed with 1 part acetonitrile."
+            ),
+            "solution_b": (
+                "Solution B는 HPLC water로 만든 25 mM AMBIC 용액입니다."
+                if language == "ko" else
+                "Solution B is 25 mM AMBIC made in HPLC water."
+            ),
+            "acetonitrile": (
+                "Acetonitrile은 이 프로토콜에서 Solution A의 1 part 성분입니다."
+                if language == "ko" else
+                "In this protocol, acetonitrile is the 1-part component of Solution A."
+            ),
+            "rpm": (
+                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 현재 단계에서는 부드러운 교반 속도에 연결됩니다."
+                if language == "ko" else
+                "rpm means revolutions per minute; in the current step it is the gentle-agitation speed setting."
+            ),
+        }
+        alias_map = {
+            "ambic": ("ambic", "ammonium bicarbonate"),
+            "hplc_water": ("hplc water",),
+            "solution_a": ("solution a",), "solution_b": ("solution b",),
+            "acetonitrile": ("acetonitrile",), "rpm": ("rpm",),
+        }
+        for entity in intent.requested_entities:
+            if action_words and entity in {action.target_id for action in frame.actions}:
+                continue
+            evidence = tuple(
+                fact.fact_id for fact in facts
+                if any(alias in _derived_source_text(fact.text).casefold()
+                       for alias in alias_map.get(entity, (entity,)))
+            )[:2]
+            answer = entity_answers.get(entity)
+            if answer and evidence:
+                dimension = (
+                    "composition" if entity in {"solution_a", "solution_b"}
+                    else "definition"
+                )
+                add(
+                    ClaimTargetType.ENTITY, entity, dimension,
+                    evidence_ids=evidence, local_answer=answer,
+                )
+        if "difference" in intent.question_dimensions and intent.requested_entities:
+            target = "-vs-".join(intent.requested_entities)
+            limitation = (
+                "활성 프로토콜은 일반 물과의 품질 차이를 정의하지 않으므로, 그 비교에는 별도 권위 자료가 필요합니다."
+                if language == "ko" else
+                "The active protocol does not define that general quality difference, so the comparison requires a separate authoritative source."
+            )
+            add(
+                ClaimTargetType.COMPARISON, target, "difference",
+                evidence_ids=tuple(dict.fromkeys(
+                    evidence_id for claim in claims
+                    for evidence_id in claim.evidence_ids
+                )),
+                local_answer=limitation,
+                unresolved_reason="comparison_absent_from_active_protocol",
+                authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
+                status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
+            )
+        elif (
+            "relationship" in intent.question_dimensions
+            and {"hplc_water", "ambic"} <= set(intent.requested_entities)
+        ):
+            evidence_ids = tuple(dict.fromkeys(
+                evidence_id for claim in claims
+                for evidence_id in claim.evidence_ids
+            ))
+            answer = (
+                "관계: 이 프로토콜에서는 HPLC water가 25 mM AMBIC 용액을 만드는 물이고, AMBIC가 그 용액의 성분입니다."
+                if language == "ko" else
+                "Relationship: in this protocol, HPLC water is the water used to prepare the 25 mM AMBIC solution, and AMBIC is its solute component."
+            )
+            if evidence_ids:
+                add(
+                    ClaimTargetType.COMPARISON, "hplc_water-ambic",
+                    "relationship", evidence_ids=evidence_ids,
+                    local_answer=answer,
+                )
+
+        if re.search(r"(?:1\.5\s*mL\s*튜브|1\.5\s*mL\s*tube|그\s*크기\s*튜브)", key, re.I):
+            current_evidence = ("current_step",)
+            if re.search(r"(?:뭘|무엇|what).*(?:넣|들어|place|contain)|(?:튜브).*(?:뭘|무엇)", key):
+                answer = (
+                    "1.5 mL 튜브에는 약 200 µL의 25 mM AMBIC이 있고, 절취한 젤 재료를 그 안에 넣습니다."
+                    if language == "ko" else
+                    "The 1.5 mL tube contains approximately 200 µL of 25 mM AMBIC, and the excised gel material is placed into it."
+                )
+                add(
+                    ClaimTargetType.ACTION, "place_gel_in_tube", "value",
+                    evidence_ids=current_evidence, local_answer=answer,
+                    operational=True,
+                )
+            if re.search(r"(?:왜|이유|why).*(?:1\.5|그\s*크기)|(?:1\.5|그\s*크기).*(?:왜|이유)", key):
+                limitation = (
+                    "활성 프로토콜은 1.5 mL 튜브를 지정하지만 그 크기를 선택한 과학적 이유는 설명하지 않습니다."
+                    if language == "ko" else
+                    "The active protocol specifies a 1.5 mL tube but does not explain the scientific reason for that size."
+                )
+                add(
+                    ClaimTargetType.PARAMETER, "vessel_capacity", "rationale",
+                    evidence_ids=current_evidence, local_answer=limitation,
+                    unresolved_reason="rationale_absent_from_active_protocol",
+                    authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
+                    status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
+                )
+
+        for binding in frame.parameters:
+            unit_aliases = {
+                "°C": r"(?:°\s*C|C|도)",
+                "C": r"(?:°\s*C|C|도)",
+                "min": r"(?:min(?:ute)?s?|분)",
+                "rpm": r"(?:rpm|분당\s*회전)",
+                "µL": r"(?:µL|uL|microliters?|마이크로리터)",
+                "mL": r"(?:mL|milliliters?|밀리리터)",
+                "mM": r"(?:mM|millimolar|밀리몰)",
+            }
+            unit_pattern = unit_aliases.get(
+                binding.unit, re.escape(binding.unit)
+            )
+            token_pattern = (
+                rf"(?<![0-9]){re.escape(binding.value)}\s*"
+                rf"{unit_pattern}(?![A-Za-z0-9])"
+            )
+            if re.search(token_pattern, key, re.I) is None:
+                continue
+            role_labels = {
+                "incubation_temperature": ("배양 온도", "incubation temperature"),
+                "incubation_duration": ("배양 시간", "incubation duration"),
+                "agitation_speed": ("부드러운 교반 속도", "gentle-agitation speed"),
+                "solution_volume": ("사용 용액 부피", "solution volume"),
+                "concentration": ("용액 농도", "solution concentration"),
+                "vessel_capacity": ("튜브 용량", "tube capacity"),
+                "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
+            }
+            label = role_labels.get(binding.role, ("단계 조건", "step condition"))[
+                0 if language == "ko" else 1
+            ]
+            rendered = f"{binding.value} {binding.unit}"
+            answer = (
+                f"{rendered}는 현재 {frame.step_label}단계의 {label}입니다."
+                if language == "ko" else
+                f"{rendered} is the current step's {label}."
+            )
+            add(
+                ClaimTargetType.PARAMETER, binding.parameter_id, "role",
+                evidence_ids=(binding.evidence_id,), local_answer=answer,
+                operational=True,
+                authority=(
+                    "SOURCE_APPROVED_ALTERNATIVE"
+                    if binding.source_approved_alternative else "ACTIVE_PROTOCOL"
+                ),
+            )
+
+        if not any(
+            claim.target_type is ClaimTargetType.PARAMETER
+            and claim.dimension == "role" for claim in claims
+        ):
+            requested_role = next((role for role, pattern in (
+                ("incubation_temperature", r"(?:온도|temperature)"),
+                ("incubation_duration", r"(?:시간|기간|duration|how\s+long)"),
+                ("agitation_speed", r"(?:교반|회전|rpm|agitation|speed)"),
+                ("solution_volume", r"(?:부피|용량|volume)"),
+                ("concentration", r"(?:농도|concentration)"),
+            ) if re.search(pattern, key)), None)
+            if requested_role:
+                candidates = tuple(
+                    item for item in frame.parameters
+                    if item.role == requested_role
+                )
+                if len(candidates) == 1:
+                    item = candidates[0]
+                    answer = (
+                        f"현재 {frame.step_label}단계에서 {item.value} {item.unit}는 {requested_role}에 연결된 값입니다."
+                        if language == "ko" else
+                        f"In step {frame.step_label}, {item.value} {item.unit} is bound to {requested_role}."
+                    )
+                    add(
+                        ClaimTargetType.PARAMETER,item.parameter_id,"role",
+                        evidence_ids=(item.evidence_id,),local_answer=answer,
+                        operational=True,
+                    )
+                elif len(candidates) > 1:
+                    values = ", ".join(
+                        f"{item.value} {item.unit}" for item in candidates
+                    )
+                    message = (
+                        f"현재 단계에는 {values}처럼 같은 종류의 값이 둘 이상 있습니다. 어떤 값을 말씀하시는지 확인해 주세요."
+                        if language == "ko" else
+                        f"The current step has more than one matching value ({values}). Please specify which one you mean."
+                    )
+                    add(
+                        ClaimTargetType.PARAMETER,requested_role,"value",
+                        local_answer=message,
+                        unresolved_reason="multiple_current_step_parameters",
+                        status=ClaimAdmissionStatus.CLARIFICATION_REQUIRED,
+                        operational=True,
+                    )
+
+        matching_actions = tuple(
+            action for action in frame.actions
+            if action_words and (
+                action.target_id is None
+                or action.target_id in intent.requested_entities
+                or action.action_type in key.replace(" ", "_")
+                or action.action_type == "remove_discard"
+                and re.search(r"(?:discard|remove|버리|제거)", key)
+            )
+        )
+        if len(matching_actions) == 1:
+            action = matching_actions[0]
+            action_answer = (
+                "활성 프로토콜은 젤 밴드가 든 튜브에서 Solution A를 제거해 버리라고 지시합니다."
+                if language == "ko" and action.action_type == "remove_discard" else
+                "The active protocol instructs you to remove and discard Solution A from the tube containing the gel band."
+                if action.action_type == "remove_discard" else
+                (f"현재 단계의 확인된 동작은 {_derived_source_text(action.source_text)}입니다.")
+            )
+            add(
+                ClaimTargetType.ACTION, action.action_id, "value",
+                evidence_ids=(action.evidence_id,), local_answer=action_answer,
+                operational=True,
+            )
+            if re.search(r"(?:왜|이유|rationale|why)", key):
+                limitation = (
+                    "활성 프로토콜은 이 동작을 지시하지만 그 기전적 이유는 설명하지 않습니다."
+                    if language == "ko" else
+                    "The active protocol instructs this action but does not state its mechanistic rationale."
+                )
+                add(
+                    ClaimTargetType.ACTION, action.action_id, "rationale",
+                    evidence_ids=(action.evidence_id,), local_answer=limitation,
+                    unresolved_reason="rationale_absent_from_active_protocol",
+                    authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
+                    status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
+                )
+
+        if ratio_words and len(frame.ratios) == 1:
+            ratio = frame.ratios[0]
+            first, second = ratio.components
+            answer = (
+                f"Solution A의 비율은 25 mM AMBIC 용액 {first[1]} parts 대 acetonitrile {second[1]} part입니다."
+                if language == "ko" else
+                f"Solution A uses {first[1]} parts 25 mM AMBIC solution to {second[1]} part acetonitrile."
+            )
+            add(
+                ClaimTargetType.RATIO, ratio.ratio_id, "value",
+                evidence_ids=(ratio.evidence_id,), local_answer=answer,
+                operational=True,
+            )
+        return tuple(claims)
 
     def _localized_fact(self, step_id: str, fact_id: str) -> str | None:
         """Read optional presentation data without weakening fixture validation."""
@@ -2792,6 +3542,68 @@ class CuratedProtocolSession:
         entities = plan.requested_entities or (
             (plan.requested_entity,) if plan.requested_entity else ()
         )
+        if plan.claim_requests:
+            admitted = tuple(
+                claim for claim in plan.claim_requests
+                if claim.admission_status is ClaimAdmissionStatus.LOCAL_SUPPORTED
+                and claim.local_answer
+                and claim.evidence_ids
+            )
+            unresolved_claims = tuple(
+                claim for claim in plan.claim_requests
+                if claim.admission_status is ClaimAdmissionStatus.RESEARCH_REQUIRED
+            )
+            visible = tuple(
+                claim for claim in plan.claim_requests if claim.local_answer
+            )
+            if visible:
+                direct = "\n".join(
+                    f"• {claim.local_answer}" for claim in visible
+                )
+                spoken_parts = [claim.local_answer for claim in admitted[:3]]
+                if unresolved_claims and len(spoken_parts) < 3:
+                    limitation = next(
+                        (claim.local_answer for claim in unresolved_claims
+                         if claim.local_answer), None
+                    )
+                    if limitation:
+                        spoken_parts.append(limitation)
+                speech = " ".join(spoken_parts)
+                claim_evidence = tuple(dict.fromkeys(
+                    evidence_id for claim in visible
+                    for evidence_id in claim.evidence_ids
+                ))
+                scopes = ["ACTIVE_PROTOCOL"]
+                if any(
+                    claim.required_authority == "SOURCE_APPROVED_ALTERNATIVE"
+                    for claim in admitted
+                ):
+                    scopes.append("SOURCE_APPROVED_ALTERNATIVE")
+                if unresolved_claims:
+                    scopes.extend((
+                        "APPROVED_REFERENCE",
+                        "AUTHORITATIVE_EXTERNAL_REFERENCE",
+                    ))
+                return AnswerEnvelope(
+                    direct_answer=direct,
+                    speech_summary=speech,
+                    entity_sections=tuple(
+                        (claim.target_id, claim.local_answer or "")
+                        for claim in visible
+                    ),
+                    protocol_relevance="",
+                    evidence_ids=claim_evidence,
+                    source_plan=SourcePlan(
+                        tuple(dict.fromkeys(scopes)),
+                        tuple(dict.fromkeys(
+                            claim.dimension for claim in unresolved_claims
+                        )),
+                        tuple(claim.claim_id for claim in unresolved_claims),
+                    ),
+                    admitted_claim_ids=tuple(
+                        claim.claim_id for claim in admitted
+                    ),
+                )
         sections: list[tuple[str, str]] = []
         explanations_ko = {
             "ambic": (
@@ -3119,8 +3931,16 @@ class CuratedProtocolSession:
             self._pending_completion_confirmation = None
         if observation_pending is not None and not observation_pending_valid:
             self._pending_observation_confirmation = None
-        if pending_valid and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(
-            normalized_confirmation
+        binary_reply = _binary_frame_reply(transcript)
+        pending_language_mismatch = bool(
+            (pending_valid or observation_pending_valid)
+            and language == "ko"
+            and re.fullmatch(r"[a-z]{1,4}", normalized_confirmation)
+            and normalized_confirmation not in {"yes", "no", "done"}
+        )
+        if pending_valid and (
+            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            or binary_reply == "affirmative"
         ):
             self._pending_completion_confirmation = None
             intent = CuratedControlIntent(
@@ -3135,8 +3955,9 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
-        elif pending_valid and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(
-            normalized_confirmation
+        elif pending_valid and (
+            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            or binary_reply == "negative"
         ):
             self._pending_completion_confirmation = None
             intent = CuratedControlIntent(
@@ -3169,6 +3990,51 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
+        elif observation_pending_valid and binary_reply in {
+            "affirmative", "negative"
+        }:
+            self._pending_observation_confirmation = None
+            observed = (
+                observation_pending.affirmative_outcome
+                if binary_reply == "affirmative"
+                else observation_pending.negative_outcome
+            )
+            intent = CuratedControlIntent(
+                intent_kind="pending_observation_confirmed",
+                action=CuratedProtocolAction.NEXT,
+                reported_completion=observed == "positive",
+                reported_observation=True,
+                observation_predicate=observed,
+                observation_outcome=normalized_confirmation,
+                requested_transition=("next" if observed == "positive" else None),
+                requested_followup="describe_new_current_step",
+                target_step="authoritative_current_step",
+                confidence_source="server_pending_observation_binary_reply",
+                allows_state_mutation=observed == "positive",
+                language=language,
+                normalized_transcript=normalized_confirmation,
+            )
+        elif pending_language_mismatch:
+            if pending_valid and pending is not None:
+                self._pending_completion_confirmation = replace(
+                    pending, requested_turn_id=turn_id,
+                    requested_generation=generation,
+                )
+            if observation_pending_valid and observation_pending is not None:
+                self._pending_observation_confirmation = replace(
+                    observation_pending, requested_turn_id=turn_id,
+                    requested_generation=generation,
+                )
+            intent = CuratedControlIntent(
+                intent_kind="pending_reply_transcript_unreliable",
+                action=CuratedProtocolAction.TRANSCRIPT_UNRELIABLE,
+                transcript_quality="pending_frame_language_mismatch",
+                confidence=None,
+                confidence_source="source_frame_plausibility",
+                requires_confirmation=True,
+                language=language,
+                normalized_transcript=normalized_confirmation,
+            )
         else:
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
@@ -3190,6 +4056,45 @@ class CuratedProtocolSession:
                 ),
                 completion_context=self.active,
             )
+        if self.active:
+            plausibility = assess_transcript_plausibility(
+                transcript, self.current_step_semantic_frame()
+            )
+            claims = self._semantic_claim_requests(
+                transcript, intent, language=language
+            )
+            intent = replace(
+                intent,
+                claim_requests=claims,
+                plausibility_status=plausibility.status,
+                plausibility_reason=plausibility.reason_code,
+            )
+            if any(
+                claim.admission_status is ClaimAdmissionStatus.CLARIFICATION_REQUIRED
+                for claim in claims
+            ):
+                intent = replace(
+                    intent,
+                    intent_kind="operational_parameter_ambiguous",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                    allows_state_mutation=False,
+                    requires_confirmation=True,
+                )
+            if (
+                plausibility.status == "incompatible_suspicious"
+                and intent.action in {
+                    CuratedProtocolAction.RELATED_QUESTION,
+                    CuratedProtocolAction.OPERATIONAL_DEVIATION,
+                    CuratedProtocolAction.OFF_TOPIC,
+                }
+            ):
+                intent = replace(
+                    intent,
+                    intent_kind="operational_value_clarification_required",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                    allows_state_mutation=False,
+                    requires_confirmation=True,
+                )
         if (
             self.active
             and intent.action is CuratedProtocolAction.NEXT
@@ -3315,6 +4220,35 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
                 requested_followup=intent.requested_followup,
+            )
+        elif command is CuratedProtocolAction.CLARIFY_PARAMETER:
+            step = steps[self.current_index]
+            response = {
+                "en": (
+                    "That value is not uniquely bound to the current step. "
+                    "Please repeat the value with its unit or say whether you are comparing it with the active protocol value. No state changed."
+                ),
+                "vi": (
+                    "Giá trị đó chưa gắn rõ với bước hiện tại. Vui lòng nói lại kèm đơn vị. Trạng thái không thay đổi."
+                ),
+                "ko": (
+                    "말씀하신 값은 현재 단계의 조건이나 비율에 명확히 연결되지 않습니다. "
+                    "단위와 함께 다시 말하거나, 활성 프로토콜 값과 비교하려는 것인지 알려 주세요. 상태는 변경하지 않았습니다."
+                ),
+            }.get(language, "값과 단위를 다시 확인해 주세요. 상태는 변경하지 않았습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                facts=(),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind=intent.intent_kind,
+                normalized_transcript=intent.normalized_transcript,
+                plausibility_status=intent.plausibility_status,
+                plausibility_reason=intent.plausibility_reason,
             )
         elif command is CuratedProtocolAction.TRANSCRIPT_UNRELIABLE:
             response = ({
@@ -4006,7 +4940,10 @@ class CuratedProtocolSession:
                 coreference_reason=intent.coreference_reason,
             )
             if intent.requested_entities:
-                envelope=self.protocol_answer_envelope(plan,language=language)
+                envelope=self.protocol_answer_envelope(
+                    replace(plan, claim_requests=intent.claim_requests),
+                    language=language,
+                )
                 visual_status=(
                     "검증된 원본 시각 자료를 함께 표시합니다."
                     if source_visual is not None else
@@ -4027,6 +4964,8 @@ class CuratedProtocolSession:
                     source_plan_scopes=envelope.source_plan.scopes,
                     unresolved_dimensions=(
                         envelope.source_plan.unresolved_dimensions),
+                    unresolved_claim_ids=(
+                        envelope.source_plan.unresolved_claim_ids),
                 )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
@@ -4332,7 +5271,10 @@ class CuratedProtocolSession:
                 and plan.facts
                 and not missing_followup_query
             ):
-                envelope=self.protocol_answer_envelope(plan,language=language)
+                envelope=self.protocol_answer_envelope(
+                    replace(plan, claim_requests=intent.claim_requests),
+                    language=language,
+                )
                 plan=replace(
                     plan,
                     display_text=(
@@ -4351,7 +5293,15 @@ class CuratedProtocolSession:
                     source_plan_scopes=envelope.source_plan.scopes,
                     unresolved_dimensions=(
                         envelope.source_plan.unresolved_dimensions),
+                    unresolved_claim_ids=(
+                        envelope.source_plan.unresolved_claim_ids),
                 )
+        plan = replace(
+            plan,
+            claim_requests=intent.claim_requests,
+            plausibility_status=intent.plausibility_status,
+            plausibility_reason=intent.plausibility_reason,
+        )
         if opening_projection != (
             self.active,
             self.current_index,
@@ -4384,6 +5334,10 @@ class CuratedProtocolSession:
                 workflow_revision=self._revision,
                 requested_turn_id=turn_id,
                 requested_generation=generation,
+                predicate_id=(
+                    self.current_step_semantic_frame().observation_predicate_id
+                    or f"candidate_a_step_{step.source_label}_endpoint"
+                ),
             )
         elif plan.action in {
             CuratedProtocolAction.START,
@@ -4427,6 +5381,45 @@ class CuratedProtocolSession:
                 turn_id=turn_id,
                 generation=generation,
                 workflow_revision=self._revision,
+                focus_kind=(
+                    DiscourseFocusKind.PROTOCOL_BENEFIT
+                    if plan.question_kind == "protocol_benefit"
+                    else DiscourseFocusKind.CURRENT_STEP_PARAMETER
+                    if any(claim.target_type is ClaimTargetType.PARAMETER
+                           for claim in plan.claim_requests)
+                    else DiscourseFocusKind.CURRENT_STEP_ACTION
+                    if any(claim.target_type is ClaimTargetType.ACTION
+                           for claim in plan.claim_requests)
+                    else DiscourseFocusKind.COMPARISON
+                    if len(plan.requested_entities) > 1
+                    else DiscourseFocusKind.ENTITY
+                ),
+                proposition_ids=tuple(
+                    claim.claim_id for claim in plan.claim_requests
+                    if claim.admission_status is ClaimAdmissionStatus.LOCAL_SUPPORTED
+                ),
+                source_evidence_ids=tuple(dict.fromkeys(
+                    evidence_id for claim in plan.claim_requests
+                    for evidence_id in claim.evidence_ids
+                )),
+            )
+        elif (
+            command is CuratedProtocolAction.PROTOCOL_QUERY
+            and intent.protocol_scope == "purpose"
+        ):
+            self._discourse_context = ProtocolDiscourseContext(
+                requested_dimension="purpose",
+                semantic_topic="protocol_purpose",
+                step_id=self.fixture.steps[self.current_index].step_id,
+                response_language=language,
+                turn_id=turn_id,
+                generation=generation,
+                workflow_revision=self._revision,
+                focus_kind=DiscourseFocusKind.PROTOCOL_PURPOSE,
+                proposition_ids=tuple(
+                    claim.claim_id for claim in plan.claim_requests
+                ) or ("protocol_purpose",),
+                source_evidence_ids=("protocol_purpose",),
             )
         elif command is CuratedProtocolAction.VISUAL_REQUEST and plan.requested_entities:
             self._discourse_context = ProtocolDiscourseContext(
@@ -4442,6 +5435,14 @@ class CuratedProtocolSession:
                 turn_id=turn_id,
                 generation=generation,
                 workflow_revision=self._revision,
+                focus_kind=DiscourseFocusKind.ENTITY,
+                proposition_ids=tuple(
+                    claim.claim_id for claim in plan.claim_requests
+                ),
+                source_evidence_ids=tuple(dict.fromkeys(
+                    evidence_id for claim in plan.claim_requests
+                    for evidence_id in claim.evidence_ids
+                )),
             )
         elif plan.state_changed or command in {
             CuratedProtocolAction.START,

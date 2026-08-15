@@ -60,6 +60,7 @@ def main() -> int:
     confirmation_total = confirmation_correct = 0
     observation_confirmation_total = observation_confirmation_correct = 0
     brain_total = brain_correct = 0
+    semantic_plan_total = semantic_plan_correct = 0
     latencies: list[float] = []
     results = []
     for turn_id, case in enumerate(dataset["cases"], 1):
@@ -87,10 +88,34 @@ def main() -> int:
         )
         latencies.append((time.perf_counter() - started) * 1000)
         changed = session.current_index != opening_index or not session.active
+        actual_claim_types = {
+            f"{claim.target_type.value}:{claim.dimension}"
+            for claim in plan.claim_requests
+        }
+        structured_checks: list[bool] = []
+        if expected_claim_types := case.get("claim_types"):
+            structured_checks.append(set(expected_claim_types) <= actual_claim_types)
+        if "minimum_claim_count" in case:
+            structured_checks.append(
+                len(plan.claim_requests) >= case["minimum_claim_count"]
+            )
+        if "unresolved_claim_count" in case:
+            structured_checks.append(
+                len(plan.unresolved_claim_ids) == case["unresolved_claim_count"]
+            )
+        if "plausibility" in case:
+            structured_checks.append(
+                plan.plausibility_status == case["plausibility"]
+            )
+        structured_ok = all(structured_checks)
+        if structured_checks:
+            semantic_plan_total += 1
+            semantic_plan_correct += int(structured_ok)
         route_ok = (
             plan.intent_kind == case["intent"]
             and plan.action.value == case["action"]
             and changed == case["mutates"]
+            and structured_ok
         )
         correct += int(route_ok)
         mutation_false_positives += int(changed and not case["mutates"])
@@ -154,6 +179,9 @@ def main() -> int:
             "intent": plan.intent_kind,
             "action": plan.action.value,
             "state_changed": changed,
+            "claim_types": sorted(actual_claim_types),
+            "unresolved_claim_count": len(plan.unresolved_claim_ids),
+            "plausibility": plan.plausibility_status,
             "pass": route_ok,
         })
     report = {
@@ -191,6 +219,10 @@ def main() -> int:
         ),
         "brain_activation_accuracy": (
             brain_correct / brain_total if brain_total else None
+        ),
+        "semantic_claim_plan_accuracy": (
+            semantic_plan_correct / semantic_plan_total
+            if semantic_plan_total else None
         ),
         "original_vs_generated_visual_decision_accuracy": (
             visual_correct / visual_total if visual_total else None

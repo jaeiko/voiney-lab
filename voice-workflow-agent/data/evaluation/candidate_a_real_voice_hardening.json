@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "cases": [
     {"id": "completion-ko-1", "text": "현재 단계를 완료했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true, "brains": []},
     {"id": "completion-ko-2", "text": "여기까지 다 했어요.", "step_index": 1, "intent": "report_completion", "action": "next", "mutates": true},
@@ -88,5 +88,18 @@
     ,{"id": "pending-move-short-ko", "prior_text": "다음 단계로 안내해 줘.", "text": "옮겨", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
     ,{"id": "pending-move-on-en", "prior_text": "Guide me to the next step.", "text": "let's continue", "language": "en", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
     ,{"id": "stt-corrupted-start", "text": "투 루를 시작해 줘", "step_index": 0, "intent": "ambiguous_protocol_start", "action": "transcript_unreliable", "mutates": false}
+    ,{"id": "live9-purpose-natural", "text": "우선 이 실험이 어떤 실험인지 알려줄 수 있어?", "step_index": 1, "intent": "protocol_purpose", "action": "protocol_query", "mutates": false, "claim_types": ["protocol_proposition:purpose"]}
+    ,{"id": "live9-purpose-unseen-en", "text": "Could you tell me what kind of experiment this is?", "language": "en", "step_index": 1, "intent": "protocol_purpose", "action": "protocol_query", "mutates": false, "claim_types": ["protocol_proposition:purpose"]}
+    ,{"id": "live9-purpose-current-contrast", "text": "이 실험에서 지금 단계가 뭐야?", "step_index": 1, "intent": "current_step_information", "action": "current", "mutates": false}
+    ,{"id": "live9-purpose-followup", "prior_text": "우선 이 실험이 어떤 실험인지 알려줄 수 있어?", "text": "그게 왜 유용해?", "step_index": 1, "intent": "protocol_purpose_followup", "action": "related_question", "mutates": false, "claim_types": ["protocol_proposition:rationale"]}
+    ,{"id": "live9-multipart-tube", "text": "AMBIC가 무엇이고 1.5 mL 튜브에는 무엇을 넣으며 왜 그 크기를 사용해?", "step_index": 0, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "claim_types": ["entity:definition", "action:value", "parameter:rationale"], "unresolved_claim_count": 1}
+    ,{"id": "live9-parameters", "text": "37°C, 15 minutes, 800 rpm이 각각 무엇을 위한 조건이야?", "step_index": 2, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "claim_types": ["parameter:role"], "minimum_claim_count": 3}
+    ,{"id": "live9-discard-rationale", "text": "Why do we remove Solution A here?", "language": "en", "step_index": 3, "intent": "protocol_entity_question", "action": "related_question", "mutates": false, "claim_types": ["action:value", "action:rationale"], "unresolved_claim_count": 1}
+    ,{"id": "live9-ratio-unseen", "text": "Solution A에서 AMBIC 용액과 acetonitrile을 몇 대 몇으로 섞어?", "step_index": 1, "intent": "related_question", "action": "related_question", "mutates": false, "claim_types": ["ratio:value"]}
+    ,{"id": "live9-suspicious-decimal", "text": "2.2로 섞으면 돼?", "step_index": 1, "intent": "operational_value_clarification_required", "action": "clarify_parameter", "mutates": false, "plausibility": "incompatible_suspicious"}
+    ,{"id": "live9-pending-filler", "prior_text": "다음 단계로 안내해 줘.", "text": "어, 다 했어.", "step_index": 1, "intent": "pending_completion_confirmed", "action": "next", "mutates": true, "pending_confirmation": false}
+    ,{"id": "live9-pending-so-contrast", "prior_text": "다음 단계로 안내해 줘.", "text": "So", "step_index": 1, "intent": "pending_reply_transcript_unreliable", "action": "transcript_unreliable", "mutates": false, "pending_confirmation": true}
+    ,{"id": "live9-observation-yes", "prior_text": "현재 단계를 완료했어요.", "text": "네", "step_index": 6, "intent": "pending_observation_confirmed", "action": "next", "mutates": true, "pending_observation": false}
+    ,{"id": "live9-observation-no", "prior_text": "현재 단계를 완료했어요.", "text": "아니요", "step_index": 6, "intent": "pending_observation_confirmed", "action": "next", "mutates": false, "pending_observation": false}
   ]
 }

@@ -183,6 +183,21 @@ and TTS proceed while a bounded Answer call may later add written detail. The
 browser reports these as read-only brain diagnostics, never as fake Tools or
 server operations.
 
+The 2026-08-15 account probe used the application's actual OpenAI-compatible
+`chat.completions` transport (the installed OpenAI client is 2.50.0). The
+authenticated `/v1/models` list contained `grok-4.20-0309-non-reasoning` and
+`grok-4.3`. The former passed Source and Visual but failed Answer admission; the
+latter passed Answer and Source but returned `no_visual` for an explicit visual
+request. No candidate was eligible for the concurrent acceptance probe. The
+Candidate A launcher therefore keeps Multi-Brain disabled. This does not change
+the separately configured Responses/web-search or supplemental models.
+
+Current xAI documentation recommends Responses for new text integrations while
+still documenting strict JSON Schema on Chat Completions. Migration of the
+application role transport is a separate compatibility change; do not call the
+deprecated transport live-verified merely because its schema request returned
+HTTP 200.
+
 ## 7. Candidate A usefulness gate
 
 The local audit on 2026-08-10 found two active approved demo documents and three

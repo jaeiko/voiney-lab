@@ -30,6 +30,7 @@ from voice_workflow_agent.configuration import (
 )
 from voice_workflow_agent.cascade_filler import CascadeFiller
 from voice_workflow_agent.curated_protocol import (
+    ClaimAdmissionStatus,
     CuratedProtocolAction,
     CuratedProtocolFixture,
     CuratedProtocolSession,
@@ -104,6 +105,7 @@ from voice_workflow_agent.moss_retrieval import (
 )
 from voice_workflow_agent.multi_brain import (
     AnswerBrainOutput,
+    BrainClaim,
     BrainFact,
     BrainSnapshot,
     HybridMultiBrain,
@@ -399,6 +401,39 @@ class SttDiagnosticSettings:
         return cls(enabled,directory,maximum)
 
 
+@dataclass(frozen=True)
+class CascadeTranscriptionContext:
+    """One server-owned STT policy shared by ordinary and barge-in audio."""
+
+    configuration_id:int|None
+    session_id:str
+    generation:int
+    language:str|None
+    protocol_id:str|None
+    step_id:str|None
+    pending_frame:str|None
+    keyterms:tuple[str,...]
+    audio_origin:str
+
+    def __post_init__(self)->None:
+        if self.audio_origin not in {"ordinary","barge_in"}:
+            raise ValueError("STT audio origin is invalid")
+
+    def request_policy(self)->dict[str,object]:
+        fields=["format"]
+        if self.language is not None:
+            fields.append("language")
+        fields.extend("keyterm" for _ in self.keyterms)
+        fields.append("file")
+        return {
+            "language":self.language,
+            "keyterms":list(self.keyterms),
+            "request_field_order":fields,
+            "pending_frame":self.pending_frame,
+            "audio_origin":self.audio_origin,
+        }
+
+
 def _stt_multipart(
     pcm:bytes,*,language:str|None,keyterms:tuple[str,...]
 )->tuple[list[tuple[str,tuple]],bytes,tuple[str,...]]:
@@ -446,6 +481,7 @@ def persist_stt_diagnostic(
             "detected_language","raw_transcript","normalized_transcript",
             "correction_class","clarification_required","intent_kind",
             "action","mutation_authorized","browser_audio_constraints",
+            "audio_origin","pending_frame",
         }
     }
     safe["wav_sha256"]=hashlib.sha256(wav).hexdigest()
@@ -1437,6 +1473,7 @@ class ListenerSession:
             diagnostics=dict(event.diagnostics or {}))
     def commit_interrupt_candidate(
         self,event:ListenerEvent,*,stt_ms:int|None=None,
+        reason:str="confirmed_speech",
     )->list[ListenerEvent]:
         identity=self._interrupt_candidate_identity
         if (event.kind!="barge_in_audio_ready" or identity is None or
@@ -1467,12 +1504,12 @@ class ListenerSession:
             ListenerEvent(
                 "assistant.interrupted",event.turn_id,event.result,
                 event.generation,superseding_turn_id,self.generation,
-                reason="confirmed_speech",latency_ms=latency,
+                reason=reason,latency_ms=latency,
                 diagnostics=diagnostics),
             ListenerEvent(
                 "barge_in_committed",event.turn_id,event.result,
                 event.generation,superseding_turn_id,self.generation,
-                reason="confirmed_speech",latency_ms=latency,
+                reason=reason,latency_ms=latency,
                 diagnostics=diagnostics),
             ListenerEvent(
                 "speech.start",superseding_turn_id,event.result,
@@ -1517,6 +1554,53 @@ class ListenerSession:
         self._restore_primary_detector(TurnState.COOLDOWN)
         self._reset_interrupt_input()
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000; return True
+
+
+def cascade_transcription_context(
+    session:ListenerSession,
+    *,
+    audio_origin:str,
+) -> CascadeTranscriptionContext:
+    """Build the exact shared request policy for every Cascade speech origin."""
+
+    curated=session.curated_protocol_session
+    step_id=None
+    pending_frame=None
+    keyterms:tuple[str,...]=()
+    if curated is not None:
+        keyterms=curated.stt_keyterms()
+        if curated.active:
+            step_id=curated.fixture.steps[curated.current_index].step_id
+        if curated.pending_observation_confirmation is not None:
+            pending_frame=(
+                "observation:"
+                f"{curated.pending_observation_confirmation.predicate_id}"
+            )
+        elif curated.pending_completion_confirmation is not None:
+            pending_frame="completion"
+    language=session.manual_language if session.language_mode=="manual" else None
+    return CascadeTranscriptionContext(
+        configuration_id=session.accepted_configuration_id,
+        session_id=session.session_id,
+        generation=session.generation,
+        language=language,
+        protocol_id=session.accepted_protocol_id,
+        step_id=step_id,
+        pending_frame=pending_frame,
+        keyterms=keyterms,
+        audio_origin=audio_origin,
+    )
+
+
+def transcribe_cascade_audio(
+    pcm:bytes,
+    context:CascadeTranscriptionContext,
+) -> Transcription:
+    """Apply one request contract without rewriting the provider transcript."""
+
+    return transcribe(
+        clean_path(pcm),language=context.language,keyterms=context.keyterms,
+    )
 
 class LockedSender:
     def __init__(self,websocket): self.websocket=websocket; self.lock=asyncio.Lock()
@@ -2037,13 +2121,54 @@ async def _send_session_greeting(
         tools_used=[],timings_ms={"stt":0,"first_audio_ms":0,"total_ms":0},
     )
 
+def _claim_admitted_answer(
+    output:AnswerBrainOutput,
+    plan:object,
+) -> AnswerBrainOutput|None:
+    """Keep independently supported claim sections when another claim is open."""
+
+    unresolved=tuple(getattr(plan,"unresolved_claim_ids",()) or ())
+    if not unresolved:
+        return output
+    requests=tuple(getattr(plan,"claim_requests",()) or ())
+    admitted_ids={
+        claim.claim_id for claim in requests
+        if claim.admission_status is ClaimAdmissionStatus.LOCAL_SUPPORTED
+    }
+    sections=tuple(
+        section for section in output.claim_sections
+        if section[0] in admitted_ids
+    )
+    if not sections:
+        return None
+    limitations=tuple(
+        claim.local_answer for claim in requests
+        if claim.claim_id in unresolved and claim.local_answer
+    )
+    display="\n".join(f"• {section[1]}" for section in sections)
+    if limitations:
+        display += "\n\n" + "\n".join(f"• {item}" for item in limitations)
+    evidence_ids=tuple(dict.fromkeys(
+        evidence_id for _,_,section_ids in sections
+        for evidence_id in section_ids
+    ))
+    return AnswerBrainOutput(
+        spoken_answer=" ".join(section[1] for section in sections[:3]),
+        display_answer=display,
+        evidence_ids=evidence_ids,
+        limitations=tuple(dict.fromkeys((*output.limitations,*limitations))),
+        claim_sections=sections,
+    )
+
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,
                    retained_prefix_frames:int=0,
                    clock:Callable[[],float]=time.perf_counter,
                    sender:LockedSender|None=None,filler:CascadeFiller|None=None,
                    accepted_transcription:Transcription|None=None,
-                   accepted_stt_ms:int|None=None)->None:
+                   accepted_stt_ms:int|None=None,
+                   accepted_stt_context:CascadeTranscriptionContext|None=None)->None:
     sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
@@ -2078,21 +2203,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "transcribing",
         timings_ms={"utterance_to_status":timings["utterance_to_status_ms"]})
     if not await current_text("turn.processing",turn_id=turn_id,input_frames=input_frames): return
-    stt_language=(
-        session.manual_language
-        if session.language_mode=="manual" else None
+    transcription_context=(
+        accepted_stt_context
+        or cascade_transcription_context(session,audio_origin="ordinary")
     )
-    stt_keyterms=(
-        session.curated_protocol_session.stt_keyterms()
-        if session.curated_protocol_session is not None else ()
-    )
+    stt_language=transcription_context.language
+    stt_keyterms=transcription_context.keyterms
     if accepted_transcription is None:
         started=clock()
         transcription=await asyncio.to_thread(
-            partial(
-                transcribe,clean_path(source_pcm),
-                language=stt_language,keyterms=stt_keyterms,
-            ))
+            transcribe_cascade_audio,source_pcm,transcription_context)
         timings["stt"]=round((clock()-started)*1000)
     else:
         transcription=accepted_transcription
@@ -2137,10 +2257,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "retained_prefix_frames":max(0,retained_prefix_frames),
         "retained_prefix_ms":max(0,retained_prefix_frames)*20,
         "stt_endpoint":"/v1/stt",
-        "request_field_order":[
-            "format","language",*("keyterm" for _ in stt_keyterms),"file"
-        ],
+        "request_field_order":transcription_context.request_policy()[
+            "request_field_order"],
         "language":stt_language,"keyterms":list(stt_keyterms),
+        "audio_origin":transcription_context.audio_origin,
+        "pending_frame":transcription_context.pending_frame,
         "response_status":transcription.response_status,
         "response_duration_seconds":transcription.duration_seconds,
         "word_count":len(transcription.words),
@@ -2172,6 +2293,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         keyterm_count=len(stt_keyterms),
         keyterms=list(stt_keyterms),
         request_field_order=stt_diagnostic_metadata["request_field_order"],
+        audio_origin=transcription_context.audio_origin,
+        pending_frame=transcription_context.pending_frame,
         retained_prefix_frames=max(0,retained_prefix_frames),
         retained_prefix_ms=max(0,retained_prefix_frames)*20,
         browser_audio_constraints=dict(session.client_audio_constraints),
@@ -2389,6 +2512,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         fact.fact_id,fact.kind,fact.text,fact.source_page)
                         for fact in brain_facts[:24]
                     ),
+                    claims=tuple(BrainClaim(
+                        claim.claim_id,claim.target_type.value,claim.target_id,
+                        claim.dimension,claim.required_authority,
+                        claim.evidence_ids,claim.admission_status.value,
+                        claim.unresolved_reason,
+                    ) for claim in plan.claim_requests),
                 )
                 brain_snapshot=snapshot
                 brain_run=HybridMultiBrain(
@@ -2422,22 +2551,17 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         and curated.fixture.steps[curated.current_index].step_id
                         ==snapshot.step_id
                     ):
-                        # A schema-valid model response is not evidence.  When
-                        # the deterministic SourcePlan says a requested claim
-                        # dimension is unresolved, supplied local facts cannot
-                        # support prose for that dimension.  Keep the admitted
-                        # deterministic answer and let retrieval resolve it.
-                        # This also blocks a live-observed failure where a model
-                        # cited the recipe while inventing water-purity claims.
-                        if plan.unresolved_dimensions:
+                        answer_output=_claim_admitted_answer(
+                            answer_terminal.output,plan)
+                        if answer_output is None:
                             await current_text(
                                 "brain.output.rejected",turn_id=turn_id,
                                 role="answer",
                                 reason="unresolved_claim_dimensions",
                                 dimensions=list(plan.unresolved_dimensions),
+                                unresolved_claim_ids=list(
+                                    plan.unresolved_claim_ids),
                             )
-                        else:
-                            answer_output=answer_terminal.output
                         if (
                             answer_output is not None
                             and plan.action is CuratedProtocolAction.OPERATIONAL_DEVIATION
@@ -2486,7 +2610,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     requested_entity=plan.requested_entity,
                     requested_entities=plan.requested_entities,
                     question_kind=plan.question_kind,
-                    question_dimensions=plan.question_dimensions,
+                    question_dimensions=(
+                        plan.unresolved_dimensions or plan.question_dimensions
+                    ),
                 )
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
@@ -2798,6 +2924,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
             CuratedProtocolAction.DECLINE_COMPLETION:"completion_confirmation_declined",
             CuratedProtocolAction.CLARIFY_REFERENCE:"reference_clarification_required",
+            CuratedProtocolAction.CLARIFY_PARAMETER:"parameter_clarification_required",
             CuratedProtocolAction.OFF_TOPIC:"scope_reminder",
             CuratedProtocolAction.UNSUPPORTED:"unsupported_question",
             CuratedProtocolAction.STOP:"protocol_stop",
@@ -2900,15 +3027,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 )
                 if terminal.status=="success" and owned and isinstance(terminal.output,expected):
                     if role=="answer":
-                        if plan.unresolved_dimensions:
+                        admitted_late=_claim_admitted_answer(
+                            terminal.output,plan)
+                        if admitted_late is None:
                             await current_text(
                                 "brain.output.rejected",turn_id=turn_id,
                                 role="answer",
                                 reason="unresolved_claim_dimensions",
                                 dimensions=list(plan.unresolved_dimensions),
+                                unresolved_claim_ids=list(
+                                    plan.unresolved_claim_ids),
                             )
                         else:
-                            late_answer_output=terminal.output
+                            late_answer_output=admitted_late
                     elif role=="source": source_output=terminal.output
                     else: visual_output=terminal.output
             if isinstance(late_answer_output,AnswerBrainOutput):
@@ -3504,6 +3635,7 @@ async def run_turn_safely(
     retained_prefix_frames=0,
     *,accepted_transcription:Transcription|None=None,
     accepted_stt_ms:int|None=None,
+    accepted_stt_context:CascadeTranscriptionContext|None=None,
 ):
     generation=session.turn_generations.get(turn_id,session.generation)
     sender=LockedSender(websocket)
@@ -3535,7 +3667,8 @@ async def run_turn_safely(
         retained_prefix_frames,
         sender=sender,filler=filler,
         accepted_transcription=accepted_transcription,
-        accepted_stt_ms=accepted_stt_ms)
+        accepted_stt_ms=accepted_stt_ms,
+        accepted_stt_context=accepted_stt_context)
     except asyncio.CancelledError:
         await _finish_research_operation(
             sender,session,turn_id,generation,"cancelled",
@@ -3564,6 +3697,98 @@ async def run_turn_safely(
     finally:
         await filler.cancel()
 
+
+async def run_barge_in_stt_failure_turn(
+    websocket:WebSocket,
+    session:ListenerSession,
+    *,
+    turn_id:int,
+    generation:int,
+    input_frames:int,
+    voiced_frames:int,
+    context:CascadeTranscriptionContext,
+    stt_ms:int,
+) -> None:
+    """Own one accepted interruption whose speech could not be transcribed."""
+
+    if not session.is_current(turn_id,generation):
+        return
+    sender=LockedSender(websocket)
+    language=context.language or session.accepted_language or "ko"
+    text={
+        "en": (
+            "I stopped the previous answer, but I could not transcribe your interruption. "
+            "Please say it once more."
+        ),
+        "vi": (
+            "Tôi đã dừng câu trả lời trước nhưng không phiên âm được lời ngắt. Vui lòng nói lại."
+        ),
+        "ko": (
+            "이전 답변은 중단했지만 방금 끼어든 말씀을 정확히 받아쓰지 못했습니다. "
+            "한 번만 다시 말씀해 주세요."
+        ),
+    }.get(language, "방금 끼어든 말씀을 받아쓰지 못했습니다. 다시 말씀해 주세요.")
+    for state in ("transcribing","routing","composing"):
+        progress=session.advance_turn_progress(
+            turn_id,generation,state,route="barge_in_stt_clarification"
+        )
+        if progress is not None:
+            await sender.text("turn.state",**progress)
+    await sender.text(
+        "transcript.unavailable",
+        configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,
+        reason="transcription_failed",
+        audio_origin=context.audio_origin,
+        pending_frame=context.pending_frame,
+        stt_ms=max(0,stt_ms),
+        voiced_frames=max(0,voiced_frames),
+        total_frames=max(0,input_frames),
+    )
+    await sender.text(
+        "reply.delta",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,segment_index=0,text=text,
+    )
+    try:
+        progress=session.advance_turn_progress(
+            turn_id,generation,"synthesizing",
+            route="barge_in_stt_clarification",
+        )
+        if progress is not None:
+            await sender.text("turn.state",**progress)
+        pcm=await asyncio.to_thread(synthesize,text,language)
+        frames=frame_complete_audio(pcm)
+    except Exception:
+        frames=[]
+    if frames and session.is_current(turn_id,generation) and session.start_playback(turn_id):
+        progress=session.advance_turn_progress(
+            turn_id,generation,"playing",
+            route="barge_in_stt_clarification",
+        )
+        if progress is not None:
+            await sender.text("turn.state",**progress)
+        await sender.segment(turn_id,0,frames,generation)
+        segment_count=1
+    else:
+        segment_count=0
+        session.complete_without_playback(turn_id)
+    await sender.text(
+        "reply.complete",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,text=text,
+    )
+    await sender.text(
+        "audio.complete",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,segment_count=segment_count,
+    )
+    await sender.text(
+        "turn.done",configuration_id=session.accepted_configuration_id,
+        turn_id=turn_id,generation=generation,
+        route="barge_in_stt_clarification",result_kind="clarification",
+        segment_count=segment_count,input_frames=input_frames,
+        output_frames=(len(frames) if frames else 0),tools_used=[],
+        timings_ms={"stt":max(0,stt_ms)},
+    )
+
 async def cancel_cascade_generation(
     websocket:WebSocket,session:ListenerSession,task:asyncio.Task|None,
     interruption:ListenerEvent,
@@ -3577,13 +3802,17 @@ async def cancel_cascade_generation(
         except (asyncio.CancelledError,WebSocketDisconnect): pass
     progress=session.advance_turn_progress(
         interruption.turn_id,interruption.generation,"cancelled")
-    if progress is None:
-        return
     fields={
-        **progress,
+        **(progress or {
+            "configuration_id":session.accepted_configuration_id,
+            "turn_id":interruption.turn_id,
+            "generation":interruption.generation,
+            "revision":0,
+            "state":"cancelled",
+        }),
         "superseding_turn_id":interruption.superseding_turn_id,
         "superseding_generation":interruption.superseding_generation,
-        "reason":"confirmed_speech",
+        "reason":interruption.reason or "confirmed_speech",
     }
     if interruption.latency_ms is not None:
         fields["barge_in_to_silence_ms"]=interruption.latency_ms
@@ -3660,28 +3889,45 @@ async def voice_socket(websocket:WebSocket):
                         listener_events.append(item)
                         continue
                     validation_started=session.clock()
+                    stt_context=cascade_transcription_context(
+                        session,audio_origin="barge_in")
                     try:
                         transcription=await asyncio.to_thread(
-                            transcribe,clean_path(item.result.utterance or b""))
+                            transcribe_cascade_audio,
+                            item.result.utterance or b"",stt_context)
                         if isinstance(transcription,str):
                             transcription=Transcription(transcription,None)
                     except Exception:
                         log.warning(
-                            "barge_in.rejected reason=transcription_failed "
+                            "barge_in.committed reason=transcription_failed "
                             "voiced_frames=%d total_frames=%d",
                             item.result.voiced_frames,item.result.total_frames)
-                        rejected=session.reject_interrupt_candidate(
-                            item,"transcription_failed")
-                        if rejected is not None:
-                            listener_events.append(rejected)
+                        stt_ms=max(
+                            0,round((session.clock()-validation_started)*1000))
+                        committed=session.commit_interrupt_candidate(
+                            item,stt_ms=stt_ms,reason="transcription_failed")
+                        if committed:
+                            end=next(event_item for event_item in committed
+                                     if event_item.kind=="speech.end")
+                            accepted_interrupts[(end.turn_id,end.generation)]={
+                                "transcription":None,"stt_ms":stt_ms,
+                                "context":stt_context,"failed":True,
+                            }
+                            listener_events.extend(committed)
                         continue
                     stt_ms=max(
                         0,round((session.clock()-validation_started)*1000))
                     if not transcription.text.strip():
-                        rejected=session.reject_interrupt_candidate(
-                            item,"empty_transcript")
-                        if rejected is not None:
-                            listener_events.append(rejected)
+                        committed=session.commit_interrupt_candidate(
+                            item,stt_ms=stt_ms,reason="transcription_failed")
+                        if committed:
+                            end=next(event_item for event_item in committed
+                                     if event_item.kind=="speech.end")
+                            accepted_interrupts[(end.turn_id,end.generation)]={
+                                "transcription":None,"stt_ms":stt_ms,
+                                "context":stt_context,"failed":True,
+                            }
+                            listener_events.extend(committed)
                         continue
                     input_decision=classify_input_event(transcription)
                     if not input_decision.accepted:
@@ -3701,7 +3947,9 @@ async def voice_socket(websocket:WebSocket):
                         event_item for event_item in committed
                         if event_item.kind=="speech.end")
                     accepted_interrupts[(end.turn_id,end.generation)]=(
-                        transcription,stt_ms)
+                        {"transcription":transcription,"stt_ms":stt_ms,
+                         "context":stt_context,"failed":False}
+                    )
                     listener_events.extend(committed)
                 for item in listener_events:
                     if item.kind=="assistant.interrupted":
@@ -3763,15 +4011,29 @@ async def voice_socket(websocket:WebSocket):
                     if item.kind=="speech.end":
                         accepted=accepted_interrupts.get(
                             (item.turn_id,item.generation))
-                        task=asyncio.create_task(run_turn_safely(
-                            websocket,session,item.result.utterance or b"",
-                            item.turn_id,item.result.total_frames,
-                            item.result.voiced_frames,
-                            item.result.prefix_frames_retained,
-                            accepted_transcription=(
-                                accepted[0] if accepted else None),
-                            accepted_stt_ms=(
-                                accepted[1] if accepted else None)))
+                        if accepted and accepted["failed"]:
+                            task=asyncio.create_task(
+                                run_barge_in_stt_failure_turn(
+                                    websocket,session,turn_id=item.turn_id,
+                                    generation=item.generation,
+                                    input_frames=item.result.total_frames,
+                                    voiced_frames=item.result.voiced_frames,
+                                    context=accepted["context"],
+                                    stt_ms=accepted["stt_ms"],
+                                )
+                            )
+                        else:
+                            task=asyncio.create_task(run_turn_safely(
+                                websocket,session,item.result.utterance or b"",
+                                item.turn_id,item.result.total_frames,
+                                item.result.voiced_frames,
+                                item.result.prefix_frames_retained,
+                                accepted_transcription=(
+                                    accepted["transcription"] if accepted else None),
+                                accepted_stt_ms=(
+                                    accepted["stt_ms"] if accepted else None),
+                                accepted_stt_context=(
+                                    accepted["context"] if accepted else None)))
                 continue
             if message.get("text") is None:continue
             control=parse_control(message["text"])

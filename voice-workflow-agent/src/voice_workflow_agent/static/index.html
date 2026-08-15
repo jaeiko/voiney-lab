@@ -30,7 +30,7 @@
     .brand small{display:block;color:var(--muted);font-size:.72rem;font-weight:650;letter-spacing:.08em;text-transform:uppercase}
     .session-badge{display:flex;align-items:center;gap:.5rem;border:1px solid rgba(22,79,59,.16);background:rgba(255,255,255,.72);padding:.48rem .72rem;border-radius:999px;color:var(--forest);font-size:.82rem;font-weight:750}
     .session-dot{width:.5rem;height:.5rem;border-radius:50%;background:#8ea199;box-shadow:0 0 0 4px rgba(142,161,153,.14)}
-    .shell{max-width:88rem;margin:0 auto;padding:1rem 1.25rem 4rem;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"setup setup" "work work" "chat chat" "report report" "examples examples";gap:1rem;align-items:start}
+    .shell{max-width:88rem;margin:0 auto;padding:1rem 1.25rem 4rem;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"setup setup" "work work" "chat chat" "examples examples";gap:1rem;align-items:start}
     .hero{grid-area:setup;display:block}
     .panel{border:1px solid rgba(22,79,59,.13);background:rgba(255,255,255,.88);border-radius:1.4rem;box-shadow:var(--shadow)}
     .voice-panel{padding:.85rem 1rem;display:grid;grid-template-columns:minmax(12rem,.3fr) minmax(0,1.7fr);gap:.8rem;align-items:center}
@@ -63,13 +63,13 @@
     .capability span{color:var(--muted);font-size:.78rem}
     .capability code{float:right;border-radius:999px;background:var(--mint);color:var(--forest);padding:.16rem .42rem;font:700 .68rem/1.3 ui-monospace,monospace}
     .workflow-grid{grid-area:work;display:grid;grid-template-columns:minmax(28rem,1.2fr) minmax(22rem,.8fr);grid-template-areas:"step visual";gap:1rem;align-items:stretch}
-    .report-card{grid-area:report;padding:1.25rem;border-radius:1.4rem;background:var(--forest);color:white;box-shadow:var(--shadow)}
-    .report-card .label{color:#b8d6ca}
-    .report-card strong{display:block;margin:.35rem 0;font-size:1.08rem;letter-spacing:.02em}
-    .report-card details{margin-top:.65rem}.report-card summary{cursor:pointer;font-weight:850;color:#dff2e9}.report-card details[open] summary{margin-bottom:.6rem}
-    #last-report-state{color:#dff4e9;font-size:.84rem}
-    #pending-report{margin-top:.8rem;padding-top:.8rem;border-top:1px solid rgba(223,244,233,.26);color:#eefaf4;font-size:.8rem}
-    .report-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem}.report-actions button,.report-actions a{min-height:2.75rem;border:1px solid rgba(255,255,255,.45);border-radius:.7rem;background:transparent;color:white;padding:.55rem .8rem;font-weight:800;text-decoration:none}.report-actions a[aria-disabled="true"]{opacity:.5;pointer-events:none}
+    .report-card{margin-top:.85rem;padding:.75rem;border:1px solid var(--line);border-radius:.85rem;background:#f1f7f3;color:var(--ink)}
+    .report-card .label{color:var(--forest-2)}
+    .report-card strong{display:block;margin:.2rem 0;font-size:.86rem;letter-spacing:.01em}
+    .report-card details{margin-top:.35rem}.report-card summary{cursor:pointer;font-size:.78rem;font-weight:850;color:var(--forest)}.report-card details[open] summary{margin-bottom:.45rem}
+    #last-report-state{color:var(--muted);font-size:.75rem}
+    #pending-report{margin-top:.55rem;padding-top:.55rem;border-top:1px solid var(--line);color:var(--muted);font-size:.75rem}
+    .report-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.55rem}.report-actions button,.report-actions a{min-height:2.65rem;border:1px solid var(--forest);border-radius:.65rem;background:white;color:var(--forest);padding:.48rem .65rem;font-size:.76rem;font-weight:800;text-decoration:none}.report-actions a[aria-disabled="true"]{opacity:.5;pointer-events:none}
     .procedure-card{padding:1.25rem;grid-area:step}
     .procedure-head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem}
     .procedure-card strong{display:block;margin:.25rem 0;font-size:1.05rem}.procedure-card p{margin:.45rem 0 0;font-size:.86rem}
@@ -110,7 +110,7 @@
     .label{color:var(--muted)}
     .error{color:var(--red)}
     @media(max-width:980px){
-      .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat" "report" "examples"}.workflow-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"step" "visual"}.voice-panel{grid-template-columns:1fr}.capabilities{grid-template-columns:repeat(2,minmax(0,1fr))}.language-controls{grid-template-columns:repeat(2,minmax(8rem,1fr))}#log{height:clamp(26rem,58vh,44rem)}}
+      .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat" "examples"}.workflow-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"step" "visual"}.voice-panel{grid-template-columns:1fr}.capabilities{grid-template-columns:repeat(2,minmax(0,1fr))}.language-controls{grid-template-columns:repeat(2,minmax(8rem,1fr))}#log{height:clamp(26rem,58vh,44rem)}}
     @media(max-width:720px){
       .workflow-grid,.example-strip{grid-template-columns:minmax(0,1fr)}.voice-console{grid-template-columns:auto 1fr}.controls{grid-column:1/-1}.controls button{flex:1}.workflow-details{grid-template-columns:1fr}.protocol-register{grid-template-columns:1fr}.turn{grid-template-columns:1fr}.turn .turn-status,.turn .tools,.turn .server-operation,.turn .stats,.turn .error,.turn .filler-status,.turn .turn-replay,.turn .replay-status,.turn .turn-visual,.turn-diagnostics{grid-column:1}.turn .label{margin-top:.35rem}.step-visual img{max-height:18rem}}
     @media(max-width:520px){.topbar,.shell{padding-left:.85rem;padding-right:.85rem}.session-badge{display:none}.voice-panel{padding:1.2rem}.capabilities{grid-template-columns:1fr}h1{font-size:2.35rem}}
@@ -216,6 +216,23 @@
             <div class="workflow-detail"><b>인계</b><span id="procedure-handoff">—</span></div>
             <div class="workflow-detail"><b>감사</b><span id="procedure-audit">—</span></div>
           </div>
+          <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
+            <div class="label" id="experiment-report-title">실험 기록 · 개발 세션</div>
+            <strong id="last-report-id">아직 열린 실험 기록 없음</strong>
+            <div id="last-report-state">세션이 시작되면 서버가 실험 기록 초안을 관리합니다.</div>
+            <details>
+              <summary>기록 보기 · 이상 사항 · 내보내기</summary>
+              <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
+              <div class="report-actions">
+                <button id="show-experiment-report" type="button">실험 기록 보기</button>
+                <button id="record-anomaly" type="button">이상 사항 기록</button>
+                <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
+                <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
+                <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
+              </div>
+              <div id="pending-report" hidden></div>
+            </details>
+          </aside>
       </div>
       <section class="panel source-card" aria-labelledby="source-visual-title">
         <h2 id="source-visual-title">원문 시각 자료</h2>
@@ -237,24 +254,6 @@
       <div id="log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="세션 대화 기록"></div>
       <button id="new-chat-update" type="button" hidden aria-label="새 메시지로 이동">새 메시지 ↓</button>
     </section>
-
-    <aside class="report-card" aria-live="polite" aria-labelledby="experiment-report-title">
-      <div class="label" id="experiment-report-title">실험 기록 · 개발 세션</div>
-      <strong id="last-report-id">아직 열린 실험 기록 없음</strong>
-      <div id="last-report-state">세션이 시작되면 서버가 실험 기록 초안을 관리합니다.</div>
-      <details>
-        <summary>실험 기록 보기 · 내보내기</summary>
-        <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
-        <div class="report-actions">
-          <button id="show-experiment-report" type="button">실험 기록 보기</button>
-          <button id="record-anomaly" type="button">이상 사항 기록</button>
-          <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
-          <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
-          <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
-        </div>
-        <div id="pending-report" hidden></div>
-      </details>
-    </aside>
 
     <section class="example-strip" aria-label="음성 사용 예시">
       <div class="example"><b>프로토콜 시작</b>“프로토콜을 시작해 줘.”</div>

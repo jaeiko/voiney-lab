@@ -355,8 +355,13 @@ let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:
         )
         self.assertLess(html.index('class="panel voice-panel"'), html.index('class="workflow-grid"'))
         self.assertLess(html.index('class="workflow-grid"'), html.index('class="panel timeline"'))
-        self.assertLess(html.index('class="panel timeline"'), html.index('class="report-card"'))
-        self.assertIn("실험 기록 보기 · 내보내기", html)
+        self.assertLess(
+            html.index('class="report-card procedure-report"'),
+            html.index('class="panel timeline"'),
+        )
+        self.assertEqual(html.count('id="experiment-report-title"'), 1)
+        self.assertNotIn('grid-area:report', html)
+        self.assertIn("기록 보기 · 이상 사항 · 내보내기", html)
         self.assertIn("function applyBrainState", html)
         self.assertIn("function applyBrainAnswerEnrichment", html)
         self.assertIn('m.type==="session.greeting"', html)

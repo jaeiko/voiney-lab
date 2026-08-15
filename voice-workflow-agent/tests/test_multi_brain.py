@@ -9,6 +9,7 @@ from unittest.mock import patch
 from voice_workflow_agent.multi_brain import (
     AnswerBrainOutput,
     BrainFact,
+    BrainClaim,
     BrainSnapshot,
     HybridMultiBrain,
     MultiBrainSettings,
@@ -16,6 +17,12 @@ from voice_workflow_agent.multi_brain import (
     VisualBrainOutput,
     activation_for,
 )
+from voice_workflow_agent.curated_protocol import (
+    ClaimAdmissionStatus,
+    ClaimRequest,
+    ClaimTargetType,
+)
+from voice_workflow_agent.server import _claim_admitted_answer
 
 
 def snapshot(*, intent="related_question", visual=False):
@@ -241,6 +248,95 @@ class MultiBrainTests(unittest.IsolatedAsyncioTestCase):
         run.cancel()
         await asyncio.gather(*run.tasks.values(), return_exceptions=True)
         self.assertTrue(all(task.cancelled() for task in run.tasks.values()))
+
+    async def test_claim_sections_admit_supported_part_without_open_rationale(self):
+        base=snapshot()
+        supported=BrainClaim(
+            "claim-supported","entity","hplc_water","definition",
+            "ACTIVE_PROTOCOL",("fact-water",),"local_supported",
+        )
+        unresolved=BrainClaim(
+            "claim-open","comparison","hplc_water-vs-ordinary","difference",
+            "AUTHORITATIVE_EXTERNAL_REFERENCE",("fact-water",),
+            "research_required","comparison_absent_from_active_protocol",
+        )
+        with_claims=BrainSnapshot(**{
+            **base.__dict__,"claims":(supported,unresolved),
+        })
+
+        async def create(**_kwargs):
+            return response({
+                "spoken_answer":"HPLC water는 이 단계의 AMBIC 용액에 쓰입니다.",
+                "display_answer":"HPLC water는 이 단계의 AMBIC 용액에 쓰입니다.",
+                "evidence_ids":["fact-water"],"limitations":[],
+                "claim_sections":[{
+                    "claim_id":"claim-supported",
+                    "text":"HPLC water는 이 단계의 AMBIC 용액에 쓰입니다.",
+                    "evidence_ids":["fact-water"],
+                }],
+            })
+
+        client=SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)))
+        terminal=await HybridMultiBrain(
+            client,MultiBrainSettings(True,"fake",1,1,.1),
+        ).start(with_claims,activation_for(
+            intent_kind="related_question",visual_requested=False,
+            unresolved_dimensions=("difference",),
+        )).terminal("answer")
+        self.assertEqual(terminal.status,"success")
+        plan=SimpleNamespace(
+            unresolved_claim_ids=("claim-open",),
+            claim_requests=(
+                ClaimRequest(
+                    "claim-supported",ClaimTargetType.ENTITY,"hplc_water",
+                    "definition","ACTIVE_PROTOCOL",("fact-water",),
+                    ClaimAdmissionStatus.LOCAL_SUPPORTED,
+                    "HPLC water는 AMBIC 용액에 쓰입니다.",
+                ),
+                ClaimRequest(
+                    "claim-open",ClaimTargetType.COMPARISON,
+                    "hplc_water-vs-ordinary","difference",
+                    "AUTHORITATIVE_EXTERNAL_REFERENCE",("fact-water",),
+                    ClaimAdmissionStatus.RESEARCH_REQUIRED,
+                    "일반 물과의 차이는 별도 권위 근거가 필요합니다.",
+                ),
+            ),
+        )
+        admitted=_claim_admitted_answer(terminal.output,plan)
+        self.assertIsNotNone(admitted)
+        self.assertIn("AMBIC",admitted.display_answer)
+        self.assertIn("별도 권위 근거",admitted.display_answer)
+
+    async def test_unresolved_claim_cannot_be_smuggled_into_answer_section(self):
+        base=snapshot()
+        unresolved=BrainClaim(
+            "claim-open","comparison","water-comparison","difference",
+            "AUTHORITATIVE_EXTERNAL_REFERENCE",("fact-water",),
+            "research_required","not_in_protocol",
+        )
+        with_claims=BrainSnapshot(**{**base.__dict__,"claims":(unresolved,)})
+
+        async def create(**_kwargs):
+            return response({
+                "spoken_answer":"Unsupported comparison.",
+                "display_answer":"Unsupported comparison.",
+                "evidence_ids":["fact-water"],"limitations":[],
+                "claim_sections":[{
+                    "claim_id":"claim-open","text":"Unsupported comparison.",
+                    "evidence_ids":["fact-water"],
+                }],
+            })
+
+        client=SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)))
+        terminal=await HybridMultiBrain(
+            client,MultiBrainSettings(True,"fake",1,1,.1),
+        ).start(with_claims,activation_for(
+            intent_kind="related_question",visual_requested=False,
+            unresolved_dimensions=("difference",),
+        )).terminal("answer")
+        self.assertEqual(terminal.status,"rejected")
 
     def test_settings_are_explicit_and_bounded(self):
         with patch.dict(os.environ, {

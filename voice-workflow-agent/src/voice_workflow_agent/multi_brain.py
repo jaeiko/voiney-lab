@@ -101,6 +101,18 @@ class BrainFact:
 
 
 @dataclass(frozen=True)
+class BrainClaim:
+    claim_id: str
+    target_type: str
+    target_id: str
+    dimension: str
+    required_authority: str
+    evidence_ids: tuple[str, ...]
+    admission_status: str
+    unresolved_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class BrainSnapshot:
     configuration_id: int | None
     session_id: str
@@ -118,8 +130,19 @@ class BrainSnapshot:
     requested_entities: tuple[str, ...]
     question_dimensions: tuple[str, ...]
     facts: tuple[BrainFact, ...]
+    claims: tuple[BrainClaim, ...] = ()
 
-    def public_context(self) -> dict[str, object]:
+    def public_context(self, *, role: str | None = None) -> dict[str, object]:
+        claims = self.claims
+        dimensions = self.question_dimensions
+        if role == "source" and claims:
+            claims = tuple(
+                claim for claim in claims
+                if claim.admission_status == "research_required"
+            )
+            dimensions = tuple(dict.fromkeys(
+                claim.dimension for claim in claims
+            ))
         return {
             "configuration_id": self.configuration_id,
             "session_id": self.session_id,
@@ -134,8 +157,9 @@ class BrainSnapshot:
             "intent_kind": self.intent_kind,
             "question_kind": self.question_kind,
             "requested_entities": list(self.requested_entities),
-            "question_dimensions": list(self.question_dimensions),
+            "question_dimensions": list(dimensions),
             "facts": [fact.__dict__ for fact in self.facts],
+            "claims": [claim.__dict__ for claim in claims],
         }
 
 
@@ -156,6 +180,7 @@ class AnswerBrainOutput:
     display_answer: str
     evidence_ids: tuple[str, ...]
     limitations: tuple[str, ...]
+    claim_sections: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +190,7 @@ class SourceBrainOutput:
     scopes: tuple[str, ...]
     query: str
     needs_research: bool
+    claim_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -202,10 +228,12 @@ ANSWER_SYSTEM = (
     "You are the read-only Answer Brain. Answer the actual question first in the requested language. "
     "Use only supplied facts. Every factual sentence must cite supplied evidence IDs in the JSON field. "
     "Never mutate workflow/report state, claim persistence, authorize a deviation, invent criteria, or add a number. "
+    "Attach each independently supported section to one supplied claim ID and only that claim's evidence IDs. "
+    "Omit unresolved claims from answer sections; the server will preserve their limitation. "
     "Return concise speech plus richer display text as strict JSON."
 )
 SOURCE_SYSTEM = (
-    "You are the read-only Source Brain. Select only supplied entities, dimensions, and allowed source scopes; "
+    "You are the read-only Source Brain. Plan only supplied unresolved claim IDs. Select only supplied entities, dimensions, and allowed source scopes; "
     "construct one bounded research query. You cannot retrieve, admit authority, answer, cite, or mutate state. Return strict JSON."
 )
 VISUAL_SYSTEM = (
@@ -264,7 +292,7 @@ class HybridMultiBrain:
             model=self.settings.model,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "system", "content": json.dumps(snapshot.public_context(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))},
+                {"role": "system", "content": json.dumps(snapshot.public_context(role=role), ensure_ascii=False, sort_keys=True, separators=(",", ":"))},
                 {"role": "user", "content": snapshot.transcript[:800]},
             ],
             response_format={"type": "json_schema", "json_schema": {"name": f"candidate_a_{role}_brain_v1", "strict": True, "schema": schema}},
@@ -281,16 +309,59 @@ class HybridMultiBrain:
 
     async def _answer(self, snapshot: BrainSnapshot) -> AnswerBrainOutput:
         evidence = tuple(fact.evidence_id for fact in snapshot.facts)
-        schema = {"type": "object", "additionalProperties": False, "properties": {
+        claim_ids = tuple(claim.claim_id for claim in snapshot.claims)
+        properties: dict[str, object] = {
             "spoken_answer": {"type": "string"}, "display_answer": {"type": "string"},
             "evidence_ids": {"type": "array", "items": {"type": "string", "enum": list(evidence)}, "uniqueItems": True},
             "limitations": {"type": "array", "items": {"type": "string"}},
-        }, "required": ["spoken_answer", "display_answer", "evidence_ids", "limitations"]}
+        }
+        if claim_ids:
+            properties["claim_sections"] = {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "claim_id": {"type": "string", "enum": list(claim_ids)},
+                    "text": {"type": "string"},
+                    "evidence_ids": {"type": "array", "items": {
+                        "type": "string", "enum": list(evidence)},
+                        "uniqueItems": True},
+                },
+                "required": ["claim_id", "text", "evidence_ids"],
+            }}
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "properties": properties,
+            "required": [
+                "spoken_answer", "display_answer", "evidence_ids", "limitations",
+                *(("claim_sections",) if claim_ids else ()),
+            ],
+        }
         value = await self._create("answer", ANSWER_SYSTEM, snapshot, schema)
-        spoken, display, ids, limitations = value.get("spoken_answer"), value.get("display_answer"), value.get("evidence_ids"), value.get("limitations")
+        spoken, display, ids, limitations, raw_sections = value.get("spoken_answer"), value.get("display_answer"), value.get("evidence_ids"), value.get("limitations"), value.get("claim_sections", [])
         fact_map = {fact.evidence_id: fact.text for fact in snapshot.facts}
-        if not isinstance(spoken, str) or not spoken.strip() or not isinstance(display, str) or not display.strip() or not isinstance(ids, list) or not ids or any(item not in fact_map for item in ids) or not isinstance(limitations, list) or any(not isinstance(item, str) for item in limitations):
+        claim_map = {claim.claim_id: claim for claim in snapshot.claims}
+        if not isinstance(spoken, str) or not spoken.strip() or not isinstance(display, str) or not display.strip() or not isinstance(ids, list) or not ids or any(item not in fact_map for item in ids) or not isinstance(limitations, list) or any(not isinstance(item, str) for item in limitations) or not isinstance(raw_sections, list):
             raise RuntimeError("answer brain output failed shape/evidence gate")
+        sections: list[tuple[str, str, tuple[str, ...]]] = []
+        for item in raw_sections:
+            if not isinstance(item, dict):
+                raise RuntimeError("answer brain claim section is invalid")
+            claim_id, text, section_ids = (
+                item.get("claim_id"), item.get("text"), item.get("evidence_ids")
+            )
+            claim = claim_map.get(claim_id)
+            if (
+                claim is None
+                or claim.admission_status != "local_supported"
+                or not isinstance(text, str) or not text.strip()
+                or not isinstance(section_ids, list) or not section_ids
+                or any(evidence_id not in claim.evidence_ids
+                       for evidence_id in section_ids)
+            ):
+                raise RuntimeError("answer brain claim section failed admission")
+            section_evidence = "\n".join(fact_map[item] for item in section_ids)
+            if not _numbers(text).issubset(_numbers(section_evidence)):
+                raise RuntimeError("answer brain claim section introduced a number")
+            sections.append((claim_id, text.strip(), tuple(section_ids)))
         admitted = "\n".join(fact_map[item] for item in ids)
         if not _numbers(spoken + "\n" + display).issubset(_numbers(admitted)):
             raise RuntimeError("answer brain introduced a number or unit")
@@ -302,24 +373,48 @@ class HybridMultiBrain:
         )
         if forbidden.search(spoken) or forbidden.search(display):
             raise RuntimeError("answer brain claimed workflow/report mutation")
-        return AnswerBrainOutput(spoken.strip(), display.strip(), tuple(ids), tuple(limitations))
+        return AnswerBrainOutput(
+            spoken.strip(), display.strip(), tuple(ids), tuple(limitations),
+            tuple(sections),
+        )
 
     async def _source(self, snapshot: BrainSnapshot) -> SourceBrainOutput:
         entities = snapshot.requested_entities or ("current_step",)
-        dimensions = snapshot.question_dimensions or ("related_knowledge",)
-        schema = {"type": "object", "additionalProperties": False, "properties": {
+        unresolved_claim_ids = tuple(
+            claim.claim_id for claim in snapshot.claims
+            if claim.admission_status == "research_required"
+        )
+        dimensions = tuple(dict.fromkeys(
+            claim.dimension for claim in snapshot.claims
+            if claim.claim_id in unresolved_claim_ids
+        )) or snapshot.question_dimensions or ("related_knowledge",)
+        properties: dict[str, object] = {
             "entities": {"type": "array", "items": {"type": "string", "enum": list(entities)}, "uniqueItems": True},
             "dimensions": {"type": "array", "items": {"type": "string", "enum": list(dimensions)}, "uniqueItems": True},
             "scopes": {"type": "array", "items": {"type": "string", "enum": list(ALLOWED_SOURCE_SCOPES)}, "uniqueItems": True},
             "query": {"type": "string"}, "needs_research": {"type": "boolean"},
-        }, "required": ["entities", "dimensions", "scopes", "query", "needs_research"]}
+        }
+        if unresolved_claim_ids:
+            properties["claim_ids"] = {
+                "type": "array", "items": {
+                    "type": "string", "enum": list(unresolved_claim_ids)},
+                "uniqueItems": True,
+            }
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "properties": properties,
+            "required": [
+                "entities", "dimensions", "scopes", "query", "needs_research",
+                *(("claim_ids",) if unresolved_claim_ids else ()),
+            ],
+        }
         value = await self._create("source", SOURCE_SYSTEM, snapshot, schema)
-        selected_entities, selected_dimensions, scopes, query, needs = value.get("entities"), value.get("dimensions"), value.get("scopes"), value.get("query"), value.get("needs_research")
-        if not isinstance(selected_entities, list) or any(item not in entities for item in selected_entities) or not isinstance(selected_dimensions, list) or any(item not in dimensions for item in selected_dimensions) or not isinstance(scopes, list) or any(item not in ALLOWED_SOURCE_SCOPES for item in scopes) or not isinstance(query, str) or len(query.strip()) > 600 or not isinstance(needs, bool):
+        selected_entities, selected_dimensions, scopes, query, needs, selected_claim_ids = value.get("entities"), value.get("dimensions"), value.get("scopes"), value.get("query"), value.get("needs_research"), value.get("claim_ids", list(unresolved_claim_ids))
+        if not isinstance(selected_entities, list) or any(item not in entities for item in selected_entities) or not isinstance(selected_dimensions, list) or any(item not in dimensions for item in selected_dimensions) or not isinstance(scopes, list) or any(item not in ALLOWED_SOURCE_SCOPES for item in scopes) or not isinstance(query, str) or len(query.strip()) > 600 or not isinstance(needs, bool) or not isinstance(selected_claim_ids, list) or any(item not in unresolved_claim_ids for item in selected_claim_ids):
             raise RuntimeError("source brain output failed policy gate")
         if "UNSUPPORTED_OPERATIONAL" in scopes and any(scope not in {"ACTIVE_PROTOCOL", "UNSUPPORTED_OPERATIONAL", "SUPPLEMENTAL_MODEL_KNOWLEDGE", "NOT_FOUND"} for scope in scopes):
             raise RuntimeError("source brain broadened operational authority")
-        return SourceBrainOutput(tuple(selected_entities), tuple(selected_dimensions), tuple(scopes), query.strip(), needs)
+        return SourceBrainOutput(tuple(selected_entities), tuple(selected_dimensions), tuple(scopes), query.strip(), needs, tuple(selected_claim_ids))
 
     async def _visual(self, snapshot: BrainSnapshot) -> VisualBrainOutput:
         entities = snapshot.requested_entities or ("current_step",)

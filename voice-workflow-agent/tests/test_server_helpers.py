@@ -16,7 +16,7 @@ from voice_workflow_agent.experiment_reports import (
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, export_experiment_report, frame_complete_audio, normalize_session_language, run_turn, server_config, server_tool_context, transcribe, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
@@ -1561,7 +1561,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(session.state,TurnState.AGENT_SPEAKING)
         self.assertTrue(session.playback_ended(1))
 
-    def test_empty_transcript_barge_in_candidate_never_clears_playback(self):
+    def test_accepted_barge_in_with_empty_transcript_interrupts_and_clarifies(self):
         config=VadConfig(
             onset_voiced_frames=2,onset_window_frames=3,prefix_frames=3,
             endpoint_silence_frames=2,minimum_voiced_frames=2,
@@ -1582,7 +1582,6 @@ class ServerTests(unittest.TestCase):
         class Socket:
             def __init__(self):
                 self.text=[]
-                self.at_rejection=None
                 self.messages=[
                     {"bytes":frame(11)*6},
                     {"type":"websocket.disconnect","code":1000},
@@ -1592,10 +1591,6 @@ class ServerTests(unittest.TestCase):
             async def send_text(self,value):
                 parsed=json.loads(value)
                 self.text.append(parsed)
-                if parsed["type"]=="barge_in_rejected":
-                    self.at_rejection=(
-                        session.generation,session.active_turn_id,
-                        session.state)
             async def send_bytes(self,value): raise AssertionError("no audio output")
             async def close(self,**kwargs): return None
         socket=Socket()
@@ -1616,18 +1611,89 @@ class ServerTests(unittest.TestCase):
         transcription.assert_called_once()
         kinds=[item["type"] for item in socket.text]
         self.assertEqual(kinds.count("barge_in_candidate"),1)
-        self.assertEqual(kinds.count("barge_in_rejected"),1)
-        self.assertNotIn("barge_in_committed",kinds)
-        self.assertNotIn("assistant.interrupted",kinds)
-        self.assertNotIn("cascade.playback.clear",kinds)
-        rejection=next(
+        self.assertEqual(kinds.count("barge_in_committed"),1)
+        self.assertNotIn("barge_in_rejected",kinds)
+        self.assertEqual(kinds.count("cascade.playback.clear"),1)
+        committed=next(
             item for item in socket.text
-            if item["type"]=="barge_in_rejected")
-        self.assertEqual(rejection["reason"],"empty_transcript")
-        self.assertEqual(
-            socket.at_rejection,
-            (opening_generation,1,TurnState.AGENT_SPEAKING),
+            if item["type"]=="barge_in_committed")
+        self.assertEqual(committed["reason"],"transcription_failed")
+        self.assertGreater(committed["superseding_generation"],opening_generation)
+
+    def test_ordinary_and_barge_in_share_one_session_aware_stt_policy(self):
+        pending=SimpleNamespace(predicate_id="candidate_a_step_7_endpoint")
+        curated=SimpleNamespace(
+            active=True,current_index=6,
+            fixture=SimpleNamespace(steps=[
+                *[SimpleNamespace(step_id=f"step-{index}") for index in range(6)],
+                SimpleNamespace(step_id="step-7"),
+            ]),
+            pending_observation_confirmation=pending,
+            pending_completion_confirmation=None,
+            stt_keyterms=lambda:("AMBIC","완료했어요","투명한가요"),
         )
+        session=ListenerSession()
+        session.start()
+        session.curated_protocol_session=curated
+        session.manual_language="ko"
+        session.accept_configuration(9,"cascade","ko","candidate-a")
+        ordinary=cascade_transcription_context(session,audio_origin="ordinary")
+        barge=cascade_transcription_context(session,audio_origin="barge_in")
+        self.assertEqual(ordinary.language,barge.language)
+        self.assertEqual(ordinary.keyterms,barge.keyterms)
+        self.assertEqual(ordinary.pending_frame,barge.pending_frame)
+        self.assertEqual(ordinary.step_id,barge.step_id)
+        self.assertEqual(ordinary.request_policy()["request_field_order"],
+                         barge.request_policy()["request_field_order"])
+        self.assertEqual(ordinary.audio_origin,"ordinary")
+        self.assertEqual(barge.audio_origin,"barge_in")
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("네","ko"),
+        ) as provider:
+            transcribe_cascade_audio(b"\0\0",ordinary)
+            transcribe_cascade_audio(b"\0\0",barge)
+        self.assertEqual(provider.call_count,2)
+        for call in provider.call_args_list:
+            self.assertEqual(call.kwargs["language"],"ko")
+            self.assertEqual(call.kwargs["keyterms"],ordinary.keyterms)
+
+    def test_committed_barge_stt_failure_owns_one_clarification_turn(self):
+        class Socket:
+            def __init__(self): self.text=[]; self.binary=[]
+            async def send_text(self,value): self.text.append(json.loads(value))
+            async def send_bytes(self,value): self.binary.append(value)
+
+        async def scenario():
+            session=ListenerSession();session.start()
+            session.accept_configuration(22,"cascade","ko","candidate-a")
+            turn_id=session.next_turn_id;generation=session.generation
+            session.active_turn_id=turn_id
+            session.turn_generations[turn_id]=generation
+            session.detector.state=TurnState.PROCESSING
+            context=CascadeTranscriptionContext(
+                22,"session-test",generation,"ko","candidate-a",None,
+                "observation:candidate_a_step_7_endpoint",("AMBIC","네"),
+                "barge_in",
+            )
+            socket=Socket()
+            with patch(
+                "voice_workflow_agent.server.synthesize",return_value=b"\0\0"
+            ) as tts:
+                await run_barge_in_stt_failure_turn(
+                    socket,session,turn_id=turn_id,generation=generation,
+                    input_frames=12,voiced_frames=8,context=context,stt_ms=41,
+                )
+            self.assertEqual(tts.call_count,1)
+            self.assertEqual(sum(
+                item["type"]=="transcript.unavailable" for item in socket.text
+            ),1)
+            done=[item for item in socket.text if item["type"]=="turn.done"]
+            self.assertEqual(len(done),1)
+            self.assertEqual(done[0]["result_kind"],"clarification")
+            self.assertEqual(done[0]["generation"],generation)
+            self.assertEqual(len(socket.binary),1)
+        asyncio.run(scenario())
 
     def test_stop_clears_history(self):
         session=ListenerSession(); session.history.pending_report={"location":"before start"}; session.start(); self.assertIsNone(session.history.pending_report); session.active_turn_id=7; generation=session.generation; self.assertTrue(session.is_current(7,generation)); session.history.commit([{"role":"user","content":"x"}]); session.history.pending_report={"location":"before stop"}

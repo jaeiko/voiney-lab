@@ -572,3 +572,54 @@ The resulting transport-deadline repair is offline-verified, but the live role
 contract is not. Before Mac Acceptance, rerun one explicitly approved bounded
 role request and verify that the SDK timeout and public terminal both close it;
 do not infer this from the cancellation-resistant fake.
+
+## Live-voice generalization checklist (2026-08-15)
+
+The launcher intentionally reports Hybrid Multi-Brain as disabled after the
+bounded account probe failed to find one model that passed all role semantics.
+The deterministic/local answer path must therefore remain useful. Do not enable
+the roles for this checklist unless a later bounded production-transport probe
+passes all three individual roles and their concurrent group.
+
+Use one fresh Korean Manual Cascade session in Whale, headphones, the exact
+Candidate A development fixture, and consented/bounded STT audio diagnostics only
+when diagnosing capture. Record raw Provider transcript, normalized transcript,
+request language/keyterm counts, audio origin, plausibility, route, owned pending
+frame, Turn/generation, state/report counts before/after, answer, TTS timing, and
+terminal research/visual state.
+
+1. Confirm one interruptible greeting and no replay after reconnect.
+2. Use ordinary `프로토콜을 시작해 줘`, then interrupt spoken output with one
+   meaningful request. Confirm ordinary and barge-in diagnostics have identical
+   language/keyterm policy and different origin labels only.
+3. Ask for the next-step action, then say `어, 다 했어`. Confirm one accepted
+   pending completion, one persisted event/acknowledgment, and one transition.
+   Repeat with an intentionally unclear/cross-language fragment; it must clarify
+   with zero mutation.
+4. Ask `우선 이 실험이 어떤 실험인지 알려줄 수 있어?`, then `그게 왜
+   유용해?`. Confirm title/Abstract purpose, compatible proposition focus, and
+   no Step 1 dump.
+5. Ask one Turn containing the AMBIC definition, contents of the 1.5 mL tube,
+   and why that tube size is used. Confirm the supported claims appear first and
+   the absent PDF rationale is independently labelled/researched.
+6. At Step 3 ask about 37°C, 15 minutes, and 800 rpm, then ask about 35°C.
+   Confirm exact action bindings, and that 35°C remains the user's proposed
+   deviation rather than an approved value.
+7. Ask why Solution A is removed, ask the Solution A ratio in unfamiliar
+   wording, and introduce `2.2`. Confirm action/target and 2:1 component order,
+   while `2.2` triggers clarification and is never coerced.
+8. At Steps 7, 9, and 20, create each source-owned observation question and
+   answer immediately with yes and no in separate isolated runs. Confirm predicate
+   inheritance is exactly once. Step 20's negative repeat ambiguity stays blocked.
+9. Interrupt during generation and force one accepted-speech STT failure in a
+   controlled harness. Confirm the old response stays interrupted, one new Turn
+   asks to repeat, and no late old event revives it.
+10. Verify a real persisted completion/anomaly acknowledgment, then confirm the
+    compact Experiment Record inside Procedure has the same report ID, counts,
+    anomaly action, and JSON/Markdown/CSV exports.
+11. At 100%, 125%, and mobile width confirm Procedure/Visual remain primary,
+    report controls are subordinate, Turn evidence starts collapsed, and late
+    patches preserve focus/scroll.
+
+Real microphone capture, audible TTS, browser barge-in timing, and Whale layout
+remain manual; deterministic provider fakes and DOM harnesses do not prove them.

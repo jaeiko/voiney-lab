@@ -374,3 +374,66 @@ The server now rejects every Answer output while its deterministic SourcePlan
 has unresolved claim dimensions, preserves the local answer, and waits for
 admitted retrieval instead. Schema validity alone is never evidence. These
 measurements do not verify live authoritative search or microphone/TTS quality.
+
+## 2026-08-15 live-voice semantic generalization
+
+The class-explicit boundary remains: prompts request behavior, while the server
+enforces state, persistence, cancellation, source admission, and stale-work
+rejection. The following names and data structures are project-engineering
+choices: typed discourse propositions, per-claim requests, current-step semantic
+frames, transcript plausibility classes, and the owned barge-in handoff.
+
+- One `CascadeTranscriptionContext` now supplies configuration/session/
+  generation identity, manual language, pending-frame vocabulary, bounded
+  protocol terms, request normalization, and diagnostic policy to both ordinary
+  and barge-in STT. The origin is diagnostic metadata only; it cannot select a
+  weaker transcription policy. Raw, normalized, repair, and plausibility values
+  remain distinct.
+- Purpose focus is a typed, bounded admitted proposition rather than a generic
+  entity string. Natural experiment-identity questions use title/Abstract facts;
+  one compatible benefit follow-up may inherit that proposition, while a new
+  explicit topic or stale revision supersedes it.
+- `ClaimRequest` decomposes a mixed Turn into entity, proposition, action,
+  parameter, ratio, observation, comparison, and bounded other claims. Local
+  supported claims render immediately; only unresolved claim IDs/dimensions are
+  exposed to Source planning. One unsupported rationale no longer discards
+  supported protocol facts.
+- `StepSemanticFrame` is a read-only projection of canonical facts. It binds
+  parameters to roles/actions, actions to targets, mixture components to part
+  counts, and source-defined observations to normalized predicates. It is not a
+  second protocol authority. A plausibility gate preserves proposed deviations
+  and asks about suspicious unbound numbers rather than rewriting either.
+- Completion and observation remain distinct owned binary frames. Benign filler
+  can be interpreted only inside a valid frame. A short mismatched transcript
+  such as `So` in Korean is retained diagnostically and clarified with zero
+  mutation. A valid immediate affirmative to a server-authored observation
+  question inherits that exact predicate and polarity; no unowned `yes` can
+  satisfy an observation.
+- Accepted barge-in is committed before the old generation is cancelled. The
+  accepted transcript receives exactly one superseding Turn/generation. If STT
+  fails after accepted speech, the old response remains interrupted and the new
+  Turn gives one clarification; noise rejection still resumes without a Turn.
+- The existing Experiment Report store remains unchanged. Its compact status
+  and export/anomaly actions now live inside Procedure; the separate dominant
+  full-width card is removed. Turn answers lead; raw evidence and diagnostics
+  remain subordinate details.
+
+The version 9 offline corpus has 100 scenarios and asserts typed claim plans,
+unresolved-claim isolation, plausibility, pending ownership, and state effects.
+It is deterministic and makes zero Provider calls.
+
+### 2026-08-15 bounded role-provider decision
+
+One authenticated read-only model-list call and six paid text calls were made;
+no web, image, STT, TTS, microphone, or browser-audio calls were made. On the
+actual Chat Completions production transport:
+
+- `grok-4.20-0309-non-reasoning`: Answer rejected at 2166 ms; Source passed at
+  1004 ms; Visual passed at 799 ms.
+- `grok-4.3`: Answer passed at 7124 ms; Source passed at 5008 ms; Visual returned
+  semantically unsuitable `no_visual` at 5274 ms for an explicit visual request.
+
+Because neither candidate passed all individual roles, the required concurrent
+group was not run and the launcher now defaults Multi-Brain to disabled. This is
+an honest live-provider failure boundary, not a rollback of the offline-verified
+orchestration and admission gates.
