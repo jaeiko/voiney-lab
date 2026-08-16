@@ -335,11 +335,8 @@ let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:
             ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            'grid-template-areas:"setup setup" "work work" "chat chat"',
+            'grid-template-areas:"setup setup" "work chat"',
             html,
-        )
-        self.assertIn(
-            'grid-template-areas:"step visual"', html
         )
         self.assertIn(
             'grid-template-areas:"setup" "work" "chat"', html

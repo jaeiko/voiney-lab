@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import struct
+import time
 import zlib
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -81,6 +82,12 @@ class CuratedProtocolAction(str, Enum):
     UNSUPPORTED = "unsupported"
     STOP = "stop"
     INACTIVE = "inactive"
+    AGENT_META = "agent_meta"
+    PAUSE = "pause"
+    RESUME = "resume"
+    START_TIMER = "start_timer"
+    TIMER_STATUS = "timer_status"
+    PREVIEW_STEP = "preview_step"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -1149,18 +1156,29 @@ def resolve_bounded_coreference(
 
 _COMPLETION_AND_NEXT_PATTERNS = (
     re.compile(
-        r"(?:현재\s+){0,2}(?:이\s*)?(?:단계|작업)?\s*"
-        r"(?:완료(?:했어|했어요|했습니다)?|끝냈어|끝냈어요|끝났어|끝났어요|다\s*했어|다\s*했어요)"
-        r".*(?:다음(?:\s*단계)?|다음으로).*(?:안내|알려|넘어|진행|가자)",
+        r"(?:현재\s+){0,2}(?:이\s*|이번\s*)?(?:단계|작업|것)?(?:도|은|는|를|이|가)?\s*"
+        r"(?:완료(?:했어|했어요|했습니다|했으니|했으니까)?|끝냈어|끝냈어요|끝났어|끝났어요|끝났으니|끝났으니까|다\s*했어|다\s*했어요|마쳤어|마쳤어요)"
+        r".*(?:다음(?:\s*단계)?|다음으로|넘어가|넘어가자).*(?:안내|알려|넘어|진행|가자)?",
+    ),
+    re.compile(
+        r"(?:다음(?:\s*단계)?|다음으로).*(?:안내|알려|넘어|진행|가자).*"
+        r"(?:현재\s+){0,2}(?:이\s*|이번\s*)?(?:단계|작업|것)?(?:도|은|는|를|이|가)?\s*"
+        r"(?:완료(?:했어|했어요|했습니다|했으니)?|끝냈어|끝냈어요|끝났어|끝났어요|다\s*했어|다\s*했어요|마쳤어|마쳤어요)",
     ),
     re.compile(
         r"여기까지\s*(?:했어|했고|했습니다).*(?:이제\s*)?다음(?:으로|\s*단계)",
     ),
     re.compile(
-        r"(?:i\s+)?(?:finished|completed|am\s+done\s+with)\s+(?:this|the\s+current)?\s*step"
-        r".*(?:next|what\s+comes\s+next)",
+        r"(?:i\s+)?(?:finished|completed|am\s+done\s+with)\s+(?:this|the\s+current)?\s*(?:step|one)?"
+        r".*(?:next|what\s+comes\s+next|take\s+me\s+to)",
+        re.I,
     ),
-    re.compile(r"this\s+step\s+is\s+complete.*(?:next|what\s+comes\s+next)"),
+    re.compile(
+        r"(?:take\s+me\s+to\s+(?:the\s+)?next\s+step|guide\s+me\s+to\s+(?:the\s+)?next\s+step|go\s+to\s+(?:the\s+)?next\s+step)"
+        r".*(?:finished|completed|done\s+with|complete)",
+        re.I,
+    ),
+    re.compile(r"this\s+step\s+is\s+complete.*(?:next|what\s+comes\s+next)", re.I),
 )
 _COMPLETION_ONLY_PATTERNS = (
     re.compile(
@@ -1303,22 +1321,65 @@ _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:find|show).*(?:real|web|source).*(?:photo|image)"),
 )
 _TERM_QUESTION_PATTERNS = (
-    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅"), "ambic"),
-    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물"), "hplc_water"),
-    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액"), "solution_a"),
-    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액"), "solution_b"),
-    (re.compile(r"acetonitrile|아세토니트릴"), "acetonitrile"),
-    (re.compile(r"gel\s*plug|젤\s*플러그"), "gel_plug"),
-    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*밴드"), "stained_protein_band"),
-    (re.compile(r"(?<![a-z0-9])rpm(?![a-z0-9])|분당\s*회전"), "rpm"),
-    (re.compile(r"incubat(?:e|ion)|배양"), "incubation"),
-    (re.compile(r"contamination|오염"), "contamination"),
+    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅", re.I), "ambic"),
+    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물", re.I), "hplc_water"),
+    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액", re.I), "solution_a"),
+    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액", re.I), "solution_b"),
+    (re.compile(r"acetonitrile|아세토니트릴", re.I), "acetonitrile"),
+    (re.compile(r"gel\s*plug|젤\s*플러그", re.I), "gel_plug"),
+    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*밴드|단백질\s*밴드", re.I), "stained_protein_band"),
+    (re.compile(r"(?<![a-z0-9])dtt(?![a-z0-9])|dithiothreitol|디티오트레이톨", re.I), "dtt"),
+    (re.compile(r"iodoacetamide|요오도아세트아미드|아이오도아세트아마이드", re.I), "iodoacetamide"),
+    (re.compile(r"trypsin|트립신", re.I), "trypsin"),
+    (re.compile(r"formic\s*acid|포름산|폼산", re.I), "formic_acid"),
+    (re.compile(r"(?<![a-z0-9])rpm(?![a-z0-9])|분당\s*회전", re.I), "rpm"),
+    (re.compile(r"incubat(?:e|ion)|배양", re.I), "incubation"),
+    (re.compile(r"contamination|오염|케라틴", re.I), "contamination"),
+)
+_AGENT_META_PATTERNS = (
+    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|ai|시스템)(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명)"),
+    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|ai|시스템)(?:는|가|는\s*대체)?\s*(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|무슨\s*일|어떤\s*일).*(?:뭐|무엇|알려|설명|있어)"),
+    re.compile(r"^(?:너|에이전트)(?:는)?\s*(?:뭐\s*(?:할\s*수\s*있어|하는\s*거야|하는\s*애야)|무슨\s*기능이\s*있어)\??$"),
+    re.compile(r"(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|기능이).*(?:뭐|무엇|알려|설명)"),
+    re.compile(r"(?:에이전트|시스템|너).*(?:기능|역할|목적|능력).*(?:뭐|무엇|알려|설명|소개)"),
+    re.compile(r"(?:what\s+(?:is\s+(?:the\s+)?purpose\s+of\s+this\s+agent|can\s+(?:this\s+agent|you)\s+do|are\s+your\s+capabilities)|what\s+are\s+you(?:\s+for)?)\??$", re.I),
+)
+_UNDERSPECIFIED_RESULT_PATTERNS = (
+    re.compile(r"^(?:그\s*)?(?:결과(?:를)?\s*(?:알려줘|말해줘|알려\s*줘|보여줘)|결과가?\s*뭐야)\??$"),
+    re.compile(r"^(?:tell\s+me\s+the\s+result|what\s+is\s+the\s+result)\??$", re.I),
+)
+_PAUSE_PATTERNS = (
+    re.compile(r"(?:잠깐|잠시)?\s*(?:실험|프로토콜|안내)?\s*(?:일시\s*중지|일시\s*정지|멈춰|잠깐\s*멈|잠시\s*멈|나갔다\s*올게|나가\s*있을게)"),
+    re.compile(r"^(?:pause(?:\s+(?:the\s+)?(?:protocol|experiment))?|take\s+a\s+break|hold\s+on)$", re.I),
+)
+_RESUME_PATTERNS = (
+    re.compile(r"(?:다시\s*(?:시작|진행)|재개|계속\s*(?:하자|할게|해줘)|계속\s*진행)"),
+    re.compile(r"^(?:resume(?:\s+(?:the\s+)?(?:protocol|experiment))?|continue(?:\s+the\s+protocol)?)$", re.I),
+)
+_TIMER_START_PATTERNS = (
+    re.compile(r"(?:타이머|시간\s*측정|배양\s*시간).*(?:시작|재기\s*시작|재줘|틀어)"),
+    re.compile(r"^(?:지금\s*)?시작했어$"),
+    re.compile(r"^(?:start\s+(?:the\s+)?timer|timer\s+start)$", re.I),
+)
+_TIMER_QUERY_PATTERNS = (
+    re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
+    re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
+    re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
+)
+_PREVIEW_STEP_PATTERNS = (
+    re.compile(r"^(?:(?P<label>[1-9]|1[0-9]|2[0-5])\s*단계|step\s*(?P<en>[1-9]|1[0-9]|2[0-5]))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
+    re.compile(r"^(?:preview\s+step\s*(?P<pen>[1-9]|1[0-9]|2[0-5]))$", re.I),
+)
+_PARAMETER_RATIONALE_PATTERNS = (
+    re.compile(r"(?:근거|이유|기준|배경).*(?:어디|뭐|무엇|어디서|왜)"),
+    re.compile(r"(?:왜|어째서).*(?:기준|값|조건|온도|교반|rpm|시간|부피).*(?:잡았|정했|선택|설정)"),
+    re.compile(r"(?:what\s+is\s+the\s+basis|why\s+(?:was|were)\s+this|why\s+(?:is|are)\s+the\s+condition)", re.I),
 )
 _TERM_QUESTION_DIMENSIONS = frozenset({
     "뭐", "무엇", "물질", "성분", "구성", "차이", "왜", "역할", "준비",
-    "만들", "일반 물", "증류수", "위험", "주의", "안전", "알려", "대해서",
+    "만들", "일반 물", "증류수", "위험", "주의", "안전", "알려", "대해", "대해서", "설명",
     "what", "which", "define", "difference", "why", "role", "contain",
-    "prepare", "hazard", "safe",
+    "prepare", "hazard", "safe", "explain",
 })
 _REPORT_REQUEST_PATTERNS = (
     re.compile(r"(?:현재\s*)?(?:실험\s*)?(?:기록|보고서).*(?:보여|열어|내보내|export)"),
@@ -1448,7 +1509,8 @@ _ANOMALY_NON_ASSERTION = re.compile(
 def _scientific_entity_inventory(value: tuple[str, ...]) -> tuple[str, ...]:
     defaults = (
         "ambic", "hplc water", "solution a", "solution b", "acetonitrile",
-        "gel plug", "stained protein band", "rpm", "incubation", "contamination",
+        "gel plug", "stained protein band", "dtt", "iodoacetamide", "trypsin",
+        "formic acid", "rpm", "incubation", "contamination",
     )
     return tuple(dict.fromkeys(value or defaults))
 
@@ -1542,6 +1604,8 @@ def normalize_scientific_request(
         "solution_a": "Solution A", "solution_b": "Solution B",
         "acetonitrile": "acetonitrile", "gel_plug": "gel plug",
         "stained_protein_band": "stained protein band",
+        "dtt": "DTT", "iodoacetamide": "iodoacetamide",
+        "trypsin": "trypsin", "formic_acid": "formic acid",
         "rpm": "rpm", "incubation": "incubation",
         "contamination": "contamination",
     }
@@ -1953,6 +2017,61 @@ def classify_curated_control_intent(
             },
             normalized_transcript=key,
         )
+    if any(pattern.search(key) for pattern in _AGENT_META_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="agent_meta",
+            action=CuratedProtocolAction.AGENT_META,
+            question_kind="agent_meta",
+            language=language,
+            normalized_transcript=key,
+        )
+    if any(pattern.fullmatch(key) for pattern in _UNDERSPECIFIED_RESULT_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="underspecified_result_request",
+            action=CuratedProtocolAction.CLARIFY_REFERENCE,
+            question_kind="underspecified_request",
+            language=language,
+            normalized_transcript=key,
+        )
+    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="pause_workflow",
+            action=CuratedProtocolAction.PAUSE,
+            language=language,
+            normalized_transcript=key,
+        )
+    if any(pattern.search(key) for pattern in _RESUME_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="resume_workflow",
+            action=CuratedProtocolAction.RESUME,
+            language=language,
+            allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    if any(pattern.search(key) for pattern in _TIMER_START_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="start_step_timer",
+            action=CuratedProtocolAction.START_TIMER,
+            language=language,
+            normalized_transcript=key,
+        )
+    if any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="step_timer_status",
+            action=CuratedProtocolAction.TIMER_STATUS,
+            language=language,
+            normalized_transcript=key,
+        )
+    for pattern in _PREVIEW_STEP_PATTERNS:
+        if match := pattern.search(key):
+            target = match.groupdict().get("label") or match.groupdict().get("en") or match.groupdict().get("pen") or "1"
+            return CuratedControlIntent(
+                intent_kind="preview_step",
+                action=CuratedProtocolAction.PREVIEW_STEP,
+                target_step=target,
+                language=language,
+                normalized_transcript=key,
+            )
     for scope, pattern in _PROTOCOL_SCOPE_PATTERNS:
         if pattern.search(key):
             return CuratedControlIntent(
@@ -2835,6 +2954,35 @@ def _step_reply(
     return f"{prefix} {noun}{label}단계: {text}"
 
 
+_CANDIDATE_A_STEP_TIMERS: dict[int, int] = {
+    0: 0,
+    1: 0,
+    2: 900,    # Step 3: 15 min at 37°C
+    3: 0,
+    4: 900,    # Step 5: 15 min at 37°C
+    5: 0,
+    6: 0,
+    7: 900,    # Step 8: 15 min at 22°C
+    8: 0,
+    9: 0,
+    10: 0,
+    11: 3600,  # Step 12: 60 min at 60°C
+    12: 0,
+    13: 0,
+    14: 0,
+    15: 2700,  # Step 16: 45 min RT in dark
+    16: 600,   # Step 17: 10 min at 22°C
+    17: 0,
+    18: 900,   # Step 19: 15 min at 22°C
+    19: 0,
+    20: 0,
+    21: 600,   # Step 22: 10 min in fridge
+    22: 57600, # Step 23: 16 hr at 37°C
+    23: 1800,  # Step 24: 30 min at 37°C
+    24: 0,
+}
+
+
 class CuratedProtocolSession:
     """Server-owned in-memory state for one validated structured fixture."""
 
@@ -2852,6 +3000,10 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation: PendingCompletionConfirmation | None = None
         self._pending_observation_confirmation: PendingObservationConfirmation | None = None
+        self._workflow_status: str = "preview"
+        self._timer_started_at: float | None = None
+        self._timer_duration_seconds: int | None = None
+        self._timer_step_index: int | None = None
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:
@@ -2860,6 +3012,43 @@ class CuratedProtocolSession:
     @property
     def pending_observation_confirmation(self) -> PendingObservationConfirmation | None:
         return self._pending_observation_confirmation
+
+    @property
+    def workflow_status(self) -> str:
+        if not self.active:
+            return self._workflow_status or "preview"
+        return self._workflow_status or "active"
+
+    def start_timer(self, step_index: int | None = None, now: float | None = None) -> tuple[bool, int, str]:
+        idx = self.current_index if step_index is None else step_index
+        duration = _CANDIDATE_A_STEP_TIMERS.get(idx, 0)
+        if duration <= 0:
+            return False, 0, "No timer configured for this step"
+        current_time = time.time() if now is None else now
+        self._timer_started_at = current_time
+        self._timer_duration_seconds = duration
+        self._timer_step_index = idx
+        return True, duration, f"Started {duration}s timer"
+
+    def timer_status(self, now: float | None = None) -> dict[str, Any]:
+        if self._timer_started_at is None or self._timer_duration_seconds is None or self._timer_step_index is None:
+            return {
+                "state": "not_started",
+                "duration_seconds": _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0),
+                "remaining_seconds": _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0),
+                "step_index": self.current_index,
+            }
+        current_time = time.time() if now is None else now
+        elapsed = current_time - self._timer_started_at
+        remaining = max(0, int(round(self._timer_duration_seconds - elapsed)))
+        state = "running" if remaining > 0 else "expired"
+        return {
+            "state": state,
+            "duration_seconds": self._timer_duration_seconds,
+            "remaining_seconds": remaining,
+            "elapsed_seconds": int(round(elapsed)),
+            "step_index": self._timer_step_index,
+        }
 
     def _entity_inventory(self) -> tuple[str, ...]:
         indexes = {
@@ -2881,6 +3070,10 @@ class CuratedProtocolSession:
             "acetonitrile": ("acetonitrile",),
             "gel plug": ("gel plug",),
             "stained protein band": ("stained protein band",),
+            "dtt": ("dtt", "dithiothreitol"),
+            "iodoacetamide": ("iodoacetamide",),
+            "trypsin": ("trypsin",),
+            "formic acid": ("formic acid", "formic"),
             "rpm": ("rpm",),
             "incubation": ("incubat",),
             "contamination": ("contaminat", "오염"),
@@ -2994,7 +3187,7 @@ class CuratedProtocolSession:
             )
 
         action_words = bool(re.search(
-            r"(?:discard|remove|버리|제거|씻|wash|incubat|배양|넣|place|cut|자르)", key
+            r"(?:discard|remove|버리|제거|폐기|비우|dispos|씻|wash|incubat|배양|넣|place|cut|자르)", key
         ))
         ratio_words = bool(re.search(
             r"(?:비율|parts?|ratio|몇\s*대\s*몇|\d+\s*대\s*\d+|대\s*일|:\s*1)",
@@ -3002,41 +3195,91 @@ class CuratedProtocolSession:
         ))
         entity_answers = {
             "ambic": (
-                "AMBIC는 ammonium bicarbonate를 가리키는 약칭이며, 이 프로토콜에서는 Solution A와 B의 구성 성분입니다."
+                "AMBIC는 ammonium bicarbonate(중탄산 암모늄)의 약칭으로, 휘발성 약알칼리성 완충 용액 역할을 합니다. 이 프로토콜에서는 25 mM 농도로 조제하여 Solution A와 B의 기본 성분 및 트립신 배양액으로 사용됩니다. 프로토콜 원문에는 25 mM AMBIC의 구체적 작용 기전은 설명되어 있지 않습니다."
                 if language == "ko" else
-                "AMBIC is the protocol's abbreviation for ammonium bicarbonate and is a component of Solutions A and B."
+                "AMBIC stands for ammonium bicarbonate, a volatile mildly basic buffer. In this protocol, it is prepared at 25 mM as the base component of Solutions A and B and as the trypsin digestion buffer. The protocol text specifies 25 mM AMBIC without detailing its chemical mechanism."
             ),
             "hplc_water": (
-                "HPLC water는 이 프로토콜에서 25 mM AMBIC 용액을 만드는 물로 사용됩니다."
+                "HPLC water는 고성능 액체 크로마토그래피 등급의 고순도 정제수로, 불순물로 인한 질량분석 방해를 방지합니다. 이 프로토콜에서는 25 mM AMBIC 수용액을 만드는 데 사용됩니다. 일반 정제수와의 구체적 불순물 기준 차이는 별도 권위 자료가 필요합니다."
                 if language == "ko" else
-                "In this protocol, HPLC water is used to prepare the 25 mM AMBIC solution."
+                "HPLC water is high-purity chromatography-grade water used to prevent mass spec background interference. In this protocol, it is used to prepare the 25 mM AMBIC base solution. Quality differences compared to deionized water require separate authoritative references."
             ),
             "solution_a": (
-                "Solution A는 HPLC water로 만든 25 mM AMBIC 2 parts와 acetonitrile 1 part의 혼합물입니다."
+                "Solution A는 25 mM AMBIC 수용액 2 parts와 acetonitrile 1 part를 혼합한 젤 탈색 세척 용액입니다. 젤에서 염색약을 씻어내는 유기/수계 혼합 세척 역할을 합니다. 후보 A 원문은 2:1 혼합 비율을 지정하지만 해당 혼합비의 기전적 이유는 명시하지 않습니다."
                 if language == "ko" else
-                "Solution A is 2 parts 25 mM AMBIC in HPLC water mixed with 1 part acetonitrile."
+                "Solution A is the wash solution prepared by mixing 2 parts of 25 mM AMBIC in HPLC water with 1 part acetonitrile. It acts as an organic-aqueous wash to destain gel pieces. Candidate A specifies the 2:1 ratio without stating the mechanistic rationale."
             ),
             "solution_b": (
-                "Solution B는 HPLC water로 만든 25 mM AMBIC 용액입니다."
+                "Solution B는 HPLC water로 조제한 25 mM AMBIC 수용액입니다. Solution A 세척 후 젤 조각을 헹구고 완충 환경을 맞추는 역할을 합니다. 원문은 500 µL 세척을 지시하지만 세척 후 배출액의 시설별 폐기 경로는 명시하지 않습니다."
                 if language == "ko" else
-                "Solution B is 25 mM AMBIC made in HPLC water."
+                "Solution B is 25 mM AMBIC made in HPLC water. It rinses the gel piece after Solution A washes and maintains the buffer environment. The protocol specifies 500 µL washes without defining facility-specific waste streams."
             ),
             "acetonitrile": (
-                "Acetonitrile은 이 프로토콜에서 Solution A의 1 part 성분입니다."
+                "Acetonitrile(아세토니트릴)은 유기 용매로, 단백질 젤을 탈수시키고 소수성 상호작용을 줄여 염색약 제거와 시약 침투를 돕습니다. 이 프로토콜에서는 Solution A의 1 part 성분 및 젤 탈수 세척액으로 사용됩니다."
                 if language == "ko" else
-                "In this protocol, acetonitrile is the 1-part component of Solution A."
+                "Acetonitrile is an organic solvent used to dehydrate gel pieces and facilitate destaining and reagent penetration. In this protocol, it is the 1-part component of Solution A and the wash for gel dehydration."
+            ),
+            "gel_plug": (
+                "젤 플러그(gel plug)는 염색된 단백질 밴드에서 잘라낸 약 1 mm³ 크기의 작은 젤 조각입니다. 세척, 탈색, 환원·알킬화, 트립신 소화 등 전체 인젤 소화 과정의 물리적 반응 대상입니다."
+                if language == "ko" else
+                "A gel plug is the small (~1 mm³) piece excised from a stained protein band. It serves as the reaction vessel material throughout destaining, reduction/alkylation, and trypsin digestion."
+            ),
+            "stained_protein_band": (
+                "염색된 단백질 밴드는 SDS-PAGE 전기영동 후 염색되어 육안으로 확인되는 표적 단백질 겔 영역입니다. 이 프로토콜에서 1 mm³ 플러그 또는 밴드 전체를 잘라내어 인젤 소화 및 질량분석 시료로 준비합니다."
+                if language == "ko" else
+                "The stained protein band is the visualized protein zone on an SDS-PAGE gel after electrophoresis. In this protocol, it is excised as a 1 mm³ plug or sliced into smaller sections for in-gel digestion and mass spectrometry."
+            ),
+            "dtt": (
+                "DTT(dithiothreitol)는 강력한 환원제로, 단백질 내 이황화 결합(disulfide bond)을 끊어 3차 구조를 풀어줍니다. 이 프로토콜 10단계에서 1.5 mg/mL (10 mM) 농도로 25 mM AMBIC에 조제하여 사용합니다."
+                if language == "ko" else
+                "DTT (dithiothreitol) is a reducing agent that breaks disulfide bonds to denature protein structure. In step 10, it is prepared at 1.5 mg/mL (10 mM) in 25 mM AMBIC."
+            ),
+            "iodoacetamide": (
+                "Iodoacetamide(요오도아세트아미드)는 알킬화제로, DTT로 환원된 시스테인 티올기(-SH)를 알킬화(카르바미도메틸화)하여 이황화 결합의 재형성을 막습니다. 10단계에서 10 mg/mL (60 mM)로 조제하여 암소에서 반응시킵니다."
+                if language == "ko" else
+                "Iodoacetamide is an alkylating agent that covalently modifies reduced cysteine thiols to prevent disulfide reformation. In step 10, it is prepared at 10 mg/mL (60 mM) and incubated in the dark."
+            ),
+            "trypsin": (
+                "Trypsin(트립신)은 단백질 분해 효소로, 라이신(Lys)과 아르기닌(Arg) 잔기의 C-말단을 특이적으로 절단하여 질량분석에 적합한 펩타이드를 생성합니다. 21단계에서 25 mM AMBIC에 6 ng/µL로 조제하여 사용합니다."
+                if language == "ko" else
+                "Trypsin is a protease that specifically cleaves proteins at the C-terminus of lysine and arginine residues to produce peptides for mass spectrometry. In step 21, it is prepared at 6 ng/µL in 25 mM AMBIC."
+            ),
+            "formic_acid": (
+                "Formic acid(포름산, LC-MS grade)는 산성화 시약으로, 트립신 소화 반응을 정지시키고 펩타이드를 양이온화하여 펩타이드 추출 및 LC-MS 이온화를 돕습니다. 24단계에서 최종 1% (v/v) 농도로 첨가합니다."
+                if language == "ko" else
+                "Formic acid (LC-MS grade) is an acidifying agent used to quench trypsin activity and protonate peptides for extraction and LC-MS ionization. In step 24, it is added to achieve a final 1% (v/v) concentration."
             ),
             "rpm": (
-                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 현재 단계에서는 부드러운 교반 속도에 연결됩니다."
+                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 이 프로토콜에서는 800 rpm이 부드러운 교반 속도로 지정되어 있습니다. 원문은 800 rpm을 지정하지만 이 회전 속도의 기전적 근거는 명시하지 않습니다."
                 if language == "ko" else
-                "rpm means revolutions per minute; in the current step it is the gentle-agitation speed setting."
+                "rpm means revolutions per minute; in this protocol 800 rpm is the gentle-agitation speed setting. The protocol specifies 800 rpm without detailing the mechanistic basis for this speed."
+            ),
+            "incubation": (
+                "배양(incubation)은 반응물이 특정 온도와 시간 조건에서 반응하도록 유지하는 과정입니다. 이 프로토콜에서는 탈색, 환원, 알킬화, 트립신 소화 등 각 단계마다 37°C, 60°C, 실온 등의 온도 조건이 지정됩니다."
+                if language == "ko" else
+                "Incubation is holding the reaction mixture at specified temperature and time conditions. In this protocol, different steps use 37°C, 60°C, or room temperature for destaining, reduction, alkylation, and digestion."
+            ),
+            "contamination": (
+                "오염(contamination)은 외부 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 각질(keratin) 및 먼지 오염을 방지하기 위해 장갑 착용과 깨끗한 작업 환경을 경고합니다."
+                if language == "ko" else
+                "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace."
             ),
         }
         alias_map = {
             "ambic": ("ambic", "ammonium bicarbonate"),
-            "hplc_water": ("hplc water",),
-            "solution_a": ("solution a",), "solution_b": ("solution b",),
-            "acetonitrile": ("acetonitrile",), "rpm": ("rpm",),
+            "hplc_water": ("hplc water", "hplc"),
+            "solution_a": ("solution a",),
+            "solution_b": ("solution b",),
+            "acetonitrile": ("acetonitrile",),
+            "gel_plug": ("gel plug",),
+            "stained_protein_band": ("stained protein band", "protein band"),
+            "dtt": ("dtt", "dithiothreitol"),
+            "iodoacetamide": ("iodoacetamide",),
+            "trypsin": ("trypsin",),
+            "formic_acid": ("formic acid", "formic"),
+            "rpm": ("rpm",),
+            "incubation": ("incubat", "배양"),
+            "contamination": ("contamination", "keratin", "오염"),
         }
         for entity in intent.requested_entities:
             if action_words and entity in {action.target_id for action in frame.actions}:
@@ -3158,15 +3401,38 @@ class CuratedProtocolSession:
                 if language == "ko" else
                 f"{rendered} is the current step's {label}."
             )
-            add(
-                ClaimTargetType.PARAMETER, binding.parameter_id, "role",
-                evidence_ids=(binding.evidence_id,), local_answer=answer,
-                operational=True,
-                authority=(
-                    "SOURCE_APPROVED_ALTERNATIVE"
-                    if binding.source_approved_alternative else "ACTIVE_PROTOCOL"
-                ),
-            )
+            if not any(
+                claim.target_id in {binding.parameter_id, binding.role}
+                and claim.dimension == "role"
+                for claim in claims
+            ):
+                add(
+                    ClaimTargetType.PARAMETER, binding.parameter_id, "role",
+                    evidence_ids=(binding.evidence_id,), local_answer=answer,
+                    operational=True,
+                    authority=(
+                        "SOURCE_APPROVED_ALTERNATIVE"
+                        if binding.source_approved_alternative else "ACTIVE_PROTOCOL"
+                    ),
+                )
+            if re.search(r"(?:왜|이유|근거|rationale|why|basis)", key):
+                if not any(
+                    claim.target_id in {binding.parameter_id, binding.role}
+                    and claim.dimension == "rationale"
+                    for claim in claims
+                ):
+                    limitation = (
+                        f"후보 A 프로토콜 원문은 {frame.step_label}단계의 {label} 조건을 명시하고 있으나, 저자가 이 정확한 수치를 선택한 과학적 근거는 원문 문서 자체에 설명되어 있지 않습니다."
+                        if language == "ko" else
+                        f"Candidate A specifies the {label} condition for step {frame.step_label}, but the document itself does not explain why the author selected this exact value."
+                    )
+                    add(
+                        ClaimTargetType.PARAMETER, binding.parameter_id, "rationale",
+                        evidence_ids=(binding.evidence_id,), local_answer=limitation,
+                        unresolved_reason="rationale_absent_from_active_protocol",
+                        authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
+                        status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
+                    )
 
         if not any(
             claim.target_type is ClaimTargetType.PARAMETER
@@ -3220,15 +3486,17 @@ class CuratedProtocolSession:
                 or action.target_id in intent.requested_entities
                 or action.action_type in key.replace(" ", "_")
                 or action.action_type == "remove_discard"
-                and re.search(r"(?:discard|remove|버리|제거)", key)
+                and re.search(r"(?:discard|remove|버리|제거|폐기|dispos)", key)
             )
         )
         if len(matching_actions) == 1:
             action = matching_actions[0]
+            target_label = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "지정된 용액"
+            target_label_en = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "the specified solution"
             action_answer = (
-                "활성 프로토콜은 젤 밴드가 든 튜브에서 Solution A를 제거해 버리라고 지시합니다."
+                f"활성 프로토콜은 젤 밴드가 든 튜브에서 {target_label}를 제거해 버리라고 지시합니다."
                 if language == "ko" and action.action_type == "remove_discard" else
-                "The active protocol instructs you to remove and discard Solution A from the tube containing the gel band."
+                f"The active protocol instructs you to remove and discard {target_label_en} from the tube containing the gel band."
                 if action.action_type == "remove_discard" else
                 (f"현재 단계의 확인된 동작은 {_derived_source_text(action.source_text)}입니다.")
             )
@@ -3237,11 +3505,24 @@ class CuratedProtocolSession:
                 evidence_ids=(action.evidence_id,), local_answer=action_answer,
                 operational=True,
             )
-            if re.search(r"(?:왜|이유|rationale|why)", key):
+            if action.target_id:
+                target_entity = action.target_id
+                target_name = "Solution B" if target_entity == "solution_b" else "Solution A" if target_entity == "solution_a" else target_entity
+                add(
+                    ClaimTargetType.ENTITY, target_entity, "handling",
+                    evidence_ids=(action.evidence_id,),
+                    local_answer=(
+                        f"이 단계에서 다루는 용액은 {target_name}입니다. {target_name}를 제거해 버립니다."
+                        if language == "ko" else
+                        f"The solution handled in this step is {target_name}. Remove and discard {target_name}."
+                    ),
+                    operational=True,
+                )
+            if re.search(r"(?:왜|이유|rationale|why|근거)", key):
                 limitation = (
-                    "활성 프로토콜은 이 동작을 지시하지만 그 기전적 이유는 설명하지 않습니다."
+                    f"활성 프로토콜은 {target_label} 제거 동작을 지시하지만 그 기전적 이유나 구체적 폐기물 처리 경로는 설명하지 않습니다."
                     if language == "ko" else
-                    "The active protocol instructs this action but does not state its mechanistic rationale."
+                    f"The active protocol instructs removing {target_label_en} but does not state its mechanistic rationale or facility waste disposal stream."
                 )
                 add(
                     ClaimTargetType.ACTION, action.action_id, "rationale",
@@ -3356,8 +3637,9 @@ class CuratedProtocolSession:
     def activate_configured(self) -> None:
         """Make one successfully configured structured protocol usable."""
 
-        opening = (self.active, self.current_index, self._block_reason)
+        opening = (self.active, self.current_index, self._block_reason, self._workflow_status)
         self.active = True
+        self._workflow_status = "active"
         self.current_index = 0
         self._block_reason = None
         self._replay.clear()
@@ -3368,12 +3650,16 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation = None
         self._pending_observation_confirmation = None
-        if opening != (self.active, self.current_index, self._block_reason):
+        self._timer_started_at = None
+        self._timer_duration_seconds = None
+        self._timer_step_index = None
+        if opening != (self.active, self.current_index, self._block_reason, self._workflow_status):
             self._revision += 1
 
     def reset(self) -> None:
-        opening = (self.active, self.current_index, self._block_reason)
+        opening = (self.active, self.current_index, self._block_reason, self._workflow_status)
         self.active = False
+        self._workflow_status = "preview"
         self.current_index = 0
         self._block_reason = None
         self._replay.clear()
@@ -3384,7 +3670,10 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation = None
         self._pending_observation_confirmation = None
-        if opening != (self.active, self.current_index, self._block_reason):
+        self._timer_started_at = None
+        self._timer_duration_seconds = None
+        self._timer_step_index = None
+        if opening != (self.active, self.current_index, self._block_reason, self._workflow_status):
             self._revision += 1
 
     def _checkpoint(
@@ -3402,6 +3691,10 @@ class CuratedProtocolSession:
         PendingCompletionConfirmation | None,
         PendingObservationConfirmation | None,
         ProtocolDiscourseContext,
+        str,
+        float | None,
+        int | None,
+        int | None,
     ]:
         return (
             self.active,
@@ -3416,6 +3709,10 @@ class CuratedProtocolSession:
             self._pending_completion_confirmation,
             self._pending_observation_confirmation,
             self._discourse_context,
+            self._workflow_status,
+            self._timer_started_at,
+            self._timer_duration_seconds,
+            self._timer_step_index,
         )
 
     def _restore(
@@ -3433,6 +3730,10 @@ class CuratedProtocolSession:
             PendingCompletionConfirmation | None,
             PendingObservationConfirmation | None,
             ProtocolDiscourseContext,
+            str,
+            float | None,
+            int | None,
+            int | None,
         ],
     ) -> None:
         (
@@ -3448,6 +3749,10 @@ class CuratedProtocolSession:
             self._pending_completion_confirmation,
             self._pending_observation_confirmation,
             self._discourse_context,
+            self._workflow_status,
+            self._timer_started_at,
+            self._timer_duration_seconds,
+            self._timer_step_index,
         ) = checkpoint
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
@@ -3495,6 +3800,10 @@ class CuratedProtocolSession:
             "acetonitrile": ("acetonitrile",),
             "gel_plug": ("gel plug", "plug of a stained protein band"),
             "stained_protein_band": ("stained protein band", "gel band"),
+            "dtt": ("dtt", "dithiothreitol"),
+            "iodoacetamide": ("iodoacetamide",),
+            "trypsin": ("trypsin",),
+            "formic_acid": ("formic acid", "formic"),
             "rpm": ("rpm",),
             "incubation": ("incubat",),
             "contamination": ("contaminat", "오염"),
@@ -3608,56 +3917,118 @@ class CuratedProtocolSession:
         explanations_ko = {
             "ambic": (
                 "AMBIC",
-                "AMBIC는 이 프로토콜에서 ammonium bicarbonate를 가리키는 약칭입니다.",
+                "AMBIC는 ammonium bicarbonate(중탄산 암모늄)의 약칭으로, 휘발성 약알칼리성 완충 용액 역할을 합니다. 이 프로토콜에서는 25 mM 농도로 조제하여 Solution A와 B의 기본 성분 및 트립신 배양액으로 사용됩니다. 프로토콜 원문에는 25 mM AMBIC의 구체적 작용 기전은 설명되어 있지 않습니다.",
             ),
             "hplc_water": (
                 "HPLC water",
-                "HPLC water는 이 프로토콜에서 25mM ammonium bicarbonate(AMBIC) 용액을 만드는 데 쓰이는 물입니다.",
+                "HPLC water는 고성능 액체 크로마토그래피 등급의 고순도 정제수로, 불순물로 인한 질량분석 방해를 방지합니다. 이 프로토콜에서는 25 mM AMBIC 수용액을 만드는 데 사용됩니다. 일반 정제수와의 구체적 불순물 기준 차이는 별도 권위 자료가 필요합니다.",
             ),
             "solution_a": (
                 "Solution A",
-                "Solution A는 HPLC water로 만든 25mM AMBIC 2 parts와 acetonitrile 1 part를 섞은 세척 용액입니다.",
+                "Solution A는 25 mM AMBIC 수용액 2 parts와 acetonitrile 1 part를 혼합한 젤 탈색 세척 용액입니다. 젤에서 염색약을 씻어내는 유기/수계 혼합 세척 역할을 합니다. 후보 A 원문은 2:1 혼합 비율을 지정하지만 해당 혼합비의 기전적 이유는 명시하지 않습니다.",
             ),
             "solution_b": (
                 "Solution B",
-                "Solution B는 HPLC water로 만든 25mM AMBIC 용액입니다.",
+                "Solution B는 HPLC water로 조제한 25 mM AMBIC 수용액입니다. Solution A 세척 후 젤 조각을 헹구고 완충 환경을 맞추는 역할을 합니다. 원문은 500 µL 세척을 지시하지만 세척 후 배출액의 시설별 폐기 경로는 명시하지 않습니다.",
             ),
             "acetonitrile": (
                 "Acetonitrile",
-                "Acetonitrile은 이 프로토콜에서 Solution A에 1 part로 포함되는 성분입니다.",
+                "Acetonitrile(아세토니트릴)은 유기 용매로, 단백질 젤을 탈수시키고 소수성 상호작용을 줄여 염색약 제거와 시약 침투를 돕습니다. 이 프로토콜에서는 Solution A의 1 part 성분 및 젤 탈수 세척액으로 사용됩니다.",
             ),
             "gel_plug": (
                 "Gel plug",
-                "젤 플러그는 이 프로토콜에서 염색된 단백질 밴드에서 잘라 세척·배양하는 작은 젤 조각을 가리킵니다.",
+                "젤 플러그(gel plug)는 염색된 단백질 밴드에서 잘라낸 약 1 mm³ 크기의 작은 젤 조각입니다. 세척, 탈색, 환원·알킬화, 트립신 소화 등 전체 인젤 소화 과정의 물리적 반응 대상입니다.",
             ),
             "stained_protein_band": (
                 "Stained protein band",
-                "염색된 단백질 밴드는 이 프로토콜에서 젤에서 잘라 작은 플러그나 조각으로 만드는 대상입니다.",
+                "염색된 단백질 밴드는 SDS-PAGE 전기영동 후 염색되어 육안으로 확인되는 표적 단백질 겔 영역입니다. 이 프로토콜에서 1 mm³ 플러그 또는 밴드 전체를 잘라내어 인젤 소화 및 질량분석 시료로 준비합니다.",
+            ),
+            "dtt": (
+                "DTT",
+                "DTT(dithiothreitol)는 강력한 환원제로, 단백질 내 이황화 결합(disulfide bond)을 끊어 3차 구조를 풀어줍니다. 이 프로토콜 10단계에서 1.5 mg/mL (10 mM) 농도로 25 mM AMBIC에 조제하여 사용합니다.",
+            ),
+            "iodoacetamide": (
+                "Iodoacetamide",
+                "Iodoacetamide(요오도아세트아미드)는 알킬화제로, DTT로 환원된 시스테인 티올기(-SH)를 알킬화(카르바미도메틸화)하여 이황화 결합의 재형성을 막습니다. 10단계에서 10 mg/mL (60 mM)로 조제하여 암소에서 반응시킵니다.",
+            ),
+            "trypsin": (
+                "Trypsin",
+                "Trypsin(트립신)은 단백질 분해 효소로, 라이신(Lys)과 아르기닌(Arg) 잔기의 C-말단을 특이적으로 절단하여 질량분석에 적합한 펩타이드를 생성합니다. 21단계에서 25 mM AMBIC에 6 ng/µL로 조제하여 사용합니다.",
+            ),
+            "formic_acid": (
+                "Formic acid",
+                "Formic acid(포름산, LC-MS grade)는 산성화 시약으로, 트립신 소화 반응을 정지시키고 펩타이드를 양이온화하여 펩타이드 추출 및 LC-MS 이온화를 돕습니다. 24단계에서 최종 1% (v/v) 농도로 첨가합니다.",
             ),
             "rpm": (
                 "rpm",
-                "800 rpm은 이 프로토콜의 배양 단계에서 부드러운 교반에 사용하는 기기 설정값입니다.",
+                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 이 프로토콜에서는 800 rpm이 부드러운 교반 속도로 지정되어 있습니다. 원문은 800 rpm을 지정하지만 이 회전 속도의 기전적 근거는 명시하지 않습니다.",
             ),
             "incubation": (
                 "Incubation",
-                "배양은 이 프로토콜에서 시료를 지정된 시간과 온도 조건에 두는 단계로 사용됩니다.",
+                "배양(incubation)은 반응물이 특정 온도와 시간 조건에서 반응하도록 유지하는 과정입니다. 이 프로토콜에서는 탈색, 환원, 알킬화, 트립신 소화 등 각 단계마다 37°C, 60°C, 실온 등의 온도 조건이 지정됩니다.",
             ),
             "contamination": (
                 "Contamination",
-                "오염은 원하지 않는 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 먼지와 케라틴 오염을 피하도록 경고합니다.",
+                "오염(contamination)은 외부 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 각질(keratin) 및 먼지 오염을 방지하기 위해 장갑 착용과 깨끗한 작업 환경을 경고합니다.",
             ),
         }
         explanations_en = {
-            "ambic": ("AMBIC", "AMBIC is the abbreviation used by this protocol for ammonium bicarbonate."),
-            "hplc_water": ("HPLC water", "In this protocol, HPLC water is the water used to prepare 25mM ammonium bicarbonate (AMBIC)."),
-            "solution_a": ("Solution A", "Solution A is the wash solution made from 2 parts 25mM AMBIC in HPLC water and 1 part acetonitrile."),
-            "solution_b": ("Solution B", "Solution B is 25mM AMBIC made in HPLC water."),
-            "acetonitrile": ("Acetonitrile", "In this protocol, acetonitrile is the 1-part component of Solution A."),
-            "gel_plug": ("Gel plug", "In this protocol, a gel plug is the small gel piece cut from a stained protein band for washing and incubation."),
-            "stained_protein_band": ("Stained protein band", "In this protocol, the stained protein band is the gel region cut into a plug or smaller pieces."),
-            "rpm": ("rpm", "800 rpm is the instrument setting used for gentle agitation in the protocol's incubation steps."),
-            "incubation": ("Incubation", "In this protocol, incubation means holding the sample under the stated time and temperature conditions."),
-            "contamination": ("Contamination", "Contamination is unwanted material in the sample; this protocol specifically warns about dust and keratin contamination."),
+            "ambic": (
+                "AMBIC",
+                "AMBIC stands for ammonium bicarbonate, a volatile mildly basic buffer. In this protocol, it is prepared at 25 mM as the base component of Solutions A and B and as the trypsin digestion buffer. The protocol text specifies 25 mM AMBIC without detailing its chemical mechanism.",
+            ),
+            "hplc_water": (
+                "HPLC water",
+                "HPLC water is high-purity chromatography-grade water used to prevent mass spec background interference. In this protocol, it is used to prepare the 25 mM AMBIC base solution. Quality differences compared to deionized water require separate authoritative references.",
+            ),
+            "solution_a": (
+                "Solution A",
+                "Solution A is the wash solution prepared by mixing 2 parts of 25 mM AMBIC in HPLC water with 1 part acetonitrile. It acts as an organic-aqueous wash to destain gel pieces. Candidate A specifies the 2:1 ratio without stating the mechanistic rationale.",
+            ),
+            "solution_b": (
+                "Solution B",
+                "Solution B is 25 mM AMBIC made in HPLC water. It rinses the gel piece after Solution A washes and maintains the buffer environment. The protocol specifies 500 µL washes without defining facility-specific waste streams.",
+            ),
+            "acetonitrile": (
+                "Acetonitrile",
+                "Acetonitrile is an organic solvent used to dehydrate gel pieces and facilitate destaining and reagent penetration. In this protocol, it is the 1-part component of Solution A and the wash for gel dehydration.",
+            ),
+            "gel_plug": (
+                "Gel plug",
+                "A gel plug is the small (~1 mm³) piece excised from a stained protein band. It serves as the reaction vessel material throughout destaining, reduction/alkylation, and trypsin digestion.",
+            ),
+            "stained_protein_band": (
+                "Stained protein band",
+                "The stained protein band is the visualized protein zone on an SDS-PAGE gel after electrophoresis. In this protocol, it is excised as a 1 mm³ plug or sliced into smaller sections for in-gel digestion and mass spectrometry.",
+            ),
+            "dtt": (
+                "DTT",
+                "DTT (dithiothreitol) is a reducing agent that breaks disulfide bonds to denature protein structure. In step 10, it is prepared at 1.5 mg/mL (10 mM) in 25 mM AMBIC.",
+            ),
+            "iodoacetamide": (
+                "Iodoacetamide",
+                "Iodoacetamide is an alkylating agent that covalently modifies reduced cysteine thiols to prevent disulfide reformation. In step 10, it is prepared at 10 mg/mL (60 mM) and incubated in the dark.",
+            ),
+            "trypsin": (
+                "Trypsin",
+                "Trypsin is a protease that specifically cleaves proteins at the C-terminus of lysine and arginine residues to produce peptides for mass spectrometry. In step 21, it is prepared at 6 ng/µL in 25 mM AMBIC.",
+            ),
+            "formic_acid": (
+                "Formic acid",
+                "Formic acid (LC-MS grade) is an acidifying agent used to quench trypsin activity and protonate peptides for extraction and LC-MS ionization. In step 24, it is added to achieve a final 1% (v/v) concentration.",
+            ),
+            "rpm": (
+                "rpm",
+                "rpm means revolutions per minute; in this protocol 800 rpm is the gentle-agitation speed setting. The protocol specifies 800 rpm without detailing the mechanistic basis for this speed.",
+            ),
+            "incubation": (
+                "Incubation",
+                "Incubation is holding the reaction mixture at specified temperature and time conditions. In this protocol, different steps use 37°C, 60°C, or room temperature for destaining, reduction, alkylation, and digestion.",
+            ),
+            "contamination": (
+                "Contamination",
+                "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace.",
+            ),
         }
         explanations = explanations_ko if language == "ko" else explanations_en
         for entity in entities:
@@ -3844,6 +4215,8 @@ class CuratedProtocolSession:
             # Warning severity is not represented in the canonical domain.
             # Keep ordinary warnings visible without inventing a critical cue.
             "critical_warning_texts": [],
+            "workflow_status": self.workflow_status,
+            "timer": self.timer_status(),
         }
 
     def _current_step_readiness_blocker(
@@ -4168,9 +4541,12 @@ class CuratedProtocolSession:
             resumed = self.active and bool(self._replay)
             if not self.active:
                 self.active = True
+                self._workflow_status = "active"
                 self.current_index = 0
                 self._block_reason = None
                 changed = True
+            else:
+                self._workflow_status = "active"
             step = steps[self.current_index]
             control_text = _control_speech(
                 CuratedProtocolAction.START,
@@ -4292,7 +4668,204 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
                 requested_followup=intent.requested_followup,
             )
-        elif not self.active:
+        elif command is CuratedProtocolAction.AGENT_META:
+            response = (
+                "저는 승인된 실험 프로토콜의 단계별 음성 안내, 배양 타이머 관리, 이상 사항 및 관찰 기록, 실험 보고서 생성, 그리고 프로토콜 및 승인된 참고자료 기반 질의응답을 지원하는 실험실 보이스 워크플로 에이전트입니다. 프로토콜을 시작하시려면 '실험 시작'이라고 말씀해 주세요."
+                if language == "ko" else
+                "I am a laboratory voice workflow assistant that provides step-by-step voice guidance for approved protocols, timer management, observation and anomaly recording, experiment report generation, and grounded QA over protocols and approved reference sources. To begin the workflow, please say 'start protocol'."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.AGENT_META,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+                question_kind="agent_meta",
+            )
+        elif command is CuratedProtocolAction.PAUSE:
+            self._workflow_status = "paused"
+            response = (
+                "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
+                if language == "ko" else
+                "Voice workflow guidance is paused. Any active physical timer continues in the laboratory. When ready, say 'resume protocol'."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PAUSE,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.RESUME:
+            if not self.active:
+                self.active = True
+                self.current_index = 0
+            self._workflow_status = "active"
+            step = steps[self.current_index]
+            timer_info = self.timer_status()
+            timer_suffix = ""
+            if timer_info.get("state") == "running":
+                rem = timer_info.get("remaining_seconds", 0)
+                timer_suffix = f" (진행 중인 타이머 {rem // 60}분 {rem % 60}초 남음)" if language == "ko" else f" (Timer running: {rem // 60}m {rem % 60}s remaining)"
+            elif timer_info.get("state") == "expired":
+                timer_suffix = " (타이머가 완료되었습니다)" if language == "ko" else " (Timer expired)"
+            control_text = (
+                f"워크플로를 재개합니다. 현재 {step.source_label}단계입니다.{timer_suffix}"
+                if language == "ko" else
+                f"Resuming protocol. Currently at step {step.source_label}.{timer_suffix}"
+            )
+            response, primary, sources, pages, evidence_ids, translation_status = (
+                _step_presentation(
+                    self.fixture,
+                    self.current_index,
+                    language,
+                    control_text,
+                )
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.RESUME,
+                display_text=response,
+                speech_text=control_text,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=True,
+                primary_text=primary,
+                source_texts=sources,
+                source_pages=pages,
+                evidence_ids=evidence_ids,
+                translation_status=translation_status,
+                intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.START_TIMER:
+            success, duration, _ = self.start_timer()
+            step = steps[self.current_index]
+            if success:
+                minutes = duration // 60
+                seconds = duration % 60
+                time_str = f"{minutes}분" if seconds == 0 else f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
+                time_str_en = f"{minutes} min" if seconds == 0 else f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
+                response = (
+                    f"현재 {step.source_label}단계의 {time_str} 타이머를 시작했습니다. 시간이 끝나면 알려드릴게요."
+                    if language == "ko" else
+                    f"Started {time_str_en} timer for step {step.source_label}. I will notify you when it completes."
+                )
+            else:
+                response = (
+                    f"현재 {step.source_label}단계에는 설정된 타이머 시간이 없습니다."
+                    if language == "ko" else
+                    f"There is no configured timer duration for step {step.source_label}."
+                )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.START_TIMER,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.TIMER_STATUS:
+            timer_info = self.timer_status()
+            step = steps[self.current_index]
+            state = timer_info.get("state")
+            rem = timer_info.get("remaining_seconds", 0)
+            minutes = rem // 60
+            seconds = rem % 60
+            if state == "running":
+                time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
+                time_str_en = f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
+                response = (
+                    f"현재 {step.source_label}단계 타이머가 진행 중이며, 약 {time_str} 남았습니다."
+                    if language == "ko" else
+                    f"Step {step.source_label} timer is running with approximately {time_str_en} remaining."
+                )
+            elif state == "expired":
+                response = (
+                    f"현재 {step.source_label}단계 타이머가 이미 완료되었습니다. 다음 작업으로 진행할 수 있습니다."
+                    if language == "ko" else
+                    f"Step {step.source_label} timer has expired. You can proceed with the next action."
+                )
+            else:
+                dur = timer_info.get("duration_seconds", 0)
+                if dur > 0:
+                    time_str = f"{dur // 60}분"
+                    response = (
+                        f"현재 {step.source_label}단계는 {time_str} 배양 단계입니다. 아직 타이머가 시작되지 않았습니다. 시작하시려면 '타이머 시작해'라고 말씀해 주세요."
+                        if language == "ko" else
+                        f"Step {step.source_label} is a {dur // 60}-minute step. The timer has not been started yet. Say 'start timer' to begin."
+                    )
+                else:
+                    response = (
+                        f"현재 {step.source_label}단계에는 설정된 타이머가 없습니다."
+                        if language == "ko" else
+                        f"There is no active timer for step {step.source_label}."
+                    )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.TIMER_STATUS,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.PREVIEW_STEP:
+            target_label = intent.target_step or "1"
+            target_idx = self._step_index_for_label(target_label)
+            if target_idx is None:
+                target_idx = 0
+            target_step = steps[target_idx]
+            localized = self._localized_fact(target_step.step_id, "current_step")
+            instruction = localized if language == "ko" and localized else target_step.instruction_source_text
+            current_label = steps[self.current_index].source_label if self.active else "시작 전"
+            current_label_en = steps[self.current_index].source_label if self.active else "not started"
+            response = (
+                f"{target_step.source_label}단계 미리보기: {instruction} (현재 상태: {current_label}, 상태는 변경하지 않았습니다)"
+                if language == "ko" else
+                f"Step {target_step.source_label} preview: {instruction} (Current status: {current_label_en}, state not changed)"
+            )
+            facts = self.fixture.facts_for_step(target_idx)
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PREVIEW_STEP,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                facts=facts,
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                source_texts=tuple(fact.text for fact in facts[:4]),
+                source_pages=tuple(fact.source_page for fact in facts[:4]),
+                evidence_ids=tuple(fact.fact_id for fact in facts[:4]),
+                translation_status=("verified_sidecar" if language == "ko" else "source_language"),
+                intent_kind=intent.intent_kind,
+                target_step=target_step.source_label,
+            )
+
+        elif not self.active and command not in (
+            CuratedProtocolAction.PROTOCOL_QUERY,
+            CuratedProtocolAction.AGENT_META,
+            CuratedProtocolAction.PREVIEW_STEP,
+        ):
             response = {
                 "en": "The protocol session is stopped. Say start protocol to resume it.",
                 "vi": "Phiên quy trình đã dừng. Hãy yêu cầu bắt đầu quy trình để tiếp tục.",
@@ -4742,38 +5315,57 @@ class CuratedProtocolSession:
             CuratedProtocolAction.CURRENT,
             CuratedProtocolAction.REPEAT,
         ):
-            step = steps[self.current_index]
-            action = command
-            control_text = _control_speech(
-                action,
-                language,
-                step.source_label,
-                development_only=self.fixture.development_only,
-            )
-            response, primary, sources, pages, evidence_ids, translation_status = (
-                _step_presentation(
-                    self.fixture,
-                    self.current_index,
-                    language,
-                    control_text,
+            if not self.active:
+                response = (
+                    "아직 실험을 시작하지 않았습니다. 시작하면 1단계부터 진행합니다. 원하시면 1단계를 미리 설명해드릴게요."
+                    if language == "ko" else
+                    "The experiment has not started yet. When started, it will begin from Step 1. If you'd like, I can preview Step 1 for you."
                 )
-            )
-            plan = CuratedProtocolTurnPlan(
-                action=action,
-                display_text=response,
-                speech_text=control_text,
-                speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                facts=self.fixture.facts_for_step(self.current_index),
-                step_label=step.source_label,
-                final_step=self.current_index == len(steps) - 1,
-                state_changed=False,
-                primary_text=primary,
-                source_texts=sources,
-                source_pages=pages,
-                evidence_ids=evidence_ids,
-                translation_status=translation_status,
-                intent_kind=intent.intent_kind,
-            )
+                plan = CuratedProtocolTurnPlan(
+                    action=command,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                    facts=(),
+                    step_label=None,
+                    final_step=False,
+                    state_changed=False,
+                    primary_text=response,
+                    intent_kind=intent.intent_kind,
+                )
+            else:
+                step = steps[self.current_index]
+                action = command
+                control_text = _control_speech(
+                    action,
+                    language,
+                    step.source_label,
+                    development_only=self.fixture.development_only,
+                )
+                response, primary, sources, pages, evidence_ids, translation_status = (
+                    _step_presentation(
+                        self.fixture,
+                        self.current_index,
+                        language,
+                        control_text,
+                    )
+                )
+                plan = CuratedProtocolTurnPlan(
+                    action=action,
+                    display_text=response,
+                    speech_text=control_text,
+                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    primary_text=primary,
+                    source_texts=sources,
+                    source_pages=pages,
+                    evidence_ids=evidence_ids,
+                    translation_status=translation_status,
+                    intent_kind=intent.intent_kind,
+                )
         elif command is CuratedProtocolAction.FULL_DETAIL:
             target_index = self._step_index_for_label(intent.target_step)
             if target_index is None:
@@ -5050,33 +5642,43 @@ class CuratedProtocolSession:
                 target_step=intent.target_step,
             )
         elif command is CuratedProtocolAction.CLARIFY_REFERENCE:
-            step=steps[self.current_index]
-            candidates=intent.requested_entities
-            labels={
-                "solution_a":"Solution A","solution_b":"Solution B",
-                "hplc_water":"HPLC water","ambic":"AMBIC",
-                "acetonitrile":"acetonitrile","gel_plug":"gel plug",
+            step = steps[self.current_index] if self.active else None
+            candidates = intent.requested_entities
+            labels = {
+                "solution_a": "Solution A", "solution_b": "Solution B",
+                "hplc_water": "HPLC water", "ambic": "AMBIC",
+                "acetonitrile": "acetonitrile", "gel_plug": "gel plug",
+                "stained_protein_band": "stained protein band",
+                "dtt": "DTT", "iodoacetamide": "iodoacetamide",
+                "trypsin": "trypsin", "formic_acid": "formic acid",
             }
-            if intent.coreference_status==CoreferenceStatus.AMBIGUOUS.value:
-                choices="와 ".join(labels.get(item,item) for item in candidates[:2])
-                response=(
+            if intent.intent_kind == "underspecified_result_request":
+                response = (
+                    "어떤 결과를 말씀하시나요? 현재 단계의 예상 관찰 결과, 지금까지의 실험 기록, 또는 최근 질의 답변 중 원하시는 내용을 말씀해 주세요."
+                    if language == "ko" else
+                    "Which result do you mean: the expected observation of the current step, the experiment record, or the recent answer?"
+                )
+            elif intent.coreference_status == CoreferenceStatus.AMBIGUOUS.value:
+                choices = "와 ".join(labels.get(item, item) for item in candidates[:2])
+                response = (
                     f"{choices} 중 어느 것을 말씀하시나요? 프로토콜 상태는 변경하지 않았습니다."
-                    if language=="ko" else
-                    f"Which do you mean: {' or '.join(labels.get(item,item) for item in candidates[:2])}? The protocol state did not change."
+                    if language == "ko" else
+                    f"Which do you mean: {' or '.join(labels.get(item, item) for item in candidates[:2])}? The protocol state did not change."
                 )
             else:
-                response=(
+                response = (
                     "어떤 물질이나 용액을 말씀하시는지 이름을 알려 주세요. 프로토콜 상태는 변경하지 않았습니다."
-                    if language=="ko" else
+                    if language == "ko" else
                     "Please name the material or solution you mean. The protocol state did not change."
                 )
-            plan=CuratedProtocolTurnPlan(
+            plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.CLARIFY_REFERENCE,
-                display_text=response,speech_text=response,
+                display_text=response, speech_text=response,
                 speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-                facts=(),step_label=step.source_label,
-                final_step=self.current_index==len(steps)-1,
-                state_changed=False,intent_kind=intent.intent_kind,
+                facts=(), step_label=(step.source_label if step is not None else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False, intent_kind=intent.intent_kind,
+                primary_text=response,
                 requested_entities=candidates,
                 question_kind=intent.question_kind,
                 normalized_transcript=intent.normalized_transcript,

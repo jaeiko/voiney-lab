@@ -66,21 +66,57 @@ class MultiBrainSettings:
     answer_timeout_seconds: float = 8.0
     planner_timeout_seconds: float = 6.0
     primary_answer_budget_seconds: float = 1.25
+    answer_brain_enabled: bool | None = None
+    answer_brain_model: str | None = None
+    source_brain_enabled: bool | None = None
+    source_brain_model: str | None = None
+    visual_brain_enabled: bool | None = None
+    visual_brain_model: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.answer_brain_enabled is None:
+            object.__setattr__(self, "answer_brain_enabled", self.enabled)
+        if self.answer_brain_model is None:
+            object.__setattr__(self, "answer_brain_model", self.model)
+        if self.source_brain_enabled is None:
+            object.__setattr__(self, "source_brain_enabled", self.enabled)
+        if self.source_brain_model is None:
+            object.__setattr__(self, "source_brain_model", self.model)
+        if self.visual_brain_enabled is None:
+            object.__setattr__(self, "visual_brain_enabled", self.enabled)
+        if self.visual_brain_model is None:
+            object.__setattr__(self, "visual_brain_model", self.model)
 
     @classmethod
     def from_environment(cls) -> "MultiBrainSettings":
         enabled = os.environ.get("VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
         model = os.environ.get("VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL", "grok-4.6").strip()
+        answer_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        answer_model = os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        source_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_SOURCE_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        source_model = os.environ.get("VOICE_WORKFLOW_AGENT_SOURCE_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        visual_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_VISUAL_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        visual_model = os.environ.get("VOICE_WORKFLOW_AGENT_VISUAL_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+
+        overall_enabled = enabled or answer_enabled or source_enabled or visual_enabled
         answer = float(os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS", "8"))
         planner = float(os.environ.get("VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS", "6"))
         primary = float(os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS", "1.25"))
-        if enabled and not model:
+        if overall_enabled and not model and not (answer_model or source_model or visual_model):
             raise ValueError("multi-brain model is required when enabled")
         if not 1 <= answer <= 15 or not 1 <= planner <= 12:
             raise ValueError("multi-brain timeouts are outside bounded limits")
         if not 0.1 <= primary < answer:
             raise ValueError("primary answer budget must be shorter than the answer timeout")
-        return cls(enabled, model or "grok-4.6", answer, planner, primary)
+        return cls(
+            overall_enabled, model or "grok-4.6", answer, planner, primary,
+            answer_brain_enabled=answer_enabled,
+            answer_brain_model=answer_model,
+            source_brain_enabled=source_enabled,
+            source_brain_model=source_model,
+            visual_brain_enabled=visual_enabled,
+            visual_brain_model=visual_model,
+        )
 
     def public_capability(self) -> dict[str, object]:
         return {
@@ -89,6 +125,11 @@ class MultiBrainSettings:
             "answer_timeout_seconds": self.answer_timeout_seconds if self.enabled else None,
             "planner_timeout_seconds": self.planner_timeout_seconds if self.enabled else None,
             "primary_answer_budget_seconds": self.primary_answer_budget_seconds if self.enabled else None,
+            "roles": {
+                "answer": {"enabled": bool(self.answer_brain_enabled), "model": self.answer_brain_model if self.answer_brain_enabled else None},
+                "source": {"enabled": bool(self.source_brain_enabled), "model": self.source_brain_model if self.source_brain_enabled else None},
+                "visual": {"enabled": bool(self.visual_brain_enabled), "model": self.visual_brain_model if self.visual_brain_enabled else None},
+            },
         }
 
 
@@ -252,11 +293,11 @@ class HybridMultiBrain:
 
     def start(self, snapshot: BrainSnapshot, activation: BrainActivation) -> "BrainRun":
         tasks: dict[str, asyncio.Task[BrainTerminal]] = {}
-        if activation.answer:
+        if activation.answer and self.settings.answer_brain_enabled:
             tasks["answer"] = asyncio.create_task(self._timed("answer", self._answer(snapshot), self.settings.answer_timeout_seconds))
-        if activation.source:
+        if activation.source and self.settings.source_brain_enabled:
             tasks["source"] = asyncio.create_task(self._timed("source", self._source(snapshot), self.settings.planner_timeout_seconds))
-        if activation.visual:
+        if activation.visual and self.settings.visual_brain_enabled:
             tasks["visual"] = asyncio.create_task(self._timed("visual", self._visual(snapshot), self.settings.planner_timeout_seconds))
         return BrainRun(snapshot, activation, tasks)
 
@@ -288,8 +329,14 @@ class HybridMultiBrain:
             self.settings.answer_timeout_seconds
             if role == "answer" else self.settings.planner_timeout_seconds
         )
+        role_model = (
+            self.settings.answer_brain_model if role == "answer"
+            else self.settings.source_brain_model if role == "source"
+            else self.settings.visual_brain_model if role == "visual"
+            else self.settings.model
+        ) or self.settings.model
         response = await self.client.chat.completions.create(
-            model=self.settings.model,
+            model=role_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "system", "content": json.dumps(snapshot.public_context(role=role), ensure_ascii=False, sort_keys=True, separators=(",", ":"))},

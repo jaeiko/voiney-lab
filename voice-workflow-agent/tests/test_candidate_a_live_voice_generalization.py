@@ -232,6 +232,124 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         unowned = self.session("7").plan("네", turn_id=2, language="ko")
         self.assertFalse(unowned.state_changed)
 
+    def test_agent_meta_intent_and_capabilities(self) -> None:
+        for utterance, lang in (
+            ("이 에이전트의 목적이 뭐야?", "ko"),
+            ("하는 기능이 뭐야?", "ko"),
+            ("이 에이전트의 주요 기능과 역할을 설명해줘", "ko"),
+            ("What can this agent do?", "en"),
+            ("What are your capabilities?", "en"),
+        ):
+            with self.subTest(utterance=utterance):
+                session = CuratedProtocolSession(self.fixture)
+                plan = session.plan(utterance, turn_id=1, language=lang)
+                self.assertEqual(plan.action, CuratedProtocolAction.AGENT_META)
+                self.assertEqual(plan.intent_kind, "agent_meta")
+                self.assertFalse(plan.state_changed)
+                self.assertIn("보이스 워크플로" if lang == "ko" else "voice workflow assistant", plan.primary_text or "")
+
+    def test_pre_start_preview_and_preview_step(self) -> None:
+        session = CuratedProtocolSession(self.fixture)
+        self.assertFalse(session.active)
+        self.assertEqual(session.workflow_status, "preview")
+
+        # In pre-start mode, asking for current step when inactive returns inactive guidance
+        curr = session.plan("현재 단계가 뭐야?", turn_id=1, language="ko")
+        self.assertEqual(curr.action, CuratedProtocolAction.INACTIVE)
+        self.assertFalse(session.active)
+        self.assertIn("프로토콜 세션이 중지되었습니다", curr.display_text or "")
+
+        # Explicit preview of step 1
+        prev = session.plan("1단계 미리 알려줘", turn_id=2, language="ko")
+        self.assertEqual(prev.action, CuratedProtocolAction.PREVIEW_STEP)
+        self.assertFalse(session.active)
+        self.assertIn("1단계 미리보기", prev.primary_text or "")
+
+        # Start protocol activates step 1
+        started = session.plan("프로토콜 시작해줘", turn_id=3, language="ko")
+        self.assertEqual(started.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+        self.assertEqual(session.workflow_status, "active")
+        self.assertEqual(session.current_index, 0)
+
+    def test_pause_and_resume_with_timer_continuity(self) -> None:
+        session = self.session("3")
+        self.assertEqual(session.workflow_status, "active")
+
+        # Start timer at Step 3
+        timer_start = session.plan("타이머 시작해", turn_id=2, language="ko")
+        self.assertEqual(timer_start.action, CuratedProtocolAction.START_TIMER)
+        self.assertIn("타이머를 시작했습니다", timer_start.primary_text or "")
+
+        # Check timer status
+        timer_stat = session.plan("타이머 얼마나 남았어?", turn_id=3, language="ko")
+        self.assertEqual(timer_stat.action, CuratedProtocolAction.TIMER_STATUS)
+        self.assertIn("타이머", timer_stat.primary_text or "")
+
+        # Pause workflow
+        paused = session.plan("잠깐 일시 중지할게", turn_id=4, language="ko")
+        self.assertEqual(paused.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(session.workflow_status, "paused")
+        self.assertIn("일시 중지", paused.primary_text or "")
+
+        # Resume workflow
+        resumed = session.plan("다시 시작할게", turn_id=5, language="ko")
+        self.assertEqual(resumed.action, CuratedProtocolAction.RESUME)
+        self.assertEqual(session.workflow_status, "active")
+        self.assertIn("재개", resumed.speech_text or resumed.display_text or "")
+
+    def test_parameter_rationale_unresolved_boundary(self) -> None:
+        session = self.session("3")
+        plan = session.plan("800 rpm 하고 37도로 기준선을 잡은 근거가 어디 있어?", turn_id=2, language="ko")
+        rationale_claims = tuple(
+            claim for claim in plan.claim_requests
+            if claim.target_type is ClaimTargetType.PARAMETER and claim.dimension == "rationale"
+        )
+        self.assertGreaterEqual(len(rationale_claims), 1)
+        for claim in rationale_claims:
+            self.assertEqual(claim.admission_status, ClaimAdmissionStatus.RESEARCH_REQUIRED)
+            self.assertEqual(claim.unresolved_reason, "rationale_absent_from_active_protocol")
+
+    def test_compositional_completion_and_next_step_order_invariance(self) -> None:
+        # Order 1: completion then next
+        s1 = self.session("1")
+        p1 = s1.plan("1단계 다 했어 다음 단계로 넘어가 줘", turn_id=2, language="ko")
+        self.assertTrue(p1.state_changed)
+        self.assertEqual(s1.current_index, 1)
+
+        # Order 2: next then completion
+        s2 = self.session("1")
+        p2 = s2.plan("다음 단계로 넘어가 줘 1단계 다 했어", turn_id=2, language="ko")
+        self.assertTrue(p2.state_changed)
+        self.assertEqual(s2.current_index, 1)
+
+    def test_solution_b_disposal_at_step_6_dynamic_binding(self) -> None:
+        session = self.session("6")
+        plan = session.plan("이 용액 폐기는 어떻게 해?", turn_id=2, language="ko")
+        self.assertTrue(any(
+            claim.target_id == "solution_b" for claim in plan.claim_requests
+        ))
+        self.assertIn("Solution B", plan.primary_text or "")
+
+    def test_underspecified_result_query_clarification(self) -> None:
+        session = self.session("1")
+        plan = session.plan("결과 알려줘", turn_id=2, language="ko")
+        self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_REFERENCE)
+        self.assertIn("어떤 결과", plan.primary_text or "")
+
+    def test_new_scientific_entities_normalization_and_claims(self) -> None:
+        for entity_query, entity_name in (
+            ("DTT가 뭐야?", "dtt"),
+            ("Iodoacetamide의 역할이 뭐야?", "iodoacetamide"),
+            ("Trypsin에 대해 설명해줘", "trypsin"),
+            ("Formic acid는 왜 넣어?", "formic_acid"),
+        ):
+            with self.subTest(query=entity_query):
+                session = self.session("10")
+                plan = session.plan(entity_query, turn_id=2, language="ko")
+                self.assertIn(entity_name, plan.requested_entities)
+                self.assertFalse(plan.state_changed)
+
 
 if __name__ == "__main__":
     unittest.main()
