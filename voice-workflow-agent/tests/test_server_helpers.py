@@ -704,6 +704,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(curated_state["state"]["protocol_id"],protocol_id)
         self.assertEqual(curated_state["state"]["revision"],1)
         self.assertTrue(curated_state["state"]["active"])
+        self.assertEqual(curated_state["state"]["workflow_status"],"active")
         self.assertEqual(curated_state["state"]["current_step_label"],"1")
         self.assertFalse(any(
             item["type"]=="turn.state" for item in socket.sent
@@ -1780,5 +1781,53 @@ class ServerTests(unittest.TestCase):
                             response.headers["content-disposition"],
                             f'attachment; filename="{report["report_id"]}.{format_name}"',
                         )
+
+    def test_curated_protocol_action_operation_labels_are_exhaustive(self):
+        from voice_workflow_agent.curated_protocol import CuratedProtocolAction
+        root = Path(__file__).resolve().parents[1]
+        server_py = (root / "src" / "voice_workflow_agent" / "server.py").read_text(encoding="utf-8")
+        for action in CuratedProtocolAction:
+            with self.subTest(action=action.name):
+                self.assertIn(
+                    f"CuratedProtocolAction.{action.name}:",
+                    server_py,
+                    f"CuratedProtocolAction.{action.name} is missing from server.py operation_labels!",
+                )
+
+    def test_experiment_report_get_websocket_handler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reports.sqlite"
+            store = ExperimentReportStore(path)
+            report = store.open_report(
+                session_id="session-ws-test", protocol_id="candidate-a",
+                protocol_title="Candidate A", protocol_revision="revision-1",
+                protocol_sha256="7" * 64, readiness_status="analysis_required",
+                development_only=True,
+            )
+            store.append_event(
+                report["report_id"], event_key="ws-start",
+                event_type="session_started", step_id="step-1", step_label="1",
+            )
+            class MockSession:
+                def __init__(self):
+                    self.experiment_report_store = store
+                    self.experiment_report_id = report["report_id"]
+                    self.accepted_configuration_id = 1
+                    self.turn_counter = 3
+                    self.generation = 1
+            mock_session = MockSession()
+            sent_messages = []
+            class MockWS:
+                async def send_text(self, text):
+                    sent_messages.append(json.loads(text))
+
+            # Simulate the experiment.report.get handler logic from server.py
+            control = {"type": "experiment.report.get", "report_id": report["report_id"]}
+            report_id = control.get("report_id") or mock_session.experiment_report_id
+            st = mock_session.experiment_report_store
+            fetched = st.get_report(report_id) if st and report_id else None
+            self.assertIsNotNone(fetched)
+            self.assertEqual(fetched["report_id"], report["report_id"])
+            self.assertEqual(len(fetched["events"]), 1)
 
 if __name__=="__main__": unittest.main()

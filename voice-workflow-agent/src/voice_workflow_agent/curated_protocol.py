@@ -14,7 +14,7 @@ import re
 import struct
 import time
 import zlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -830,16 +830,99 @@ def _utterance_key(value: str) -> str:
     return re.sub(r"해\s*줘$", "해줘", key)
 
 
-def _semantic_utterance_key(value: str) -> str:
-    """Normalize harmless speech variation without fuzzy intent inference."""
+def normalize_conversational_utterance(value: str) -> str:
+    """Normalize speech variation, disfluencies, stuttering, and conversational fillers
+    without altering any operational numbers, units, solutions, or step numbers."""
 
     key = _utterance_key(value)
     # Decimal points are operational tokens, not punctuation. Preserve them so
     # 1.5 mL cannot become the unrelated value 5 mL during routing.
     key = re.sub(r"(?<!\d)\.(?!\d)|[,!?。！？;:]", " ", key)
-    key = re.sub(r"^(?:어+|음+|저기)\s+", "", key)
-    key = re.sub(r"\b(현재|이제)\s+\1\b", r"\1", key)
+
+    # Safe conversational filler words at utterance start
+    while True:
+        stripped = re.sub(
+            r"^(?:okay|ok|오케이|응|네|예|어+|음+|저기|자|좋아|그래|well|um|uh|so|ah|oh)\s+",
+            "",
+            key,
+            flags=re.I,
+        )
+        if stripped == key:
+            break
+        key = stripped
+
+    # Repetition / stutter reduction for non-numeric words (up to 4 iterations)
+    for _ in range(4):
+        reduced = re.sub(
+            r"\b([가-힣a-zA-Z]{1,10})\s+\1\b",
+            r"\1",
+            key,
+            flags=re.I,
+        )
+        if reduced == key:
+            break
+        key = reduced
+
     return " ".join(key.split())
+
+
+def _semantic_utterance_key(value: str) -> str:
+    """Normalize harmless speech variation without fuzzy intent inference."""
+    return normalize_conversational_utterance(value)
+
+
+@dataclass(frozen=True)
+class TurnInterpretation:
+    """Structured semantic turn interpretation proposing meaning without workflow authority."""
+
+    language: str
+    raw_utterance: str
+    normalized_utterance: str
+    speech_acts: tuple[str, ...] = ()
+    explicit_entities: tuple[str, ...] = ()
+    referenced_entities: tuple[str, ...] = ()
+    requested_claims: tuple[str, ...] = ()
+    requested_result_scope: str | None = None
+    workflow_command: CuratedProtocolAction | None = None
+    parameters: tuple[str, ...] = ()
+    discourse_references: tuple[str, ...] = ()
+    confidence: float = 1.0
+    clarification_required: bool = False
+    interpretation_evidence: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WorkflowContextCapsule:
+    """Compact server-owned milestone injected into interpretation and Brain contexts."""
+
+    session_phase: str = "preview"
+    protocol_id: str | None = None
+    workflow_revision: int = 0
+    current_step_id: str | None = None
+    current_step_label: str | None = None
+    pending_interaction: str | None = None
+    pending_completion_gate: bool = False
+    pending_observation_gate: bool = False
+    active_timer_state: dict[str, Any] | None = None
+    recent_semantic_focus: str | None = None
+    recent_explicit_entities: tuple[str, ...] = ()
+    last_user_intent: str | None = None
+    last_committed_workflow_action: str | None = None
+    last_report_acknowledgment: str | None = None
+
+    def summary_capsule(self) -> str:
+        parts = [
+            f"phase={self.session_phase}",
+            f"step={self.current_step_label or 'none'}",
+            f"revision={self.workflow_revision}",
+        ]
+        if self.pending_interaction:
+            parts.append(f"pending={self.pending_interaction}")
+        if self.active_timer_state:
+            parts.append("timer=active")
+        if self.recent_semantic_focus:
+            parts.append(f"focus={self.recent_semantic_focus}")
+        return " · ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -1182,7 +1265,7 @@ _COMPLETION_AND_NEXT_PATTERNS = (
 )
 _COMPLETION_ONLY_PATTERNS = (
     re.compile(
-        r"^(?:(?:현재|지금)\s+)?(?:이\s*)?(?:단계|작업)(?:는|를|가)?\s*"
+        r"^(?:(?:현재|지금)\s+)?(?:이\s*)?(?:단계|작업)(?:는|를|가|로)?\s*"
         r"(?:완료(?:했어|했어요|했습니다)?|끝냈어|끝냈어요|끝났습니다|"
         r"끝났어요|마쳤어|마쳤어요|마쳤습니다)$"
     ),
@@ -1190,15 +1273,20 @@ _COMPLETION_ONLY_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:작업\s*)?(?:마쳤어|마쳤어요|마쳤습니다)$"),
     re.compile(r"^(?:i\s+)?completed\s+(?:the\s+)?current\s+step$"),
     re.compile(r"^(?:this|the\s+current)\s+step\s+is\s+(?:finished|complete)$"),
+    re.compile(r"^(?:completed|finished|done)\s*했어$"),
 )
 _COMPLETION_CLAIM = re.compile(
     r"(?:"
-    r"(?:(?:현재|지금|이)\s*)?(?:단계|작업)(?:는|를|가)?\s*"
+    r"(?:(?:현재|지금|이)\s*)?(?:단계|작업)(?:는|를|가|로)?\s*"
     r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까)?|"
-    r"끝(?:났어|났어요|났습니다|냈어|냈어요)?|"
-    r"다\s*했어|다\s*했어요|마쳤어|마쳤어요|마쳤습니다)"
-    r"|(?:i\s+)?(?:completed|finished)\s+(?:this|the\s+current)\s+step"
-    r"|(?:this|the\s+current)\s+step\s+is\s+(?:complete|finished)"
+    r"끝(?:났어|났어요|났습니다|냈어|냈어요|냈고)?|"
+    r"다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까|마쳤어|마쳤어요|마쳤습니다|"
+    r"completed\s*했어|finish\s*했어)"
+    r"|(?:completed|finished|done)\s*했어"
+    r"|(?:여기까지\s*)?(?:다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까)"
+    r"|(?:i\s+)?(?:completed|finished|done)\s+(?:this|the\s+current)\s+step"
+    r"|(?:this|the\s+current)\s+step\s+is\s+(?:complete|finished|done)"
+    r"|this\s+step\s+is\s+done"
     r")"
 )
 _NEXT_STEP_REQUEST = re.compile(
@@ -1209,7 +1297,10 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"^(?:(?:네|예|응|그래|맞아|맞아요)(?:\s+(?:(?:현재|이)?\s*"
     r"(?:단계|작업)(?:를|는)?\s*)?(?:완료(?:했어|했어요|했습니다)?|"
     r"끝냈어|끝냈어요|다\s*했어|다\s*했어요|했어|했어요))?|"
+    r"(?:(?:현재|이)?\s*(?:단계|작업)(?:를|는)?\s*)?(?:완료(?:했어|했어요|했습니다)|"
+    r"끝냈어|끝냈어요|다\s*했어|다\s*했어요)|"
     r"yes(?:\s*,?\s*(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?)?|"
+    r"(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?|"
     r"done|"
     r"(?:다음\s*단계로\s*)?(?:이동할게|이동해\s*줘|넘어갈게|넘어가자|진행해|옮겨)|"
     r"yes[, ]*move\s+on|let(?:'|’)s\s+continue|proceed|"
@@ -1344,9 +1435,15 @@ _AGENT_META_PATTERNS = (
     re.compile(r"(?:에이전트|시스템|너).*(?:기능|역할|목적|능력).*(?:뭐|무엇|알려|설명|소개)"),
     re.compile(r"(?:what\s+(?:is\s+(?:the\s+)?purpose\s+of\s+this\s+agent|can\s+(?:this\s+agent|you)\s+do|are\s+your\s+capabilities)|what\s+are\s+you(?:\s+for)?)\??$", re.I),
 )
+_START_COMMAND_PATTERNS = (
+    re.compile(r"^(?:프로토콜|실험|절차)?\s*(?:시작해(?:줘)?|시작하자|시작할게|시작하겠습니다|시작\s*부탁해|진행하자|1단계부터\s*하자)$"),
+    re.compile(r"^(?:이제\s*)?(?:프로토콜|실험|절차)?\s*(?:시작해(?:줘)?|시작하자|진행하자)$"),
+    re.compile(r"^(?:start(?:\s+it)?|yes,?\s*start|start\s+(?:the\s+)?(?:protocol|experiment)|let(?:'|’)s\s+start)$", re.I),
+)
 _UNDERSPECIFIED_RESULT_PATTERNS = (
-    re.compile(r"^(?:그\s*)?(?:결과(?:를)?\s*(?:알려줘|말해줘|알려\s*줘|보여줘)|결과가?\s*뭐야)\??$"),
-    re.compile(r"^(?:tell\s+me\s+the\s+result|what\s+is\s+the\s+result)\??$", re.I),
+    re.compile(r"^(?:그\s*)?(?:실험\s*)?결과(?:가|를|는)?\s*(?:알려줘|말해줘|알려\s*줘|보여줘|어떻게\s*돼|어때|뭐야)\??$"),
+    re.compile(r"^(?:지금\s*)?(?:나온\s*)?(?:실험\s*)?결과(?:가|를|는)?\s*(?:알려줘|보여줘|말해줘|어떻게\s*돼)\??$"),
+    re.compile(r"^(?:tell\s+me\s+the\s+result|what\s+is\s+the\s+result|what\s+was\s+the\s+result|show\s+me\s+the\s+result)\??$", re.I),
 )
 _PAUSE_PATTERNS = (
     re.compile(r"(?:잠깐|잠시)?\s*(?:실험|프로토콜|안내)?\s*(?:일시\s*중지|일시\s*정지|멈춰|잠깐\s*멈|잠시\s*멈|나갔다\s*올게|나가\s*있을게)"),
@@ -1988,6 +2085,17 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
+    if any(pattern.fullmatch(key) for pattern in _START_COMMAND_PATTERNS) or any(pattern.search(key) for pattern in _START_COMMAND_PATTERNS):
+        if not re.search(r"(?:타이머|시간\s*측정|timer|반응|미리)", key):
+            return CuratedControlIntent(
+                intent_kind="workflow_command",
+                action=CuratedProtocolAction.START,
+                requested_transition="start",
+                requested_followup="describe_new_current_step",
+                language=language,
+                allows_state_mutation=True,
+                normalized_transcript=key,
+            )
     exact = _WORKFLOW_COMMANDS.get(key)
     if exact is not None:
         if exact is CuratedProtocolAction.NEXT:
@@ -2433,6 +2541,18 @@ def classify_curated_control_intent(
 
 
 _WORKFLOW_COMMANDS = {
+    "시작": CuratedProtocolAction.START,
+    "시작해": CuratedProtocolAction.START,
+    "시작해줘": CuratedProtocolAction.START,
+    "시작하자": CuratedProtocolAction.START,
+    "시작할게": CuratedProtocolAction.START,
+    "시작하겠습니다": CuratedProtocolAction.START,
+    "응 시작하자": CuratedProtocolAction.START,
+    "그래 시작해": CuratedProtocolAction.START,
+    "1단계부터 하자": CuratedProtocolAction.START,
+    "진행하자": CuratedProtocolAction.START,
+    "start it": CuratedProtocolAction.START,
+    "yes start": CuratedProtocolAction.START,
     "프로토콜 시작": CuratedProtocolAction.START,
     "프로토콜을 시작해줘": CuratedProtocolAction.START,
     "프로토콜 시작해줘": CuratedProtocolAction.START,
@@ -3282,8 +3402,6 @@ class CuratedProtocolSession:
             "contamination": ("contamination", "keratin", "오염"),
         }
         for entity in intent.requested_entities:
-            if action_words and entity in {action.target_id for action in frame.actions}:
-                continue
             evidence = tuple(
                 fact.fact_id for fact in facts
                 if any(alias in _derived_source_text(fact.text).casefold()
@@ -3520,14 +3638,27 @@ class CuratedProtocolSession:
                 )
             if re.search(r"(?:왜|이유|rationale|why|근거)", key):
                 limitation = (
-                    f"활성 프로토콜은 {target_label} 제거 동작을 지시하지만 그 기전적 이유나 구체적 폐기물 처리 경로는 설명하지 않습니다."
+                    "활성 프로토콜은 해당 용액을 제거해 버리라고 지시하지만 그에 대한 과학적 이유는 설명하지 않습니다."
                     if language == "ko" else
-                    f"The active protocol instructs removing {target_label_en} but does not state its mechanistic rationale or facility waste disposal stream."
+                    "The active protocol instructs removing and discarding the solution but does not specify a separate scientific rationale."
                 )
                 add(
                     ClaimTargetType.ACTION, action.action_id, "rationale",
                     evidence_ids=(action.evidence_id,), local_answer=limitation,
                     unresolved_reason="rationale_absent_from_active_protocol",
+                    authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
+                    status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
+                )
+            if re.search(r"(?:어떻게|폐기|처리\s*방법|waste|stream|how|dispos|discard|방법|분류)", key):
+                limitation = (
+                    f"Candidate A는 {target_label}를 제거해 폐기하라고 지시하지만, 구체적인 폐기 방법이나 시설별 폐기물 분류는 이 PDF에 명시되어 있지 않습니다. 관련 안전자료와 외부 권위자료를 확인해보겠습니다."
+                    if language == "ko" else
+                    f"Candidate A instructs removing and discarding {target_label_en}, but specific laboratory disposal methods and facility waste streams are not detailed in this protocol PDF."
+                )
+                add(
+                    ClaimTargetType.ACTION, action.action_id, "disposal_method",
+                    evidence_ids=(action.evidence_id,), local_answer=limitation,
+                    unresolved_reason="disposal_method_absent_from_active_protocol",
                     authority="AUTHORITATIVE_EXTERNAL_REFERENCE",
                     status=ClaimAdmissionStatus.RESEARCH_REQUIRED,
                 )
@@ -3637,7 +3768,7 @@ class CuratedProtocolSession:
     def activate_configured(self) -> None:
         """Make one successfully configured structured protocol usable."""
 
-        opening = (self.active, self.current_index, self._block_reason, self._workflow_status)
+        opening = (self.active, self.current_index, self._block_reason)
         self.active = True
         self._workflow_status = "active"
         self.current_index = 0
@@ -3653,11 +3784,11 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
-        if opening != (self.active, self.current_index, self._block_reason, self._workflow_status):
+        if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
     def reset(self) -> None:
-        opening = (self.active, self.current_index, self._block_reason, self._workflow_status)
+        opening = (self.active, self.current_index, self._block_reason)
         self.active = False
         self._workflow_status = "preview"
         self.current_index = 0
@@ -3673,8 +3804,51 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
-        if opening != (self.active, self.current_index, self._block_reason, self._workflow_status):
+        if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
+
+    def configure_ready(self) -> None:
+        self.reset()
+
+    def context_capsule(self) -> WorkflowContextCapsule:
+        step = self.fixture.steps[self.current_index] if 0 <= self.current_index < len(self.fixture.steps) else None
+        timer_state = None
+        if self._timer_started_at is not None and self._timer_duration_seconds is not None:
+            timer_state = {
+                "step_index": self._timer_step_index,
+                "duration_seconds": self._timer_duration_seconds,
+                "started_at": self._timer_started_at,
+            }
+        pending = None
+        if not self.active:
+            pending = "greeting_pending"
+        elif self._pending_completion_confirmation:
+            pending = "completion_gate"
+        elif self._pending_observation_confirmation:
+            pending = "observation_gate"
+
+        last_intent = None
+        if self._replay:
+            last_intent = self._replay[max(self._replay.keys())].normalized_transcript
+
+        return WorkflowContextCapsule(
+            session_phase=self.workflow_status,
+            protocol_id=self.fixture.protocol_id,
+            workflow_revision=self._revision,
+            current_step_id=step.step_id if step else None,
+            current_step_label=step.source_label if step else None,
+            pending_interaction=pending,
+            pending_completion_gate=bool(self._pending_completion_confirmation),
+            pending_observation_gate=bool(self._pending_observation_confirmation),
+            active_timer_state=timer_state,
+            recent_semantic_focus=(
+                self._discourse_context.entity
+                or self._discourse_context.focus_kind.value
+            ),
+            recent_explicit_entities=tuple(self._recent_verified_entities),
+            last_user_intent=last_intent,
+            last_committed_workflow_action=None,
+        )
 
     def _checkpoint(
         self,
@@ -4866,11 +5040,18 @@ class CuratedProtocolSession:
             CuratedProtocolAction.AGENT_META,
             CuratedProtocolAction.PREVIEW_STEP,
         ):
-            response = {
-                "en": "The protocol session is stopped. Say start protocol to resume it.",
-                "vi": "Phiên quy trình đã dừng. Hãy yêu cầu bắt đầu quy trình để tiếp tục.",
-                "ko": "프로토콜 세션이 중지되었습니다. 다시 사용하려면 프로토콜을 시작해 주세요.",
-            }.get(language, "프로토콜 세션이 중지되었습니다. 프로토콜을 시작해 주세요.")
+            if self._workflow_status in {"preview", "ready"}:
+                response = {
+                    "en": "The experiment has not started yet. When started, it will begin from Step 1. Please say start protocol to begin.",
+                    "vi": "Thí nghiệm chưa bắt đầu. Khi bắt đầu sẽ tiến hành từ bước 1.",
+                    "ko": "아직 실험을 시작하지 않았습니다. 프로토콜을 시작해 주세요. 시작하면 1단계부터 진행합니다.",
+                }.get(language, "아직 실험을 시작하지 않았습니다. 프로토콜을 시작해 주세요.")
+            else:
+                response = {
+                    "en": "The protocol session is stopped. Say start protocol to resume it.",
+                    "vi": "Phiên quy trình đã dừng. Hãy yêu cầu bắt đầu quy trình để tiếp tục.",
+                    "ko": "프로토콜 세션이 중지되었습니다. 다시 사용하려면 프로토콜을 시작해 주세요.",
+                }.get(language, "프로토콜 세션이 중지되었습니다. 프로토콜을 시작해 주세요.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.INACTIVE,
                 display_text=response,

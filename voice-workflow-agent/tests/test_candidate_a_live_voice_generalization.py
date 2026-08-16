@@ -249,15 +249,25 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 self.assertIn("보이스 워크플로" if lang == "ko" else "voice workflow assistant", plan.primary_text or "")
 
     def test_pre_start_preview_and_preview_step(self) -> None:
-        session = CuratedProtocolSession(self.fixture)
-        self.assertFalse(session.active)
-        self.assertEqual(session.workflow_status, "preview")
+        for start_utterance in ("프로토콜 시작해줘", "시작해", "시작해줘", "응 시작하자", "start", "start it", "1단계부터 하자", "진행하자"):
+            with self.subTest(utterance=start_utterance):
+                session = CuratedProtocolSession(self.fixture)
+                session.configure_ready()
+                self.assertFalse(session.active)
+                self.assertEqual(session.workflow_status, "preview")
+                started = session.plan(start_utterance, turn_id=1, language="en" if "start" in start_utterance else "ko")
+                self.assertEqual(started.action, CuratedProtocolAction.START)
+                self.assertTrue(session.active)
+                self.assertEqual(session.workflow_status, "active")
+                self.assertEqual(session.current_index, 0)
 
+        session = CuratedProtocolSession(self.fixture)
+        session.configure_ready()
         # In pre-start mode, asking for current step when inactive returns inactive guidance
         curr = session.plan("현재 단계가 뭐야?", turn_id=1, language="ko")
         self.assertEqual(curr.action, CuratedProtocolAction.INACTIVE)
         self.assertFalse(session.active)
-        self.assertIn("프로토콜 세션이 중지되었습니다", curr.display_text or "")
+        self.assertIn("실험을 시작하지 않았습니다", curr.display_text or curr.speech_text or "")
 
         # Explicit preview of step 1
         prev = session.plan("1단계 미리 알려줘", turn_id=2, language="ko")
@@ -265,12 +275,58 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         self.assertFalse(session.active)
         self.assertIn("1단계 미리보기", prev.primary_text or "")
 
-        # Start protocol activates step 1
-        started = session.plan("프로토콜 시작해줘", turn_id=3, language="ko")
-        self.assertEqual(started.action, CuratedProtocolAction.START)
-        self.assertTrue(session.active)
-        self.assertEqual(session.workflow_status, "active")
-        self.assertEqual(session.current_index, 0)
+    def test_conversational_stutter_and_particles_completion(self) -> None:
+        for stutter_utterance in (
+            "Okay, 현재 현재 단계로 완료했어",
+            "어 음 지금 지금 단계를 완료했어",
+            "네 현재 단계는 완료했습니다",
+            "좋아 completed 했어",
+            "This step is done, let's move on",
+            "다 했으니까 다음으로 넘어가줘",
+        ):
+            with self.subTest(utterance=stutter_utterance):
+                session = self.session("1")
+                self.assertEqual(session.current_index, 0)
+                plan = session.plan(
+                    stutter_utterance, turn_id=2,
+                    language="en" if "done" in stutter_utterance else "ko",
+                )
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.current_index, 1)
+
+    def test_multilingual_underspecified_result_query_parity(self) -> None:
+        for utterance, lang in (
+            ("실험 결과 알려줘", "ko"),
+            ("결과가 어떻게 돼?", "ko"),
+            ("지금 나온 결과 보여줘", "ko"),
+            ("Tell me the result", "en"),
+            ("What was the result?", "en"),
+        ):
+            with self.subTest(utterance=utterance):
+                session = self.session("1")
+                plan = session.plan(utterance, turn_id=2, language=lang)
+                self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_REFERENCE)
+                self.assertEqual(plan.intent_kind, "underspecified_result_request")
+                self.assertFalse(plan.state_changed)
+                if lang == "ko":
+                    self.assertIn("어떤 결과를 말씀하시나요", plan.primary_text or "")
+                else:
+                    self.assertIn("Which result do you mean", plan.primary_text or "")
+
+    def test_solution_a_disposal_limitation_and_sources(self) -> None:
+        session = self.session("4")
+        plan = session.plan("솔루션 A가 무엇이며 어떻게 폐기하는 거야?", turn_id=2, language="ko")
+        self.assertIn("solution_a", plan.requested_entities)
+        disposal_claims = tuple(
+            claim for claim in plan.claim_requests
+            if claim.dimension == "disposal_method"
+        )
+        self.assertGreaterEqual(len(disposal_claims), 1)
+        for claim in disposal_claims:
+            self.assertEqual(claim.admission_status, ClaimAdmissionStatus.RESEARCH_REQUIRED)
+        self.assertIn("Solution A", plan.primary_text or "")
+        self.assertIn("명시되어 있지 않습니다", plan.primary_text or "")
+        self.assertFalse(plan.state_changed)
 
     def test_pause_and_resume_with_timer_continuity(self) -> None:
         session = self.session("3")

@@ -1921,9 +1921,16 @@ def _record_experiment_report_plan(
     elif plan.action is CuratedProtocolAction.STOP and plan.state_changed:
         event_type="session_stopped"
         payload["stop_reason"]="stopped_by_user"
+    elif plan.action is CuratedProtocolAction.START_TIMER:
+        event_type="timer_started"
+    elif plan.action is CuratedProtocolAction.PAUSE:
+        event_type="workflow_paused"
+    elif plan.action is CuratedProtocolAction.RESUME:
+        event_type="workflow_resumed"
     elif plan.action in {
         CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
         CuratedProtocolAction.FULL_DETAIL,CuratedProtocolAction.PROTOCOL_QUERY,
+        CuratedProtocolAction.PREVIEW_STEP,
     }:
         event_type="step_presented"
     elif plan.answer_origin in {
@@ -2929,6 +2936,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.UNSUPPORTED:"unsupported_question",
             CuratedProtocolAction.STOP:"protocol_stop",
             CuratedProtocolAction.INACTIVE:"inactive_session_guard",
+            CuratedProtocolAction.AGENT_META:"agent_meta_information",
+            CuratedProtocolAction.PAUSE:"workflow_paused",
+            CuratedProtocolAction.RESUME:"workflow_resumed",
+            CuratedProtocolAction.START_TIMER:"step_timer_started",
+            CuratedProtocolAction.TIMER_STATUS:"step_timer_status_read",
+            CuratedProtocolAction.PREVIEW_STEP:"step_preview_read",
         }
         operation=(
             "completion_and_next_transition"
@@ -4360,17 +4373,46 @@ async def voice_socket(websocket:WebSocket):
                     _send_session_greeting(
                         sender,session,
                         language=session.accepted_language or "ko")))
+            elif control["type"] in {"experiment.report.get", "experiment.report.status.get"}:
+                try:
+                    store = session.experiment_report_store
+                    if store is not None:
+                        if session.experiment_report_id is None and session.curated_protocol_session is not None:
+                            _open_experiment_report(session, session.curated_protocol_session)
+                        report_id = control.get("report_id") or session.experiment_report_id
+                        if report_id:
+                            report = store.get_report(report_id)
+                            if report is not None:
+                                await websocket.send_text(event(
+                                    "experiment.report.state",
+                                    configuration_id=session.accepted_configuration_id,
+                                    turn_id=session.active_turn_id or max(0, session.next_turn_id - 1),
+                                    generation=session.generation,
+                                    report=report,
+                                ))
+                except Exception as err:
+                    log.warning("experiment.report.get failed non-fatally: %s", err)
             elif control["type"]=="report.status.get":
-                result=await asyncio.to_thread(
-                    check_safety_report_status,control["report_id"])
-                await websocket.send_text(event(
-                    "report.status",
-                    report_id=control["report_id"],
-                    status=result.get("status","error"),
-                    report_status=result.get("report_status"),
-                    attempts=result.get("attempts",0),
-                    workflow=result.get("workflow"),
-                ))
+                try:
+                    result=await asyncio.to_thread(
+                        check_safety_report_status,control["report_id"])
+                    await websocket.send_text(event(
+                        "report.status",
+                        report_id=control["report_id"],
+                        status=result.get("status","error"),
+                        report_status=result.get("report_status"),
+                        attempts=result.get("attempts",0),
+                        workflow=result.get("workflow"),
+                    ))
+                except Exception as err:
+                    log.warning("report.status.get failed non-fatally: %s", err)
+                    await websocket.send_text(event(
+                        "report.status",
+                        report_id=control.get("report_id", "unknown"),
+                        status="error",
+                        report_status="lookup_failed",
+                        attempts=1,
+                    ))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
                 generation=session.turn_generations.get(
                     control["turn_id"],session.generation)

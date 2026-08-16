@@ -67,6 +67,14 @@ def parse_control(raw: str) -> dict[str, Any]:
         if REPORT_ID_PATTERN.fullmatch(normalized) is None:
             raise ProtocolError("report.status.get report_id is invalid")
         return {"type":"report.status.get","report_id":normalized}
+    if message["type"] in {"experiment.report.get", "experiment.report.status.get"}:
+        report_id = message.get("report_id")
+        configuration_id = message.get("configuration_id")
+        return {
+            "type": message["type"],
+            "report_id": report_id,
+            "configuration_id": configuration_id,
+        }
     if message["type"]=="playback.ended":
         turn_id=message.get("turn_id")
         if not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0: raise ProtocolError("playback.ended needs a positive integer turn_id")
