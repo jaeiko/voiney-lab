@@ -89,6 +89,7 @@ class CuratedProtocolAction(str, Enum):
     START_TIMER = "start_timer"
     TIMER_STATUS = "timer_status"
     PREVIEW_STEP = "preview_step"
+    REPORT_HANDOFF = "report_handoff"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -197,6 +198,18 @@ class ProtocolVisualAsset:
                 f"{encoded_revision}/assets/{encoded_asset}"
             ),
         }
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionFingerprint:
+    protocol_id: str
+    configuration_id: int | None
+    run_id: str | None
+    active: bool
+    workflow_status: str
+    current_step_id: str | None
+    current_index: int
+    experiment_started_at: float | None
 
 
 @dataclass(frozen=True)
@@ -1510,18 +1523,24 @@ _AGENT_META_PATTERNS = (
 )
 _START_COMMAND_PATTERNS = (
     re.compile(
-        r"^(?:이제\s*)?(?:"
+        r"^(?:그러면|그럼|자|이제|네|응|그래|음|자\s*그럼)?,?\s*(?:"
         r"(?:실험|프로토콜|절차)(?:을|를|은|는)?\s*(?:시작\s*해(?:\s*(?:줘|주세요|줄래|줄\s*수\s*있어))?|시작\s*하자|시작\s*할게(?:요)?|시작\s*하겠습니다|시작\s*부탁해|시작|진행\s*하자|진행\s*해(?:\s*(?:줘|주세요))?)"
         r"|"
-        r"(?:시작\s*해(?:\s*(?:줘|주세요|줄래|줄\s*수\s*있어))?|시작\s*하자|시작\s*할게(?:요)?|시작\s*하겠습니다|시작\s*부탁해|시작|1단계부터\s*(?:시작하자|시작\s*해(?:\s*줘)?|하자|진행하자)|1단계\s*(?:시작\s*해(?:\s*줘)?|시작\s*하자|시작))"
+        r"(?:시작\s*해(?:\s*(?:줘|주세요|줄래|줄\s*수\s*있어))?|시작\s*하자|시작\s*할게(?:요)?|시작\s*하겠습니다|시작\s*부탁해|시작|진행\s*하자|진행\s*해\s*(?:줘|주세요|줄래)|1단계부터\s*(?:시작하자|시작\s*해(?:\s*줘)?|하자|진행하자)|1단계\s*(?:시작\s*해(?:\s*줘)?|시작\s*하자|시작))"
         r")$",
         re.I,
     ),
     re.compile(
-        r"^(?:start(?:\s+it)?|yes,?\s*start|start\s+(?:the\s+)?(?:protocol|experiment)|"
+        r"^(?:(?:so|then|well|now|okay|ok|yes),?\s*)?(?:start(?:\s+it)?|yes,?\s*start|start\s+(?:the\s+)?(?:protocol|experiment)|"
         r"begin\s+(?:the\s+)?(?:protocol|experiment)|let(?:'|’)?s\s+start)$",
         re.I,
     ),
+)
+_HANDOFF_PATTERNS = (
+    re.compile(r"(?:교수님|교수|안전관리자|관리자|지도교수).*(?:보고서|이상사항|기록|이메일).*(?:보내|전송|인계|전달)"),
+    re.compile(r"(?:보고서|이상사항|기록).*(?:교수님|교수|안전관리자|관리자|지도교수).*(?:보내|전송|인계|전달)"),
+    re.compile(r"^(?:(?:교수님|안전관리자|관리자)에게\s*)?(?:보고서|기록)\s*(?:보내줘|전송해줘|인계해줘)$"),
+    re.compile(r"(?:send|email|forward|handoff)\s+(?:the\s+)?(?:report|anomaly|summary)\s+to\s+(?:the\s+)?(?:professor|advisor|safety\s+officer|manager)", re.I),
 )
 _UNDERSPECIFIED_RESULT_PATTERNS = (
     re.compile(r"^(?:그\s*)?(?:실험\s*)?결과(?:가|를|는)?\s*(?:알려줘|말해줘|알려\s*줘|보여줘|어떻게\s*돼|어때|뭐야)\??$"),
@@ -2248,6 +2267,13 @@ def classify_curated_control_intent(
             action=CuratedProtocolAction.RESUME,
             language=language,
             allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    if any(pattern.search(key) for pattern in _HANDOFF_PATTERNS):
+        return CuratedControlIntent(
+            intent_kind="report_handoff",
+            action=CuratedProtocolAction.REPORT_HANDOFF,
+            language=language,
             normalized_transcript=key,
         )
     if any(pattern.search(key) for pattern in _TIMER_START_PATTERNS):
@@ -3217,6 +3243,153 @@ _CANDIDATE_A_STEP_TIMERS: dict[int, int] = {
     24: 0,
 }
 
+CANONICAL_RESEARCH_ENTITIES: dict[str, dict[str, Any]] = {
+    "ambic": {
+        "requested_label": "AMBIC",
+        "canonical_name": "ammonium bicarbonate",
+        "aliases": ("NH4HCO3", "ammonium hydrogen carbonate", "중탄산암모늄", "탄산수소암모늄"),
+        "formula": "CH5NO3",
+        "cid": 14013,
+        "protocol_relation": "25 mM buffer component used for destain and digestion wash in Solutions A and B",
+        "query_variants": (
+            "ammonium bicarbonate chemical structure",
+            "ammonium bicarbonate laboratory reagent appearance photo",
+            "ammonium bicarbonate properties",
+        ),
+        "visual_intents": ("chemical_structure", "reagent_appearance", "product_reference"),
+    },
+    "dtt": {
+        "requested_label": "DTT",
+        "canonical_name": "dithiothreitol",
+        "aliases": ("Cleland's reagent", "디티티", "디티오트레이톨"),
+        "formula": "C4H10O2S2",
+        "cid": 439196,
+        "protocol_relation": "Reducing agent (10 mM) used to reduce protein disulfide bonds",
+        "query_variants": (
+            "dithiothreitol chemical structure",
+            "dithiothreitol reducing agent laboratory reagent",
+        ),
+        "visual_intents": ("chemical_structure", "reagent_appearance"),
+    },
+    "iodoacetamide": {
+        "requested_label": "Iodoacetamide",
+        "canonical_name": "iodoacetamide",
+        "aliases": ("IAA", "2-iodoacetamide", "아이오도아세트아마이드"),
+        "formula": "C2H4INO",
+        "cid": 3727,
+        "protocol_relation": "Alkylating agent (55 mM) used to alkylate free cysteine thiols and prevent disulfide reformation",
+        "query_variants": (
+            "iodoacetamide chemical structure",
+            "iodoacetamide alkylating agent laboratory reagent",
+        ),
+        "visual_intents": ("chemical_structure", "reagent_appearance"),
+    },
+    "acetonitrile": {
+        "requested_label": "Acetonitrile",
+        "canonical_name": "acetonitrile",
+        "aliases": ("ACN", "methyl cyanide", "아세토나이트릴"),
+        "formula": "C2H3N",
+        "cid": 6342,
+        "protocol_relation": "Organic solvent used in 2:1 ratio with 25 mM AMBIC for gel shrinkage and destaining (Solution A)",
+        "query_variants": (
+            "acetonitrile chemical structure",
+            "acetonitrile HPLC grade solvent reagent",
+        ),
+        "visual_intents": ("chemical_structure", "reagent_appearance"),
+    },
+    "trypsin": {
+        "requested_label": "Trypsin",
+        "canonical_name": "trypsin",
+        "aliases": ("trypsin protease", "트립신"),
+        "protocol_relation": "Serine protease enzyme that specifically cleaves peptide chains at lysine and arginine residues",
+        "query_variants": (
+            "trypsin enzyme structure mass spectrometry grade",
+            "trypsin in-gel digestion protease",
+        ),
+        "visual_intents": ("structure", "product_reference"),
+    },
+    "formic_acid": {
+        "requested_label": "Formic acid",
+        "canonical_name": "formic acid",
+        "aliases": ("methanoic acid", "HCOOH", "포름산", "폼산"),
+        "formula": "CH2O2",
+        "cid": 284,
+        "protocol_relation": "Extraction and LC-MS acidification agent used in peptide recovery",
+        "query_variants": (
+            "formic acid chemical structure",
+            "formic acid LC-MS grade reagent",
+        ),
+        "visual_intents": ("chemical_structure", "reagent_appearance"),
+    },
+    "gel_plug": {
+        "requested_label": "Gel plug",
+        "canonical_name": "SDS-PAGE gel plug",
+        "aliases": ("단백질 밴드", "stained protein band", "1 mm3 plug"),
+        "protocol_relation": "1 mm³ excised piece of Coomassie/silver stained polyacrylamide gel containing target protein",
+        "query_variants": (
+            "SDS-PAGE stained protein band excision gel plug",
+            "in-gel digestion gel piece excision",
+        ),
+        "visual_intents": ("laboratory_appearance", "procedure_visual"),
+    },
+    "stained_protein_band": {
+        "requested_label": "Stained protein band",
+        "canonical_name": "stained protein band",
+        "aliases": ("염색된 단백질 밴드", "protein band", "SDS-PAGE band"),
+        "protocol_relation": "Visualized protein band on polyacrylamide gel matrix",
+        "query_variants": (
+            "Coomassie stained protein gel band excision",
+            "destained gel plug appearance",
+        ),
+        "visual_intents": ("laboratory_appearance", "procedure_visual"),
+    },
+    "hplc_water": {
+        "requested_label": "HPLC water",
+        "canonical_name": "HPLC grade water",
+        "aliases": ("HPLC grade water", "초순수"),
+        "protocol_relation": "High purity chromatography water used to prepare 25 mM AMBIC solutions",
+        "query_variants": (
+            "HPLC grade water laboratory reagent",
+        ),
+        "visual_intents": ("product_reference",),
+    },
+    "solution_a": {
+        "requested_label": "Solution A",
+        "canonical_name": "Solution A (AMBIC / Acetonitrile)",
+        "aliases": ("용액 A", "Solution A"),
+        "protocol_relation": "Destain wash solution composed of 2 parts 25 mM AMBIC and 1 part acetonitrile",
+        "query_variants": (
+            "ammonium bicarbonate acetonitrile destaining solution SDS-PAGE",
+        ),
+        "visual_intents": ("procedure_visual",),
+    },
+    "solution_b": {
+        "requested_label": "Solution B",
+        "canonical_name": "Solution B (25 mM AMBIC)",
+        "aliases": ("용액 B", "Solution B"),
+        "protocol_relation": "Wash and trypsin reconstitution buffer consisting of 25 mM ammonium bicarbonate in HPLC water",
+        "query_variants": (
+            "ammonium bicarbonate buffer solution",
+        ),
+        "visual_intents": ("procedure_visual",),
+    },
+}
+
+
+def canonical_research_plan(entity_key: str) -> dict[str, Any]:
+    norm = entity_key.strip().casefold().replace(" ", "_")
+    if norm in CANONICAL_RESEARCH_ENTITIES:
+        return CANONICAL_RESEARCH_ENTITIES[norm]
+    label = entity_key.replace("_", " ").title()
+    return {
+        "requested_label": label,
+        "canonical_name": label,
+        "aliases": (),
+        "protocol_relation": f"Laboratory reagent or material: {label}",
+        "query_variants": (f"{label} laboratory scientific reference",),
+        "visual_intents": ("general_reference",),
+    }
+
 
 class CuratedProtocolSession:
     """Server-owned in-memory state for one validated structured fixture."""
@@ -3242,6 +3415,11 @@ class CuratedProtocolSession:
         self._experiment_started_at: float | None = None
         self._experiment_ended_at: float | None = None
         self._pending_anomaly: dict[str, Any] | None = None
+        self._pause_state: str = "active"
+        self._paused_at: float | None = None
+        self._total_paused_seconds: float = 0.0
+        self._pause_intervals: list[dict[str, Any]] = []
+        self._pending_handoff_confirmation: dict[str, Any] | None = None
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:
@@ -3341,6 +3519,66 @@ class CuratedProtocolSession:
             "elapsed_seconds": elapsed,
         }
 
+    def pause_timer_status(self, now: float | None = None) -> dict[str, Any]:
+        current_time = time.time() if now is None else now
+        current_pause = 0
+        if self._pause_state == "paused" and self._paused_at is not None:
+            current_pause = max(0, int(round(current_time - self._paused_at)))
+        total = int(round(self._total_paused_seconds + current_pause))
+        return {
+            "state": self._pause_state,
+            "paused_at": (
+                datetime.fromtimestamp(self._paused_at, tz=timezone.utc).isoformat()
+                if self._paused_at is not None
+                else None
+            ),
+            "total_paused_seconds": total,
+            "current_pause_seconds": current_pause,
+            "interval_count": len(self._pause_intervals) + (1 if self._pause_state == "paused" else 0),
+            "intervals": list(self._pause_intervals),
+        }
+
+    def pause_workflow(self, now: float | None = None) -> bool:
+        current_time = time.time() if now is None else now
+        if self._pause_state == "paused":
+            return False
+        self._pause_state = "paused"
+        self._paused_at = current_time
+        self._workflow_status = "paused"
+        return True
+
+    def resume_workflow(self, now: float | None = None) -> bool:
+        current_time = time.time() if now is None else now
+        if not self.active:
+            self.active = True
+            self.current_index = 0
+            self._start_experiment_clock_once(now=current_time)
+        if self._pause_state != "paused":
+            self._workflow_status = "active"
+            return False
+        duration = max(0.0, current_time - (self._paused_at or current_time))
+        self._total_paused_seconds += duration
+        step_label = (
+            self.fixture.steps[self.current_index].source_label
+            if 0 <= self.current_index < len(self.fixture.steps)
+            else None
+        )
+        self._pause_intervals.append({
+            "started_at": (
+                datetime.fromtimestamp(self._paused_at, tz=timezone.utc).isoformat()
+                if self._paused_at is not None
+                else None
+            ),
+            "resumed_at": datetime.fromtimestamp(current_time, tz=timezone.utc).isoformat(),
+            "duration_seconds": round(duration, 2),
+            "step_index": self.current_index,
+            "step_label": step_label,
+        })
+        self._pause_state = "active"
+        self._paused_at = None
+        self._workflow_status = "active"
+        return True
+
     def _clear_step_timer(self) -> None:
         self._timer_started_at = None
         self._timer_duration_seconds = None
@@ -3414,6 +3652,33 @@ class CuratedProtocolSession:
             if any(term in text for term in terms)
         ]
         return tuple(dict.fromkeys((*present, *self._recent_verified_entities)))
+
+    def execution_fingerprint(self, configuration_id: int | None = None) -> WorkflowExecutionFingerprint:
+        step = self.fixture.steps[self.current_index] if 0 <= self.current_index < len(self.fixture.steps) else None
+        return WorkflowExecutionFingerprint(
+            protocol_id=self.fixture.protocol_id,
+            configuration_id=configuration_id,
+            run_id=getattr(self, "_session_run_id", None),
+            active=self.active,
+            workflow_status=self.workflow_status,
+            current_step_id=step.step_id if step else None,
+            current_index=self.current_index,
+            experiment_started_at=self._experiment_started_at,
+        )
+
+    def canonical_research_plan(self, entity_key: str) -> dict[str, Any]:
+        norm = entity_key.strip().casefold().replace(" ", "_")
+        if norm in CANONICAL_RESEARCH_ENTITIES:
+            return CANONICAL_RESEARCH_ENTITIES[norm]
+        label = entity_key.replace("_", " ").title()
+        return {
+            "requested_label": label,
+            "canonical_name": label,
+            "aliases": (),
+            "protocol_relation": f"Laboratory reagent or material: {label}",
+            "query_variants": (f"{label} laboratory scientific reference",),
+            "visual_intents": ("general_reference",),
+        }
 
     def stt_keyterms(self) -> tuple[str, ...]:
         """Return protocol-wide technical and workflow terms within xAI's cap.
@@ -3978,7 +4243,6 @@ class CuratedProtocolSession:
 
     def activate_configured(self) -> None:
         """Make one successfully configured structured protocol usable."""
-
         opening = (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         )
@@ -4000,6 +4264,11 @@ class CuratedProtocolSession:
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
+        self._pause_state = "active"
+        self._paused_at = None
+        self._total_paused_seconds = 0.0
+        self._pause_intervals.clear()
+        self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -4025,6 +4294,11 @@ class CuratedProtocolSession:
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
+        self._pause_state = "active"
+        self._paused_at = None
+        self._total_paused_seconds = 0.0
+        self._pause_intervals.clear()
+        self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -4623,6 +4897,7 @@ class CuratedProtocolSession:
             "timers": {
                 "experiment": self.experiment_timer_status(),
                 "step": self.timer_status(),
+                "pause": self.pause_timer_status(),
             },
         }
 
@@ -5133,7 +5408,7 @@ class CuratedProtocolSession:
                 question_kind="agent_meta",
             )
         elif command is CuratedProtocolAction.PAUSE:
-            self._workflow_status = "paused"
+            self.pause_workflow()
             response = (
                 "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
                 if language == "ko" else
@@ -5152,10 +5427,7 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
             )
         elif command is CuratedProtocolAction.RESUME:
-            if not self.active:
-                self.active = True
-                self.current_index = 0
-            self._workflow_status = "active"
+            self.resume_workflow()
             step = steps[self.current_index]
             timer_info = self.timer_status()
             timer_suffix = ""
@@ -5192,6 +5464,30 @@ class CuratedProtocolSession:
                 evidence_ids=evidence_ids,
                 translation_status=translation_status,
                 intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.REPORT_HANDOFF:
+            recip_label = "지도교수님" if any(t in transcript for t in ("교수", "교수님", "advisor", "professor")) else "연구실 안전관리자"
+            recip_email = "advisor@university.edu" if "교수" in recip_label else "safety@university.edu"
+            response = (
+                f"등록된 {recip_label}({recip_email})로 현재 실험 보고서를 전송할까요? 전송을 진행하시려면 '응, 보내줘'라고 말씀해 주세요."
+                if language == "ko" else
+                f"Shall I send the current laboratory report to {recip_label} ({recip_email})? Please say 'yes, send it' to confirm."
+            )
+            self._pending_handoff_confirmation = {
+                "recipient_name": recip_label,
+                "recipient_email": recip_email,
+            }
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.REPORT_HANDOFF,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="report_handoff",
             )
         elif command is CuratedProtocolAction.START_TIMER:
             success, duration, _ = self.start_timer()
@@ -5319,6 +5615,8 @@ class CuratedProtocolSession:
                 CuratedProtocolAction.CURRENT,
                 CuratedProtocolAction.FULL_DETAIL,
                 CuratedProtocolAction.RELATED_QUESTION,
+                CuratedProtocolAction.VISUAL_REQUEST,
+                CuratedProtocolAction.REPORT_HANDOFF,
             )
             or (
                 command is CuratedProtocolAction.RELATED_QUESTION
@@ -6428,15 +6726,15 @@ class CuratedProtocolSession:
                 action=(
                     CuratedProtocolAction.CLARIFY_REFERENCE
                     if missing_followup_query
-                    else CuratedProtocolAction.RELATED_QUESTION
-                    if command is CuratedProtocolAction.RELATED_QUESTION
+                    else command
+                    if command in (CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.VISUAL_REQUEST)
                     else CuratedProtocolAction.UNSUPPORTED
                 ),
                 display_text=response,speech_text=response,
                 speech_mode=CuratedProtocolSpeechMode.BLOCKED,
                 facts=(
                     self.related_facts(transcript)
-                    if command is CuratedProtocolAction.RELATED_QUESTION
+                    if command in (CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.VISUAL_REQUEST)
                     else ()
                 ),step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
@@ -6454,7 +6752,7 @@ class CuratedProtocolSession:
                 coreference_reason=intent.coreference_reason,
             )
             if (
-                command is CuratedProtocolAction.RELATED_QUESTION
+                command in (CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.VISUAL_REQUEST)
                 and (plan.facts or plan.requested_entities)
                 and not missing_followup_query
             ):

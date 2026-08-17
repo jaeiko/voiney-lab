@@ -206,10 +206,10 @@
           <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
           <div class="spoken-summary"><b>짧은 음성 안내</b><span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span></div>
           <div class="step-actions" aria-label="현재 단계 음성 명령 도움말">
-            <button id="repeat-step" type="button" disabled aria-describedby="voice-command-hint">반복 요청 방법</button>
-            <button id="next-step" type="button" disabled aria-describedby="voice-command-hint">다음 단계 요청 방법</button>
+            <button id="repeat-step" type="button" disabled aria-describedby="voice-command-hint">음성 예시 · "다시 알려줘"</button>
+            <button id="next-step" type="button" disabled aria-describedby="voice-command-hint">음성 예시 · "다음 단계로 안내해줘"</button>
           </div>
-          <p id="voice-command-hint" class="voice-command-hint">버튼을 누르면 사용할 음성 명령을 안내합니다. 단계 변경은 서버가 음성을 확인한 뒤에만 수행합니다.</p>
+          <p id="voice-command-hint" class="voice-command-hint">말씀하시면 음성 안내를 반복하거나 다음 단계로 안전하게 전환합니다.</p>
           <div class="workflow-details">
             <div class="workflow-detail"><b>출처</b><span id="procedure-source">—</span></div>
             <div class="workflow-detail"><b>타이머</b><span id="procedure-timer">—</span></div>
@@ -231,7 +231,7 @@
             <div class="label" id="experiment-report-title">실험 기록 · 개발 세션</div>
             <strong id="last-report-id">아직 열린 실험 기록 없음</strong>
             <div id="last-report-state">세션이 시작되면 서버가 실험 기록 초안을 관리합니다.</div>
-            <details>
+            <details open>
               <summary>기록 보기 · 이상 사항 · 내보내기</summary>
               <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
               <div id="experiment-report-events" aria-label="이 세션의 실험 기록 이벤트"></div>
@@ -312,6 +312,7 @@ function updateWorkflowTimer(){
  const curated=curatedProtocolState?.timers||{};
  const experiment=curated.experiment||null;
  const step=curated.step||procedureState?.timer||null;
+ const pause=curated.pause||null;
  const parts=[];
  if(experiment){
   const started=experiment.started_at?Date.parse(experiment.started_at):NaN;
@@ -319,6 +320,11 @@ function updateWorkflowTimer(){
   if(experiment.state==="running")parts.push(`실험 진행 경과 시간 ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="stopped")parts.push(`전체 종료 · ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="not_started")parts.push("전체 대기");
+ }
+ if(pause&&pause.state==="paused"){
+  const pausedAt=pause.paused_at?Date.parse(pause.paused_at):NaN;
+  const curPause=Number.isFinite(pausedAt)?Math.max(0,Math.floor((Date.now()-pausedAt)/1000)):Number(pause.current_pause_seconds)||0;
+  parts.push(`일시정지 중 (${formatElapsedClock(curPause)})`);
  }
  if(step){
   if(step.state==="running"){
@@ -339,7 +345,8 @@ function startWorkflowTimer(){
  const curated=curatedProtocolState?.timers||{};
  const experiment=curated.experiment;
  const step=curated.step||procedureState?.timer;
- if(experiment?.state==="running"||step?.state==="running"){
+ const pause=curated.pause;
+ if(experiment?.state==="running"||step?.state==="running"||pause?.state==="paused"){
   workflowTimerHandle=setInterval(updateWorkflowTimer,1000);
   workflowTimerHandle?.unref?.();
  }

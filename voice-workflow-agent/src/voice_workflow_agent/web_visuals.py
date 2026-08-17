@@ -152,3 +152,128 @@ class XaiAuthoritativeImageSearch:
             "matches": list(unique.values())[:1],
             "backend": "xai_responses_web_image_search",
         }
+
+
+_KNOWN_PUBCHEM_COMPOUNDS: dict[str, dict[str, Any]] = {
+    "ambic": {
+        "cid": 14013,
+        "name": "Ammonium bicarbonate",
+        "formula": "CH5NO3",
+        "weight": "79.06",
+        "iupac_name": "azanium hydrogen carbonate",
+    },
+    "ammonium bicarbonate": {
+        "cid": 14013,
+        "name": "Ammonium bicarbonate",
+        "formula": "CH5NO3",
+        "weight": "79.06",
+        "iupac_name": "azanium hydrogen carbonate",
+    },
+    "dtt": {
+        "cid": 439196,
+        "name": "Dithiothreitol",
+        "formula": "C4H10O2S2",
+        "weight": "154.25",
+        "iupac_name": "(2R,3R)-1,4-bis(sulfanyl)butane-2,3-diol",
+    },
+    "dithiothreitol": {
+        "cid": 439196,
+        "name": "Dithiothreitol",
+        "formula": "C4H10O2S2",
+        "weight": "154.25",
+        "iupac_name": "(2R,3R)-1,4-bis(sulfanyl)butane-2,3-diol",
+    },
+    "iodoacetamide": {
+        "cid": 3727,
+        "name": "Iodoacetamide",
+        "formula": "C2H4INO",
+        "weight": "184.96",
+        "iupac_name": "2-iodoacetamide",
+    },
+    "acetonitrile": {
+        "cid": 6342,
+        "name": "Acetonitrile",
+        "formula": "C2H3N",
+        "weight": "41.05",
+        "iupac_name": "acetonitrile",
+    },
+    "formic acid": {
+        "cid": 284,
+        "name": "Formic acid",
+        "formula": "CH2O2",
+        "weight": "46.03",
+        "iupac_name": "formic acid",
+    },
+    "formic_acid": {
+        "cid": 284,
+        "name": "Formic acid",
+        "formula": "CH2O2",
+        "weight": "46.03",
+        "iupac_name": "formic acid",
+    },
+}
+
+
+class PubChemChemistryAdapter:
+    """Authoritative chemical structure and metadata provider using PubChem PUG REST API."""
+
+    def __init__(self, timeout_seconds: float = 3.0) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    async def lookup(self, name_or_alias: str) -> dict[str, Any] | None:
+        key = name_or_alias.strip().casefold()
+        known = _KNOWN_PUBCHEM_COMPOUNDS.get(key)
+        if known is not None:
+            cid = known["cid"]
+            return {
+                "kind": "chemical_structure_visual",
+                "visual_class": "external_structure_visual",
+                "entity": key,
+                "chemical_name": known["name"],
+                "cid": cid,
+                "formula": known["formula"],
+                "weight": known["weight"],
+                "iupac_name": known["iupac_name"],
+                "image_url": f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/CID/{cid}/PNG",
+                "source_page_url": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}",
+                "publisher_domain": "pubchem.ncbi.nlm.nih.gov",
+                "title": f"{known['name']} 2D Chemical Structure (PubChem CID {cid})",
+                "caption": f"Authoritative chemical structure for {known['name']} ({known['formula']}, MW {known['weight']})",
+                "display_mode": "structure_image",
+                "backend": "pubchem_pug_rest",
+            }
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{key}/property/MolecularFormula,MolecularWeight,IUPACName/JSON"
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    props = data.get("PropertyTable", {}).get("Properties", [{}])[0]
+                    cid = props.get("CID")
+                    if cid:
+                        formula = props.get("MolecularFormula", "")
+                        weight = str(props.get("MolecularWeight", ""))
+                        iupac = props.get("IUPACName", key)
+                        return {
+                            "kind": "chemical_structure_visual",
+                            "visual_class": "external_structure_visual",
+                            "entity": key,
+                            "chemical_name": key.title(),
+                            "cid": cid,
+                            "formula": formula,
+                            "weight": weight,
+                            "iupac_name": iupac,
+                            "image_url": f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/CID/{cid}/PNG",
+                            "source_page_url": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}",
+                            "publisher_domain": "pubchem.ncbi.nlm.nih.gov",
+                            "title": f"{key.title()} Chemical Structure (PubChem CID {cid})",
+                            "caption": f"Authoritative chemical structure for {key.title()} ({formula})",
+                            "display_mode": "structure_image",
+                            "backend": "pubchem_pug_rest",
+                        }
+        except Exception:
+            pass
+        return None
+

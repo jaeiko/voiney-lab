@@ -182,6 +182,46 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         self.assertIn("AMBIC", p3.primary_text or "")
         self.assertEqual(session.current_index, 1)
 
+    def test_acceptance_session_exact_turn_sequence(self) -> None:
+        """Reproduce the exact acceptance session sequence:
+        Turn 4: '그러면 실험 시작할게.' -> START
+        Turn 7: 'AMBIC가 어떻게 생겼는지 그 사진으로 좀 그 외부 검색을 통해 찾아서 알려줄 수 있어, 뭐 인터넷 검색을 통해서라든지.' -> VISUAL_REQUEST
+        Turn 9: '현재 단계를 완료했어.' -> NEXT
+        """
+        session = CuratedProtocolSession(self.fixture)
+        session.configure_ready()
+        self.assertFalse(session.active)
+        self.assertEqual(session.workflow_status, "preview")
+
+        # Turn 4: START with conversational lead-in "그러면 실험 시작할게."
+        t4 = session.plan("그러면 실험 시작할게.", turn_id=4, language="ko")
+        self.assertEqual(t4.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+        self.assertEqual(session.workflow_status, "active")
+        self.assertEqual(session.current_index, 0)
+
+        # Turn 7: AMBIC visual lookup query
+        t7 = session.plan(
+            "AMBIC가 어떻게 생겼는지 그 사진으로 좀 그 외부 검색을 통해 찾아서 알려줄 수 있어, 뭐 인터넷 검색을 통해서라든지.",
+            turn_id=7, language="ko",
+        )
+        self.assertEqual(t7.action, CuratedProtocolAction.VISUAL_REQUEST)
+        self.assertIn("ambic", t7.requested_entities)
+        self.assertIn("AMBIC", t7.speech_text or "")
+        # CRITICAL INVARIANT: active workflow state MUST NOT BE LOST
+        self.assertTrue(session.active)
+        self.assertEqual(session.workflow_status, "active")
+        self.assertEqual(session.current_index, 0)
+        self.assertNotIn("아직 실험을 시작하지 않았습니다", t7.speech_text or "")
+
+        # Turn 9: Step 1 completion
+        t9 = session.plan("현재 단계를 완료했어.", turn_id=9, language="ko")
+        self.assertEqual(t9.action, CuratedProtocolAction.NEXT)
+        self.assertTrue(session.active)
+        self.assertEqual(session.current_index, 1)  # Advanced to Step 2
+        self.assertNotIn("아직 실험을 시작하지 않았습니다", t9.speech_text or "")
+
 
 if __name__ == "__main__":
     unittest.main()
+

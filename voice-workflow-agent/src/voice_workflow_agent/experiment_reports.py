@@ -411,6 +411,9 @@ class ExperimentReportStore:
             ))
         return output.getvalue().encode("utf-8-sig")
 
+    def docx_bytes(self, report_id: str) -> bytes:
+        return self.export_docx(report_id)
+
     def export_docx(self, report_id: str) -> bytes:
         """Export a bounded undergraduate lab-report .docx from the event ledger.
 

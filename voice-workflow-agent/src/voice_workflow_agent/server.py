@@ -81,8 +81,17 @@ from voice_workflow_agent.generated_visuals import (
     XaiImageGenerator,
 )
 from voice_workflow_agent.web_visuals import (
+    PubChemChemistryAdapter,
     WebVisualSettings,
     XaiAuthoritativeImageSearch,
+)
+from voice_workflow_agent.notifications import (
+    HandoffContact,
+    NotificationProvider,
+    NotificationResult,
+    SMTPEmailProvider,
+    FakeNotificationProvider,
+    resolve_handoff_recipient,
 )
 from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
@@ -1826,6 +1835,30 @@ async def _queue_curated_web_visual(
         try:
             await sender.text(
                 "tool.call",**identity,tool="search_authoritative_web",round=2)
+            
+            # 1. Fast PubChem chemistry structure lookup for scientific reagents
+            pubchem_adapter = PubChemChemistryAdapter()
+            pubchem_match = None
+            for ent in requested_entities:
+                pubchem_match = await pubchem_adapter.lookup(ent)
+                if pubchem_match:
+                    break
+
+            if pubchem_match is not None:
+                if not session.owns_visual_result(
+                    turn_id,generation,configuration_id,fixture.protocol_id):
+                    return
+                elapsed=max(0,round((clock()-started)*1000))
+                await sender.text(
+                    "tool.result",**identity,tool="search_authoritative_web",
+                    round=2,status="success",elapsed_ms=elapsed,
+                    retrieval_backend="pubchem_pug_rest",match_count=1)
+                await sender.text(
+                    "protocol.visual.state",**identity,status="web_visual_ready",
+                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                    candidate=pubchem_match)
+                return
+
             client=AsyncOpenAI(
                 base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
                 max_retries=0)
@@ -3030,6 +3063,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.START_TIMER:"step_timer_started",
             CuratedProtocolAction.TIMER_STATUS:"step_timer_status_read",
             CuratedProtocolAction.PREVIEW_STEP:"step_preview_read",
+            CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
         }
         operation=(
             "completion_and_next_transition"
