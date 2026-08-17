@@ -68,12 +68,75 @@ _NON_LEXICAL_EVENT = re.compile(
 )
 
 
-def classify_input_event(transcription: Transcription) -> InputEventDecision:
+def _normalized_keyterm_tokens(value: str) -> tuple[str, ...]:
+    return tuple(
+        token for token in re.findall(r"[0-9A-Za-z가-힣µμ°%./-]+", value.casefold())
+        if token
+    )
+
+
+def _is_keyterm_echo(
+    transcription: Transcription,
+    *,
+    keyterms: tuple[str, ...] | None = None,
+    duration_seconds: float | None = None,
+) -> bool:
+    """Reject STT concatenations that are almost only injected keyterms."""
+
+    if not keyterms:
+        return False
+    text = " ".join(str(transcription.text or "").split())
+    tokens = _normalized_keyterm_tokens(text)
+    if len(tokens) < 4:
+        return False
+    if has_language_bearing_content(text):
+        return False
+    catalog: list[tuple[str, ...]] = []
+    for term in keyterms:
+        if not isinstance(term, str):
+            continue
+        parts = _normalized_keyterm_tokens(term)
+        if parts:
+            catalog.append(parts)
+    if not catalog:
+        return False
+    covered = 0
+    index = 0
+    while index < len(tokens):
+        matched = 0
+        for parts in catalog:
+            width = len(parts)
+            if width and tokens[index:index + width] == parts:
+                matched = max(matched, width)
+        if matched == 0:
+            index += 1
+            continue
+        covered += matched
+        index += matched
+    if covered / len(tokens) < 0.85:
+        return False
+    measured = (
+        duration_seconds
+        if duration_seconds is not None
+        else transcription.duration_seconds
+    )
+    if measured is not None and measured >= 2.5:
+        return False
+    return True
+
+
+def classify_input_event(
+    transcription: Transcription,
+    keyterms: tuple[str, ...] | None = None,
+    duration_seconds: float | None = None,
+) -> InputEventDecision:
     """Reject only whole-event non-speech labels and explicit provider no-speech.
 
     The raw transcript remains available to diagnostics.  Substrings in real
     utterances (for example, "I coughed") are deliberately not rejected, and
     valid short workflow commands are never classified by length alone.
+    Optional keyterm metadata rejects bias-echo concatenations without treating
+    a lone injected term such as AMBIC as noise.
     """
 
     issue = transcription_quality_issue(transcription)
@@ -81,6 +144,10 @@ def classify_input_event(transcription: Transcription) -> InputEventDecision:
         return InputEventDecision(False, issue)
     if _NON_LEXICAL_EVENT.fullmatch(transcription.text):
         return InputEventDecision(False, "non_lexical_event")
+    if _is_keyterm_echo(
+        transcription, keyterms=keyterms, duration_seconds=duration_seconds,
+    ):
+        return InputEventDecision(False, "keyterm_echo")
     return InputEventDecision(True)
 
 

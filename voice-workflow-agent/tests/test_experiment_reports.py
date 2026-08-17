@@ -109,6 +109,44 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["user_wording"], "현재 단계를 완료했어요.")
         self.assertNotIn("chain_of_thought", content.decode("utf-8-sig"))
 
+    def test_docx_export_uses_human_readable_labels_and_blank_student_fields(self):
+        report = self.open()
+        self.store.append_event(
+            report["report_id"], event_key="turn-3-completed",
+            event_type="step_completed", step_id="candidate-a-step-03",
+            step_label="3", user_wording="현재 단계를 완료했어요.",
+            payload={
+                "timer": {
+                    "source_duration_seconds": 900,
+                    "elapsed_seconds": 20,
+                    "remaining_seconds": 880,
+                },
+            },
+        )
+        content = self.store.export_docx(report["report_id"])
+        self.assertGreater(len(content), 100)
+        self.assertTrue(content.startswith(b"PK"))
+        from docx import Document
+        document = Document(io.BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        self.assertIn("Title:", text)
+        self.assertIn("Course:", text)
+        self.assertIn("Student number:", text)
+        self.assertIn("Name:", text)
+        self.assertIn("Advisor:", text)
+        self.assertIn("I. Purpose", text)
+        self.assertIn("II. Materials and Methods", text)
+        self.assertIn("III. Results", text)
+        self.assertIn("IV. Discussion", text)
+        self.assertIn("V. Conclusion", text)
+        self.assertIn("Step 3 완료", text)
+        self.assertIn("타이머 총 15:00", text)
+        self.assertIn("경과 00:20", text)
+        self.assertIn("잔여 14:40", text)
+        self.assertNotIn("Student number: 20", text)
+        self.assertNotIn("홍길동", text)
+        self.assertNotIn("chain_of_thought", text)
+
 
 if __name__ == "__main__":
     unittest.main()

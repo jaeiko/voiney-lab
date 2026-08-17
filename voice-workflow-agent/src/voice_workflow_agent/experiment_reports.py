@@ -411,6 +411,171 @@ class ExperimentReportStore:
             ))
         return output.getvalue().encode("utf-8-sig")
 
+    def export_docx(self, report_id: str) -> bytes:
+        """Export a bounded undergraduate lab-report .docx from the event ledger.
+
+        Student metadata fields stay blank. The SQLite event ledger remains the
+        authority; this document is a derived, human-readable projection.
+        """
+
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Cm, Pt
+
+        report = self.get_report(report_id)
+        document = Document()
+        section = document.sections[0]
+        section.page_width = Cm(21.0)
+        section.page_height = Cm(29.7)
+        section.left_margin = Cm(2.5)
+        section.right_margin = Cm(2.5)
+        section.top_margin = Cm(2.5)
+        section.bottom_margin = Cm(2.5)
+
+        title = document.add_paragraph()
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = title.add_run("Undergraduate Laboratory Report")
+        run.bold = True
+        run.font.size = Pt(16)
+
+        # Faithful header fields. Never invent student metadata.
+        for label in ("Title", "Course", "Student number", "Name", "Advisor"):
+            paragraph = document.add_paragraph()
+            paragraph.add_run(f"{label}: ").bold = True
+
+        events = list(report.get("events") or ())
+        event_cap = 80
+        truncated = len(events) > event_cap
+        visible_events = events[:event_cap]
+        timeline = [
+            _human_event_label(event) for event in visible_events
+        ]
+        if truncated:
+            timeline.append(
+                "Additional events omitted to keep the report within 20 pages."
+            )
+
+        started = _human_event_clock(report.get("started_at"))
+        ended = _human_event_clock(report.get("ended_at"))
+        sections = (
+            (
+                "I. Purpose",
+                (
+                    f"Protocol: {report.get('protocol_title') or '—'} "
+                    f"({report.get('protocol_id') or '—'})."
+                ),
+            ),
+            (
+                "II. Materials and Methods",
+                (
+                    f"Revision {report.get('protocol_revision') or '—'}. "
+                    f"Readiness: {report.get('readiness_status') or '—'}."
+                ),
+            ),
+            (
+                "III. Results",
+                "\n".join(timeline) if timeline else "No recorded events.",
+            ),
+            (
+                "IV. Discussion",
+                (
+                    f"Recorded anomalies: {int(report.get('anomaly_count') or 0)}. "
+                    f"Recorded blockers: {int(report.get('blocker_count') or 0)}."
+                ),
+            ),
+            (
+                "V. Conclusion",
+                (
+                    f"Status: {report.get('status') or '—'}. "
+                    f"Started: {started or '—'}. "
+                    f"Ended: {ended or '—'}."
+                ),
+            ),
+        )
+        for heading, body in sections:
+            heading_paragraph = document.add_paragraph()
+            heading_run = heading_paragraph.add_run(heading)
+            heading_run.bold = True
+            heading_run.font.size = Pt(12)
+            for line in str(body).split("\n"):
+                document.add_paragraph(line)
+
+        buffer = io.BytesIO()
+        document.save(buffer)
+        return buffer.getvalue()
+
+
+def _format_elapsed_clock(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        total = int(round(float(value)))
+    except (TypeError, ValueError):
+        return ""
+    if total < 0:
+        total = 0
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _human_event_clock(created_at: str | None) -> str:
+    if not created_at:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return parsed.strftime("%H:%M:%S")
+
+
+_HUMAN_EVENT_VERBS = {
+    "session_started": "시작",
+    "step_completed": "완료",
+    "step_advanced": "이동",
+    "step_presented": "안내",
+    "timer_started": "타이머 시작",
+    "workflow_paused": "일시정지",
+    "workflow_resumed": "재개",
+    "workflow_completed": "완료",
+    "session_stopped": "종료",
+    "anomaly": "이상 보고",
+    "blocked": "진행 차단",
+    "observation": "관찰",
+    "source_consulted": "참고 자료 확인",
+}
+
+
+def _human_event_label(event: dict[str, Any]) -> str:
+    event_type = str(event.get("event_type") or "")
+    verb = _HUMAN_EVENT_VERBS.get(event_type, event_type.replace("_", " "))
+    step_label = event.get("step_label")
+    head = f"Step {step_label} {verb}" if step_label else verb
+    parts = [head]
+    clock = _human_event_clock(event.get("created_at"))
+    if clock:
+        parts.append(clock)
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+    duration = timer.get("source_duration_seconds", timer.get("duration_seconds"))
+    elapsed = timer.get("elapsed_seconds")
+    remaining = timer.get("remaining_seconds")
+    timer_bits = []
+    if duration not in (None, ""):
+        timer_bits.append(f"총 {_format_elapsed_clock(duration)}")
+    if elapsed not in (None, ""):
+        timer_bits.append(f"경과 {_format_elapsed_clock(elapsed)}")
+    if remaining not in (None, ""):
+        timer_bits.append(f"잔여 {_format_elapsed_clock(remaining)}")
+    if timer_bits:
+        parts.append("타이머 " + " · ".join(timer_bits))
+    wording = event.get("user_wording")
+    if wording:
+        parts.append(str(wording))
+    return " / ".join(parts)
+
 
 def new_session_id() -> str:
     return "session-" + secrets.token_hex(16)

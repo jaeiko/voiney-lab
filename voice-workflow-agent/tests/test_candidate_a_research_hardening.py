@@ -507,6 +507,25 @@ class CandidateAResearchRoutingTests(unittest.TestCase):
             "다음", "ko", no_speech_probability=0.91
         )).accepted)
 
+    def test_keyterm_echo_is_rejected_only_when_bias_dominated(self):
+        keyterms = ("AMBIC", "HPLC water", "ammonium bicarbonate")
+        echo = Transcription("AMBIC HPLC water ammonium bicarbonate AMBIC", "ko")
+        decision = classify_input_event(
+            echo, keyterms=keyterms, duration_seconds=1.2,
+        )
+        self.assertFalse(decision.accepted)
+        self.assertEqual(decision.reason, "keyterm_echo")
+        self.assertFalse(classify_input_event(echo, keyterms=keyterms).accepted)
+        self.assertTrue(classify_input_event(
+            echo, keyterms=keyterms, duration_seconds=2.5,
+        ).accepted)
+        self.assertTrue(classify_input_event(
+            Transcription("AMBIC", "ko"), keyterms=keyterms,
+        ).accepted)
+        self.assertTrue(classify_input_event(
+            Transcription("AMBIC HPLC water ammonium bicarbonate AMBIC", "ko"),
+        ).accepted)
+
     def test_checked_in_real_failure_corpus_meets_route_and_mutation_targets(self):
         import json
         corpus = json.loads((

@@ -416,6 +416,7 @@ class CascadeTranscriptionContext:
     keyterms:tuple[str,...]
     audio_origin:str
     vad_threshold:float=0.5
+    filler_words:bool=False
 
     def __post_init__(self)->None:
         if self.audio_origin not in {"ordinary","barge_in"}:
@@ -424,18 +425,22 @@ class CascadeTranscriptionContext:
             raise ValueError("STT vad_threshold is invalid")
         if not 0.0 <= float(self.vad_threshold) <= 1.0:
             raise ValueError("STT vad_threshold is outside bounds")
+        if not isinstance(self.filler_words,bool):
+            raise ValueError("STT filler_words is invalid")
 
     def request_policy(self)->dict[str,object]:
         fields=["format"]
         if self.language is not None:
             fields.append("language")
         fields.append("vad_threshold")
+        fields.append("filler_words")
         fields.extend("keyterm" for _ in self.keyterms)
         fields.append("file")
         return {
             "language":self.language,
             "keyterms":list(self.keyterms),
             "vad_threshold":float(self.vad_threshold),
+            "filler_words":bool(self.filler_words),
             "request_field_order":fields,
             "pending_frame":self.pending_frame,
             "audio_origin":self.audio_origin,
@@ -444,7 +449,7 @@ class CascadeTranscriptionContext:
 
 def _stt_multipart(
     pcm:bytes,*,language:str|None,keyterms:tuple[str,...],
-    vad_threshold:float=0.5,
+    vad_threshold:float=0.5,filler_words:bool=False,
 )->tuple[list[tuple[str,tuple]],bytes,tuple[str,...]]:
     """Build the documented xAI multipart order with the file last."""
 
@@ -452,6 +457,8 @@ def _stt_multipart(
         raise ValueError("STT language is invalid")
     if not isinstance(vad_threshold,(int,float)) or isinstance(vad_threshold,bool):
         raise ValueError("STT vad_threshold is invalid")
+    if not isinstance(filler_words,bool):
+        raise ValueError("STT filler_words is invalid")
     threshold=float(vad_threshold)
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("STT vad_threshold is outside bounds")
@@ -464,6 +471,7 @@ def _stt_multipart(
     if language is not None:
         multipart.append(("language",(None,language)))
     multipart.append(("vad_threshold",(None,f"{threshold:g}")))
+    multipart.append(("filler_words",(None,"true" if filler_words else "false")))
     multipart.extend(("keyterm",(None,value)) for value in bounded)
     multipart.append(("file",("utterance.wav",wav,"audio/wav")))
     return multipart,wav,bounded
@@ -492,7 +500,7 @@ def persist_stt_diagnostic(
             "configured_prefix_ms","retained_prefix_frames",
             "retained_prefix_ms","wav_sha256","wav_byte_count",
             "stt_endpoint","request_field_order","language","keyterms",
-            "vad_threshold",
+            "vad_threshold","filler_words",
             "response_status","response_duration_seconds","word_count",
             "detected_language","raw_transcript","normalized_transcript",
             "correction_class","clarification_required","intent_kind",
@@ -522,11 +530,13 @@ def transcribe(
     language:str|None=None,
     keyterms:tuple[str,...]=(),
     vad_threshold:float=0.5,
+    filler_words:bool=False,
 )->Transcription:
     """Call documented batch STT fields while retaining optional extensions."""
 
     multipart,_,_= _stt_multipart(
-        pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold)
+        pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
+        filler_words=filler_words)
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
         files=multipart,timeout=120)
     response.raise_for_status()
@@ -979,6 +989,9 @@ def export_experiment_report(report_id:str,format_name:str):
         elif format_name=="csv":
             content=store.export_csv(report_id)
             media_type="text/csv; charset=utf-8"
+        elif format_name=="docx":
+            content=store.export_docx(report_id)
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
     except HTTPException:
@@ -1608,6 +1621,8 @@ def cascade_transcription_context(
         pending_frame=pending_frame,
         keyterms=keyterms,
         audio_origin=audio_origin,
+        filler_words=bool(getattr(
+            getattr(session,"stt_settings",None),"filler_words",False)),
         vad_threshold=getattr(
             getattr(session,"stt_settings",None),"vad_threshold",0.5),
     )
@@ -1620,8 +1635,11 @@ def transcribe_cascade_audio(
     """Apply one request contract without rewriting the provider transcript."""
 
     return transcribe(
-        clean_path(pcm),language=context.language,keyterms=context.keyterms,
-        vad_threshold=getattr(context,"vad_threshold",0.5),
+        clean_path(pcm),
+        language=context.language,
+        keyterms=context.keyterms,
+        vad_threshold=getattr(context, "vad_threshold", 0.5),
+        filler_words=bool(getattr(context, "filler_words", False)),
     )
 
 class LockedSender:
@@ -2285,7 +2303,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
-    input_decision=classify_input_event(transcription)
+    input_decision=classify_input_event(
+        transcription,
+        keyterms=stt_keyterms,
+        duration_seconds=transcription.duration_seconds,
+    )
     if not input_decision.accepted:
         if session.reject_empty_transcript(turn_id):
             await sender.text(
@@ -3039,7 +3061,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             requested_entities=list(plan.requested_entities),
             question_dimensions=list(plan.question_dimensions),
             source_plan_scopes=list(plan.source_plan_scopes),
-            unresolved_dimensions=list(plan.unresolved_dimensions))
+            unresolved_dimensions=list(plan.unresolved_dimensions),
+            display_document=getattr(plan, "display_document", None))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         await sender.segment(turn_id,0,frames,generation)
@@ -3978,37 +4001,27 @@ async def voice_socket(websocket:WebSocket):
                             transcription=Transcription(transcription,None)
                     except Exception:
                         log.warning(
-                            "barge_in.committed reason=transcription_failed "
+                            "barge_in.rejected reason=transcription_failed "
                             "voiced_frames=%d total_frames=%d",
                             item.result.voiced_frames,item.result.total_frames)
-                        stt_ms=max(
-                            0,round((session.clock()-validation_started)*1000))
-                        committed=session.commit_interrupt_candidate(
-                            item,stt_ms=stt_ms,reason="transcription_failed")
-                        if committed:
-                            end=next(event_item for event_item in committed
-                                     if event_item.kind=="speech.end")
-                            accepted_interrupts[(end.turn_id,end.generation)]={
-                                "transcription":None,"stt_ms":stt_ms,
-                                "context":stt_context,"failed":True,
-                            }
-                            listener_events.extend(committed)
+                        rejected=session.reject_interrupt_candidate(
+                            item,"transcription_failed")
+                        if rejected is not None:
+                            listener_events.append(rejected)
                         continue
                     stt_ms=max(
                         0,round((session.clock()-validation_started)*1000))
                     if not transcription.text.strip():
-                        committed=session.commit_interrupt_candidate(
-                            item,stt_ms=stt_ms,reason="transcription_failed")
-                        if committed:
-                            end=next(event_item for event_item in committed
-                                     if event_item.kind=="speech.end")
-                            accepted_interrupts[(end.turn_id,end.generation)]={
-                                "transcription":None,"stt_ms":stt_ms,
-                                "context":stt_context,"failed":True,
-                            }
-                            listener_events.extend(committed)
+                        rejected=session.reject_interrupt_candidate(
+                            item,"transcription_failed")
+                        if rejected is not None:
+                            listener_events.append(rejected)
                         continue
-                    input_decision=classify_input_event(transcription)
+                    input_decision=classify_input_event(
+                        transcription,
+                        keyterms=stt_context.keyterms,
+                        duration_seconds=transcription.duration_seconds,
+                    )
                     if not input_decision.accepted:
                         rejected=session.reject_interrupt_candidate(
                             item,input_decision.reason or "non_speech")

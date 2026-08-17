@@ -416,6 +416,7 @@ class CuratedProtocolTurnPlan:
     plausibility_status: str | None = None
     plausibility_reason: str | None = None
     timer_payload: dict[str, Any] | None = None
+    display_document: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -2800,6 +2801,24 @@ def _step_presentation(
     )
 
 
+def _display_document(
+    *,
+    title: str,
+    primary: str | None,
+    source: str | None = None,
+    extra_sections: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
+    sections: list[dict[str, str]] = []
+    if isinstance(primary, str) and primary.strip():
+        sections.append({"heading": "안내", "text": primary.strip()})
+    if isinstance(source, str) and source.strip():
+        sections.append({"heading": "원문", "text": source.strip()})
+    for heading, text in extra_sections:
+        if isinstance(text, str) and text.strip():
+            sections.append({"heading": heading, "text": text.strip()})
+    return {"title": title, "sections": sections}
+
+
 _FACT_POINT_LABELS = {
     "step": "확인된 동작",
     "note": "원문 참고",
@@ -3942,9 +3961,11 @@ class CuratedProtocolSession:
     def activate_configured(self) -> None:
         """Make one successfully configured structured protocol usable."""
 
-        opening = (self.active, self.current_index, self._block_reason)
-        self.active = True
-        self._workflow_status = "active"
+        opening = (
+            self.active, self.current_index, self._block_reason, self._workflow_status,
+        )
+        self.active = False
+        self._workflow_status = "ready"
         self.current_index = 0
         self._block_reason = None
         self._replay.clear()
@@ -3961,7 +3982,9 @@ class CuratedProtocolSession:
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
-        if opening != (self.active, self.current_index, self._block_reason):
+        if opening != (
+            self.active, self.current_index, self._block_reason, self._workflow_status,
+        ):
             self._revision += 1
 
     def reset(self) -> None:
@@ -4485,10 +4508,16 @@ class CuratedProtocolSession:
 
     def state(self, *, spoken_summary: str | None = None) -> dict[str, object]:
         steps = self.fixture.steps
-        current_step = steps[self.current_index] if self.active else None
+        preview = (
+            not self.active
+            and self.workflow_status in {"preview", "ready"}
+            and 0 <= self.current_index < len(steps)
+        )
+        show_step = self.active or preview
+        current_step = steps[self.current_index] if show_step else None
         current_visual = (
             self.fixture.visual_for_step(self.current_index)
-            if self.active
+            if show_step
             else None
         )
         current_primary = (
@@ -4516,10 +4545,10 @@ class CuratedProtocolSession:
             "readiness_status": self.fixture.draft.readiness.status.value,
             "active": self.active,
             "current_step_label": (
-                steps[self.current_index].source_label if self.active else None
+                steps[self.current_index].source_label if show_step else None
             ),
             "current_step_id": (
-                steps[self.current_index].step_id if self.active else None
+                steps[self.current_index].step_id if show_step else None
             ),
             "total_steps": len(steps),
             "at_final_step": self.active and self.current_index == len(steps) - 1,
@@ -4886,7 +4915,9 @@ class CuratedProtocolSession:
             )
         command = intent.action
         steps = self.fixture.steps
-        opening_projection = (self.active, self.current_index, self._block_reason)
+        opening_projection = (
+            self.active, self.current_index, self._block_reason, self._workflow_status,
+        )
         changed = False
 
         if command is CuratedProtocolAction.STOP:
@@ -4935,6 +4966,12 @@ class CuratedProtocolSession:
                 resumed=resumed,
                 development_only=self.fixture.development_only,
             )
+            if language == "ko" and not resumed:
+                control_text = (
+                    "실험을 시작합니다. 현재 1단계입니다. "
+                    "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                    "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요."
+                )
             response, primary, sources, pages, evidence_ids, translation_status = (
                 _step_presentation(
                     self.fixture,
@@ -4958,6 +4995,11 @@ class CuratedProtocolSession:
                 evidence_ids=evidence_ids,
                 translation_status=translation_status,
                 intent_kind=intent.intent_kind,
+                display_document=_display_document(
+                    title=f"{step.source_label}단계",
+                    primary=primary,
+                    source=sources[0] if sources else None,
+                ),
             )
         elif command is CuratedProtocolAction.AUDIO_RECOVERY:
             response = {
@@ -5137,9 +5179,9 @@ class CuratedProtocolSession:
                 time_str = f"{minutes}분" if seconds == 0 else f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
                 time_str_en = f"{minutes} min" if seconds == 0 else f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
                 response = (
-                    f"현재 {step.source_label}단계의 {time_str} 타이머를 시작했습니다. 시간이 끝나면 알려드릴게요."
+                    f"{time_str} 타이머를 시작했습니다. 화면에서 남은 시간을 확인할 수 있습니다."
                     if language == "ko" else
-                    f"Started {time_str_en} timer for step {step.source_label}. I will notify you when it completes."
+                    f"Started a {time_str_en} timer. You can watch the remaining time on screen."
                 )
             else:
                 response = (
@@ -5155,9 +5197,14 @@ class CuratedProtocolSession:
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
-                state_changed=False,
+                state_changed=True,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
+                timer_payload=self.timer_status(),
+                display_document=_display_document(
+                    title=f"{step.source_label}단계 타이머",
+                    primary=response,
+                ),
             )
         elif command is CuratedProtocolAction.TIMER_STATUS:
             timer_info = self.timer_status()
@@ -5241,12 +5288,22 @@ class CuratedProtocolSession:
                 target_step=target_step.source_label,
             )
 
-        elif not self.active and command not in (
-            CuratedProtocolAction.PROTOCOL_QUERY,
-            CuratedProtocolAction.AGENT_META,
-            CuratedProtocolAction.PREVIEW_STEP,
-            CuratedProtocolAction.CURRENT,
-            CuratedProtocolAction.FULL_DETAIL,
+        elif not self.active and (
+            command not in (
+                CuratedProtocolAction.PROTOCOL_QUERY,
+                CuratedProtocolAction.AGENT_META,
+                CuratedProtocolAction.PREVIEW_STEP,
+                CuratedProtocolAction.CURRENT,
+                CuratedProtocolAction.FULL_DETAIL,
+                CuratedProtocolAction.RELATED_QUESTION,
+            )
+            or (
+                command is CuratedProtocolAction.RELATED_QUESTION
+                and _utterance_key(transcript) in {
+                    "현재 온도는",
+                    "이 작업의 온도는",
+                }
+            )
         ):
             if self._workflow_status in {"preview", "ready"}:
                 response = {
@@ -5716,6 +5773,11 @@ class CuratedProtocolSession:
                     observation_predicate=intent.observation_predicate,
                     observation_outcome=intent.observation_outcome,
                     timer_payload=early_exit,
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
             else:
                 early_exit = self._record_early_step_timer_exit()
@@ -5775,10 +5837,19 @@ class CuratedProtocolSession:
                 preview_index = 0
                 preview_step = steps[preview_index]
                 if language == "ko":
-                    control_text = (
-                        "아직 실험 시작 전입니다. 1단계 내용을 화면에 표시했어요. "
-                        "지금 실험을 시작할까요?"
-                    )
+                    localized = self._localized_fact(preview_step.step_id, "current_step")
+                    if localized:
+                        fact = localized.split(":", 1)[-1].strip().rstrip(".")
+                        control_text = (
+                            f"아직 실험 시작 전입니다. 1단계는 {fact} 하는 단계입니다. "
+                            "지금 실험을 시작할까요?"
+                        )
+                    else:
+                        control_text = (
+                            "아직 실험 시작 전입니다. 1단계는 염색된 단백질 밴드에서 "
+                            "작은 조각을 나누고 지정된 AMBIC 용액이 담긴 튜브에 넣는 단계입니다. "
+                            "지금 실험을 시작할까요?"
+                        )
                 else:
                     control_text = (
                         "The experiment has not started yet. I displayed Step 1 on the screen. "
@@ -5808,6 +5879,11 @@ class CuratedProtocolSession:
                     translation_status=translation_status,
                     intent_kind=intent.intent_kind,
                     target_step=preview_step.source_label,
+                    display_document=_display_document(
+                        title=f"{preview_step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
             else:
                 step = steps[self.current_index]
@@ -5841,6 +5917,11 @@ class CuratedProtocolSession:
                     evidence_ids=evidence_ids,
                     translation_status=translation_status,
                     intent_kind=intent.intent_kind,
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
         elif command is CuratedProtocolAction.FULL_DETAIL:
             target_index = self._step_index_for_label(intent.target_step)
@@ -5929,6 +6010,11 @@ class CuratedProtocolSession:
                     if step.source_label == "3"
                     and any(fact.kind == "note" for fact in admitted_facts)
                     else ("ACTIVE_PROTOCOL",)
+                ),
+                display_document=_display_document(
+                    title=f"{step.source_label}단계",
+                    primary=primary,
+                    source=sources[0] if sources else None,
                 ),
             )
         elif command is CuratedProtocolAction.VISUAL_REQUEST:
@@ -6384,6 +6470,7 @@ class CuratedProtocolSession:
             self.active,
             self.current_index,
             self._block_reason,
+            self._workflow_status,
         ):
             self._revision += 1
         if (

@@ -267,7 +267,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         curr = session.plan("현재 단계가 뭐야?", turn_id=1, language="ko")
         self.assertEqual(curr.action, CuratedProtocolAction.CURRENT)
         self.assertFalse(session.active)
-        self.assertIsNone(session.state()["current_step_label"])
+        self.assertEqual(session.state()["current_step_label"], "1")
         self.assertIn(
             "아직 실험 시작 전입니다",
             curr.speech_text or curr.display_text or "",

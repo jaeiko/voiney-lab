@@ -124,8 +124,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
 
             curated_state = next(item for item in socket.sent if item["type"] == "protocol.fixture.state")
             self.assertEqual(curated_state["action"], "attached")
-            self.assertTrue(curated_state["state"]["active"])
-            self.assertEqual(curated_state["state"]["workflow_status"], "active")
+            self.assertFalse(curated_state["state"]["active"])
+            self.assertEqual(curated_state["state"]["workflow_status"], "ready")
             self.assertEqual(curated_state["state"]["current_step_label"], "1")
 
             # Verify greeting was sent

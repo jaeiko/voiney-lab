@@ -703,8 +703,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(curated_state["action"],"attached")
         self.assertEqual(curated_state["state"]["protocol_id"],protocol_id)
         self.assertEqual(curated_state["state"]["revision"],1)
-        self.assertTrue(curated_state["state"]["active"])
-        self.assertEqual(curated_state["state"]["workflow_status"],"active")
+        self.assertFalse(curated_state["state"]["active"])
+        self.assertEqual(curated_state["state"]["workflow_status"],"ready")
         self.assertEqual(curated_state["state"]["current_step_label"],"1")
         self.assertFalse(any(
             item["type"]=="turn.state" for item in socket.sent
@@ -937,6 +937,7 @@ class ServerTests(unittest.TestCase):
             [(name,value[1] if value[0] is None else value[0])
              for name,value in parts[:-1]],
             [("format","true"),("language","ko"),("vad_threshold","0.5"),
+             ("filler_words","false"),
              ("keyterm","AMBIC"),("keyterm","HPLC water")],
         )
         self.assertEqual(parts[-1][0],"file")
@@ -1612,14 +1613,16 @@ class ServerTests(unittest.TestCase):
         transcription.assert_called_once()
         kinds=[item["type"] for item in socket.text]
         self.assertEqual(kinds.count("barge_in_candidate"),1)
-        self.assertEqual(kinds.count("barge_in_committed"),1)
-        self.assertNotIn("barge_in_rejected",kinds)
-        self.assertEqual(kinds.count("cascade.playback.clear"),1)
-        committed=next(
+        self.assertEqual(kinds.count("barge_in_rejected"),1)
+        self.assertNotIn("barge_in_committed",kinds)
+        rejected=next(
             item for item in socket.text
-            if item["type"]=="barge_in_committed")
-        self.assertEqual(committed["reason"],"transcription_failed")
-        self.assertGreater(committed["superseding_generation"],opening_generation)
+            if item["type"]=="barge_in_rejected")
+        self.assertEqual(rejected["reason"],"transcription_failed")
+        self.assertEqual(rejected["generation"],opening_generation)
+        # voice_socket finally calls session.stop(), which increments generation
+        # after the reject. Reject itself must not bump generation.
+        self.assertEqual(session.generation,opening_generation + 1)
 
     def test_ordinary_and_barge_in_share_one_session_aware_stt_policy(self):
         pending=SimpleNamespace(predicate_id="candidate_a_step_7_endpoint")

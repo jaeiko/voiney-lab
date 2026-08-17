@@ -503,6 +503,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 session = CuratedProtocolSession(self.fixture)
                 session.activate_configured()
+                session.active = True
                 intent = classify_curated_control_intent(
                     phrase,
                     language="en" if phrase.startswith(("I ", "This ")) else "ko",
@@ -598,6 +599,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
     def test_ambiguous_completion_and_off_topic_are_non_mutating(self):
         session = CuratedProtocolSession(self.fixture)
         session.activate_configured()
+        session.active = True
         session.current_index = 1
         opening = session._checkpoint()
 
@@ -807,14 +809,16 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     self.assertNotIn("검증된 개발용 픽스처", plan.display_text)
                     self.assertEqual(
                         plan.speech_text,
-                        "1단계 안내를 화면에 표시했습니다.",
+                        "실험을 시작합니다. 현재 1단계입니다. "
+                        "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                        "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
                     )
                     self.assertEqual(session.current_index, 0)
                     started = session.state()
-                    self.assertEqual(
-                        {key: value for key, value in started.items() if key not in {"timer", "timers"}},
-                        {key: value for key, value in opening.items() if key not in {"timer", "timers"}},
-                    )
+                    self.assertTrue(started["active"])
+                    self.assertFalse(opening["active"])
+                    self.assertEqual(started["workflow_status"], "active")
+                    self.assertEqual(opening["workflow_status"], "ready")
                     self.assertEqual(started["timers"]["experiment"]["state"], "running")
                     self.assertIsNotNone(started["timers"]["experiment"]["started_at"])
                     self.assertEqual(started["timers"]["step"]["state"], "not_started")
@@ -865,7 +869,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             (
                 "프로토콜을 시작해 줘",
                 CuratedProtocolAction.START,
-                "1단계 안내를 화면에 표시했습니다.",
+                "실험을 시작합니다. 현재 1단계입니다. "
+                "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
             ),
             (
                 "현재 단계 알려줘",
@@ -1102,7 +1108,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         result = inactive.plan("현재 단계", turn_id=1, language="ko")
         self.assertEqual(result.action, CuratedProtocolAction.CURRENT)
         self.assertFalse(inactive.state()["active"])
-        self.assertIsNone(inactive.state()["current_step_label"])
+        self.assertEqual(inactive.state()["current_step_label"], "1")
+        self.assertIn(inactive.state()["workflow_status"], {"preview", "ready"})
 
     def test_readiness_blockers_prevent_server_owned_advance(self):
         by_label = {
@@ -3022,7 +3029,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn(self.fixture.steps[0].instruction_source_text, display)
         self.assertEqual(
             tts.call_args.args[0],
-            "1단계 안내를 화면에 표시했습니다.",
+            "실험을 시작합니다. 현재 1단계입니다. "
+            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
         )
         self.assertNotIn("검증된 개발용 픽스처", display)
         self.assertTrue(session.playback_ended(1))
@@ -4102,7 +4111,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(spoken, [
             f"Voice Workflow Agent입니다. 선택한 {self.fixture.title} "
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
-            "1단계 안내를 화면에 표시했습니다.",
+            "실험을 시작합니다. 현재 1단계입니다. "
+            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
             "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
@@ -4178,14 +4189,14 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 for item in states[1:]
             ],
             [
-                ("start", True, "1", 1, None),
-                ("current", True, "1", 1, None),
-                ("repeat", True, "1", 1, None),
-                ("next", True, "2", 2, None),
-                ("question", True, "2", 2, None),
-                ("full_detail", True, "2", 2, None),
-                ("protocol_query", True, "2", 2, None),
-                ("stop", False, None, 3, None),
+                ("start", True, "1", 2, None),
+                ("current", True, "1", 2, None),
+                ("repeat", True, "1", 2, None),
+                ("next", True, "2", 3, None),
+                ("question", True, "2", 3, None),
+                ("full_detail", True, "2", 3, None),
+                ("protocol_query", True, "2", 3, None),
+                ("stop", False, None, 4, None),
             ],
         )
         for item in states:

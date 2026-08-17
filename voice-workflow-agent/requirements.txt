@@ -6,3 +6,4 @@ python-dotenv
 requests
 webrtcvad-wheels==2.0.14
 websockets>=14,<17
+python-docx==1.2.0

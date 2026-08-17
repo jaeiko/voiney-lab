@@ -213,7 +213,8 @@ class ProtocolCatalogTests(unittest.TestCase):
         second.activate_configured()
         first.plan("프로토콜 종료해줘", turn_id=1, language="ko")
         self.assertFalse(first.active)
-        self.assertTrue(second.active)
+        self.assertFalse(second.active)
+        self.assertEqual(second.workflow_status, "ready")
         self.assertEqual(second.current_index, 0)
 
     def test_duplicate_sha_is_idempotent_and_filename_cannot_choose_storage(self):

@@ -243,11 +243,22 @@ class VisualBrainOutput:
 
 
 @dataclass(frozen=True)
+class ReportBrainOutput:
+    title: str
+    course: str
+    student_number: str
+    student_name: str
+    advisor: str
+    sections: tuple[tuple[str, str], ...]
+    limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class BrainTerminal:
     role: str
     status: str
     elapsed_ms: int
-    output: AnswerBrainOutput | SourceBrainOutput | VisualBrainOutput | None = None
+    output: AnswerBrainOutput | SourceBrainOutput | VisualBrainOutput | ReportBrainOutput | None = None
 
 
 def activation_for(*, intent_kind: str, visual_requested: bool, unresolved_dimensions: tuple[str, ...]) -> BrainActivation:
@@ -280,6 +291,11 @@ SOURCE_SYSTEM = (
 VISUAL_SYSTEM = (
     "You are the read-only Visual Brain. Decide whether a visual helps and choose one allowed visual class. "
     "Select only a supplied entity. You cannot generate/fetch an image, claim provenance, speak, or mutate state. Return strict JSON."
+)
+REPORT_SYSTEM = (
+    "You are the read-only Report Brain. Draft derived laboratory-report prose from the supplied event ledger only. "
+    "Never invent student metadata, mutate workflow/report state, authorize a result, or treat model prose as an event. "
+    "Leave Title, Course, Student number, Name, and Advisor blank. Return strict JSON."
 )
 
 
@@ -477,6 +493,135 @@ class HybridMultiBrain:
         if not helps and preferred != "no_visual":
             raise RuntimeError("visual brain returned an inconsistent plan")
         return VisualBrainOutput(helps, entity, preferred, reason)
+
+    async def draft_report(
+        self,
+        snapshot: BrainSnapshot,
+        *,
+        events: tuple[dict[str, Any], ...] = (),
+        protocol_title: str = "",
+        protocol_id: str = "",
+        timeout: float = 12.0,
+    ) -> BrainTerminal:
+        """Derive report prose asynchronously. Never part of start() or activation_for."""
+
+        return await self._timed(
+            "report",
+            self._report(
+                snapshot,
+                events=events,
+                protocol_title=protocol_title,
+                protocol_id=protocol_id,
+            ),
+            timeout,
+        )
+
+    async def _report(
+        self,
+        snapshot: BrainSnapshot,
+        *,
+        events: tuple[dict[str, Any], ...],
+        protocol_title: str,
+        protocol_id: str,
+    ) -> ReportBrainOutput:
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "title": {"type": "string"},
+                "course": {"type": "string"},
+                "student_number": {"type": "string"},
+                "student_name": {"type": "string"},
+                "advisor": {"type": "string"},
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "body": {"type": "string"},
+                        },
+                        "required": ["heading", "body"],
+                    },
+                },
+                "limitations": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "title", "course", "student_number", "student_name", "advisor",
+                "sections", "limitations",
+            ],
+        }
+        context = snapshot.public_context(role="report")
+        context["protocol_title"] = protocol_title
+        context["protocol_id"] = protocol_id
+        context["events"] = [
+            {
+                key: event.get(key)
+                for key in (
+                    "event_type", "step_label", "user_wording", "created_at",
+                )
+            }
+            for event in events[:80]
+            if isinstance(event, dict)
+        ]
+        request_timeout = min(12.0, max(1.0, float(self.settings.planner_timeout_seconds)))
+        response = await self.client.chat.completions.create(
+            model=self.settings.model,
+            messages=[
+                {"role": "system", "content": REPORT_SYSTEM},
+                {
+                    "role": "system",
+                    "content": json.dumps(
+                        context, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                },
+                {"role": "user", "content": snapshot.transcript[:800] or "draft report"},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "candidate_a_report_brain_v1",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+            temperature=0,
+            timeout=request_timeout,
+        )
+        try:
+            value = json.loads(_content(response))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("report brain output is not JSON") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError("report brain output is not an object")
+        # Student metadata must remain blank even if the model invents values.
+        sections_raw = value.get("sections")
+        limitations_raw = value.get("limitations")
+        if not isinstance(sections_raw, list) or not isinstance(limitations_raw, list):
+            raise RuntimeError("report brain output failed shape gate")
+        sections: list[tuple[str, str]] = []
+        for item in sections_raw[:8]:
+            if not isinstance(item, dict):
+                continue
+            heading = item.get("heading")
+            body = item.get("body")
+            if isinstance(heading, str) and heading.strip() and isinstance(body, str):
+                sections.append((heading.strip(), body.strip()))
+        limitations = tuple(
+            item.strip() for item in limitations_raw
+            if isinstance(item, str) and item.strip()
+        )
+        return ReportBrainOutput(
+            title="",
+            course="",
+            student_number="",
+            student_name="",
+            advisor="",
+            sections=tuple(sections),
+            limitations=limitations,
+        )
 
 
 class BrainRun:

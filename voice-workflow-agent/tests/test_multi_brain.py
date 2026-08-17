@@ -13,6 +13,7 @@ from voice_workflow_agent.multi_brain import (
     BrainSnapshot,
     HybridMultiBrain,
     MultiBrainSettings,
+    ReportBrainOutput,
     SourceBrainOutput,
     VisualBrainOutput,
     activation_for,
@@ -351,3 +352,48 @@ class MultiBrainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings.model, "grok-test")
         self.assertEqual(settings.primary_answer_budget_seconds, .5)
         self.assertLess(settings.primary_answer_budget_seconds, settings.answer_timeout_seconds)
+
+    async def test_report_brain_is_async_and_outside_activation_and_start(self):
+        names = []
+
+        async def create(**kwargs):
+            names.append(kwargs["response_format"]["json_schema"]["name"])
+            return response({
+                "title": "Invented title",
+                "course": "Invented course",
+                "student_number": "20260001",
+                "student_name": "홍길동",
+                "advisor": "Advisor",
+                "sections": [
+                    {"heading": "I. Purpose", "body": "Derived from the event ledger."},
+                ],
+                "limitations": ["Event ledger remains authoritative."],
+            })
+
+        client = SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        ))
+        brain = HybridMultiBrain(client, MultiBrainSettings(True, "fake", 2, 2, .2))
+        activation = activation_for(
+            intent_kind="related_question", visual_requested=True,
+            unresolved_dimensions=("definition",),
+        )
+        self.assertEqual(activation.roles, ("answer", "source", "visual"))
+        self.assertNotIn("report", activation.roles)
+        run = brain.start(snapshot(visual=True), activation)
+        self.assertEqual(set(run.tasks), {"answer", "source", "visual"})
+        run.cancel()
+        await asyncio.gather(*run.tasks.values(), return_exceptions=True)
+        terminal = await brain.draft_report(
+            snapshot(),
+            events=({"event_type": "step_completed", "step_label": "3"},),
+            protocol_title="Candidate A",
+            protocol_id="candidate-a",
+        )
+        self.assertEqual(terminal.role, "report")
+        self.assertEqual(terminal.status, "success")
+        self.assertIsInstance(terminal.output, ReportBrainOutput)
+        self.assertEqual(terminal.output.title, "")
+        self.assertEqual(terminal.output.student_name, "")
+        self.assertEqual(terminal.output.student_number, "")
+        self.assertIn("candidate_a_report_brain_v1", names)

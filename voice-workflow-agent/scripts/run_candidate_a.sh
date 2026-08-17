@@ -75,9 +75,9 @@ export EXTERNAL_REFERENCE_MAX_CITATIONS="5"
 export EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
 # PROJECT-ENGINEERING: three bounded read-only planning/answering roles are
 # available conditionally; course-explicit state/tool guardrails remain server
-# enforced. They stay disabled in this launcher until one production-transport
-# model passes Answer, Source, Visual, and concurrent semantic admission.
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="false"
+# enforced. Report Brain is a separate async derivation path and is not part of
+# the latency-critical Answer/Source/Visual start() fan-out.
+export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL="grok-4.6"
 export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
 export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
