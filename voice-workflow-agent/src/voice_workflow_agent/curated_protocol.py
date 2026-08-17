@@ -1484,33 +1484,44 @@ _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:find|show).*(?:real|web|source).*(?:photo|image)"),
 )
 _TERM_QUESTION_PATTERNS = (
-    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅", re.I), "ambic"),
-    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물", re.I), "hplc_water"),
-    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액", re.I), "solution_a"),
-    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액", re.I), "solution_b"),
-    (re.compile(r"acetonitrile|아세토니트릴", re.I), "acetonitrile"),
-    (re.compile(r"gel\s*plug|젤\s*플러그", re.I), "gel_plug"),
-    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*밴드|단백질\s*밴드", re.I), "stained_protein_band"),
-    (re.compile(r"(?<![a-z0-9])dtt(?![a-z0-9])|dithiothreitol|디티오트레이톨", re.I), "dtt"),
-    (re.compile(r"iodoacetamide|요오도아세트아미드|아이오도아세트아마이드", re.I), "iodoacetamide"),
-    (re.compile(r"trypsin|트립신", re.I), "trypsin"),
+    (re.compile(r"(?<![a-z0-9])ambic(?![a-z0-9])|ammonium\s+bicarbonate|암빅|엠빅|암비크", re.I), "ambic"),
+    (re.compile(r"hplc\s*(?:grade\s*)?water|hplc\s*워터|hplc\s*물|에이치\s*피\s*엘\s*씨\s*워터|에이치피엘씨\s*워터", re.I), "hplc_water"),
+    (re.compile(r"solution\s*a|용액\s*a|용액\s*에이|a\s*용액|솔루션\s*a|솔루션\s*에이", re.I), "solution_a"),
+    (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액|솔루션\s*b|솔루션\s*비", re.I), "solution_b"),
+    (re.compile(r"acetonitrile|아세토니트릴|아세토나이트릴", re.I), "acetonitrile"),
+    (re.compile(r"gel\s*plug|젤\s*플러그|제트\s*플러그|젤\s*플럭", re.I), "gel_plug"),
+    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|(?:염색된\s*)?단백질\s*겔\s*밴드", re.I), "stained_protein_band"),
+    (re.compile(r"(?<![a-z0-9])dtt(?![a-z0-9])|dithiothreitol|디티오트레이톨|디티티", re.I), "dtt"),
+    (re.compile(r"iodoacetamide|요오도아세트아미드|아이오도아세트아마이드|아이오도아세트아미드|이오도아세트아미드", re.I), "iodoacetamide"),
+    (re.compile(r"trypsin|트립신|트립씬", re.I), "trypsin"),
     (re.compile(r"formic\s*acid|포름산|폼산", re.I), "formic_acid"),
     (re.compile(r"(?<![a-z0-9])rpm(?![a-z0-9])|분당\s*회전", re.I), "rpm"),
     (re.compile(r"incubat(?:e|ion)|배양", re.I), "incubation"),
     (re.compile(r"contamination|오염|케라틴", re.I), "contamination"),
 )
 _AGENT_META_PATTERNS = (
-    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|ai|시스템)(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명)"),
-    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|ai|시스템)(?:는|가|는\s*대체)?\s*(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|무슨\s*일|어떤\s*일).*(?:뭐|무엇|알려|설명|있어)"),
-    re.compile(r"^(?:너|에이전트)(?:는)?\s*(?:뭐\s*(?:할\s*수\s*있어|하는\s*거야|하는\s*애야)|무슨\s*기능이\s*있어)\??$"),
-    re.compile(r"(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|기능이).*(?:뭐|무엇|알려|설명)"),
-    re.compile(r"(?:에이전트|시스템|너).*(?:기능|역할|목적|능력).*(?:뭐|무엇|알려|설명|소개)"),
-    re.compile(r"(?:what\s+(?:is\s+(?:the\s+)?purpose\s+of\s+this\s+agent|can\s+(?:this\s+agent|you)\s+do|are\s+your\s+capabilities)|what\s+are\s+you(?:\s+for)?)\??$", re.I),
+    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명|있어)"),
+    re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:는|가|는\s*대체)?\s*(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|무슨\s*일|어떤\s*일|기능이|역할이).*(?:뭐|무엇|알려|설명|있어|해)"),
+    re.compile(r"^(?:너|네|당신|에이전트|이\s*시스템)(?:는)?\s*(?:뭐\s*(?:할\s*수\s*있어|하는\s*(?:거야|애야|에이전트야|일이야|로봇이야|것이야)|해)|무슨\s*(?:기능이\s*있어|일을\s*해)|어떤\s*역할을\s*해)\??$"),
+    re.compile(r"^(?:하는\s*기능이?|무슨\s*기능이?|어떤\s*기능이?|주요\s*기능이?|기능이?|역할이?)\s*(?:뭐야?|무엇|알려줘|설명해줘|소개해줘|있어)\??$"),
+    re.compile(r"(?:에이전트|시스템|너|네|당신).*(?:기능|역할|목적|능력|소개).*(?:뭐|무엇|알려|설명|소개)"),
+    re.compile(r"(?:what\s+(?:is|are|'s|’s)\s+(?:the\s+)?(?:purpose|function|functions|role|roles|capabilities|features?)\s+(?:of\s+this\s+agent|of\s+you|of\s+the\s+agent)?|what\s+(?:can|do|does)\s+(?:this\s+agent|you|the\s+agent)\s+do|what\s+are\s+(?:your\s+)?(?:capabilities|functions|roles)|what\s+are\s+you(?:\s+for)?|what(?:'s|’s|\s+is|\s+are)\s+(?:your\s+)?(?:function|functions|role|roles|purpose|capability|capabilities))\??$", re.I),
+    re.compile(r"(?:tell\s+me\s+(?:about\s+)?(?:yourself|your\s+(?:function|functions|role|roles|capabilities|purpose))|explain\s+(?:your|the)\s+(?:function|functions|role|roles|capabilities|purpose)|how\s+can\s+you\s+help(?:\s+me)?|who\s+are\s+you.*)\??$", re.I),
 )
 _START_COMMAND_PATTERNS = (
-    re.compile(r"^(?:프로토콜|실험|절차)?\s*(?:시작해(?:줘)?|시작하자|시작할게|시작하겠습니다|시작\s*부탁해|진행하자|1단계부터\s*하자)$"),
-    re.compile(r"^(?:이제\s*)?(?:프로토콜|실험|절차)?\s*(?:시작해(?:줘)?|시작하자|진행하자)$"),
-    re.compile(r"^(?:start(?:\s+it)?|yes,?\s*start|start\s+(?:the\s+)?(?:protocol|experiment)|let(?:'|’)s\s+start)$", re.I),
+    re.compile(
+        r"^(?:이제\s*)?(?:"
+        r"(?:실험|프로토콜|절차)(?:을|를|은|는)?\s*(?:시작\s*해(?:\s*(?:줘|주세요|줄래|줄\s*수\s*있어))?|시작\s*하자|시작\s*할게(?:요)?|시작\s*하겠습니다|시작\s*부탁해|시작|진행\s*하자|진행\s*해(?:\s*(?:줘|주세요))?)"
+        r"|"
+        r"(?:시작\s*해(?:\s*(?:줘|주세요|줄래|줄\s*수\s*있어))?|시작\s*하자|시작\s*할게(?:요)?|시작\s*하겠습니다|시작\s*부탁해|시작|1단계부터\s*(?:시작하자|시작\s*해(?:\s*줘)?|하자|진행하자)|1단계\s*(?:시작\s*해(?:\s*줘)?|시작\s*하자|시작))"
+        r")$",
+        re.I,
+    ),
+    re.compile(
+        r"^(?:start(?:\s+it)?|yes,?\s*start|start\s+(?:the\s+)?(?:protocol|experiment)|"
+        r"begin\s+(?:the\s+)?(?:protocol|experiment)|let(?:'|’)?s\s+start)$",
+        re.I,
+    ),
 )
 _UNDERSPECIFIED_RESULT_PATTERNS = (
     re.compile(r"^(?:그\s*)?(?:실험\s*)?결과(?:가|를|는)?\s*(?:알려줘|말해줘|알려\s*줘|보여줘|어떻게\s*돼|어때|뭐야)\??$"),
@@ -1733,6 +1744,13 @@ def normalize_scientific_request(
     repair(r"(?<![a-z0-9])am\s+bic(?![a-z0-9])", "ambic", "AMBIC")
     repair(r"(?<![a-z0-9])jel\s+tug(?![a-z0-9])", "gel plug", "gel plug")
     repair(r"제트\s*플러그", "젤 플러그", "gel plug")
+    repair(r"(?:염색된\s*)?단백질\s*(?:뱀드|뱄드|밸드|밴트)", "단백질 밴드", "단백질 밴드")
+    repair(r"에이\s*엠\s*빅", "ambic", "AMBIC")
+    repair(r"엠빅|암비크", "ambic", "AMBIC")
+    repair(r"트립씬", "트립신", "trypsin")
+    repair(r"폼산", "포름산", "formic acid")
+    repair(r"아이오도아세트아마이드|이오도아세트아미드", "아이오도아세트아미드", "iodoacetamide")
+    repair(r"디티티", "dtt", "DTT")
     key = re.sub(r"에이\s*엠\s*빅", "ambic", key)
     key = re.sub(r"솔루션\s*([ab])", r"solution \1", key)
     hplc_spaced = re.search(
@@ -2201,7 +2219,7 @@ def classify_curated_control_intent(
             },
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _AGENT_META_PATTERNS):
+    if not normalized_entities and any(pattern.search(key) for pattern in _AGENT_META_PATTERNS):
         return CuratedControlIntent(
             intent_kind="agent_meta",
             action=CuratedProtocolAction.AGENT_META,
@@ -4155,10 +4173,7 @@ class CuratedProtocolSession:
         )
         indexes = {self.current_index}
         if entities:
-            indexes.update({
-                index for index, step in enumerate(self.fixture.steps)
-                if step.source_label in {"1", "2", "3", "4", "5", "6", "7"}
-            })
+            indexes.update(range(len(self.fixture.steps)))
         else:
             indexes.update(
                 index for index in (self.current_index - 1, self.current_index + 1)
@@ -4408,6 +4423,14 @@ class CuratedProtocolSession:
         for entity in entities:
             if entity in explanations:
                 sections.append(explanations[entity])
+            else:
+                fallback_label = entity.replace("_", " ").title()
+                fallback_text = (
+                    f"활성 프로토콜에 언급된 {fallback_label}에 대한 정의나 설명은 별도 승인 자료를 참조해 주세요."
+                    if language == "ko" else
+                    f"For definitions or details regarding {fallback_label} mentioned in the active protocol, please consult approved reference materials."
+                )
+                sections.append((fallback_label, fallback_text))
         relation = ""
         if {"hplc_water", "ambic"}.issubset(entities):
             relation = (
@@ -6432,7 +6455,7 @@ class CuratedProtocolSession:
             )
             if (
                 command is CuratedProtocolAction.RELATED_QUESTION
-                and plan.facts
+                and (plan.facts or plan.requested_entities)
                 and not missing_followup_query
             ):
                 envelope=self.protocol_answer_envelope(

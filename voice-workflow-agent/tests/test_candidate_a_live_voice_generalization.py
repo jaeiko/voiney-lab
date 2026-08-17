@@ -237,8 +237,22 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
             ("이 에이전트의 목적이 뭐야?", "ko"),
             ("하는 기능이 뭐야?", "ko"),
             ("이 에이전트의 주요 기능과 역할을 설명해줘", "ko"),
+            ("그러면 네가 하는 기능이 뭐야?", "ko"),
+            ("너 뭐 하는 에이전트야?", "ko"),
+            ("네 역할이 뭐야?", "ko"),
+            ("무슨 기능이 있어?", "ko"),
+            ("어떤 기능이 있어?", "ko"),
+            ("너는 무슨 일 해?", "ko"),
+            ("너는 어떤 역할을 해?", "ko"),
+            ("네 기능 설명해줘", "ko"),
+            ("너 뭐 할 수 있어?", "ko"),
             ("What can this agent do?", "en"),
             ("What are your capabilities?", "en"),
+            ("Then what's your function?", "en"),
+            ("What do you do?", "en"),
+            ("What are your functions?", "en"),
+            ("What does this agent do?", "en"),
+            ("Who are you and what do you do?", "en"),
         ):
             with self.subTest(utterance=utterance):
                 session = CuratedProtocolSession(self.fixture)
@@ -248,18 +262,34 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 self.assertFalse(plan.state_changed)
                 self.assertIn("보이스 워크플로" if lang == "ko" else "voice workflow assistant", plan.primary_text or "")
 
+        # In Manual Korean session mode, English STT capability queries must return Korean response
+        session = CuratedProtocolSession(self.fixture)
+        ko_en_plan = session.plan("Then what's your function?", turn_id=1, language="ko")
+        self.assertEqual(ko_en_plan.action, CuratedProtocolAction.AGENT_META)
+        self.assertIn("보이스 워크플로", ko_en_plan.primary_text or "")
+
     def test_pre_start_preview_and_preview_step(self) -> None:
-        for start_utterance in ("프로토콜 시작해줘", "시작해", "시작해줘", "응 시작하자", "start", "start it", "1단계부터 하자", "진행하자"):
+        for start_utterance in (
+            "프로토콜 시작해줘", "시작해", "시작해줘", "응 시작하자", "start", "start it",
+            "1단계부터 하자", "진행하자", "실험을 시작해줘.", "실험 시작해줘", "실험 시작",
+            "실험을 시작해 주세요", "실험을 시작해 줘", "실험을 시작해줄 수 있어",
+            "프로토콜을 시작해줘", "프로토콜 시작", "절차를 시작해줘", "절차 시작",
+            "1단계부터 시작해줘", "1단계 시작해줘", "1단계 시작", "시작하자", "시작할게",
+            "시작할게요", "시작하겠습니다", "시작 부탁해", "진행해줘", "이제 실험 시작하자",
+            "start protocol", "start the protocol", "start experiment", "start the experiment",
+            "let's start", "lets start", "yes, start", "begin protocol",
+        ):
             with self.subTest(utterance=start_utterance):
                 session = CuratedProtocolSession(self.fixture)
                 session.configure_ready()
                 self.assertFalse(session.active)
                 self.assertEqual(session.workflow_status, "preview")
-                started = session.plan(start_utterance, turn_id=1, language="en" if "start" in start_utterance else "ko")
+                started = session.plan(start_utterance, turn_id=1, language="en" if any(w in start_utterance for w in ("start", "begin", "let")) else "ko")
                 self.assertEqual(started.action, CuratedProtocolAction.START)
                 self.assertTrue(session.active)
                 self.assertEqual(session.workflow_status, "active")
                 self.assertEqual(session.current_index, 0)
+                self.assertEqual(session.experiment_timer_status()["state"], "running")
 
         session = CuratedProtocolSession(self.fixture)
         session.configure_ready()
@@ -409,6 +439,61 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 plan = session.plan(entity_query, turn_id=2, language="ko")
                 self.assertIn(entity_name, plan.requested_entities)
                 self.assertFalse(plan.state_changed)
+
+    def test_multi_entity_near_miss_and_completeness_gate(self) -> None:
+        session = self.session("1")
+        # Real microphone STT variant: "뱀드" instead of "밴드" + AMBIC
+        real_turn7 = session.plan(
+            "여기서 염색된 단백질 뱀드가 무엇이며 그리고 AMBIC가 무엇인지 설명해 줄 수 있어?",
+            turn_id=2, language="ko",
+        )
+        self.assertIn("stained_protein_band", real_turn7.requested_entities)
+        self.assertIn("ambic", real_turn7.requested_entities)
+        self.assertIn("단백질 밴드", real_turn7.primary_text or "")
+        self.assertIn("AMBIC", real_turn7.primary_text or "")
+        self.assertFalse(real_turn7.state_changed)
+
+        # Other multi-entity near-misses and combinations
+        for query, expected_entities in (
+            ("염색된 단백질 밴드와 AMBIC가 뭐야?", ("stained_protein_band", "ambic")),
+            ("젤 플러그와 HPLC water가 뭐야?", ("gel_plug", "hplc_water")),
+            ("제트 플러그와 에이치피엘씨 워터 설명해줘", ("gel_plug", "hplc_water")),
+            ("Solution A and Solution B difference", ("solution_a", "solution_b")),
+            ("DTT와 iodoacetamide 그리고 trypsin 설명해줘", ("dtt", "iodoacetamide", "trypsin")),
+        ):
+            with self.subTest(query=query):
+                s = self.session("1")
+                is_en = "difference" in query
+                p = s.plan(query, turn_id=2, language="en" if is_en else "ko")
+                for ent in expected_entities:
+                    self.assertIn(ent, p.requested_entities)
+                # Verify completeness: every requested entity has a mention in primary_text
+                primary = p.primary_text or ""
+                labels_en = {
+                    "stained_protein_band": "Stained protein band",
+                    "ambic": "AMBIC",
+                    "gel_plug": "Gel plug",
+                    "hplc_water": "HPLC water",
+                    "solution_a": "Solution A",
+                    "solution_b": "Solution B",
+                    "dtt": "DTT",
+                    "iodoacetamide": "Iodoacetamide",
+                    "trypsin": "Trypsin",
+                }
+                labels_ko = {
+                    "stained_protein_band": "단백질 밴드",
+                    "ambic": "AMBIC",
+                    "gel_plug": "플러그",
+                    "hplc_water": "HPLC water",
+                    "solution_a": "Solution A",
+                    "solution_b": "Solution B",
+                    "dtt": "DTT",
+                    "iodoacetamide": "Iodoacetamide",
+                    "trypsin": "트립신",
+                }
+                labels = labels_en if is_en else labels_ko
+                for ent in expected_entities:
+                    self.assertIn(labels[ent], primary)
 
 
 if __name__ == "__main__":

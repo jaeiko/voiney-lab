@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
+    CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.experiment_reports import (
@@ -138,6 +139,48 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(report_state)
             self.assertIn("report", report_state)
             self.assertEqual(report_state["report"]["status"], "in_progress")
+
+    def test_multi_turn_live_microphone_reproduction(self) -> None:
+        """Reproduce exact live microphone turn sequence and assert authoritative state transitions."""
+        session = CuratedProtocolSession(self.fixture)
+        session.configure_ready()
+        self.assertFalse(session.active)
+        self.assertEqual(session.workflow_status, "preview")
+
+        # Turn 0: Multilingual AGENT_META query from English STT
+        p0 = session.plan("Then what's your function?", turn_id=1, language="ko")
+        self.assertEqual(p0.action, CuratedProtocolAction.AGENT_META)
+        self.assertFalse(session.active)
+        self.assertIn("보이스 워크플로", p0.primary_text or "")
+
+        # Turn 1: START with Korean object particle "실험을 시작해줘."
+        p1 = session.plan("실험을 시작해줘.", turn_id=2, language="ko")
+        self.assertEqual(p1.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+        self.assertEqual(session.workflow_status, "active")
+        self.assertEqual(session.current_index, 0)
+        timer_status = session.experiment_timer_status()
+        self.assertEqual(timer_status["state"], "running")
+        self.assertIsNotNone(timer_status["started_at"])
+
+        # Turn 2: COMPLETE with particle "현재 단계로 완료했어."
+        p2 = session.plan("현재 단계로 완료했어.", turn_id=3, language="ko")
+        self.assertEqual(p2.action, CuratedProtocolAction.NEXT)
+        self.assertTrue(session.active)
+        self.assertEqual(session.current_index, 1)  # Advanced to Step 2
+        self.assertNotIn("아직 실험을 시작하지 않았습니다", p2.speech_text or "")
+
+        # Turn 3: Multi-entity question with STT near-miss "뱀드" -> "단백질 밴드" + AMBIC
+        p3 = session.plan(
+            "여기서 염색된 단백질 뱀드가 무엇이며 그리고 AMBIC가 무엇인지 설명해 줄 수 있어?",
+            turn_id=4, language="ko",
+        )
+        self.assertEqual(p3.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertIn("stained_protein_band", p3.requested_entities)
+        self.assertIn("ambic", p3.requested_entities)
+        self.assertIn("단백질 밴드", p3.primary_text or "")
+        self.assertIn("AMBIC", p3.primary_text or "")
+        self.assertEqual(session.current_index, 1)
 
 
 if __name__ == "__main__":
