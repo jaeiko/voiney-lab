@@ -810,7 +810,16 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                         "1단계 안내를 화면에 표시했습니다.",
                     )
                     self.assertEqual(session.current_index, 0)
-                    self.assertEqual(session.state(), opening)
+                    started = session.state()
+                    self.assertEqual(
+                        {key: value for key, value in started.items() if key not in {"timer", "timers"}},
+                        {key: value for key, value in opening.items() if key not in {"timer", "timers"}},
+                    )
+                    self.assertEqual(started["timers"]["experiment"]["state"], "running")
+                    self.assertIsNotNone(started["timers"]["experiment"]["started_at"])
+                    self.assertEqual(started["timers"]["step"]["state"], "not_started")
+                    self.assertEqual(started["timer"]["state"], "not_started")
+                    self.assertTrue(plan.state_changed)
 
         session = CuratedProtocolSession(self.fixture)
         session.activate_configured()
@@ -927,11 +936,11 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         )
         self.assertEqual(
             inactive_detail.action,
-            CuratedProtocolAction.INACTIVE,
+            CuratedProtocolAction.FULL_DETAIL,
         )
-        self.assertEqual(
-            inactive_detail.speech_mode,
-            CuratedProtocolSpeechMode.BLOCKED,
+        self.assertFalse(inactive_detail.state_changed)
+        self.assertFalse(
+            CuratedProtocolSession(self.fixture).state()["active"]
         )
 
     def test_generic_fixture_warning_is_not_inferred_as_critical(self):
@@ -1083,13 +1092,17 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             turn_id=1,
             language="ko",
         )
-        self.assertEqual(session.state()["current_step_label"], "25")
+        self.assertEqual(session.current_index, 24)
         self.assertTrue(final.final_step)
-        self.assertFalse(final.state_changed)
+        self.assertTrue(final.state_changed)
+        self.assertFalse(session.active)
+        self.assertEqual(session.workflow_status, "completed")
+        self.assertIsNone(session.state()["current_step_label"])
         inactive = CuratedProtocolSession(self.fixture)
         result = inactive.plan("현재 단계", turn_id=1, language="ko")
-        self.assertEqual(result.action, CuratedProtocolAction.INACTIVE)
+        self.assertEqual(result.action, CuratedProtocolAction.CURRENT)
         self.assertFalse(inactive.state()["active"])
+        self.assertIsNone(inactive.state()["current_step_label"])
 
     def test_readiness_blockers_prevent_server_owned_advance(self):
         by_label = {

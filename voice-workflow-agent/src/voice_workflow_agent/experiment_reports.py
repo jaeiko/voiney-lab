@@ -358,11 +358,25 @@ class ExperimentReportStore:
             "",
         ]
         for event in report["events"]:
-            detail = event["user_wording"] or event["payload"].get("summary") or ""
+            payload = event.get("payload") or {}
+            detail = event["user_wording"] or payload.get("summary") or ""
+            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+            timer_bits = []
+            for key, label in (
+                ("source_duration_seconds", "defined"),
+                ("started_at", "started"),
+                ("elapsed_seconds", "elapsed"),
+                ("remaining_seconds", "remaining"),
+                ("completion_state", "completion"),
+                ("demo_bypassed", "demo_bypassed"),
+            ):
+                if timer.get(key) not in (None, ""):
+                    timer_bits.append(f"{label}={timer[key]}")
+            extra = " · ".join(item for item in (detail, "; ".join(timer_bits)) if item)
             lines.append(
                 f"- {event['created_at']} · {event['event_type']} · "
                 f"step {event['step_label'] or '—'}"
-                + (f" · {detail}" if detail else "")
+                + (f" · {extra}" if extra else "")
             )
         return ("\n".join(lines) + "\n").encode()
 
@@ -376,14 +390,24 @@ class ExperimentReportStore:
             "report_id", "event_key", "event_type", "step_id", "step_label",
             "category", "severity", "confirmation_state", "source_tier",
             "user_wording", "created_at",
+            "source_duration_seconds", "timer_started_at", "elapsed_seconds",
+            "remaining_seconds", "completion_state", "demo_bypassed",
         ))
         for event in report["events"]:
+            payload = event.get("payload") or {}
+            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
             writer.writerow((
                 report["report_id"], event["event_key"], event["event_type"],
                 event["step_id"] or "", event["step_label"] or "",
                 event["category"] or "", event["severity"] or "",
                 event["confirmation_state"] or "", event["source_tier"] or "",
                 event["user_wording"] or "", event["created_at"],
+                timer.get("source_duration_seconds", ""),
+                timer.get("started_at", ""),
+                timer.get("elapsed_seconds", ""),
+                timer.get("remaining_seconds", ""),
+                timer.get("completion_state", ""),
+                timer.get("demo_bypassed", ""),
             ))
         return output.getvalue().encode("utf-8-sig")
 

@@ -936,8 +936,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(
             [(name,value[1] if value[0] is None else value[0])
              for name,value in parts[:-1]],
-            [("format","true"),("language","ko"),("keyterm","AMBIC"),
-             ("keyterm","HPLC water")],
+            [("format","true"),("language","ko"),("vad_threshold","0.5"),
+             ("keyterm","AMBIC"),("keyterm","HPLC water")],
         )
         self.assertEqual(parts[-1][0],"file")
 

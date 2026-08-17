@@ -263,11 +263,15 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
 
         session = CuratedProtocolSession(self.fixture)
         session.configure_ready()
-        # In pre-start mode, asking for current step when inactive returns inactive guidance
+        # Pre-start CURRENT previews step 1 without mutating the session.
         curr = session.plan("현재 단계가 뭐야?", turn_id=1, language="ko")
-        self.assertEqual(curr.action, CuratedProtocolAction.INACTIVE)
+        self.assertEqual(curr.action, CuratedProtocolAction.CURRENT)
         self.assertFalse(session.active)
-        self.assertIn("실험을 시작하지 않았습니다", curr.display_text or curr.speech_text or "")
+        self.assertIsNone(session.state()["current_step_label"])
+        self.assertIn(
+            "아직 실험 시작 전입니다",
+            curr.speech_text or curr.display_text or "",
+        )
 
         # Explicit preview of step 1
         prev = session.plan("1단계 미리 알려줘", turn_id=2, language="ko")

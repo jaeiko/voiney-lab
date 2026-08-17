@@ -399,7 +399,7 @@ class XaiAuthoritativeWebSearch:
                 },
             }],
             include=["web_search_call.action.sources"],
-            stream=True,
+            stream=False,
             max_output_tokens=800,
             timeout=httpx.Timeout(
                 self.settings.timeout_seconds,

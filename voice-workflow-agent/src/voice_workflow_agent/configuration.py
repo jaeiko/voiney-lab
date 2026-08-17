@@ -156,6 +156,28 @@ class CascadeVadSettings:
 
 
 @dataclass(frozen=True)
+class CascadeSttSettings:
+    """Documented xAI REST STT fields that stay off the voice-path critical loop."""
+
+    vad_threshold: float = 0.5
+    filler_words: bool = False
+
+    @classmethod
+    def from_environment(
+        cls, environment: Mapping[str, str] | None = None
+    ) -> "CascadeSttSettings":
+        env = os.environ if environment is None else environment
+        return cls(
+            vad_threshold=_floating(
+                env, "XAI_STT_VAD_THRESHOLD", 0.5, 0.0, 1.0
+            ),
+            filler_words=_integer(
+                env, "XAI_STT_FILLER_WORDS", 0, 0, 1
+            ) == 1,
+        )
+
+
+@dataclass(frozen=True)
 class NativeVadSettings:
     threshold: float=0.6
     prefix_padding_ms: int=333
@@ -180,6 +202,7 @@ class NativeVadSettings:
 class VoiceVadSettings:
     cascade: CascadeVadSettings
     native: NativeVadSettings
+    stt: CascadeSttSettings
 
     @classmethod
     def from_environment(
@@ -189,4 +212,5 @@ class VoiceVadSettings:
         return cls(
             cascade=CascadeVadSettings.from_environment(env),
             native=NativeVadSettings.from_environment(env),
+            stt=CascadeSttSettings.from_environment(env),
         )

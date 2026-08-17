@@ -19,6 +19,7 @@
       --amber:#fff1cc;
       --red:#b53b32;
       --shadow:0 18px 50px rgba(20,45,34,.09);
+      --conversation-workspace-height:clamp(24rem,52vh,44rem);
     }
     *{box-sizing:border-box}
     body{margin:0;background:linear-gradient(180deg,#eaf3ee 0,#f7faf8 19rem,#f7faf8 100%);color:var(--ink);font:16px/1.55 Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
@@ -88,10 +89,10 @@
     .example{padding:.9rem 1rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.68);color:var(--muted);font-size:.82rem}
     .example b{display:block;margin-bottom:.2rem;color:var(--ink);font-size:.78rem}
     .timeline h2{margin:0;font-size:1rem;letter-spacing:-.02em}
-    .timeline{grid-area:chat;padding:1.1rem;position:relative;min-width:0;display:flex;flex-direction:column}
+    .timeline{grid-area:chat;padding:1.1rem;position:relative;min-width:0;display:flex;flex-direction:column;height:var(--conversation-workspace-height);max-height:var(--conversation-workspace-height);min-height:0;overflow:hidden}
     .timeline-head{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin-bottom:.75rem;flex-shrink:0}
     .timeline-head p{margin:0;color:var(--muted);font-size:.82rem}
-    #log{flex:1;height:clamp(24rem,52vh,44rem);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:.15rem .45rem .8rem;display:flex;flex-direction:column;gap:.75rem;scroll-behavior:smooth}
+    #log{flex:1;min-height:0;height:auto;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:.15rem .45rem .8rem;display:flex;flex-direction:column;gap:.75rem;scroll-behavior:smooth}
     #log:empty::before{content:"세션을 시작하고 말하면 대화와 Tool 실행 기록이 여기에 표시됩니다.";display:block;padding:2.2rem 1rem;text-align:center;color:#819087;border:1px dashed var(--line);border-radius:1rem}
     #new-chat-update{position:absolute;right:2rem;bottom:1.8rem;z-index:3;border:1px solid var(--forest);border-radius:999px;background:var(--forest);color:white;padding:.5rem .75rem;font-weight:800;box-shadow:var(--shadow);cursor:pointer}
     .turn{padding:1rem;border:1px solid var(--line);background:var(--paper);border-radius:1rem;display:grid;grid-template-columns:8rem minmax(0,1fr);column-gap:1rem;row-gap:.42rem;scroll-margin-block:.75rem}
@@ -110,7 +111,7 @@
     .label{color:var(--muted)}
     .error{color:var(--red)}
     @media(max-width:980px){
-      .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat" "examples"}.workflow-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"step" "visual"}.voice-panel{grid-template-columns:1fr}.capabilities{grid-template-columns:repeat(2,minmax(0,1fr))}.language-controls{grid-template-columns:repeat(2,minmax(8rem,1fr))}#log{height:clamp(26rem,58vh,44rem)}}
+      .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat" "examples"}.workflow-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"step" "visual"}.voice-panel{grid-template-columns:1fr}.capabilities{grid-template-columns:repeat(2,minmax(0,1fr))}.language-controls{grid-template-columns:repeat(2,minmax(8rem,1fr))}:root{--conversation-workspace-height:clamp(26rem,58vh,44rem)}}
     @media(max-width:720px){
       .workflow-grid,.example-strip{grid-template-columns:minmax(0,1fr)}.voice-console{grid-template-columns:auto 1fr}.controls{grid-column:1/-1}.controls button{flex:1}.workflow-details{grid-template-columns:1fr}.protocol-register{grid-template-columns:1fr}.turn{grid-template-columns:1fr}.turn .turn-status,.turn .tools,.turn .server-operation,.turn .stats,.turn .error,.turn .filler-status,.turn .turn-replay,.turn .replay-status,.turn .turn-visual,.turn-diagnostics{grid-column:1}.turn .label{margin-top:.35rem}.step-visual img{max-height:18rem}}
     @media(max-width:520px){.topbar,.shell{padding-left:.85rem;padding-right:.85rem}.session-badge{display:none}.voice-panel{padding:1.2rem}.capabilities{grid-template-columns:1fr}h1{font-size:2.35rem}}
@@ -233,6 +234,7 @@
             <details>
               <summary>기록 보기 · 이상 사항 · 내보내기</summary>
               <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
+              <div id="experiment-report-events" aria-label="이 세션의 실험 기록 이벤트"></div>
               <div class="report-actions">
                 <button id="show-experiment-report" type="button">실험 기록 보기</button>
                 <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
@@ -300,23 +302,51 @@ function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAtt
 function renderState(state,detail=""){const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];setDisabled($("start"),view[1]);setDisabled($("stop"),view[2]);const configurationLocked=!["IDLE","ERROR"].includes(visibleState);for(const id of ["pipeline-mode","language-mode","manual-language","protocol-id","protocol-pdf","register-protocol"]){setDisabled($(id),configurationLocked);}$("protocol-id")?.setAttribute?.("aria-busy",String(visibleState==="CONNECTING"));const active=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;setDisabled($("repeat-step"),!active);setDisabled($("next-step"),!active);const dot=document.querySelector?.(".session-dot");if(dot)dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#23a872":visibleState==="ERROR"?"#b53b32":"#8ea199";}
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
 function stopWorkflowTimer(){if(workflowTimerHandle!==null){clearInterval(workflowTimerHandle);workflowTimerHandle=null;}}
+function formatElapsedClock(seconds){
+ const total=Math.max(0,Math.floor(Number(seconds)||0));
+ const hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),secs=total%60;
+ return hours>0?`${hours}:${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")}`:`${minutes}:${String(secs).padStart(2,"0")}`;
+}
 function updateWorkflowTimer(){
- const timer=procedureState?.timer,node=$("procedure-timer");if(!node)return;
- if(!timer){node.textContent="이 단계에는 타이머가 없습니다.";return;}
- if(timer.state==="not_started"){node.textContent=`대기 · 고정 ${timer.duration_seconds}초`;return;}
- const deadline=Date.parse(timer.deadline_at),remaining=Number.isFinite(deadline)?Math.max(0,Math.ceil((deadline-Date.now())/1000)):Math.max(0,timer.remaining_seconds||0);
- node.textContent=remaining>0?`진행 중 · ${remaining}초 남음`:`완료 · ${timer.duration_seconds}초`;
- if(remaining===0)stopWorkflowTimer();
+ const node=$("procedure-timer");if(!node)return;
+ const curated=curatedProtocolState?.timers||{};
+ const experiment=curated.experiment||null;
+ const step=curated.step||procedureState?.timer||null;
+ const parts=[];
+ if(experiment){
+  const started=experiment.started_at?Date.parse(experiment.started_at):NaN;
+  const elapsed=experiment.state==="running"&&Number.isFinite(started)?Math.max(0,Math.floor((Date.now()-started)/1000)):Math.max(0,Number(experiment.elapsed_seconds)||0);
+  if(experiment.state==="running")parts.push(`전체 ${formatElapsedClock(elapsed)}`);
+  else if(experiment.state==="stopped")parts.push(`전체 종료 · ${formatElapsedClock(elapsed)}`);
+  else if(experiment.state==="not_started")parts.push("전체 대기");
+ }
+ if(step){
+  if(step.state==="running"){
+   const deadline=Date.parse(step.deadline_at);
+   const remaining=Number.isFinite(deadline)?Math.max(0,Math.ceil((deadline-Date.now())/1000)):Math.max(0,Number(step.remaining_seconds)||0);
+   parts.push(remaining>0?`단계 ${remaining}초 남음`:`단계 완료 · ${step.duration_seconds||0}초`);
+   if(remaining===0)stopWorkflowTimer();
+  }else if(step.state==="not_started"&&Number(step.duration_seconds)>0){
+   parts.push(`단계 대기 · 고정 ${step.duration_seconds}초`);
+  }else if(step.state==="stopped"||step.state==="completed"){
+   parts.push(`단계 종료 · ${step.duration_seconds||0}초`);
+  }
+ }
+ node.textContent=parts.length?parts.join(" · "):"이 단계에는 타이머가 없습니다.";
 }
 function startWorkflowTimer(){
  stopWorkflowTimer();updateWorkflowTimer();
- if(procedureState?.timer?.state==="running"){
+ const curated=curatedProtocolState?.timers||{};
+ const experiment=curated.experiment;
+ const step=curated.step||procedureState?.timer;
+ if(experiment?.state==="running"||step?.state==="running"){
   workflowTimerHandle=setInterval(updateWorkflowTimer,1000);
   workflowTimerHandle?.unref?.();
  }
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
 function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${report.report_id} · ${report.status||"unknown"}`;row.appendChild(title);container.appendChild(row);}return true;}
+function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");title.textContent=`${event.event_type||"event"} · ${event.step_label||"—"}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(String(timer.completion_state));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);container.appendChild(row);}return true;}
 function startReportPolling(reportId){
  if(typeof reportId!=="string"||!reportId)return;
  lastReportId=reportId;stopReportPolling();
@@ -354,14 +384,14 @@ function renderCuratedProtocolState(message){
  const valid=value.attached===true&&value.protocol_id===accepted.protocol_id&&value.revision_id===accepted.revision_id&&nonempty(value.protocol_id)&&nonempty(value.revision_id)&&nonempty(value.display_name)&&typeof value.development_only==="boolean"&&["analysis_required","guidance_ready"].includes(value.readiness_status)&&typeof value.active==="boolean"&&Number.isInteger(value.total_steps)&&value.total_steps>0&&typeof value.at_final_step==="boolean"&&(value.block_reason===null||nonempty(value.block_reason))&&Number.isInteger(value.revision)&&value.revision>=0&&visualShape;
  const activeValid=value.active?nonempty(value.current_step_label)&&nonempty(value.current_step_id):value.current_step_label===null&&value.current_step_id===null;
  if(!valid||!activeValid||value.revision<=curatedStateRevision)return;
- curatedProtocolState={...value};curatedStateRevision=value.revision;procedureState={attached:false};stopWorkflowTimer();
+ curatedProtocolState={...value};curatedStateRevision=value.revision;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?`개발용 · 최종 승인 아님 · ${value.protocol_id} · ${value.revision_id}`:`승인 리비전 · ${value.protocol_id} · ${value.revision_id}`;
  const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:"선택됨 · 대기";
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
  $("procedure-progress").textContent=value.active?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
  $("procedure-step-title").textContent=value.active?`Step ${value.current_step_label}`:"";const warnings=Array.isArray(value.warning_texts)?value.warning_texts.filter(nonempty):[],criticalWarnings=Array.isArray(value.critical_warning_texts)?value.critical_warning_texts.filter(nonempty):[],warningPresentations=Array.isArray(value.warning_presentations)?value.warning_presentations.filter(item=>item&&typeof item==="object"&&nonempty(item.source_text)):[];setText("procedure-primary",value.active&&nonempty(value.primary_summary)?normalizePresentationText(`안내 · 한국어 참고 번역\n${value.primary_summary}`):value.active?"검증된 한국어 참고 번역을 사용할 수 없습니다.":"");$("procedure-instruction").textContent=value.active&&nonempty(value.display_summary)?normalizePresentationText(`원문 · English\n${value.display_summary}`):"";const warningText=normalizePresentationText(warningPresentations.length?warningPresentations.map(item=>`${nonempty(item.primary_text)?`주의 · 한국어 참고 번역\n${item.primary_text}\n`:""}원문 · English\n${item.source_text}\n출처 · ${item.evidence_id} · p.${item.source_page}`).join("\n\n"):[...warnings.map(item=>`주의 원문: ${item}`),...criticalWarnings.filter(item=>!warnings.includes(item)).map(item=>`중요 경고 원문: ${item}`)].join("\n"));$("procedure-warning").textContent=warningText;$("procedure-warning").hidden=!warningText;$("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
- $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";$("procedure-timer").textContent="지원되지 않음";$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
+ $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
  const blockLabels={unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계"};
  $("procedure-handoff").textContent=blocked?`진행 제한 · ${blockLabels[value.block_reason]||value.block_reason}`:"연결된 인계 없음";
  $("procedure-audit").textContent=`준비 상태 ${value.readiness_status} · ${value.development_only?"개발용":"승인 리비전"}`;$("source-filename").textContent=nonempty(value.source_filename)?value.source_filename:"파일명 정보 없음";$("source-page-number").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?value.source_page_refs.map(page=>`p.${page}`).join(", "):"—";$("source-short-hash").textContent=typeof value.source_sha256==="string"&&/^[0-9a-f]{64}$/.test(value.source_sha256)?`${value.source_sha256.slice(0,12)}…`:"—";renderState(visibleState);
@@ -398,7 +428,18 @@ function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id
 function renderStructuredReply(node,message){
  const target=node?.querySelector?.(".reply");if(!target)return false;
  const snapshot=beginChatPatch(node),primary=message?.primary_text,sources=message?.source_texts,pages=message?.source_pages,evidence=message?.evidence_ids,citations=message?.citations,correction=typeof message?.transcript_correction_note==="string"&&message.transcript_correction_note.trim()?message.transcript_correction_note.trim():null,reference=["approved_lab_corpus","external_authoritative_reference"].includes(message?.answer_origin)&&Array.isArray(citations)&&citations.length>0,structured=typeof primary==="string"&&primary.trim()&&Array.isArray(sources)&&sources.length>0&&sources.every(item=>typeof item==="string"&&item.length>0)&&Array.isArray(pages)&&pages.length===sources.length&&pages.every(item=>Number.isInteger(item)&&item>0)&&Array.isArray(evidence)&&evidence.length===sources.length&&evidence.every(item=>typeof item==="string"&&item.length>0);
- if(!structured&&!reference&&message?.answer_origin!=="supplemental_model_knowledge"){target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(message.text)+" ";finishChatPatch(snapshot);return false;}
+ if(!structured&&!reference&&message?.answer_origin!=="supplemental_model_knowledge"){
+  const documentPayload=message?.display_document;
+  if(documentPayload&&typeof documentPayload==="object"){
+   target.replaceChildren();
+   const addDocument=(className,label,text)=>{if(typeof text!=="string"||!text.trim())return;const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}const body=document.createElement("span");body.textContent=normalizePresentationText(text);block.appendChild(body);target.appendChild(block);};
+   if(correction)addDocument("answer-correction","음성 인식 보정",correction);
+   addDocument("answer-document-title","",documentPayload.title||message.text||"");
+   const sections=Array.isArray(documentPayload.sections)?documentPayload.sections:[];
+   for(const section of sections){if(!section||typeof section!=="object")continue;addDocument("answer-document-section",section.heading||"",section.text||section.body||"");}
+   finishChatPatch(snapshot);return true;
+  }
+  target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(message.text)+" ";finishChatPatch(snapshot);return false;}
  target.replaceChildren();
  const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;const heading=document.createElement("b");heading.textContent=label;const body=document.createElement("span");body.textContent=normalizePresentationText(text);block.appendChild(heading);block.appendChild(body);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
@@ -596,9 +637,9 @@ async function onMessage(e,generation,current){
 	 if(m.type==="research.result")applyResearchResult(m,generation);
 	 if(m.type==="brain.state")applyBrainState(m,generation);
 	 if(m.type==="brain.answer.enrichment")applyBrainAnswerEnrichment(m,generation);
- const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(m?.turn_id,generation),known=turnServerGenerations.get(browserKey);return accepted?.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&Number.isInteger(m.turn_id)&&Number.isInteger(m.generation)&&known===m.generation&&!cascadeTurnInterrupted(m);};
+ const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${report.status} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;renderExperimentReportList(report.reports);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"]]){const link=$(id);link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
+  const report=m.report;lastReportId=report.report_id;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${report.status} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent())$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";
  if(m.type==="report.status"){if(m.report_id)$("last-report-id").textContent=m.report_id;const label=REPORT_LABELS[m.report_status]||m.report_status||"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}

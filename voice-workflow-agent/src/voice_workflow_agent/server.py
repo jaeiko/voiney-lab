@@ -24,6 +24,7 @@ from voice_workflow_agent.brain import (
     stream_brain_turn,
 )
 from voice_workflow_agent.configuration import (
+    CascadeSttSettings,
     ConfigurationError,
     VoiceVadSettings,
     cascade_filler_delay_ms,
@@ -414,20 +415,27 @@ class CascadeTranscriptionContext:
     pending_frame:str|None
     keyterms:tuple[str,...]
     audio_origin:str
+    vad_threshold:float=0.5
 
     def __post_init__(self)->None:
         if self.audio_origin not in {"ordinary","barge_in"}:
             raise ValueError("STT audio origin is invalid")
+        if not isinstance(self.vad_threshold,(int,float)) or isinstance(self.vad_threshold,bool):
+            raise ValueError("STT vad_threshold is invalid")
+        if not 0.0 <= float(self.vad_threshold) <= 1.0:
+            raise ValueError("STT vad_threshold is outside bounds")
 
     def request_policy(self)->dict[str,object]:
         fields=["format"]
         if self.language is not None:
             fields.append("language")
+        fields.append("vad_threshold")
         fields.extend("keyterm" for _ in self.keyterms)
         fields.append("file")
         return {
             "language":self.language,
             "keyterms":list(self.keyterms),
+            "vad_threshold":float(self.vad_threshold),
             "request_field_order":fields,
             "pending_frame":self.pending_frame,
             "audio_origin":self.audio_origin,
@@ -435,12 +443,18 @@ class CascadeTranscriptionContext:
 
 
 def _stt_multipart(
-    pcm:bytes,*,language:str|None,keyterms:tuple[str,...]
+    pcm:bytes,*,language:str|None,keyterms:tuple[str,...],
+    vad_threshold:float=0.5,
 )->tuple[list[tuple[str,tuple]],bytes,tuple[str,...]]:
     """Build the documented xAI multipart order with the file last."""
 
     if language not in {None,"ko","en","vi"}:
         raise ValueError("STT language is invalid")
+    if not isinstance(vad_threshold,(int,float)) or isinstance(vad_threshold,bool):
+        raise ValueError("STT vad_threshold is invalid")
+    threshold=float(vad_threshold)
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("STT vad_threshold is outside bounds")
     bounded=tuple(dict.fromkeys(
         value.strip() for value in keyterms
         if isinstance(value,str) and 1<=len(value.strip())<=50
@@ -449,6 +463,7 @@ def _stt_multipart(
     multipart:list[tuple[str,tuple]]=[("format",(None,"true"))]
     if language is not None:
         multipart.append(("language",(None,language)))
+    multipart.append(("vad_threshold",(None,f"{threshold:g}")))
     multipart.extend(("keyterm",(None,value)) for value in bounded)
     multipart.append(("file",("utterance.wav",wav,"audio/wav")))
     return multipart,wav,bounded
@@ -477,6 +492,7 @@ def persist_stt_diagnostic(
             "configured_prefix_ms","retained_prefix_frames",
             "retained_prefix_ms","wav_sha256","wav_byte_count",
             "stt_endpoint","request_field_order","language","keyterms",
+            "vad_threshold",
             "response_status","response_duration_seconds","word_count",
             "detected_language","raw_transcript","normalized_transcript",
             "correction_class","clarification_required","intent_kind",
@@ -505,10 +521,12 @@ def transcribe(
     *,
     language:str|None=None,
     keyterms:tuple[str,...]=(),
+    vad_threshold:float=0.5,
 )->Transcription:
     """Call documented batch STT fields while retaining optional extensions."""
 
-    multipart,_,_= _stt_multipart(pcm,language=language,keyterms=keyterms)
+    multipart,_,_= _stt_multipart(
+        pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold)
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
         files=multipart,timeout=120)
     response.raise_for_status()
@@ -1146,6 +1164,7 @@ class ListenerSession:
         self.greeting_emitted=False
         self.greeting_audio_ready=False
         self.client_audio_constraints:dict[str,object]={}
+        self.stt_settings=CascadeSttSettings.from_environment()
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -1589,6 +1608,8 @@ def cascade_transcription_context(
         pending_frame=pending_frame,
         keyterms=keyterms,
         audio_origin=audio_origin,
+        vad_threshold=getattr(
+            getattr(session,"stt_settings",None),"vad_threshold",0.5),
     )
 
 
@@ -1600,6 +1621,7 @@ def transcribe_cascade_audio(
 
     return transcribe(
         clean_path(pcm),language=context.language,keyterms=context.keyterms,
+        vad_threshold=getattr(context,"vad_threshold",0.5),
     )
 
 class LockedSender:
@@ -1905,7 +1927,15 @@ def _record_experiment_report_plan(
         "reported_observation":bool(plan.reported_observation),
         "observation_predicate":plan.observation_predicate,
         "observation_outcome":plan.observation_outcome,
+        "timers":{
+            "experiment":curated.experiment_timer_status(),
+            "step":curated.timer_status(),
+        },
+        "workflow_status":curated._workflow_status,
     }
+    timer_payload=getattr(plan,"timer_payload",None)
+    if isinstance(timer_payload,dict) and timer_payload:
+        payload["timer"]=timer_payload
     if plan.action is CuratedProtocolAction.START and plan.state_changed:
         event_type="session_started"
     elif plan.action is CuratedProtocolAction.NEXT and plan.state_changed:
@@ -1967,17 +1997,38 @@ def _record_experiment_report_plan(
             status="stopped",
             event_key=f"{event_key}-finalize",
         )
+    elif (
+        plan.action is CuratedProtocolAction.NEXT
+        and plan.state_changed
+        and not curated.active
+        and curated._workflow_status=="completed"
+    ):
+        completed_key=f"{event_key}-workflow-completed"
+        report=store.append_event(
+            session.experiment_report_id,
+            event_key=completed_key,
+            event_type="workflow_completed",
+            step_id=step_id,
+            step_label=step_label,
+            payload=payload,
+        )
+        report=store.finalize(
+            session.experiment_report_id,
+            status="completed",
+            event_key=f"{event_key}-finalize",
+        )
     return report
 
 
 def _public_experiment_report_state(report:dict)->dict:
+    events=list(report.get("events") or ())
     return {
         key:report.get(key) for key in (
             "report_id","status","started_at","ended_at","anomaly_count",
             "blocker_count","finalization_version","development_only",
             "session_id","protocol_id",
         )
-    } | {"event_count":len(report.get("events",()))}
+    } | {"event_count":len(events),"events":events}
 
 
 def _research_terminal_status(status:str)->str:
@@ -2734,17 +2785,32 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             code="report_persistence_failed")
                     else:
                         report_prepared=True
-                        acknowledged=(
-                            f"말씀하신 이상 사항을 현재 {plan.step_label}단계 실험 기록에 남겼습니다. "
-                            "프로토콜 상태는 변경하지 않았습니다."
-                            if turn_language=="ko" else
-                            f"The reported issue was added to the experiment record for step {plan.step_label}. The protocol state did not change."
-                        )
-                        plan=replace(
-                            plan,display_text=acknowledged,
-                            speech_text=acknowledged,
-                            speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                        )
+                        if plan.action is CuratedProtocolAction.REPORT_ANOMALY:
+                            follow_up = (
+                                " 어떤 종류의 색 변화를 보셨나요?"
+                                if "What kind of color change" not in (plan.speech_text or "")
+                                and "색 변화" in (plan.speech_text or "") else
+                                " What kind of color change did you observe?"
+                                if "What kind of color change" in (plan.speech_text or "") else
+                                ""
+                            )
+                            if turn_language=="ko":
+                                acknowledged=(
+                                    f"말씀하신 이상 사항을 현재 {plan.step_label}단계 실험 기록에 남겼습니다. "
+                                    "프로토콜 상태는 변경하지 않았습니다."
+                                    + follow_up
+                                )
+                            else:
+                                acknowledged=(
+                                    f"The reported issue was added to the experiment record for step {plan.step_label}. "
+                                    "The protocol state did not change."
+                                    + follow_up
+                                )
+                            plan=replace(
+                                plan,display_text=acknowledged,
+                                speech_text=acknowledged,
+                                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                            )
                         await report_state(report)
             display_text=plan.display_text
             speech_text=plan.speech_text
@@ -4376,22 +4442,50 @@ async def voice_socket(websocket:WebSocket):
             elif control["type"] in {"experiment.report.get", "experiment.report.status.get"}:
                 try:
                     store = session.experiment_report_store
-                    if store is not None:
+                    if store is None:
+                        await websocket.send_text(event(
+                            "experiment.report.error",
+                            configuration_id=session.accepted_configuration_id,
+                            generation=session.generation,
+                            code="report_store_unavailable"))
+                    else:
                         if session.experiment_report_id is None and session.curated_protocol_session is not None:
                             _open_experiment_report(session, session.curated_protocol_session)
                         report_id = control.get("report_id") or session.experiment_report_id
-                        if report_id:
-                            report = store.get_report(report_id)
-                            if report is not None:
+                        if not report_id:
+                            await websocket.send_text(event(
+                                "experiment.report.error",
+                                configuration_id=session.accepted_configuration_id,
+                                generation=session.generation,
+                                code="report_id_missing"))
+                        else:
+                            try:
+                                report = store.get_report(report_id)
+                            except (KeyError, ValueError):
+                                await websocket.send_text(event(
+                                    "experiment.report.error",
+                                    configuration_id=session.accepted_configuration_id,
+                                    generation=session.generation,
+                                    report_id=report_id,
+                                    code="report_not_found"))
+                            else:
+                                public=_public_experiment_report_state(report)
+                                public["reports"]=store.list_reports(
+                                    session_id=session.session_id)
                                 await websocket.send_text(event(
                                     "experiment.report.state",
                                     configuration_id=session.accepted_configuration_id,
-                                    turn_id=session.active_turn_id or max(0, session.next_turn_id - 1),
                                     generation=session.generation,
-                                    report=report,
+                                    session_id=session.session_id,
+                                    report=public,
                                 ))
                 except Exception as err:
                     log.warning("experiment.report.get failed non-fatally: %s", err)
+                    await websocket.send_text(event(
+                        "experiment.report.error",
+                        configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,
+                        code="report_lookup_failed"))
             elif control["type"]=="report.status.get":
                 try:
                     result=await asyncio.to_thread(

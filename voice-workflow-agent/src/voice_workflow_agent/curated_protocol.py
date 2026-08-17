@@ -15,6 +15,7 @@ import struct
 import time
 import zlib
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -414,6 +415,7 @@ class CuratedProtocolTurnPlan:
     claim_requests: tuple["ClaimRequest", ...] = ()
     plausibility_status: str | None = None
     plausibility_reason: str | None = None
+    timer_payload: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -869,6 +871,75 @@ def normalize_conversational_utterance(value: str) -> str:
 def _semantic_utterance_key(value: str) -> str:
     """Normalize harmless speech variation without fuzzy intent inference."""
     return normalize_conversational_utterance(value)
+
+
+def _utterance_looks_like_new_command(transcript: str) -> bool:
+    """True for a new workflow/control command, false for descriptive follow-ups."""
+
+    key = _semantic_utterance_key(transcript)
+    if not key:
+        return False
+    if key in _WORKFLOW_COMMANDS or key in _FULL_DETAIL_COMMANDS:
+        return True
+    if _SPECIFIC_STEP_PATTERN.fullmatch(key):
+        return True
+    if any(pattern.fullmatch(key) for pattern in _CURRENT_INFORMATION_PATTERNS):
+        return True
+    if any(pattern.fullmatch(key) for pattern in _UNDERSPECIFIED_RESULT_PATTERNS):
+        return True
+    command_groups = (
+        _PAUSE_PATTERNS,
+        _RESUME_PATTERNS,
+        _TIMER_START_PATTERNS,
+        _TIMER_QUERY_PATTERNS,
+        _AGENT_META_PATTERNS,
+        _NATURAL_STOP_PATTERNS,
+        _NAVIGATION_PATTERNS,
+        _NEXT_INFORMATION_PATTERNS,
+        _AUDIO_RECOVERY_PATTERNS,
+        _REPORT_REQUEST_PATTERNS,
+        _COMPLETION_AND_NEXT_PATTERNS,
+        _COMPLETION_ONLY_PATTERNS,
+        _PREVIEW_STEP_PATTERNS,
+        _CANCEL_READONLY_PATTERNS,
+        _SOURCE_REQUEST_PATTERNS,
+        _STEP_ELABORATION_PATTERNS,
+        _EXPECTED_RESULT_PATTERNS,
+        _EXTERNAL_MORE_PATTERNS,
+        _REPEAT_PATTERNS,
+        _UNRELIABLE_TRANSCRIPT_PATTERNS,
+        _AMBIGUOUS_COMPLETION_PATTERNS,
+    )
+    if any(pattern.search(key) for group in command_groups for pattern in group):
+        return True
+    if any(pattern.search(key) for _scope, pattern in _PROTOCOL_SCOPE_PATTERNS):
+        return True
+    if any(pattern.search(key) for pattern, _category in _ANOMALY_PATTERNS):
+        return True
+    if _COMPLETION_CLAIM.search(key) or _NEXT_STEP_REQUEST.search(key):
+        return True
+    return False
+
+
+def _utterance_looks_like_anomaly_follow_up(transcript: str) -> bool:
+    """True only for a descriptive color/appearance answer to the pending anomaly prompt."""
+
+    key = _semantic_utterance_key(transcript)
+    if not key or _utterance_looks_like_new_command(transcript):
+        return False
+    if re.search(
+        r"(?:무슨\s*의미|무슨\s*뜻|의미야|뜻이야|왜\s*(?:변|그래|이래)|원인|설명해|"
+        r"뭐가\s*문제|어떤\s*의미|what\s+does|what\s+is\s+the\s+meaning|"
+        r"why\s+(?:did|does|is)|explain)",
+        key,
+    ):
+        return False
+    return bool(re.search(
+        r"(?:노란|갈색|투명|흐려|탁해|하얗|검게|붉|파란|초록|주황|분홍|"
+        r"변색|색이\s*변|색깔이\s*변|turned|became|yellow|brown|cloudy|"
+        r"clear|white|dark|orange|pink|purple|green|red|blue)",
+        key,
+    ))
 
 
 @dataclass(frozen=True)
@@ -1587,7 +1658,11 @@ _NEXT_INFORMATION_PATTERNS = (
 )
 _CURRENT_INFORMATION_PATTERNS = (
     re.compile(r"^(?:what(?:'s|\s+is)\s+(?:the\s+)?current\s+step)$"),
+    re.compile(r"^(?:what\s+should\s+i\s+do\s+(?:now|next)|what\s+do\s+i\s+do\s+now)$"),
     re.compile(r"^(?:(?:이\s*)?실험에서\s*)?(?:지금|현재)\s*단계(?:는|가)?\s*(?:뭐야|무엇|어디야)$"),
+    re.compile(
+        r"^(?:지금|현재)\s*(?:뭐|무엇을?)\s*(?:해야|할)\s*(?:돼|되|하나요|합니까|해)$"
+    ),
 )
 _OPERATIONAL_DEVIATION_PATTERNS = (
     re.compile(
@@ -2573,6 +2648,9 @@ _WORKFLOW_COMMANDS = {
     "현재 단계 다시 알려줘": CuratedProtocolAction.CURRENT,
     "현재 단계를 다시 알려줘": CuratedProtocolAction.CURRENT,
     "지금 무슨 단계야": CuratedProtocolAction.CURRENT,
+    "지금 뭐 해야 돼": CuratedProtocolAction.CURRENT,
+    "지금 뭐 해야 되": CuratedProtocolAction.CURRENT,
+    "what should i do now": CuratedProtocolAction.CURRENT,
     "current step": CuratedProtocolAction.CURRENT,
     "다시 말해 줘": CuratedProtocolAction.REPEAT,
     "다시 말해줘": CuratedProtocolAction.REPEAT,
@@ -3124,6 +3202,9 @@ class CuratedProtocolSession:
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
+        self._experiment_started_at: float | None = None
+        self._experiment_ended_at: float | None = None
+        self._pending_anomaly: dict[str, Any] | None = None
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:
@@ -3151,23 +3232,116 @@ class CuratedProtocolSession:
         return True, duration, f"Started {duration}s timer"
 
     def timer_status(self, now: float | None = None) -> dict[str, Any]:
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps)
+            else None
+        )
+        current_time = time.time() if now is None else now
         if self._timer_started_at is None or self._timer_duration_seconds is None or self._timer_step_index is None:
+            duration = _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0)
             return {
                 "state": "not_started",
-                "duration_seconds": _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0),
-                "remaining_seconds": _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0),
+                "duration_seconds": duration,
+                "remaining_seconds": duration,
                 "step_index": self.current_index,
+                "step_id": step.step_id if step is not None else None,
+                "step_label": step.source_label if step is not None else None,
+                "deadline_at": None,
             }
-        current_time = time.time() if now is None else now
         elapsed = current_time - self._timer_started_at
         remaining = max(0, int(round(self._timer_duration_seconds - elapsed)))
         state = "running" if remaining > 0 else "expired"
+        deadline = datetime.fromtimestamp(
+            self._timer_started_at + self._timer_duration_seconds,
+            tz=timezone.utc,
+        ).isoformat()
+        timed_step = (
+            self.fixture.steps[self._timer_step_index]
+            if 0 <= self._timer_step_index < len(self.fixture.steps)
+            else step
+        )
         return {
             "state": state,
             "duration_seconds": self._timer_duration_seconds,
             "remaining_seconds": remaining,
             "elapsed_seconds": int(round(elapsed)),
             "step_index": self._timer_step_index,
+            "step_id": timed_step.step_id if timed_step is not None else None,
+            "step_label": timed_step.source_label if timed_step is not None else None,
+            "deadline_at": deadline,
+            "started_at": datetime.fromtimestamp(
+                self._timer_started_at, tz=timezone.utc
+            ).isoformat(),
+        }
+
+    def experiment_timer_status(self, now: float | None = None) -> dict[str, Any]:
+        current_time = time.time() if now is None else now
+        if self._experiment_started_at is None:
+            return {
+                "state": "not_started",
+                "started_at": None,
+                "ended_at": None,
+                "elapsed_seconds": 0,
+            }
+        ended_at = self._experiment_ended_at
+        elapsed_end = ended_at if ended_at is not None else current_time
+        elapsed = max(0, int(round(elapsed_end - self._experiment_started_at)))
+        if ended_at is not None:
+            state = "stopped"
+        else:
+            state = "running"
+        return {
+            "state": state,
+            "started_at": datetime.fromtimestamp(
+                self._experiment_started_at, tz=timezone.utc
+            ).isoformat(),
+            "ended_at": (
+                datetime.fromtimestamp(ended_at, tz=timezone.utc).isoformat()
+                if ended_at is not None
+                else None
+            ),
+            "elapsed_seconds": elapsed,
+        }
+
+    def _clear_step_timer(self) -> None:
+        self._timer_started_at = None
+        self._timer_duration_seconds = None
+        self._timer_step_index = None
+
+    def _stop_experiment_clock(self, now: float | None = None) -> None:
+        if self._experiment_started_at is None:
+            return
+        if self._experiment_ended_at is None:
+            self._experiment_ended_at = time.time() if now is None else now
+
+    def _start_experiment_clock_once(self, now: float | None = None) -> bool:
+        if self._experiment_started_at is not None:
+            return False
+        self._experiment_started_at = time.time() if now is None else now
+        self._experiment_ended_at = None
+        return True
+
+    def _record_early_step_timer_exit(self) -> dict[str, Any] | None:
+        if (
+            self._timer_started_at is None
+            or self._timer_duration_seconds is None
+            or self._timer_step_index is None
+        ):
+            return None
+        status = self.timer_status()
+        if status.get("state") != "running":
+            return None
+        return {
+            "demo_bypassed": True,
+            "step_exited_before_timer_elapsed": True,
+            "step_id": status.get("step_id"),
+            "step_label": status.get("step_label"),
+            "source_duration_seconds": status.get("duration_seconds"),
+            "started_at": status.get("started_at"),
+            "elapsed_seconds": status.get("elapsed_seconds"),
+            "remaining_seconds": status.get("remaining_seconds"),
+            "completion_state": "step_exited_before_timer_elapsed",
         }
 
     def _entity_inventory(self) -> tuple[str, ...]:
@@ -3784,6 +3958,9 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._experiment_started_at = None
+        self._experiment_ended_at = None
+        self._pending_anomaly = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -3804,6 +3981,9 @@ class CuratedProtocolSession:
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
+        self._experiment_started_at = None
+        self._experiment_ended_at = None
+        self._pending_anomaly = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -3869,6 +4049,9 @@ class CuratedProtocolSession:
         float | None,
         int | None,
         int | None,
+        float | None,
+        float | None,
+        dict[str, Any] | None,
     ]:
         return (
             self.active,
@@ -3887,28 +4070,14 @@ class CuratedProtocolSession:
             self._timer_started_at,
             self._timer_duration_seconds,
             self._timer_step_index,
+            self._experiment_started_at,
+            self._experiment_ended_at,
+            self._pending_anomaly,
         )
 
     def _restore(
         self,
-        checkpoint: tuple[
-            bool,
-            int,
-            int,
-            str | None,
-            dict[int, CuratedProtocolTurnPlan],
-            tuple[str, ...],
-            str | None,
-            str | None,
-            tuple[str, ...],
-            PendingCompletionConfirmation | None,
-            PendingObservationConfirmation | None,
-            ProtocolDiscourseContext,
-            str,
-            float | None,
-            int | None,
-            int | None,
-        ],
+        checkpoint: tuple[Any, ...],
     ) -> None:
         (
             self.active,
@@ -3927,7 +4096,15 @@ class CuratedProtocolSession:
             self._timer_started_at,
             self._timer_duration_seconds,
             self._timer_step_index,
-        ) = checkpoint
+        ) = checkpoint[:16]
+        if len(checkpoint) >= 19:
+            self._experiment_started_at = checkpoint[16]
+            self._experiment_ended_at = checkpoint[17]
+            self._pending_anomaly = checkpoint[18]
+        else:
+            self._experiment_started_at = None
+            self._experiment_ended_at = None
+            self._pending_anomaly = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -4391,6 +4568,10 @@ class CuratedProtocolSession:
             "critical_warning_texts": [],
             "workflow_status": self.workflow_status,
             "timer": self.timer_status(),
+            "timers": {
+                "experiment": self.experiment_timer_status(),
+                "step": self.timer_status(),
+            },
         }
 
     def _current_step_readiness_blocker(
@@ -4588,7 +4769,25 @@ class CuratedProtocolSession:
                 self._pending_completion_confirmation = None
             if observation_pending_valid:
                 self._pending_observation_confirmation = None
-            intent = classify_curated_control_intent(
+            pending_anomaly = self._pending_anomaly
+            if (
+                pending_anomaly
+                and self.active
+                and _utterance_looks_like_anomaly_follow_up(transcript)
+            ):
+                intent = CuratedControlIntent(
+                    intent_kind="enrich_pending_anomaly",
+                    action=CuratedProtocolAction.REPORT_ANOMALY,
+                    question_kind="anomaly",
+                    language=language,
+                    reported_anomaly=True,
+                    anomaly_category=str(
+                        pending_anomaly.get("category") or "protocol_block"
+                    ),
+                    normalized_transcript=_utterance_key(transcript),
+                )
+            else:
+                intent = classify_curated_control_intent(
                 transcript,
                 language=language,
                 entity_inventory=self._entity_inventory(),
@@ -4691,9 +4890,13 @@ class CuratedProtocolSession:
         changed = False
 
         if command is CuratedProtocolAction.STOP:
-            changed = self.active
+            changed = self.active or self._experiment_started_at is not None
             self.active = False
             self._block_reason = None
+            self._workflow_status = "stopped"
+            self._stop_experiment_clock()
+            self._clear_step_timer()
+            self._pending_anomaly = None
             action = CuratedProtocolAction.STOP
             response = {
                 "en": "The protocol session has ended without a completion claim.",
@@ -4713,6 +4916,7 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.START:
             resumed = self.active and bool(self._replay)
+            clock_started = self._start_experiment_clock_once()
             if not self.active:
                 self.active = True
                 self._workflow_status = "active"
@@ -4721,6 +4925,8 @@ class CuratedProtocolSession:
                 changed = True
             else:
                 self._workflow_status = "active"
+                if clock_started:
+                    changed = True
             step = steps[self.current_index]
             control_text = _control_speech(
                 CuratedProtocolAction.START,
@@ -4937,9 +5143,9 @@ class CuratedProtocolSession:
                 )
             else:
                 response = (
-                    f"현재 {step.source_label}단계에는 설정된 타이머 시간이 없습니다."
+                    f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 전체 실험 경과 시간은 계속 기록 중입니다."
                     if language == "ko" else
-                    f"There is no configured timer duration for step {step.source_label}."
+                    f"Step {step.source_label} has no separate protocol-defined timer. The overall experiment elapsed time is still being recorded."
                 )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.START_TIMER,
@@ -4985,9 +5191,9 @@ class CuratedProtocolSession:
                     )
                 else:
                     response = (
-                        f"현재 {step.source_label}단계에는 설정된 타이머가 없습니다."
+                        f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 전체 실험 경과 시간은 계속 기록 중입니다."
                         if language == "ko" else
-                        f"There is no active timer for step {step.source_label}."
+                        f"Step {step.source_label} has no separate protocol-defined timer. The overall experiment elapsed time is still being recorded."
                     )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.TIMER_STATUS,
@@ -5039,6 +5245,8 @@ class CuratedProtocolSession:
             CuratedProtocolAction.PROTOCOL_QUERY,
             CuratedProtocolAction.AGENT_META,
             CuratedProtocolAction.PREVIEW_STEP,
+            CuratedProtocolAction.CURRENT,
+            CuratedProtocolAction.FULL_DETAIL,
         ):
             if self._workflow_status in {"preview", "ready"}:
                 response = {
@@ -5065,20 +5273,75 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.REPORT_ANOMALY:
             step = steps[self.current_index]
-            response = {
-                "en": (
-                    f"I recognized an issue to record against step {step.source_label}. "
-                    "I will confirm only after the experiment record accepts it."
-                ),
-                "vi": (
-                    f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
-                    "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công."
-                ),
-                "ko": (
-                    f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
-                    "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다."
-                ),
-            }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+            category = intent.anomaly_category or "protocol_block"
+            existing = self._pending_anomaly if isinstance(self._pending_anomaly, dict) else None
+            if intent.intent_kind == "enrich_pending_anomaly" and existing:
+                notes = list(existing.get("notes") or [])
+                note = transcript.strip()[:800]
+                if note and note not in notes:
+                    notes.append(note)
+                self._pending_anomaly = {
+                    **existing,
+                    "notes": notes,
+                    "text": note or existing.get("text"),
+                    "step_label": step.source_label,
+                    "step_id": step.step_id,
+                }
+                response = {
+                    "en": (
+                        f"I added that detail to the pending issue for step {step.source_label}. "
+                        "I will confirm only after the experiment record accepts it."
+                    ),
+                    "vi": (
+                        f"Tôi đã bổ sung chi tiết vào sự cố đang chờ ghi ở bước {step.source_label}. "
+                        "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công."
+                    ),
+                    "ko": (
+                        f"현재 {step.source_label}단계의 대기 중인 이상 기록에 그 내용을 추가했습니다. "
+                        "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다."
+                    ),
+                }.get(language, "이상 사항 추가 내용을 확인했습니다.")
+            else:
+                self._pending_anomaly = {
+                    "category": category,
+                    "text": transcript.strip()[:800],
+                    "step_label": step.source_label,
+                    "step_id": step.step_id,
+                    "notes": [transcript.strip()[:800]],
+                }
+                if category == "protocol_block":
+                    response = {
+                        "en": (
+                            f"I recognized an issue to record against step {step.source_label}. "
+                            "I will confirm only after the experiment record accepts it. "
+                            "What kind of color change did you observe?"
+                        ),
+                        "vi": (
+                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
+                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công. "
+                            "Bạn quan sát thấy màu thay đổi như thế nào?"
+                        ),
+                        "ko": (
+                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
+                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다. "
+                            "어떤 종류의 색 변화를 보셨나요?"
+                        ),
+                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+                else:
+                    response = {
+                        "en": (
+                            f"I recognized an issue to record against step {step.source_label}. "
+                            "I will confirm only after the experiment record accepts it."
+                        ),
+                        "vi": (
+                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
+                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công."
+                        ),
+                        "ko": (
+                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
+                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다."
+                        ),
+                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.REPORT_ANOMALY,
                 display_text=response,
@@ -5090,7 +5353,7 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
                 reported_anomaly=True,
-                anomaly_category=intent.anomaly_category,
+                anomaly_category=category,
                 anomaly_text=transcript.strip()[:800],
             )
         elif command is CuratedProtocolAction.SHOW_REPORT:
@@ -5409,6 +5672,8 @@ class CuratedProtocolSession:
                     observation_outcome=intent.observation_outcome,
                 )
             elif self.current_index < len(steps) - 1:
+                early_exit = self._record_early_step_timer_exit()
+                self._clear_step_timer()
                 self.current_index += 1
                 self._block_reason = None
                 changed = True
@@ -5450,39 +5715,49 @@ class CuratedProtocolSession:
                     reported_observation=intent.reported_observation,
                     observation_predicate=intent.observation_predicate,
                     observation_outcome=intent.observation_outcome,
+                    timer_payload=early_exit,
                 )
             else:
+                early_exit = self._record_early_step_timer_exit()
+                self._clear_step_timer()
+                self._stop_experiment_clock()
+                self.active = False
+                self._workflow_status = "completed"
                 self._block_reason = "final_step_boundary"
+                self._pending_anomaly = None
                 step = steps[self.current_index]
+                if language == "ko":
+                    speech = (
+                        f"마지막 {step.source_label}단계까지 진행했습니다. "
+                        "실험을 완료로 기록하고 전체 경과 시간을 멈췄습니다."
+                    )
+                elif language == "vi":
+                    speech = (
+                        f"Đã đến bước cuối {step.source_label}. "
+                        "Phiên được ghi là hoàn thành và đồng hồ thí nghiệm đã dừng."
+                    )
+                else:
+                    speech = (
+                        f"The final step {step.source_label} has been reached. "
+                        "The experiment is recorded as completed and the overall timer has stopped."
+                    )
                 response = _step_reply(
                     language,
                     step.source_label,
                     step.instruction_source_text,
-                    prefix=(
-                        "The final-step boundary has been reached."
-                        if language == "en"
-                        else "마지막 단계이며 더 진행하지 않습니다."
-                    ),
+                    prefix=speech,
                     development_only=self.fixture.development_only,
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
                     display_text=response,
-                    speech_text=(
-                        "The final-step boundary has been reached; no further "
-                        "step was created."
-                        if language == "en"
-                        else (
-                            "Đã đến giới hạn bước cuối; không tạo thêm bước nào."
-                            if language == "vi"
-                            else "마지막 단계 경계이며 더 진행하지 않습니다."
-                        )
-                    ),
-                    speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                    speech_text=speech,
+                    speech_mode=CuratedProtocolSpeechMode.STOP,
                     facts=self.fixture.facts_for_step(self.current_index),
                     step_label=step.source_label,
                     final_step=True,
-                    state_changed=False,
+                    state_changed=True,
+                    timer_payload=early_exit,
                     intent_kind=intent.intent_kind,
                     reported_completion=intent.reported_completion,
                     requested_transition=intent.requested_transition,
@@ -5497,22 +5772,42 @@ class CuratedProtocolSession:
             CuratedProtocolAction.REPEAT,
         ):
             if not self.active:
-                response = (
-                    "아직 실험을 시작하지 않았습니다. 시작하면 1단계부터 진행합니다. 원하시면 1단계를 미리 설명해드릴게요."
-                    if language == "ko" else
-                    "The experiment has not started yet. When started, it will begin from Step 1. If you'd like, I can preview Step 1 for you."
+                preview_index = 0
+                preview_step = steps[preview_index]
+                if language == "ko":
+                    control_text = (
+                        "아직 실험 시작 전입니다. 1단계 내용을 화면에 표시했어요. "
+                        "지금 실험을 시작할까요?"
+                    )
+                else:
+                    control_text = (
+                        "The experiment has not started yet. I displayed Step 1 on the screen. "
+                        "Would you like to start the experiment now?"
+                    )
+                response, primary, sources, pages, evidence_ids, translation_status = (
+                    _step_presentation(
+                        self.fixture,
+                        preview_index,
+                        language,
+                        control_text,
+                    )
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=command,
                     display_text=response,
-                    speech_text=response,
+                    speech_text=control_text,
                     speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                    facts=(),
+                    facts=self.fixture.facts_for_step(preview_index),
                     step_label=None,
                     final_step=False,
                     state_changed=False,
-                    primary_text=response,
+                    primary_text=primary,
+                    source_texts=sources,
+                    source_pages=pages,
+                    evidence_ids=evidence_ids,
+                    translation_status=translation_status,
                     intent_kind=intent.intent_kind,
+                    target_step=preview_step.source_label,
                 )
             else:
                 step = steps[self.current_index]

@@ -60,8 +60,9 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
         )
         self.assertEqual(parts[0], ("format", (None, "true")))
         self.assertEqual(parts[1], ("language", (None, "ko")))
+        self.assertEqual(parts[2], ("vad_threshold", (None, "0.5")))
         self.assertEqual(parts[-1][0], "file")
-        self.assertEqual(tuple(item[1][1] for item in parts[2:-1]), bounded)
+        self.assertEqual(tuple(item[1][1] for item in parts[3:-1]), bounded)
         self.assertTrue(wav.startswith(b"RIFF"))
         self.assertLessEqual(len(bounded), 100)
 

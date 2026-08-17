@@ -449,36 +449,10 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             "citations": [url],
             "usage": {"server_side_tool_usage": {"WEB_SEARCH": 1}},
         }
-        class Stream:
-            def __init__(self):
-                self.closed = False
-                self.events = [
-                    SimpleNamespace(
-                        type="response.output_item.added",
-                        item=SimpleNamespace(type="web_search_call"),
-                    ),
-                    SimpleNamespace(type="response.output_text.delta"),
-                    SimpleNamespace(
-                        type="response.output_item.done",
-                        item=SimpleNamespace(type="web_search_call"),
-                    ),
-                    SimpleNamespace(type="response.completed", response=final),
-                ]
-            def __aiter__(self):
-                self.iterator = iter(self.events)
-                return self
-            async def __anext__(self):
-                try:
-                    return next(self.iterator)
-                except StopIteration:
-                    raise StopAsyncIteration
-            async def close(self):
-                self.closed = True
         endpoint = SimpleNamespace()
         async def create(**kwargs):
             endpoint.kwargs = kwargs
-            endpoint.stream = Stream()
-            return endpoint.stream
+            return final
         endpoint.create = create
         result = await XaiAuthoritativeWebSearch(
             SimpleNamespace(responses=endpoint),
@@ -487,12 +461,11 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             ),
         ).search("unique streaming AMBIC query", language="ko")
         self.assertEqual(result["status"], "success")
-        self.assertTrue(result["streaming"])
-        self.assertEqual(result["event_count"], 4)
-        self.assertGreaterEqual(result["tool_event_count"], 2)
-        self.assertTrue(endpoint.kwargs["stream"])
+        self.assertFalse(result["streaming"])
+        self.assertEqual(result["event_count"], 0)
+        self.assertEqual(result["tool_event_count"], 0)
+        self.assertFalse(endpoint.kwargs["stream"])
         self.assertEqual(endpoint.kwargs["max_output_tokens"], 800)
-        self.assertTrue(endpoint.stream.closed)
 
     async def test_external_adapter_distinguishes_tool_and_schema_failures(self):
         url = "https://www.osha.gov/laboratory"
