@@ -414,7 +414,9 @@ class ExperimentReportStore:
     def docx_bytes(self, report_id: str) -> bytes:
         return self.export_docx(report_id)
 
-    def export_docx(self, report_id: str) -> bytes:
+    def export_docx(
+        self, report_id: str, narrative: ReportNarrative | None = None
+    ) -> bytes:
         """Export a bounded undergraduate lab-report .docx from the event ledger.
 
         Student metadata fields stay blank. The SQLite event ledger remains the
@@ -497,66 +499,42 @@ class ExperimentReportStore:
             reason = pe.get("user_wording") or (pe.get("payload") or {}).get("reason") or "Paused"
             pause_lines.append(f"• [{clock}] Paused: {reason}")
 
+        timeline = [_human_event_label(e) for e in events if _human_event_label(e)]
+
+        # Use narrative if provided, otherwise deterministic narrative
+        if narrative is None:
+            writer = ReportWriterBrain()
+            narrative = writer.build_deterministic_narrative(report, events)
+
         sections = (
             (
-                "I. Purpose",
-                (
-                    f"Protocol: {report.get('protocol_title') or '—'} "
-                    f"({report.get('protocol_id') or '—'}).\n"
-                    f"Session Report ID: {report_id}.\n"
-                    f"Execution Mode: {'Development' if report.get('development_only') else 'Approved Production'}."
-                ),
+                "I. Purpose / 실험 목적",
+                f"Protocol: {report.get('protocol_title') or '—'} ({report.get('protocol_id') or '—'}).\n"
+                f"Session Report ID: {report_id}.\n"
+                f"{narrative.objective}"
             ),
             (
-                "II. Materials and Methods",
-                (
-                    f"Protocol Revision: {report.get('protocol_revision') or '—'}.\n"
-                    f"Readiness Status: {report.get('readiness_status') or '—'}.\n"
-                    f"Protocol SHA-256: {report.get('protocol_sha256') or '—'}.\n"
-                    "Admitted Protocol Materials:\n"
-                    "• Solution A: 25 mM AMBIC in HPLC water / Acetonitrile (2:1 v/v)\n"
-                    "• Solution B: 25 mM AMBIC in HPLC water\n"
-                    "• DTT: 1.5 mg/mL (10 mM) in 25 mM AMBIC\n"
-                    "• Iodoacetamide: 10 mg/mL (60 mM) in 25 mM AMBIC\n"
-                    "• Trypsin: 6 ng/µL in 25 mM AMBIC\n"
-                    "• Formic acid: LC-MS grade (final 1% v/v)\n"
-                    "Operating Conditions: Eppendorf Thermomixer at 800 rpm, 37 °C / 60 °C."
-                ),
+                "II. Materials and Methods / 재료 및 실험 방법",
+                f"Protocol Revision: {report.get('protocol_revision') or '—'}.\n"
+                f"Readiness Status: {report.get('readiness_status') or '—'}.\n"
+                f"Protocol SHA-256: {report.get('protocol_sha256') or '—'}.\n"
+                f"{narrative.materials_and_methods}"
             ),
             (
-                "III. Results",
-                (
-                    ("Execution Event Timeline:\n" + "\n".join(timeline))
-                    if timeline else "No recorded events."
-                )
-                + (
-                    ("\n\nRecorded Observations:\n" + "\n".join(observation_lines))
-                    if observation_lines else ""
-                ),
+                "III. Results / 수행 내용 및 관찰 결과",
+                ((f"Execution Event Timeline:\n" + "\n".join(f"• {item}" for item in timeline) + "\n\n") if timeline else "")
+                + f"{narrative.results_and_observations}"
             ),
             (
-                "IV. Discussion",
-                (
-                    f"Recorded anomalies: {int(report.get('anomaly_count') or 0)}. "
-                    f"Recorded blockers: {int(report.get('blocker_count') or 0)}.\n"
-                    + (
-                        "Anomaly Details:\n" + "\n".join(anomaly_lines)
-                        if anomaly_lines else "No abnormal deviations or hazards were encountered."
-                    )
-                    + (
-                        ("\nPause/Resume Record:\n" + "\n".join(pause_lines))
-                        if pause_lines else ""
-                    )
-                ),
+                "IV. Discussion / 고찰",
+                f"Recorded anomalies: {int(report.get('anomaly_count') or 0)}. Recorded blockers: {int(report.get('blocker_count') or 0)}.\n"
+                f"{narrative.discussion}"
             ),
             (
-                "V. Conclusion",
-                (
-                    f"Status: {report.get('status') or '—'}. "
-                    f"Started: {started or '—'}. "
-                    f"Ended: {ended or '—'}.\n"
-                    f"Cryptographic Ledger Events: {len(events)} events committed."
-                ),
+                "V. Conclusion / 결론",
+                f"Status: {report.get('status') or '—'}. Started: {started or '—'}. Ended: {ended or '—'}.\n"
+                f"Cryptographic Ledger Events: {len(events)} events committed.\n"
+                f"{narrative.conclusion}"
             ),
         )
         for heading, body in sections:
@@ -569,10 +547,10 @@ class ExperimentReportStore:
                 p = document.add_paragraph(line)
                 p.paragraph_format.space_after = Pt(2)
 
-        # Structured Event Table
+        # Structured Event Table as Appendix
         if visible_events:
             table_heading = document.add_paragraph()
-            table_run = table_heading.add_run("Structured Event Timeline Table / 구조화된 이벤트 타임라인 표")
+            table_run = table_heading.add_run("VI. 부록: 상세 이벤트 감사 기록 / Appendix: Detailed Event Ledger")
             table_run.bold = True
             table_run.font.size = Pt(11)
             table_run.font.color.rgb = RGBColor(20, 50, 35)
@@ -623,6 +601,22 @@ class ExperimentReportStore:
 
 
 @dataclass(frozen=True)
+class ReportNarrative:
+    """Structured, professional narrative laboratory report produced by ReportWriterBrain."""
+
+    title: str
+    objective: str
+    session_summary: str
+    chronological_highlights: tuple[str, ...]
+    materials_and_methods: str
+    results_and_observations: str
+    discussion: str
+    anomalies_and_deviations: str
+    conclusion: str
+    limitations: str
+
+
+@dataclass(frozen=True)
 class ReportDraftState:
     """Server-owned structured draft state for specialized report writing."""
 
@@ -641,12 +635,46 @@ class ReportDraftState:
     last_updated_at: str = ""
 
 
+@dataclass(frozen=True)
+class ReportWriterSettings:
+    enabled: bool = True
+    model: str = "grok-4.6"
+    timeout_seconds: float = 25.0
+
+    @classmethod
+    def from_environment(cls) -> "ReportWriterSettings":
+        enabled_val = os.environ.get(
+            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_ENABLED", "true"
+        ).strip().casefold()
+        enabled = enabled_val in _TRUE
+        model = os.environ.get(
+            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_MODEL",
+            os.environ.get("EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
+        ).strip() or "grok-4.6"
+        try:
+            timeout = float(os.environ.get(
+                "VOICE_WORKFLOW_AGENT_REPORT_WRITER_TIMEOUT_SECONDS", "25"
+            ).strip())
+        except ValueError:
+            timeout = 25.0
+        return cls(enabled=enabled, model=model, timeout_seconds=timeout)
+
+
+_NARRATIVE_CACHE: dict[tuple[str, int, str, str], ReportNarrative] = {}
+
+
 class ReportWriterBrain:
     """Specialist Brain generating faithful laboratory report prose from event ledgers."""
 
-    def __init__(self, client: Any = None, model: str = "grok-4.6") -> None:
+    def __init__(
+        self,
+        client: Any = None,
+        model: str = "grok-4.6",
+        timeout_seconds: float = 25.0,
+    ) -> None:
         self.client = client
         self.model = model
+        self.timeout_seconds = timeout_seconds
 
     def build_deterministic_draft(
         self,
@@ -695,6 +723,197 @@ class ReportWriterBrain:
             committed_event_ids=event_ids,
             last_updated_at=_now(),
         )
+
+    def build_deterministic_narrative(
+        self,
+        report_data: dict[str, Any],
+        events: list[dict[str, Any]],
+    ) -> ReportNarrative:
+        """Create a faithful, unhallucinated report narrative directly from SQLite events."""
+        title = str(report_data.get("protocol_title") or "Laboratory Experiment Report")
+        report_id = str(report_data.get("report_id") or "—")
+        status = str(report_data.get("status") or "in_progress")
+        started = _human_event_clock(report_data.get("started_at"))
+        ended = _human_event_clock(report_data.get("ended_at"))
+
+        completed_steps = [
+            str(e.get("step_label")) for e in events if e.get("event_type") == "step_completed"
+        ]
+        obs_events = [e for e in events if e.get("event_type") == "observation"]
+        anomaly_events = [
+            e for e in events
+            if e.get("event_type") in ("anomaly", "system_anomaly") or e.get("anomaly_category")
+        ]
+        pause_events = [e for e in events if e.get("event_type") == "workflow_paused"]
+
+        objective = (
+            f"본 실험 세션의 목적은 '{title}' 지침에 따라 검증된 절차를 체계적으로 수행하고, "
+            f"공정별 진행 상태 및 작업자 관찰 결과를 감사 가능한 전자 실험 기록으로 남기는 것이다."
+        )
+
+        session_summary = (
+            f"본 실험 세션({report_id})은 시작 시간({started or '기록됨'})부터 종료 시점까지 "
+            f"총 {len(events)}건의 검증된 이벤트가 등록되었으며, {len(completed_steps)}개의 단계가 완료 처리되었다. "
+            f"현재 세션의 최종 상태는 '{status}'(으)로 기록되었다."
+        )
+
+        highlights = []
+        for e in events:
+            if e.get("event_type") in ("session_started", "step_completed", "workflow_completed", "observation", "anomaly"):
+                highlights.append(_human_event_label(e))
+
+        materials = (
+            f"프로토콜 식별자: {report_data.get('protocol_id') or '—'} (버전: {report_data.get('protocol_revision') or '—'}).\n"
+            f"원문 문서 SHA-256: {report_data.get('protocol_sha256') or '—'}.\n"
+            "본 세션의 모든 수행 지침은 활성화된 실험 PDF 및 검증된 단계 정의에 기반하여 수행되었으며, "
+            "절차 외 비표준 물질의 임의 대체는 허용되지 않았다."
+        )
+
+        results_parts = []
+        if completed_steps:
+            results_parts.append(
+                f"총 {len(completed_steps)}개 단계({', '.join(f'{s}단계' for s in completed_steps)})가 "
+                "작업자의 확인을 거쳐 정상적으로 완료되었다."
+            )
+        else:
+            results_parts.append("진행 중인 단계에 대한 수행 기록이 유지되고 있다.")
+
+        if obs_events:
+            results_parts.append(
+                f"작업자는 총 {len(obs_events)}건의 관찰 결과를 보고하였으며: "
+                + "; ".join(
+                    str(o.get("user_wording") or (o.get("payload") or {}).get("text") or "관찰 기록")
+                    for o in obs_events
+                )
+            )
+        else:
+            results_parts.append("별도의 특이 정성 관찰 결과는 기록되지 않았다.")
+        results_and_obs = " ".join(results_parts)
+
+        discussion_parts = []
+        if anomaly_events:
+            discussion_parts.append(
+                f"세션 진행 중 {len(anomaly_events)}건의 이상/편차 사항이 보고되어 기록되었다."
+            )
+        else:
+            discussion_parts.append("절차 진행 중 보고된 비정상 편차나 위험 요인은 없었다.")
+
+        if pause_events:
+            discussion_parts.append(f"총 {len(pause_events)}회의 일시정지 및 재개가 발생하였다.")
+        discussion_parts.append("모든 수행 내역은 불변 SQLite 이벤트 원장에 무결하게 보존되었다.")
+        discussion = " ".join(discussion_parts)
+
+        anomalies_dev = (
+            "\n".join(
+                f"• [{_human_event_clock(ae.get('created_at'))}] Step {ae.get('step_label') or '—'}: {ae.get('user_wording') or (ae.get('payload') or {}).get('text') or '이상'}"
+                for ae in anomaly_events
+            )
+            if anomaly_events else "특이 이상 또는 절차 차단 사항 없음."
+        )
+
+        conclusion = (
+            f"실험 세션 {report_id}의 최종 상태는 '{status}'이며, "
+            f"총 {len(events)}개의 암호학적 원장 이벤트가 유효하게 확정되었다."
+        )
+
+        limitations = "본 보고서는 시스템에 등록된 실제 이벤트 기록에 한하여 작성되었으며, 미기록된 관찰이나 수치는 포함하지 않는다."
+
+        return ReportNarrative(
+            title=title,
+            objective=objective,
+            session_summary=session_summary,
+            chronological_highlights=tuple(highlights),
+            materials_and_methods=materials,
+            results_and_observations=results_and_obs,
+            discussion=discussion,
+            anomalies_and_deviations=anomalies_dev,
+            conclusion=conclusion,
+            limitations=limitations,
+        )
+
+    async def generate_narrative(
+        self,
+        report_data: dict[str, Any],
+        events: list[dict[str, Any]],
+    ) -> ReportNarrative:
+        """Generate a rich, academic Korean narrative report grounded strictly in the ledger."""
+        report_id = str(report_data.get("report_id") or "")
+        finalization_version = int(report_data.get("finalization_version") or 0)
+        latest_key = str(events[-1].get("event_key") if events else "")
+        cache_key = (report_id, finalization_version, latest_key, self.model)
+
+        cached = _NARRATIVE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        deterministic = self.build_deterministic_narrative(report_data, events)
+        if not self.client:
+            _NARRATIVE_CACHE[cache_key] = deterministic
+            return deterministic
+
+        try:
+            prompt_context = {
+                "report_id": report_id,
+                "protocol_title": report_data.get("protocol_title"),
+                "protocol_id": report_data.get("protocol_id"),
+                "protocol_revision": report_data.get("protocol_revision"),
+                "status": report_data.get("status"),
+                "started_at": report_data.get("started_at"),
+                "ended_at": report_data.get("ended_at"),
+                "events": [
+                    {
+                        "event_type": e.get("event_type"),
+                        "step_label": e.get("step_label"),
+                        "created_at": e.get("created_at"),
+                        "user_wording": e.get("user_wording"),
+                        "payload": e.get("payload"),
+                    }
+                    for e in events
+                ],
+            }
+            system_prompt = (
+                "You are an experienced professional laboratory scientific report writer. "
+                "Write a formal, comprehensive laboratory session report in Korean based strictly on the provided verified experimental event ledger. "
+                "STYLE REQUIREMENTS: Write coherent, academic, natural narrative prose with full paragraphs. "
+                "FACTUAL INTEGRITY RULES: "
+                "1. Do NOT invent or hallucinate any experimental results, qualitative observations, quantitative measurements, or equipment outcomes that were not recorded in the ledger. "
+                "2. If no qualitative observation was logged by the operator, explicitly state that no abnormal visual or qualitative observation was noted ('별도의 특이 관찰 결과는 기록되지 않았다.'). "
+                "3. Ground Materials and Methods strictly in the active protocol and actually completed steps. "
+                "4. Return a valid JSON object matching the requested schema exactly."
+            )
+            user_prompt = f"Experimental Event Ledger:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}"
+
+            resp = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=1500,
+                ),
+                timeout=self.timeout_seconds,
+            )
+            content = resp.choices[0].message.content or ""
+            data = json.loads(content)
+            narrative = ReportNarrative(
+                title=str(data.get("title") or deterministic.title),
+                objective=str(data.get("objective") or deterministic.objective),
+                session_summary=str(data.get("session_summary") or deterministic.session_summary),
+                chronological_highlights=tuple(data.get("chronological_highlights") or deterministic.chronological_highlights),
+                materials_and_methods=str(data.get("materials_and_methods") or deterministic.materials_and_methods),
+                results_and_observations=str(data.get("results_and_observations") or deterministic.results_and_observations),
+                discussion=str(data.get("discussion") or deterministic.discussion),
+                anomalies_and_deviations=str(data.get("anomalies_and_deviations") or deterministic.anomalies_and_deviations),
+                conclusion=str(data.get("conclusion") or deterministic.conclusion),
+                limitations=str(data.get("limitations") or deterministic.limitations),
+            )
+            _NARRATIVE_CACHE[cache_key] = narrative
+            return narrative
+        except Exception:
+            _NARRATIVE_CACHE[cache_key] = deterministic
+            return deterministic
 
 
 

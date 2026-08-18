@@ -6992,7 +6992,7 @@ class CuratedProtocolSession:
                     plan,
                     display_text=(
                         f"직접 답변\n{envelope.direct_answer}\n\n"
-                        "근거 경계\n활성 프로토콜의 확인된 내용입니다."
+                        "PDF 기준\n현재 적용된 실험 PDF에서 확인된 내용이에요."
                         if language=="ko" else envelope.direct_answer
                     ),
                     speech_text=envelope.speech_summary,

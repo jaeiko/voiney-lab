@@ -1136,7 +1136,7 @@ function renderMarkdownToContainer(container,markdownText){
    container.appendChild(heading);
    continue;
   }
-  const listMatch=trimmed.match(/^(?:[-*]|\d+\.)\s+(.+)$/);
+  const listMatch=trimmed.match(/^(?:[-*•]|\d+\.)\s+(.+)$/);
   if(listMatch){
    flushParagraph();
    if(!inList){inList=true;listElement=document.createElement("ul");listElement.className="reply-list";}
@@ -1163,7 +1163,7 @@ function turnNode(id,browserGeneration=sessionGeneration){
  const key=turnBrowserKey(id,browserGeneration);
  if(turns.has(key))return turns.get(key);
  const node=document.createElement("div");node.className="turn";
- node.innerHTML=`<b>Turn ${id}</b><div class="label">사용자 발화</div><div class="transcript">듣는 중…</div><div class="label">어시스턴트</div><div class="reply"></div><div class="filler-status" hidden></div><div class="turn-visual" hidden></div><div class="turn-status">듣는 중…</div><div class="tools" hidden></div><div class="server-operation" hidden></div><div class="stats"></div><div class="error"></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div></div></details><div class="replay-status"></div>`;
+ node.innerHTML=`<b>Turn ${id}</b><div class="label">USER</div><div class="transcript">듣는 중…</div><div class="label">AGENT 🤖</div><div class="reply"></div><div class="filler-status" hidden></div><div class="turn-visual" hidden></div><div class="turn-status">듣는 중…</div><div class="tools" hidden></div><div class="server-operation" hidden></div><div class="stats"></div><div class="error"></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div></div></details><div class="replay-status"></div>`;
  const log=$("log");
  if(log){
   if(typeof log.insertBefore==="function")log.insertBefore(node,log.firstChild);
@@ -1194,7 +1194,7 @@ function renderStructuredReply(node,message){
  target.replaceChildren();
  const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);renderMarkdownToContainer(block,text);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
- const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 승인 참고자료 · 활성 프로토콜의 일부가 아님":message.answer_origin==="external_authoritative_reference"?"외부 권위 참고자료 · 활성 프로토콜의 일부가 아님":message.answer_origin==="supplemental_model_knowledge"?"일반 모델 설명 · 확인된 권위 근거 없음":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
+ const originLabel=message.answer_origin==="approved_lab_corpus"?"웹 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 설명":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
  add(target,"answer-primary",originLabel,primary||message.text||"");
  if(structured||reference){
   const details=document.createElement("details");details.className="reference-details";
@@ -1295,8 +1295,8 @@ function applyResearchState(message,browserGeneration=sessionGeneration){
  const key=researchEventKey(message),record=researchEvents.get(key);if(record?.terminal)return false;
  researchEvents.set(key,{terminal:false,phase:message.phase||record?.phase||null});
  const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;
- const labels={approved_references:"승인된 참고자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중 · 웹에서 참고 자료를 찾고 있어요 🔍",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"추가 근거는 제한된 시간 안에서 백그라운드로 확인 중…"};
- target.textContent=message.status==="background_bounded"?labels.optional_enrichment:(labels[message.phase]||"추가 근거 확인 중…");
+ const labels={approved_references:"승인된 참고 자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중 · 웹에서 참고 자료를 찾고 있어요 🔍",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"웹에서 참고 자료를 찾고 있어요 🔍"};
+ target.textContent=(message.status==="background_bounded"?labels.optional_enrichment:(labels[message.phase]||message.message||"웹에서 참고 자료를 찾고 있어요 🔍"));
  target.hidden=false;
  startResearchProgressTimer(key,target,message.phase==="supplemental_model");
  announceMilestone("웹 참고 자료 검색을 시작했습니다.");
@@ -1319,21 +1319,21 @@ function applyResearchResult(message,browserGeneration=sessionGeneration){
   block.appendChild(heading);block.appendChild(body);
   if(Array.isArray(message.citations)&&message.citations.length){
    const details=document.createElement("details");details.className="reference-details";
-   const summary=document.createElement("summary");summary.textContent="추가 근거";details.appendChild(summary);
+   const summary=document.createElement("summary");summary.textContent="웹 참고 자료 출처";details.appendChild(summary);
    for(const item of message.citations){
     const line=document.createElement("div");
     if(external&&typeof item?.canonical_url==="string"&&item.canonical_url.startsWith("https://")){
      const link=document.createElement("a");link.href=item.canonical_url;link.target="_blank";link.rel="noopener noreferrer";
-     link.textContent=`${item.title||item.domain||"권위 자료"} · ${item.domain||""}`;line.appendChild(link);
-    }else line.textContent=normalizePresentationText(`${item?.document_title||"승인 자료"} · ${item?.section||item?.chunk_id||""}`);
+     link.textContent=`${item.title||item.domain||"참고 자료"} · ${item.domain||""}`;line.appendChild(link);
+    }else line.textContent=normalizePresentationText(`${item?.document_title||"참고 자료"} · ${item?.section||item?.chunk_id||""}`);
     details.appendChild(line);
    }
    block.appendChild(details);
   }
   announceMilestone("웹 참고 자료 검색을 완료했습니다.");
  }else{
-  heading.textContent={timeout:"추가 근거 확인 시간 초과",cancelled:"추가 근거 확인 취소",superseded:"새 요청으로 이전 근거 확인 종료",failed:"추가 근거 확인 실패"}[message.terminal_status]||"추가 근거 확인 제한";
-  const body=document.createElement("span");body.textContent=normalizePresentationText(message.limitation||"추가 근거를 확인하지 못했습니다. 활성 프로토콜 근거는 유지됩니다.");
+  heading.textContent={timeout:"웹 참고 자료 확인 시간 초과",cancelled:"웹 참고 자료 확인 취소",superseded:"새 요청으로 이전 검색 종료",failed:"웹 참고 자료 확인 실패"}[message.terminal_status]||"웹 참고 자료 확인 제한";
+  const body=document.createElement("span");body.textContent=normalizePresentationText(message.limitation||"추가 내용을 확인하지 못했습니다. 현재 적용된 실험 PDF 내용은 유지됩니다.");
   block.appendChild(heading);block.appendChild(body);
  }
  const status=node.querySelector?.(".filler-status");if(status){status.textContent="";status.hidden=true;}

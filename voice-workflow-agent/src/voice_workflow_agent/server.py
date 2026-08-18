@@ -64,6 +64,9 @@ from voice_workflow_agent.experiment_protocol_store import (
 from voice_workflow_agent.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
+    ReportNarrative,
+    ReportWriterBrain,
+    ReportWriterSettings,
     new_session_id,
 )
 from voice_workflow_agent.external_references import (
@@ -2178,6 +2181,19 @@ async def _queue_curated_research(
                 "external_search.provider_started turn_id=%s generation=%s query=%s",
                 turn_id,generation,ctx["reference_query"][:120],
             )
+            async def _on_partial_sources(srcs: list[dict[str, Any]]) -> None:
+                if session.owns_research_result(turn_id, generation, configuration_id):
+                    await sender.text(
+                        "research.state",
+                        turn_id=turn_id,
+                        generation=generation,
+                        status="running",
+                        phase="authoritative_web",
+                        correlation_id=f"research-{generation}-{turn_id}",
+                        sources_found=len(srcs),
+                        message=f"웹에서 참고 자료 {len(srcs)}개를 찾았어요.",
+                    )
+
             try:
                 external_client=AsyncOpenAI(
                     base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
@@ -2186,13 +2202,11 @@ async def _queue_curated_research(
                     external_client,session.external_reference_settings,
                 )
                 try:
-                    search_call=(
-                        external_searcher.search(
-                            ctx["reference_query"],language=turn_language,
-                            include_images=True)
-                        if include_images else
-                        external_searcher.search(
-                            ctx["reference_query"],language=turn_language)
+                    search_call=external_searcher.search(
+                        ctx["reference_query"],
+                        language=turn_language,
+                        include_images=include_images,
+                        on_partial_sources=_on_partial_sources,
                     )
                 except TypeError:
                     search_call=external_searcher.search(
@@ -2363,7 +2377,7 @@ async def _queue_curated_research(
             await _finish_research_operation(
                 sender,session,turn_id,generation,status,
                 limitation=(
-                    "활성 프로토콜 근거는 유지했지만 요청한 추가 차원을 권위 자료에서 확인하지 못했습니다."
+                    "현재 적용된 실험 PDF 근거는 유지했지만 요청한 추가 차원을 웹 참고 자료에서 확인하지 못했습니다."
                     if turn_language=="ko" else
                     "The protocol evidence remains available, but the additional dimension could not be verified."
                 ),
@@ -2371,7 +2385,10 @@ async def _queue_curated_research(
 
     task=asyncio.create_task(worker())
     session.track_visual_task(task)
-    await task
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        pass
 
 
 def _open_experiment_report(
@@ -4026,10 +4043,7 @@ async def run_turn_safely(
         accepted_stt_ms=accepted_stt_ms,
         accepted_stt_context=accepted_stt_context)
     except asyncio.CancelledError:
-        await _finish_research_operation(
-            sender,session,turn_id,generation,"cancelled",
-            limitation="근거 확인이 취소되었습니다.",
-        )
+        log.info("voice turn audio interrupted by barge-in turn_id=%s generation=%s", turn_id, generation)
         session.cascade_failed(turn_id)
         raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
