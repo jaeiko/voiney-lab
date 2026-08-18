@@ -404,6 +404,7 @@ class CuratedProtocolTurnPlan:
     intent_confidence: float | None = None
     visual_requested: bool = False
     visual_kind: str | None = None
+    visual_intent: str | None = None
     requested_entity: str | None = None
     requested_entities: tuple[str, ...] = ()
     question_kind: str | None = None
@@ -1038,6 +1039,7 @@ class CuratedControlIntent:
     reported_anomaly: bool = False
     anomaly_category: str | None = None
     visual_kind: str | None = None
+    visual_intent: str | None = None
     normalized_transcript: str | None = None
     transcript_correction_note: str | None = None
     transcript_corrections: tuple[tuple[str, str], ...] = ()
@@ -1309,13 +1311,10 @@ def resolve_bounded_coreference(
             CoreferenceStatus.RESOLVED, explicit_entities, "explicit_entity_wins"
         )
     key = _semantic_utterance_key(transcript)
-    if _COREFERENCE_REFERENCE.search(key) is None:
-        # Also check if it's a visual request with no explicit entity
-        is_visual = any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS) or any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
-        if not is_visual:
-            return CoreferenceResolution(
-                CoreferenceStatus.UNRESOLVED, (), "no_coreference_expression"
-            )
+    if _COREFERENCE_REFERENCE.search(key) is None and not re.search(r"(?:그중\s*첫\s*번째|the\s+first\s+one)", key):
+        return CoreferenceResolution(
+            CoreferenceStatus.UNRESOLVED, (), "no_coreference_expression"
+        )
     if context is None:
         return CoreferenceResolution(
             CoreferenceStatus.UNRESOLVED, (), "no_owned_recent_context"
@@ -1550,6 +1549,13 @@ _TERM_QUESTION_PATTERNS = (
     (re.compile(r"(?<![a-z0-9])rpm(?![a-z0-9])|분당\s*회전", re.I), "rpm"),
     (re.compile(r"incubat(?:e|ion)|배양", re.I), "incubation"),
     (re.compile(r"contamination|오염|케라틴", re.I), "contamination"),
+    (re.compile(r"(?<![a-z0-9])sds[\s_-]*page(?![a-z0-9])|에스디에스[\s_-]*페이지|단백질\s*전기영동|겔\s*전기영동|polyacrylamide\s+gel\s+electrophoresis", re.I), "sds_page"),
+    (re.compile(r"electrophoresis|전기영동", re.I), "electrophoresis"),
+    (re.compile(r"coomassie(?:\s*blue)?|쿠마시(?:\s*블루)?|쿠마씨", re.I), "coomassie"),
+    (re.compile(r"destain(?:ing)?|탈색", re.I), "destaining"),
+    (re.compile(r"centrifuge|원심분리기|원심분리", re.I), "centrifuge"),
+    (re.compile(r"pipette|파이펫|피펫", re.I), "pipette"),
+    (re.compile(r"mass\s*spectrometr(?:y|ic)|질량분석", re.I), "mass_spectrometry"),
 )
 _AGENT_META_PATTERNS = (
     re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명|있어)"),
@@ -2575,20 +2581,26 @@ def classify_curated_control_intent(
         any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS)
         or any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
     ):
-        visual_kind = (
-            "web_photo"
-            if (
-                any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
-                or any(term in key for term in ("이미지", "사진", "photo", "image", "구조", "structure"))
-            )
-            else "instructional_illustration"
-        )
+        if any(term in key for term in ("화학 구조", "화학구조", "구조식", "2d 구조", "chemical structure", "molecular structure")):
+            visual_intent = "chemical_structure"
+            visual_kind = "web_photo"
+        elif any(term in key for term in ("장치", "장비", "기구", "기기", "전기영동", "sds-page", "sds_page", "electrophoresis", "centrifuge", "pipette", "apparatus", "equipment")):
+            visual_intent = "lab_equipment_image"
+            visual_kind = "web_photo"
+        elif any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS) or any(term in key for term in ("이미지", "사진", "photo", "image", "실제", "시약", "sample")):
+            visual_intent = "real_reference_image"
+            visual_kind = "web_photo"
+        else:
+            visual_intent = "instructional_illustration"
+            visual_kind = "instructional_illustration"
+
         return CuratedControlIntent(
             intent_kind="visual_request",
             action=CuratedProtocolAction.VISUAL_REQUEST,
             target_step="authoritative_current_step",
             visual_requested=True,
             visual_kind=visual_kind,
+            visual_intent=visual_intent,
             requested_entity=normalized_entity,
             requested_entities=normalized_entities,
             resolved_entity=normalized_entity,
@@ -6544,6 +6556,7 @@ class CuratedProtocolSession:
                 target_step=intent.target_step,
                 visual_requested=True,
                 visual_kind=intent.visual_kind,
+                visual_intent=intent.visual_intent,
                 requested_entity=intent.requested_entity,
                 requested_entities=intent.requested_entities,
                 normalized_transcript=intent.normalized_transcript,

@@ -1288,7 +1288,6 @@ class ListenerSession:
             and self.accepted_configuration_id==configuration_id
             and self.accepted_protocol_id==protocol_id
             and self.turn_generations.get(turn_id)==generation
-            and (turn_id,generation) not in self._interrupted_generations
         )
     def owns_research_result(
         self,turn_id:int,generation:int,configuration_id:int|None=None,
@@ -1297,7 +1296,6 @@ class ListenerSession:
             self.active
             and (configuration_id is None or self.accepted_configuration_id==configuration_id)
             and self.turn_generations.get(turn_id)==generation
-            and (turn_id,generation) not in self._interrupted_generations
         )
     def track_visual_task(self,task:asyncio.Task)->None:
         self.visual_tasks.add(task)
@@ -1870,6 +1868,7 @@ async def _queue_curated_web_visual(
     *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
     endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
     settings:WebVisualSettings,requested_entities:tuple[str,...]=(),
+    visual_intent:str|None=None,
 ) -> None:
     fixture=curated.fixture
     step=fixture.steps[curated.current_index]
@@ -1897,13 +1896,17 @@ async def _queue_curated_web_visual(
                 "tool.call", **identity, tool="search_authoritative_web", round=2
             )
 
-            # 1. Fast PubChem chemistry structure lookup for scientific reagents
-            pubchem_adapter = PubChemChemistryAdapter()
+            # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests)
             pubchem_match = None
-            for ent in requested_entities:
-                pubchem_match = await pubchem_adapter.lookup(ent)
-                if pubchem_match:
-                    break
+            if visual_intent == "chemical_structure" or (
+                visual_intent != "lab_equipment_image"
+                and any(ent.casefold() in _KNOWN_PUBCHEM_COMPOUNDS for ent in requested_entities)
+            ):
+                pubchem_adapter = PubChemChemistryAdapter()
+                for ent in requested_entities:
+                    pubchem_match = await pubchem_adapter.lookup(ent)
+                    if pubchem_match:
+                        break
 
             if pubchem_match is not None:
                 if not session.owns_visual_result(
@@ -3674,7 +3677,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         session=session,sender=sender,turn_id=turn_id,
                         generation=generation,endpoint=endpoint,clock=clock,
                         curated=curated,settings=web_visual_settings,
-                        requested_entities=plan.requested_entities)
+                        requested_entities=plan.requested_entities,
+                        visual_intent=plan.visual_intent)
                 else:
                     fixture=curated.fixture;step=fixture.steps[curated.current_index]
                     await current_text(

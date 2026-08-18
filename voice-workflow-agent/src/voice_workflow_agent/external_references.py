@@ -95,6 +95,7 @@ class ExternalReferenceSettings:
     read_timeout_seconds: float = 90.0
     cache_ttl_seconds: int = 900
     user_visible_enrichment_budget_seconds: float = 4.0
+    service_tier: str = "default"
 
     @classmethod
     def from_environment(cls) -> "ExternalReferenceSettings":
@@ -194,9 +195,15 @@ class ExternalReferenceSettings:
             ) from exc
         if not 0 <= cache_ttl <= 86400:
             raise ValueError("EXTERNAL_REFERENCE_CACHE_TTL_SECONDS is invalid")
+        service_tier = os.environ.get(
+            "EXTERNAL_REFERENCE_SERVICE_TIER", "default"
+        ).strip().casefold()
+        if service_tier not in {"default", "priority"}:
+            raise ValueError("EXTERNAL_REFERENCE_SERVICE_TIER is invalid")
         return cls(
             True, domains, model, timeout_seconds, max_citations, profile,
             connect_timeout, read_timeout, cache_ttl, enrichment_budget,
+            service_tier,
         )
 
     def public_capability(self) -> dict[str, Any]:
@@ -456,26 +463,35 @@ class XaiAuthoritativeWebSearch:
             "preserve numbers and units, and never modify the active protocol."
         )
         started = time.monotonic()
-        response_or_stream = await self.client.responses.create(
-            model=self.settings.model,
-            input=[{
+        request_kwargs: dict[str, Any] = {
+            "model": self.settings.model,
+            "input": [{
                 "role": "system",
                 "content": system_prompt,
             }, {"role": "user", "content": query[:1200]}],
-            tools=[tool_spec],
-            include=["web_search_call.action.sources"],
-            stream=True,
-            max_output_tokens=350,
-            timeout=httpx.Timeout(
+            "tools": [tool_spec],
+            "include": ["web_search_call.action.sources"],
+            "stream": True,
+            "max_output_tokens": 350,
+            "timeout": httpx.Timeout(
                 self.settings.timeout_seconds,
                 connect=self.settings.connect_timeout_seconds,
                 read=self.settings.read_timeout_seconds,
             ),
-        )
+        }
+        extra_body: dict[str, Any] = {
+            "prompt_cache_key": "voice-workflow-agent-grok46-v1",
+        }
+        if self.settings.service_tier != "default":
+            extra_body["service_tier"] = self.settings.service_tier
+        request_kwargs["extra_body"] = extra_body
+
+        response_or_stream = await self.client.responses.create(**request_kwargs)
         telemetry: dict[str, Any] = {
             "streaming": False,
             "event_count": 0,
             "tool_event_count": 0,
+            "service_tier": self.settings.service_tier,
         }
         if not hasattr(response_or_stream, "__aiter__"):
             return response_or_stream, telemetry

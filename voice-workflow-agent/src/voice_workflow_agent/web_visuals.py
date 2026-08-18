@@ -63,6 +63,20 @@ def _walk(value: Any):
             yield from _walk(attributes)
 
 
+_NON_CHEMICAL_ENTITIES = frozenset({
+    "sds_page", "sds-page", "sds page", "electrophoresis", "gel_electrophoresis",
+    "destaining", "coomassie", "centrifuge", "pipette", "mass_spectrometry",
+    "incubation", "contamination", "rpm", "gel_plug", "stained_protein_band",
+})
+
+
+def _is_image_media_url(url: str | None) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    path = urlsplit(url).path.casefold()
+    return any(path.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"))
+
+
 _IMAGE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _IN_FLIGHT_IMAGE_SEARCH: dict[Any, asyncio.Future[dict[str, Any]]] = {}
 
@@ -315,6 +329,8 @@ class PubChemChemistryAdapter:
 
     async def lookup(self, name_or_alias: str) -> dict[str, Any] | None:
         key = name_or_alias.strip().casefold()
+        if not key or key in _NON_CHEMICAL_ENTITIES:
+            return None
         known = _KNOWN_PUBCHEM_COMPOUNDS.get(key)
         if known is not None:
             cid = known["cid"]
