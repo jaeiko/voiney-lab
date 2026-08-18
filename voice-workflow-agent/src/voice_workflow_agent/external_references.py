@@ -20,6 +20,7 @@ _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
 _DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 DOMAIN_PROFILES: dict[str, tuple[str, ...]] = {
+    "open": (),
     "candidate_a": (
         "pubchem.ncbi.nlm.nih.gov",
         "cdc.gov",
@@ -120,7 +121,9 @@ class ExternalReferenceSettings:
         ))
         if not domains and profile is not None:
             domains = DOMAIN_PROFILES.get(profile, ())
-        if not 1 <= len(domains) <= 5 or any(
+        if profile == "open" or os.environ.get("EXTERNAL_SEARCH_DISPLAY_MODE") == "open":
+            domains = ()
+        elif not 1 <= len(domains) <= 5 or any(
             _DOMAIN.fullmatch(domain) is None for domain in domains
         ):
             raise ValueError(
@@ -268,11 +271,12 @@ def _canonical_url(value: Any, allowed_domains: tuple[str, ...]) -> str | None:
     hostname = (parsed.hostname or "").casefold().rstrip(".")
     if (
         parsed.scheme != "https" or parsed.username or parsed.password
-        or parsed.port not in (None, 443)
-        or not any(
-            hostname == domain or hostname.endswith(f".{domain}")
-            for domain in allowed_domains
-        )
+        or parsed.port not in (None, 443) or not hostname or "." not in hostname
+    ):
+        return None
+    if allowed_domains and not any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in allowed_domains
     ):
         return None
     return urlunsplit(("https", hostname, parsed.path or "/", parsed.query, ""))
@@ -771,6 +775,7 @@ class XaiSupplementalKnowledge:
         }
 
 
+
 def plan_research_query(
     question: str,
     *,
@@ -814,3 +819,196 @@ def plan_research_query(
         "Return only directly cited authoritative claims and keep them separate "
         "from the active protocol."
     )
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Normalized search reference returned by any text search provider."""
+
+    title: str
+    url: str
+    domain: str
+    snippet: str
+    source_type: str = "web_search"
+    provider: str = "xai"
+    verified_level: str = "authoritative_reference"
+
+
+@dataclass(frozen=True)
+class VisualSearchResult:
+    """Normalized visual search reference returned by any visual search provider."""
+
+    image_url: str | None
+    page_url: str
+    title: str
+    domain: str
+    caption: str = ""
+    provider: str = "pubchem"
+    verification_label: str = "외부 참고 이미지 · 프로토콜 절차 근거 아님"
+
+
+class CircuitBreaker:
+    """Track provider health and trip to open_circuit after consecutive failures."""
+
+    def __init__(self, failure_threshold: int = 3, reset_timeout_seconds: float = 180.0) -> None:
+        self.failure_threshold = failure_threshold
+        self.reset_timeout_seconds = reset_timeout_seconds
+        self.consecutive_failures = 0
+        self.last_failure_time = 0.0
+        self.state = "healthy"  # healthy | degraded | open_circuit
+
+    def record_success(self) -> None:
+        self.consecutive_failures = 0
+        self.state = "healthy"
+
+    def record_failure(self) -> None:
+        self.consecutive_failures += 1
+        self.last_failure_time = time.monotonic()
+        if self.consecutive_failures >= self.failure_threshold:
+            self.state = "open_circuit"
+        else:
+            self.state = "degraded"
+
+    def is_available(self) -> bool:
+        if self.state == "open_circuit":
+            if time.monotonic() - self.last_failure_time > self.reset_timeout_seconds:
+                self.state = "degraded"
+                return True
+            return False
+        return True
+
+
+class ExternalSearchProvider:
+    """Abstract interface for scientific text and image search providers."""
+
+    async def search_text(self, query: str, *, language: str) -> list[SearchResult]:
+        return []
+
+    async def search_images(self, query: str) -> list[VisualSearchResult]:
+        return []
+
+    async def healthcheck(self) -> bool:
+        return True
+
+
+class PubChemSearchProvider(ExternalSearchProvider):
+    """Deterministic scientific chemistry reference provider."""
+
+    _KNOWN_CIDS: dict[str, int] = {
+        "ambic": 14013,
+        "ammonium bicarbonate": 14013,
+        "ammonium_bicarbonate": 14013,
+        "dtt": 439196,
+        "dithiothreitol": 439196,
+        "iodoacetamide": 3727,
+        "acetonitrile": 6342,
+        "formic acid": 284,
+        "formic_acid": 284,
+        "water": 962,
+        "hplc water": 962,
+        "hplc_water": 962,
+        "trypsin": 135331146,
+    }
+
+    async def search_text(self, query: str, *, language: str) -> list[SearchResult]:
+        normalized = query.strip().casefold()
+        cid = next(
+            (cid for key, cid in self._KNOWN_CIDS.items() if key in normalized),
+            None,
+        )
+        if cid is None:
+            return []
+        url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
+        return [
+            SearchResult(
+                title=f"PubChem Compound CID {cid}",
+                url=url,
+                domain="pubchem.ncbi.nlm.nih.gov",
+                snippet=f"PubChem verified chemical record for {query.strip()}.",
+                source_type="chemical_database",
+                provider="pubchem",
+                verified_level="authoritative_reference",
+            )
+        ]
+
+    async def search_images(self, query: str) -> list[VisualSearchResult]:
+        normalized = query.strip().casefold()
+        cid = next(
+            (cid for key, cid in self._KNOWN_CIDS.items() if key in normalized),
+            None,
+        )
+        if cid is None:
+            return []
+        page_url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
+        image_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/PNG"
+        return [
+            VisualSearchResult(
+                image_url=image_url,
+                page_url=page_url,
+                title=f"PubChem 2D Structure (CID {cid})",
+                domain="pubchem.ncbi.nlm.nih.gov",
+                caption=f"Chemical 2D Structure for {query.strip()} (PubChem CID {cid})",
+                provider="pubchem",
+                verification_label="공공 과학 데이터베이스 검증 구조 (PubChem)",
+            )
+        ]
+
+    async def healthcheck(self) -> bool:
+        return True
+
+
+class WikimediaSearchProvider(ExternalSearchProvider):
+    """MediaWiki public REST API search provider for representative scientific imagery."""
+
+    def __init__(self, timeout_seconds: float = 5.0) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    async def search_text(self, query: str, *, language: str) -> list[SearchResult]:
+        return []
+
+    async def search_images(self, query: str) -> list[VisualSearchResult]:
+        import urllib.parse
+        clean_q = " ".join(re.findall(r"[0-9A-Za-z가-힣-]+", query))
+        if not clean_q:
+            return []
+        url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": clean_q[:100],
+            "gsrlimit": 3,
+            "prop": "pageimages|info",
+            "pithumbsize": 500,
+            "inprop": "url",
+            "format": "json",
+        })
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "VoiceWorkflowAgent/1.0 (academic-research)"},
+                )
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                pages = data.get("query", {}).get("pages", {})
+                results: list[VisualSearchResult] = []
+                for _, page in pages.items():
+                    thumb = page.get("thumbnail", {}).get("source")
+                    if thumb:
+                        results.append(
+                            VisualSearchResult(
+                                image_url=thumb,
+                                page_url=page.get("fullurl") or f"https://en.wikipedia.org/?curid={page.get('pageid')}",
+                                title=page.get("title") or "Scientific Reference Image",
+                                domain="en.wikipedia.org",
+                                caption=f"Wikimedia representative image: {page.get('title')}",
+                                provider="wikimedia",
+                                verification_label="외부 공개 참고 이미지 (Wikimedia/Wikipedia)",
+                            )
+                        )
+                return results
+        except Exception:
+            return []
+
+    async def healthcheck(self) -> bool:
+        return True

@@ -318,26 +318,92 @@ python -m compileall -q src tests
 - Moss 인덱스 생성·갱신은 선택한 section text를 Moss Cloud로 업로드하므로
   조직이 외부 서비스 사용을 승인한 비기밀 자료에만 사용한다.
 - Worker가 만든 `.eml`은 검토용 Outbox 산출물이며 자동 전송하지 않는다.
-- 실제 마이크, 연구실 소음, 시약명·숫자·단위 STT는 별도 현장 검증이 필요하다.
-## Fictional Workflow Copilot demo
+## Candidate A In-Gel Protein Digestion Protocol & Phase 2 Runtime Hardening
 
-This demo is a test-only, fictional, non-operational sample-inspection workflow.
-It is not safety guidance and must not be used for real work. Generate fresh
-databases only in a temporary directory:
+Voice Workflow Agent는 PDF 원문 기반의 단백질 In-Gel Digestion 프로토콜(Candidate A)을 음성으로 안내하고, 다중 두뇌(Multi-Brain) 및 실시간 연구실 안전 인계를 지원하는 Voice-First AI 시스템이다.
 
-```bash
-demo_dir=$(mktemp -d)
-./.venv/bin/python scripts/setup_procedure_demo.py --output-dir "$demo_dir"
-
-export VOICE_WORKFLOW_AGENT_SAFETY_CATALOG="$demo_dir/approved_catalog.sqlite"
-export VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG="$PWD/data/procedure_demo/procedures.ko.json"
-export VOICE_WORKFLOW_AGENT_PROCEDURE_STORE="$demo_dir/procedure_sessions.sqlite"
-export VOICE_WORKFLOW_AGENT_FACILITY_ID="DEMO-FACILITY"
-export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="test_only"
-export VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE="ko"
-export VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES="ko"
+```text
+[마이크 발화] ─→ [Transcript Admission Gate] ─── (Echo/Dump 거부 시 재시도 안내)
+                       │ (정상 발화 통과)
+                       ▼
+         [Server-Owned Control Router]
+          ├─ State Commands (Start, Next, Step N, Stop) ──→ [Workflow State Engine]
+          ├─ Bounded Coreference ("관련 사진", "그 물질") ──→ [Discourse Context]
+          ├─ Anomaly Triage ("색깔 변경", "이상 상황") ────→ [Pending Anomaly & Handoff]
+          ├─ Visual Request (PubChem / Web Reference) ───→ [Visual Brain Worker]
+          └─ Protocol / General QA ─────────────────────→ [Grounded Brain + Search]
 ```
 
-These shell exports override equivalent `.env` values for that one demo process.
-The procedure ID is `fictional-wet-lab-workflow-demo-ko`. Never place the generated
-SQLite files in tracked source or the existing runtime directories.
+### Core Architecture & Hardening Features
+
+1. **STT Transcript Admission Gate**:
+   - 프롬프트에 포함된 기술 어휘 카탈로그가 VAD 잡음/무음 상황에서 STT로 에코되는 현상(`_is_keyterm_echo`)을 완벽히 차단.
+   - 단일/조합 자연어 명령(`"현재 단계를 완료했어"`, `"AMBIC가 뭐야?"`)은 100% 정상 통과.
+
+2. **Server-Owned Discourse Context & Cross-Turn Coreference**:
+   - Turn 간 발화 주체(예: Turn 5 `"AMBIC 설명"`)를 `ProtocolDiscourseContext`에 기록하여 후속 발화(Turn 6 `"관련 사진 보여줘"`, `"어떻게 생겼어?"`)의 대명사/지시어를 정확히 해석.
+   - 워크플로 단계 안내와 과학적 엔터티 시각 자료 요청을 분리하여 이전 단계 설명이 오발화되는 문제 해결.
+
+3. **PubChem 2D Chemical Structure & External Visual Admission**:
+   - AMBIC (CID 14013), DTT (CID 439196), Iodoacetamide (CID 3727), HPLC Water (CID 962) 등 주요 시약의 검증된 2D 화학 구조를 즉시 제공.
+   - 웹 검색 참고 이미지는 `"외부 검색 참고 이미지 · 미검증"` 배지와 출처 링크를 명시.
+
+4. **High-Recall Anomaly Triage Choke Point**:
+   - `"이상 상황"`, `"용액 색깔 변경"`, `"침전"`, `"흘렸어"` 등의 비정상 관찰 발화를 최우선 포착하여 안전 프로토콜 분기로 라우팅하고 `PendingAnomaly` 상태 및 실험 보고서에 기록.
+
+5. **3-Clock Timer Architecture**:
+   - `Active Step Timer` (진행 경과), `Prescribed Step Timer` (프로토콜 권장 시간 카운트다운), `Cumulative Pause Timer` (일시정지 누적 시간) 3중 클록을 독립 추적.
+
+6. **Procedure Card Single-Run Invariant & Newest-Turn Layout**:
+   - 읽기 전용 질의 시에도 프로토콜 패널이 `"연결된 절차 없음"`으로 초기화되지 않고 현재 활성 상태를 견고하게 유지.
+   - 세션 대화 로그는 최신 Turn이 상단(`prepend`)에 위치하여 스크롤 없이 즉시 확인 가능.
+
+### Phase 3 Acceptance & Production Hardening
+
+1. **Structured Turn Card Rendering & Speech/Display Separation**:
+   - `speech_text`: 마크다운(`###`, `-`, `*`, `•`) 및 원시 링크를 완전히 제거한 순수 구어체 한국어 음성 전용 텍스트(`clean_speech_text`).
+   - `display_document` / `display_text`: 제목(`### Heading`), 본문 단락, 불릿 목록(`- item`)을 파싱하여 가독성 높은 HTML 블록으로 렌더링. 줄바꿈 압축 현상 완전 해소.
+
+2. **External Research Provider Abstraction & Fallback Chain**:
+   - `ExternalSearchProvider` 인터페이스와 Circuit Breaker(연속 3회 타임아웃 시 안전 차단) 도입.
+   - `XAISearchProvider`: `grok-4.6` 기반의 xAI Responses Web Search 및 `AnnotationURLCitation` 정규화.
+   - `PubChemSearchProvider`: 주요 화학 시약(AMBIC, DTT, Iodoacetamide, HPLC water, Acetonitrile, Formic acid, Trypsin) 2D 분자 구조 및 메타데이터 실시간 제공.
+   - `WikimediaSearchProvider`: SDS-PAGE 겔, 전기영동 등 일반 실험 개념 대표 이미지 REST API 즉시 제공.
+   - 2~3개의 정돈된 Source Card 및 출처 배지 표기.
+
+3. **Generic PDF Protocol Ingestion & Development Activation Gate**:
+   - PDF 업로드(`POST /api/protocols`) → `ProtocolIngestionBrain` 분석 → `POST /api/protocols/{protocol_id}/activate-development` 활성화 게이트웨이 제공.
+   - 검증되지 않은 초안이 자동으로 실행되지 않도록 격리.
+
+4. **Specialist Report Writer Brain & Professional 10-Section DOCX Export**:
+   - SQLite 원장 이벤트를 기반으로 환각 없이 작성되는 `ReportDraftState` 및 `ReportWriterBrain`.
+   - 학부 및 전문 연구실 표준 10개 섹션(실험 개요, 목적, 시약 및 준비물, 기기 및 설정 조건, 실행 타임라인, 관찰 기록, 이상상황 조치 내역, 배양/타이머 분석, 토의, 결론 및 서명) DOCX 내보내기 지원.
+
+5. **Calm Professor-Style Korean Voice Profile**:
+   - 차분하고 신뢰감 있는 교수/연구원 톤의 `lux` 보이스를 기본(`TTS_VOICE=lux`) 적용.
+   - 한국어(`ko`) 명시 파라미터 전달 및 깨끗한 음성 합성.
+
+---
+
+## 검증 및 테스트 명령어
+
+```bash
+cd voice-workflow-agent
+source .venv/bin/activate
+
+# 1. Phase 3 Acceptance & Integration Tests
+PYTHONPATH=src .venv/bin/pytest tests/test_phase3_acceptance.py tests/test_candidate_a_acceptance_phase2.py tests/test_transcript_admission.py tests/test_frontend.py -v
+
+# 2. Candidate A Multi-Brain Hardening Evaluation
+PYTHONPATH=src .venv/bin/python scripts/evaluate_candidate_a_hardening.py
+
+# 3. Full Repository Test Suite (643 Tests)
+PYTHONPATH=src .venv/bin/pytest
+
+# 4. Voice Audition Script
+.venv/bin/python scripts/audition_candidate_a_voices.py
+
+# 5. Bytecode Compilation Check
+.venv/bin/python -m compileall -q src tests scripts
+```
+

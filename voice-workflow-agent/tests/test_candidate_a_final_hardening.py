@@ -52,9 +52,10 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
             "AMBIC", "ammonium bicarbonate", "HPLC water", "DTT",
             "iodoacetamide", "trypsin", "formic acid", "LC-MS",
             "SDS-PAGE", "gel plug", "stained protein band", "Thermomixer",
-            "rpm", "keratin", "contamination", "Evotip", "완료",
+            "rpm", "keratin", "contamination", "Evotip",
         ):
             self.assertIn(expected, terms)
+        self.assertNotIn("완료", terms)
         parts, wav, bounded = _stt_multipart(
             b"\0\0", language="ko", keyterms=terms
         )

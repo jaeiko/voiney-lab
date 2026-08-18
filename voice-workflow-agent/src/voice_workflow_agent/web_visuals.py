@@ -211,6 +211,34 @@ _KNOWN_PUBCHEM_COMPOUNDS: dict[str, dict[str, Any]] = {
         "weight": "46.03",
         "iupac_name": "formic acid",
     },
+    "hplc water": {
+        "cid": 962,
+        "name": "Water (HPLC Grade)",
+        "formula": "H2O",
+        "weight": "18.015",
+        "iupac_name": "oxidane",
+    },
+    "hplc_water": {
+        "cid": 962,
+        "name": "Water (HPLC Grade)",
+        "formula": "H2O",
+        "weight": "18.015",
+        "iupac_name": "oxidane",
+    },
+    "water": {
+        "cid": 962,
+        "name": "Water",
+        "formula": "H2O",
+        "weight": "18.015",
+        "iupac_name": "oxidane",
+    },
+    "trypsin": {
+        "cid": 135331146,
+        "name": "Trypsin",
+        "formula": "C6H15N3O2",
+        "weight": "23290",
+        "iupac_name": "Trypsin Protease",
+    },
 }
 
 
@@ -276,4 +304,63 @@ class PubChemChemistryAdapter:
         except Exception:
             pass
         return None
+
+
+class WikimediaVisualAdapter:
+    """Public scientific image discovery using Wikimedia REST API."""
+
+    def __init__(self, timeout_seconds: float = 4.0) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    async def lookup(self, query: str) -> dict[str, Any] | None:
+        import urllib.parse
+        import httpx
+        clean_q = " ".join(re.findall(r"[0-9A-Za-z가-힣-]+", query))
+        if not clean_q:
+            return None
+        url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": clean_q[:100],
+            "gsrlimit": 2,
+            "prop": "pageimages|info",
+            "pithumbsize": 500,
+            "inprop": "url",
+            "format": "json",
+        })
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "VoiceWorkflowAgent/1.0 (academic-research)"},
+                )
+                if resp.status_code != 200:
+                    return None
+                data = resp.json()
+                pages = data.get("query", {}).get("pages", {})
+                for _, page in pages.items():
+                    thumb = page.get("thumbnail", {}).get("source")
+                    if thumb:
+                        title = page.get("title") or clean_q
+                        fullurl = (
+                            page.get("fullurl")
+                            or f"https://en.wikipedia.org/?curid={page.get('pageid')}"
+                        )
+                        return {
+                            "kind": "web_image_reference",
+                            "visual_class": "external_concept_visual",
+                            "entity": clean_q,
+                            "title": f"{title} (Wikimedia)",
+                            "caption": f"Representative reference image for {title}",
+                            "image_url": thumb,
+                            "source_page_url": fullurl,
+                            "publisher_domain": "en.wikipedia.org",
+                            "display_mode": "concept_image",
+                            "reason": "public_reference_image",
+                            "backend": "wikimedia_rest",
+                        }
+        except Exception:
+            return None
+        return None
+
 

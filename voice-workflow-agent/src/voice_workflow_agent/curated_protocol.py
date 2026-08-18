@@ -89,6 +89,8 @@ class CuratedProtocolAction(str, Enum):
     START_TIMER = "start_timer"
     TIMER_STATUS = "timer_status"
     PREVIEW_STEP = "preview_step"
+    STEP_RANGE = "step_range"
+    LAB_DOMAIN_QA = "lab_domain_qa"
     REPORT_HANDOFF = "report_handoff"
 
 
@@ -1049,6 +1051,8 @@ class CuratedControlIntent:
     claim_requests: tuple["ClaimRequest", ...] = ()
     plausibility_status: str | None = None
     plausibility_reason: str | None = None
+    range_start_step: int | None = None
+    range_end_step: int | None = None
 
 
 class DiscourseFocusKind(str, Enum):
@@ -1281,45 +1285,65 @@ class CoreferenceResolution:
 
 _COREFERENCE_REFERENCE = re.compile(
     r"(?:이게|이건|이것|그게|그건|그것|그거|그\s*물|그\s*물질|"
-    r"그\s*용액|그중\s*첫\s*번째|that(?:\s+(?:material|water|solution|one))?|"
-    r"the\s+first\s+one|how\s+is\s+that\s+different|tell\s+me\s+more\s+about\s+it)"
+    r"그\s*용액|그\s*시약|그\s*사진|그\s*이미지|그\s*구조|그\s*화학\s*구조|"
+    r"관련\s*(?:사진|이미지|자료|그림|시각\s*자료)|관련된\s*(?:사진|이미지|자료|그림)|"
+    r"어떻게\s*생겼|어떤\s*모습|그거\s*(?:사진|이미지|구조|설명)|"
+    r"그중\s*첫\s*번째|that(?:\s+(?:material|water|solution|reagent|structure|photo|image|picture|one))?|"
+    r"the\s+first\s+one|how\s+is\s+that\s+different|tell\s+me\s+more\s+about\s+it|"
+    r"related\s+(?:photo|image|picture|visual|structure)|"
+    r"show\s+(?:me\s+)?(?:the\s+)?(?:photo|image|picture|structure|visual)|"
+    r"what\s+does\s+it\s+look\s+like|show\s+its\s+structure)"
 )
 
 
 def resolve_bounded_coreference(
-    transcript:str,*,explicit_entities:tuple[str,...],
-    context:ProtocolDiscourseContext|None,
-)->CoreferenceResolution:
+    transcript: str,
+    *,
+    explicit_entities: tuple[str, ...],
+    context: ProtocolDiscourseContext | None,
+) -> CoreferenceResolution:
     """Resolve one recent semantic focus without granting workflow authority."""
 
     if explicit_entities:
         return CoreferenceResolution(
-            CoreferenceStatus.RESOLVED,explicit_entities,"explicit_entity_wins")
-    key=_semantic_utterance_key(transcript)
+            CoreferenceStatus.RESOLVED, explicit_entities, "explicit_entity_wins"
+        )
+    key = _semantic_utterance_key(transcript)
     if _COREFERENCE_REFERENCE.search(key) is None:
-        return CoreferenceResolution(
-            CoreferenceStatus.UNRESOLVED,(),"no_coreference_expression")
+        # Also check if it's a visual request with no explicit entity
+        is_visual = any(pattern.search(key) for pattern in _VISUAL_REQUEST_PATTERNS) or any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
+        if not is_visual:
+            return CoreferenceResolution(
+                CoreferenceStatus.UNRESOLVED, (), "no_coreference_expression"
+            )
     if context is None:
         return CoreferenceResolution(
-            CoreferenceStatus.UNRESOLVED,(),"no_owned_recent_context")
-    if re.search(r"(?:그중\s*첫\s*번째|the\s+first\s+one)",key):
+            CoreferenceStatus.UNRESOLVED, (), "no_owned_recent_context"
+        )
+    if re.search(r"(?:그중\s*첫\s*번째|the\s+first\s+one)", key):
         if context.comparison_entities:
             return CoreferenceResolution(
                 CoreferenceStatus.RESOLVED,
-                context.comparison_entities[:1],"ordered_comparison_first")
+                context.comparison_entities[:1],
+                "ordered_comparison_first",
+            )
         return CoreferenceResolution(
-            CoreferenceStatus.UNRESOLVED,(),"comparison_context_missing")
-    candidates=tuple(dict.fromkeys(
+            CoreferenceStatus.UNRESOLVED, (), "comparison_context_missing"
+        )
+    candidates = tuple(dict.fromkeys(
         context.comparison_entities or context.focused_entities
     ))
-    if len(candidates)==1:
+    if len(candidates) == 1:
         return CoreferenceResolution(
-            CoreferenceStatus.RESOLVED,candidates,"single_recent_focus")
-    if len(candidates)>1:
+            CoreferenceStatus.RESOLVED, candidates, "single_recent_focus"
+        )
+    if len(candidates) > 1:
         return CoreferenceResolution(
-            CoreferenceStatus.AMBIGUOUS,candidates,"multiple_recent_entities")
+            CoreferenceStatus.AMBIGUOUS, candidates, "multiple_recent_entities"
+        )
     return CoreferenceResolution(
-        CoreferenceStatus.UNRESOLVED,(),"recent_focus_empty")
+        CoreferenceStatus.UNRESOLVED, (), "recent_focus_empty"
+    )
 
 
 _COMPLETION_AND_NEXT_PATTERNS = (
@@ -1403,35 +1427,49 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
 
     The phrases below do not invent a vision result: they preserve a user's
     report and bind it to the source endpoint for the current step. Negative
-    patterns run first so phrases such as ``not transparent`` never become a
-    positive result by substring overlap.
+    patterns and question guards run first so phrases such as "not transparent"
+    or questions like "투명한가요?" never become a positive result by substring overlap.
     """
 
     key = _semantic_utterance_key(transcript)
     if step_label == "7":
         if re.search(
-            r"(?:아직.*(?:색|염색).*(?:남아|있어)|"
-            r"투명하지\s*않|완전히\s*탈색되지\s*않|"
+            r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
+            r"투명해지면\s*어떻게|is\s+it\s+transparent|should\s+it\s+be\s+transparent|"
+            r"투명해졌다고\s*말하면|탈색된\s*건가요|탈색된다는\s*(?:게|건)|"
+            r"의미|뜻|무슨|왜|알려|설명|meaning|what\s+does|explain)\??",
+            key,
+        ):
+            return None
+        if re.search(
+            r"(?:아직.*(?:색|색깔|염색|탈색).*(?:남아|안|있어|덜|남았)|"
+            r"투명하지\s*않|완전히\s*탈색되지\s*않|완전히\s*탈색된\s*건\s*아닌|"
             r"still.*(?:stain|color)|not\s+(?:fully\s+)?(?:destained|transparent))",
             key,
         ):
             return "negative"
         if re.search(
-            r"(?:완전히\s*탈색(?:됐|되었|됐어|됐습니다)?|"
-            r"젤(?:이|은|이\s*)?\s*투명(?:해|합니다|해졌어|해요)|"
-            r"fully\s+destained|gel\s+is\s+transparent)",
+            r"(?:완전히\s*탈색(?:됐|되었|되어|됐어|됐습니다|된|돼서)?|"
+            r"젤(?:이|은|이\s*(?:이제\s*)?)?\s*(?:이제\s*)?(?:완전히\s*)?투명(?:해|합니다|해졌어|해요|해졌습니다)|"
+            r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
+            r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
             key,
         ):
             return "positive"
     if step_label in {"9", "20"}:
         if re.search(
-            r"(?:아직.*(?:투명|젖어|수분)|흰색이\s*아니|"
+            r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
+            key,
+        ):
+            return None
+        if re.search(
+            r"(?:아직.*(?:투명|젖어|수분|건조)|흰색이\s*아니|"
             r"not\s+(?:white|whitish|dehydrated|dry)|still\s+(?:clear|wet))",
             key,
         ):
             return "negative"
         if re.search(
-            r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다)|"
+            r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
             r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
@@ -1569,6 +1607,57 @@ _PREVIEW_STEP_PATTERNS = (
     re.compile(r"^(?:(?P<label>[1-9]|1[0-9]|2[0-5])\s*단계|step\s*(?P<en>[1-9]|1[0-9]|2[0-5]))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
     re.compile(r"^(?:preview\s+step\s*(?P<pen>[1-9]|1[0-9]|2[0-5]))$", re.I),
 )
+
+_KOREAN_STEP_NUMBERS = {
+    "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9, "십": 10,
+    "십일": 11, "십이": 12, "십삼": 13, "십사": 14, "십오": 15, "십육": 16, "십칠": 17,
+    "십팔": 18, "십구": 19, "이십": 20, "이십일": 21, "이십이": 22, "이십삼": 23, "이십사": 24, "이십오": 25,
+    "첫": 1, "첫번째": 1, "첫_번째": 1,
+}
+
+_ENGLISH_STEP_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "twenty-one": 21, "twenty-two": 22, "twenty-three": 23,
+    "twenty-four": 24, "twenty-five": 25,
+}
+
+
+def _parse_step_number_or_label(token: str, current_step: int, max_step: int) -> int | None:
+    t = " ".join(token.casefold().split())
+    if t in {"이", "현재", "지금", "this", "current", "here"}:
+        return current_step
+    if t in {"마지막", "끝", "최종", "last", "final", "end"}:
+        return max_step
+    num_match = re.match(r"^(\d+)", t)
+    if num_match:
+        val = int(num_match.group(1))
+        return val if 1 <= val <= max_step else None
+    if t in _KOREAN_STEP_NUMBERS:
+        return _KOREAN_STEP_NUMBERS[t]
+    if t in _ENGLISH_STEP_NUMBERS:
+        return _ENGLISH_STEP_NUMBERS[t]
+    return None
+
+
+def _extract_step_range(text: str, current_step: int = 1, max_step: int = 25) -> tuple[int, int] | None:
+    raw = text.casefold().strip()
+    patterns = (
+        r"(?:(?:step|단계)\s*)?(?P<start>\d+|이|현재|지금|this|current|[가-힣]+)\s*(?:단계)?\s*(?:부터|에서)\s*(?:(?:step|단계)\s*)?(?P<end>\d+|마지막|끝|최종|last|final|[가-힣]+)\s*(?:단계)?\s*(?:까지)?",
+        r"(?P<start>\d+|[가-힣]+)\s*(?:에서|~|-)\s*(?P<end>\d+|[가-힣]+)\s*단계",
+        r"from\s+(?:steps?\s+)?(?P<start>\d+|this|current|[a-z]+)\s+(?:through|to)\s+(?:steps?\s+)?(?P<end>\d+|last|final|[a-z]+)",
+        r"steps?\s+(?P<start>\d+|[a-z]+)\s+(?:through|to)\s+(?P<end>\d+|[a-z]+)",
+    )
+    for pattern in patterns:
+        for m in re.finditer(pattern, raw):
+            start_tok = m.group("start")
+            end_tok = m.group("end")
+            start_val = _parse_step_number_or_label(start_tok, current_step, max_step)
+            end_val = _parse_step_number_or_label(end_tok, current_step, max_step)
+            if start_val is not None and end_val is not None and 1 <= start_val <= end_val <= max_step:
+                return (start_val, end_val)
+    return None
 _PARAMETER_RATIONALE_PATTERNS = (
     re.compile(r"(?:근거|이유|기준|배경).*(?:어디|뭐|무엇|어디서|왜)"),
     re.compile(r"(?:왜|어째서).*(?:기준|값|조건|온도|교반|rpm|시간|부피).*(?:잡았|정했|선택|설정)"),
@@ -1585,19 +1674,22 @@ _REPORT_REQUEST_PATTERNS = (
     re.compile(r"(?:show|export|open).*(?:experiment\s*)?(?:report|record)"),
 )
 _ANOMALY_PATTERNS = (
+    (re.compile(r"(?:이상\s*(?:상황|현상|발생|사항|있어|생겼)|문제가\s*(?:생겼|발생|있어)|뭔가\s*이상|실수가\s*있었|something\s+went\s+wrong|there\s+is\s+an\s+issue|anomaly|abnormal)"), "protocol_block"),
     (re.compile(r"(?:용액|시약).*(?:잘못|틀리게).*(?:넣|준비)"), "reagent_preparation_issue"),
-    (re.compile(r"(?:시료|샘플).*(?:흘렸|쏟았)"), "sample_deviation"),
+    (re.compile(r"(?:시료|샘플).*(?:흘렸|쏟았|묻었|떨어뜨)"), "sample_deviation"),
     (re.compile(
-        r"(?:색|색깔|투명|침전|결과).*(?:남아|이상|다르|예상|변했|변형됐|"
-        r"달라|something\s+seems\s+wrong|looks\s+different|changed\s+unexpectedly)"
+        r"(?:색|색깔|투명|침전|결과|외관|용액).*(?:남아|이상|다르|예상과\s*다르|변했|변형됐|바뀌|변경|탁해|흐려|달라|"
+        r"something\s+seems\s+wrong|looks\s+different|changed\s+unexpectedly|turned\s+(?:yellow|brown|cloudy))"
     ), "protocol_block"),
+    (re.compile(r"(?:갑자기).*(?:색|색깔|변했|바뀌|변경|이상|탁해|거품|연기|냄새)"), "protocol_block"),
     (re.compile(
         r"(?:오염(?:된\s*것\s*같|됐|된\s*것이\s*보|을\s*발견)|"
         r"(?:sample|시료).*(?:contaminated|오염됐))"
     ), "contamination_concern"),
-    (re.compile(r"(?:장비|기기).*(?:멈췄|고장|이상)"), "equipment_issue"),
-    (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상)"), "timing_temperature_deviation"),
-    (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에)"), "spill_exposure_safety_event"),
+    (re.compile(r"(?:장비|기기|thermomixer|교반기|speedvac).*(?:멈췄|고장|이상|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
+    (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상|너무\s*높|너무\s*낮)"), "timing_temperature_deviation"),
+    (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
+    (re.compile(r"(?:깨졌|부서졌|금이\s*갔|터졌)"), "sample_deviation"),
 )
 _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:소리가\s*안\s*(?:나|나요|나요)|안\s*들려|음성이\s*재생되지\s*않았어)$"),
@@ -2101,6 +2193,8 @@ def classify_curated_control_intent(
     recent_related_entities: tuple[str, ...] = (),
     discourse_context: ProtocolDiscourseContext | None = None,
     completion_context: bool = False,
+    current_step: int | str | None = None,
+    max_steps: int = 25,
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
@@ -2289,6 +2383,23 @@ def classify_curated_control_intent(
             action=CuratedProtocolAction.TIMER_STATUS,
             language=language,
             normalized_transcript=key,
+        )
+    curr_step_val = 1
+    if current_step is not None:
+        try:
+            curr_step_val = int(current_step)
+        except (ValueError, TypeError):
+            curr_step_val = 1
+    if step_range := _extract_step_range(key, current_step=curr_step_val, max_step=max_steps):
+        r_start, r_end = step_range
+        return CuratedControlIntent(
+            intent_kind="step_range_summary",
+            action=CuratedProtocolAction.STEP_RANGE,
+            target_step=f"{r_start}-{r_end}",
+            language=language,
+            normalized_transcript=key,
+            range_start_step=r_start,
+            range_end_step=r_end,
         )
     for pattern in _PREVIEW_STEP_PATTERNS:
         if match := pattern.search(key):
@@ -2652,6 +2763,23 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
             question_dimensions=dimensions,
+        )
+    if re.search(
+        r"(?:튜브|tube|용기|vial|팁|tip|피펫|pipette|반응기|센트리퓨지|centrifuge|"
+        r"마이크로튜브|microcentrifuge|시약병|시험관|플레이트|well\s*plate|비커|beaker)",
+        key,
+    ):
+        return CuratedControlIntent(
+            intent_kind="lab_domain_qa",
+            action=CuratedProtocolAction.LAB_DOMAIN_QA,
+            question_kind="lab_domain_qa",
+            target_step="authoritative_current_step",
+            requested_entities=normalized_entities or (("tube",) if re.search(r"(?:튜브|tube)", key) else ()),
+            requested_entity=normalized_entity or ("tube" if re.search(r"(?:튜브|tube)", key) else None),
+            resolved_entity=normalized_entity or ("tube" if re.search(r"(?:튜브|tube)", key) else None),
+            language=language,
+            normalized_transcript=key,
+            question_dimensions=dimensions or ("definition", "role"),
         )
     return CuratedControlIntent(
         intent_kind="off_topic",
@@ -3681,12 +3809,11 @@ class CuratedProtocolSession:
         }
 
     def stt_keyterms(self) -> tuple[str, ...]:
-        """Return protocol-wide technical and workflow terms within xAI's cap.
+        """Return protocol-wide technical domain terms within xAI's cap.
 
-        The STT request receives a bounded vocabulary, not the protocol body and
-        not numeric operating values.  Including later-step vocabulary avoids a
-        dependence on the current step when a user asks an adjacent/global
-        question or the microphone endpoint lags behind a committed transition.
+        The STT request receives a bounded technical vocabulary (chemical reagents,
+        materials, and scientific nouns), not command sentences or workflow phrases.
+        Ordinary command concepts are handled by the intent classifier after transcription.
         """
 
         scientific = (
@@ -3696,14 +3823,7 @@ class CuratedProtocolSession:
             "stained protein band", "Thermomixer", "rpm", "incubation",
             "keratin", "contamination", "Evotip",
         )
-        workflow = (
-            "프로토콜 시작", "현재 단계", "다음 단계", "다음 단계 미리보기",
-            "완료", "현재 단계 완료", "완료했어요", "다 했어요", "완료 조건",
-            "네", "아니요", "다시 알려줘", "프로토콜 중단",
-            "이상 사항 기록", "관찰 결과", "완전히 탈색", "투명해요",
-            "투명한가요", "흰색으로 변했어요", "아직 색이 남아 있어요",
-        )
-        return tuple(dict.fromkeys((*scientific, *workflow)))[:100]
+        return tuple(dict.fromkeys(scientific))[:100]
 
     def current_step_semantic_frame(self) -> StepSemanticFrame:
         return build_step_semantic_frame(self.fixture, self.current_index)
@@ -4730,19 +4850,20 @@ class CuratedProtocolSession:
                 )
             speech = direct
         elif sections:
-            direct = "\n".join(f"• {label}: {text}" for label, text in sections)
+            formatted_blocks = []
+            for label, text in sections:
+                formatted_blocks.append(f"### {label}\n{text}")
             if relation:
-                direct += f"\n\n{'관계' if language == 'ko' else 'Relationship'}\n{relation}"
+                rel_title = "프로토콜 내 관계" if language == "ko" else "Protocol Relationship"
+                formatted_blocks.append(f"### {rel_title}\n{relation}")
             if "difference" in plan.question_dimensions and "hplc_water" in entities:
                 limitation = (
                     "활성 프로토콜은 HPLC water와 일반 물의 품질 차이를 정의하지 않으므로 그 차이는 별도 권위 자료가 필요합니다."
                     if language == "ko" else
                     "The active protocol does not define the quality difference between HPLC water and ordinary water, so that comparison needs a separate authoritative source."
                 )
-                direct += f"\n\n{limitation}"
-            speech = " ".join(text for _, text in sections[:2])
-            if relation and len(sections) <= 2:
-                speech += " " + relation
+                lim_title = "참고 한계" if language == "ko" else "Note"
+                formatted_blocks.append(f"### {lim_title}\n{limitation}")
             if "role" in plan.question_dimensions:
                 role_notes = {
                     "ambic": (
@@ -4757,10 +4878,13 @@ class CuratedProtocolSession:
                     ),
                 }
                 if entities and entities[0] in role_notes:
-                    speech += " " + role_notes[entities[0]]
-                    direct += f"\n\n{role_notes[entities[0]]}"
-            if "difference" in plan.question_dimensions and "hplc_water" in entities:
-                speech += " " + limitation
+                    role_title = "역할" if language == "ko" else "Role"
+                    formatted_blocks.append(f"### {role_title}\n{role_notes[entities[0]]}")
+            direct = "\n\n".join(formatted_blocks)
+            speech_parts = [text for _, text in sections[:2]]
+            if relation and len(sections) <= 2:
+                speech_parts.append(relation)
+            speech = " ".join(speech_parts)
         else:
             step = self.fixture.steps[self.current_index]
             localized = self._localized_fact(step.step_id, "current_step")
@@ -5094,7 +5218,10 @@ class CuratedProtocolSession:
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
                 self._pending_completion_confirmation = None
-            if observation_pending_valid:
+            stale_observation_reply = (
+                observation_pending is not None and not observation_pending_valid
+            )
+            if observation_pending is not None:
                 self._pending_observation_confirmation = None
             pending_anomaly = self._pending_anomaly
             if (
@@ -5115,20 +5242,22 @@ class CuratedProtocolSession:
                 )
             else:
                 intent = classify_curated_control_intent(
-                transcript,
-                language=language,
-                entity_inventory=self._entity_inventory(),
-                recent_related_query=self._last_related_query,
-                recent_related_entities=self._last_related_entities,
-                discourse_context=(
-                    self._discourse_context
-                    if self._discourse_context.step_id
-                    == self.fixture.steps[self.current_index].step_id
-                    and self._discourse_context.workflow_revision == self._revision
-                    else None
-                ),
-                completion_context=self.active,
-            )
+                    transcript,
+                    language=language,
+                    entity_inventory=self._entity_inventory(),
+                    recent_related_query=self._last_related_query,
+                    recent_related_entities=self._last_related_entities,
+                    discourse_context=(
+                        self._discourse_context
+                        if self._discourse_context.step_id
+                        == self.fixture.steps[self.current_index].step_id
+                        and self._discourse_context.workflow_revision == self._revision
+                        else None
+                    ),
+                    completion_context=self.active,
+                    current_step=self.current_index + 1,
+                    max_steps=len(self.fixture.steps),
+                )
         if self.active:
             plausibility = assess_transcript_plausibility(
                 transcript, self.current_step_semantic_frame()
@@ -5170,9 +5299,9 @@ class CuratedProtocolSession:
                 )
         if (
             self.active
-            and intent.action is CuratedProtocolAction.NEXT
             and self.fixture.steps[self.current_index].source_label in {"7", "9", "20"}
             and not intent.reported_observation
+            and not stale_observation_reply
         ):
             observed = _observation_predicate(
                 self.fixture.steps[self.current_index].source_label, transcript
@@ -5180,14 +5309,21 @@ class CuratedProtocolSession:
             if observed is not None:
                 intent = replace(
                     intent,
+                    action=CuratedProtocolAction.NEXT,
                     reported_completion=observed == "positive",
                     reported_observation=True,
                     observation_predicate=observed,
                     observation_outcome=normalized_confirmation,
                     allows_state_mutation=observed == "positive",
                     requested_transition=("next" if observed == "positive" else None),
+                    target_step="authoritative_current_step",
+                    intent_kind=(
+                        "direct_positive_observation"
+                        if observed == "positive"
+                        else "direct_negative_observation"
+                    ),
                 )
-            elif intent.reported_completion:
+            elif intent.action is CuratedProtocolAction.NEXT and intent.reported_completion:
                 intent = replace(
                     intent,
                     intent_kind="observation_confirmation_required",
@@ -6671,6 +6807,82 @@ class CuratedProtocolSession:
                     "unavailable" if language == "ko" else "source_language"
                 ),
                 intent_kind="current_protocol_fact",
+            )
+        elif command is CuratedProtocolAction.STEP_RANGE:
+            start_step = intent.range_start_step or 1
+            end_step = intent.range_end_step or len(steps)
+            start_idx = max(0, start_step - 1)
+            end_idx = min(len(steps) - 1, end_step - 1)
+            target_steps = steps[start_idx : end_idx + 1]
+            bullet_lines = []
+            speech_bits = []
+            for s in target_steps:
+                localized = self._localized_fact(s.step_id, "current_step")
+                desc = localized if localized else s.text
+                bullet_lines.append(f"• {s.source_label}단계: {desc}")
+                speech_bits.append(f"{s.source_label}단계: {desc}")
+            header_text = (
+                f"{start_step}단계부터 {end_step}단계까지의 절차 요약입니다."
+                if language == "ko"
+                else f"Here is the summary of steps {start_step} through {end_step}:"
+            )
+            display_text = header_text + "\n\n" + "\n".join(bullet_lines)
+            speech_text = header_text + " " + " ".join(speech_bits)
+            current_step = steps[self.current_index]
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.STEP_RANGE,
+                display_text=display_text,
+                speech_text=speech_text,
+                speech_mode=CuratedProtocolSpeechMode.FULL_DETAIL,
+                facts=(),
+                step_label=current_step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind="step_range_summary",
+                target_step=f"{start_step}-{end_step}",
+                primary_text=display_text,
+            )
+        elif command is CuratedProtocolAction.LAB_DOMAIN_QA:
+            current_step = steps[self.current_index]
+            localized_step = self._localized_fact(current_step.step_id, "current_step") or current_step.text
+            if re.search(r"(?:튜브|tube|용기|vial|container)", transcript.casefold()):
+                if language == "ko":
+                    response = (
+                        "이 프로토콜에서 튜브는 젤 밴드 조각을 담아 세척(Solution A/B), "
+                        "환원, 알킬화 및 트립신 소화 반응을 진행하는 약 1.5 mL 마이크로센트리퓨지 튜브입니다. "
+                        f"현재 진행 중인 {current_step.source_label}단계에서는 튜브 내의 용액을 처리하는 과정입니다. "
+                        f"현재 프로토콜 상태는 {current_step.source_label}단계를 그대로 유지합니다."
+                    )
+                else:
+                    response = (
+                        "In this in-gel digestion protocol, the tube refers to a standard ~1.5 mL microcentrifuge tube "
+                        "used to hold the gel plug and reagents for washing and digestion. "
+                        f"At the current Step {current_step.source_label}, operations take place inside this reaction tube. "
+                        f"The protocol state remains at Step {current_step.source_label}."
+                    )
+            else:
+                if language == "ko":
+                    response = (
+                        f"현재 진행 중인 {current_step.source_label}단계 작업은 다음과 같습니다: {localized_step} "
+                        f"현재 프로토콜은 {current_step.source_label}단계를 유지합니다."
+                    )
+                else:
+                    response = (
+                        f"The active Step {current_step.source_label} is: {localized_step}. "
+                        f"The protocol state remains at Step {current_step.source_label}."
+                    )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.LAB_DOMAIN_QA,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.FULL_DETAIL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=current_step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind="lab_domain_qa",
+                target_step=current_step.source_label,
+                primary_text=response,
             )
         elif command is CuratedProtocolAction.OFF_TOPIC:
             step = steps[self.current_index]

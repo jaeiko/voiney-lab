@@ -68,6 +68,24 @@ _NON_LEXICAL_EVENT = re.compile(
 )
 
 
+_CANONICAL_COMMAND_TERMS = (
+    # Korean workflow terms
+    "프로토콜 시작", "현재 단계", "다음 단계", "다음 단계 미리보기",
+    "완료", "현재 단계 완료", "완료했어요", "다 했어요", "완료 조건",
+    "네", "아니요", "다시 알려줘", "프로토콜 중단", "이상 사항 기록",
+    "관찰 결과", "완전히 탈색", "투명해요", "투명한가요", "흰색으로 변했어요",
+    "아직 색이 남아 있어요",
+    # English workflow terms / STT translations
+    "protocol start", "proton start", "pro protocol start", "current step", "current stage",
+    "next step", "next stage", "next step preview", "preview step", "step preview",
+    "complete", "current step complete", "current stage complete", "i did it",
+    "complete condition", "completion condition", "yes", "no", "tell me again",
+    "protocol interruption", "protocol stop", "anomaly record", "abnormality record",
+    "observation result", "completely decontaminated", "completely destained",
+    "transparent", "white changed", "color is still there", "stain still remains",
+)
+
+
 def _normalized_keyterm_tokens(value: str) -> tuple[str, ...]:
     return tuple(
         token for token in re.findall(r"[0-9A-Za-z가-힣µμ°%./-]+", value.casefold())
@@ -81,18 +99,23 @@ def _is_keyterm_echo(
     keyterms: tuple[str, ...] | None = None,
     duration_seconds: float | None = None,
 ) -> bool:
-    """Reject STT concatenations that are almost only injected keyterms."""
+    """Reject STT concatenations that are almost only injected keyterms / vocabulary dumps.
 
-    if not keyterms:
-        return False
+    Differentiates authentic single/double workflow commands (e.g. "현재 단계 완료했어")
+    from STT model hallucinations that regurgitate the prompt / keyterm catalog
+    as an enumerative concatenation in Korean, English, or mixed languages.
+    """
+
     text = " ".join(str(transcription.text or "").split())
+    if not text:
+        return False
     tokens = _normalized_keyterm_tokens(text)
-    if len(tokens) < 4:
+    if len(tokens) < 3:
         return False
-    if has_language_bearing_content(text):
-        return False
+
+    all_terms: list[str] = list(keyterms or ()) + list(_CANONICAL_COMMAND_TERMS)
     catalog: list[tuple[str, ...]] = []
-    for term in keyterms:
+    for term in all_terms:
         if not isinstance(term, str):
             continue
         parts = _normalized_keyterm_tokens(term)
@@ -100,29 +123,51 @@ def _is_keyterm_echo(
             catalog.append(parts)
     if not catalog:
         return False
+
+    # Sort catalog by length descending for greedy matching
+    catalog.sort(key=len, reverse=True)
+
     covered = 0
     index = 0
+    matched_distinct_terms: set[tuple[str, ...]] = set()
+
     while index < len(tokens):
         matched = 0
+        matched_term = None
         for parts in catalog:
             width = len(parts)
-            if width and tokens[index:index + width] == parts:
-                matched = max(matched, width)
+            if width and index + width <= len(tokens) and tokens[index:index + width] == parts:
+                matched = width
+                matched_term = parts
+                break
         if matched == 0:
             index += 1
             continue
         covered += matched
+        if matched_term:
+            matched_distinct_terms.add(matched_term)
         index += matched
-    if covered / len(tokens) < 0.85:
-        return False
-    measured = (
-        duration_seconds
-        if duration_seconds is not None
-        else transcription.duration_seconds
-    )
-    if measured is not None and measured >= 2.5:
-        return False
-    return True
+
+    coverage_ratio = covered / len(tokens) if tokens else 0.0
+    punct_count = len(re.findall(r"[,.·/?!]", text))
+
+    # 1. Obvious large vocabulary dump: 4 or more distinct keyterm phrases with high coverage
+    if len(matched_distinct_terms) >= 4 and coverage_ratio >= 0.65:
+        return True
+
+    # 2. Enumerative listing of 3+ keyterm commands with list punctuation
+    if len(matched_distinct_terms) >= 3 and coverage_ratio >= 0.75 and punct_count >= 2:
+        return True
+
+    # 3. Dense keyterm repetition without natural syntax when length >= 4 tokens and coverage >= 0.85
+    if len(tokens) >= 4 and coverage_ratio >= 0.85 and not has_language_bearing_content(text):
+        return True
+
+    # 4. Long sequence (>= 5 tokens) of catalog terms with >= 3 distinct terms and >= 80% coverage
+    if len(tokens) >= 5 and len(matched_distinct_terms) >= 3 and coverage_ratio >= 0.80:
+        return True
+
+    return False
 
 
 def classify_input_event(
@@ -282,3 +327,23 @@ CLARIFICATION_TEXT = {
     "en": "Please choose Korean or English, then repeat your question.",
     "vi": "Vui lòng chọn tiếng Hàn hoặc tiếng Anh, rồi nhắc lại câu hỏi.",
 }
+
+
+def clean_speech_text(text: str) -> str:
+    """Strip markdown syntax, headers, bullets, bolding, and links from spoken audio text."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    # Remove markdown headers like ### Heading or ## Heading
+    cleaned = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
+    # Remove list bullets like - bullet or • bullet or * bullet or 1. bullet
+    cleaned = re.sub(r"^\s*[-*•]\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^\s*\d+\.\s*", "", cleaned, flags=re.MULTILINE)
+    # Remove bold / italic markers **word** or *word*
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+    # Remove markdown links [text](url) -> text
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    # Remove citation brackets like [1] or [CID 14013]
+    cleaned = re.sub(r"\[[0-9A-Za-z\s_-]+\]", "", cleaned)
+    # Normalize whitespace
+    return " ".join(cleaned.split())

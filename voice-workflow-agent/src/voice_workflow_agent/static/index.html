@@ -98,8 +98,18 @@
     .turn{padding:1rem;border:1px solid var(--line);background:var(--paper);border-radius:1rem;display:grid;grid-template-columns:8rem minmax(0,1fr);column-gap:1rem;row-gap:.42rem;scroll-margin-block:.75rem}
     .turn>b{grid-column:1/-1;color:var(--forest);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase}
     .turn .label{color:var(--muted);font-size:.74rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
-    .turn .reply{font-weight:650}
-    .turn .answer-block{margin:.25rem 0 .55rem}.turn .answer-block b{display:block;color:var(--muted);font-size:.7rem;margin-bottom:.18rem}.turn .answer-source{white-space:pre-wrap;font-weight:500;color:#34483e}.turn .answer-citation{font-size:.72rem;color:var(--muted)}
+    .turn .reply{font-weight:550;line-height:1.55;color:#1e3228}
+    .turn .reply-heading{font-size:.88rem;font-weight:750;color:#133024;margin:.6rem 0 .25rem;letter-spacing:-.01em}
+    .turn .reply-heading-main{font-size:.95rem;font-weight:800;color:#0b2118;margin:.7rem 0 .3rem}
+    .turn .reply-list{margin:.3rem 0 .5rem 1.15rem;padding:0;line-height:1.5}
+    .turn .reply-list li{margin-bottom:.25rem;color:#213b2e}
+    .turn .reply-paragraph{margin:.3rem 0 .5rem;line-height:1.55;color:#213b2e}
+    .turn .answer-block{margin:.35rem 0 .65rem}.turn .answer-block b{display:block;color:var(--muted);font-size:.72rem;font-weight:800;margin-bottom:.25rem;text-transform:uppercase;letter-spacing:.04em}.turn .answer-source{white-space:pre-wrap;font-weight:500;color:#34483e}.turn .answer-citation{font-size:.72rem;color:var(--muted)}
+    .turn .external-reference-links{display:flex;flex-direction:column;gap:.4rem;margin-top:.45rem}
+    .turn .source-card{display:block;padding:.45rem .65rem;border:1px solid var(--line);border-radius:.6rem;background:#f8fbf9;text-decoration:none;color:#19382b;transition:border-color .15s,background .15s}
+    .turn .source-card:hover{border-color:var(--forest);background:#f0f7f3}
+    .turn .source-card-title{font-weight:700;font-size:.8rem;color:#133326;display:block}
+    .turn .source-card-domain{font-size:.7rem;color:var(--muted);display:inline-block;margin-top:.15rem}
     .turn .turn-status{grid-column:2;color:var(--forest);font-size:.78rem;font-weight:800}
     .turn .tools{color:var(--forest-2);font-size:.78rem;font-weight:700}
     .turn .server-operation{color:var(--muted);font-size:.75rem}
@@ -391,8 +401,8 @@ function renderCuratedProtocolState(message){
  const valid=value.attached===true&&value.protocol_id===accepted.protocol_id&&value.revision_id===accepted.revision_id&&nonempty(value.protocol_id)&&nonempty(value.revision_id)&&nonempty(value.display_name)&&typeof value.development_only==="boolean"&&["analysis_required","guidance_ready"].includes(value.readiness_status)&&typeof value.active==="boolean"&&Number.isInteger(value.total_steps)&&value.total_steps>0&&typeof value.at_final_step==="boolean"&&(value.block_reason===null||nonempty(value.block_reason))&&Number.isInteger(value.revision)&&value.revision>=0&&visualShape;
  const previewValid=!value.active&&["preview","ready"].includes(value.workflow_status)&&nonempty(value.current_step_label)&&nonempty(value.current_step_id);
  const activeValid=value.active?nonempty(value.current_step_label)&&nonempty(value.current_step_id):(previewValid||(value.current_step_label===null&&value.current_step_id===null));
- if(!valid||!activeValid||value.revision<=curatedStateRevision)return;
- curatedProtocolState={...value};curatedStateRevision=value.revision;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
+ if(!valid||!activeValid||value.revision<curatedStateRevision)return;
+ curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?`개발용 · 최종 승인 아님 · ${value.protocol_id} · ${value.revision_id}`:`승인 리비전 · ${value.protocol_id} · ${value.revision_id}`;
  const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
@@ -429,18 +439,42 @@ function renderProcedureState(value){
  startWorkflowTimer();
 }
 async function closeAudio(){if(micWorkletNode){micWorkletNode.port.onmessage=null;try{micWorkletNode.port.postMessage({type:"stop"});}catch(_){}try{micWorkletNode.disconnect();}catch(_){}micWorkletNode=null;}if(micSource){try{micSource.disconnect();}catch(_){}micSource=null;}if(micStream){for(const track of micStream.getTracks())track.stop();micStream=null;}for(const context of [micContext,playContext])if(context&&context.state!=="closed")try{await context.close();}catch(_){}micContext=null;playContext=null;cascadeGain=null;micSignalSeen=false;resetCascadeInterruption();}
-function chatNearBottom(){const log=$("log");return !log||log.scrollHeight-log.scrollTop-log.clientHeight<72;}
+function chatNearBottom(){const log=$("log");return !log||log.scrollTop<72||log.scrollHeight-log.scrollTop-log.clientHeight<72;}
 function beginChatPatch(node=null){const log=$("log");return log?{near:chatNearBottom(),height:log.scrollHeight,top:log.scrollTop,targetTop:Number.isFinite(node?.offsetTop)?node.offsetTop:null}:null;}
-function finishChatPatch(snapshot,kind="message"){const log=$("log"),button=$("new-chat-update");if(!log||!snapshot)return;if(snapshot.near){log.scrollTop=log.scrollHeight;if(button)button.hidden=true;return;}if(snapshot.targetTop!==null&&snapshot.targetTop<snapshot.top)log.scrollTop=snapshot.top+Math.max(0,log.scrollHeight-snapshot.height);if(button){button.textContent=kind==="visual"?"새 시각 자료 ↓":"새 메시지 ↓";button.hidden=false;}}
-function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const snapshot=beginChatPatch();const node=document.createElement("section");node.className="turn";node.setAttribute?.("aria-label",`Turn ${id}`);node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">Voice Workflow Agent</div><div class="reply"></div><div class="label">Status</div><div class="turn-status"></div><div class="filler-status"></div><div class="replay-status" role="status"></div><div class="turn-visual step-visual" hidden></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div class="server-operation" hidden></div><div class="tools" hidden></div><div class="stats"></div></details><div class="error"></div>`;$("log").appendChild(node);turns.set(key,node);finishChatPatch(snapshot);return node;}
+function finishChatPatch(snapshot,kind="message"){const log=$("log"),button=$("new-chat-update");if(!log||!snapshot)return;if(snapshot.near){if(button)button.hidden=true;return;}if(button){button.textContent=kind==="visual"?"새 시각 자료 ↑":"새 메시지 ↑";button.hidden=false;}}
+function turnNode(id,generation=sessionGeneration){const key=`${generation}:${id}`;if(turns.has(key))return turns.get(key);const snapshot=beginChatPatch();const node=document.createElement("section");node.className="turn";node.setAttribute?.("aria-label",`Turn ${id}`);node.innerHTML=`<b>Turn ${id}</b><div class="label">You</div><div class="transcript">듣는 중…</div><div class="label">Voice Workflow Agent</div><div class="reply"></div><div class="label">Status</div><div class="turn-status"></div><div class="filler-status"></div><div class="replay-status" role="status"></div><div class="turn-visual step-visual" hidden></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div class="server-operation" hidden></div><div class="tools" hidden></div><div class="stats"></div></details><div class="error"></div>`;const log=$("log");if(log.firstChild)log.insertBefore(node,log.firstChild);else log.appendChild(node);turns.set(key,node);finishChatPatch(snapshot);return node;}
+function renderMarkdownToContainer(container, rawText){
+ if(typeof rawText!=="string"||!rawText.trim())return;
+ const normalized=normalizePresentationText(rawText);
+ const blocks=normalized.split(/\n\n+/);
+ for(const block of blocks){
+  const trimmed=block.trim();
+  if(!trimmed)continue;
+  if(trimmed.startsWith("### ")){
+   const h=document.createElement("h4");h.className="reply-heading";h.textContent=trimmed.replace(/^###\s+/,"");container.appendChild(h);
+  }else if(trimmed.startsWith("## ")){
+   const h=document.createElement("h3");h.className="reply-heading-main";h.textContent=trimmed.replace(/^##\s+/,"");container.appendChild(h);
+  }else if(/^[-*•]\s+/m.test(trimmed)){
+   const ul=document.createElement("ul");ul.className="reply-list";
+   const lines=trimmed.split("\n");
+   for(const line of lines){
+    const clean=line.replace(/^[-*•]\s+/,"").trim();
+    if(clean){const li=document.createElement("li");li.textContent=clean;ul.appendChild(li);}
+   }
+   container.appendChild(ul);
+  }else{
+   const p=document.createElement("p");p.className="reply-paragraph";p.textContent=trimmed;container.appendChild(p);
+  }
+ }
+}
 function renderStructuredReply(node,message){
  const target=node?.querySelector?.(".reply");if(!target)return false;
  const snapshot=beginChatPatch(node),primary=message?.primary_text,sources=message?.source_texts,pages=message?.source_pages,evidence=message?.evidence_ids,citations=message?.citations,correction=typeof message?.transcript_correction_note==="string"&&message.transcript_correction_note.trim()?message.transcript_correction_note.trim():null,reference=["approved_lab_corpus","external_authoritative_reference"].includes(message?.answer_origin)&&Array.isArray(citations)&&citations.length>0,structured=typeof primary==="string"&&primary.trim()&&Array.isArray(sources)&&sources.length>0&&sources.every(item=>typeof item==="string"&&item.length>0)&&Array.isArray(pages)&&pages.length===sources.length&&pages.every(item=>Number.isInteger(item)&&item>0)&&Array.isArray(evidence)&&evidence.length===sources.length&&evidence.every(item=>typeof item==="string"&&item.length>0);
+ const documentPayload=message?.display_document;
  if(!structured&&!reference&&message?.answer_origin!=="supplemental_model_knowledge"){
-  const documentPayload=message?.display_document;
   if(documentPayload&&typeof documentPayload==="object"){
    target.replaceChildren();
-   const addDocument=(className,label,text)=>{if(typeof text!=="string"||!text.trim())return;const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}const body=document.createElement("span");body.textContent=normalizePresentationText(text);block.appendChild(body);target.appendChild(block);};
+   const addDocument=(className,label,text)=>{if(typeof text!=="string"||!text.trim())return;const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}renderMarkdownToContainer(block,text);target.appendChild(block);};
    if(correction)addDocument("answer-correction","음성 인식 보정",correction);
    addDocument("answer-document-title","",documentPayload.title||message.text||"");
    const sections=Array.isArray(documentPayload.sections)?documentPayload.sections:[];
@@ -449,7 +483,7 @@ function renderStructuredReply(node,message){
   }
   target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(message.text)+" ";finishChatPatch(snapshot);return false;}
  target.replaceChildren();
- const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;const heading=document.createElement("b");heading.textContent=label;const body=document.createElement("span");body.textContent=normalizePresentationText(text);block.appendChild(heading);block.appendChild(body);parent.appendChild(block);};
+ const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);renderMarkdownToContainer(block,text);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
  const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 승인 참고자료 · 활성 프로토콜의 일부가 아님":message.answer_origin==="external_authoritative_reference"?"외부 권위 참고자료 · 활성 프로토콜의 일부가 아님":message.answer_origin==="supplemental_model_knowledge"?"일반 모델 설명 · 확인된 권위 근거 없음":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
  add(target,"answer-primary",originLabel,primary||message.text||"");
@@ -466,7 +500,10 @@ renderStructuredReply=function(node,message){
  for(const item of message.citations.slice(0,5)){
   let parsed;try{parsed=new URL(item?.canonical_url);}catch(_){continue;}
   if(parsed.protocol!=="https:"||typeof item?.domain!=="string"||parsed.hostname!==item.domain)continue;
-  const link=document.createElement("a");link.href=parsed.href;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${item.title||"권위 자료"} · ${item.domain}`;links.push(link);
+  const link=document.createElement("a");link.className="source-card";link.href=parsed.href;link.target="_blank";link.rel="noopener noreferrer";
+  const title=document.createElement("span");title.className="source-card-title";title.textContent=item.title||"권위 참고 자료";
+  const domain=document.createElement("span");domain.className="source-card-domain";domain.textContent=`출처 · ${item.domain}`;
+  link.appendChild(title);link.appendChild(domain);links.push(link);
  }
  if(links.length){const linkList=document.createElement("div");linkList.className="external-reference-links";for(const link of links)linkList.appendChild(link);body.appendChild(linkList);}
  return rendered;

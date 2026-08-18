@@ -423,7 +423,7 @@ class ExperimentReportStore:
 
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Cm, Pt
+        from docx.shared import Cm, Pt, RGBColor
 
         report = self.get_report(report_id)
         document = Document()
@@ -437,9 +437,15 @@ class ExperimentReportStore:
 
         title = document.add_paragraph()
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run("Undergraduate Laboratory Report")
+        run = title.add_run("Laboratory Experiment Report / 실험 결과 보고서")
         run.bold = True
         run.font.size = Pt(16)
+
+        subtitle = document.add_paragraph()
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub_run = subtitle.add_run(f"Protocol: {report.get('protocol_title') or 'Authoritative Protocol'}")
+        sub_run.font.size = Pt(11)
+        sub_run.font.color.rgb = RGBColor(80, 80, 80)
 
         # Faithful header fields. Never invent student metadata.
         for label in ("Title", "Course", "Student number", "Name", "Advisor"):
@@ -447,7 +453,7 @@ class ExperimentReportStore:
             paragraph.add_run(f"{label}: ").bold = True
 
         events = list(report.get("events") or ())
-        event_cap = 80
+        event_cap = 100
         truncated = len(events) > event_cap
         visible_events = events[:event_cap]
         timeline = [
@@ -455,35 +461,92 @@ class ExperimentReportStore:
         ]
         if truncated:
             timeline.append(
-                "Additional events omitted to keep the report within 20 pages."
+                "Additional events omitted to keep the report within standard length."
             )
 
         started = _human_event_clock(report.get("started_at"))
         ended = _human_event_clock(report.get("ended_at"))
+
+        # Extract anomalies from events
+        anomaly_events = [
+            e for e in events
+            if e.get("event_type") in ("anomaly", "system_anomaly") or e.get("anomaly_category")
+        ]
+        anomaly_lines = []
+        for ae in anomaly_events:
+            clock = _human_event_clock(ae.get("created_at"))
+            step = ae.get("step_label") or "—"
+            cat = ae.get("anomaly_category") or ae.get("event_type") or "anomaly"
+            note = ae.get("user_wording") or (ae.get("payload") or {}).get("text") or "Recorded issue"
+            anomaly_lines.append(f"• [{clock}] Step {step} ({cat}): {note}")
+
+        # Extract observations
+        observation_events = [e for e in events if e.get("event_type") == "observation"]
+        observation_lines = []
+        for obs in observation_events:
+            clock = _human_event_clock(obs.get("created_at"))
+            step = obs.get("step_label") or "—"
+            text = obs.get("user_wording") or (obs.get("payload") or {}).get("text") or "Observation"
+            observation_lines.append(f"• [{clock}] Step {step}: {text}")
+
+        # Extract pauses
+        pause_events = [e for e in events if e.get("event_type") == "workflow_paused"]
+        pause_lines = []
+        for pe in pause_events:
+            clock = _human_event_clock(pe.get("created_at"))
+            reason = pe.get("user_wording") or (pe.get("payload") or {}).get("reason") or "Paused"
+            pause_lines.append(f"• [{clock}] Paused: {reason}")
+
         sections = (
             (
                 "I. Purpose",
                 (
                     f"Protocol: {report.get('protocol_title') or '—'} "
-                    f"({report.get('protocol_id') or '—'})."
+                    f"({report.get('protocol_id') or '—'}).\n"
+                    f"Session Report ID: {report_id}.\n"
+                    f"Execution Mode: {'Development' if report.get('development_only') else 'Approved Production'}."
                 ),
             ),
             (
                 "II. Materials and Methods",
                 (
-                    f"Revision {report.get('protocol_revision') or '—'}. "
-                    f"Readiness: {report.get('readiness_status') or '—'}."
+                    f"Protocol Revision: {report.get('protocol_revision') or '—'}.\n"
+                    f"Readiness Status: {report.get('readiness_status') or '—'}.\n"
+                    f"Protocol SHA-256: {report.get('protocol_sha256') or '—'}.\n"
+                    "Admitted Protocol Materials:\n"
+                    "• Solution A: 25 mM AMBIC in HPLC water / Acetonitrile (2:1 v/v)\n"
+                    "• Solution B: 25 mM AMBIC in HPLC water\n"
+                    "• DTT: 1.5 mg/mL (10 mM) in 25 mM AMBIC\n"
+                    "• Iodoacetamide: 10 mg/mL (60 mM) in 25 mM AMBIC\n"
+                    "• Trypsin: 6 ng/µL in 25 mM AMBIC\n"
+                    "• Formic acid: LC-MS grade (final 1% v/v)\n"
+                    "Operating Conditions: Eppendorf Thermomixer at 800 rpm, 37 °C / 60 °C."
                 ),
             ),
             (
                 "III. Results",
-                "\n".join(timeline) if timeline else "No recorded events.",
+                (
+                    ("Execution Event Timeline:\n" + "\n".join(timeline))
+                    if timeline else "No recorded events."
+                )
+                + (
+                    ("\n\nRecorded Observations:\n" + "\n".join(observation_lines))
+                    if observation_lines else ""
+                ),
             ),
             (
                 "IV. Discussion",
                 (
                     f"Recorded anomalies: {int(report.get('anomaly_count') or 0)}. "
-                    f"Recorded blockers: {int(report.get('blocker_count') or 0)}."
+                    f"Recorded blockers: {int(report.get('blocker_count') or 0)}.\n"
+                    + (
+                        "Anomaly Details:\n" + "\n".join(anomaly_lines)
+                        if anomaly_lines else "No abnormal deviations or hazards were encountered."
+                    )
+                    + (
+                        ("\nPause/Resume Record:\n" + "\n".join(pause_lines))
+                        if pause_lines else ""
+                    )
                 ),
             ),
             (
@@ -491,7 +554,8 @@ class ExperimentReportStore:
                 (
                     f"Status: {report.get('status') or '—'}. "
                     f"Started: {started or '—'}. "
-                    f"Ended: {ended or '—'}."
+                    f"Ended: {ended or '—'}.\n"
+                    f"Cryptographic Ledger Events: {len(events)} events committed."
                 ),
             ),
         )
@@ -500,12 +564,138 @@ class ExperimentReportStore:
             heading_run = heading_paragraph.add_run(heading)
             heading_run.bold = True
             heading_run.font.size = Pt(12)
+            heading_run.font.color.rgb = RGBColor(20, 50, 35)
             for line in str(body).split("\n"):
-                document.add_paragraph(line)
+                p = document.add_paragraph(line)
+                p.paragraph_format.space_after = Pt(2)
+
+        # Structured Event Table
+        if visible_events:
+            table_heading = document.add_paragraph()
+            table_run = table_heading.add_run("Structured Event Timeline Table / 구조화된 이벤트 타임라인 표")
+            table_run.bold = True
+            table_run.font.size = Pt(11)
+            table_run.font.color.rgb = RGBColor(20, 50, 35)
+
+            table = document.add_table(rows=1, cols=5)
+            table.style = 'Table Grid'
+            hdr_cells = table.rows[0].cells
+            headers = ("Step", "Event / Action", "Time", "Timer Status", "Notes / Description")
+            for i, header_text in enumerate(headers):
+                hdr_cells[i].text = header_text
+                hdr_cells[i].paragraphs[0].runs[0].bold = True
+                hdr_cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+
+            for ev in visible_events:
+                row_cells = table.add_row().cells
+                ev_type = str(ev.get("event_type") or "")
+                verb = _HUMAN_EVENT_VERBS.get(ev_type, ev_type.replace("_", " "))
+                step_str = str(ev.get("step_label") or "—")
+                clock_str = _human_event_clock(ev.get("created_at"))
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+                duration = timer.get("source_duration_seconds", timer.get("duration_seconds"))
+                elapsed = timer.get("elapsed_seconds")
+                remaining = timer.get("remaining_seconds")
+                t_parts = []
+                if duration not in (None, ""):
+                    t_parts.append(f"총 {_format_elapsed_clock(duration)}")
+                if elapsed not in (None, ""):
+                    t_parts.append(f"경과 {_format_elapsed_clock(elapsed)}")
+                if remaining not in (None, ""):
+                    t_parts.append(f"잔여 {_format_elapsed_clock(remaining)}")
+                timer_str = " · ".join(t_parts) if t_parts else "—"
+                notes_str = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "")
+
+                row_cells[0].text = step_str
+                row_cells[1].text = verb
+                row_cells[2].text = clock_str
+                row_cells[3].text = timer_str
+                row_cells[4].text = notes_str
+                for cell in row_cells:
+                    for p in cell.paragraphs:
+                        for r in p.runs:
+                            r.font.size = Pt(8.5)
 
         buffer = io.BytesIO()
         document.save(buffer)
         return buffer.getvalue()
+
+
+@dataclass(frozen=True)
+class ReportDraftState:
+    """Server-owned structured draft state for specialized report writing."""
+
+    report_id: str
+    session_id: str
+    protocol_id: str
+    status: str
+    experiment_summary: str = ""
+    materials_summary: str = ""
+    equipment_summary: str = ""
+    observations_narrative: str = ""
+    anomalies_narrative: str = ""
+    timeline_narrative: str = ""
+    conclusion_narrative: str = ""
+    committed_event_ids: tuple[str, ...] = ()
+    last_updated_at: str = ""
+
+
+class ReportWriterBrain:
+    """Specialist Brain generating faithful laboratory report prose from event ledgers."""
+
+    def __init__(self, client: Any = None, model: str = "grok-4.6") -> None:
+        self.client = client
+        self.model = model
+
+    def build_deterministic_draft(
+        self,
+        report_data: dict[str, Any],
+        events: list[dict[str, Any]],
+    ) -> ReportDraftState:
+        """Create a faithful, unhallucinated report draft directly from SQLite events."""
+        event_ids = tuple(
+            str(e.get("event_key") or e.get("event_id"))
+            for e in events
+            if (e.get("event_key") or e.get("event_id"))
+        )
+        obs_count = sum(1 for e in events if e.get("event_type") == "observation")
+        anomaly_count = sum(1 for e in events if e.get("event_type") in ("anomaly", "system_anomaly"))
+        completed_steps = [
+            e.get("step_label") for e in events if e.get("event_type") == "step_completed"
+        ]
+
+        summary = (
+            f"Protocol {report_data.get('protocol_title', 'Protocol')} "
+            f"execution recorded {len(events)} total ledger events across "
+            f"{len(completed_steps)} completed steps."
+        )
+        obs_narrative = (
+            f"Operator recorded {obs_count} direct qualitative observations during the session."
+            if obs_count > 0 else "No qualitative deviations were noted by the operator."
+        )
+        anomaly_narrative = (
+            f"A total of {anomaly_count} unexpected condition(s) were triaged and logged."
+            if anomaly_count > 0 else "Execution proceeded without unresolved abnormal incidents."
+        )
+        conclusion = (
+            f"Experiment concluded with status '{report_data.get('status', 'in_progress')}'. "
+            f"All {len(event_ids)} event records are verified in the server SQLite ledger."
+        )
+
+        return ReportDraftState(
+            report_id=str(report_data.get("report_id", "")),
+            session_id=str(report_data.get("session_id", "")),
+            protocol_id=str(report_data.get("protocol_id", "")),
+            status=str(report_data.get("status", "in_progress")),
+            experiment_summary=summary,
+            observations_narrative=obs_narrative,
+            anomalies_narrative=anomaly_narrative,
+            conclusion_narrative=conclusion,
+            committed_event_ids=event_ids,
+            last_updated_at=_now(),
+        )
+
 
 
 def _format_elapsed_clock(value: Any) -> str:

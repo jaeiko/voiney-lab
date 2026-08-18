@@ -106,6 +106,7 @@ from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
     CLARIFICATION_TEXT, Transcription, classify_input_event,
+    clean_speech_text,
     normalize_provider_language,
     resolve_turn_language, transcription_quality_issue,
 )
@@ -577,13 +578,33 @@ def validate_tts_pcm(response:requests.Response)->bytes:
         raise RuntimeError(f"xAI TTS failed ({response.status_code}): {detail}")
     if "json" in response.headers.get("content-type","").lower():
         raise RuntimeError("xAI TTS returned JSON instead of requested raw PCM")
-    if not response.content or len(response.content)%2: raise RuntimeError("xAI TTS returned invalid PCM")
+    if not response.content or len(response.content) % 2:
+        raise RuntimeError("xAI TTS returned invalid PCM")
     return response.content
 
+
+def _tts_voice() -> str:
+    return (
+        os.environ.get("TTS_VOICE", os.environ.get("XAI_TTS_VOICE", "lux")).strip()
+        or "lux"
+    )
+
 def synthesize(text:str,language:str|None=None)->bytes:
-    response=requests.post(api_url("tts"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
-        json={"text":text,"voice_id":require_env("TTS_VOICE"),"language":language or "auto",
-              "output_format":{"codec":"pcm","sample_rate":16000}},timeout=120)
+    clean_text = clean_speech_text(text)
+    if not clean_text:
+        return b""
+    voice = _tts_voice()
+    response=requests.post(
+        api_url("tts"),
+        headers={"Authorization":f"Bearer {require_env('XAI_API_KEY')}"},
+        json={
+            "text":clean_text,
+            "voice_id":voice,
+            "language":language or "ko",
+            "output_format":{"codec":"pcm","sample_rate":16000},
+        },
+        timeout=120,
+    )
     return validate_tts_pcm(response)
 
 def frame_complete_audio(pcm:bytes)->list[bytes]:
@@ -879,6 +900,33 @@ def approve_protocol_revision(
             store.close()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/activate-development")
+def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
+    """Explicit developer action promoting an analyzed protocol draft to active development execution."""
+    try:
+        catalog, store = _open_protocol_catalog()
+        try:
+            status = catalog.analysis_run_status(protocol_id)
+            if status.status not in ("READY_FOR_DEVELOPMENT", "REVIEW_REQUIRED", "COMPLETED"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"protocol_not_ready_for_development (status={status.status})",
+                )
+            return {
+                "protocol_id": protocol_id,
+                "status": "active_development",
+                "development_only": True,
+                "message": "Protocol draft activated for development session.",
+            }
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
 
 
 @app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/assets/{asset_id}")
@@ -1566,6 +1614,9 @@ class ListenerSession:
         return True
     def playback_ended(self,turn_id:int)->bool:
         if self.state!=TurnState.AGENT_SPEAKING or turn_id!=self.active_turn_id:return False
+        turn_gen=self.turn_generations.get(turn_id,self.generation)
+        if (turn_id,turn_gen) in self._interrupted_generations or self._interrupt_candidate_identity is not None:
+            return False
         received_at=self.clock()
         committed_at=self.turn_committed_at.get(turn_id)
         self._restore_primary_detector(TurnState.COOLDOWN)
@@ -2011,7 +2062,8 @@ def _record_experiment_report_plan(
     elif plan.action in {
         CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
         CuratedProtocolAction.FULL_DETAIL,CuratedProtocolAction.PROTOCOL_QUERY,
-        CuratedProtocolAction.PREVIEW_STEP,
+        CuratedProtocolAction.PREVIEW_STEP,CuratedProtocolAction.STEP_RANGE,
+        CuratedProtocolAction.LAB_DOMAIN_QA,
     }:
         event_type="step_presented"
     elif plan.answer_origin in {
@@ -2889,6 +2941,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     CuratedProtocolAction.COMPLETION_CRITERIA,
                     CuratedProtocolAction.OPERATIONAL_DEVIATION,
                     CuratedProtocolAction.PROTOCOL_QUERY,
+                    CuratedProtocolAction.STEP_RANGE,
+                    CuratedProtocolAction.LAB_DOMAIN_QA,
                 }
             ):
                 try:
@@ -3063,6 +3117,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.START_TIMER:"step_timer_started",
             CuratedProtocolAction.TIMER_STATUS:"step_timer_status_read",
             CuratedProtocolAction.PREVIEW_STEP:"step_preview_read",
+            CuratedProtocolAction.STEP_RANGE:"step_range_read",
+            CuratedProtocolAction.LAB_DOMAIN_QA:"lab_domain_qa_read",
             CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
         }
         operation=(
@@ -4429,7 +4485,11 @@ async def voice_socket(websocket:WebSocket):
                             "error",message="native session reset failed"))
                         continue
                 await websocket.send_text(event("session.reset",state=session.state.value))
-                await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
+                if session.curated_protocol_session is not None:
+                    fixture_state = session.curated_protocol_session.state()
+                    await websocket.send_text(event("protocol.fixture.state", state=fixture_state))
+                else:
+                    await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
