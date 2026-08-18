@@ -62,7 +62,7 @@ def _walk(value: Any):
 
 
 class XaiAuthoritativeImageSearch:
-    """Discover a relevant image source without hotlinking or copying bytes."""
+    """Discover a relevant image source with image URL for web display."""
 
     def __init__(self, client: Any, settings: WebVisualSettings) -> None:
         if not settings.enabled or settings.references is None:
@@ -73,6 +73,14 @@ class XaiAuthoritativeImageSearch:
     async def search(self, query: str) -> dict[str, Any]:
         if not isinstance(query, str) or not query.strip():
             return {"status": "invalid_arguments", "matches": []}
+        tool_spec: dict[str, Any] = {
+            "type": "web_search",
+            "enable_image_search": True,
+        }
+        if self.settings.allowed_domains:
+            tool_spec["filters"] = {
+                "allowed_domains": list(self.settings.allowed_domains)
+            }
         response = await asyncio.wait_for(
             self.client.responses.create(
                 model=self.settings.model,
@@ -84,11 +92,8 @@ class XaiAuthoritativeImageSearch:
                         "an image is protocol evidence and do not claim display rights."
                     ),
                 }, {"role": "user", "content": query[:1800]}],
-                tools=[{
-                    "type": "web_search",
-                    "filters": {"allowed_domains": list(self.settings.allowed_domains)},
-                    "enable_image_search": True,
-                }],
+                tools=[tool_spec],
+                include=["web_search_call.action.sources"],
             ),
             timeout=self.settings.timeout_seconds,
         )
@@ -119,8 +124,6 @@ class XaiAuthoritativeImageSearch:
                 "display_mode": "source_link",
                 "reason": "display_rights_not_verified",
             })
-        # Current xAI Responses documentation returns discovered images as
-        # Markdown embeds. They are references, not permission to hotlink.
         markdown = _response_text(response)
         image_pattern = re.compile(r"!\[([^\]]*)\]\((https://[^\s)]+)\)")
         encountered_pages = [

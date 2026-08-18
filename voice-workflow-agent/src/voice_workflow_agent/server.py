@@ -1290,6 +1290,15 @@ class ListenerSession:
             and self.turn_generations.get(turn_id)==generation
             and (turn_id,generation) not in self._interrupted_generations
         )
+    def owns_research_result(
+        self,turn_id:int,generation:int,configuration_id:int|None=None,
+    )->bool:
+        return bool(
+            self.active
+            and (configuration_id is None or self.accepted_configuration_id==configuration_id)
+            and self.turn_generations.get(turn_id)==generation
+            and (turn_id,generation) not in self._interrupted_generations
+        )
     def track_visual_task(self,task:asyncio.Task)->None:
         self.visual_tasks.add(task)
         task.add_done_callback(self.visual_tasks.discard)
@@ -1910,6 +1919,7 @@ async def _queue_curated_web_visual(
                     candidate=pubchem_match)
                 return
 
+            # 2. xAI Responses grok-4.6 web image discovery
             client=AsyncOpenAI(
                 base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
                 max_retries=0)
@@ -1936,14 +1946,48 @@ async def _queue_curated_web_visual(
                     "protocol.visual.state",**identity,status="web_visual_ready",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                     candidate=result["matches"][0])
-            else:
+                return
+
+            # 3. Fallback: Wikimedia public search provider for scientific reference images
+            wiki_provider = WikimediaSearchProvider()
+            wiki_matches = []
+            for q_term in ([*requested_entities, step.instruction_source_text[:50]] if requested_entities else [step.instruction_source_text[:50]]):
+                wiki_matches = await wiki_provider.search_images(q_term)
+                if wiki_matches:
+                    break
+            if wiki_matches:
+                wm = wiki_matches[0]
+                wiki_candidate = {
+                    "kind": "web_image_reference",
+                    "image_url": wm.image_url,
+                    "source_page_url": wm.page_url,
+                    "publisher_domain": wm.domain,
+                    "title": wm.title,
+                    "caption": wm.caption,
+                    "rights": None,
+                    "display_mode": "web_image",
+                    "reason": "web_reference_image",
+                    "verification_label": wm.verification_label,
+                }
+                if not session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                    return
                 await sender.text(
                     "tool.result",**identity,tool="search_authoritative_web",
-                    round=2,status="not_found",elapsed_ms=elapsed,match_count=0)
+                    round=2,status="success",elapsed_ms=max(0,round((clock()-started)*1000)),
+                    retrieval_backend="wikimedia_rest",match_count=1)
                 await sender.text(
-                    "protocol.visual.state",**identity,status="visual_failed",
+                    "protocol.visual.state",**identity,status="web_visual_ready",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    fallback="none")
+                    candidate=wiki_candidate)
+                return
+
+            await sender.text(
+                "tool.result",**identity,tool="search_authoritative_web",
+                round=2,status="not_found",elapsed_ms=elapsed,match_count=0)
+            await sender.text(
+                "protocol.visual.state",**identity,status="visual_failed",
+                visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                fallback="none")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1963,6 +2007,310 @@ async def _queue_curated_web_visual(
 
     task=asyncio.create_task(worker())
     session.track_visual_task(task)
+
+
+async def _queue_curated_research(
+    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
+    endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
+    context:dict[str,Any],turn_language:str,pre_transition_index:int|None,
+    plan:Any,source_output:Any=None,
+) -> None:
+    configuration_id=session.accepted_configuration_id
+    if not session.owns_research_result(turn_id,generation,configuration_id):
+        return
+
+    async def worker() -> None:
+        research_plan=None
+        ctx=context
+        if (
+            isinstance(source_output,SourceBrainOutput)
+            and source_output.needs_research
+            and source_output.query
+        ):
+            ctx={**ctx,"reference_query":plan_research_query(
+                source_output.query,
+                protocol_title=curated.fixture.title,
+                step_label=ctx["step"].source_label,
+                step_text=ctx["step"].instruction_source_text,
+                evidence_texts=tuple(fact.text for fact in ctx["facts"]),
+                requested_entity=plan.requested_entity,
+                requested_entities=plan.requested_entities,
+                question_kind=plan.question_kind,
+                question_dimensions=plan.question_dimensions,
+            )}
+
+        research_budget=min(120.0,max(
+            10.0,
+            (
+                session.external_reference_settings.timeout_seconds
+                if session.external_reference_settings.enabled else 0.0
+            ) + (
+                session.supplemental_knowledge_settings.timeout_seconds
+                if session.supplemental_knowledge_settings.enabled else 0.0
+            ),
+        ))
+        research_deadline=clock()+research_budget
+        def research_remaining(cap:float)->float:
+            return max(0.05,min(cap,research_deadline-clock()))
+
+        # 1. Approved references (internal SQLite)
+        if session.tool_context is not None and not ctx["force_external"]:
+            await sender.text(
+                "research.state",turn_id=turn_id,status="running",
+                phase="approved_references",
+                correlation_id=f"research-{generation}-{turn_id}",
+            )
+            await sender.text(
+                "tool.call",turn_id=turn_id,
+                tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
+            reference_started=clock()
+            try:
+                reference_result=await asyncio.wait_for(
+                    asyncio.to_thread(
+                        search_approved_lab_references,
+                        ctx["reference_query"],context=session.tool_context,
+                        protocol_id=curated.fixture.protocol_id,top_k=5,
+                    ),
+                    timeout=research_remaining(3.0),
+                )
+            except asyncio.TimeoutError:
+                reference_result={
+                    "status":"timeout_read","answerable":False,
+                    "matches":[],"retrieval":{"backend":"sqlite"},
+                }
+            if not session.owns_research_result(turn_id,generation,configuration_id):
+                return
+            reference_elapsed=round((clock()-reference_started)*1000)
+            reference_backend=(
+                reference_result.get("retrieval",{}).get("backend")
+                if isinstance(reference_result,dict) else None
+            )
+            matches=tuple(reference_result.get("matches",()))
+            await sender.text(
+                "tool.result",turn_id=turn_id,
+                tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0,
+                status=reference_result.get("status","error"),
+                elapsed_ms=reference_elapsed,
+                retrieval_backend=reference_backend,
+                match_count=len(matches))
+            if reference_result.get("answerable") and matches:
+                try:
+                    client=AsyncOpenAI(
+                        base_url=api_url(""),
+                        api_key=require_env("XAI_API_KEY"),max_retries=0)
+                    client.model=require_env("CHAT_MODEL")
+                    answer=await asyncio.wait_for(
+                        answer_approved_reference_question(
+                            client,ctx["query"],language=turn_language,
+                            protocol_id=curated.fixture.protocol_id,
+                            step_id=ctx["step"].step_id,evidence=matches),
+                        timeout=research_remaining(8.0),
+                    )
+                    if session.owns_research_result(turn_id,generation,configuration_id):
+                        research_plan=curated.apply_reference_answer(
+                            turn_id=turn_id,language=turn_language,
+                            primary_text=answer.primary_text,
+                            origin="approved_lab_corpus",
+                            citations=answer.citations,
+                            retrieval_backend=reference_backend or "sqlite",
+                            retrieval_scores=tuple(
+                                float(item["score"]) for item in matches
+                                if isinstance(item.get("score"),(int,float))
+                            ),limitations=answer.limitations,
+                        )
+                except Exception:
+                    log.info(
+                        "approved reference supplement failed closed turn_id=%s",
+                        turn_id)
+
+        # 2. External Web Search (Grok 4.6)
+        result=None
+        if research_plan is None and session.external_reference_settings.enabled:
+            await sender.text(
+                "research.state",turn_id=turn_id,status="running",
+                phase="authoritative_web",
+                correlation_id=f"research-{generation}-{turn_id}",
+            )
+            await sender.text(
+                "tool.call",turn_id=turn_id,
+                tool="search_authoritative_web",round=1)
+            external_started=clock()
+            log.info(
+                "external_search.start turn_id=%s generation=%s model=%s query=%s",
+                turn_id, generation, session.external_reference_settings.model, ctx["reference_query"][:120],
+            )
+            try:
+                external_client=AsyncOpenAI(
+                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                    max_retries=0)
+                result=await asyncio.wait_for(
+                    XaiAuthoritativeWebSearch(
+                        external_client,session.external_reference_settings,
+                    ).search(
+                        ctx["reference_query"],language=turn_language),
+                    timeout=research_remaining(
+                        session.external_reference_settings.timeout_seconds),
+                )
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                log.warning("external_search.timeout turn_id=%s layer=server_research_remaining", turn_id)
+                result={"status":"timeout_total","matches":[],"images":[]}
+            except Exception as exc:
+                log.warning(
+                    "external_search.error turn_id=%s class=%s",
+                    turn_id,type(exc).__name__)
+                result={"status":"connect_error","matches":[],"images":[]}
+            if not session.owns_research_result(turn_id,generation,configuration_id):
+                return
+            external_elapsed=round((clock()-external_started)*1000)
+            log.info(
+                "external_search.provider_completed turn_id=%s elapsed_ms=%s status=%s matches=%s images=%s",
+                turn_id, external_elapsed, result.get("status"), len(result.get("matches",[])), len(result.get("images",[])),
+            )
+            await sender.text(
+                "tool.result",turn_id=turn_id,
+                tool="search_authoritative_web",round=1,
+                status=result.get("status","response_schema_error"),
+                elapsed_ms=external_elapsed,
+                retrieval_backend=result.get("backend"),
+                match_count=len(result.get("matches",[])),
+                provider_request_id=result.get("provider_request_id"),
+                streaming=bool(result.get("streaming",False)),
+                provider_event_count=result.get("event_count",0),
+                provider_tool_event_count=result.get("tool_event_count",0),
+                first_provider_event_ms=result.get("first_event_ms"),
+                first_provider_text_ms=result.get("first_text_ms"),
+                provider_tool_started_ms=result.get("tool_started_ms"),
+                provider_tool_ended_ms=result.get("tool_ended_ms"),
+            )
+            if result.get("status")=="success" and result.get("matches"):
+                research_plan=curated.apply_reference_answer(
+                    turn_id=turn_id,language=turn_language,
+                    primary_text=result["answer"],
+                    origin="external_authoritative_reference",
+                    citations=tuple(result["matches"]),
+                    retrieval_backend=result["backend"],
+                    limitations=(
+                        "External guidance cannot modify the active protocol.",
+                    ),
+                )
+                if result.get("images") and getattr(plan, "visual_requested", False):
+                    img_match = result["images"][0]
+                    fixture = curated.fixture
+                    step = fixture.steps[curated.current_index]
+                    job_id = hashlib.sha256(
+                        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                    ).hexdigest()
+                    await sender.text(
+                        "protocol.visual.state",
+                        configuration_id=configuration_id,turn_id=turn_id,
+                        generation=generation,protocol_id=fixture.protocol_id,
+                        step_id=step.step_id,source_document_hash=fixture.source_pdf_sha256,
+                        visual_job_id=job_id,status="web_visual_ready",
+                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
+                        candidate=img_match)
+
+        # 3. Supplemental model knowledge (Grok 4.6 explanation)
+        supplemental_result=None
+        if (
+            research_plan is None
+            and session.supplemental_knowledge_settings.enabled
+            and supplemental_knowledge_allowed(
+                ctx["query"],plan.question_dimensions)
+        ):
+            await sender.text(
+                "research.state",turn_id=turn_id,status="running",
+                phase="supplemental_model",
+                correlation_id=f"research-{generation}-{turn_id}",
+            )
+            supplemental_started=clock()
+            try:
+                supplemental_client=AsyncOpenAI(
+                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+                    max_retries=0)
+                supplemental_result=await asyncio.wait_for(
+                    XaiSupplementalKnowledge(
+                        supplemental_client,
+                        session.supplemental_knowledge_settings,
+                    ).explain(
+                        ctx["reference_query"],language=turn_language),
+                    timeout=research_remaining(
+                        session.supplemental_knowledge_settings.timeout_seconds),
+                )
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                supplemental_result={"status":"timeout_total"}
+            except Exception as exc:
+                log.info(
+                    "supplemental explanation failed turn_id=%s category=%s",
+                    turn_id,type(exc).__name__)
+                supplemental_result={"status":"provider_error"}
+            if not session.owns_research_result(turn_id,generation,configuration_id):
+                return
+            if supplemental_result.get("status")=="success":
+                research_plan=curated.apply_supplemental_answer(
+                    turn_id=turn_id,language=turn_language,
+                    primary_text=supplemental_result["answer"],
+                    retrieval_backend=supplemental_result["backend"],
+                )
+
+        if research_plan is not None and session.owns_research_result(turn_id,generation,configuration_id):
+            await _finish_research_operation(
+                sender,session,turn_id,generation,"success",
+                primary_text=research_plan.primary_text,
+                answer_origin=research_plan.answer_origin,
+                citations=list(research_plan.citations),
+                retrieval_backend=research_plan.retrieval_backend,
+                limitations=list(research_plan.limitations),
+            )
+            if session.experiment_report_store is not None:
+                report=await asyncio.to_thread(
+                    _record_experiment_report_plan,
+                    session,curated,research_plan,
+                    turn_id=turn_id,generation=generation,
+                    pre_transition_index=pre_transition_index,
+                )
+                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+        elif session.owns_research_result(turn_id,generation,configuration_id):
+            status=(
+                result.get("status","disabled")
+                if isinstance(result,dict) else
+                supplemental_result.get("status","disabled")
+                if isinstance(supplemental_result,dict) else "disabled"
+            )
+            if (
+                session.experiment_report_store is not None
+                and status not in {"disabled","not_found","no_allowed_citation"}
+            ):
+                report=_open_experiment_report(session,curated)
+                store=session.experiment_report_store
+                assert store is not None and session.experiment_report_id
+                report=await asyncio.to_thread(
+                    store.append_event,session.experiment_report_id,
+                    event_key=f"turn-{turn_id}-generation-{generation}-research-{status}",
+                    event_type="system_anomaly",
+                    step_id=ctx["step"].step_id,
+                    step_label=ctx["step"].source_label,
+                    category="external_research_failure",
+                    severity="development_diagnostic",
+                    confirmation_state="server_observed",
+                    payload={"status":status,"state_mutation":False},
+                )
+                await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+            await _finish_research_operation(
+                sender,session,turn_id,generation,status,
+                limitation=(
+                    "활성 프로토콜 근거는 유지했지만 요청한 추가 차원을 권위 자료에서 확인하지 못했습니다."
+                    if turn_language=="ko" else
+                    "The protocol evidence remains available, but the additional dimension could not be verified."
+                ),
+            )
+
+    task=asyncio.create_task(worker())
+    session.track_visual_task(task)
+    await task
 
 
 def _open_experiment_report(
@@ -3312,267 +3660,21 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     ).hexdigest(),status="visual_failed",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                     fallback="planner_no_visual")
-        if research_context is not None and session.is_current(turn_id,generation):
-            research_plan=None
-            context=research_context
-            if (
-                isinstance(source_output,SourceBrainOutput)
-                and source_output.needs_research
-                and source_output.query
-            ):
-                # The Source Brain proposes terms only. Rebuild the final
-                # query through the deterministic context planner before any
-                # retriever/provider sees it.
-                context={**context,"reference_query":plan_research_query(
-                    source_output.query,
-                    protocol_title=curated.fixture.title,
-                    step_label=context["step"].source_label,
-                    step_text=context["step"].instruction_source_text,
-                    evidence_texts=tuple(fact.text for fact in context["facts"]),
-                    requested_entity=plan.requested_entity,
-                    requested_entities=plan.requested_entities,
-                    question_kind=plan.question_kind,
-                    question_dimensions=plan.question_dimensions,
-                )}
-            research_budget=min(30.0,max(
-                10.0,
-                (
-                    session.external_reference_settings.timeout_seconds
-                    if session.external_reference_settings.enabled else 0.0
-                ) + (
-                    session.supplemental_knowledge_settings.timeout_seconds
-                    if session.supplemental_knowledge_settings.enabled else 0.0
-                ),
-            ))
-            research_deadline=clock()+research_budget
-            def research_remaining(cap:float)->float:
-                return max(0.05,min(cap,research_deadline-clock()))
-            if session.tool_context is not None and not context["force_external"]:
-                await current_text(
-                    "research.state",turn_id=turn_id,status="running",
-                    phase="approved_references",
-                    correlation_id=f"research-{generation}-{turn_id}",
-                )
-                await current_text(
-                    "tool.call",turn_id=turn_id,
-                    tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
-                reference_started=clock()
-                try:
-                    reference_result=await asyncio.wait_for(
-                        asyncio.to_thread(
-                            search_approved_lab_references,
-                            context["reference_query"],context=session.tool_context,
-                            protocol_id=curated.fixture.protocol_id,top_k=5,
-                        ),
-                        timeout=research_remaining(3.0),
-                    )
-                except asyncio.TimeoutError:
-                    reference_result={
-                        "status":"timeout_read","answerable":False,
-                        "matches":[],"retrieval":{"backend":"sqlite"},
-                    }
-                if not session.is_current(turn_id,generation):
-                    return
-                reference_elapsed=round((clock()-reference_started)*1000)
-                reference_backend=(
-                    reference_result.get("retrieval",{}).get("backend")
-                    if isinstance(reference_result,dict) else None
-                )
-                matches=tuple(reference_result.get("matches",()))
-                await current_text(
-                    "tool.result",turn_id=turn_id,
-                    tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0,
-                    status=reference_result.get("status","error"),
-                    elapsed_ms=reference_elapsed,
-                    retrieval_backend=reference_backend,
-                    match_count=len(matches))
-                if reference_result.get("answerable") and matches:
-                    try:
-                        client=AsyncOpenAI(
-                            base_url=api_url(""),
-                            api_key=require_env("XAI_API_KEY"),max_retries=0)
-                        client.model=require_env("CHAT_MODEL")
-                        answer=await asyncio.wait_for(
-                            answer_approved_reference_question(
-                                client,context["query"],language=turn_language,
-                                protocol_id=curated.fixture.protocol_id,
-                                step_id=context["step"].step_id,evidence=matches),
-                            timeout=research_remaining(8.0),
-                        )
-                        if session.is_current(turn_id,generation):
-                            research_plan=curated.apply_reference_answer(
-                                turn_id=turn_id,language=turn_language,
-                                primary_text=answer.primary_text,
-                                origin="approved_lab_corpus",
-                                citations=answer.citations,
-                                retrieval_backend=reference_backend or "sqlite",
-                                retrieval_scores=tuple(
-                                    float(item["score"]) for item in matches
-                                    if isinstance(item.get("score"),(int,float))
-                                ),limitations=answer.limitations,
-                            )
-                    except Exception:
-                        log.info(
-                            "approved reference supplement failed closed turn_id=%s",
-                            turn_id)
-            result=None
-            if research_plan is None and session.external_reference_settings.enabled:
-                await current_text(
-                    "research.state",turn_id=turn_id,status="running",
-                    phase="authoritative_web",
-                    correlation_id=f"research-{generation}-{turn_id}",
-                )
-                await current_text(
-                    "tool.call",turn_id=turn_id,
-                    tool="search_authoritative_web",round=1)
-                external_started=clock()
-                try:
-                    external_client=AsyncOpenAI(
-                        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                        max_retries=0)
-                    result=await asyncio.wait_for(
-                        XaiAuthoritativeWebSearch(
-                            external_client,session.external_reference_settings,
-                        ).search(
-                            context["reference_query"],language=turn_language),
-                        timeout=research_remaining(
-                            session.external_reference_settings.timeout_seconds),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except asyncio.TimeoutError:
-                    result={"status":"timeout_total","matches":[]}
-                except Exception as exc:
-                    log.warning(
-                        "authoritative research failed turn_id=%s category=%s",
-                        turn_id,type(exc).__name__)
-                    result={"status":"connect_error","matches":[]}
-                if not session.is_current(turn_id,generation):
-                    return
-                external_elapsed=round((clock()-external_started)*1000)
-                await current_text(
-                    "tool.result",turn_id=turn_id,
-                    tool="search_authoritative_web",round=1,
-                    status=result.get("status","response_schema_error"),
-                    elapsed_ms=external_elapsed,
-                    retrieval_backend=result.get("backend"),
-                    match_count=len(result.get("matches",[])),
-                    provider_request_id=result.get("provider_request_id"),
-                    streaming=bool(result.get("streaming",False)),
-                    provider_event_count=result.get("event_count",0),
-                    provider_tool_event_count=result.get("tool_event_count",0),
-                    first_provider_event_ms=result.get("first_event_ms"),
-                    first_provider_text_ms=result.get("first_text_ms"),
-                    provider_tool_started_ms=result.get("tool_started_ms"),
-                    provider_tool_ended_ms=result.get("tool_ended_ms"),
-                )
-                if result.get("status")=="success" and result.get("matches"):
-                    research_plan=curated.apply_reference_answer(
-                        turn_id=turn_id,language=turn_language,
-                        primary_text=result["answer"],
-                        origin="external_authoritative_reference",
-                        citations=tuple(result["matches"]),
-                        retrieval_backend=result["backend"],
-                        limitations=(
-                            "External guidance cannot modify the active protocol.",
-                        ),
-                    )
-            supplemental_result=None
-            if (
-                research_plan is None
-                and session.supplemental_knowledge_settings.enabled
-                and supplemental_knowledge_allowed(
-                    context["query"],plan.question_dimensions)
-            ):
-                await current_text(
-                    "research.state",turn_id=turn_id,status="running",
-                    phase="supplemental_model",
-                    correlation_id=f"research-{generation}-{turn_id}",
-                )
-                supplemental_started=clock()
-                try:
-                    supplemental_client=AsyncOpenAI(
-                        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                        max_retries=0)
-                    supplemental_result=await asyncio.wait_for(
-                        XaiSupplementalKnowledge(
-                            supplemental_client,
-                            session.supplemental_knowledge_settings,
-                        ).explain(
-                            context["reference_query"],language=turn_language),
-                        timeout=research_remaining(
-                            session.supplemental_knowledge_settings.timeout_seconds),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except asyncio.TimeoutError:
-                    supplemental_result={"status":"timeout_total"}
-                except Exception as exc:
-                    log.info(
-                        "supplemental explanation failed turn_id=%s category=%s",
-                        turn_id,type(exc).__name__)
-                    supplemental_result={"status":"provider_error"}
-                if not session.is_current(turn_id,generation):
-                    return
-                if supplemental_result.get("status")=="success":
-                    research_plan=curated.apply_supplemental_answer(
-                        turn_id=turn_id,language=turn_language,
-                        primary_text=supplemental_result["answer"],
-                        retrieval_backend=supplemental_result["backend"],
-                    )
-                timings["supplemental_model_ms"]=round(
-                    (clock()-supplemental_started)*1000)
-            if research_plan is not None and session.is_current(turn_id,generation):
-                await _finish_research_operation(
-                    sender,session,turn_id,generation,"success",
-                    primary_text=research_plan.primary_text,
-                    answer_origin=research_plan.answer_origin,
-                    citations=list(research_plan.citations),
-                    retrieval_backend=research_plan.retrieval_backend,
-                    limitations=list(research_plan.limitations),
-                )
-                if session.experiment_report_store is not None:
-                    report=await asyncio.to_thread(
-                        _record_experiment_report_plan,
-                        session,curated,research_plan,
-                        turn_id=turn_id,generation=generation,
-                        pre_transition_index=pre_transition_index,
-                    )
-                    await report_state(report)
-            elif session.is_current(turn_id,generation):
-                status=(
-                    result.get("status","disabled")
-                    if isinstance(result,dict) else
-                    supplemental_result.get("status","disabled")
-                    if isinstance(supplemental_result,dict) else "disabled"
-                )
-                if (
-                    session.experiment_report_store is not None
-                    and status not in {"disabled","not_found","no_allowed_citation"}
-                ):
-                    report=_open_experiment_report(session,curated)
-                    store=session.experiment_report_store
-                    assert store is not None and session.experiment_report_id
-                    report=await asyncio.to_thread(
-                        store.append_event,session.experiment_report_id,
-                        event_key=f"turn-{turn_id}-generation-{generation}-research-{status}",
-                        event_type="system_anomaly",
-                        step_id=context["step"].step_id,
-                        step_label=context["step"].source_label,
-                        category="external_research_failure",
-                        severity="development_diagnostic",
-                        confirmation_state="server_observed",
-                        payload={"status":status,"state_mutation":False},
-                    )
-                    await report_state(report)
-                await _finish_research_operation(
-                    sender,session,turn_id,generation,status,
-                    limitation=(
-                        "활성 프로토콜 근거는 유지했지만 요청한 추가 차원을 권위 자료에서 확인하지 못했습니다."
-                        if turn_language=="ko" else
-                        "The protocol evidence remains available, but the additional dimension could not be verified."
-                    ),
-                )
+        if research_context is not None:
+            await _queue_curated_research(
+                session=session,
+                sender=sender,
+                turn_id=turn_id,
+                generation=generation,
+                endpoint=endpoint,
+                clock=clock,
+                curated=curated,
+                context=research_context,
+                turn_language=turn_language,
+                pre_transition_index=pre_transition_index,
+                plan=plan,
+                source_output=source_output,
+            )
         if session.is_current(turn_id,generation):
             session.history.commit([
                 {"role":"user","content":transcript},
@@ -4172,13 +4274,7 @@ async def voice_socket(websocket:WebSocket):
                             item.result.voiced_frames,item.result.total_frames,
                             item.latency_ms)
                     if item.kind=="speech.start":
-                        # Once playback has finished, a prior Cascade task may
-                        # still be enriching that historical Turn. A new real
-                        # utterance owns the session; cancel the old read-only
-                        # request instead of merely waiting for and discarding it.
                         if task is not None and not task.done():
-                            await _finish_all_research_operations(
-                                sender,session,"superseded")
                             task.cancel()
                             try:
                                 await task
