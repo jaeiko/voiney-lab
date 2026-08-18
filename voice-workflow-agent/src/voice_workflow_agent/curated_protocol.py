@@ -1526,9 +1526,10 @@ _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:이|현재)?\s*단계.*(?:그림|삽화|일러스트).*(?:설명|보여|그려)"),
     re.compile(r"(?:그림|삽화|일러스트).*(?:이|현재)?\s*단계"),
     re.compile(r"(?:illustrate|show\s+an?\s+illustration|draw).*(?:this|current)\s+step"),
-    re.compile(r"(?:이미지|사진|그림|삽화|시각\s*자료).*(?:보여|찾아|만들|설명)"),
-    re.compile(r"(?:보여|찾아|만들|설명).*(?:이미지|사진|그림|삽화|시각\s*자료)"),
-    re.compile(r"(?:show|find|make|generate).*(?:image|photo|illustration|visual)"),
+    re.compile(r"(?:이미지|사진|그림|삽화|시각\s*자료|구조|화학\s*구조).*(?:보여|찾아|만들|설명)"),
+    re.compile(r"(?:보여|찾아|만들|설명).*(?:이미지|사진|그림|삽화|시각\s*자료|구조|화학\s*구조)"),
+    re.compile(r"(?:show|find|make|generate).*(?:image|photo|illustration|visual|structure|chemical\s+structure)"),
+    re.compile(r"(?:structure|chemical\s+structure).*(?:show|find|view|display)"),
 )
 _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:원본|실제|인터넷|웹).*(?:사진|이미지).*(?:보여|찾아)"),
@@ -2578,7 +2579,7 @@ def classify_curated_control_intent(
             "web_photo"
             if (
                 any(pattern.search(key) for pattern in _WEB_VISUAL_REQUEST_PATTERNS)
-                or any(term in key for term in ("이미지", "사진", "photo", "image"))
+                or any(term in key for term in ("이미지", "사진", "photo", "image", "구조", "structure"))
             )
             else "instructional_illustration"
         )
@@ -2830,6 +2831,8 @@ _WORKFLOW_COMMANDS = {
     "반복": CuratedProtocolAction.REPEAT,
     "repeat": CuratedProtocolAction.REPEAT,
     "다음": CuratedProtocolAction.NEXT,
+    "다음 단계": CuratedProtocolAction.NEXT,
+    "다음 단계로 넘어가줘": CuratedProtocolAction.NEXT,
     "다음 단계로 넘어가 줘": CuratedProtocolAction.NEXT,
     "다음 단계로 넘어가죠": CuratedProtocolAction.NEXT,
     "단계로 넘어가죠": CuratedProtocolAction.NEXT,

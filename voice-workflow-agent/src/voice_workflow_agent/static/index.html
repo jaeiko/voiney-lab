@@ -48,7 +48,19 @@
     .control-field{display:grid;gap:.22rem;min-width:0}.control-field>span{font-size:.7rem;font-weight:800;color:var(--muted)}
     .language-controls select,.language-controls button{width:100%;min-width:0;border:1px solid var(--line);border-radius:.7rem;background:white;padding:.5rem .65rem;color:var(--ink)}
     .session-context{grid-column:1/-1;display:flex;gap:.45rem;flex-wrap:wrap;align-items:center;font-size:.75rem}.context-chip{display:inline-flex;align-items:center;gap:.25rem;border:1px solid var(--line);border-radius:999px;padding:.25rem .55rem;background:white}.context-chip b{color:var(--forest)}
-    .protocol-register{grid-column:1/-1;display:grid;grid-template-columns:minmax(12rem,1fr) auto minmax(14rem,1.2fr);gap:.45rem;align-items:center}.protocol-register input{min-width:0}.protocol-register button{border:1px solid var(--line);border-radius:.7rem;background:white;padding:.45rem .65rem}.protocol-register small{color:var(--muted)}
+    .dev-diagnostics{grid-column:1/-1;margin-top:.35rem;font-size:.73rem;color:var(--muted)}
+    .dev-diagnostics summary{cursor:pointer;font-weight:750;color:var(--forest-2);padding:.2rem 0;user-select:none}
+    .dev-diagnostics .dev-chips{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.35rem;padding:.45rem;border:1px dashed var(--line);border-radius:.6rem;background:rgba(255,255,255,.5)}
+    .protocol-register{grid-column:1/-1;margin-top:.45rem}
+    .custom-file-wrapper{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+    .visually-hidden-file-input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .btn-file-select{display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--forest);border-radius:.7rem;background:white;color:var(--forest);padding:.45rem .85rem;font-size:.78rem;font-weight:800;cursor:pointer;transition:background .15s,color .15s}
+    .btn-file-select:hover{background:var(--mint)}
+    .btn-file-select:focus-visible{outline:2px solid var(--forest);outline-offset:2px}
+    .selected-file-name{font-size:.76rem;color:var(--ink);max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .btn-register{border:1px solid var(--line);border-radius:.7rem;background:var(--forest);color:white;padding:.45rem .85rem;font-size:.78rem;font-weight:800;cursor:pointer}
+    .btn-register:disabled{opacity:.45;cursor:not-allowed}
+    .protocol-register small{display:block;margin-top:.25rem;color:var(--muted);font-size:.72rem}
     #language-status{font-size:.82rem;font-weight:800;color:var(--forest)}
     #language-confirmation{color:var(--red);font-size:.8rem;font-weight:750}
     .controls button{border:0;border-radius:.85rem;padding:.72rem 1rem;cursor:pointer;font-weight:800;transition:transform .15s ease,opacity .15s ease,background .15s ease}
@@ -57,6 +69,8 @@
     #start{background:var(--forest);color:white}
     #stop{background:#e6ece8;color:var(--ink)}
     .safety-note{margin:.85rem 0 0;color:var(--muted);font-size:.78rem}
+    @keyframes pulseFiller{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.75;transform:scale(0.99)}}
+    .turn .filler-status{grid-column:2;display:inline-flex;align-items:center;gap:.35rem;padding:.35rem .65rem;border-radius:.5rem;background:#eef7f2;color:var(--forest-2);font-size:.76rem;font-weight:750;animation:pulseFiller 2.2s infinite ease-in-out;margin:.25rem 0}
     .section-label{margin:1rem 0 .6rem;color:var(--muted);font-size:.74rem;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
     .capabilities{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.7rem}
     .capability{min-height:6.1rem;padding:.85rem;border:1px solid var(--line);border-radius:1rem;background:rgba(255,255,255,.72)}
@@ -174,24 +188,33 @@
                 <option value="">카탈로그를 불러오는 중…</option>
             </select></label>
             <div class="session-context" aria-live="polite">
-              <span class="context-chip"><b>준비</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
-              <span class="context-chip"><b>리비전</b><span id="protocol-revision">—</span></span>
-              <span class="context-chip"><b>언어</b><span id="language-status">Manual · Korean · 한국어</span></span>
-              <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
-              <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
-              <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
-              <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
-              <span class="context-chip"><b>웹 이미지</b><span id="research-image-capability">확인 중</span></span>
-              <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
+              <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
+              <span class="context-chip"><b>안내 언어</b><span id="language-status">Manual · Korean · 한국어</span></span>
               <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
               <button id="new-user" type="button">대화 초기화</button>
               <span id="language-confirmation" role="alert" hidden>언어를 선택하고 다시 말씀해 주세요.</span>
             </div>
+            <details class="dev-diagnostics">
+              <summary>개발자 상세 정보</summary>
+              <div class="dev-chips">
+                <span class="context-chip"><b>리비전</b><span id="protocol-revision">—</span></span>
+                <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
+                <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
+                <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
+                <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
+                <span class="context-chip"><b>웹 이미지</b><span id="research-image-capability">확인 중</span></span>
+                <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
+              </div>
+            </details>
             <div class="protocol-register">
-              <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
-              <button id="register-protocol" type="button">PDF 등록</button>
+              <div class="custom-file-wrapper">
+                <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
+                <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
+                <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
+                <button id="register-protocol" type="button" class="btn-register">등록하기</button>
+              </div>
               <small id="protocol-upload-status" role="status">등록 후 분석·검토·승인이 필요합니다.</small>
-              <small id="protocol-analysis-progress" role="status">대형 문서 분석 상태 없음</small>
+              <small id="protocol-analysis-progress" role="status" hidden>대형 문서 분석 상태 없음</small>
             </div>
           </div>
           <p class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</p>
@@ -199,11 +222,11 @@
       </section>
     </div>
 
-    <section class="workflow-grid" aria-label="현재 단계와 원문 시각 자료">
+    <section class="workflow-grid" aria-label="현재 단계와 실험 PDF 이미지">
       <div class="panel procedure-card" aria-live="polite">
         <div class="procedure-head">
           <div>
-          <div class="label">Procedure</div>
+          <div class="label">실험 안내</div>
           <strong id="procedure-title">연결된 절차 없음</strong>
           <div id="procedure-meta">서버가 승인 절차 상태를 전송하면 표시됩니다.</div>
           </div>
@@ -223,17 +246,17 @@
           <div class="workflow-details">
             <div class="workflow-detail"><b>출처</b><span id="procedure-source">—</span></div>
             <div class="workflow-detail"><b>타이머</b><span id="procedure-timer">—</span></div>
-            <div class="workflow-detail"><b>관찰</b><span id="procedure-observation">—</span></div>
-            <div class="workflow-detail"><b>인계</b><span id="procedure-handoff">—</span></div>
-            <div class="workflow-detail"><b>감사</b><span id="procedure-audit">—</span></div>
+            <div class="workflow-detail" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
+            <div class="workflow-detail" id="handoff-container" hidden><b>인계</b><span id="procedure-handoff">—</span></div>
+            <div class="workflow-detail" id="audit-container" hidden><b>감사</b><span id="procedure-audit">—</span></div>
           </div>
           <section class="panel source-card" style="margin-top:.85rem;" aria-labelledby="source-visual-title">
-            <h2 id="source-visual-title">원문 시각 자료</h2>
+            <h2 id="source-visual-title">실험 PDF 이미지</h2>
             <div class="source-meta" aria-live="polite">
               <span><b>상태</b> <span id="source-visual-state">단계 선택 대기</span></span>
               <span><b>파일</b> <span id="source-filename">—</span></span>
               <span><b>페이지</b> <span id="source-page-number">—</span></span>
-              <span><b>SHA-256</b> <span id="source-short-hash">—</span></span>
+              <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
             </div>
             <div id="procedure-visual" class="step-visual" hidden></div>
           </section>
@@ -259,8 +282,8 @@
 
     <section class="panel timeline" aria-labelledby="timeline-title">
       <div class="timeline-head">
-        <h2 id="timeline-title">세션 대화</h2>
-        <p>음성 원문 · 답변 · Tool · 지연시간</p>
+        <h2 id="timeline-title">음성으로 나눈 대화</h2>
+        <p>실험 음성 질의응답과 참고 자료</p>
       </div>
       <div id="log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="세션 대화 기록"></div>
       <button id="new-chat-update" type="button" hidden aria-label="새 메시지로 이동">새 메시지 ↓</button>
@@ -508,12 +531,47 @@ renderStructuredReply=function(node,message){
  if(links.length){const linkList=document.createElement("div");linkList.className="external-reference-links";for(const link of links)linkList.appendChild(link);body.appendChild(linkList);}
  return rendered;
 };
+const RESEARCH_TIMERS = new Map();
+function clearResearchProgressTimer(key){if(RESEARCH_TIMERS.has(key)){clearInterval(RESEARCH_TIMERS.get(key));RESEARCH_TIMERS.delete(key);}}
+function startResearchProgressTimer(key, targetNode, isSupplemental=false){
+ clearResearchProgressTimer(key);
+ const startedAt=Date.now();
+ const update=()=>{
+  const elapsedSec=(Date.now()-startedAt)/1000;
+  let text="";
+  if(isSupplemental){
+   if(elapsedSec<6)text="일반 배경 설명 준비 중…";
+   else if(elapsedSec<15)text="일반 배경 내용을 정리하고 있어요.";
+   else text="배경 설명 준비 중…";
+  }else{
+   if(elapsedSec<6)text="외부 권위 근거 확인 중 · 웹에서 참고 자료를 찾고 있어요 🔍";
+   else if(elapsedSec<15)text="관련 자료를 비교하고 있어요.";
+   else if(elapsedSec<30)text="찾은 내용을 정리하고 있어요. 실험 안내는 계속 사용할 수 있어요.";
+   else text="검색이 조금 오래 걸리고 있어요. 다른 질문을 해도 괜찮아요.";
+  }
+  if(targetNode){targetNode.textContent=text;targetNode.hidden=false;}
+ };
+ update();
+ const interval=setInterval(update,1000);
+ RESEARCH_TIMERS.set(key,interval);
+}
 function currentResearchEvent(message,browserGeneration=sessionGeneration){const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);return accepted?.mode==="cascade"&&message?.configuration_id===accepted.configuration_id&&Number.isInteger(message?.turn_id)&&Number.isInteger(message?.generation)&&known===message.generation&&!cascadeTurnInterrupted(message)&&turns.has(browserKey);}
 function researchEventKey(message){return `${message.configuration_id}:${message.generation}:${message.turn_id}`;}
-function applyResearchState(message,browserGeneration=sessionGeneration){if(!currentResearchEvent(message,browserGeneration))return false;const key=researchEventKey(message),record=researchEvents.get(key);if(record?.terminal)return false;researchEvents.set(key,{terminal:false,phase:message.phase||record?.phase||null});const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;const labels={approved_references:"승인된 참고자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중…",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"추가 근거는 제한된 시간 안에서 백그라운드로 확인 중…"};target.textContent=message.status==="background_bounded"?labels.optional_enrichment:(labels[message.phase]||"추가 근거 확인 중…");target.hidden=false;return true;}
+function applyResearchState(message,browserGeneration=sessionGeneration){
+ if(!currentResearchEvent(message,browserGeneration))return false;
+ const key=researchEventKey(message),record=researchEvents.get(key);if(record?.terminal)return false;
+ researchEvents.set(key,{terminal:false,phase:message.phase||record?.phase||null});
+ const node=turnNode(message.turn_id,browserGeneration),target=node.querySelector?.(".filler-status");if(!target)return false;
+ const labels={approved_references:"승인된 참고자료 확인 중…",authoritative_web:"외부 권위 근거 확인 중 · 웹에서 참고 자료를 찾고 있어요 🔍",supplemental_model:"일반 배경 설명 준비 중…",optional_enrichment:"추가 근거는 제한된 시간 안에서 백그라운드로 확인 중…"};
+ target.textContent=message.status==="background_bounded"?labels.optional_enrichment:(labels[message.phase]||"추가 근거 확인 중…");
+ target.hidden=false;
+ startResearchProgressTimer(key,target,message.phase==="supplemental_model");
+ return true;
+}
 function applyResearchResult(message,browserGeneration=sessionGeneration){
  if(!currentResearchEvent(message,browserGeneration))return false;
  const key=researchEventKey(message),record=researchEvents.get(key);if(!record||record.terminal)return false;researchEvents.set(key,{...record,terminal:true,status:message.terminal_status||message.status});
+ clearResearchProgressTimer(key);
  const node=turnNode(message.turn_id,browserGeneration),reply=node.querySelector?.(".reply");if(!reply)return false;
  const snapshot=beginChatPatch(node);let block=reply.querySelector?.(".research-supplement");if(!block){block=document.createElement("div");block.className="research-supplement";reply.appendChild(block);}block.replaceChildren();const heading=document.createElement("b");
  if(message.status==="success"){const external=message.answer_origin==="external_authoritative_reference",supplemental=message.answer_origin==="supplemental_model_knowledge";heading.textContent=external?"외부 권위 참고자료 · 활성 프로토콜의 일부가 아님":supplemental?"일반 모델 설명 · 확인된 권위 근거 없음":"추가 승인 참고자료 · 활성 프로토콜의 일부가 아님";const body=document.createElement("span");body.textContent=normalizePresentationText(message.primary_text||"");block.appendChild(heading);block.appendChild(body);if(Array.isArray(message.citations)&&message.citations.length){const details=document.createElement("details");details.className="reference-details";const summary=document.createElement("summary");summary.textContent="추가 근거";details.appendChild(summary);for(const item of message.citations){const line=document.createElement("div");if(external&&typeof item?.canonical_url==="string"&&item.canonical_url.startsWith("https://")){const link=document.createElement("a");link.href=item.canonical_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`${item.title||item.domain||"권위 자료"} · ${item.domain||""}`;line.appendChild(link);}else line.textContent=normalizePresentationText(`${item?.document_title||"승인 자료"} · ${item?.section||item?.chunk_id||""}`);details.appendChild(line);}block.appendChild(details);}}
@@ -752,6 +810,7 @@ if(typeof ResizeObserver==="function"){
  if(target){const ro=new ResizeObserver(()=>syncConversationHeight());ro.observe(target);}
 }
 globalThis.addEventListener?.("resize",syncConversationHeight);
+$("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");});
 $("register-protocol")?.addEventListener("click",registerSelectedProtocol);globalThis.addEventListener?.("load",()=>{syncConversationHeight();void loadProtocolCatalog();},{once:true});
 </script>
 </body>

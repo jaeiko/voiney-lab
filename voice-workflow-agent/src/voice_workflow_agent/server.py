@@ -1891,11 +1891,12 @@ async def _queue_curated_web_visual(
         visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
 
     async def worker() -> None:
-        started=clock()
+        started = clock()
         try:
             await sender.text(
-                "tool.call",**identity,tool="search_authoritative_web",round=2)
-            
+                "tool.call", **identity, tool="search_authoritative_web", round=2
+            )
+
             # 1. Fast PubChem chemistry structure lookup for scientific reagents
             pubchem_adapter = PubChemChemistryAdapter()
             pubchem_match = None
@@ -1906,104 +1907,126 @@ async def _queue_curated_web_visual(
 
             if pubchem_match is not None:
                 if not session.owns_visual_result(
-                    turn_id,generation,configuration_id,fixture.protocol_id):
+                    turn_id, generation, configuration_id, fixture.protocol_id
+                ):
                     return
-                elapsed=max(0,round((clock()-started)*1000))
+                elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
-                    "tool.result",**identity,tool="search_authoritative_web",
-                    round=2,status="success",elapsed_ms=elapsed,
-                    retrieval_backend="pubchem_pug_rest",match_count=1)
+                    "tool.result", **identity, tool="search_authoritative_web",
+                    round=2, status="success", elapsed_ms=elapsed,
+                    retrieval_backend="pubchem_pug_rest", match_count=1
+                )
                 await sender.text(
-                    "protocol.visual.state",**identity,status="web_visual_ready",
-                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    candidate=pubchem_match)
+                    "protocol.visual.state", **identity, status="web_visual_ready",
+                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
+                    candidate=pubchem_match
+                )
                 return
 
-            # 2. xAI Responses grok-4.6 web image discovery
-            client=AsyncOpenAI(
-                base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                max_retries=0)
-            query="\n".join((
-                "Find a real, authoritative image example relevant to this laboratory request.",
-                f"Protocol: {fixture.title}",
-                f"Step {step.source_label}: {step.instruction_source_text}",
-                "Requested entities: " + (
-                    ", ".join(requested_entities) or "current step"
-                ),
-                "Do not treat the image as protocol evidence or an observed result.",
-            ))
-            result=await XaiAuthoritativeImageSearch(client,settings).search(query)
-            if not session.owns_visual_result(
-                turn_id,generation,configuration_id,fixture.protocol_id):
-                return
-            elapsed=max(0,round((clock()-started)*1000))
-            if result.get("status")=="success" and result.get("matches"):
+            # 2. Parallel Fast Public Visual (Wikimedia) + Deep Grok 4.6 Image Search
+            search_terms = [*requested_entities, step.instruction_source_text[:50]] if requested_entities else [step.instruction_source_text[:50]]
+            wiki_adapter = WikimediaVisualAdapter(timeout_seconds=4.0)
+
+            async def _fast_public_search():
+                for term in search_terms:
+                    cand = await wiki_adapter.lookup(term)
+                    if cand and cand.get("image_url"):
+                        return cand
+                return None
+
+            async def _grok_image_search():
+                try:
+                    client = AsyncOpenAI(
+                        base_url=api_url(""),
+                        api_key=require_env("XAI_API_KEY"),
+                        max_retries=0,
+                    )
+                    query = "\n".join((
+                        "Find a real, authoritative laboratory image for this request. Include Markdown link ![alt](image_url).",
+                        f"Protocol: {fixture.title}",
+                        f"Step {step.source_label}: {step.instruction_source_text}",
+                        "Requested entities: " + (", ".join(requested_entities) or "current step"),
+                    ))
+                    res = await XaiAuthoritativeImageSearch(client, settings).search(query)
+                    if res.get("status") == "success" and res.get("matches"):
+                        return res["matches"][0]
+                except Exception as exc:
+                    log.info("grok image search failed turn_id=%s class=%s", turn_id, type(exc).__name__)
+                return None
+
+            fast_task = asyncio.create_task(_fast_public_search())
+            grok_task = asyncio.create_task(_grok_image_search())
+
+            # Wait for the fast public search first (with up to 4.5s budget)
+            fast_candidate = None
+            try:
+                fast_candidate = await asyncio.wait_for(asyncio.shield(fast_task), timeout=4.5)
+            except (asyncio.TimeoutError, Exception):
+                fast_candidate = None
+
+            if fast_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
-                    "tool.result",**identity,tool="search_authoritative_web",
-                    round=2,status="success",elapsed_ms=elapsed,
-                    retrieval_backend=result.get("backend"),match_count=1)
+                    "tool.result", **identity, tool="search_authoritative_web",
+                    round=2, status="success", elapsed_ms=elapsed,
+                    retrieval_backend="wikimedia_rest", match_count=1
+                )
                 await sender.text(
-                    "protocol.visual.state",**identity,status="web_visual_ready",
-                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    candidate=result["matches"][0])
+                    "protocol.visual.state", **identity, status="web_visual_ready",
+                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
+                    candidate=fast_candidate
+                )
+                # Fast result successfully delivered to user! Allow grok_task to complete in background or cancel
+                grok_task.cancel()
                 return
 
-            # 3. Fallback: Wikimedia public search provider for scientific reference images
-            wiki_provider = WikimediaSearchProvider()
-            wiki_matches = []
-            for q_term in ([*requested_entities, step.instruction_source_text[:50]] if requested_entities else [step.instruction_source_text[:50]]):
-                wiki_matches = await wiki_provider.search_images(q_term)
-                if wiki_matches:
-                    break
-            if wiki_matches:
-                wm = wiki_matches[0]
-                wiki_candidate = {
-                    "kind": "web_image_reference",
-                    "image_url": wm.image_url,
-                    "source_page_url": wm.page_url,
-                    "publisher_domain": wm.domain,
-                    "title": wm.title,
-                    "caption": wm.caption,
-                    "rights": None,
-                    "display_mode": "web_image",
-                    "reason": "web_reference_image",
-                    "verification_label": wm.verification_label,
-                }
-                if not session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                    return
+            # If fast search had no image, wait for Grok 4.6 image search
+            grok_candidate = await grok_task
+            if grok_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
-                    "tool.result",**identity,tool="search_authoritative_web",
-                    round=2,status="success",elapsed_ms=max(0,round((clock()-started)*1000)),
-                    retrieval_backend="wikimedia_rest",match_count=1)
+                    "tool.result", **identity, tool="search_authoritative_web",
+                    round=2, status="success", elapsed_ms=elapsed,
+                    retrieval_backend="xai_responses_web_image_search", match_count=1
+                )
                 await sender.text(
-                    "protocol.visual.state",**identity,status="web_visual_ready",
-                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    candidate=wiki_candidate)
+                    "protocol.visual.state", **identity, status="web_visual_ready",
+                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
+                    candidate=grok_candidate
+                )
                 return
 
-            await sender.text(
-                "tool.result",**identity,tool="search_authoritative_web",
-                round=2,status="not_found",elapsed_ms=elapsed,match_count=0)
-            await sender.text(
-                "protocol.visual.state",**identity,status="visual_failed",
-                visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                fallback="none")
+            if session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                elapsed = max(0, round((clock() - started) * 1000))
+                await sender.text(
+                    "tool.result", **identity, tool="search_authoritative_web",
+                    round=2, status="not_found", elapsed_ms=elapsed, match_count=0
+                )
+                await sender.text(
+                    "protocol.visual.state", **identity, status="visual_failed",
+                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
+                    fallback="none"
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.warning(
                 "web visual search failed closed turn_id=%s error=%s",
-                turn_id,type(exc).__name__)
+                turn_id, type(exc).__name__
+            )
             if session.owns_visual_result(
-                turn_id,generation,configuration_id,fixture.protocol_id):
+                turn_id, generation, configuration_id, fixture.protocol_id
+            ):
                 await sender.text(
-                    "tool.result",**identity,tool="search_authoritative_web",
-                    round=2,status="error",
-                    elapsed_ms=max(0,round((clock()-started)*1000)))
+                    "tool.result", **identity, tool="search_authoritative_web",
+                    round=2, status="error",
+                    elapsed_ms=max(0, round((clock() - started) * 1000))
+                )
                 await sender.text(
-                    "protocol.visual.state",**identity,status="visual_failed",
-                    visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    fallback="none")
+                    "protocol.visual.state", **identity, status="visual_failed",
+                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
+                    fallback="none"
+                )
 
     task=asyncio.create_task(worker())
     session.track_visual_task(task)

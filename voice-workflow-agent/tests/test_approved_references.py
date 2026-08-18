@@ -464,8 +464,8 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["streaming"])
         self.assertEqual(result["event_count"], 0)
         self.assertEqual(result["tool_event_count"], 0)
-        self.assertFalse(endpoint.kwargs["stream"])
-        self.assertEqual(endpoint.kwargs["max_output_tokens"], 800)
+        self.assertTrue(endpoint.kwargs["stream"])
+        self.assertEqual(endpoint.kwargs["max_output_tokens"], 350)
 
     async def test_external_adapter_distinguishes_tool_and_schema_failures(self):
         url = "https://www.osha.gov/laboratory"
