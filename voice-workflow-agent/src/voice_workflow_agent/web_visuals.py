@@ -110,19 +110,21 @@ class XaiAuthoritativeImageSearch:
             )
             image_url = _canonical_url(raw_image, self.settings.allowed_domains)
             source_url = _canonical_url(raw_source, self.settings.allowed_domains)
-            if image_url is None or source_url is None:
+            if image_url is None and source_url is None:
                 continue
-            title = item.get("title") or item.get("caption") or "Authoritative image"
+            title = item.get("title") or item.get("caption") or "Web reference image"
             rights = item.get("license") or item.get("rights")
             candidates.append({
                 "kind": "web_image_reference",
+                "image_url": image_url or source_url,
                 "source_page_url": source_url,
-                "publisher_domain": urlsplit(source_url).hostname or "",
-                "title": str(title).strip()[:300] or "Authoritative image",
+                "publisher_domain": urlsplit(source_url or image_url or "").hostname or "",
+                "title": str(title).strip()[:300] or "Web reference image",
                 "caption": str(item.get("caption") or "").strip()[:800],
                 "rights": str(rights).strip()[:300] if rights else None,
-                "display_mode": "source_link",
-                "reason": "display_rights_not_verified",
+                "verification_label": "웹 참고 이미지 · 프로토콜 절차 근거 아님",
+                "display_mode": "web_image" if image_url else "source_link",
+                "reason": "web_reference_image",
             })
         markdown = _response_text(response)
         image_pattern = re.compile(r"!\[([^\]]*)\]\((https://[^\s)]+)\)")
@@ -135,19 +137,25 @@ class XaiAuthoritativeImageSearch:
             image_url = _canonical_url(
                 match.group(2), self.settings.allowed_domains
             )
-            if image_url is None or source_page is None:
+            if image_url is None:
                 continue
             candidates.append({
                 "kind": "web_image_reference",
+                "image_url": image_url,
                 "source_page_url": source_page,
-                "publisher_domain": urlsplit(source_page).hostname or "",
-                "title": (match.group(1).strip() or "Authoritative image")[:300],
+                "publisher_domain": urlsplit(source_page or image_url).hostname or "",
+                "title": (match.group(1).strip() or "Web reference image")[:300],
                 "caption": match.group(1).strip()[:800],
                 "rights": None,
-                "display_mode": "source_link",
-                "reason": "display_rights_not_verified",
+                "verification_label": "웹 참고 이미지 · 프로토콜 절차 근거 아님",
+                "display_mode": "web_image",
+                "reason": "web_reference_image",
             })
-        unique = {item["source_page_url"]: item for item in candidates}
+        unique = {
+            (item.get("image_url") or item.get("source_page_url")): item
+            for item in candidates
+            if item.get("image_url") or item.get("source_page_url")
+        }
         if not tool_used or not unique:
             return {"status": "not_found", "matches": []}
         return {

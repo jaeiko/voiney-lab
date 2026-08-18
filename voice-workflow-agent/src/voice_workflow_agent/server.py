@@ -2135,19 +2135,44 @@ async def _queue_curated_research(
                 "tool.call",turn_id=turn_id,
                 tool="search_authoritative_web",round=1)
             external_started=clock()
+            include_images=bool(
+                getattr(plan,"visual_requested",False)
+                or getattr(plan,"action",None) is CuratedProtocolAction.VISUAL_REQUEST
+            )
             log.info(
-                "external_search.start turn_id=%s generation=%s model=%s query=%s",
-                turn_id, generation, session.external_reference_settings.model, ctx["reference_query"][:120],
+                "external_search.request_config model=%s open_mode=%s total_timeout=%s connect_timeout=%s read_timeout=%s image_search_enabled=%s",
+                session.external_reference_settings.model,
+                bool(session.external_reference_settings.domain_profile=="open" or not session.external_reference_settings.allowed_domains),
+                session.external_reference_settings.timeout_seconds,
+                session.external_reference_settings.connect_timeout_seconds,
+                session.external_reference_settings.read_timeout_seconds,
+                include_images,
+            )
+            log.info(
+                "external_search.provider_started turn_id=%s generation=%s query=%s",
+                turn_id,generation,ctx["reference_query"][:120],
             )
             try:
                 external_client=AsyncOpenAI(
                     base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
                     max_retries=0)
+                external_searcher=XaiAuthoritativeWebSearch(
+                    external_client,session.external_reference_settings,
+                )
+                try:
+                    search_call=(
+                        external_searcher.search(
+                            ctx["reference_query"],language=turn_language,
+                            include_images=True)
+                        if include_images else
+                        external_searcher.search(
+                            ctx["reference_query"],language=turn_language)
+                    )
+                except TypeError:
+                    search_call=external_searcher.search(
+                        ctx["reference_query"],language=turn_language)
                 result=await asyncio.wait_for(
-                    XaiAuthoritativeWebSearch(
-                        external_client,session.external_reference_settings,
-                    ).search(
-                        ctx["reference_query"],language=turn_language),
+                    search_call,
                     timeout=research_remaining(
                         session.external_reference_settings.timeout_seconds),
                 )
@@ -2165,8 +2190,18 @@ async def _queue_curated_research(
                 return
             external_elapsed=round((clock()-external_started)*1000)
             log.info(
-                "external_search.provider_completed turn_id=%s elapsed_ms=%s status=%s matches=%s images=%s",
-                turn_id, external_elapsed, result.get("status"), len(result.get("matches",[])), len(result.get("images",[])),
+                "external_search.provider_completed turn_id=%s elapsed_ms=%s status=%s web_search_count=%s image_search_count=%s source_count=%s markdown_image_count=%s",
+                turn_id,external_elapsed,result.get("status"),
+                result.get("web_search_count",result.get("tool_usage_count",0)),
+                result.get("image_search_count",0),
+                len(result.get("matches",[])),
+                len(result.get("images",[])),
+            )
+            log.info(
+                "external_search.result_admission citation_count=%s image_candidate_count=%s turn_id=%s generation=%s",
+                len(result.get("matches",[])),
+                len(result.get("images",[])),
+                turn_id,generation,
             )
             await sender.text(
                 "tool.result",turn_id=turn_id,

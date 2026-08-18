@@ -633,7 +633,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         )
         self.assertIn('export EXTERNAL_REFERENCES_ENABLED="true"', launcher)
         self.assertIn(
-            'export EXTERNAL_REFERENCE_DOMAIN_PROFILE="candidate_a"', launcher
+            'export EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', launcher
         )
         self.assertIn('export WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
         self.assertIn('export CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)

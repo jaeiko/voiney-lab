@@ -65,11 +65,11 @@ export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
 export EXTERNAL_REFERENCES_ENABLED="true"
-export EXTERNAL_REFERENCE_DOMAIN_PROFILE="candidate_a"
+export EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"
 export EXTERNAL_REFERENCE_MODEL="grok-4.6"
-export EXTERNAL_REFERENCE_TIMEOUT_SECONDS="20"
-export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="3"
-export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="15"
+export EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"
+export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"
+export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"
 export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS="900"
 export EXTERNAL_REFERENCE_MAX_CITATIONS="5"
 export EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
@@ -120,6 +120,14 @@ multi_brain = MultiBrainSettings.from_environment()
 if references.enabled and not bool(os.environ.get("XAI_API_KEY")):
     raise SystemExit("[ERROR] XAI_API_KEY is not configured for enabled Candidate A research")
 print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
+print("external_search_model:", references.model if references.enabled else "disabled")
+print("external_search_profile:", references.domain_profile or "custom")
+print("external_search_open_mode:", "true" if (references.domain_profile == "open" or not references.allowed_domains) else "false")
+print("external_search_allowed_domain_count:", len(references.allowed_domains))
+print("external_search_timeout_seconds:", references.timeout_seconds)
+print("external_search_connect_timeout_seconds:", references.connect_timeout_seconds)
+print("external_search_read_timeout_seconds:", references.read_timeout_seconds)
+print("external_search_image_search_policy:", "on_visual_request")
 print("supplemental_model_knowledge:", "enabled" if supplemental.enabled else "disabled")
 print("hybrid_multi_brain:", "enabled" if multi_brain.enabled else "disabled")
 print("primary_answer_budget_seconds:", multi_brain.primary_answer_budget_seconds)

@@ -524,6 +524,60 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["attempt_count"], 1)
                 self.assertNotIn("failure", str(result))
 
+    def test_candidate_a_launcher_script_resolves_to_open_mode_and_90s_timeouts(self):
+        script = Path(__file__).resolve().parent.parent / "scripts" / "run_candidate_a.sh"
+        self.assertTrue(script.is_file())
+        text = script.read_text(encoding="utf-8")
+        self.assertIn('EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', text)
+        self.assertIn('EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"', text)
+        self.assertIn('EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"', text)
+        self.assertIn('EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"', text)
+        self.assertIn('EXTERNAL_REFERENCE_MODEL="grok-4.6"', text)
+        self.assertIn('external_search_model', text)
+        self.assertIn('external_search_open_mode', text)
+
+    async def test_web_search_request_tool_spec_omits_image_search_by_default(self):
+        captured_kwargs = {}
+        async def create(**kwargs):
+            nonlocal captured_kwargs
+            captured_kwargs = kwargs
+            return {
+                "output_text": "Ammonium bicarbonate is a buffer.",
+                "citations": ["https://en.wikipedia.org/wiki/Ammonium_bicarbonate"],
+                "output": [{"type": "web_search_call", "status": "completed"}],
+            }
+        searcher = XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=SimpleNamespace(create=create)),
+            ExternalReferenceSettings(True, (), "grok-4.6", 90.0, 5, "open"),
+        )
+        res = await searcher.search("AMBIC buffer", language="en", include_images=False)
+        self.assertEqual(res["status"], "success")
+        tools = captured_kwargs.get("tools", [])
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0]["type"], "web_search")
+        self.assertNotIn("enable_image_search", tools[0])
+        self.assertNotIn("filters", tools[0])
+
+    async def test_web_search_request_tool_spec_includes_image_search_when_requested(self):
+        captured_kwargs = {}
+        async def create(**kwargs):
+            nonlocal captured_kwargs
+            captured_kwargs = kwargs
+            return {
+                "output_text": "![AMBIC](https://example.com/ambic.jpg)",
+                "citations": ["https://example.com/ambic"],
+                "output": [{"type": "web_search_call", "status": "completed"}],
+            }
+        searcher = XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=SimpleNamespace(create=create)),
+            ExternalReferenceSettings(True, (), "grok-4.6", 90.0, 5, "open"),
+        )
+        res = await searcher.search("AMBIC image", language="en", include_images=True)
+        self.assertEqual(res["status"], "success")
+        tools = captured_kwargs.get("tools", [])
+        self.assertEqual(len(tools), 1)
+        self.assertTrue(tools[0].get("enable_image_search"))
+
 
 if __name__ == "__main__":
     unittest.main()

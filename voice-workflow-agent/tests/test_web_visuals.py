@@ -44,8 +44,9 @@ class WebVisualTests(unittest.IsolatedAsyncioTestCase):
         ).search("HPLC water authoritative real image")
         self.assertEqual(result["status"], "success")
         candidate = result["matches"][0]
-        self.assertEqual(candidate["display_mode"], "source_link")
-        self.assertNotIn("image_url", candidate)
+        self.assertEqual(candidate["display_mode"], "web_image")
+        self.assertEqual(candidate["image_url"], "https://pubchem.ncbi.nlm.nih.gov/image.png")
+        self.assertEqual(candidate["source_page_url"], source)
         tool = responses.calls[0]["tools"][0]
         self.assertTrue(tool["enable_image_search"])
         self.assertNotIn("enable_image_understanding", tool)
