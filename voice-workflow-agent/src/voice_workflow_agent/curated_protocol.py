@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from pypdf import PdfReader
@@ -30,7 +30,11 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
 )
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.completion_intent import classify_korean_completion_command
+from voice_workflow_agent.completion_intent import (
+    CompletionIntentDecision,
+    classify_korean_completion_command,
+    resolve_korean_completion_decision,
+)
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -1243,6 +1247,7 @@ class PendingCompletionConfirmation:
     workflow_revision: int
     requested_turn_id: int
     requested_generation: int | None
+    requested_target_step: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1259,6 +1264,90 @@ class PendingObservationConfirmation:
     predicate_id: str
     affirmative_outcome: str = "positive"
     negative_outcome: str = "negative"
+
+
+@dataclass(frozen=True)
+class PendingTranscriptConfirmation:
+    """One step/version-bound confirmation for a mutation-sensitive repaired transcript."""
+
+    configuration_id: int | None
+    step_id: str
+    step_index: int
+    step_label: str
+    workflow_revision: int
+    requested_turn_id: int
+    requested_generation: int | None
+    proposed_transcript: str
+    proposed_action: CuratedProtocolAction
+    proposed_target_step: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptRepairDecision:
+    status: Literal["exact", "safe_autocorrection", "confirmation_required", "unresolved"]
+    normalized_transcript: str
+    proposed_transcript: str | None = None
+    proposed_action: CuratedProtocolAction | None = None
+    proposed_target_step: str | None = None
+    note: str | None = None
+
+
+_TYPO_NORMALIZATIONS = (
+    (re.compile(r"\b단게\b"), "단계"),
+    (re.compile(r"\b완로\b"), "완료"),
+    (re.compile(r"\b완려\b"), "완료"),
+    (re.compile(r"\b완뇨\b"), "완료"),
+    (re.compile(r"\b다\s*헸어\b"), "다 했어"),
+    (re.compile(r"\b끝냇어\b"), "끝냈어"),
+)
+
+_HIGH_RISK_COMPLETION_CORRUPTION_PATTERNS = (
+    # e.g. "탐방대도 완료했어", "삼방대도 완료했어", "삼당계도 완료했어", "산단계 완료했어", "탐단계 완료했어"
+    re.compile(r"^(?:(?:현재|지금|이번|이)\s*)?(?:탐방대|삼방대|탐단계|삼당계|산단계|사단계|탐당계|탄단계|단방대|담방대)\s*(?:도|는|은|를|을|이|가|로)?\s*(?:미리|이미|벌써|방금|아까|다|완전히)?\s*(?:완료(?:했어|했어요|했습니다)?|끝(?:냈어|냈어요|냈습니다|났어|났어요)|다\s*했어|마쳤어)"),
+)
+
+
+def classify_contextual_transcript_repair(
+    transcript: str,
+    current_step_label: str,
+    language: str = "ko",
+) -> TranscriptRepairDecision:
+    """Bounded contextual repair distinguishing safe typos from high-risk corruptions."""
+    if language != "ko" or not isinstance(transcript, str):
+        return TranscriptRepairDecision(status="exact", normalized_transcript=transcript)
+
+    raw = transcript.strip()
+    if not raw:
+        return TranscriptRepairDecision(status="exact", normalized_transcript="")
+
+    # 1. Check for low-risk safe autocorrection
+    normalized = raw
+    notes: list[str] = []
+    for pattern, repl in _TYPO_NORMALIZATIONS:
+        if pattern.search(normalized):
+            normalized = pattern.sub(repl, normalized)
+            notes.append(f"'{pattern.pattern}' -> '{repl}'")
+
+    if normalized != raw:
+        return TranscriptRepairDecision(
+            status="safe_autocorrection",
+            normalized_transcript=normalized,
+            note=", ".join(notes) if notes else None,
+        )
+
+    # 2. Check for high-risk phonetic completion corruptions
+    for pattern in _HIGH_RISK_COMPLETION_CORRUPTION_PATTERNS:
+        if pattern.search(raw):
+            proposed = f"{current_step_label}단계도 완료했어"
+            return TranscriptRepairDecision(
+                status="confirmation_required",
+                normalized_transcript=raw,
+                proposed_transcript=proposed,
+                proposed_action=CuratedProtocolAction.NEXT,
+                proposed_target_step=current_step_label,
+            )
+
+    return TranscriptRepairDecision(status="exact", normalized_transcript=raw)
 
 
 @dataclass(frozen=True)
@@ -2609,9 +2698,8 @@ def classify_curated_control_intent(
         (kind for kind, pattern in _NON_MUTATING_COMPLETION if pattern.search(key)),
         None,
     )
-    completion_claimed = bool(_COMPLETION_CLAIM.search(key)) or (
-        language == "ko" and classify_korean_completion_command(transcript, language="ko")
-    )
+    decision = resolve_korean_completion_decision(transcript, language=language)
+    completion_claimed = bool(_COMPLETION_CLAIM.search(key)) or decision.is_completion
     next_requested = bool(_NEXT_STEP_REQUEST.search(key))
     if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
         return CuratedControlIntent(
@@ -2641,15 +2729,17 @@ def classify_curated_control_intent(
             normalized_transcript=key,
         )
     if completion_claimed:
+        target_step = "authoritative_current_step"
+        intent_kind = "completion_and_next" if next_requested else "report_completion"
+        if decision.is_completion and decision.target_kind == "explicit_step" and decision.target_step_label:
+            target_step = decision.target_step_label
         return CuratedControlIntent(
-            intent_kind=(
-                "completion_and_next" if next_requested else "report_completion"
-            ),
+            intent_kind=intent_kind,
             action=CuratedProtocolAction.NEXT,
             reported_completion=True,
             requested_transition="next",
             requested_followup="describe_new_current_step",
-            target_step="authoritative_current_step",
+            target_step=target_step,
             language=language,
             allows_state_mutation=True,
             normalized_transcript=key,
@@ -3174,18 +3264,33 @@ def _step_presentation(
 def _display_document(
     *,
     title: str,
-    primary: str | None,
+    lead: str | None = None,
+    primary: str | None = None,
+    bullets: tuple[str, ...] = (),
     source: str | None = None,
+    citation: str | None = None,
     extra_sections: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, Any]:
-    sections: list[dict[str, str]] = []
+    sections: list[dict[str, Any]] = []
+    if isinstance(lead, str) and lead.strip():
+        sections.append({"kind": "lead", "heading": "", "text": lead.strip()})
+    if bullets:
+        clean_bullets = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
+        if clean_bullets:
+            sections.append({
+                "kind": "bullets",
+                "heading": "직접 답변" if not primary else "세부 항목",
+                "items": clean_bullets,
+            })
     if isinstance(primary, str) and primary.strip():
-        sections.append({"heading": "안내", "text": primary.strip()})
+        sections.append({"kind": "section", "heading": "답변", "text": primary.strip()})
     if isinstance(source, str) and source.strip():
-        sections.append({"heading": "원문", "text": source.strip()})
+        sections.append({"kind": "source", "heading": "원문 · English", "text": source.strip()})
+    if isinstance(citation, str) and citation.strip():
+        sections.append({"kind": "citation", "heading": "출처", "text": citation.strip()})
     for heading, text in extra_sections:
         if isinstance(text, str) and text.strip():
-            sections.append({"heading": heading, "text": text.strip()})
+            sections.append({"kind": "section", "heading": heading, "text": text.strip()})
     return {"title": title, "sections": sections}
 
 
@@ -3728,6 +3833,25 @@ def canonical_research_plan(entity_key: str) -> dict[str, Any]:
     }
 
 
+_CONCISE_SUMMARIES_KO = {
+    "ambic": "AMBIC는 이 프로토콜의 중탄산암모늄 완충 성분",
+    "hplc_water": "HPLC water는 고순도 크로마토그래피용 정제수",
+    "solution_a": "Solution A는 세척 및 탈수용 혼합 용액",
+    "solution_b": "Solution B는 25 mM AMBIC 기본 완충 용액",
+    "acetonitrile": "Acetonitrile은 젤 탈수와 세척에 사용하는 유기 용매",
+    "gel_plug": "젤 플러그는 밴드에서 잘라낸 약 1 mm³ 젤 조각",
+    "stained_protein_band": "염색된 단백질 밴드는 SDS-PAGE에서 확인한 표적 젤 영역",
+    "dtt": "DTT는 단백질 이황화 결합을 끊는 환원제",
+    "iodoacetamide": "Iodoacetamide는 시스테인을 알킬화하는 시약",
+    "trypsin": "Trypsin은 단백질을 펩타이드로 자르는 소화 효소",
+    "formic_acid": "Formic acid는 트립신 소화를 정지시키는 산성화 시약",
+    "rpm": "rpm은 분당 회전수 교반 설정값",
+    "incubation": "배양(incubation)은 반응물이 특정 온도와 시간에서 반응하도록 유지하는 과정",
+    "contamination": "오염(contamination)은 외부 물질이 시료에 유입되는 현상",
+    "tube": "튜브는 젤 플러그를 담아 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브",
+}
+
+
 class CuratedProtocolSession:
     """Server-owned in-memory state for one validated structured fixture."""
 
@@ -3745,6 +3869,7 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation: PendingCompletionConfirmation | None = None
         self._pending_observation_confirmation: PendingObservationConfirmation | None = None
+        self._pending_transcript_confirmation: PendingTranscriptConfirmation | None = None
         self._workflow_status: str = "preview"
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
@@ -3769,6 +3894,10 @@ class CuratedProtocolSession:
     @property
     def pending_observation_confirmation(self) -> PendingObservationConfirmation | None:
         return self._pending_observation_confirmation
+
+    @property
+    def pending_transcript_confirmation(self) -> PendingTranscriptConfirmation | None:
+        return self._pending_transcript_confirmation
 
     @property
     def workflow_status(self) -> str:
@@ -4036,13 +4165,18 @@ class CuratedProtocolSession:
             "stained protein band", "Thermomixer", "rpm", "incubation",
             "keratin", "contamination", "Evotip",
         )
+        step_tokens: tuple[str, ...] = ()
+        if self.active and 0 <= self.current_index < len(self.fixture.steps):
+            lbl = self.fixture.steps[self.current_index].source_label
+            step_tokens = (f"{lbl}단계", f"{lbl} 단계", f"현재 {lbl}단계", f"이번 {lbl}단계")
+
         if include_control_terms:
             control_korean = (
                 "아니", "네", "현재 단계", "이번 단계", "완료", "완료했어",
                 "시작", "다음 단계", "다시 알려줘",
             )
-            return tuple(dict.fromkeys(scientific + control_korean))[:100]
-        return scientific[:100]
+            return tuple(dict.fromkeys(scientific + step_tokens + control_korean))[:100]
+        return tuple(dict.fromkeys(scientific + step_tokens))[:100]
 
     def current_step_semantic_frame(self) -> StepSemanticFrame:
         return build_step_semantic_frame(self.fixture, self.current_index)
@@ -4619,6 +4753,7 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation = None
         self._pending_observation_confirmation = None
+        self._pending_transcript_confirmation = None
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
@@ -4649,6 +4784,7 @@ class CuratedProtocolSession:
         self._discourse_context = ProtocolDiscourseContext()
         self._pending_completion_confirmation = None
         self._pending_observation_confirmation = None
+        self._pending_transcript_confirmation = None
         self._timer_started_at = None
         self._timer_duration_seconds = None
         self._timer_step_index = None
@@ -4893,15 +5029,32 @@ class CuratedProtocolSession:
                 direct = "\n".join(
                     f"• {claim.local_answer}" for claim in visible
                 )
-                spoken_parts = [claim.local_answer for claim in admitted[:3]]
-                if unresolved_claims and len(spoken_parts) < 3:
-                    limitation = next(
-                        (claim.local_answer for claim in unresolved_claims
-                         if claim.local_answer), None
-                    )
-                    if limitation:
-                        spoken_parts.append(limitation)
-                speech = " ".join(spoken_parts)
+                if language == "ko":
+                    summaries = []
+                    for claim in visible:
+                        target = claim.target_id
+                        if target in _CONCISE_SUMMARIES_KO:
+                            summaries.append(_CONCISE_SUMMARIES_KO[target])
+                        elif claim.local_answer:
+                            first_sent = claim.local_answer.split(".")[0].strip()
+                            if first_sent:
+                                summaries.append(first_sent)
+                    if len(summaries) == 1:
+                        speech = f"{summaries[0]}입니다. 자세한 내용은 화면에 정리했습니다."
+                    elif len(summaries) >= 2:
+                        speech = f"{summaries[0]}이고, {summaries[1]}입니다. 자세한 내용은 화면에 정리했습니다."
+                    else:
+                        speech = "요청하신 내용을 정리했습니다. 자세한 내용은 화면을 확인해 주세요."
+                else:
+                    spoken_parts = [claim.local_answer for claim in admitted[:3]]
+                    if unresolved_claims and len(spoken_parts) < 3:
+                        limitation = next(
+                            (claim.local_answer for claim in unresolved_claims
+                             if claim.local_answer), None
+                        )
+                        if limitation:
+                            spoken_parts.append(limitation)
+                    speech = " ".join(spoken_parts)
                 claim_evidence = tuple(dict.fromkeys(
                     evidence_id for claim in visible
                     for evidence_id in claim.evidence_ids
@@ -5323,6 +5476,7 @@ class CuratedProtocolSession:
         command_key = _utterance_key(transcript)
         pending = self._pending_completion_confirmation
         observation_pending = self._pending_observation_confirmation
+        transcript_pending = self._pending_transcript_confirmation
         pending_valid = bool(
             pending is not None
             and self.active
@@ -5359,18 +5513,79 @@ class CuratedProtocolSession:
                 or generation >= observation_pending.requested_generation
             )
         )
+        transcript_pending_valid = bool(
+            transcript_pending is not None
+            and self.active
+            and self.current_index == transcript_pending.step_index
+            and self.fixture.steps[self.current_index].step_id == transcript_pending.step_id
+            and self._revision == transcript_pending.workflow_revision
+            and turn_id == transcript_pending.requested_turn_id + 1
+            and (
+                transcript_pending.configuration_id is None
+                or configuration_id == transcript_pending.configuration_id
+            )
+            and (
+                transcript_pending.requested_generation is None
+                or generation is None
+                or generation >= transcript_pending.requested_generation
+            )
+        )
         if pending is not None and not pending_valid:
             self._pending_completion_confirmation = None
         if observation_pending is not None and not observation_pending_valid:
             self._pending_observation_confirmation = None
+        if transcript_pending is not None and not transcript_pending_valid:
+            self._pending_transcript_confirmation = None
         binary_reply = _binary_frame_reply(transcript)
         pending_language_mismatch = bool(
-            (pending_valid or observation_pending_valid)
+            (pending_valid or observation_pending_valid or transcript_pending_valid)
             and language == "ko"
             and re.fullmatch(r"[a-z]{1,4}", normalized_confirmation)
             and normalized_confirmation not in {"yes", "no", "done"}
         )
-        if pending_valid and (
+        if transcript_pending_valid and (
+            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            or binary_reply == "affirmative"
+        ):
+            proposed_tx = transcript_pending.proposed_transcript
+            self._pending_transcript_confirmation = None
+            return self.plan(
+                proposed_tx,
+                turn_id=turn_id,
+                language=language,
+                transcript_quality=transcript_quality,
+                configuration_id=configuration_id,
+                generation=generation,
+            )
+        elif transcript_pending_valid and (
+            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            or binary_reply == "negative"
+        ):
+            self._pending_transcript_confirmation = None
+            response = (
+                "알겠습니다. 다시 말씀해 주세요."
+                if language == "ko" else
+                "Understood. Please say it again."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.DECLINE_COMPLETION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=(
+                    self.fixture.steps[self.current_index].source_label
+                    if self.active else None
+                ),
+                final_step=self.active and self.current_index == len(self.fixture.steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="pending_transcript_declined",
+                target_step="authoritative_current_step",
+            )
+            self._replay[turn_id] = plan
+            return plan
+        elif pending_valid and (
             _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
             or binary_reply == "affirmative"
         ):
@@ -5494,6 +5709,45 @@ class CuratedProtocolSession:
                     normalized_transcript=_utterance_key(transcript),
                 )
             else:
+                if self.active and 0 <= self.current_index < len(self.fixture.steps):
+                    step_lbl = self.fixture.steps[self.current_index].source_label
+                    repair = classify_contextual_transcript_repair(transcript, step_lbl, language)
+                    if repair.status == "safe_autocorrection":
+                        transcript = repair.normalized_transcript
+                    elif repair.status == "confirmation_required" and repair.proposed_transcript:
+                        self._pending_transcript_confirmation = PendingTranscriptConfirmation(
+                            configuration_id=configuration_id,
+                            step_id=self.fixture.steps[self.current_index].step_id,
+                            step_index=self.current_index,
+                            step_label=step_lbl,
+                            workflow_revision=self._revision,
+                            requested_turn_id=turn_id,
+                            requested_generation=generation,
+                            proposed_transcript=repair.proposed_transcript,
+                            proposed_action=repair.proposed_action or CuratedProtocolAction.NEXT,
+                            proposed_target_step=repair.proposed_target_step,
+                        )
+                        clarification = (
+                            f"‘{repair.proposed_transcript}’라고 말씀하신 건가요?"
+                            if language == "ko" else
+                            f"Did you say '{repair.proposed_transcript}'?"
+                        )
+                        plan = CuratedProtocolTurnPlan(
+                            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                            display_text=clarification,
+                            speech_text=clarification,
+                            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                            facts=self.fixture.facts_for_step(self.current_index),
+                            step_label=step_lbl,
+                            final_step=self.current_index == len(self.fixture.steps) - 1,
+                            state_changed=False,
+                            primary_text=clarification,
+                            intent_kind="corrupted_completion_confirmation_required",
+                            target_step=step_lbl,
+                        )
+                        self._replay[turn_id] = plan
+                        return plan
+
                 intent = classify_curated_control_intent(
                     transcript,
                     language=language,
@@ -5620,7 +5874,7 @@ class CuratedProtocolSession:
             return CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,
                 display_text=response,
-                speech_text=response,
+                speech_text="",
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
@@ -6372,6 +6626,47 @@ class CuratedProtocolSession:
                 unresolved_dimensions=("rationale",),
             )
         elif command is CuratedProtocolAction.NEXT:
+            if (
+                intent.target_step not in (None, "authoritative_current_step")
+                and self.active
+                and 0 <= self.current_index < len(steps)
+                and intent.target_step != steps[self.current_index].source_label
+            ):
+                current_label = steps[self.current_index].source_label
+                self._pending_completion_confirmation = PendingCompletionConfirmation(
+                    configuration_id=configuration_id,
+                    requested_generation=generation,
+                    workflow_revision=self._revision,
+                    step_index=self.current_index,
+                    step_id=steps[self.current_index].step_id,
+                    requested_turn_id=turn_id,
+                    requested_target_step=intent.target_step,
+                )
+                if language == "ko":
+                    clarification = (
+                        f"현재 진행 중인 단계는 {current_label}단계입니다. "
+                        f"{current_label}단계를 완료하셨다는 뜻인가요?"
+                    )
+                else:
+                    clarification = (
+                        f"The current step in progress is Step {current_label}. "
+                        f"Did you mean you completed Step {current_label}?"
+                    )
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                    display_text=clarification,
+                    speech_text=clarification,
+                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=current_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    primary_text=clarification,
+                    intent_kind="explicit_step_mismatch_clarification",
+                    target_step=current_label,
+                )
+                self._replay[turn_id] = plan
+                return plan
             blocker = self._current_step_readiness_blocker(
                 intent.observation_predicate
             )

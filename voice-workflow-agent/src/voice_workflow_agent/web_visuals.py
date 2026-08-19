@@ -63,6 +63,116 @@ def _walk(value: Any):
             yield from _walk(attributes)
 
 
+import hashlib
+import ipaddress
+import socket
+import httpx
+from .generated_visuals import _validated_image
+
+
+_ASSET_ID = re.compile(r"^[0-9a-f]{64}$")
+_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+
+def _is_safe_remote_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() != "https":
+            return False
+        if not parsed.hostname or "@" in parsed.netloc:
+            return False
+        ips = socket.getaddrinfo(parsed.hostname, 443, proto=socket.IPPROTO_TCP)
+        for _, _, _, _, sockaddr in ips:
+            ip_obj = ipaddress.ip_address(sockaddr[0])
+            for private in _PRIVATE_NETWORKS:
+                if ip_obj in private:
+                    return False
+        return True
+    except Exception:
+        return False
+
+
+@dataclass(frozen=True)
+class WebVisualAsset:
+    asset_id: str
+    mime_type: str
+    content: bytes
+    width: int
+    height: int
+    content_sha256: str
+    source_url: str
+    publisher_domain: str
+    title: str
+
+
+class WebVisualAssetRegistry:
+    """Store validated web image assets for safe same-origin proxying."""
+
+    def __init__(self) -> None:
+        self._assets: dict[str, WebVisualAsset] = {}
+        self._url_to_id: dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    def get(self, asset_id: str) -> WebVisualAsset | None:
+        if not isinstance(asset_id, str) or not _ASSET_ID.fullmatch(asset_id):
+            return None
+        return self._assets.get(asset_id)
+
+    async def obtain_or_register(
+        self,
+        *,
+        image_url: str,
+        source_url: str,
+        publisher_domain: str,
+        title: str,
+        timeout_seconds: float = 8.0,
+        max_bytes: int = 5_000_000,
+    ) -> WebVisualAsset | None:
+        if not image_url or not _is_safe_remote_url(image_url):
+            return None
+        async with self._lock:
+            cached_id = self._url_to_id.get(image_url)
+            if cached_id and cached_id in self._assets:
+                return self._assets[cached_id]
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+                resp = await client.get(image_url)
+                if resp.status_code != 200 or not resp.content or len(resp.content) > max_bytes:
+                    return None
+                content = resp.content
+                mime, width, height = _validated_image(content, max_bytes)
+                sha = hashlib.sha256(content).hexdigest()
+                asset = WebVisualAsset(
+                    asset_id=sha,
+                    mime_type=mime,
+                    content=content,
+                    width=width,
+                    height=height,
+                    content_sha256=sha,
+                    source_url=source_url,
+                    publisher_domain=publisher_domain,
+                    title=title,
+                )
+                async with self._lock:
+                    self._assets[sha] = asset
+                    self._url_to_id[image_url] = sha
+                return asset
+        except Exception:
+            return None
+
+
+WEB_VISUAL_REGISTRY = WebVisualAssetRegistry()
+
+
 _NON_CHEMICAL_ENTITIES = frozenset({
     "sds_page", "sds-page", "sds page", "electrophoresis", "gel_electrophoresis",
     "destaining", "coomassie", "centrifuge", "pipette", "mass_spectrometry",
@@ -226,6 +336,20 @@ class XaiAuthoritativeImageSearch:
         }
         if not tool_used or not unique:
             return {"status": "not_found", "matches": []}
+
+        for item in unique.values():
+            raw_img = item.get("image_url")
+            if raw_img and raw_img.startswith("https://"):
+                asset = await WEB_VISUAL_REGISTRY.obtain_or_register(
+                    image_url=raw_img,
+                    source_url=item.get("source_page_url") or raw_img,
+                    publisher_domain=item.get("publisher_domain") or "",
+                    title=item.get("title") or "Web reference image",
+                )
+                if asset is not None:
+                    item["image_url"] = f"/api/web-visuals/{asset.asset_id}"
+                    item["display_mode"] = "web_image"
+
         return {
             "status": "success",
             "matches": list(unique.values())[:1],

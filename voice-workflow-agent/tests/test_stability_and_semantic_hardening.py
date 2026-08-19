@@ -317,7 +317,131 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
         self.assertEqual(self.session._pause_state, "active")
         self.assertIn("재개", plan_resume.speech_text)
+    def test_numbered_step_completion_matching_and_mismatch_clarification(self) -> None:
+        """Explicit numbered step completion must advance on match and clarify on mismatch without state mutation."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        # 1. Matching numbered completion: Step 1 -> Step 2
+        plan_match1 = self.session.plan("1단계 완료했어", turn_id=2, language="ko")
+        self.assertTrue(plan_match1.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "2")
+
+        # 2. Matching numbered completion with adverb: "이번 2단계도 완료했어" -> Step 3
+        plan_match2 = self.session.plan("이번 2단계도 완료했어", turn_id=3, language="ko")
+        self.assertTrue(plan_match2.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "3")
+
+        # 3. Mismatched numbered completion: at Step 3, user says "4단계 완료했어"
+        # Server authority MUST guard this and require clarification before mutating.
+        plan_mismatch = self.session.plan("4단계 완료했어", turn_id=4, language="ko")
+        self.assertFalse(plan_mismatch.state_changed)
+        self.assertEqual(self.session.current_index, 2)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "3")
+        self.assertEqual(plan_mismatch.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertIn("현재 진행 중인 단계는 3단계입니다", plan_mismatch.speech_text)
+        self.assertIn("3단계를 완료하셨다는 뜻인가요?", plan_mismatch.speech_text)
+
+        # 4. User confirms affirmative: "응" -> advances to Step 4
+        plan_confirm = self.session.plan("응", turn_id=5, language="ko")
+        self.assertTrue(plan_confirm.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "4")
+
+        # 5. Mismatched numbered completion: at Step 4, user says "2단계 완료했어"
+        plan_mismatch2 = self.session.plan("2단계 완료했어", turn_id=6, language="ko")
+        self.assertFalse(plan_mismatch2.state_changed)
+        self.assertEqual(plan_mismatch2.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertIn("현재 진행 중인 단계는 4단계입니다", plan_mismatch2.speech_text)
+
+        # 6. User declines negative: "아니" -> declines without mutation
+        plan_decline = self.session.plan("아니", turn_id=7, language="ko")
+        self.assertFalse(plan_decline.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "4")
+        self.assertEqual(plan_decline.action, CuratedProtocolAction.DECLINE_COMPLETION)
+
+    def test_contextual_stt_repair_confirmation_flow(self) -> None:
+        """Corrupted STT for completion commands must trigger clarification without mutating state."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        self.session.plan("1단계 완료했어", turn_id=2, language="ko")
+        self.session.plan("2단계 완료했어", turn_id=3, language="ko")
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "3")
+
+        # At Step 3, corrupted STT transcript "탐방대도 완료했어"
+        plan_corrupted = self.session.plan("탐방대도 완료했어", turn_id=4, language="ko")
+        self.assertFalse(plan_corrupted.state_changed)
+        self.assertEqual(self.session.current_index, 2)
+        self.assertEqual(plan_corrupted.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertIn("3단계도 완료했어", plan_corrupted.speech_text)
+        self.assertIn("말씀하신 건가요?", plan_corrupted.speech_text)
+
+        # Confirm repair -> advances to Step 4
+        plan_confirm = self.session.plan("응 맞아", turn_id=5, language="ko")
+        self.assertTrue(plan_confirm.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "4")
+
+    def test_qa_speech_brevity_and_display_detail(self) -> None:
+        """Grounded QA speech must be concise (<200 chars) while display document contains full rich detail."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+
+        # Single entity query
+        plan1 = self.session.plan("AMBIC가 뭐야?", turn_id=2, language="ko")
+        self.assertIn(plan1.action, {CuratedProtocolAction.LAB_DOMAIN_QA, CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.QUESTION})
+        self.assertLessEqual(len(plan1.speech_text), 150)
+        self.assertIn("중탄산암모늄", plan1.speech_text)
+        self.assertIn("화면에 정리했습니다", plan1.speech_text)
+        self.assertNotIn("http", plan1.speech_text)
+        self.assertNotIn(".pdf", plan1.speech_text)
+
+        # Multi-entity query
+        plan2 = self.session.plan("AMBIC와 HPLC water의 차이가 뭐야?", turn_id=3, language="ko")
+        self.assertIn(plan2.action, {CuratedProtocolAction.LAB_DOMAIN_QA, CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.QUESTION})
+        self.assertLessEqual(len(plan2.speech_text), 200)
+        self.assertIn("AMBIC", plan2.speech_text)
+        self.assertIn("HPLC water", plan2.speech_text)
+        self.assertIn("화면에 정리했습니다", plan2.speech_text)
+
+    def test_paused_workflow_complete_voice_muting(self) -> None:
+        """During paused workflow, speech_text must be completely empty to prevent TTS playback."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        self.session.plan("잠시 일시정지", turn_id=2, language="ko")
+        self.assertEqual(self.session._pause_state, "paused")
+
+        # Utterance while paused
+        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=3, language="ko")
+        self.assertEqual(plan_mute.action, CuratedProtocolAction.PAUSE)
+        self.assertFalse(plan_mute.state_changed)
+        self.assertEqual(plan_mute.speech_text, "")
+        self.assertIn("일시정지 상태입니다", plan_mute.display_text)
+
+        # Resume restores speech
+        plan_resume = self.session.plan("실험 재개", turn_id=4, language="ko")
+        self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
+        self.assertEqual(self.session._pause_state, "active")
+        self.assertNotEqual(plan_resume.speech_text, "")
+        self.assertIn("재개", plan_resume.speech_text)
+
+    def test_web_visual_asset_registry(self) -> None:
+        """WebVisualAssetRegistry stores and retrieves validated assets with same-origin IDs."""
+        from voice_workflow_agent.web_visuals import WebVisualAsset, WebVisualAssetRegistry
+
+        registry = WebVisualAssetRegistry()
+        dummy_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x40\x00\x00\x00\x40\x08\x06\x00\x00\x00\xaa"
+        sha = "a" * 64
+        asset = WebVisualAsset(
+            asset_id=sha,
+            mime_type="image/png",
+            content=dummy_content,
+            width=64,
+            height=64,
+            content_sha256=sha,
+            source_url="https://example.com/image.png",
+            publisher_domain="example.com",
+            title="Example Test Image",
+        )
+        registry._assets[sha] = asset
+        self.assertIsNotNone(registry.get(sha))
+        self.assertEqual(registry.get(sha).asset_id, sha)
+        self.assertIsNone(registry.get("invalid_id"))
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ from voice_workflow_agent.generated_visuals import (
 )
 from voice_workflow_agent.web_visuals import (
     PubChemChemistryAdapter,
+    WEB_VISUAL_REGISTRY,
     WebVisualSettings,
     XaiAuthoritativeImageSearch,
 )
@@ -1034,6 +1035,26 @@ def get_generated_visual_asset(asset_id:str):
             "X-Generated-Visual-SHA256":asset.content_sha256,
             "X-Protocol-Source-SHA256":asset.source_document_hash,
             "X-Protocol-Visual-Kind":"generated_instructional",
+        },
+    )
+
+
+@app.get("/api/web-visuals/{asset_id}")
+def get_web_visual_asset(asset_id:str):
+    """Serve one validated proxied web image through an opaque same-origin ID."""
+
+    asset=WEB_VISUAL_REGISTRY.get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404,detail="Web visual is unknown.")
+    return Response(
+        content=asset.content,media_type=asset.mime_type,
+        headers={
+            "Cache-Control":"private, max-age=3600, immutable",
+            "X-Content-Type-Options":"nosniff",
+            "Content-Security-Policy":"default-src 'none'; sandbox",
+            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
+            "X-Web-Visual-SHA256":asset.content_sha256,
+            "X-Protocol-Visual-Kind":"web_reference_image",
         },
     )
 

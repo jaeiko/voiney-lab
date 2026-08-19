@@ -31,7 +31,7 @@ def _enabled(name: str) -> bool:
 @dataclass(frozen=True)
 class GeneratedVisualSettings:
     enabled: bool
-    model: str = "grok-imagine-image-quality"
+    model: str = "grok-imagine-image-2.0"
     max_bytes: int = 5_000_000
     timeout_seconds: float = 60.0
 
@@ -42,7 +42,7 @@ class GeneratedVisualSettings:
             return cls(False)
         model = os.environ.get(
             "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL",
-            "grok-imagine-image-quality",
+            "grok-imagine-image-2.0",
         ).strip()
         if not model or len(model) > 128:
             raise ValueError("generated visual model is invalid")
@@ -209,8 +209,20 @@ def _validated_image(raw: bytes, maximum: int) -> tuple[str, int, int]:
             if length < 2:
                 break
             offset += length + 2
-        if width <= 0 or height <= 0:
-            raise ValueError("generated JPEG dimensions are invalid")
+    elif raw.startswith(b"RIFF") and len(raw) >= 30 and raw[8:12] == b"WEBP":
+        mime = "image/webp"
+        if raw[12:16] == b"VP8 " and len(raw) >= 30:
+            width = (struct.unpack("<H", raw[26:28])[0] & 0x3FFF)
+            height = (struct.unpack("<H", raw[28:30])[0] & 0x3FFF)
+        elif raw[12:16] == b"VP8L" and len(raw) >= 25:
+            b0, b1, b2, b3 = raw[21:25]
+            width = 1 + (((b1 & 0x3F) << 8) | b0)
+            height = 1 + (((b3 & 0xF) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+        elif raw[12:16] == b"VP8X" and len(raw) >= 30:
+            width = 1 + struct.unpack("<I", raw[24:27] + b"\x00")[0]
+            height = 1 + struct.unpack("<I", raw[27:30] + b"\x00")[0]
+        else:
+            width, height = 512, 512
     else:
         raise ValueError("generated image format is invalid")
     if not 64 <= width <= 8192 or not 64 <= height <= 8192:
@@ -228,12 +240,18 @@ class XaiImageGenerator:
         self.settings = settings
 
     async def generate(self, specification: VisualSpecification) -> bytes:
+        extra_body: dict[str, Any] = {
+            "aspect_ratio": specification.aspect_ratio or "4:3",
+        }
+        if "2.0" in self.settings.model:
+            extra_body["resolution"] = "1k"
+            extra_body["quality"] = "low"
         response = await asyncio.wait_for(
             self.client.images.generate(
                 model=self.settings.model,
                 prompt=specification.prompt(),
                 response_format="b64_json",
-                extra_body={"aspect_ratio": specification.aspect_ratio},
+                extra_body=extra_body,
             ),
             timeout=self.settings.timeout_seconds,
         )

@@ -689,6 +689,9 @@
     .turn .answer-block b{display:block;color:var(--muted);font-size:.74rem;font-weight:800;margin-bottom:.3rem;text-transform:uppercase;letter-spacing:.04em}
     .turn .answer-source{white-space:pre-wrap;font-weight:500;color:var(--subtext)}
     .turn .answer-citation{font-size:.74rem;color:var(--muted)}
+    .turn .answer-lead p{margin:0 0 .4rem;font-weight:600;color:var(--ink)}
+    .turn .answer-bullet-list{margin:.35rem 0 .55rem 1.25rem;padding:0;line-height:1.55}
+    .turn .answer-bullet-list li{margin-bottom:.3rem;color:var(--subtext)}
 
     .turn .external-reference-links{display:flex;flex-direction:column;gap:.45rem;margin-top:.55rem}
     .turn .source-card{
@@ -941,6 +944,13 @@
               </div>
               <div id="procedure-visual" class="step-visual" hidden></div>
             </section>
+            <section id="task-requested-visual-panel" class="panel source-card" aria-labelledby="req-visual-title" hidden>
+              <h2 id="req-visual-title">요청한 참고 시각 자료</h2>
+              <div class="source-meta" aria-live="polite">
+                <span><b>상태</b> <span id="req-visual-state">대기</span></span>
+              </div>
+              <div id="task-requested-visual-content" class="step-visual"></div>
+            </section>
             <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
               <h2 id="web-ref-title">웹 참고 자료</h2>
               <div id="task-web-reference-content"></div>
@@ -1136,7 +1146,7 @@ function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entri
 function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["source_crop","full_source_page_preview"].includes(value.kind)||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||!Array.isArray(state?.source_page_refs)||!state.source_page_refs.includes(value.source_page)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.asset_id!=="string"||!/^(?:source-crop-[1-9][0-9]*-[1-9][0-9]*|source-page-[1-9][0-9]*)$/.test(value.asset_id)||typeof value.alt_text!=="string"||!value.alt_text||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/assets/${encodeURIComponent(value.asset_id)}`||!["image/png","image/jpeg"].includes(value.mime_type))return null;if(value.kind!=="full_source_page_preview"&&(typeof value.label!=="string"||typeof value.caption_primary!=="string"||typeof value.caption_source!=="string"||value.source_page_url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/source-pages/${value.source_page}`))return null;return value;}
 function renderStepVisual(container,state){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
 
-function safeGeneratedVisualAsset(value,message){const accepted=acceptedSessionConfiguration;if(!accepted||!value||typeof value!=="object"||value.kind!=="generated_instructional"||value.protocol_id!==accepted.protocol_id||value.protocol_id!==message.protocol_id||value.revision_id!==accepted.revision_id||value.step_id!==message.step_id||value.source_document_id!==message.source_document_hash||typeof value.asset_id!=="string"||!/^[0-9a-f]{64}$/.test(value.asset_id)||value.sha256!==value.asset_id||typeof value.url!=="string"||value.url!==`/api/generated-visuals/${value.asset_id}`||!["image/png","image/jpeg"].includes(value.mime_type)||!Number.isInteger(value.source_page)||value.source_page<=0||!Number.isInteger(value.width)||value.width<64||!Number.isInteger(value.height)||value.height<64||!Array.isArray(value.source_evidence_ids)||!value.source_evidence_ids.length||value.source_evidence_ids.some(id=>typeof id!=="string"||!id)||typeof value.label!=="string"||!value.label.includes("not an original source image"))return null;return value;}
+function safeGeneratedVisualAsset(value,message){const accepted=acceptedSessionConfiguration;if(!accepted||!value||typeof value!=="object"||value.kind!=="generated_instructional"||value.protocol_id!==accepted.protocol_id||value.protocol_id!==message.protocol_id||value.revision_id!==accepted.revision_id||value.step_id!==message.step_id||value.source_document_id!==message.source_document_hash||typeof value.asset_id!=="string"||!/^[0-9a-f]{64}$/.test(value.asset_id)||value.sha256!==value.asset_id||typeof value.url!=="string"||value.url!==`/api/generated-visuals/${value.asset_id}`||!["image/png","image/jpeg","image/webp"].includes(value.mime_type)||!Number.isInteger(value.source_page)||value.source_page<=0||!Number.isInteger(value.width)||value.width<64||!Number.isInteger(value.height)||value.height<64||!Array.isArray(value.source_evidence_ids)||!value.source_evidence_ids.length||value.source_evidence_ids.some(id=>typeof id!=="string"||!id)||typeof value.label!=="string"||!value.label.includes("not an original source image"))return null;return value;}
 
 function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
  const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);
@@ -1162,9 +1172,15 @@ function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
  }else if(message.status==="web_visual_ready"){
   const candidate=message.candidate;
   let page,imgUrl=null;
-  try{page=new URL(candidate?.source_page_url||candidate?.image_url);}catch(_){return false;}
-  if(candidate?.image_url){try{const imgObj=new URL(candidate.image_url);if(imgObj.protocol==="https:")imgUrl=candidate.image_url;}catch(_){}}
-  if(!["web_image_reference","chemical_structure_visual"].includes(candidate?.kind)||page.protocol!=="https:")return false;
+  try{page=new URL(candidate?.source_page_url||candidate?.image_url,window.location.origin);}catch(_){return false;}
+  if(candidate?.image_url){
+   if(typeof candidate.image_url==="string"&&candidate.image_url.startsWith("/api/web-visuals/")){
+    imgUrl=candidate.image_url;
+   }else{
+    try{const imgObj=new URL(candidate.image_url);if(imgObj.protocol==="https:")imgUrl=candidate.image_url;}catch(_){}
+   }
+  }
+  if(!["web_image_reference","chemical_structure_visual"].includes(candidate?.kind))return false;
   container.replaceChildren();
   container.hidden=false;
   const status=document.createElement("div");
@@ -1238,12 +1254,12 @@ function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
 }
 
 function promoteTurnVisualToPanel(message,browserGeneration=sessionGeneration){
- if(message?.step_id!==curatedProtocolState?.current_step_id)return false;
- const node=turnNode(message.turn_id,browserGeneration),compact=node.querySelector?.(".turn-visual"),panel=$("procedure-visual");
- if(!compact||!panel)return false;
+ const node=turnNode(message.turn_id,browserGeneration),compact=node.querySelector?.(".turn-visual");
+ const reqPanel=$("task-requested-visual-panel"),reqContent=$("task-requested-visual-content");
+ if(!compact||!reqPanel||!reqContent)return false;
  const panelSnapshot=beginChatPatch(node);
- panel.replaceChildren(...[...compact.childNodes].map(item=>item.cloneNode(true)));
- panel.hidden=false;
+ reqContent.replaceChildren(...[...compact.childNodes].map(item=>item.cloneNode(true)));
+ reqPanel.hidden=false;
  const link=compact.querySelector?.("a")?.cloneNode(true);
  compact.replaceChildren();
  const badge=document.createElement("span");
@@ -1252,7 +1268,7 @@ function promoteTurnVisualToPanel(message,browserGeneration=sessionGeneration){
  compact.appendChild(badge);
  if(link)compact.appendChild(link);
  compact.hidden=false;
- $("source-visual-state").textContent=badge.textContent;
+ $("req-visual-state").textContent=badge.textContent;
  finishChatPatch(panelSnapshot,"visual");
  return true;
 }
@@ -1498,17 +1514,46 @@ function renderStructuredReply(node,message){
   finishChatPatch(snapshot);return false;
  }
  target.replaceChildren();
- const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);renderMarkdownToContainer(block,text);parent.appendChild(block);};
+ const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}renderMarkdownToContainer(block,text);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
- const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
- let cleanPrimary = primary || message.text || "";
- if(message.answer_origin==="external_authoritative_reference") cleanPrimary = sanitizeExternalResearchAnswer(cleanPrimary);
- add(target,"answer-primary",originLabel,cleanPrimary);
+
+ if(message.display_document && Array.isArray(message.display_document.sections) && message.display_document.sections.length > 0){
+  for(const sec of message.display_document.sections){
+   if(sec.kind==="lead" && sec.text){
+    const leadBlock=document.createElement("div");leadBlock.className="answer-block answer-lead";
+    const p=document.createElement("p");p.textContent=normalizePresentationText(sec.text);leadBlock.appendChild(p);target.appendChild(leadBlock);
+   }else if(sec.kind==="bullets" && Array.isArray(sec.items) && sec.items.length){
+    const bulletBlock=document.createElement("div");bulletBlock.className="answer-block answer-primary";
+    if(sec.heading){const heading=document.createElement("b");heading.textContent=sec.heading;bulletBlock.appendChild(heading);}
+    const ul=document.createElement("ul");ul.className="answer-bullet-list";
+    for(const item of sec.items){
+     const li=document.createElement("li");renderMarkdownToContainer(li,item);ul.appendChild(li);
+    }
+    bulletBlock.appendChild(ul);target.appendChild(bulletBlock);
+   }else if(sec.kind==="source" && sec.text){
+    const details=document.createElement("details");details.className="reference-details";
+    const summary=document.createElement("summary");summary.textContent=sec.heading||"원문 · English";
+    const body=document.createElement("div");body.className="evidence-detail-body";
+    add(body,"answer-source","원문 · English",sec.text);
+    details.appendChild(summary);details.appendChild(body);target.appendChild(details);
+   }else if(sec.kind==="citation" && sec.text){
+    add(target,"answer-citation",sec.heading||"출처",sec.text);
+   }else if(sec.text){
+    add(target,"answer-primary",sec.heading||"답변",sec.text);
+   }
+  }
+ }else{
+  const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
+  let cleanPrimary = primary || message.text || "";
+  if(message.answer_origin==="external_authoritative_reference") cleanPrimary = sanitizeExternalResearchAnswer(cleanPrimary);
+  add(target,"answer-primary",originLabel,cleanPrimary);
+ }
+
  if(structured||reference){
   const details=document.createElement("details");details.className="reference-details";
   const summary=document.createElement("summary");summary.textContent="원문·근거·검색 세부정보";
   const body=document.createElement("div");body.className="evidence-detail-body";
-  if(sources?.length)add(body,"answer-source","원문 · English",sources.join("\n\n"));
+  if(sources?.length&&(!message.display_document||!message.display_document.sections.some(s=>s.kind==="source")))add(body,"answer-source","원문 · English",sources.join("\n\n"));
   if(structured&&evidence?.length&&pages?.length)add(body,"answer-citation","출처",evidence.map((id,index)=>`${id} · p.${pages[index]}`).join(", "));
   if(reference){
    const line=document.createElement("div");line.className="reference-citations";
@@ -2009,7 +2054,7 @@ async function onMessage(e,generation,current){
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
  if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)node.querySelector(".filler-status").textContent=filler;updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);
- if(m.type==="reply.delta"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&!interruptedTurns.has(m.turn_id)){const owner=turnNode(m.turn_id,generation);if(!owner.dataset.greetingOwner)renderStructuredReply(owner,m);}
+ if((m.type==="reply.complete"||m.type==="reply.delta")&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&!interruptedTurns.has(m.turn_id)){const owner=turnNode(m.turn_id,generation);if(!owner.dataset.greetingOwner)renderStructuredReply(owner,m);}
  if(m.type==="server.operation"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&m.route==="curated_protocol"&&Object.prototype.hasOwnProperty.call(SERVER_OPERATION_LABELS,m.operation)){if(m.operation==="audio_replay_request")audioRecoveryTurns.add(cascadeTurnKey(m.turn_id,m.generation));const target=turnNode(m.turn_id,generation).querySelector(".server-operation");target.textContent=`처리 경로 · curated_protocol · 서버 작업 · ${SERVER_OPERATION_LABELS[m.operation]}`;target.hidden=false;}
  if(m.type==="tool.call"||m.type==="tool.result")updateToolView(m);
  if(m.type==="audio.segment.start"){if(cascadeTurnInterrupted(m))return;if(activeTurn===null){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;}if(!currentCascadeMessage(m)||m.segment_index<nextSegment)return;clearFillerPlayback(m.turn_id,m.generation);receiving=m;receivedFrames=[];}
