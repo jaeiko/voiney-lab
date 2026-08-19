@@ -14,6 +14,11 @@
         "title": "Ứng phó chung khi hóa chất tràn",
         "section": "Hành động ngay",
         "guidance": "Dừng công việc, rời khỏi mối nguy hiểm trước mắt và báo cho người quản lý phòng thí nghiệm hoặc cán bộ an toàn. Làm theo quy trình khẩn cấp đã được phê duyệt của phòng thí nghiệm và không tiếp tục công việc khi chưa có xác nhận được ủy quyền."
+      },
+      "en": {
+        "title": "General Chemical Spill Response",
+        "section": "Immediate Action",
+        "guidance": "Stop work, evacuate immediate hazards, and notify lab safety personnel. Follow approved emergency procedures and do not resume without authorization."
       }
     }
   },
@@ -32,6 +37,103 @@
         "title": "Ứng phó chung khi thiết bị có dấu hiệu bất thường",
         "section": "Dừng việc và báo cáo",
         "guidance": "Dừng công việc, rời khỏi mối nguy hiểm trước mắt và báo cho người quản lý phòng thí nghiệm hoặc cán bộ an toàn. Không sử dụng lại thiết bị hoặc tiếp tục công việc khi chưa có xác nhận được ủy quyền."
+      },
+      "en": {
+        "title": "General Equipment Abnormality Response",
+        "section": "Stop and Report",
+        "guidance": "Stop work and disconnect equipment safely if possible. Report abnormal noise, vibration, or smoke to lab manager before restarting."
+      }
+    }
+  },
+  {
+    "document_id": "DEMO-PPE-003",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["ppe", "glove", "glasses", "coat", "hood", "보호구", "장갑", "보안경", "실험복", "후드", "bảo hộ"],
+    "translations": {
+      "ko": {
+        "title": "실험실 개인보호구(PPE) 착용 기준",
+        "section": "보호구 착용",
+        "guidance": "시약 취급 및 가열 시 항상 니트릴 장갑, 보안경, 실험복을 착용하십시오. 휘발성 유기용매 사용 시 흄후드 내에서 작업하십시오."
+      },
+      "vi": {
+        "title": "Quy chuẩn trang bị bảo hộ cá nhân (PPE)",
+        "section": "Trang bị bảo hộ",
+        "guidance": "Luôn đeo găng tay nitrile, kính bảo hộ và áo blouse phòng thí nghiệm. Thao tác trong tủ hút khi sử dụng dung môi hữu cơ bay hơi."
+      },
+      "en": {
+        "title": "Standard Laboratory PPE Requirements",
+        "section": "Protective Equipment",
+        "guidance": "Always wear nitrile gloves, safety goggles, and a lab coat when handling reagents or heated vessels. Use a fume hood for volatile organic solvents."
+      }
+    }
+  },
+  {
+    "document_id": "DEMO-STORAGE-004",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["chemical", "storage", "reagent", "buffer", "시약", "보관", "보관기준", "hóa chất", "lưu trữ"],
+    "translations": {
+      "ko": {
+        "title": "화학물질 및 시약 보관 안전 지침",
+        "section": "시약 보관 및 취급",
+        "guidance": "시약병은 밀폐하여 지정된 온도(상온/냉장/냉동)에 보관하고 라벨을 확인하십시오. 산과 염기, 인화성 물질은 분리하여 보관하십시오."
+      },
+      "vi": {
+        "title": "Hướng dẫn bảo quản hóa chất và thuốc thử",
+        "section": "Bảo quản thuốc thử",
+        "guidance": "Đậy kín lọ thuốc thử và bảo quản ở nhiệt độ quy định (nhiệt độ phòng/lạnh/đông). Tách riêng axit, bazơ và chất dễ cháy."
+      },
+      "en": {
+        "title": "Chemical Handling and Storage Guidelines",
+        "section": "Storage and Handling",
+        "guidance": "Keep chemical containers tightly sealed at specified temperatures. Store acids, bases, and flammable organics in segregated cabinets."
+      }
+    }
+  },
+  {
+    "document_id": "DEMO-DISPOSAL-005",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["waste", "disposal", "폐기", "폐액", "폐기물", "chất thải"],
+    "translations": {
+      "ko": {
+        "title": "실험실 폐기물 및 폐액 처리 절차",
+        "section": "폐액 처리",
+        "guidance": "유기용매 폐액, 무기산 폐액, 중금속 폐액을 분류하여 전용 폐액통에 배출하십시오. 싱크대에 시약을 직접 폐기하지 마십시오."
+      },
+      "vi": {
+        "title": "Quy trình xử lý chất thải và dung dịch thải phòng thí nghiệm",
+        "section": "Xử lý chất thải",
+        "guidance": "Phân loại dung môi hữu cơ, axit vô cơ và chất thải kim loại nặng vào bình chứa chuyên dụng. Không xả trực tiếp vào bồn rửa."
+      },
+      "en": {
+        "title": "Laboratory Waste and Disposal Procedures",
+        "section": "Waste Disposal",
+        "guidance": "Segregate organic solvent waste, inorganic acid waste, and heavy metals into designated waste carboys. Never dispose of reagents down the drain."
+      }
+    }
+  },
+  {
+    "document_id": "DEMO-EQUIP-006",
+    "source_label": "Voice Workflow Agent classroom demo record",
+    "demo_only": true,
+    "keywords": ["centrifuge", "thermomixer", "vortex", "원심분리기", "항온교반기", "볼텍서", "máy ly tâm"],
+    "translations": {
+      "ko": {
+        "title": "실험 장비 기본 안전 운용 (원심분리기·교반기)",
+        "section": "장비 운용 기준",
+        "guidance": "원심분리기 작동 전 튜브 무게 균형(대칭 배치)을 반드시 확인하십시오. 고온 항온교반기 취급 시 내열 장갑을 착용하십시오."
+      },
+      "vi": {
+        "title": "Vận hành an toàn thiết bị phòng thí nghiệm cơ bản",
+        "section": "Quy chuẩn thiết bị",
+        "guidance": "Luôn cân bằng đối xứng các ống trước khi chạy máy ly tâm. Sử dụng găng tay cách nhiệt khi thao tác với máy lắc ủ nhiệt độ cao."
+      },
+      "en": {
+        "title": "Standard Equipment Operation Guidelines",
+        "section": "Equipment Safety",
+        "guidance": "Always balance centrifuge tubes symmetrically before starting. Wear heat-resistant gloves when handling high-temperature heating blocks."
       }
     }
   }

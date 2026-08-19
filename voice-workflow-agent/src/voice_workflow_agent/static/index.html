@@ -50,10 +50,99 @@
       outline:3px solid var(--blurple);
       outline-offset:3px;
     }
+    .sticky-rail{
+      position:sticky;
+      top:0;
+      z-index:90;
+      background:rgba(14,18,52,.92);
+      backdrop-filter:blur(16px);
+      border-bottom:1px solid var(--border);
+      padding:.65rem 1.5rem;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:1rem;
+      box-shadow:0 4px 20px rgba(0,0,0,.35);
+      transition:all .2s ease;
+    }
+    .rail-left{display:flex;align-items:center;gap:.75rem;min-width:0;flex-wrap:wrap}
+    .brand-mini{display:flex;align-items:center;gap:.45rem;font-size:.82rem;font-weight:800;color:var(--ink)}
+    .rail-divider{width:1px;height:1.2rem;background:var(--border)}
+    .rail-title{font-size:.84rem;font-weight:750;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:20rem}
+    .rail-badge{background:var(--surface-card);border:1px solid var(--border);padding:.2rem .55rem;border-radius:var(--radius-pill);font-size:.74rem;font-weight:800;color:var(--subtext)}
+    .rail-timer{font-size:.78rem;font-weight:800;color:var(--cyan);white-space:nowrap}
+    .rail-safety{font-size:.76rem;font-weight:750;color:var(--amber);background:rgba(240,178,50,.12);border:1px solid rgba(240,178,50,.28);padding:.2rem .55rem;border-radius:var(--radius-pill);white-space:nowrap}
+    .rail-right{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
+    .btn-rail-secondary{background:var(--surface-card);border:1px solid var(--border);color:var(--ink);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s}
+    .btn-rail-secondary:hover{border-color:var(--blurple);background:var(--surface-onyx)}
+    .btn-rail-danger{background:rgba(250,119,124,.18);border:1px solid rgba(250,119,124,.4);color:var(--red);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s}
+    .btn-rail-danger:hover:not(:disabled){background:var(--red);color:#000000}
+    .btn-rail-danger:disabled{opacity:.35;cursor:not-allowed}
+    .btn-rail-ghost{background:transparent;border:1px solid var(--border);color:var(--muted);padding:.35rem .65rem;border-radius:var(--radius-sm);font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s}
+    .btn-rail-ghost:hover{color:var(--ink);border-color:var(--muted)}
+
+    .safety-guidance-box{
+      margin:.85rem 0 0;
+      padding:.85rem 1rem;
+      border-radius:var(--radius-sm);
+      background:rgba(240,178,50,.08);
+      border:1px solid rgba(240,178,50,.32);
+      color:#fff;
+    }
+    .safety-guidance-head{
+      display:flex;
+      align-items:center;
+      gap:.45rem;
+      font-size:.78rem;
+      color:var(--amber);
+      font-weight:800;
+      margin-bottom:.35rem;
+    }
+    .safety-citation{
+      margin-left:auto;
+      font-size:.72rem;
+      color:var(--muted);
+      font-weight:600;
+    }
+    .safety-guidance-body{
+      font-size:.82rem;
+      line-height:1.55;
+      color:#f8fafc;
+      white-space:pre-wrap;
+    }
+
+    .modal-backdrop{
+      position:fixed;
+      inset:0;
+      z-index:200;
+      background:rgba(0,0,0,.75);
+      backdrop-filter:blur(6px);
+      display:grid;
+      place-items:center;
+      padding:1.5rem;
+    }
+    .modal-backdrop[hidden]{display:none !important}
+    .modal-card{
+      background:var(--surface-raised);
+      border:1px solid var(--border-accent);
+      border-radius:var(--radius-lg);
+      padding:1.5rem 1.75rem;
+      max-width:28rem;
+      width:100%;
+      box-shadow:var(--shadow);
+    }
+    .modal-title{margin:0 0 .5rem;font-size:1.15rem;font-weight:800;color:var(--ink)}
+    .modal-desc{margin:0 0 1.25rem;font-size:.88rem;color:var(--subtext);line-height:1.5}
+    .modal-actions{display:flex;justify-content:flex-end;gap:.65rem}
+    .btn-modal-confirm{background:var(--red);color:#000000;border:0;padding:.6rem 1.15rem;border-radius:var(--radius-sm);font-weight:800;font-size:.85rem;cursor:pointer}
+    .btn-modal-confirm:hover{background:#ff9196}
+    .btn-modal-cancel{background:var(--surface-card);border:1px solid var(--border);color:var(--ink);padding:.6rem 1.15rem;border-radius:var(--radius-sm);font-weight:750;font-size:.85rem;cursor:pointer}
+    .btn-modal-cancel:hover{background:var(--surface-onyx)}
+
     .topbar{
-      max-width:88rem;
+      max-width:92rem;
       margin:0 auto;
-      padding:1.25rem 1.5rem .75rem;
+      padding:1rem 1.5rem .5rem;
       display:flex;
       align-items:center;
       justify-content:space-between;
@@ -89,16 +178,17 @@
     .session-dot{width:.55rem;height:.55rem;border-radius:50%;background:#8ea199;box-shadow:0 0 0 4px rgba(142,161,153,.18);transition:background .3s}
     
     .shell{
-      max-width:88rem;
+      max-width:92rem;
       margin:0 auto;
-      padding:1rem 1.5rem 4rem;
+      padding:.75rem 1.5rem 4rem;
       display:grid;
-      grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);
+      grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);
       grid-template-areas:"setup setup" "work chat";
       gap:1.25rem;
       align-items:stretch;
     }
-    .hero{grid-area:setup;display:block}
+    .hero{grid-area:setup;display:block;transition:all .3s ease}
+    .hero.collapsed{display:none}
     .panel{
       border:1px solid var(--border);
       background:var(--surface-raised);
@@ -637,6 +727,26 @@
   <!-- Hidden Screen Reader Live Announcer for Key Milestones -->
   <div id="screen-reader-announcer" class="visually-hidden-file-input" aria-live="polite" role="status"></div>
 
+  <!-- Adaptive Lab Cockpit Sticky Rail -->
+  <header class="sticky-rail" id="sticky-rail" aria-label="활성 세션 빠른 제어">
+    <div class="rail-left">
+      <div class="brand-mini">
+        <span class="session-dot" aria-hidden="true"></span>
+        <strong id="rail-state">IDLE</strong>
+      </div>
+      <div class="rail-divider"></div>
+      <span id="rail-pdf-title" class="rail-title" title="선택된 실험 PDF">실험 PDF 선택 대기</span>
+      <span id="rail-step-badge" class="rail-badge" title="현재 단계">—</span>
+      <span id="rail-timer-badge" class="rail-timer" title="타이머">⏱ 00:00</span>
+      <span id="rail-safety-badge" class="rail-safety" title="바인딩된 안전 지침">🛡️ 안전 자료 확인 중</span>
+    </div>
+    <div class="rail-right">
+      <button id="rail-new-session" type="button" class="btn-rail-secondary">새 세션</button>
+      <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
+      <button id="toggle-setup-btn" type="button" class="btn-rail-ghost" aria-expanded="true" aria-controls="hero-setup">⚙️ 설정 접기</button>
+    </div>
+  </header>
+
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">VW</div>
@@ -646,7 +756,7 @@
   </header>
 
   <main class="shell">
-    <div class="hero">
+    <div id="hero-setup" class="hero">
       <section class="panel voice-panel" aria-labelledby="page-title">
         <div class="voice-copy">
           <p class="eyebrow">Guide · Search · Discover</p>
@@ -679,7 +789,7 @@
                 <option value="en">English</option>
                 <option value="vi">Tiếng Việt</option>
             </select></label>
-            <label class="control-field"><span>실험 프로토콜</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
+            <label class="control-field"><span>실험 PDF</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
                 <option value="">카탈로그를 불러오는 중…</option>
             </select></label>
             <div class="protocol-register">
@@ -692,7 +802,7 @@
               <small id="protocol-upload-status" role="status"></small>
             </div>
             <div class="session-context" aria-live="polite">
-              <button id="new-user" type="button">대화 초기화</button>
+              <button id="new-user" type="button">새 세션</button>
               <span id="language-confirmation" role="alert" hidden>언어를 선택하고 다시 말씀해 주세요.</span>
             </div>
             <details class="dev-diagnostics">
@@ -732,6 +842,14 @@
           <p id="procedure-primary"></p>
           <p id="procedure-instruction"></p>
           <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
+          <div id="step-safety-guidance" class="safety-guidance-box" hidden>
+            <div class="safety-guidance-head">
+              <span class="safety-icon">🛡️</span>
+              <strong>안전 지침 및 PPE 기준</strong>
+              <span id="step-safety-citation" class="safety-citation"></span>
+            </div>
+            <div id="step-safety-text" class="safety-guidance-body"></div>
+          </div>
           <div class="spoken-summary"><b>짧은 음성 안내</b><span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span></div>
           <div class="step-actions" aria-label="현재 단계 음성 명령 도움말">
             <button id="repeat-step" type="button" disabled aria-describedby="voice-command-hint">음성 예시 · "다시 알려줘"</button>
@@ -791,6 +909,18 @@
     </section>
   </main>
 
+  <!-- New Session Confirmation Modal -->
+  <div id="new-session-modal" class="modal-backdrop" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-desc">
+      <h3 id="modal-title" class="modal-title">새 세션 시작</h3>
+      <p id="modal-desc" class="modal-desc">현재 실험 세션이 진행 중입니다. 새 세션을 시작하면 현재 세션이 종료됩니다. 계속하시겠습니까?</p>
+      <div class="modal-actions">
+        <button id="modal-confirm-btn" type="button" class="btn-modal-confirm">계속 진행</button>
+        <button id="modal-cancel-btn" type="button" class="btn-modal-cancel">취소</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 const $=id=>document.getElementById(id);
 function setText(id,value){const node=$(id);if(node)node.textContent=value;}
@@ -845,15 +975,18 @@ const REPORT_LABELS={awaiting_user_confirmation:"사용자 제출 확인 대기"
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}
 function renderState(state,detail=""){
  const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];
+ if($("rail-state"))$("rail-state").textContent=visibleState;
  setDisabled($("start"),view[1]);setDisabled($("stop"),view[2]);
+ setDisabled($("rail-stop-session"),view[2]);
  const configurationLocked=!["IDLE","ERROR"].includes(visibleState);
  for(const id of ["pipeline-mode","language-mode","manual-language","protocol-id","protocol-pdf","register-protocol"]){setDisabled($(id),configurationLocked);}
  $("protocol-id")?.setAttribute?.("aria-busy",String(visibleState==="CONNECTING"));
  const active=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;
  setDisabled($("repeat-step"),!active);setDisabled($("next-step"),!active);
- if(typeof document?.querySelector==="function"){
-  const dot=document.querySelector(".session-dot");
-  if(dot)dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#35ed7e":visibleState==="ERROR"?"#fa777c":"#8ea199";
+ if(typeof document?.querySelectorAll==="function"){
+  for(const dot of document.querySelectorAll(".session-dot")){
+   dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#35ed7e":visibleState==="ERROR"?"#fa777c":"#8ea199";
+  }
  }
 }
 function sendControl(type,fields={}){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type,...fields}));}
@@ -864,7 +997,7 @@ function formatElapsedClock(seconds){
  return hours>0?`${hours}:${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")}`:`${minutes}:${String(secs).padStart(2,"0")}`;
 }
 function updateWorkflowTimer(){
- const node=$("procedure-timer");if(!node)return;
+ const node=$("procedure-timer"),railTimer=$("rail-timer-badge");
  const curated=curatedProtocolState?.timers||{};
  const experiment=curated.experiment||null;
  const step=curated.step||procedureState?.timer||null;
@@ -876,6 +1009,7 @@ function updateWorkflowTimer(){
   if(experiment.state==="running")parts.push(`실험 진행 경과 시간 ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="stopped")parts.push(`전체 종료 · ${formatElapsedClock(elapsed)}`);
   else if(experiment.state==="not_started")parts.push("전체 대기");
+  if(railTimer&&experiment.state==="running")railTimer.textContent=`⏱ ${formatElapsedClock(elapsed)}`;
  }
  if(pause&&pause.state==="paused"){
   const pausedAt=pause.paused_at?Date.parse(pause.paused_at):NaN;
@@ -887,6 +1021,7 @@ function updateWorkflowTimer(){
    const deadline=Date.parse(step.deadline_at);
    const remaining=Number.isFinite(deadline)?Math.max(0,Math.ceil((deadline-Date.now())/1000)):Math.max(0,Number(step.remaining_seconds)||0);
    parts.push(remaining>0?`단계 ${remaining}초 남음`:`단계 완료 · ${step.duration_seconds||0}초`);
+   if(railTimer)railTimer.textContent=`⏱ 단계 ${remaining}s`;
    if(remaining===0)stopWorkflowTimer();
   }else if(step.state==="not_started"&&Number(step.duration_seconds)>0){
    parts.push(`단계 대기 · 고정 ${step.duration_seconds}초`);
@@ -894,7 +1029,7 @@ function updateWorkflowTimer(){
    parts.push(`단계 종료 · ${step.duration_seconds||0}초`);
   }
  }
- node.textContent=parts.length?parts.join(" · "):"이 단계에는 타이머가 없습니다.";
+ if(node)node.textContent=parts.length?parts.join(" · "):"이 단계에는 타이머가 없습니다.";
 }
 function startWorkflowTimer(){
  stopWorkflowTimer();updateWorkflowTimer();
@@ -1075,6 +1210,58 @@ function resetSessionUI(){
  resetVoiceProcessing();invalidateCuratedProtocolState();
 }
 
+let activeSafetyPack=null;
+function renderSafetyPack(pack){
+ if(!pack||typeof pack!=="object")return;
+ activeSafetyPack=pack;
+ const count=Number(pack.total_document_count||(pack.sds_documents?.length||0)+(pack.equipment_documents?.length||0)+(pack.sop_documents?.length||0));
+ const status=pack.coverage_status||"unavailable";
+ const railBadge=$("rail-safety-badge");
+ if(railBadge){
+  if(status==="available"||(count>0&&status!=="demo_only"&&status!=="partial")){
+   railBadge.textContent=`🛡️ 안전 자료 ${count}개 적용`;
+   railBadge.title=`SDS: ${pack.sds_documents?.length||0}건 · 장비: ${pack.equipment_documents?.length||0}건 · SOP: ${pack.sop_documents?.length||0}건`;
+  }else if(status==="demo_only"){
+   railBadge.textContent=`🛡️ 데모 안전 자료 ${count}개`;
+   railBadge.title=`데모 안전 자료 ${count}건 적용 (교육/테스트용)`;
+  }else if(status==="partial"){
+   railBadge.textContent=`🛡️ 안전 자료 일부 연결`;
+   railBadge.title=`일부 안전 자료 연결됨 (${count}건)`;
+  }else if(status==="disabled"){
+   railBadge.textContent=`안전 자료 사용 안 함`;
+   railBadge.title=`추가 안전 자료 연동 비활성화됨`;
+  }else{
+   railBadge.textContent=`추가 안전 자료 없음`;
+   railBadge.title=`연결된 추가 승인 안전 자료가 없습니다.`;
+  }
+ }
+ updateStepSafetyGuidance();
+}
+function updateStepSafetyGuidance(){
+ const box=$("step-safety-guidance"),citation=$("step-safety-citation"),body=$("step-safety-text");
+ if(!box||!body)return;
+ if(!activeSafetyPack||!curatedProtocolState||!curatedProtocolState.current_step_label){box.hidden=true;return;}
+ const stepLabel=String(curatedProtocolState.current_step_label);
+ const stepGuidanceList=activeSafetyPack.step_guidance||[];
+ const found=stepGuidanceList.find(g=>String(g.step_label)===stepLabel);
+ if(found&&(found.ppe_requirements?.length||found.handling_precautions?.length||found.precautions?.length||found.citation_label)){
+  box.hidden=false;
+  if(citation)citation.textContent=found.citation_label||"";
+  const bits=[];
+  const ppe=found.ppe_requirements||[];
+  const handling=found.handling_precautions||found.precautions||[];
+  if(ppe.length)bits.push(`• 개인보호구(PPE): ${ppe.join(", ")}`);
+  if(handling.length)bits.push(`• 안전 취급 주의: ${handling.join(" ")}`);
+  body.textContent=bits.length?bits.join("\n"):"• 실험 PDF의 기본 주의사항을 준수하십시오.";
+ }else if(activeSafetyPack.sop_documents?.length||activeSafetyPack.sds_documents?.length||activeSafetyPack.equipment_documents?.length){
+  box.hidden=false;
+  if(citation)citation.textContent="안전 SOP · SDS 적용됨";
+  body.textContent="• 표준 실험실 안전 지침(PPE 착용 및 시약 분리 보관 기준)을 준수하십시오.";
+ }else{
+  box.hidden=true;
+ }
+}
+
 function renderCuratedProtocolState(message){
  const value=message?.state,accepted=acceptedSessionConfiguration,nonempty=v=>typeof v==="string"&&v.trim().length>0;
  if(!accepted||message.configuration_id!==accepted.configuration_id||accepted.mode!=="cascade"||!value||typeof value!=="object")return;
@@ -1085,16 +1272,19 @@ function renderCuratedProtocolState(message){
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
+ if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?`개발용 · 최종 승인 아님 · ${value.protocol_id} · ${value.revision_id}`:`승인 리비전 · ${value.protocol_id} · ${value.revision_id}`;
  const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
  $("procedure-progress").textContent=(value.active||previewValid)?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
+ if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`Step ${value.current_step_label} / ${value.total_steps}`:"대기";
  $("procedure-step-title").textContent=(value.active||previewValid)?`Step ${value.current_step_label}`:"";
  const warnings=Array.isArray(value.warning_texts)?value.warning_texts.filter(nonempty):[],criticalWarnings=Array.isArray(value.critical_warning_texts)?value.critical_warning_texts.filter(nonempty):[],warningPresentations=Array.isArray(value.warning_presentations)?value.warning_presentations.filter(item=>item&&typeof item==="object"&&nonempty(item.source_text)):[];
  setText("procedure-primary",(value.active||previewValid)&&nonempty(value.primary_summary)?normalizePresentationText(`안내 · 한국어 참고 번역\n${value.primary_summary}`):(value.active||previewValid)?"검증된 한국어 참고 번역을 사용할 수 없습니다.":"");
  $("procedure-instruction").textContent=(value.active||previewValid)&&nonempty(value.display_summary)?normalizePresentationText(`원문 · English\n${value.display_summary}`):"";
  const warningText=normalizePresentationText(warningPresentations.length?warningPresentations.map(item=>`${nonempty(item.primary_text)?`주의 · 한국어 참고 번역\n${item.primary_text}\n`:""}원문 · English\n${item.source_text}\n출처 · ${item.evidence_id} · p.${item.source_page}`).join("\n\n"):[...warnings.map(item=>`주의 원문: ${item}`),...criticalWarnings.filter(item=>!warnings.includes(item)).map(item=>`중요 경고 원문: ${item}`)].join("\n"));
  $("procedure-warning").textContent=warningText;$("procedure-warning").hidden=!warningText;
+ updateStepSafetyGuidance();
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
@@ -1483,13 +1673,43 @@ async function registerSelectedProtocol(){
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
-  if(status)status.textContent=payload.deduplicated?"동일 PDF가 이미 등록되어 있습니다.":"등록 완료 · 분석·검토·승인 전에는 실행할 수 없습니다.";
+  if(payload.protocol_id){
+   if(status)status.textContent="원문 PDF 등록 완료 · 구조 분석 진행 중…";
+   try{
+    const analysisRes=await fetch(`/api/protocols/${encodeURIComponent(payload.protocol_id)}/analysis`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"});
+    if(analysisRes.ok){
+     const aPayload=await analysisRes.json();
+     if(aPayload.available_for_execution===true||aPayload.analysis_status==="active_development"||aPayload.readiness_status==="guidance_ready"){
+      if(status)status.textContent="구조 분석 완료! 실험 가이드가 준비되었습니다.";
+     }else if(aPayload.analysis_status==="ocr_required"){
+      if(status)status.textContent="스캔 문서(OCR 필요)로 감지되어 텍스트 추출이 필요합니다.";
+     }else{
+      if(status)status.textContent="구조 분석 완료 · 검토 후 사용 가능합니다.";
+     }
+    }
+   }catch(_){}
+  }else{
+   if(status)status.textContent=payload.deduplicated?"동일 PDF가 이미 등록되어 있습니다.":"등록 완료 · 분석·검토·승인 전에는 실행할 수 없습니다.";
+  }
   await loadProtocolCatalog();
+  if(payload.protocol_id&&$("protocol-id")){
+   $("protocol-id").value=payload.protocol_id;
+   renderSelectedProtocolContext();
+  }
  }finally{if(button)button.disabled=false;}
 }
 function requestLanguageMode(){const mode=$("language-mode").value;$("manual-language").hidden=mode!=="manual";if(!sessionActive){$("language-status").textContent=mode==="manual"?"Manual · 선택 대기":"Automatic · 세션 시작 시 명시 언어가 필요합니다";return;}if(mode==="auto")sendControl("session.set_language_mode",{mode:"auto"});else sendControl("session.set_language_mode",{mode:"manual",language:$("manual-language").value});}
 function renderLanguageState(mode,language){acknowledgedLanguageMode=mode;acknowledgedLanguage=language||null;$("language-mode").value=mode;$("manual-language").hidden=mode!=="manual";const names={ko:"Korean · 한국어",en:"English",vi:"Vietnamese"};$("language-status").textContent=(mode==="auto"?"Automatic":"Manual")+" · "+(names[language]||"확인 대기");}
 function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
+function confirmNewSession(){
+ if(sessionActive){
+  const modal=$("new-session-modal");
+  if(modal)modal.hidden=false;
+ }else{
+  resetSessionUI();
+  announceMilestone("새 세션이 준비되었습니다.");
+ }
+}
 function newUser(){if(!sessionActive)return;sendControl("session.reset");}
 async function stopSession(){const wasActive=sessionActive;sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
@@ -1560,6 +1780,7 @@ async function onMessage(e,generation,current){
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);$("language-confirmation").hidden=true;}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);$("language-confirmation").hidden=true;}
  if(m.type==="session.language_confirmation_required"){$("language-confirmation").hidden=false;$("language-status").textContent="Language confirmation required";}
+ if(m.type==="session.safety_pack")renderSafetyPack(m.safety_pack);
  if(m.type==="session.reset"){resetSessionUI();}
  if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
@@ -1620,6 +1841,11 @@ async function onMessage(e,generation,current){
 
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
 $("language-mode").addEventListener("change",requestLanguageMode);$("manual-language").addEventListener("change",requestLanguageMode);$("new-user").addEventListener("click",newUser);
+$("rail-new-session")?.addEventListener("click",confirmNewSession);
+$("rail-stop-session")?.addEventListener("click",stopSession);
+$("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();resetSessionUI();announceMilestone("새 세션이 준비되었습니다.");});
+$("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});
+$("toggle-setup-btn")?.addEventListener("click",()=>{const hero=$("hero-setup"),btn=$("toggle-setup-btn");if(!hero||!btn)return;const c=hero.classList.toggle("collapsed");btn.textContent=c?"⚙️ 설정 열기":"⚙️ 설정 접기";btn.setAttribute("aria-expanded",String(!c));});
 $("protocol-id")?.addEventListener("change",renderSelectedProtocolContext);$("repeat-step")?.addEventListener("click",()=>voiceCommandHint("다시 말해 줘"));$("next-step")?.addEventListener("click",()=>voiceCommandHint("다음 단계로 넘어가 줘"));
 
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTop=log.scrollHeight;$("new-chat-update").hidden=true;}});$("log")?.addEventListener("scroll",()=>{if(chatNearBottom())$("new-chat-update").hidden=true;},{passive:true});
@@ -1640,7 +1866,7 @@ if(typeof ResizeObserver==="function"){
  if(target){const ro=new ResizeObserver(()=>syncConversationHeight());ro.observe(target);}
 }
 globalThis.addEventListener?.("resize",syncConversationHeight);
-$("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");});
+$("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
 $("register-protocol")?.addEventListener("click",registerSelectedProtocol);globalThis.addEventListener?.("load",()=>{syncConversationHeight();void loadProtocolCatalog();},{once:true});
 </script>
 </body>

@@ -147,6 +147,100 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertNotIn("홍길동", text)
         self.assertNotIn("chain_of_thought", text)
 
+    def test_grounded_report_context_and_scientific_narrative_integrity(self):
+        from voice_workflow_agent.experiment_reports import (
+            StepExecutionContext,
+            GroundedReportContext,
+            ReportWriterBrain,
+            ReportWriterSettings,
+            build_grounded_report_context,
+        )
+        report = self.open()
+        # Record step completion with execution snapshot containing instruction, expected result, and actual observation
+        self.store.append_event(
+            report["report_id"],
+            event_key="turn-1-complete",
+            event_type="step_completed",
+            step_id="candidate-a-step-01",
+            step_label="1",
+            user_wording="젤 밴드를 1x1 mm 크기로 잘랐습니다.",
+            payload={
+                "step_snapshot": {
+                    "step_id": "candidate-a-step-01",
+                    "step_label": "1",
+                    "instruction": "Cut band into 1 mm3 pieces.",
+                    "expected_results": ["1x1 mm pieces without contamination"],
+                    "warnings": ["Clean surfaces, use scalpel and gloves."],
+                    "source_page": 1,
+                },
+                "observations": ["투명하고 균일한 1 mm 크기로 절단 완료"],
+            },
+        )
+        # Record second step where no actual observation was recorded
+        self.store.append_event(
+            report["report_id"],
+            event_key="turn-2-complete",
+            event_type="step_completed",
+            step_id="candidate-a-step-02",
+            step_label="2",
+            user_wording="워시 완충액을 넣었습니다.",
+            payload={
+                "step_snapshot": {
+                    "step_id": "candidate-a-step-02",
+                    "step_label": "2",
+                    "instruction": "Wash with 100 uL of 100 mM ABC/ACN (1:1, vol/vol).",
+                    "expected_results": ["Gel destained completely"],
+                    "source_page": 1,
+                },
+                "observations": [],
+            },
+        )
+        doc = self.store.get_report(report["report_id"])
+        ctx = build_grounded_report_context(doc)
+        self.assertEqual(len(ctx.executed_steps), 2)
+        self.assertEqual(ctx.executed_steps[0].step_label, "1")
+        self.assertIn("Cut band into 1 mm3 pieces", ctx.executed_steps[0].instruction)
+        self.assertEqual(ctx.executed_steps[0].user_confirmed_observations, ("투명하고 균일한 1 mm 크기로 절단 완료",))
+        self.assertEqual(ctx.executed_steps[1].user_confirmed_observations, ())
+
+        brain = ReportWriterBrain(ReportWriterSettings(enabled=True, model="grok-4.6-preview"))
+        narrative = brain.build_deterministic_narrative(ctx)
+        self.assertIn("목적", narrative.objective)
+        self.assertIn("절차", narrative.materials_and_methods)
+        # Results should mention actual observation for step 1
+        self.assertIn("투명하고 균일한 1 mm 크기", narrative.results_and_observations)
+        # Results should strictly disclaim unobserved actual result for step 2 without claiming false success
+        self.assertIn("별도의 실제 관찰값은 기록되지 않았다", narrative.results_and_observations)
+        self.assertNotIn("모든 단계가 정상적으로 완료되었다", narrative.results_and_observations)
+
+    def test_docx_export_contains_grounded_step_table(self):
+        report = self.open()
+        self.store.append_event(
+            report["report_id"],
+            event_key="turn-1-complete",
+            event_type="step_completed",
+            step_id="step-1",
+            step_label="1",
+            user_wording="시약을 추가했습니다.",
+            payload={
+                "step_snapshot": {
+                    "step_id": "step-1",
+                    "step_label": "1",
+                    "instruction": "Add 50 uL ABC buffer.",
+                    "source_page": 1,
+                },
+            },
+        )
+        docx_bytes = self.store.export_docx(report["report_id"])
+        from docx import Document
+        doc = Document(io.BytesIO(docx_bytes))
+        # Verify table exists in docx
+        self.assertGreater(len(doc.tables), 0)
+        table_text = " ".join(cell.text for row in doc.tables[0].rows for cell in row.cells)
+        self.assertIn("Step", table_text)
+        self.assertIn("Event / Action", table_text)
+        self.assertIn("시약을 추가했습니다", table_text)
+
 
 if __name__ == "__main__":
     unittest.main()

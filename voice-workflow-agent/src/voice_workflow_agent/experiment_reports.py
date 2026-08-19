@@ -536,6 +536,10 @@ class ExperimentReportStore:
                 f"Cryptographic Ledger Events: {len(events)} events committed.\n"
                 f"{narrative.conclusion}"
             ),
+            (
+                "VI. Limitations / 한계 및 미기록 항목",
+                f"{narrative.limitations}"
+            ),
         )
         for heading, body in sections:
             heading_paragraph = document.add_paragraph()
@@ -550,7 +554,7 @@ class ExperimentReportStore:
         # Structured Event Table as Appendix
         if visible_events:
             table_heading = document.add_paragraph()
-            table_run = table_heading.add_run("VI. 부록: 상세 이벤트 감사 기록 / Appendix: Detailed Event Ledger")
+            table_run = table_heading.add_run("Appendix: Detailed Event Ledger / 상세 이벤트 감사 기록")
             table_run.bold = True
             table_run.font.size = Pt(11)
             table_run.font.color.rgb = RGBColor(20, 50, 35)
@@ -598,6 +602,338 @@ class ExperimentReportStore:
         buffer = io.BytesIO()
         document.save(buffer)
         return buffer.getvalue()
+
+
+@dataclass(frozen=True)
+class StepExecutionContext:
+    """Detailed factual context for one protocol step and its execution status."""
+
+    step_id: str
+    step_label: str
+    section_title: str
+    instruction_source_text: str
+    sub_actions: tuple[str, ...] = ()
+    quantities: tuple[str, ...] = ()
+    conditions: tuple[str, ...] = ()
+    expected_results: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+    source_page: int = 1
+    evidence_ids: tuple[str, ...] = ()
+    entered_at: str | None = None
+    completed_at: str | None = None
+    completion_state: str = "not_started"  # "completed", "in_progress", "not_started"
+    timer_configuration: str | None = None
+    timer_actuals: str | None = None
+    user_confirmed_observations: tuple[str, ...] = ()
+    anomalies_deviations: tuple[str, ...] = ()
+    applicable_safety_references: tuple[str, ...] = ()
+
+    @property
+    def instruction(self) -> str:
+        return self.instruction_source_text
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "step_id": self.step_id,
+            "step_label": self.step_label,
+            "section_title": self.section_title,
+            "instruction_source_text": self.instruction_source_text,
+            "sub_actions": list(self.sub_actions),
+            "quantities": list(self.quantities),
+            "conditions": list(self.conditions),
+            "expected_results": list(self.expected_results),
+            "warnings": list(self.warnings),
+            "notes": list(self.notes),
+            "source_page": self.source_page,
+            "evidence_ids": list(self.evidence_ids),
+            "entered_at": self.entered_at,
+            "completed_at": self.completed_at,
+            "completion_state": self.completion_state,
+            "timer_configuration": self.timer_configuration,
+            "timer_actuals": self.timer_actuals,
+            "user_confirmed_observations": list(self.user_confirmed_observations),
+            "anomalies_deviations": list(self.anomalies_deviations),
+            "applicable_safety_references": list(self.applicable_safety_references),
+        }
+
+
+@dataclass(frozen=True)
+class GroundedReportContext:
+    """Rich factual context constructed from the ledger and verified protocol store."""
+
+    report_metadata: dict[str, Any]
+    protocol_metadata: dict[str, Any]
+    experiment_objective: str
+    materials: tuple[str, ...]
+    equipment: tuple[str, ...]
+    prerequisites: tuple[str, ...]
+    executed_steps: tuple[StepExecutionContext, ...]
+    all_protocol_steps: tuple[StepExecutionContext, ...]
+    observations: tuple[dict[str, Any], ...]
+    timers: tuple[dict[str, Any], ...]
+    anomalies: tuple[dict[str, Any], ...]
+    deviations: tuple[dict[str, Any], ...]
+    safety_pack_summary: dict[str, Any] | None
+    source_references: tuple[str, ...]
+    session_timing: dict[str, Any]
+    event_ledger: tuple[dict[str, Any], ...]
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "report_metadata": self.report_metadata,
+            "protocol_metadata": self.protocol_metadata,
+            "experiment_objective": self.experiment_objective,
+            "materials": list(self.materials),
+            "equipment": list(self.equipment),
+            "prerequisites": list(self.prerequisites),
+            "executed_steps": [s.public_dict() for s in self.executed_steps],
+            "observations": list(self.observations),
+            "timers": list(self.timers),
+            "anomalies": list(self.anomalies),
+            "deviations": list(self.deviations),
+            "safety_pack_summary": self.safety_pack_summary,
+            "source_references": list(self.source_references),
+            "session_timing": self.session_timing,
+            "total_event_count": len(self.event_ledger),
+        }
+
+
+def build_grounded_report_context(
+    report_data: dict[str, Any],
+    events: list[dict[str, Any]] | None = None,
+) -> GroundedReportContext:
+    """Rehydrate protocol steps and merge execution event timestamps, observations, and timers."""
+    if events is None:
+        events = list(report_data.get("events") or [])
+    protocol_id = str(report_data.get("protocol_id") or "")
+    protocol_rev = str(report_data.get("protocol_revision") or "")
+    protocol_title = str(report_data.get("protocol_title") or "Experiment Protocol")
+
+    step_events: dict[str, list[dict[str, Any]]] = {}
+    obs_list: list[dict[str, Any]] = []
+    timer_list: list[dict[str, Any]] = []
+    anomaly_list: list[dict[str, Any]] = []
+    deviation_list: list[dict[str, Any]] = []
+    step_snapshots: dict[str, dict[str, Any]] = {}
+
+    for e in events:
+        s_lbl = str(e.get("step_label") or "")
+        if s_lbl and s_lbl != "—":
+            step_events.setdefault(s_lbl, []).append(e)
+        ev_type = str(e.get("event_type") or "")
+        payload = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+
+        if "step_snapshot" in payload and isinstance(payload["step_snapshot"], dict):
+            snap = payload["step_snapshot"]
+            snap_lbl = str(snap.get("step_label") or s_lbl)
+            if snap_lbl:
+                step_snapshots[snap_lbl] = snap
+
+        if ev_type == "observation":
+            obs_list.append(e)
+        elif ev_type in ("timer_started", "timer_expired") or "timer" in payload:
+            timer_list.append(e)
+        elif ev_type in ("anomaly", "system_anomaly") or e.get("anomaly_category"):
+            anomaly_list.append(e)
+        elif ev_type in ("workflow_paused", "workflow_blocked"):
+            deviation_list.append(e)
+
+    # Try rehydrating stored protocol from database or candidate fixture
+    stored_protocol = None
+    try:
+        from voice_workflow_agent.server import _open_protocol_catalog, _configured_candidate_fixture, server_config
+        cfg = server_config()
+        candidate = _configured_candidate_fixture(cfg)
+        if candidate is not None and candidate.protocol_id == protocol_id:
+            stored_protocol = candidate.draft.protocol
+        else:
+            cat, st = _open_protocol_catalog()
+            try:
+                fix = cat.load_executable_fixture(protocol_id)
+                stored_protocol = fix.draft.protocol
+            finally:
+                st.close()
+    except Exception:
+        stored_protocol = None
+
+    all_steps: list[StepExecutionContext] = []
+    executed_steps: list[StepExecutionContext] = []
+    all_materials: set[str] = set()
+    all_equipment: set[str] = set()
+    all_prereqs: set[str] = set()
+    objective = f"본 실험은 '{protocol_title}' 지침에 따라 표준화된 실험 절차를 수행하고 검증된 실험 데이터를 기록하는 것을 목적으로 한다."
+
+    if stored_protocol is not None:
+        if stored_protocol.metadata.description:
+            objective = stored_protocol.metadata.description
+        for m in stored_protocol.metadata.materials:
+            if m.name:
+                all_materials.add(f"{m.name} ({m.amount} {m.unit})".strip() if m.amount else m.name)
+        for eq in stored_protocol.metadata.equipment:
+            if eq.name:
+                all_equipment.add(eq.name)
+        for p in stored_protocol.metadata.prerequisites:
+            all_prereqs.add(p)
+
+        for sec in stored_protocol.sections:
+            for stp in sec.steps:
+                lbl = stp.source_label
+                evs = step_events.get(lbl, [])
+                entered = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") in ("step_entered", "step_presented", "session_started")), None)
+                completed = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") == "step_completed"), None)
+                state = "completed" if completed else ("in_progress" if entered else "not_started")
+
+                # Timers
+                t_cfg = None
+                t_act = None
+                t_ev = next((ev for ev in evs if ev.get("event_type") == "timer_started" or "timer" in (ev.get("payload") or {})), None)
+                if t_ev:
+                    t_pay = (t_ev.get("payload") or {}).get("timer", {})
+                    dur = t_pay.get("source_duration_seconds", t_pay.get("duration_seconds"))
+                    elap = t_pay.get("elapsed_seconds")
+                    if dur:
+                        t_cfg = f"{dur}초 ({_format_elapsed_clock(dur)})"
+                    if elap:
+                        t_act = f"{elap}초 경과 ({_format_elapsed_clock(elap)})"
+
+                # Observations
+                obs_collected = []
+                for ev in evs:
+                    if ev.get("event_type") == "observation":
+                        text = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "관찰 기록")
+                        if text:
+                            obs_collected.append(text)
+                    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                    if "observations" in payload and isinstance(payload["observations"], (list, tuple)):
+                        for o in payload["observations"]:
+                            if o and str(o).strip():
+                                obs_collected.append(str(o).strip())
+                step_obs = tuple(obs_collected)
+
+                # Anomalies
+                step_anom = tuple(
+                    str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "이상 보고")
+                    for ev in evs if ev.get("event_type") in ("anomaly", "system_anomaly") or ev.get("anomaly_category")
+                )
+
+                ctx_step = StepExecutionContext(
+                    step_id=stp.step_id,
+                    step_label=lbl,
+                    section_title=sec.title,
+                    instruction_source_text=stp.instruction,
+                    sub_actions=tuple(a.text for a in stp.sub_actions),
+                    quantities=tuple(f"{q.amount} {q.unit} {q.name}".strip() for q in stp.quantities),
+                    conditions=tuple(f"{c.parameter}: {c.value} {c.unit}".strip() for c in stp.conditions),
+                    expected_results=tuple(stp.expected_results),
+                    warnings=tuple(stp.warnings),
+                    notes=tuple(stp.notes),
+                    source_page=stp.source_page,
+                    evidence_ids=tuple(stp.evidence_ids),
+                    entered_at=entered,
+                    completed_at=completed,
+                    completion_state=state,
+                    timer_configuration=t_cfg,
+                    timer_actuals=t_act,
+                    user_confirmed_observations=step_obs,
+                    anomalies_deviations=step_anom,
+                )
+                all_steps.append(ctx_step)
+                if state in ("completed", "in_progress") or step_obs or step_anom:
+                    executed_steps.append(ctx_step)
+
+    else:
+        # Fall back to step_snapshots or step_events
+        for lbl, evs in sorted(step_events.items(), key=lambda x: str(x[0])):
+            snap = step_snapshots.get(lbl, {})
+            entered = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") in ("step_entered", "step_presented", "session_started")), None)
+            completed = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") == "step_completed"), None)
+            state = "completed" if completed else "in_progress"
+
+            inst = snap.get("instruction_source_text") or snap.get("instruction") or f"Step {lbl} instruction."
+            sec_title = snap.get("section_title") or "Experiment Execution"
+            quantities = tuple(snap.get("quantities") or ())
+            conditions = tuple(snap.get("conditions") or ())
+            exp_res = tuple(snap.get("expected_results") or ())
+            warnings = tuple(snap.get("warnings") or ())
+            page = int(snap.get("source_page") or 1)
+
+            obs_collected = []
+            for ev in evs:
+                if ev.get("event_type") == "observation":
+                    text = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "관찰 기록")
+                    if text:
+                        obs_collected.append(text)
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                if "observations" in payload and isinstance(payload["observations"], (list, tuple)):
+                    for o in payload["observations"]:
+                        if o and str(o).strip():
+                            obs_collected.append(str(o).strip())
+            step_obs = tuple(obs_collected)
+
+            step_anom = tuple(
+                str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "이상 보고")
+                for ev in evs if ev.get("event_type") in ("anomaly", "system_anomaly") or ev.get("anomaly_category")
+            )
+
+            ctx_step = StepExecutionContext(
+                step_id=snap.get("step_id") or f"step-{lbl}",
+                step_label=lbl,
+                section_title=sec_title,
+                instruction_source_text=inst,
+                quantities=quantities,
+                conditions=conditions,
+                expected_results=exp_res,
+                warnings=warnings,
+                source_page=page,
+                entered_at=entered,
+                completed_at=completed,
+                completion_state=state,
+                user_confirmed_observations=step_obs,
+                anomalies_deviations=step_anom,
+            )
+            all_steps.append(ctx_step)
+            executed_steps.append(ctx_step)
+
+    refs = [f"실험 PDF: {report_data.get('protocol_title') or protocol_title} (ID: {protocol_id}, Rev: {protocol_rev})"]
+    if report_data.get("protocol_sha256"):
+        refs.append(f"PDF SHA-256: {report_data.get('protocol_sha256')}")
+
+    return GroundedReportContext(
+        report_metadata={
+            "report_id": report_data.get("report_id"),
+            "session_id": report_data.get("session_id"),
+            "status": report_data.get("status"),
+            "anomaly_count": report_data.get("anomaly_count", len(anomaly_list)),
+            "blocker_count": report_data.get("blocker_count", 0),
+            "finalization_version": report_data.get("finalization_version", 0),
+        },
+        protocol_metadata={
+            "protocol_id": protocol_id,
+            "protocol_title": protocol_title,
+            "protocol_revision": protocol_rev,
+            "protocol_sha256": report_data.get("protocol_sha256"),
+            "total_steps": len(all_steps),
+        },
+        experiment_objective=objective,
+        materials=tuple(sorted(all_materials)),
+        equipment=tuple(sorted(all_equipment)),
+        prerequisites=tuple(sorted(all_prereqs)),
+        executed_steps=tuple(executed_steps),
+        all_protocol_steps=tuple(all_steps),
+        observations=tuple(obs_list),
+        timers=tuple(timer_list),
+        anomalies=tuple(anomaly_list),
+        deviations=tuple(deviation_list),
+        safety_pack_summary=None,
+        source_references=tuple(refs),
+        session_timing={
+            "started_at": report_data.get("started_at"),
+            "ended_at": report_data.get("ended_at"),
+            "timezone": report_data.get("timezone", "UTC"),
+        },
+        event_ledger=tuple(events),
+    )
 
 
 @dataclass(frozen=True)
@@ -660,11 +996,11 @@ class ReportWriterSettings:
         return cls(enabled=enabled, model=model, timeout_seconds=timeout)
 
 
-_NARRATIVE_CACHE: dict[tuple[str, int, str, str], ReportNarrative] = {}
+_NARRATIVE_CACHE: dict[tuple[str, int, str, str, str], ReportNarrative] = {}
 
 
 class ReportWriterBrain:
-    """Specialist Brain generating faithful laboratory report prose from event ledgers."""
+    """Specialist Brain generating faithful laboratory report prose from grounded step context."""
 
     def __init__(
         self,
@@ -700,7 +1036,7 @@ class ReportWriterBrain:
         )
         obs_narrative = (
             f"Operator recorded {obs_count} direct qualitative observations during the session."
-            if obs_count > 0 else "No qualitative deviations were noted by the operator."
+            if obs_count > 0 else "해당 단계에 대해 별도의 관찰 결과가 기록되지 않았다."
         )
         anomaly_narrative = (
             f"A total of {anomaly_count} unexpected condition(s) were triaged and logged."
@@ -726,89 +1062,122 @@ class ReportWriterBrain:
 
     def build_deterministic_narrative(
         self,
-        report_data: dict[str, Any],
-        events: list[dict[str, Any]],
+        report_data_or_context: dict[str, Any] | GroundedReportContext,
+        events: list[dict[str, Any]] | None = None,
+        context: GroundedReportContext | None = None,
     ) -> ReportNarrative:
-        """Create a faithful, unhallucinated report narrative directly from SQLite events."""
-        title = str(report_data.get("protocol_title") or "Laboratory Experiment Report")
+        """Create a faithful, unhallucinated report narrative grounded in executed protocol steps."""
+        if isinstance(report_data_or_context, GroundedReportContext):
+            context = report_data_or_context
+            report_data = context.report_metadata or {}
+            if events is None:
+                events = list(context.event_ledger or [])
+        else:
+            report_data = report_data_or_context
+            if events is None:
+                events = list(report_data.get("events") or [])
+            if context is None:
+                context = build_grounded_report_context(report_data, events)
+
+        title = str(report_data.get("protocol_title") or context.protocol_metadata.get("protocol_title") or "Laboratory Experiment Report")
         report_id = str(report_data.get("report_id") or "—")
         status = str(report_data.get("status") or "in_progress")
         started = _human_event_clock(report_data.get("started_at"))
         ended = _human_event_clock(report_data.get("ended_at"))
 
-        completed_steps = [
-            str(e.get("step_label")) for e in events if e.get("event_type") == "step_completed"
-        ]
-        obs_events = [e for e in events if e.get("event_type") == "observation"]
-        anomaly_events = [
-            e for e in events
-            if e.get("event_type") in ("anomaly", "system_anomaly") or e.get("anomaly_category")
-        ]
-        pause_events = [e for e in events if e.get("event_type") == "workflow_paused"]
-
         objective = (
             f"본 실험 세션의 목적은 '{title}' 지침에 따라 검증된 절차를 체계적으로 수행하고, "
-            f"공정별 진행 상태 및 작업자 관찰 결과를 감사 가능한 전자 실험 기록으로 남기는 것이다."
+            f"공정별 진행 상태 및 작업자 관찰 결과를 감사 가능한 전자 실험 기록으로 남기는 것이다. "
+            f"{context.experiment_objective}"
         )
 
+        completed_count = sum(1 for s in context.executed_steps if s.completion_state == "completed")
         session_summary = (
-            f"본 실험 세션({report_id})은 시작 시간({started or '기록됨'})부터 종료 시점까지 "
-            f"총 {len(events)}건의 검증된 이벤트가 등록되었으며, {len(completed_steps)}개의 단계가 완료 처리되었다. "
+            f"본 실험 세션({report_id})은 시작 시간({started or '기록됨'})부터 종료 시점({ended or '진행 중'})까지 "
+            f"총 {len(events)}건의 검증된 이벤트가 등록되었으며, {completed_count}개의 단계가 완료 기록되었다. "
             f"현재 세션의 최종 상태는 '{status}'(으)로 기록되었다."
         )
 
-        highlights = []
-        for e in events:
-            if e.get("event_type") in ("session_started", "step_completed", "workflow_completed", "observation", "anomaly"):
-                highlights.append(_human_event_label(e))
+        highlights = [_human_event_label(e) for e in events if _human_event_label(e)]
+
+        # Materials & Methods
+        mat_items = []
+        if context.materials:
+            mat_items.append(f"• 주요 시약 및 재료: {', '.join(context.materials)}")
+        if context.equipment:
+            mat_items.append(f"• 사용 장비: {', '.join(context.equipment)}")
+        if context.prerequisites:
+            mat_items.append(f"• 사전 준비 사항: {', '.join(context.prerequisites)}")
+
+        method_items = []
+        for s in context.executed_steps:
+            item_txt = f"• [{s.section_title}] Step {s.step_label}: {s.instruction_source_text}"
+            if s.quantities:
+                item_txt += f" (수량: {', '.join(s.quantities)})"
+            if s.conditions:
+                item_txt += f" (조건: {', '.join(s.conditions)})"
+            method_items.append(item_txt)
 
         materials = (
-            f"프로토콜 식별자: {report_data.get('protocol_id') or '—'} (버전: {report_data.get('protocol_revision') or '—'}).\n"
-            f"원문 문서 SHA-256: {report_data.get('protocol_sha256') or '—'}.\n"
-            "본 세션의 모든 수행 지침은 활성화된 실험 PDF 및 검증된 단계 정의에 기반하여 수행되었으며, "
-            "절차 외 비표준 물질의 임의 대체는 허용되지 않았다."
+            f"프로토콜 식별자: {context.protocol_metadata.get('protocol_id') or '—'} (버전: {context.protocol_metadata.get('protocol_revision') or '—'}).\n"
+            f"원문 문서 SHA-256: {context.protocol_metadata.get('protocol_sha256') or '—'}.\n"
+            + ("\n".join(mat_items) + "\n\n" if mat_items else "")
+            + "수행 절차 요약:\n"
+            + ("\n".join(method_items) if method_items else "기록된 실행 단계가 없습니다.")
         )
 
-        results_parts = []
-        if completed_steps:
-            results_parts.append(
-                f"총 {len(completed_steps)}개 단계({', '.join(f'{s}단계' for s in completed_steps)})가 "
-                "작업자의 확인을 거쳐 정상적으로 완료되었다."
-            )
-        else:
-            results_parts.append("진행 중인 단계에 대한 수행 기록이 유지되고 있다.")
+        # Results & Observations - detailed chronological narrative
+        res_paras = []
+        if context.executed_steps:
+            for s in context.executed_steps:
+                p_bits = [f"[{s.section_title}] {s.step_label}단계에서는 '{s.instruction_source_text}' 절차를 수행하였다."]
+                if s.quantities:
+                    p_bits.append(f"적용된 물질 및 수량은 {', '.join(s.quantities)}이다.")
+                if s.conditions:
+                    p_bits.append(f"실험 조건은 {', '.join(s.conditions)}이다.")
+                if s.timer_configuration:
+                    p_bits.append(f"설정된 타이머는 {s.timer_configuration}이며, 실제 {s.timer_actuals or '정상 시간'} 동안 유지되었다.")
 
-        if obs_events:
-            results_parts.append(
-                f"작업자는 총 {len(obs_events)}건의 관찰 결과를 보고하였으며: "
-                + "; ".join(
-                    str(o.get("user_wording") or (o.get("payload") or {}).get("text") or "관찰 기록")
-                    for o in obs_events
-                )
-            )
-        else:
-            results_parts.append("별도의 특이 정성 관찰 결과는 기록되지 않았다.")
-        results_and_obs = " ".join(results_parts)
+                # Distinguish user observation vs expected results vs no record
+                if s.user_confirmed_observations:
+                    obs_str = "; ".join(s.user_confirmed_observations)
+                    p_bits.append(f"작업자는 해당 단계에서 '{obs_str}'(이)라는 관찰 결과를 기록하였으며, 이 관찰이 완료 조건을 충족하였다.")
+                elif s.expected_results:
+                    exp_str = "; ".join(s.expected_results)
+                    p_bits.append(f"실험 PDF에서는 '{exp_str}'을(를) 예상 결과로 제시하고 있으나, 해당 단계에 대해 별도의 실제 관찰값은 기록되지 않았다.")
+                else:
+                    p_bits.append("해당 단계에 대해 별도의 관찰 결과가 기록되지 않았다.")
 
+                if s.completion_state == "completed":
+                    p_bits.append("해당 단계는 완료로 기록되었다.")
+
+                res_paras.append(" ".join(p_bits))
+        else:
+            res_paras.append("진행 중인 단계에 대한 수행 기록이 유지되고 있다.")
+
+        results_and_obs = "\n\n".join(res_paras)
+
+        # Discussion
         discussion_parts = []
-        if anomaly_events:
+        if context.anomalies:
             discussion_parts.append(
-                f"세션 진행 중 {len(anomaly_events)}건의 이상/편차 사항이 보고되어 기록되었다."
+                f"세션 진행 중 {len(context.anomalies)}건의 이상/편차 사항이 보고되어 기록되었다."
             )
         else:
             discussion_parts.append("절차 진행 중 보고된 비정상 편차나 위험 요인은 없었다.")
 
-        if pause_events:
-            discussion_parts.append(f"총 {len(pause_events)}회의 일시정지 및 재개가 발생하였다.")
+        if context.deviations:
+            discussion_parts.append(f"총 {len(context.deviations)}회의 일시정지 및 재개가 발생하였다.")
         discussion_parts.append("모든 수행 내역은 불변 SQLite 이벤트 원장에 무결하게 보존되었다.")
         discussion = " ".join(discussion_parts)
 
+        # Anomalies
         anomalies_dev = (
             "\n".join(
-                f"• [{_human_event_clock(ae.get('created_at'))}] Step {ae.get('step_label') or '—'}: {ae.get('user_wording') or (ae.get('payload') or {}).get('text') or '이상'}"
-                for ae in anomaly_events
+                f"• [{_human_event_clock(ae.get('created_at'))}] Step {ae.get('step_label') or '—'}: {ae.get('user_wording') or (ae.get('payload') or {}).get('text') or '이상 보고'}"
+                for ae in context.anomalies
             )
-            if anomaly_events else "특이 이상 또는 절차 차단 사항 없음."
+            if context.anomalies else "특이 이상 또는 절차 차단 사항 없음."
         )
 
         conclusion = (
@@ -816,7 +1185,10 @@ class ReportWriterBrain:
             f"총 {len(events)}개의 암호학적 원장 이벤트가 유효하게 확정되었다."
         )
 
-        limitations = "본 보고서는 시스템에 등록된 실제 이벤트 기록에 한하여 작성되었으며, 미기록된 관찰이나 수치는 포함하지 않는다."
+        limitations = (
+            "본 보고서는 시스템에 등록된 실제 이벤트 기록 및 활성 실험 PDF에 한하여 작성되었으며, "
+            "작업자가 명시적으로 기록하지 않은 관찰값이나 측정 수치는 포함하지 않는다."
+        )
 
         return ReportNarrative(
             title=title,
@@ -836,52 +1208,36 @@ class ReportWriterBrain:
         report_data: dict[str, Any],
         events: list[dict[str, Any]],
     ) -> ReportNarrative:
-        """Generate a rich, academic Korean narrative report grounded strictly in the ledger."""
+        """Generate a rich, academic Korean narrative report grounded strictly in the ledger and protocol steps."""
+        context = build_grounded_report_context(report_data, events)
         report_id = str(report_data.get("report_id") or "")
+        protocol_rev = str(report_data.get("protocol_revision") or "")
         finalization_version = int(report_data.get("finalization_version") or 0)
         latest_key = str(events[-1].get("event_key") if events else "")
-        cache_key = (report_id, finalization_version, latest_key, self.model)
+        cache_key = (report_id, finalization_version, latest_key, protocol_rev, self.model)
 
         cached = _NARRATIVE_CACHE.get(cache_key)
         if cached is not None:
             return cached
 
-        deterministic = self.build_deterministic_narrative(report_data, events)
+        deterministic = self.build_deterministic_narrative(report_data, events, context=context)
         if not self.client:
             _NARRATIVE_CACHE[cache_key] = deterministic
             return deterministic
 
         try:
-            prompt_context = {
-                "report_id": report_id,
-                "protocol_title": report_data.get("protocol_title"),
-                "protocol_id": report_data.get("protocol_id"),
-                "protocol_revision": report_data.get("protocol_revision"),
-                "status": report_data.get("status"),
-                "started_at": report_data.get("started_at"),
-                "ended_at": report_data.get("ended_at"),
-                "events": [
-                    {
-                        "event_type": e.get("event_type"),
-                        "step_label": e.get("step_label"),
-                        "created_at": e.get("created_at"),
-                        "user_wording": e.get("user_wording"),
-                        "payload": e.get("payload"),
-                    }
-                    for e in events
-                ],
-            }
+            prompt_context = context.public_dict()
             system_prompt = (
                 "You are an experienced professional laboratory scientific report writer. "
-                "Write a formal, comprehensive laboratory session report in Korean based strictly on the provided verified experimental event ledger. "
+                "Write a formal, comprehensive laboratory session report in Korean based strictly on the provided verified experimental context and event ledger. "
                 "STYLE REQUIREMENTS: Write coherent, academic, natural narrative prose with full paragraphs. "
                 "FACTUAL INTEGRITY RULES: "
-                "1. Do NOT invent or hallucinate any experimental results, qualitative observations, quantitative measurements, or equipment outcomes that were not recorded in the ledger. "
-                "2. If no qualitative observation was logged by the operator, explicitly state that no abnormal visual or qualitative observation was noted ('별도의 특이 관찰 결과는 기록되지 않았다.'). "
-                "3. Ground Materials and Methods strictly in the active protocol and actually completed steps. "
+                "1. Ground Materials and Methods and Results strictly in the provided executed steps, quantities, conditions, and timers. "
+                "2. Distinguish protocol expected results from actual user observations. If an expected result was in the protocol but no observation was recorded, explicitly state that no actual observation was logged ('해당 단계에 대해 별도의 관찰 결과가 기록되지 않았다.'). "
+                "3. Do NOT invent or hallucinate any unrecorded measurements, temperatures, reagent volumes, or success claims. "
                 "4. Return a valid JSON object matching the requested schema exactly."
             )
-            user_prompt = f"Experimental Event Ledger:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}"
+            user_prompt = f"Grounded Experimental Report Context:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}"
 
             resp = await asyncio.wait_for(
                 self.client.chat.completions.create(
@@ -891,7 +1247,7 @@ class ReportWriterBrain:
                         {"role": "user", "content": user_prompt},
                     ],
                     response_format={"type": "json_object"},
-                    max_tokens=1500,
+                    max_tokens=1800,
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -911,7 +1267,8 @@ class ReportWriterBrain:
             )
             _NARRATIVE_CACHE[cache_key] = narrative
             return narrative
-        except Exception:
+        except Exception as exc:
+            log.warning("ReportWriterBrain LLM generation failed (%s), using deterministic narrative", exc)
             _NARRATIVE_CACHE[cache_key] = deterministic
             return deterministic
 

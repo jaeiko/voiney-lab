@@ -3563,6 +3563,10 @@ class CuratedProtocolSession:
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
         self._pending_handoff_confirmation: dict[str, Any] | None = None
+        self.safety_pack: Any = None
+
+    def set_safety_pack(self, safety_pack: Any) -> None:
+        self.safety_pack = safety_pack
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:

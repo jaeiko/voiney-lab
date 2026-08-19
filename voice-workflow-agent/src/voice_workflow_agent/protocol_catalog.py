@@ -63,6 +63,7 @@ _MERGE_CONFLICT_EVENT = "protocol_chunk_merge_conflict"
 _REVIEW_REQUIRED_EVENT = "protocol_chunk_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
+_DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
 _CHUNK_RUN_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 
@@ -318,12 +319,14 @@ class ProtocolCatalog:
         if analysis is None:
             return False
         return any(
-            event.event_type == _APPROVAL_EVENT
+            event.event_type in (_APPROVAL_EVENT, _DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
             and event.protocol_revision_number == revision.revision_number
-            and event.analysis_revision_number
-            == analysis.analysis_revision_number
+            and (
+                event.analysis_revision_number is None
+                or event.analysis_revision_number == analysis.analysis_revision_number
+            )
             and isinstance(event.payload, dict)
-            and event.payload.get("decision") == "approved"
+            and event.payload.get("decision") in ("approved", "development_activated", "development_only")
             for event in self.store.list_events(revision.experiment_id)
         )
 
@@ -498,7 +501,15 @@ class ProtocolCatalog:
                 analysis_status = "analysis_failed"
         approved = self._is_approved(revision, analysis)
         if approved:
-            analysis_status = "approved"
+            is_dev_only = any(
+                event.event_type in (_DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
+                and event.protocol_revision_number == revision.revision_number
+                for event in self.store.list_events(revision.experiment_id)
+            )
+            analysis_status = "active_development" if is_dev_only else "approved"
+            approval_status = "development_only" if is_dev_only else "approved"
+        else:
+            approval_status = "unapproved"
         readiness = (
             analysis.readiness_status if analysis else "analysis_required"
         )
@@ -522,7 +533,7 @@ class ProtocolCatalog:
                 analysis.analysis_revision_number if analysis else None,
             ),
             readiness_status=readiness,
-            approval_status="approved" if approved else "unapproved",
+            approval_status=approval_status,
             analysis_status=analysis_status,
             step_count=(
                 sum(len(section.steps) for section in analysis.protocol.sections)
@@ -1111,6 +1122,36 @@ class ProtocolCatalog:
         )
         return self.get_entry(protocol_id)
 
+    def activate_development(
+        self,
+        protocol_id: str,
+        *,
+        revision_id: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol analysis is required before development activation."
+            )
+        if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
+            raise ProtocolCatalogUnavailableError(
+                f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
+            )
+        self.store.append_event(
+            f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-{analysis.analysis_revision_number}",
+            protocol_id,
+            revision.revision_number,
+            _DEVELOPMENT_ACTIVATION_EVENT,
+            {
+                "decision": "development_activated",
+                "authority": "development_policy",
+                "readiness": analysis.readiness.status.value,
+            },
+            analysis_revision_number=analysis.analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
     def load_executable_fixture(
         self, protocol_id: str
     ) -> CuratedProtocolFixture:
@@ -1149,7 +1190,7 @@ class ProtocolCatalog:
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
             revision_id=entry.revision_id,
-            development_only=False,
+            development_only=entry.approval_status == "development_only",
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,

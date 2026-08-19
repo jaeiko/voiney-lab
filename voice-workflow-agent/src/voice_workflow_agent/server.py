@@ -96,6 +96,7 @@ from voice_workflow_agent.notifications import (
     FakeNotificationProvider,
     resolve_handoff_recipient,
 )
+from voice_workflow_agent.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
@@ -839,6 +840,17 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
         client,require_env("PROTOCOL_ANALYSIS_MODEL"))
 
 
+def _auto_activate_ready_uploads_enabled() -> bool:
+    scope = (
+        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
+        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+    ).strip().casefold()
+    if scope == "operational":
+        return False  # NEVER silently bypass human/facility approval in operational mode
+    raw = os.environ.get("VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS", "false").strip().casefold()
+    return raw in ("1", "true", "yes", "on")
+
+
 @app.post("/api/protocols/{protocol_id}/analysis")
 async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
     """The only HTTP boundary that may explicitly request PDF analysis."""
@@ -853,6 +865,14 @@ async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
                 _protocol_analysis_model(),
                 analysis_id=f"analysis-{secrets.token_hex(16)}",
             )
+            if _auto_activate_ready_uploads_enabled():
+                try:
+                    rev = catalog._latest_protocol_revision(protocol_id)
+                    analysis = catalog._latest_analysis(rev)
+                    if analysis is not None and analysis.readiness.status.value == "guidance_ready":
+                        entry = catalog.activate_development(protocol_id)
+                except Exception as auto_exc:
+                    log.warning("Auto-activation skipped for %s: %s", protocol_id, auto_exc)
             public=entry.public_dict()
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
@@ -911,16 +931,12 @@ def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
     try:
         catalog, store = _open_protocol_catalog()
         try:
-            status = catalog.analysis_run_status(protocol_id)
-            if status.status not in ("READY_FOR_DEVELOPMENT", "REVIEW_REQUIRED", "COMPLETED"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"protocol_not_ready_for_development (status={status.status})",
-                )
+            entry = catalog.activate_development(protocol_id)
             return {
                 "protocol_id": protocol_id,
                 "status": "active_development",
                 "development_only": True,
+                "available_for_execution": entry.available_for_execution,
                 "message": "Protocol draft activated for development session.",
             }
         finally:
@@ -4499,8 +4515,53 @@ async def voice_socket(websocket:WebSocket):
                     session.set_tool_context(context)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
                     session.start()
-                    if session.curated_protocol_session is not None:
+                    if session.curated_protocol_session is not None and selected_curated_fixture is not None:
+                        try:
+                            log.info(
+                                "safety_pack.resolve.start: protocol_id=%s revision=%s catalog=%s",
+                                requested_protocol_id,
+                                selected_revision_id,
+                                bool(trusted_config.catalog_path),
+                            )
+                            safety_pack = resolve_safety_pack(
+                                selected_curated_fixture.draft.protocol,
+                                catalog_path=trusted_config.catalog_path,
+                                facility_id=trusted_config.facility_id,
+                                usage_scope=trusted_config.usage_scope,
+                                protocol_revision=selected_revision_id or "1",
+                            )
+                            log.info(
+                                "safety_pack.resolve.complete: protocol_id=%s status=%s docs=%d (sop=%d, sds=%d, equip=%d)",
+                                requested_protocol_id,
+                                safety_pack.coverage_status,
+                                safety_pack.total_document_count,
+                                len(safety_pack.sop_documents),
+                                len(safety_pack.sds_documents),
+                                len(safety_pack.equipment_documents),
+                            )
+                        except Exception as exc:
+                            log.exception(
+                                "safety_pack.resolve.degraded: protocol_id=%s error=%s",
+                                requested_protocol_id,
+                                exc,
+                            )
+                            safety_pack = unavailable_safety_pack(
+                                protocol_id=requested_protocol_id or "unknown_protocol",
+                                protocol_revision=selected_revision_id or "1",
+                                facility_id=trusted_config.facility_id,
+                                status="unavailable",
+                                error_reason=str(exc),
+                            )
+
+                        session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
+                        await websocket.send_text(event(
+                            "session.safety_pack",
+                            configuration_id=configuration_id,
+                            protocol_id=requested_protocol_id,
+                            revision_id=selected_revision_id,
+                            safety_pack=safety_pack.public_dict(),
+                        ))
                     pipeline=requested_mode
                     if pipeline=="native":
                         configuration_stage="native_environment"
