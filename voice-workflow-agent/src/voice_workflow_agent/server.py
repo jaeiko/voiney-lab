@@ -129,12 +129,6 @@ from voice_workflow_agent.multi_brain import (
     VisualBrainOutput,
     activation_for,
 )
-from voice_workflow_agent.native_realtime import (
-    NATIVE_SAMPLE_RATE,
-    NativeRealtimeConfig,
-    NativeRealtimeError,
-    NativeRealtimeSession,
-)
 from voice_workflow_agent.tools import (
     APPROVED_LAB_REFERENCE_TOOL_NAME,
     COMPLETE_CURRENT_STEP_TOOL_NAME,
@@ -1066,7 +1060,37 @@ def export_experiment_report(report_id:str,format_name:str):
             content=store.export_csv(report_id)
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
-            content=store.export_docx(report_id)
+            narrative = None
+            try:
+                writer_settings = ReportWriterSettings.from_environment()
+                if writer_settings.enabled:
+                    api_key = os.environ.get("XAI_API_KEY", "").strip()
+                    if api_key:
+                        try:
+                            async_client = AsyncOpenAI(
+                                base_url=api_url(""),
+                                api_key=api_key,
+                                max_retries=0,
+                                timeout=writer_settings.timeout_seconds,
+                            )
+                            brain = ReportWriterBrain(
+                                client=async_client,
+                                model=writer_settings.model,
+                                timeout_seconds=writer_settings.timeout_seconds,
+                            )
+                            report_doc = store.get_report(report_id)
+                            events = list(report_doc.get("events") or ())
+                            narrative = asyncio.run(brain.generate_narrative(report_doc, events))
+                        except Exception as llm_exc:
+                            log.warning(
+                                "Report LLM generation failed (%s), falling back to deterministic narrative",
+                                llm_exc,
+                            )
+                            narrative = None
+            except Exception as brain_exc:
+                log.warning("Report writer setup failed (%s), using deterministic narrative", brain_exc)
+                narrative = None
+            content=store.export_docx(report_id, narrative=narrative)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
@@ -1758,15 +1782,6 @@ class LockedSender:
                 "filler.audio.end",configuration_id=configuration_id,
                 turn_id=turn_id,generation=generation,
                 frame_count=len(frames)))
-    async def native_audio(
-        self,turn_id:int,response_id:str,item_id:str|None,pcm:bytes,*,sample_rate:int
-    ):
-        async with self.lock:
-            await self.websocket.send_text(event(
-                "native.audio.delta",turn_id=turn_id,response_id=response_id,
-                item_id=item_id,sample_rate=sample_rate,encoding="pcm_s16le",
-                byte_length=len(pcm)))
-            await self.websocket.send_bytes(pcm)
 
 
 def _curated_visual_specification(
@@ -4251,9 +4266,9 @@ async def voice_socket(websocket:WebSocket):
         multi_brain_settings=multi_brain_settings,
     ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
-    sender=LockedSender(websocket); native_session=None; native_config=None; pipeline="cascade"
-    await websocket.send_text(event("ready",sample_rate=16000,native_sample_rate=NATIVE_SAMPLE_RATE,
-                                    pipelines=["cascade","native"],frame_ms=20,
+    sender=LockedSender(websocket); pipeline="cascade"
+    await websocket.send_text(event("ready",sample_rate=16000,
+                                    pipelines=["cascade"],frame_ms=20,
                                     frame_bytes=FRAME_BYTES,vad_mode=config.mode,
                                     endpoint_silence_ms=config.endpoint_silence_frames*20,
                                     prefix_padding_ms=config.prefix_frames*20,
@@ -4264,9 +4279,6 @@ async def voice_socket(websocket:WebSocket):
             message=await websocket.receive()
             if message.get("type")=="websocket.disconnect": break
             if message.get("bytes") is not None:
-                if native_session is not None:
-                    await native_session.send_audio(message["bytes"])
-                    continue
                 if session.refresh_cooldown(): await websocket.send_text(event("state.changed",state="IDLE"))
                 listener_events=[]
                 accepted_interrupts={}
@@ -4562,25 +4574,11 @@ async def voice_socket(websocket:WebSocket):
                             revision_id=selected_revision_id,
                             safety_pack=safety_pack.public_dict(),
                         ))
-                    pipeline=requested_mode
-                    if pipeline=="native":
-                        configuration_stage="native_environment"
-                        native_config=(
-                            native_config
-                            or NativeRealtimeConfig.from_environment(
-                                vad_settings.native))
-                        configuration_stage="native_session"
-                        native_session=NativeRealtimeSession(
-                            sender,session.tool_context,native_config,
-                            application_session_id=session.session_id,
-                            language_mode=session.language_mode,
-                            manual_language=session.manual_language)
-                        configuration_stage="native_provider_session"
-                        await native_session.start()
+                    pipeline="cascade"
                     session.accept_configuration(
                         configuration_id,pipeline,context.language,
                         requested_protocol_id,selected_revision_id)
-                except (RuntimeError,ValueError,NativeRealtimeError) as exc:
+                except (RuntimeError,ValueError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
                         str(exc)
@@ -4595,9 +4593,6 @@ async def voice_socket(websocket:WebSocket):
                         ",".join(field_names) if field_names else "none",
                         safe_detail,
                     )
-                    if native_session is not None:
-                        await native_session.stop()
-                        native_session=None
                     session.stop()
                     load_failed=configuration_stage=="curated_protocol_fixture"
                     load_failure_messages={
@@ -4658,9 +4653,6 @@ async def voice_socket(websocket:WebSocket):
                         sender,session,"cancelled")
                     task.cancel()
                 session.set_tool_context(context)
-                if native_session is not None:
-                    await native_session.update_language(
-                        context,language_mode="manual",manual_language=context.language)
                 await websocket.send_text(event("session.language_changed",state=session.state.value))
                 await websocket.send_text(event("session.language_state",mode="manual",
                                                 language=context.language))
@@ -4684,10 +4676,6 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
-                if native_session is not None and session.tool_context is not None:
-                    await native_session.update_language(
-                        session.tool_context,language_mode=session.language_mode,
-                        manual_language=session.manual_language)
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.reset":
@@ -4701,22 +4689,6 @@ async def voice_socket(websocket:WebSocket):
                 session.reset_sensitive_state()
                 if session.tool_context and session.tool_context.procedure_controller:
                     session.tool_context.procedure_controller.detach()
-                if native_session is not None:
-                    await native_session.stop()
-                    native_session=NativeRealtimeSession(
-                        sender,session.tool_context,native_config,
-                        application_session_id=session.session_id,
-                        language_mode=session.language_mode,
-                        manual_language=session.manual_language)
-                    try:
-                        await native_session.start()
-                    except NativeRealtimeError:
-                        await native_session.stop()
-                        native_session=None
-                        session.stop()
-                        await websocket.send_text(event(
-                            "error",message="native session reset failed"))
-                        continue
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
                     fixture_state = session.curated_protocol_session.state()
@@ -4730,9 +4702,6 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
-                if native_session is not None:
-                    await native_session.stop()
-                    native_session=None
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
             elif control["type"]=="client.audio_constraints":
@@ -4874,32 +4843,6 @@ async def voice_socket(websocket:WebSocket):
                     "state.changed",state=session.state.value,
                     turn_id=control["turn_id"],generation=generation,
                     cooldown_ms=config.cooldown_ms))
-            elif control["type"]=="native.playback.truncate" and native_session is not None:
-                await native_session.truncate_playback(
-                    control["response_id"],control["item_id"],control["audio_end_ms"])
-            elif control["type"]=="native.playback.metrics" and native_session is not None:
-                log.info(
-                    "native.playback.metrics response_id=%s provider_gap_count=%s "
-                    "provider_gap_ms=%s client_underrun_count=%s "
-                    "client_underrun_ms=%s scheduled_chunks=%s audio_context_state=%s",
-                    control["response_id"],control["provider_gap_count"],
-                    control["provider_gap_ms"],control["client_underrun_count"],
-                    control["client_underrun_ms"],control["scheduled_chunks"],
-                    control["audio_context_state"],
-                )
-            elif control["type"]=="native.playback.ended" and native_session is not None:
-                completion=await native_session.playback_ended(
-                    control["response_id"])
-                if completion is not None:
-                    turn_id,playback_completion_ms=completion
-                    log.info(
-                        "playback.completed pipeline=native turn_id=%s "
-                        "playback_completion_ms=%s",
-                        turn_id,playback_completion_ms)
-                    await websocket.send_text(event(
-                        "playback.completed",pipeline="native",
-                        turn_id=turn_id,
-                        playback_completion_ms=playback_completion_ms))
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -4911,8 +4854,6 @@ async def voice_socket(websocket:WebSocket):
             task.cancel()
             try: await task
             except (asyncio.CancelledError, WebSocketDisconnect): pass
-        if native_session is not None:
-            await native_session.stop()
         session.stop()
         if procedure_store is not None: procedure_store.close()
 

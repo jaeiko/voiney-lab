@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from voice_workflow_agent.report_projection import project_protocol_for_report, project_step_for_report
+
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
@@ -43,7 +45,8 @@ class ExperimentReportSettings:
                 "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED must be a boolean"
             )
         path = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB", ""
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB",
+            os.environ.get("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_DATABASE", ""),
         ).strip()
         if not path:
             raise ValueError(
@@ -78,6 +81,10 @@ class ExperimentReportStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+
+    @property
+    def database_path(self) -> Path:
+        return self.path
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,6 +625,7 @@ class StepExecutionContext:
     expected_results: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    tips: tuple[str, ...] = ()
     source_page: int = 1
     evidence_ids: tuple[str, ...] = ()
     entered_at: str | None = None
@@ -645,6 +653,7 @@ class StepExecutionContext:
             "expected_results": list(self.expected_results),
             "warnings": list(self.warnings),
             "notes": list(self.notes),
+            "tips": list(self.tips),
             "source_page": self.source_page,
             "evidence_ids": list(self.evidence_ids),
             "entered_at": self.entered_at,
@@ -678,6 +687,18 @@ class GroundedReportContext:
     source_references: tuple[str, ...]
     session_timing: dict[str, Any]
     event_ledger: tuple[dict[str, Any], ...]
+
+    @property
+    def protocol_id(self) -> str:
+        return str(self.protocol_metadata.get("protocol_id") or "")
+
+    @property
+    def report_id(self) -> str:
+        return str(self.report_metadata.get("report_id") or "")
+
+    @property
+    def all_steps(self) -> tuple[StepExecutionContext, ...]:
+        return self.all_protocol_steps
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -741,6 +762,7 @@ def build_grounded_report_context(
 
     # Try rehydrating stored protocol from database or candidate fixture
     stored_protocol = None
+    protocol_revision = str(report_data.get("protocol_revision") or "1")
     try:
         from voice_workflow_agent.server import _open_protocol_catalog, _configured_candidate_fixture, server_config
         cfg = server_config()
@@ -750,7 +772,7 @@ def build_grounded_report_context(
         else:
             cat, st = _open_protocol_catalog()
             try:
-                fix = cat.load_executable_fixture(protocol_id)
+                fix = cat.load_executable_fixture(protocol_id, protocol_revision)
                 stored_protocol = fix.draft.protocol
             finally:
                 st.close()
@@ -765,82 +787,78 @@ def build_grounded_report_context(
     objective = f"본 실험은 '{protocol_title}' 지침에 따라 표준화된 실험 절차를 수행하고 검증된 실험 데이터를 기록하는 것을 목적으로 한다."
 
     if stored_protocol is not None:
-        if stored_protocol.metadata.description:
-            objective = stored_protocol.metadata.description
-        for m in stored_protocol.metadata.materials:
-            if m.name:
-                all_materials.add(f"{m.name} ({m.amount} {m.unit})".strip() if m.amount else m.name)
-        for eq in stored_protocol.metadata.equipment:
-            if eq.name:
-                all_equipment.add(eq.name)
-        for p in stored_protocol.metadata.prerequisites:
-            all_prereqs.add(p)
+        projected = project_protocol_for_report(stored_protocol)
+        if projected.objective:
+            objective = projected.objective
+        all_materials = set(projected.materials)
+        all_equipment = set(projected.equipment)
+        all_prereqs = set(projected.prerequisites)
 
-        for sec in stored_protocol.sections:
-            for stp in sec.steps:
-                lbl = stp.source_label
-                evs = step_events.get(lbl, [])
-                entered = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") in ("step_entered", "step_presented", "session_started")), None)
-                completed = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") == "step_completed"), None)
-                state = "completed" if completed else ("in_progress" if entered else "not_started")
+        for p_step in projected.steps:
+            lbl = p_step.step_label
+            evs = step_events.get(lbl, [])
+            entered = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") in ("step_entered", "step_presented", "session_started")), None)
+            completed = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") == "step_completed"), None)
+            state = "completed" if completed else ("in_progress" if entered else "not_started")
 
-                # Timers
-                t_cfg = None
-                t_act = None
-                t_ev = next((ev for ev in evs if ev.get("event_type") == "timer_started" or "timer" in (ev.get("payload") or {})), None)
-                if t_ev:
-                    t_pay = (t_ev.get("payload") or {}).get("timer", {})
-                    dur = t_pay.get("source_duration_seconds", t_pay.get("duration_seconds"))
-                    elap = t_pay.get("elapsed_seconds")
-                    if dur:
-                        t_cfg = f"{dur}초 ({_format_elapsed_clock(dur)})"
-                    if elap:
-                        t_act = f"{elap}초 경과 ({_format_elapsed_clock(elap)})"
+            # Timers
+            t_cfg = None
+            t_act = None
+            t_ev = next((ev for ev in evs if ev.get("event_type") == "timer_started" or "timer" in (ev.get("payload") or {})), None)
+            if t_ev:
+                t_pay = (t_ev.get("payload") or {}).get("timer", {})
+                dur = t_pay.get("source_duration_seconds", t_pay.get("duration_seconds"))
+                elap = t_pay.get("elapsed_seconds")
+                if dur:
+                    t_cfg = f"{dur}초 ({_format_elapsed_clock(dur)})"
+                if elap:
+                    t_act = f"{elap}초 경과 ({_format_elapsed_clock(elap)})"
 
-                # Observations
-                obs_collected = []
-                for ev in evs:
-                    if ev.get("event_type") == "observation":
-                        text = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "관찰 기록")
-                        if text:
-                            obs_collected.append(text)
-                    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-                    if "observations" in payload and isinstance(payload["observations"], (list, tuple)):
-                        for o in payload["observations"]:
-                            if o and str(o).strip():
-                                obs_collected.append(str(o).strip())
-                step_obs = tuple(obs_collected)
+            # Observations
+            obs_collected = []
+            for ev in evs:
+                if ev.get("event_type") == "observation":
+                    text = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "관찰 기록")
+                    if text:
+                        obs_collected.append(text)
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                if "observations" in payload and isinstance(payload["observations"], (list, tuple)):
+                    for o in payload["observations"]:
+                        if o and str(o).strip():
+                            obs_collected.append(str(o).strip())
+            step_obs = tuple(obs_collected)
 
-                # Anomalies
-                step_anom = tuple(
-                    str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "이상 보고")
-                    for ev in evs if ev.get("event_type") in ("anomaly", "system_anomaly") or ev.get("anomaly_category")
-                )
+            # Anomalies
+            step_anom = tuple(
+                str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "이상 보고")
+                for ev in evs if ev.get("event_type") in ("anomaly", "system_anomaly") or ev.get("anomaly_category")
+            )
 
-                ctx_step = StepExecutionContext(
-                    step_id=stp.step_id,
-                    step_label=lbl,
-                    section_title=sec.title,
-                    instruction_source_text=stp.instruction,
-                    sub_actions=tuple(a.text for a in stp.sub_actions),
-                    quantities=tuple(f"{q.amount} {q.unit} {q.name}".strip() for q in stp.quantities),
-                    conditions=tuple(f"{c.parameter}: {c.value} {c.unit}".strip() for c in stp.conditions),
-                    expected_results=tuple(stp.expected_results),
-                    warnings=tuple(stp.warnings),
-                    notes=tuple(stp.notes),
-                    source_page=stp.source_page,
-                    evidence_ids=tuple(stp.evidence_ids),
-                    entered_at=entered,
-                    completed_at=completed,
-                    completion_state=state,
-                    timer_configuration=t_cfg,
-                    timer_actuals=t_act,
-                    user_confirmed_observations=step_obs,
-                    anomalies_deviations=step_anom,
-                )
-                all_steps.append(ctx_step)
-                if state in ("completed", "in_progress") or step_obs or step_anom:
-                    executed_steps.append(ctx_step)
+            ctx_step = StepExecutionContext(
+                step_id=p_step.step_id,
+                step_label=lbl,
+                section_title=p_step.section_title,
+                instruction_source_text=p_step.instruction_source_text,
+                sub_actions=p_step.sub_actions,
+                quantities=p_step.quantities,
+                conditions=p_step.conditions,
+                expected_results=p_step.expected_results,
+                warnings=p_step.warnings,
+                notes=p_step.notes,
+                tips=p_step.tips,
+                source_page=p_step.source_page,
+                evidence_ids=p_step.evidence_ids,
+                entered_at=entered,
+                completed_at=completed,
+                completion_state=state,
+                timer_configuration=t_cfg,
+                timer_actuals=t_act,
+                user_confirmed_observations=step_obs,
+                anomalies_deviations=step_anom,
+            )
+            all_steps.append(ctx_step)
+            if state in ("completed", "in_progress") or step_obs or step_anom:
+                executed_steps.append(ctx_step)
 
     else:
         # Fall back to step_snapshots or step_events

@@ -10,10 +10,6 @@ from voice_workflow_agent.configuration import (
     VoiceVadSettings,
     milliseconds_to_frames,
 )
-from voice_workflow_agent.native_realtime import (
-    NativeRealtimeConfig,
-    session_update_payload,
-)
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import VadConfig
 from pathlib import Path
@@ -180,30 +176,6 @@ class VadConfigurationTests(unittest.TestCase):
         )
         with self.assertRaises(ConfigurationError):
             milliseconds_to_frames(0)
-
-    def test_native_environment_values_reach_session_payload(self):
-        with patch.dict(os.environ,{
-            "XAI_API_KEY":"test-key",
-            "XAI_REALTIME_VAD_THRESHOLD":"0.55",
-            "NATIVE_VAD_PREFIX_PADDING_MS":"500",
-            "XAI_REALTIME_SILENCE_DURATION_MS":"1300",
-        },clear=True):
-            config=NativeRealtimeConfig.from_environment()
-        payload=session_update_payload(
-            config,
-            ToolContext(
-                Path("/trusted/catalog.sqlite"),
-                "FACILITY","ko","test_only"),
-            language_mode="manual",
-            manual_language="ko",
-        )
-        self.assertEqual(payload["session"]["turn_detection"],{
-            "type":"server_vad",
-            "threshold":0.55,
-            "silence_duration_ms":1300,
-            "prefix_padding_ms":500,
-            "idle_timeout_ms":None,
-        })
 
     def test_native_silence_default_custom_and_bounds(self):
         self.assertEqual(

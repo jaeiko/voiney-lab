@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import csv
 import io
+import os
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from voice_workflow_agent.experiment_reports import ExperimentReportStore
@@ -240,6 +242,77 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertIn("Step", table_text)
         self.assertIn("Event / Action", table_text)
         self.assertIn("시약을 추가했습니다", table_text)
+
+    def test_grounded_report_with_candidate_a_domain_protocol_rehydration(self):
+        """Test build_grounded_report_context with real domain ExperimentProtocol instance."""
+        from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
+        from voice_workflow_agent.experiment_reports import build_grounded_report_context, ReportWriterBrain
+
+        fixture_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.json"
+        provenance_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+        pdf_path = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+        fixture = load_curated_protocol_fixture(fixture_path, provenance_path, pdf_path)
+        protocol = fixture.draft.protocol
+
+        report = self.open()
+        self.store.append_event(
+            report["report_id"],
+            event_key="turn-1-complete",
+            event_type="step_completed",
+            step_id="candidate-a-step-01",
+            step_label="1",
+            user_wording="젤 밴드를 절단했습니다.",
+        )
+        doc = self.store.get_report(report["report_id"])
+
+        # Patch candidate fixture lookup to return the real candidate fixture
+        with unittest.mock.patch("voice_workflow_agent.server._configured_candidate_fixture", return_value=fixture):
+            ctx = build_grounded_report_context(doc)
+            self.assertIsNotNone(ctx)
+            self.assertEqual(ctx.protocol_id, "candidate-a-curated-development-v1")
+            self.assertGreater(len(ctx.all_steps), 0)
+            self.assertGreater(len(ctx.executed_steps), 0)
+            self.assertEqual(ctx.executed_steps[0].step_label, "1")
+            self.assertTrue(len(ctx.executed_steps[0].instruction_source_text) > 0)
+
+            # Export docx
+            docx_bytes = self.store.export_docx(report["report_id"])
+            self.assertTrue(docx_bytes.startswith(b"PK"))
+            from docx import Document
+            docx_doc = Document(io.BytesIO(docx_bytes))
+            self.assertGreater(len(docx_doc.paragraphs), 5)
+
+    def test_http_docx_export_returns_200_and_valid_document(self):
+        """Direct HTTP test for GET /api/experiment-reports/{report_id}.docx."""
+        from starlette.testclient import TestClient
+        from voice_workflow_agent.server import app
+
+        report = self.open()
+        self.store.append_event(
+            report["report_id"],
+            event_key="turn-1-complete",
+            event_type="step_completed",
+            step_id="step-1",
+            step_label="1",
+            user_wording="1단계 작업을 마쳤습니다.",
+        )
+
+        with unittest.mock.patch.dict(os.environ, {
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(self.store.path),
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_DATABASE": str(self.store.path),
+        }):
+            client = TestClient(app)
+            response = client.get(f"/api/experiment-reports/{report['report_id']}.docx")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.headers["content-type"],
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            self.assertTrue(response.content.startswith(b"PK"))
+            from docx import Document
+            doc = Document(io.BytesIO(response.content))
+            self.assertGreater(len(doc.paragraphs), 5)
 
 
 if __name__ == "__main__":

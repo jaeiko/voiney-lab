@@ -111,8 +111,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             ), patch(
                 "voice_workflow_agent.server.load_procedure_definitions",
             ), patch(
-                "voice_workflow_agent.server.NativeRealtimeSession",
-            ), patch(
                 "voice_workflow_agent.server.synthesize",
                 return_value=b"\x00\x00" * 320,
             ):
@@ -220,6 +218,43 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         self.assertTrue(session.active)
         self.assertEqual(session.current_index, 1)  # Advanced to Step 2
         self.assertNotIn("아직 실험을 시작하지 않았습니다", t9.speech_text or "")
+
+    def test_candidate_a_sequential_natural_completion_and_question_guard(self) -> None:
+        """Verify sequential natural Korean completion:
+        1. '실험을 시작해 줘.' -> Step 1
+        2. '현재 단계를 완료했어.' -> Step 2
+        3. '현재 단계도 완료했어.' -> Step 3
+        4. '이번 단계도 완료했어.' -> Step 4
+        5. '현재 단계 완료 조건이 뭐야?' -> Step remains 4
+        """
+        session = CuratedProtocolSession(self.fixture)
+        session.configure_ready()
+
+        # 1. Start experiment
+        t1 = session.plan("실험을 시작해 줘.", turn_id=1, language="ko")
+        self.assertEqual(t1.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+        self.assertEqual(session.current_index, 0)  # Step 1
+
+        # 2. Step 1 -> Step 2: "현재 단계를 완료했어."
+        t2 = session.plan("현재 단계를 완료했어.", turn_id=2, language="ko")
+        self.assertEqual(t2.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(session.current_index, 1)  # Step 2
+
+        # 3. Step 2 -> Step 3: "현재 단계도 완료했어."
+        t3 = session.plan("현재 단계도 완료했어.", turn_id=3, language="ko")
+        self.assertEqual(t3.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(session.current_index, 2)  # Step 3
+
+        # 4. Step 3 -> Step 4: "이번 단계도 완료했어."
+        t4 = session.plan("이번 단계도 완료했어.", turn_id=4, language="ko")
+        self.assertEqual(t4.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(session.current_index, 3)  # Step 4
+
+        # 5. Question: "현재 단계 완료 조건이 뭐야?" -> Step remains 4
+        t5 = session.plan("현재 단계 완료 조건이 뭐야?", turn_id=5, language="ko")
+        self.assertNotEqual(t5.action, CuratedProtocolAction.NEXT)
+        self.assertEqual(session.current_index, 3)  # Still Step 4
 
 
 if __name__ == "__main__":

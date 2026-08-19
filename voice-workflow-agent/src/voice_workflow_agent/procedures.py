@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any, Callable
 
+from .completion_intent import classify_korean_completion_command
 from .procedure_definitions import ProcedureDefinition, ProcedureStep
 from .procedure_store import ProcedureStore, ProcedureTransitionError
 
@@ -20,6 +21,9 @@ KOREAN_COMPLETION_PHRASES=frozenset({
     "현재 단계를 완료했어",
     "이 단계를 완료했어",
     "현재 단계 완료했어",
+    "현재 단계도 완료했어",
+    "이번 단계 완료했어",
+    "이번 단계도 완료했어",
     "현재 단계 완료",
 })
 KOREAN_COMPLETION_INSTRUCTION="현재 단계를 완료했습니다"
@@ -51,10 +55,7 @@ def authorized_completion_step_id(
     transcript:str, language:str, controller:"ProcedureController"|None
 )->str|None:
     """Authorize one current step for this turn using exact reviewed utterances."""
-    if language!="ko" or controller is None or not isinstance(transcript,str):
-        return None
-    normalized=_normalized_korean_command(transcript)
-    if normalized not in KOREAN_COMPLETION_PHRASES:
+    if _normalized_korean_command(transcript) not in KOREAN_COMPLETION_PHRASES:
         return None
     return _active_step_id(controller,allow_completed_replay=True)
 

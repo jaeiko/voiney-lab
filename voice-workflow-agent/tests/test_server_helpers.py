@@ -679,9 +679,7 @@ class ServerTests(unittest.TestCase):
             "voice_workflow_agent.server.ProcedureStore",
         ) as procedure_store, patch(
             "voice_workflow_agent.server.load_procedure_definitions",
-        ) as procedure_loader, patch(
-            "voice_workflow_agent.server.NativeRealtimeSession",
-        ) as native_session:
+        ) as procedure_loader:
             asyncio.run(voice_socket(socket))
         ready=next(item for item in socket.sent if item["type"]=="session.ready")
         self.assertEqual({key:ready[key] for key in (
@@ -714,7 +712,6 @@ class ServerTests(unittest.TestCase):
         fixture_loader.assert_called_once_with(placeholder,placeholder,placeholder)
         procedure_store.assert_not_called()
         procedure_loader.assert_not_called()
-        native_session.assert_not_called()
 
     def test_curated_loading_failure_is_sanitized_and_never_becomes_ready(self):
         protocol_id="candidate-a-curated-development-v1"
@@ -786,7 +783,7 @@ class ServerTests(unittest.TestCase):
                             {"text":json.dumps({
                                 "type":"session.start","mode":"cascade",
                                 "language":"ko","protocol_id":selected,
-                                "configuration_id":8,
+                                "configuration_id":9,
                             })},
                             {"type":"websocket.disconnect","code":1000},
                         ))
@@ -796,15 +793,14 @@ class ServerTests(unittest.TestCase):
 
                 socket=Socket()
                 with patch(
-                    "voice_workflow_agent.server.server_config",return_value=config,
+                    "voice_workflow_agent.server.server_config",
+                    return_value=config,
                 ), patch(
                     "voice_workflow_agent.server.load_curated_protocol_fixture",
                     return_value=Fixture(),
                 ), patch(
                     "voice_workflow_agent.server.ProcedureStore",
-                ) as procedure_store, patch(
-                    "voice_workflow_agent.server.NativeRealtimeSession",
-                ) as native_session:
+                ) as procedure_store:
                     asyncio.run(voice_socket(socket))
                 required=next(
                     item for item in socket.sent
@@ -816,54 +812,7 @@ class ServerTests(unittest.TestCase):
                     for item in socket.sent
                 ))
                 procedure_store.assert_not_called()
-                native_session.assert_not_called()
 
-    def test_canonical_environment_accepts_exact_native_browser_payload(self):
-        class Socket:
-            def __init__(self):
-                self.sent=[]
-                self.messages=iter((
-                    {"text":json.dumps({
-                        "type":"session.start","mode":"native",
-                        "language":"ko","protocol_id":None,
-                        "configuration_id":1,
-                    })},
-                    {"type":"websocket.disconnect","code":1000},
-                ))
-            async def accept(self): pass
-            async def send_text(self,value): self.sent.append(json.loads(value))
-            async def receive(self): return next(self.messages)
-        instances=[]
-        class Native:
-            def __init__(self,sender,tool_context,native_config,**kwargs):
-                self.config=native_config
-                instances.append(self)
-            async def start(self): pass
-            async def stop(self): pass
-        with tempfile.TemporaryDirectory() as temporary:
-            catalog=self.approved_catalog(temporary,"demo")
-            environment={
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
-                "XAI_API_KEY":"test-key",
-            }
-            socket=Socket()
-            with patch.dict("os.environ",environment,clear=True), patch(
-                "voice_workflow_agent.server.NativeRealtimeSession",Native,
-            ):
-                asyncio.run(voice_socket(socket))
-        started=next(item for item in socket.sent if item["type"]=="session.started")
-        self.assertEqual(started["pipeline"],"native")
-        ready=next(item for item in socket.sent if item["type"]=="session.ready")
-        self.assertEqual({key:ready[key] for key in (
-            "type","configuration_id","mode","language","protocol_id",
-        )},{
-            "type":"session.ready","configuration_id":1,"mode":"native",
-            "language":"ko","protocol_id":None,
-        })
-        self.assertEqual(instances[0].config.model,"grok-voice-latest")
-        self.assertEqual(instances[0].config.voice,"eve")
-        self.assertEqual(instances[0].config.vad_threshold,0.6)
 
     def test_legacy_renamed_keys_report_safe_session_configuration_stage(self):
         class Socket:
@@ -871,7 +820,7 @@ class ServerTests(unittest.TestCase):
                 self.sent=[]
                 self.messages=iter((
                     {"text":json.dumps({
-                        "type":"session.start","mode":"native",
+                        "type":"session.start","mode":"cascade",
                         "language":"ko","protocol_id":None,
                         "configuration_id":1,
                     })},
@@ -892,7 +841,7 @@ class ServerTests(unittest.TestCase):
         error=next(item for item in socket.sent if item["type"]=="error")
         self.assertEqual(error["message"],"invalid session configuration")
         rendered=warning.call_args.args[0] % warning.call_args.args[1:]
-        self.assertIn("pipeline=native",rendered)
+        self.assertIn("pipeline=cascade",rendered)
         self.assertIn("stage=server_policy",rendered)
         self.assertIn("exception=ServerConfigurationError",rendered)
         self.assertIn("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",rendered)

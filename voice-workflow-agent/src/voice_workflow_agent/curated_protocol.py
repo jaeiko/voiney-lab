@@ -30,6 +30,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
 )
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
+from voice_workflow_agent.completion_intent import classify_korean_completion_command
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -1373,25 +1374,25 @@ _COMPLETION_AND_NEXT_PATTERNS = (
 )
 _COMPLETION_ONLY_PATTERNS = (
     re.compile(
-        r"^(?:(?:현재|지금)\s+)?(?:이\s*)?(?:단계|작업)(?:는|를|가|로)?\s*"
-        r"(?:완료(?:했어|했어요|했습니다)?|끝냈어|끝냈어요|끝났습니다|"
-        r"끝났어요|마쳤어|마쳤어요|마쳤습니다)$"
+        r"^(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
+        r"(?:완료(?:했어|했어요|했습니다|함)?|끝냈어|끝냈어요|끝났습니다|"
+        r"끝났어|끝났어요|마쳤어|마쳤어요|마쳤습니다|다\s*했어|다\s*했어요)$"
     ),
-    re.compile(r"^(?:여기까지\s*)?(?:다\s*했어|다\s*했어요|끝났습니다)$"),
-    re.compile(r"^(?:방금\s*)?(?:작업\s*)?(?:마쳤어|마쳤어요|마쳤습니다)$"),
+    re.compile(r"^(?:현재|지금|이번|이)\s*(?:단계|작업)\s*완료$"),
+    re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다|끝났습니다)$"),
     re.compile(r"^(?:i\s+)?completed\s+(?:the\s+)?current\s+step$"),
     re.compile(r"^(?:this|the\s+current)\s+step\s+is\s+(?:finished|complete)$"),
     re.compile(r"^(?:completed|finished|done)\s*했어$"),
 )
 _COMPLETION_CLAIM = re.compile(
     r"(?:"
-    r"(?:(?:현재|지금|이)\s*)?(?:단계|작업)(?:는|를|가|로)?\s*"
-    r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까)?|"
+    r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
+    r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까|함)?|"
     r"끝(?:났어|났어요|났습니다|냈어|냈어요|냈고)?|"
     r"다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까|마쳤어|마쳤어요|마쳤습니다|"
     r"completed\s*했어|finish\s*했어)"
     r"|(?:completed|finished|done)\s*했어"
-    r"|(?:여기까지\s*)?(?:다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까)"
+    r"|(?:여기까지|방금\s*(?:작업|단계)?)\s*(?:다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까)"
     r"|(?:i\s+)?(?:completed|finished|done)\s+(?:this|the\s+current)\s+step"
     r"|(?:this|the\s+current)\s+step\s+is\s+(?:complete|finished|done)"
     r"|this\s+step\s+is\s+done"
@@ -1402,11 +1403,11 @@ _NEXT_STEP_REQUEST = re.compile(
     r".*(?:안내|알려|넘어|진행|가자|show|tell|move|go|proceed)?"
 )
 _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
-    r"^(?:(?:네|예|응|그래|맞아|맞아요)(?:\s+(?:(?:현재|이)?\s*"
-    r"(?:단계|작업)(?:를|는)?\s*)?(?:완료(?:했어|했어요|했습니다)?|"
+    r"^(?:(?:네|예|응|그래|맞아|맞아요)(?:\s+(?:(?:현재|지금|이번|이)\s*"
+    r"(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:완료(?:했어|했어요|했습니다)?|"
     r"끝냈어|끝냈어요|다\s*했어|다\s*했어요|했어|했어요))?|"
-    r"(?:(?:현재|이)?\s*(?:단계|작업)(?:를|는)?\s*)?(?:완료(?:했어|했어요|했습니다)|"
-    r"끝냈어|끝냈어요|다\s*했어|다\s*했어요)|"
+    r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:완료(?:했어|했어요|했습니다)|"
+    r"끝냈어|끝냈어요|다\s*했어|다\s*했어요|마쳤어|마쳤어요)|"
     r"yes(?:\s*,?\s*(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?)?|"
     r"(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?|"
     r"done|"
@@ -2441,7 +2442,9 @@ def classify_curated_control_intent(
         (kind for kind, pattern in _NON_MUTATING_COMPLETION if pattern.search(key)),
         None,
     )
-    completion_claimed = bool(_COMPLETION_CLAIM.search(key))
+    completion_claimed = bool(_COMPLETION_CLAIM.search(key)) or (
+        language == "ko" and classify_korean_completion_command(transcript, language="ko")
+    )
     next_requested = bool(_NEXT_STEP_REQUEST.search(key))
     if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
         return CuratedControlIntent(
