@@ -247,8 +247,8 @@ class XaiAuthoritativeImageSearch:
             tool_spec["filters"] = {
                 "allowed_domains": list(self.settings.allowed_domains)
             }
-        response = await asyncio.wait_for(
-            self.client.responses.create(
+        async def _fetch():
+            resp = await self.client.responses.create(
                 model=self.settings.model,
                 input=[{
                     "role": "system",
@@ -261,17 +261,24 @@ class XaiAuthoritativeImageSearch:
                 }, {"role": "user", "content": query[:1800]}],
                 tools=[tool_spec],
                 include=["web_search_call.action.sources"],
-                stream=True,
+                stream=False,
                 max_output_tokens=300,
-            ),
-            timeout=self.settings.timeout_seconds,
-        )
-        if hasattr(response, "__aiter__"):
-            final_resp = None
-            async for ev in response:
-                if _field(ev, "type") == "response.completed":
-                    final_resp = _field(ev, "response")
-            response = final_resp or response
+            )
+            if hasattr(resp, "__aiter__"):
+                final_resp = None
+                async for ev in resp:
+                    if _field(ev, "type") == "response.completed":
+                        final_resp = _field(ev, "response")
+                resp = final_resp or resp
+            return resp
+
+        try:
+            response = await asyncio.wait_for(
+                _fetch(),
+                timeout=self.settings.timeout_seconds,
+            )
+        except Exception:
+            return {"status": "not_found", "matches": []}
 
         output = _field(response, "output", []) or []
         tool_used = any(
@@ -286,6 +293,8 @@ class XaiAuthoritativeImageSearch:
             )
             image_url = _canonical_url(raw_image, self.settings.allowed_domains)
             source_url = _canonical_url(raw_source, self.settings.allowed_domains)
+            if image_url is None and raw_image and _is_safe_remote_url(raw_image) and (source_url is not None or not self.settings.allowed_domains):
+                image_url = raw_image
             if image_url is None and source_url and any(source_url.casefold().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif")):
                 image_url = source_url
             if image_url is None and source_url is None:
@@ -312,9 +321,12 @@ class XaiAuthoritativeImageSearch:
         ]
         source_page = next((item for item in encountered_pages if item), None)
         for match in image_pattern.finditer(markdown):
+            raw_img_link = match.group(2)
             image_url = _canonical_url(
-                match.group(2), self.settings.allowed_domains
+                raw_img_link, self.settings.allowed_domains
             )
+            if image_url is None and _is_safe_remote_url(raw_img_link) and (source_page is not None or not self.settings.allowed_domains):
+                image_url = raw_img_link
             if image_url is None:
                 continue
             candidates.append({

@@ -107,6 +107,37 @@
       font-size:.82rem;
       line-height:1.55;
       color:#f8fafc;
+    }
+    .safety-bullets-text{
+      white-space:pre-wrap;
+      margin-bottom:.35rem;
+    }
+    .safety-source-details{
+      margin-top:.45rem;
+      font-size:.75rem;
+      color:var(--muted);
+      border-top:1px dashed rgba(240,178,50,.2);
+      padding-top:.35rem;
+    }
+    .safety-source-details summary{
+      cursor:pointer;
+      user-select:none;
+      font-weight:700;
+      color:var(--amber);
+      opacity:.85;
+      font-size:.74rem;
+    }
+    .safety-source-details summary:hover{
+      opacity:1;
+    }
+    .safety-source-body{
+      margin-top:.3rem;
+      padding:.45rem .65rem;
+      background:rgba(0,0,0,.25);
+      border-radius:var(--radius-sm);
+      color:var(--subtext);
+      font-size:.73rem;
+      line-height:1.45;
       white-space:pre-wrap;
     }
 
@@ -1332,9 +1363,11 @@ function updateStepSafetyGuidance(){
    ? stepGuidanceState
    : (stepLabel ? stepGuidanceList.find(g => String(g.step_label) === stepLabel) : null);
  if(found){
-  const bits=[];
-  if(Array.isArray(found.display_bullets)&&found.display_bullets.length){
-   bits.push(...found.display_bullets);
+  let bits=[];
+  if(Array.isArray(found.localized_display_bullets)&&found.localized_display_bullets.length){
+   bits=found.localized_display_bullets.slice(0,3);
+  }else if(Array.isArray(found.display_bullets)&&found.display_bullets.length){
+   bits=found.display_bullets.slice(0,3);
   }else{
    const warnings=found.warnings||[];
    const ppe=found.ppe_requirements||[];
@@ -1342,11 +1375,43 @@ function updateStepSafetyGuidance(){
    for(const w of warnings){if(w&&w.trim())bits.push(`• 주의: ${w.trim()}`);}
    if(ppe.length)bits.push(`• 개인보호구(PPE): ${Array.from(new Set(ppe)).join(", ")}`);
    if(handling.length)bits.push(`• 안전 취급 주의: ${Array.from(new Set(handling)).join(" ")}`);
+   bits=bits.slice(0,3);
   }
   if(bits.length){
    box.hidden=false;
    if(citation)citation.textContent=found.citation_label||(activeSafetyPack?.coverage_status==="demo_only"?"데모 안전 기준":"안전 SOP · SDS 적용됨");
-   body.textContent=bits.slice(0,3).join("\n");
+
+   const rawBits=[];
+   if(Array.isArray(found.warnings)){
+    for(const w of found.warnings){if(w&&w.trim())rawBits.push(`• Protocol Warning: ${w.trim()}`);}
+   }
+   if(Array.isArray(found.ppe_requirements)&&found.ppe_requirements.length){
+    rawBits.push(`• PPE: ${Array.from(new Set(found.ppe_requirements)).join(", ")}`);
+   }
+   if(Array.isArray(found.handling_precautions)&&found.handling_precautions.length){
+    rawBits.push(`• Precautions: ${Array.from(new Set(found.handling_precautions)).join(" ")}`);
+   }
+   const rawSource=rawBits.join("\n").trim();
+   const localizedText=bits.join("\n");
+
+   body.innerHTML="";
+   const bulletsEl=document.createElement("div");
+   bulletsEl.className="safety-bullets-text";
+   bulletsEl.textContent=localizedText;
+   body.appendChild(bulletsEl);
+
+   if(rawSource && rawSource !== localizedText){
+    const detailsEl=document.createElement("details");
+    detailsEl.className="safety-source-details";
+    const summaryEl=document.createElement("summary");
+    summaryEl.textContent="원문 안전 근거 보기";
+    const sourceBodyEl=document.createElement("div");
+    sourceBodyEl.className="safety-source-body";
+    sourceBodyEl.textContent=rawSource;
+    detailsEl.appendChild(summaryEl);
+    detailsEl.appendChild(sourceBodyEl);
+    body.appendChild(detailsEl);
+   }
    return;
   }
  }

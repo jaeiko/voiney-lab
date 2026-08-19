@@ -420,6 +420,61 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertNotEqual(plan_resume.speech_text, "")
         self.assertIn("재개", plan_resume.speech_text)
 
+    def test_paused_workflow_speech_policy_and_silent_contract(self) -> None:
+        """During paused workflow, speech_policy must be 'silent' and speech_text empty."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        self.session.plan("잠시 일시정지", turn_id=2, language="ko")
+        self.assertEqual(self.session._pause_state, "paused")
+
+        # Non-resume utterance while paused
+        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=3, language="ko")
+        self.assertEqual(plan_mute.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(plan_mute.speech_policy, "silent")
+        self.assertEqual(plan_mute.speech_text, "")
+        self.assertIn("일시정지 상태입니다", plan_mute.display_text)
+
+        # Another random speech utterance while paused
+        plan_mute2 = self.session.plan("어 혹시 거기 누구 오셨나요?", turn_id=4, language="ko")
+        self.assertEqual(plan_mute2.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(plan_mute2.speech_policy, "silent")
+        self.assertEqual(plan_mute2.speech_text, "")
+
+        # Resume restores speech_policy="speak" and concise spoken text
+        plan_resume = self.session.plan("실험 재개할게", turn_id=5, language="ko")
+        self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
+        self.assertEqual(plan_resume.speech_policy, "speak")
+        self.assertEqual(self.session._pause_state, "active")
+        self.assertNotEqual(plan_resume.speech_text, "")
+        self.assertIn("재개", plan_resume.speech_text)
+
+    def test_step_safety_guidance_korean_localization(self) -> None:
+        """StepSafetyGuidance builds Korean localized display bullets while preserving raw English data."""
+        from voice_workflow_agent.safety_pack import (
+            resolve_safety_pack,
+        )
+
+        pack = resolve_safety_pack(
+            protocol=self.fixture.draft.protocol,
+            catalog_path=None,
+            facility_id="MAIN-LAB",
+            usage_scope="demo",
+        )
+        first_step = self.fixture.draft.protocol.sections[0].steps[0]
+        guidance = pack.guidance_for_step(first_step)
+
+        # Verify localized display bullets are in Korean
+        self.assertTrue(len(guidance.localized_display_bullets) > 0)
+        self.assertEqual(guidance.localization_language, "ko")
+        self.assertEqual(guidance.localization_status, "localized")
+        self.assertTrue(any("개인보호구" in b or "오염 방지" in b or "주의" in b for b in guidance.localized_display_bullets))
+
+        # Verify authoritative English source text is preserved unmodified
+        self.assertTrue(len(guidance.warnings) > 0)
+        pub = guidance.public_dict()
+        self.assertIn("localized_display_bullets", pub)
+        self.assertIn("warnings", pub)
+        self.assertEqual(pub["warnings"], list(guidance.warnings))
+
     def test_web_visual_asset_registry(self) -> None:
         """WebVisualAssetRegistry stores and retrieves validated assets with same-origin IDs."""
         from voice_workflow_agent.web_visuals import WebVisualAsset, WebVisualAssetRegistry

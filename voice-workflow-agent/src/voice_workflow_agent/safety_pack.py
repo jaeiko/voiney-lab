@@ -82,6 +82,9 @@ class StepSafetyGuidance:
     handling_precautions: tuple[str, ...]
     citation_label: str
     display_bullets: tuple[str, ...] = ()
+    localized_display_bullets: tuple[str, ...] = ()
+    localization_language: str = "ko"
+    localization_status: str = "localized"
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +96,9 @@ class StepSafetyGuidance:
             "handling_precautions": list(self.handling_precautions),
             "citation_label": self.citation_label,
             "display_bullets": list(self.display_bullets),
+            "localized_display_bullets": list(self.localized_display_bullets),
+            "localization_language": self.localization_language,
+            "localization_status": self.localization_status,
         }
 
 
@@ -329,6 +335,12 @@ def resolve_step_safety_context(
     if handling:
         bullets.append(f"• 안전 취급 주의: {' '.join(dict.fromkeys(handling))}")
 
+    localized_bullets = _build_localized_safety_bullets(
+        step_pdf_warnings=step_pdf_warnings,
+        ppe_reqs=ppe_reqs,
+        handling=handling,
+    )
+
     return StepSafetyGuidance(
         step_id=step_id,
         step_label=step_label,
@@ -338,7 +350,92 @@ def resolve_step_safety_context(
         handling_precautions=tuple(handling),
         citation_label=" · ".join(citations),
         display_bullets=tuple(bullets[:3]),
+        localized_display_bullets=localized_bullets,
+        localization_language="ko",
+        localization_status="localized" if localized_bullets else "fallback",
     )
+
+
+def _localize_safety_bullet(text: str) -> str:
+    """Conservatively localize an English safety statement to Korean without inventing extra claims."""
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    if any("\uac00" <= ch <= "\ud7a3" for ch in cleaned):
+        return cleaned
+
+    lower = cleaned.casefold()
+
+    if "keratin" in lower or "dust" in lower:
+        if "scalpel" in lower or "fresh" in lower or "clean" in lower:
+            return "오염 방지: 케라틴과 먼지 오염을 방지하기 위해 깨끗한 작업 표면과 도구를 사용하고 장갑을 착용하세요."
+        return "오염 방지: 케라틴 및 먼지 오염을 줄이기 위해 깨끗한 표면에서 작업하세요."
+
+    if "glove" in lower or "gloves" in lower:
+        if "goggles" in lower or "glasses" in lower or "eye" in lower:
+            return "개인보호구(PPE): 실험용 장갑 및 보안경을 착용하세요."
+        if "mask" in lower or "respirat" in lower:
+            return "개인보호구(PPE): 실험용 장갑 및 보호 마스크를 착용하세요."
+        return "개인보호구(PPE): 실험용 장갑을 착용하세요."
+    if "goggles" in lower or "glasses" in lower or "eye protection" in lower:
+        return "개인보호구(PPE): 실험실 보안경을 착용하세요."
+    if "mask" in lower or "respirat" in lower:
+        return "개인보호구(PPE): 적절한 보호 마스크를 착용하세요."
+    if "fume hood" in lower or "hood" in lower or "ventilat" in lower:
+        return "작업 환경: 흄 후드(환기 장치) 내에서 작업하세요."
+
+    if "spill" in lower or "leak" in lower:
+        return "안전 취급: 유기용매 및 화학물질 누출에 주의하고 즉시 방제 절차를 따르세요."
+    if "toxic" in lower or "hazard" in lower or "harmful" in lower or "irritan" in lower:
+        return "안전 주의: 유해 화학물질 취급 시 피부 접촉과 증기 흡입을 피하세요."
+
+    if "dark" in lower or "light" in lower or "protect from light" in lower:
+        return "보관 주의: 빛을 차단한 차광 상태로 보관 및 취급하세요."
+    if "centrifuge" in lower:
+        return "장비 안전: 튜브 균형을 맞춘 후 원심분리기를 작동하세요."
+
+    return f"주의: {cleaned}"
+
+
+def _build_localized_safety_bullets(
+    step_pdf_warnings: list[str],
+    ppe_reqs: list[str],
+    handling: list[str],
+) -> tuple[str, ...]:
+    """Derive natural Korean presentation bullets for the UI safety card."""
+    localized_items: list[str] = []
+
+    ppe_text = " ".join(ppe_reqs).casefold()
+    if ppe_reqs:
+        if "glove" in ppe_text and ("goggle" in ppe_text or "eye" in ppe_text):
+            localized_items.append("• 개인보호구(PPE): 실험용 장갑 및 보안경 착용")
+        elif "glove" in ppe_text:
+            localized_items.append("• 개인보호구(PPE): 실험용 장갑 착용")
+        elif "goggle" in ppe_text or "eye" in ppe_text:
+            localized_items.append("• 개인보호구(PPE): 보안경 착용")
+        elif "mask" in ppe_text:
+            localized_items.append("• 개인보호구(PPE): 보호 마스크 착용")
+        else:
+            localized_items.append("• 개인보호구(PPE): 적절한 실험실 보호구 착용")
+
+    for w in step_pdf_warnings:
+        loc = _localize_safety_bullet(w)
+        if loc:
+            bullet = loc if loc.startswith("•") else f"• {loc}"
+            if bullet not in localized_items:
+                localized_items.append(bullet)
+
+    for h in handling:
+        loc = _localize_safety_bullet(h)
+        if loc:
+            bullet = loc if loc.startswith("•") else f"• {loc}"
+            if bullet not in localized_items:
+                localized_items.append(bullet)
+
+    if not localized_items and (ppe_reqs or handling or step_pdf_warnings):
+        localized_items.append("• 안전 지침: 승인된 실험실 안전 기준 및 보호구 수칙을 준수하세요.")
+
+    return tuple(localized_items[:3])
 
 
 def unavailable_safety_pack(

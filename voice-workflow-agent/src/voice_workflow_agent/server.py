@@ -1951,14 +1951,22 @@ async def _queue_curated_web_visual(
                 "tool.call", **identity, tool="search_authoritative_web", round=2
             )
 
-            # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests)
+            # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests or known compounds)
             pubchem_match = None
+            detected_entities = list(requested_entities)
+            if not detected_entities:
+                step_text_lower = f"{step.instruction_source_text} {fixture.title}".casefold()
+                for comp in _KNOWN_PUBCHEM_COMPOUNDS:
+                    if comp in step_text_lower:
+                        detected_entities.append(comp)
+                        break
+
             if visual_intent == "chemical_structure" or (
                 visual_intent != "lab_equipment_image"
-                and any(ent.casefold() in _KNOWN_PUBCHEM_COMPOUNDS for ent in requested_entities)
+                and any(ent.casefold() in _KNOWN_PUBCHEM_COMPOUNDS for ent in detected_entities)
             ):
                 pubchem_adapter = PubChemChemistryAdapter()
-                for ent in requested_entities:
+                for ent in detected_entities:
                     pubchem_match = await pubchem_adapter.lookup(ent)
                     if pubchem_match:
                         break
@@ -1968,6 +1976,17 @@ async def _queue_curated_web_visual(
                     turn_id, generation, configuration_id, fixture.protocol_id
                 ):
                     return
+                raw_img = pubchem_match.get("image_url")
+                if raw_img and raw_img.startswith("https://"):
+                    asset = await WEB_VISUAL_REGISTRY.obtain_or_register(
+                        image_url=raw_img,
+                        source_url=pubchem_match.get("source_page_url") or raw_img,
+                        publisher_domain=pubchem_match.get("publisher_domain") or "pubchem.ncbi.nlm.nih.gov",
+                        title=pubchem_match.get("title") or "PubChem Chemical Structure",
+                    )
+                    if asset is not None:
+                        pubchem_match["image_url"] = f"/api/web-visuals/{asset.asset_id}"
+                        pubchem_match["display_mode"] = "web_image"
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
@@ -1981,9 +2000,9 @@ async def _queue_curated_web_visual(
                 )
                 return
 
-            # 2. Parallel Fast Public Visual (Wikimedia) + Deep Grok 4.6 Image Search
-            search_terms = [*requested_entities, step.instruction_source_text[:50]] if requested_entities else [step.instruction_source_text[:50]]
-            wiki_adapter = WikimediaVisualAdapter(timeout_seconds=4.0)
+            # 2. Parallel Fast Public Visual (Wikimedia) + Deep Grok Image Search
+            search_terms = [*detected_entities, step.instruction_source_text[:50]] if detected_entities else [step.instruction_source_text[:50]]
+            wiki_adapter = WikimediaVisualAdapter(timeout_seconds=3.5)
 
             async def _fast_public_search():
                 for term in search_terms:
@@ -1991,6 +2010,8 @@ async def _queue_curated_web_visual(
                     if cand and cand.get("image_url"):
                         return cand
                 return None
+
+            web_visual_timeout = float(os.environ.get("VOICE_WORKFLOW_AGENT_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
 
             async def _grok_image_search():
                 try:
@@ -2003,9 +2024,14 @@ async def _queue_curated_web_visual(
                         "Find a real, authoritative laboratory image for this request. Include Markdown link ![alt](image_url).",
                         f"Protocol: {fixture.title}",
                         f"Step {step.source_label}: {step.instruction_source_text}",
-                        "Requested entities: " + (", ".join(requested_entities) or "current step"),
+                        "Requested entities: " + (", ".join(detected_entities) or "current step"),
                     ))
-                    res = await XaiAuthoritativeImageSearch(client, settings).search(query)
+                    search_settings = settings
+                    if search_settings.references:
+                        ref_copy = copy.deepcopy(search_settings.references)
+                        object.__setattr__(ref_copy, "timeout_seconds", web_visual_timeout)
+                        search_settings = WebVisualSettings(True, ref_copy)
+                    res = await XaiAuthoritativeImageSearch(client, search_settings).search(query)
                     if res.get("status") == "success" and res.get("matches"):
                         return res["matches"][0]
                 except Exception as exc:
@@ -2015,14 +2041,25 @@ async def _queue_curated_web_visual(
             fast_task = asyncio.create_task(_fast_public_search())
             grok_task = asyncio.create_task(_grok_image_search())
 
-            # Wait for the fast public search first (with up to 4.5s budget)
+            # Wait for fast public search with up to 3.5s budget
             fast_candidate = None
             try:
-                fast_candidate = await asyncio.wait_for(asyncio.shield(fast_task), timeout=4.5)
+                fast_candidate = await asyncio.wait_for(asyncio.shield(fast_task), timeout=3.5)
             except (asyncio.TimeoutError, Exception):
                 fast_candidate = None
 
             if fast_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                raw_img = fast_candidate.get("image_url")
+                if raw_img and raw_img.startswith("https://"):
+                    asset = await WEB_VISUAL_REGISTRY.obtain_or_register(
+                        image_url=raw_img,
+                        source_url=fast_candidate.get("source_page_url") or raw_img,
+                        publisher_domain=fast_candidate.get("publisher_domain") or "en.wikipedia.org",
+                        title=fast_candidate.get("title") or "Wikimedia image",
+                    )
+                    if asset is not None:
+                        fast_candidate["image_url"] = f"/api/web-visuals/{asset.asset_id}"
+                        fast_candidate["display_mode"] = "web_image"
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
@@ -2034,12 +2071,16 @@ async def _queue_curated_web_visual(
                     visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
                     candidate=fast_candidate
                 )
-                # Fast result successfully delivered to user! Allow grok_task to complete in background or cancel
                 grok_task.cancel()
                 return
 
-            # If fast search had no image, wait for Grok 4.6 image search
-            grok_candidate = await grok_task
+            # Wait for Grok image search under global deadline
+            grok_candidate = None
+            try:
+                grok_candidate = await asyncio.wait_for(grok_task, timeout=web_visual_timeout)
+            except (asyncio.TimeoutError, Exception):
+                grok_candidate = None
+
             if grok_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
@@ -2060,6 +2101,15 @@ async def _queue_curated_web_visual(
                     "tool.result", **identity, tool="search_authoritative_web",
                     round=2, status="not_found", elapsed_ms=elapsed, match_count=0
                 )
+                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
+                    visual_spec = _curated_visual_specification(curated)
+                    if visual_spec is not None:
+                        await _queue_curated_generated_visual(
+                            session=session, sender=sender, turn_id=turn_id,
+                            generation=generation, endpoint=endpoint, clock=clock,
+                            specification=visual_spec, settings=session.generated_visual_settings,
+                        )
+                        return
                 await sender.text(
                     "protocol.visual.state", **identity, status="visual_failed",
                     visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
@@ -2080,6 +2130,15 @@ async def _queue_curated_web_visual(
                     round=2, status="error",
                     elapsed_ms=max(0, round((clock() - started) * 1000))
                 )
+                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
+                    visual_spec = _curated_visual_specification(curated)
+                    if visual_spec is not None:
+                        await _queue_curated_generated_visual(
+                            session=session, sender=sender, turn_id=turn_id,
+                            generation=generation, endpoint=endpoint, clock=clock,
+                            specification=visual_spec, settings=session.generated_visual_settings,
+                        )
+                        return
                 await sender.text(
                     "protocol.visual.state", **identity, status="visual_failed",
                     visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
@@ -3403,10 +3462,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         await report_state(report)
             display_text=plan.display_text
             speech_text=plan.speech_text
+            speech_policy=getattr(plan,"speech_policy","speak")
             if not isinstance(display_text,str) or not display_text.strip():
                 raise RuntimeError("curated protocol produced no display text")
-            if not isinstance(speech_text,str) or not speech_text.strip():
-                raise RuntimeError("curated protocol produced no speech text")
+            if speech_policy=="speak":
+                if not isinstance(speech_text,str) or not speech_text.strip():
+                    raise RuntimeError("curated protocol produced no speech text")
             timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
             if plan.speech_mode.value=="blocked":
                 session.set_turn_terminal_outcome(
@@ -3521,17 +3582,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # nor TTS can use pre-persistence success language.
             display_text=plan.display_text
             speech_text=plan.speech_text
+            speech_policy=getattr(plan,"speech_policy","speak")
             if not isinstance(display_text,str) or not display_text.strip():
                 raise RuntimeError("curated protocol produced no display text")
-            if not isinstance(speech_text,str) or not speech_text.strip():
-                raise RuntimeError("curated protocol produced no speech text")
-            timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-            await progress("synthesizing",route="curated_protocol")
-            pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
-            frames=frame_complete_audio(pcm)
-            if filler is not None:await filler.primary_ready()
-            if not frames or not session.start_playback(turn_id):
-                raise RuntimeError("curated protocol produced no playable audio")
+            if speech_policy=="speak":
+                if not isinstance(speech_text,str) or not speech_text.strip():
+                    raise RuntimeError("curated protocol produced no speech text")
+                timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
+                await progress("synthesizing",route="curated_protocol")
+                pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
+                frames=frame_complete_audio(pcm)
+                if filler is not None:await filler.primary_ready()
+                if not frames or not session.start_playback(turn_id):
+                    raise RuntimeError("curated protocol produced no playable audio")
+            else:
+                frames=[]
+                if filler is not None:
+                    await filler.cancel()
+                session.complete_without_playback(turn_id)
         except asyncio.CancelledError:
             if brain_run is not None:
                 brain_run.cancel()
@@ -3547,9 +3615,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 curated._restore(checkpoint)
             raise
         timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-        await progress(
-            "playing",route="curated_protocol",
-            timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
+        if speech_policy=="speak":
+            await progress(
+                "playing",route="curated_protocol",
+                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
         await current_text(
             "protocol.fixture.state",turn_id=turn_id,
             configuration_id=session.accepted_configuration_id,
@@ -3637,23 +3706,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             display_document=getattr(plan, "display_document", None))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
-        await sender.segment(turn_id,0,frames,generation)
+        if speech_policy=="speak":
+            await sender.segment(turn_id,0,frames,generation)
         await current_text(
             "reply.complete",turn_id=turn_id,text=display_text)
         await current_text(
-            "audio.complete",turn_id=turn_id,segment_count=1)
+            "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
         if plan.action is CuratedProtocolAction.AUDIO_RECOVERY:
             await current_text(
                 "audio.replay.request",turn_id=turn_id,
                 replay_count=1,state_mutation=False)
-        else:
+        elif speech_policy=="speak":
             await current_text(
                 "audio.replay.available",turn_id=turn_id,
                 replay_count=1,state_mutation=False)
         timings["total_ms"]=round((clock()-endpoint)*1000)
         await current_text(
             "turn.done",turn_id=turn_id,timings_ms=timings,
-            segment_count=1,input_frames=input_frames,
+            segment_count=1 if speech_policy=="speak" else 0,input_frames=input_frames,
             output_frames=len(frames),tools_used=curated_tools_used,
             route="curated_protocol",result_kind=plan.action.value,
             fact_id=plan.fact_id,speech_mode=plan.speech_mode.value,

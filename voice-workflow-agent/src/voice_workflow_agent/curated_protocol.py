@@ -438,6 +438,7 @@ class CuratedProtocolTurnPlan:
     plausibility_reason: str | None = None
     timer_payload: dict[str, Any] | None = None
     display_document: dict[str, Any] | None = None
+    speech_policy: Literal["speak", "silent"] = "speak"
 
     @property
     def response_text(self) -> str | None:
@@ -5882,6 +5883,7 @@ class CuratedProtocolSession:
                 state_changed=False,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
+                speech_policy="silent",
             )
 
         if command is CuratedProtocolAction.STOP:
