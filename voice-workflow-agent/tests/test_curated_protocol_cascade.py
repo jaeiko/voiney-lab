@@ -4242,3 +4242,78 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ),
         )
         self.assertEqual(state_events[0]["action"], "clarify_completion")
+
+    def test_polite_transition_requests_require_confirmation_while_preview_is_read_only(self):
+        transition_prompts = (
+            "다음 단계로 안내해줘.",
+            "다음 단계로 안내해줄 수 있어?",
+            "다음으로 넘어가자.",
+            "다음 단계로 가줘.",
+            "이제 다음 단계 진행해줘.",
+            "다음으로 넘어갈 수 있어?",
+            "다음 단계로 넘어가도 돼?",
+            "다음 단계 진행할까?",
+            "다음 단계로 이동해 주세요",
+            "다음으로 갈래?",
+        )
+        for prompt in transition_prompts:
+            with self.subTest(prompt=prompt):
+                intent = classify_curated_control_intent(prompt, language="ko")
+                self.assertEqual(intent.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+                self.assertTrue(intent.requires_confirmation)
+                self.assertFalse(intent.allows_state_mutation)
+
+        preview_prompts = (
+            "다음 단계가 뭐야?",
+            "다음 단계 내용만 미리 알려줘.",
+            "다음 단계는 뭘 하는 단계야?",
+            "다음 단계 미리보기 해줘.",
+            "다음 스텝 미리 알려줘",
+            "next step",
+            "what is the next step",
+        )
+        for prompt in preview_prompts:
+            with self.subTest(preview_prompt=prompt):
+                intent = classify_curated_control_intent(prompt, language="ko")
+                self.assertEqual(intent.action, CuratedProtocolAction.NEXT_INFORMATION)
+                self.assertFalse(intent.allows_state_mutation)
+
+    def test_multi_entity_claim_requests_and_spoken_summary(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+        curated_session.current_index = 0
+        prompt = "염색된 단백질 밴드와, 어, AMBIC가 무엇인지 설명해줘."
+        intent = classify_curated_control_intent(prompt, language="ko")
+        self.assertEqual(intent.action, CuratedProtocolAction.RELATED_QUESTION)
+        self.assertIn("stained_protein_band", intent.requested_entities)
+        self.assertIn("ambic", intent.requested_entities)
+        plan = curated_session.plan(prompt, turn_id=1, language="ko")
+        envelope = curated_session.protocol_answer_envelope(plan, language="ko")
+        self.assertIn("단백질 밴드", envelope.speech_summary)
+        self.assertIn("AMBIC", envelope.speech_summary)
+        self.assertGreaterEqual(len(envelope.admitted_claim_ids), 2)
+
+    def test_lab_domain_qa_tube_definition_does_not_repeat_step_instruction(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+        curated_session.current_index = 3  # Step 4: Solution A discard
+        prompt = "여기서 젤 밴드가 들어있는 튜브가 무엇이야?"
+        intent = classify_curated_control_intent(prompt, language="ko")
+        self.assertIn(intent.action, {CuratedProtocolAction.LAB_DOMAIN_QA, CuratedProtocolAction.RELATED_QUESTION})
+        plan = curated_session.plan(prompt, turn_id=1, language="ko")
+        envelope = curated_session.protocol_answer_envelope(plan, language="ko")
+        self.assertNotIn("Solution A를 제거해 폐기합니다", envelope.speech_summary)
+        self.assertIn("튜브", envelope.speech_summary)
+
+    def test_timer_aware_spoken_prompt_appends_hint_on_timed_steps(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+        curated_session.current_index = 2  # Step 3: has 15 min timer
+        prompt = "현재 단계 알려줘"
+        plan = curated_session.plan(prompt, turn_id=1, language="ko")
+        self.assertIn("타이머를 시작하려면 말씀해주세요", plan.speech_text)
+
+        # After starting timer, the prompt should not append the hint again
+        curated_session.start_timer()
+        plan_after = curated_session.plan(prompt, turn_id=2, language="ko")
+        self.assertNotIn("타이머를 시작하려면 말씀해주세요", plan_after.speech_text)

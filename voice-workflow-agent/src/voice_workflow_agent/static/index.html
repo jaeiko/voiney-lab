@@ -297,8 +297,8 @@
       justify-content:flex-start;
     }
     .control-field{display:grid;gap:.28rem;min-width:0}
-    .control-field>span{font-size:.72rem;font-weight:750;color:var(--muted);letter-spacing:.02em}
-    .setup-col-left select{
+    .control-field>span,.control-label{font-size:.72rem;font-weight:750;color:var(--muted);letter-spacing:.02em;display:block}
+    .setup-col-right select,.setup-col-left select{
       width:100%;
       min-width:0;
       border:1px solid var(--border);
@@ -309,7 +309,7 @@
       font-size:.82rem;
       transition:border-color .15s;
     }
-    .setup-col-left select:hover{border-color:var(--blurple)}
+    .setup-col-right select:hover,.setup-col-left select:hover{border-color:var(--blurple)}
 
     .protocol-register{
       margin-top:0;
@@ -352,27 +352,6 @@
       text-overflow:ellipsis;
       white-space:nowrap;
     }
-    .btn-register{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      border:0;
-      border-radius:var(--radius-sm);
-      background:var(--blurple);
-      color:white;
-      padding:.45rem .85rem;
-      font-size:.82rem;
-      font-weight:800;
-      cursor:pointer;
-      flex-shrink:0;
-      width:auto;
-      white-space:nowrap;
-      height:2.2rem;
-      box-sizing:border-box;
-      transition:background .15s;
-    }
-    .btn-register:hover:not(:disabled){background:var(--blurple-hover)}
-    .btn-register:disabled{opacity:.4;cursor:not-allowed}
     .protocol-register small{display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem}
     .protocol-register small:empty{display:none}
 
@@ -632,18 +611,21 @@
       padding:1.25rem;
       position:sticky;
       top:4.5rem;
+      align-self:start;
+      width:100%;
       min-width:0;
+      box-sizing:border-box;
       display:flex;
       flex-direction:column;
-      height:calc(100vh - 5.5rem);
-      max-height:calc(100vh - 5.5rem);
-      min-height:24rem;
+      height:auto;
+      min-height:0;
+      max-height:calc(100dvh - 5.5rem);
       overflow:hidden;
     }
     #log{
-      flex:1 1 0%;
+      flex:1 1 auto;
       min-height:0;
-      height:auto;
+      max-height:calc(100dvh - 12rem);
       overflow-y:auto;
       overscroll-behavior:contain;
       scrollbar-gutter:stable;
@@ -656,7 +638,7 @@
     #log:empty::before{
       content:"세션을 시작하고 말씀하시면 음성 대화와 검색 기록이 여기에 차곡차곡 쌓여요.";
       display:block;
-      padding:3rem 1.5rem;
+      padding:1.5rem 1rem;
       text-align:center;
       color:var(--muted);
       border:1px dashed var(--border);
@@ -776,7 +758,7 @@
       .voice-panel{grid-template-columns:1fr}
       .setup-grid{grid-template-columns:1fr}
       .task-body-split{grid-template-columns:1fr}
-      .timeline{position:static;height:auto;max-height:none;min-height:22rem}
+      .timeline{position:static;height:auto;max-height:none;min-height:0;width:100%}
     }
     @media(max-width:720px){
       .example-strip{grid-template-columns:minmax(0,1fr)}
@@ -852,38 +834,38 @@
           </div>
           <div class="setup-grid">
             <div class="setup-col-left">
-              <label class="control-field"><span>실험 PDF</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
-                  <option value="">카탈로그를 불러오는 중…</option>
-              </select></label>
-              <details class="dev-diagnostics">
-                <summary>개발 상세 정보</summary>
-                <div class="dev-chips">
-                  <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
-                  <span class="context-chip"><b>안내 언어</b><span id="language-status">서버 고정 · 한국어</span></span>
-                  <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
-                  <span class="context-chip"><b>리비전</b><span id="protocol-revision">—</span></span>
-                  <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
-                  <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
-                  <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
-                  <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
-                  <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
-                  <span class="context-chip"><b>웹 이미지</b><span id="research-image-capability">확인 중</span></span>
-                  <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
-                  <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
-                </div>
-              </details>
-            </div>
-            <div class="setup-col-right">
               <div class="protocol-register">
+                <span class="control-label">새 실험 PDF 등록</span>
                 <div class="custom-file-wrapper">
                   <input id="protocol-pdf" type="file" accept="application/pdf,.pdf" class="visually-hidden-file-input" aria-label="프로토콜 PDF 등록" aria-describedby="protocol-upload-status">
                   <label for="protocol-pdf" class="btn-file-select" role="button" tabindex="0">실험 PDF 선택</label>
                   <span id="selected-file-name" class="selected-file-name">선택된 파일 없음</span>
-                  <button id="register-protocol" type="button" class="btn-register">등록하기</button>
                 </div>
                 <small id="protocol-upload-status" role="status"></small>
               </div>
             </div>
+            <div class="setup-col-right">
+              <label class="control-field"><span>실험 PDF</span><select id="protocol-id" aria-label="실행 프로토콜" aria-describedby="protocol-readiness protocol-revision">
+                  <option value="">카탈로그를 불러오는 중…</option>
+              </select></label>
+            </div>
+            <details class="dev-diagnostics" style="grid-column:1/-1;margin-top:.35rem;">
+              <summary>개발 상세 정보</summary>
+              <div class="dev-chips">
+                <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
+                <span class="context-chip"><b>안내 언어</b><span id="language-status">서버 고정 · 한국어</span></span>
+                <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
+                <span class="context-chip"><b>리비전</b><span id="protocol-revision">—</span></span>
+                <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
+                <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
+                <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
+                <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
+                <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
+                <span class="context-chip"><b>웹 이미지</b><span id="research-image-capability">확인 중</span></span>
+                <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
+                <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
+              </div>
+            </details>
           </div>
         </div>
       </section>
@@ -1312,10 +1294,12 @@ function renderSafetyPack(pack){
 function updateStepSafetyGuidance(){
  const box=$("step-safety-guidance"),citation=$("step-safety-citation"),body=$("step-safety-text");
  if(!box||!body)return;
- if(!activeSafetyPack||!curatedProtocolState||!curatedProtocolState.current_step_label){box.hidden=true;return;}
- const stepLabel=String(curatedProtocolState.current_step_label);
- const stepGuidanceList=activeSafetyPack.step_guidance||[];
- const found=stepGuidanceList.find(g=>String(g.step_label)===stepLabel);
+ const stepGuidanceState = curatedProtocolState?.step_safety_guidance;
+ const stepLabel = curatedProtocolState?.current_step_label ? String(curatedProtocolState.current_step_label) : null;
+ const stepGuidanceList = activeSafetyPack?.step_guidance || [];
+ const found = (stepGuidanceState && (!stepLabel || String(stepGuidanceState.step_label) === stepLabel))
+   ? stepGuidanceState
+   : (stepLabel ? stepGuidanceList.find(g => String(g.step_label) === stepLabel) : null);
  if(found){
   const bits=[];
   if(Array.isArray(found.display_bullets)&&found.display_bullets.length){
@@ -1330,7 +1314,7 @@ function updateStepSafetyGuidance(){
   }
   if(bits.length){
    box.hidden=false;
-   if(citation)citation.textContent=found.citation_label||"";
+   if(citation)citation.textContent=found.citation_label||(activeSafetyPack?.coverage_status==="demo_only"?"데모 안전 기준":"안전 SOP · SDS 적용됨");
    body.textContent=bits.slice(0,3).join("\n");
    return;
   }
@@ -1493,11 +1477,7 @@ function renderStructuredReply(node,message){
  const primary=typeof message.primary_text==="string"&&message.primary_text.trim()?message.primary_text.trim():typeof message.text==="string"&&message.text.trim()?message.text.trim():"";
  const sources=structured?message.sources:Array.isArray(message.source_texts)?message.source_texts:null;
  const pages=structured?message.source_pages:null,evidence=structured?message.evidence_ids:null,citations=reference?message.citations:null;
- if(!structured&&!reference&&!correction&&!message.display_document){
-  target.textContent+=normalizePresentationText(message.text)+" ";
-  finishChatPatch(snapshot);return false;
- }
- if(message.is_delta||(!structured&&!reference&&!message.display_document)){
+ if(message.is_delta || message.type==="reply.delta"){
   target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(message.text)+" ";
   finishChatPatch(snapshot);return false;
  }
@@ -1866,20 +1846,22 @@ async function safeProtocolUploadPayload(response){
  if(contentType&&!contentType.toLowerCase().includes("application/json"))return null;
  try{const payload=await response.json();return payload&&typeof payload==="object"&&!Array.isArray(payload)?payload:null;}catch(_){return null;}
 }
+let isRegisteringProtocol=false;
 async function registerSelectedProtocol(){
- const input=$("protocol-pdf"),button=$("register-protocol"),status=$("protocol-upload-status"),file=input?.files?.[0];
+ const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
  if(!file){if(status)status.textContent="등록할 PDF를 선택해 주세요.";return;}
- if(file.type!=="application/pdf"||!file.name.toLowerCase().endsWith(".pdf")){if(status)status.textContent="PDF 파일만 등록할 수 있습니다.";return;}
- if(button?.disabled)return;
- if(button)button.disabled=true;
+ if(file.type!=="application/pdf"||!file.name.toLowerCase().endsWith(".pdf")){if(status)status.textContent="PDF 파일만 등록할 수 있습니다.";if(input)input.value="";return;}
+ if(isRegisteringProtocol)return;
+ isRegisteringProtocol=true;
+ if(input)input.setAttribute?.("aria-busy","true");
  if(status)status.textContent="원문 PDF를 검증하고 등록하는 중…";
  try{
   let response;
   try{response=await fetch(`/api/protocols?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":"application/pdf"},body:file,redirect:"error"});}
-  catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return;}
+  catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");if(input)input.value="";return;}
   const payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);return;}
-  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);if(input)input.value="";return;}
+  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
   if(payload.protocol_id){
    if(status)status.textContent="원문 PDF 등록 완료 · 구조 분석 진행 중…";
    try{
@@ -1903,7 +1885,7 @@ async function registerSelectedProtocol(){
    $("protocol-id").value=payload.protocol_id;
    renderSelectedProtocolContext();
   }
- }finally{if(button)button.disabled=false;}
+ }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode="manual";acknowledgedLanguage="ko";const names={ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","서버 고정 · "+(names[language]||"한국어"));}
 function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
@@ -2035,7 +2017,7 @@ $("protocol-id")?.addEventListener("change",renderSelectedProtocolContext);$("re
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
-$("register-protocol")?.addEventListener("click",registerSelectedProtocol);globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();},{once:true});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();},{once:true});
 </script>
 </body>
 </html>

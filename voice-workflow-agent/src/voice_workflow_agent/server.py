@@ -4571,12 +4571,18 @@ async def voice_socket(websocket:WebSocket):
 
                         session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
+                        pack_dict = safety_pack.public_dict()
+                        if session.curated_protocol_session and hasattr(session.curated_protocol_session, "fixture") and session.curated_protocol_session.fixture:
+                            pack_dict["step_guidance"] = [
+                                safety_pack.guidance_for_step(step, i).public_dict()
+                                for i, step in enumerate(session.curated_protocol_session.fixture.steps)
+                            ]
                         await websocket.send_text(event(
                             "session.safety_pack",
                             configuration_id=configuration_id,
                             protocol_id=requested_protocol_id,
                             revision_id=selected_revision_id,
-                            safety_pack=safety_pack.public_dict(),
+                            safety_pack=pack_dict,
                         ))
                     pipeline="cascade"
                     session.accept_configuration(

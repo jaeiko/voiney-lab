@@ -141,8 +141,9 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
 
         # 2. Ask: "젤 밴드가 들어있는 튜브에 대해서 설명해 줄 수 있어?"
         plan2 = self.session.plan("젤 밴드가 들어있는 튜브에 대해서 설명해 줄 수 있어?", turn_id=11, language="ko")
-        self.assertEqual(plan2.action, CuratedProtocolAction.RELATED_QUESTION)
-        self.assertIn("4단계", plan2.display_text)
+        self.assertEqual(plan2.step_label, "4")
+        self.assertIn("튜브", plan2.display_text)
+        self.assertIn("단백질 밴드", plan2.display_text)
         self.assertFalse(plan2.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "4")
 

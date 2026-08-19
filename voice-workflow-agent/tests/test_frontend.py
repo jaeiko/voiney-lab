@@ -19,8 +19,7 @@ class FrontendSessionTests(unittest.TestCase):
         self.assertIn("align-items:start", html)
         self.assertIn("position:sticky", html)
         self.assertIn("top:4.5rem", html)
-        self.assertIn("calc(100vh - 5.5rem)", html)
-        self.assertIn("min-height:24rem", html)
+        self.assertIn("calc(100dvh - 5.5rem)", html)
         self.assertIn("overflow-y:auto", html)
         self.assertIn('role="log"', html)
         script = html.split("<script>", 1)[1].split("</script>", 1)[0]
@@ -307,18 +306,18 @@ const catalogEntries=[
  {protocol_id:"protocol-5",title:"Large",revision_id:"pdf-1",readiness_status:"analysis_required",analysis_status:"chunk_analysis_in_progress",available_for_execution:false,analysis_run:{state:"chunk_analysis_in_progress",total_chunks:3,completed_chunks:1,failed_chunks:0,pending_chunks:2,chunks:[{source_page_start:1,source_page_end:2,status:"completed"},{source_page_start:3,source_page_end:4,status:"in_progress"},{source_page_start:5,source_page_end:6,status:"pending"}]}}
 ];
 fetch=async()=>{assert(ids["protocol-readiness"].textContent.includes("불러오는 중"),"catalog loading state missing");return{ok:true,json:async()=>({protocols:catalogEntries})}};ids["protocol-id"].value="unavailable-old-selection";await loadProtocolCatalog();assert(protocolCatalog.size===6,`catalog size: ${protocolCatalog.size}`);assert([...protocolCatalog.values()].filter(item=>item.protocol_id==="candidate-a-curated-development-v1").length===1,"Candidate A did not appear exactly once after catalog reload");assert(protocolCatalog.get("candidate-a-curated-development-v1").development_only===true&&protocolCatalog.get("candidate-a-curated-development-v1").approval_status==="development_only_not_final_acceptance","Candidate A lost development-only status");assert(ids["protocol-id"].value==="candidate-a-curated-development-v1",`ready selection missing: ${ids["protocol-id"].value}; options=${ids["protocol-id"].options.map(option=>`${option.value}/${option.disabled}`).join(",")}`);assert(ids["protocol-readiness"].textContent.includes("개발용"),`development status missing: ${ids["protocol-readiness"].textContent}`);ids["protocol-id"].value="protocol-5";renderSelectedProtocolContext();assert(ids["protocol-analysis-progress"].textContent.includes("전체 3 / 완료 1 / 실패 0 / 대기 2")&&ids["protocol-analysis-progress"].textContent.includes("p.3-4 in_progress")&&ids["protocol-analysis-progress"].textContent.includes("검토·승인 전 실행 불가"),`chunk progress missing: ${ids["protocol-analysis-progress"].textContent}`);for(const [id,label] of [["protocol-2","구조화 분석"],["protocol-3","OCR 필요"],["protocol-4","분석 실패"],["protocol-5","대형 문서 분석 진행 중"]]){ids["protocol-id"].value=id;renderSelectedProtocolContext();assert(ids["protocol-readiness"].textContent.includes(label),`catalog state missing: ${id}`);}renderState("LISTENING");assert(ids["protocol-id"].disabled&&ids["protocol-id"].attributes["aria-disabled"]==="true","active session did not accessibly lock selector");fetch=async()=>({ok:false,json:async()=>({})});await loadProtocolCatalog();assert(ids["protocol-readiness"].textContent.includes("불러오기 실패")&&ids["protocol-id"].children.length===1&&ids["protocol-analysis-progress"].textContent.includes("상태 없음"),"catalog failure state missing");
-const selectedPdf={name:"selected.pdf",type:"application/pdf"};ids["protocol-pdf"].files=[selectedPdf];ids["register-protocol"].disabled=false;const unchangedProgress=ids["protocol-analysis-progress"].textContent;
+const selectedPdf={name:"selected.pdf",type:"application/pdf"};ids["protocol-pdf"].files=[selectedPdf];const unchangedProgress=ids["protocol-analysis-progress"].textContent;
 const errorCases=[
  ["invalid_pdf","PDF 파일이 손상되었거나 다운로드가 완료되지 않았습니다. 원본 파일을 다시 내려받아 선택해 주세요."],
  ["protocol_pdf_too_large","PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요."],
  ["protocol_catalog_unavailable","프로토콜 등록 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요."],
  ["unsupported_pdf_media_type","PDF 파일만 등록할 수 있습니다."]
 ];
-for(const [code,message] of errorCases){let calls=0;fetch=async(url,options)=>{calls++;assert(url.includes("filename=selected.pdf")&&options.method==="POST"&&options.headers["Content-Type"]==="application/pdf"&&options.body===selectedPdf&&options.redirect==="error","production raw upload contract changed");return{ok:false,headers:{get:()=>"application/json"},json:async()=>({detail:code})}};await registerSelectedProtocol();assert(calls===1,`failed ${code} refreshed catalog`);assert(ids["protocol-upload-status"].textContent===message,`safe upload message missing for ${code}`);assert(!ids["register-protocol"].disabled&&ids["protocol-pdf"].files[0]===selectedPdf,"recoverable failure lost selection or disabled button");assert(ids["protocol-analysis-progress"].textContent===unchangedProgress,"failed registration displayed analysis progress");}
-let nonJsonCalls=0;fetch=async()=>{nonJsonCalls++;return{ok:false,headers:{get:()=>"text/html"},json:async()=>{throw new Error("must not parse HTML")}}};await registerSelectedProtocol();assert(nonJsonCalls===1&&ids["protocol-upload-status"].textContent==="PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.","non-JSON upload failure was not sanitized");assert(!ids["register-protocol"].disabled,"non-JSON failure left button disabled");
-fetch=async()=>{throw new TypeError("offline")};await registerSelectedProtocol();assert(ids["protocol-upload-status"].textContent==="서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요."&&!ids["register-protocol"].disabled,"network upload failure was not distinguished");
-ids["register-protocol"].disabled=true;let duplicateCalls=0;fetch=async()=>{duplicateCalls++;throw new Error("duplicate")};await registerSelectedProtocol();assert(duplicateCalls===0,"disabled upload button allowed a duplicate request");ids["register-protocol"].disabled=false;
-let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:true,headers:{get:()=>"application/json"},json:async()=>({deduplicated:false,protocol:{protocol_id:"protocol-new"}})};return{ok:true,json:async()=>({protocols:catalogEntries})}};await registerSelectedProtocol();assert(successCalls===2,"successful registration did not refresh catalog exactly once");assert(!ids["register-protocol"].disabled,"successful registration left button disabled");
+for(const [code,message] of errorCases){let calls=0;fetch=async(url,options)=>{calls++;assert(url.includes("filename=selected.pdf")&&options.method==="POST"&&options.headers["Content-Type"]==="application/pdf"&&options.body===selectedPdf&&options.redirect==="error","production raw upload contract changed");return{ok:false,headers:{get:()=>"application/json"},json:async()=>({detail:code})}};await registerSelectedProtocol();assert(calls===1,`failed ${code} refreshed catalog`);assert(ids["protocol-upload-status"].textContent===message,`safe upload message missing for ${code}`);assert(ids["protocol-pdf"].files[0]===selectedPdf,"recoverable failure lost selection");assert(ids["protocol-analysis-progress"].textContent===unchangedProgress,"failed registration displayed analysis progress");}
+let nonJsonCalls=0;fetch=async()=>{nonJsonCalls++;return{ok:false,headers:{get:()=>"text/html"},json:async()=>{throw new Error("must not parse HTML")}}};await registerSelectedProtocol();assert(nonJsonCalls===1&&ids["protocol-upload-status"].textContent==="PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.","non-JSON upload failure was not sanitized");
+fetch=async()=>{throw new TypeError("offline")};await registerSelectedProtocol();assert(ids["protocol-upload-status"].textContent==="서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.","network upload failure was not distinguished");
+isRegisteringProtocol=true;let duplicateCalls=0;fetch=async()=>{duplicateCalls++;throw new Error("duplicate")};await registerSelectedProtocol();assert(duplicateCalls===0,"isRegisteringProtocol guard allowed a duplicate request");isRegisteringProtocol=false;
+let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:true,headers:{get:()=>"application/json"},json:async()=>({deduplicated:false,protocol:{protocol_id:"protocol-new"}})};return{ok:true,json:async()=>({protocols:catalogEntries})}};await registerSelectedProtocol();assert(successCalls===2,"successful registration did not refresh catalog exactly once");
 })().catch(error=>{console.error(error);process.exit(1)});
 """
         result=run_node_harness(harness)
@@ -340,8 +339,7 @@ let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:
         self.assertIn('align-items:start', html)
         self.assertIn('position:sticky', html)
         self.assertIn('top:4.5rem', html)
-        self.assertIn('calc(100vh - 5.5rem)', html)
-        self.assertIn('min-height:24rem', html)
+        self.assertIn('calc(100dvh - 5.5rem)', html)
         self.assertIn('class="turn-diagnostics"', html)
         self.assertIn('summary>근거·처리·지연시간 세부정보', html)
         self.assertLess(
@@ -371,7 +369,8 @@ let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:
         self.assertIn('function sanitizeExternalResearchAnswer', html)
         self.assertNotIn('id="language-mode"', html)
         self.assertNotIn('id="manual-language"', html)
-        self.assertIn('class="btn-register"', html)
+        self.assertNotIn('class="btn-register"', html)
+        self.assertNotIn('id="register-protocol"', html)
         self.assertIn('class="btn-file-select"', html)
         self.assertIn('class="report-event-ledger"', html)
         self.assertNotIn("overflow-x:scroll", html)

@@ -1542,7 +1542,8 @@ _TERM_QUESTION_PATTERNS = (
     (re.compile(r"solution\s*b|용액\s*b|용액\s*비|b\s*용액|솔루션\s*b|솔루션\s*비", re.I), "solution_b"),
     (re.compile(r"acetonitrile|아세토니트릴|아세토나이트릴", re.I), "acetonitrile"),
     (re.compile(r"gel\s*plug|젤\s*플러그|제트\s*플러그|젤\s*플럭", re.I), "gel_plug"),
-    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|(?:염색된\s*)?단백질\s*겔\s*밴드", re.I), "stained_protein_band"),
+    (re.compile(r"stained\s+protein\s+band|염색된\s*단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*(?:밴드|뱀드|뱄드|밸드|밴트)|(?:염색된\s*)?단백질\s*(?:겔|젤)\s*밴드|gel\s*band|(?:젤|겔)\s*(?:밴드|뱀드|뱄드|밸드|밴트)|단백질\s*밴드|염색된\s*밴드", re.I), "stained_protein_band"),
+    (re.compile(r"(?<![a-z0-9])(?:tube|microcentrifuge\s*tube|eppendorf|ep\s*tube)(?![a-z0-9])|튜브|마이크로센트리퓨즈\s*튜브|반응\s*튜브|원심분리\s*관|에펜도르프\s*튜브", re.I), "tube"),
     (re.compile(r"(?<![a-z0-9])dtt(?![a-z0-9])|dithiothreitol|디티오트레이톨|디티티", re.I), "dtt"),
     (re.compile(r"iodoacetamide|요오도아세트아미드|아이오도아세트아마이드|아이오도아세트아미드|이오도아세트아미드", re.I), "iodoacetamide"),
     (re.compile(r"trypsin|트립신|트립씬", re.I), "trypsin"),
@@ -1674,8 +1675,9 @@ _PARAMETER_RATIONALE_PATTERNS = (
 _TERM_QUESTION_DIMENSIONS = frozenset({
     "뭐", "무엇", "물질", "성분", "구성", "차이", "왜", "역할", "준비",
     "만들", "일반 물", "증류수", "위험", "주의", "안전", "알려", "대해", "대해서", "설명",
+    "어떤", "뜻", "의미", "튜브", "용기", "플러그", "밴드",
     "what", "which", "define", "difference", "why", "role", "contain",
-    "prepare", "hazard", "safe", "explain",
+    "prepare", "hazard", "safe", "explain", "meaning", "structure",
 })
 _REPORT_REQUEST_PATTERNS = (
     re.compile(r"(?:현재\s*)?(?:실험\s*)?(?:기록|보고서).*(?:보여|열어|내보내|export)"),
@@ -1773,19 +1775,72 @@ _SAFETY_RELATED_TERMS = frozenset({
     "warning", "contamination", "avoid",
 })
 
+_POLITE_VERB_ENDINGS = (
+    r"(?:해\s*줘|해줘|해\s*줄래|해줄래|해\s*주세요|해주세요|해\s*줄\s*수\s*있어\??|해줄\s*수\s*있어\??|"
+    r"해\s*줄\s*수\s*있나요\??|해줄\s*수\s*있나요\??|해\s*줄\s*수\s*있으세요\??|"
+    r"하자|하죠|할까\??|할래\??|해도\s*돼\??|해도\s*될까\??|해도\s*되나요\??|"
+    r"가\s*줘|가줘|갈래\??|갈까\??|가도\s*돼\??|가도\s*될까\??|가자|가죠|가주세요|"
+    r"가능해\??|가능할까\??|가능한가요\??|가능합니까\??|부탁해|부탁해요)"
+)
+
 _NAVIGATION_PATTERNS = (
     re.compile(
-        r"^다음\s*단계(?:에\s*대해서)?\s*(?:로)?\s*"
-        r"(?:진행|넘어|안내)(?:해\s*줘|해줘|하자|하죠|해\s*주세요)?$"
+        r"^(?:(?:이제|그럼|자|혹시)\s*)?"
+        r"(?:다음(?:으로)?|다음\s*(?:단계|스텝)(?:에\s*대해서|에\s*대해|에|로)?)\s*"
+        r"(?:"
+        r"(?:안내|진행|이동)"
+        r"(?:\s*(?:해\s*줘|해줘|해\s*줄래|해줄래|해\s*주세요|해주세요|해\s*줄\s*수\s*있어\??|해줄\s*수\s*있어\??|"
+        r"해\s*줄\s*수\s*있나요\??|해줄\s*수\s*있나요\??|해\s*줄\s*수\s*있으세요\??|"
+        r"하자|하죠|할까\??|할래\??|해도\s*돼\??|해도\s*될까\??|해도\s*되나요\??|가능해\??|가능할까\??|가능한가요\??|부탁해|부탁해요))?|"
+        r"(?:넘어\s*가|넘어가)"
+        r"(?:자|죠|줘|줄래|주세요|도\s*돼\??|도\s*될까\??|도\s*되나요\??|요)?"
+        r"|"
+        r"(?:넘어\s*갈|넘어갈|갈)"
+        r"(?:\s*(?:까\??|래\??|수\s*있어\??|수\s*있나요\??|수\s*있으세요\??))|"
+        r"(?:가)"
+        r"(?:자|죠|줘|줄래|주세요|도\s*돼\??|도\s*될까\??|도\s*되나요\??|요)?"
+        r")\??$",
+        re.IGNORECASE,
     ),
     re.compile(
-        r"^(?:please\s+)?(?:guide\s+me|proceed|move|go)\s+"
-        r"(?:to\s+)?(?:the\s+)?next\s+step$"
+        r"^(?:(?:이제|그럼|자)\s*)?"
+        r"(?:다음(?:으로)?|다음\s*(?:단계|스텝)(?:에\s*대해서|에\s*대해|에|로)?)\s*"
+        r"(?:해\s*줘|해줘|해\s*줄래|해줄래|해\s*주세요|해주세요|해\s*줄\s*수\s*있어\??|해줄\s*수\s*있어\??|"
+        r"해\s*줄\s*수\s*있나요\??|해줄\s*수\s*있나요\??|하자|하죠|할까\??|할래\??|해도\s*돼\??|해도\s*될까\??|해도\s*되나요\??|"
+        r"가\s*줘|가줘|갈래\??|갈까\??|가도\s*돼\??|가도\s*될까\??|가자|가죠|가주세요|"
+        r"가능해\??|가능할까\??|가능한가요\??|부탁해|부탁해요)\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:please\s+)?(?:guide\s+me\s+to|proceed\s+to|move\s+to|go\s+to|can\s+you\s+(?:guide|proceed|move|go)\s+to)\s+"
+        r"(?:the\s+)?next\s+step\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:let'?s\s+)?(?:move|proceed|go)\s+(?:on\s+)?to\s+(?:the\s+)?next\s*(?:step)?\??$",
+        re.IGNORECASE,
     ),
 )
 _NEXT_INFORMATION_PATTERNS = (
-    re.compile(r"^(?:다음\s*단계(?:는|가)?\s*(?:뭐야|무엇|어떤\s*단계|알려\s*줘))$"),
-    re.compile(r"^(?:what(?:'s|\s+is)\s+(?:the\s+)?next\s+step|tell\s+me\s+what\s+the\s+next\s+step\s+is)$"),
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시)\s*)?"
+        r"(?:다음\s*(?:단계|스텝)|next\s*step)"
+        r"(?:(?:는|가|에\s*대해|에\s*대해서|의|은)?\s*)"
+        r"(?:(?:내용(?:만)?\s*)?(?:미리\s*)?"
+        r"(?:뭐야|무엇|어떤\s*(?:단계(?:야)?|거야?|것이야?|내용이야?|작업이야?)|"
+        r"(?:뭘|무엇을?|뭐)\s*(?:하는\s*(?:단계(?:야)?|거(?:야)?|것(?:이야)?|일(?:이야)?|동작(?:이야)?)|해)|"
+        r"알려\s*(?:줘|줄래|주세요|줄\s*수\s*있어\??)|보기\s*(?:해\s*줘|해줘)?|설명해\s*줘|보여\s*줘)|"
+        r"(?:미리\s*(?:보기|알려\s*(?:줘|줄래|주세요|줄\s*수\s*있어\??))))\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:please\s+)?(?:what(?:'s|\s+is)\s+(?:the\s+)?next\s+step|"
+        r"tell\s+me\s+(?:about\s+)?(?:what\s+the\s+)?next\s+step(?:\s+is)?|"
+        r"preview\s+(?:the\s+)?next\s+step|"
+        r"what\s+does\s+the\s+next\s+step\s+do|"
+        r"(?:the\s+)?next\s+step)\??$",
+        re.IGNORECASE,
+    ),
 )
 _CURRENT_INFORMATION_PATTERNS = (
     re.compile(r"^(?:what(?:'s|\s+is)\s+(?:the\s+)?current\s+step)$"),
@@ -2703,6 +2758,19 @@ def classify_curated_control_intent(
             transcript_corrections=(("투 루", "프로토콜"),),
         )
     requested_entity = normalized_entity
+    if requested_entity == "tube" and len(normalized_entities) <= 1:
+        return CuratedControlIntent(
+            intent_kind="lab_domain_qa",
+            action=CuratedProtocolAction.LAB_DOMAIN_QA,
+            question_kind="lab_domain_qa",
+            target_step="authoritative_current_step",
+            requested_entity="tube",
+            requested_entities=("tube",),
+            resolved_entity="tube",
+            language=language,
+            normalized_transcript=key,
+            question_dimensions=dimensions or ("definition",),
+        )
     if requested_entity is not None and any(
         dimension in key for dimension in _TERM_QUESTION_DIMENSIONS
     ):
@@ -3310,37 +3378,48 @@ def _control_speech(
     *,
     resumed: bool = False,
     development_only: bool = True,
+    step_index: int | None = None,
+    timer_active: bool = False,
 ) -> str:
+    timer_hint = ""
+    if step_index is not None and _CANDIDATE_A_STEP_TIMERS.get(step_index, 0) > 0 and not timer_active:
+        if language == "ko":
+            timer_hint = " 타이머를 시작하려면 말씀해주세요."
+        elif language == "en":
+            timer_hint = " Say start timer when you are ready to begin the timer."
+        elif language == "vi":
+            timer_hint = " Hãy nói bắt đầu hẹn giờ khi bạn sẵn sàng."
+
     english_subject = "Protocol"
     if language == "en":
         if action is CuratedProtocolAction.START:
             verb = "redisplayed" if resumed else "displayed"
-            return f"{english_subject} step {label} guidance is {verb} on screen."
+            return f"{english_subject} step {label} guidance is {verb} on screen.{timer_hint}"
         if action is CuratedProtocolAction.CURRENT:
-            return f"The current step is {label}. Its guidance is displayed on screen."
+            return f"The current step is {label}. Its guidance is displayed on screen.{timer_hint}"
         if action is CuratedProtocolAction.REPEAT:
-            return f"Current step {label} guidance is displayed again on screen."
-        return f"Moved to step {label}. Its guidance is displayed on screen."
+            return f"Current step {label} guidance is displayed again on screen.{timer_hint}"
+        return f"Moved to step {label}. Its guidance is displayed on screen.{timer_hint}"
     if language == "vi":
         subject = "quy trình"
         if action is CuratedProtocolAction.START:
             verb = "hiển thị lại" if resumed else "hiển thị"
-            return f"Hướng dẫn bước {label} của {subject} đã được {verb} trên màn hình."
+            return f"Hướng dẫn bước {label} của {subject} đã được {verb} trên màn hình.{timer_hint}"
         if action is CuratedProtocolAction.CURRENT:
-            return f"Hiện tại là bước {label}. Hướng dẫn được hiển thị trên màn hình."
+            return f"Hiện tại là bước {label}. Hướng dẫn được hiển thị trên màn hình.{timer_hint}"
         if action is CuratedProtocolAction.REPEAT:
-            return f"Hướng dẫn bước {label} hiện tại đã được hiển thị lại trên màn hình."
-        return f"Đã chuyển sang bước {label}. Hướng dẫn được hiển thị trên màn hình."
+            return f"Hướng dẫn bước {label} hiện tại đã được hiển thị lại trên màn hình.{timer_hint}"
+        return f"Đã chuyển sang bước {label}. Hướng dẫn được hiển thị trên màn hình.{timer_hint}"
     korean_subject = ""
     if action is CuratedProtocolAction.START:
         if resumed:
-            return f"{korean_subject}{label}단계 안내를 화면에 다시 표시했습니다."
-        return f"{korean_subject}{label}단계 안내를 화면에 표시했습니다."
+            return f"{korean_subject}{label}단계 안내를 화면에 다시 표시했습니다.{timer_hint}"
+        return f"{korean_subject}{label}단계 안내를 화면에 표시했습니다.{timer_hint}"
     if action is CuratedProtocolAction.CURRENT:
-        return f"현재 {label}단계입니다. 안내를 화면에 표시했습니다."
+        return f"현재 {label}단계입니다. 안내를 화면에 표시했습니다.{timer_hint}"
     if action is CuratedProtocolAction.REPEAT:
-        return f"현재 {label}단계 안내를 다시 표시했습니다."
-    return f"{label}단계로 이동했습니다. 안내를 화면에 표시했습니다."
+        return f"현재 {label}단계 안내를 다시 표시했습니다.{timer_hint}"
+    return f"{label}단계로 이동했습니다. 안내를 화면에 표시했습니다.{timer_hint}"
 
 
 def _step_reply(
@@ -4008,6 +4087,11 @@ class CuratedProtocolSession:
                 if language == "ko" else
                 "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace."
             ),
+            "tube": (
+                "이 프로토콜에서 튜브는 잘라낸 1 mm³ 젤 플러그를 담아 세척, 탈색, 환원·알킬화 및 효소 소화 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브(반응 튜브)를 의미합니다. 프로토콜 원문은 튜브의 특정 재질이나 제조사를 별도로 한정하지 않습니다."
+                if language == "ko" else
+                "In this protocol, the tube refers to the 1.5 mL microcentrifuge reaction tube that holds the excised 1 mm³ gel plug during washing, destaining, reduction/alkylation, and enzymatic digestion. The source protocol does not restrict specific tube materials or brands."
+            ),
         }
         alias_map = {
             "ambic": ("ambic", "ammonium bicarbonate"),
@@ -4016,7 +4100,8 @@ class CuratedProtocolSession:
             "solution_b": ("solution b",),
             "acetonitrile": ("acetonitrile",),
             "gel_plug": ("gel plug",),
-            "stained_protein_band": ("stained protein band", "protein band"),
+            "stained_protein_band": ("stained protein band", "protein band", "gel band", "band", "밴드", "단백질 밴드", "젤 밴드"),
+            "tube": ("tube", "microcentrifuge tube", "튜브", "반응 튜브", "관"),
             "dtt": ("dtt", "dithiothreitol"),
             "iodoacetamide": ("iodoacetamide",),
             "trypsin": ("trypsin",),
@@ -4031,6 +4116,22 @@ class CuratedProtocolSession:
                 if any(alias in _derived_source_text(fact.text).casefold()
                        for alias in alias_map.get(entity, (entity,)))
             )[:2]
+            if not evidence:
+                evidence = tuple(
+                    fact.fact_id
+                    for idx in range(len(self.fixture.steps))
+                    for fact in self.fixture.facts_for_step(idx)
+                    if any(alias in _derived_source_text(fact.text).casefold()
+                           for alias in alias_map.get(entity, (entity,)))
+                )[:2]
+            if not evidence and knowledge.materials:
+                evidence = tuple(
+                    fact.fact_id for fact in knowledge.materials
+                    if any(alias in _derived_source_text(fact.text).casefold()
+                           for alias in alias_map.get(entity, (entity,)))
+                )[:2]
+            if not evidence and knowledge.purpose:
+                evidence = (knowledge.purpose.fact_id,)
             answer = entity_answers.get(entity)
             if answer and evidence:
                 dimension = (
@@ -4782,6 +4883,10 @@ class CuratedProtocolSession:
                 "Contamination",
                 "오염(contamination)은 외부 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 각질(keratin) 및 먼지 오염을 방지하기 위해 장갑 착용과 깨끗한 작업 환경을 경고합니다.",
             ),
+            "tube": (
+                "Tube (반응 튜브)",
+                "이 프로토콜에서 튜브는 잘라낸 1 mm³ 젤 플러그를 담아 세척, 탈색, 환원·알킬화 및 효소 소화 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브(반응 튜브)를 의미합니다. 프로토콜 원문은 튜브의 특정 재질이나 제조사를 별도로 한정하지 않습니다.",
+            ),
         }
         explanations_en = {
             "ambic": (
@@ -4839,6 +4944,10 @@ class CuratedProtocolSession:
             "contamination": (
                 "Contamination",
                 "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace.",
+            ),
+            "tube": (
+                "Tube",
+                "In this protocol, the tube refers to the 1.5 mL microcentrifuge reaction tube that holds the excised 1 mm³ gel plug during washing, destaining, reduction/alkylation, and enzymatic digestion. The source protocol does not restrict specific tube materials or brands.",
             ),
         }
         explanations = explanations_ko if language == "ko" else explanations_en
@@ -5043,8 +5152,12 @@ class CuratedProtocolSession:
             "warning_presentations": warning_presentations,
             # Warning severity is not represented in the canonical domain.
             # Keep ordinary warnings visible without inventing a critical cue.
-            "critical_warning_texts": [],
             "workflow_status": self.workflow_status,
+            "step_safety_guidance": (
+                self.safety_pack.guidance_for_step(current_step, self.current_index).public_dict()
+                if self.safety_pack is not None and current_step is not None
+                else None
+            ),
             "timer": self.timer_status(),
             "timers": {
                 "experiment": self.experiment_timer_status(),
@@ -5421,12 +5534,15 @@ class CuratedProtocolSession:
                 if clock_started:
                     changed = True
             step = steps[self.current_index]
+            timer_active = (self._timer_started_at is not None and self._timer_step_index == self.current_index)
             control_text = _control_speech(
                 CuratedProtocolAction.START,
                 language,
                 step.source_label,
                 resumed=resumed,
                 development_only=self.fixture.development_only,
+                step_index=self.current_index,
+                timer_active=timer_active,
             )
             if language == "ko" and not resumed:
                 control_text = (
@@ -6226,6 +6342,8 @@ class CuratedProtocolSession:
                     language,
                     step.source_label,
                     development_only=self.fixture.development_only,
+                    step_index=self.current_index,
+                    timer_active=False,
                 )
                 response, primary, sources, pages, evidence_ids, translation_status = (
                     _step_presentation(
@@ -6373,11 +6491,14 @@ class CuratedProtocolSession:
             else:
                 step = steps[self.current_index]
                 action = command
+                timer_active = (self._timer_started_at is not None and self._timer_step_index == self.current_index)
                 control_text = _control_speech(
                     action,
                     language,
                     step.source_label,
                     development_only=self.fixture.development_only,
+                    step_index=self.current_index,
+                    timer_active=timer_active,
                 )
                 response, primary, sources, pages, evidence_ids, translation_status = (
                     _step_presentation(
