@@ -4714,6 +4714,29 @@ async def voice_socket(websocket:WebSocket):
                     task.cancel()
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"]=="workflow.pause":
+                if session.active and session.curated_protocol_session is not None:
+                    session.curated_protocol_session.pause_workflow()
+                    if task and not task.done():
+                        await _finish_all_research_operations(sender,session,"cancelled")
+                        task.cancel()
+                    fixture_state=session.curated_protocol_session.state()
+                    await websocket.send_text(event(
+                        "protocol.fixture.state",
+                        configuration_id=session.accepted_configuration_id,
+                        action="pause",
+                        state=fixture_state,
+                    ))
+            elif control["type"]=="workflow.resume":
+                if session.active and session.curated_protocol_session is not None:
+                    session.curated_protocol_session.resume_workflow()
+                    fixture_state=session.curated_protocol_session.state()
+                    await websocket.send_text(event(
+                        "protocol.fixture.state",
+                        configuration_id=session.accepted_configuration_id,
+                        action="resume",
+                        state=fixture_state,
+                    ))
             elif control["type"]=="client.audio_constraints":
                 requested=control["requested"]
                 actual=control["actual"]

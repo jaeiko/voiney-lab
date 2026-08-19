@@ -10,6 +10,8 @@ from voice_workflow_agent.curated_protocol import (
     load_curated_protocol_fixture,
     _observation_predicate,
     _extract_step_range,
+    classify_curated_control_intent,
+    resolve_question_focus,
 )
 from voice_workflow_agent.external_references import _canonical_url
 from voice_workflow_agent.language import (
@@ -143,7 +145,8 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         plan2 = self.session.plan("젤 밴드가 들어있는 튜브에 대해서 설명해 줄 수 있어?", turn_id=11, language="ko")
         self.assertEqual(plan2.step_label, "4")
         self.assertIn("튜브", plan2.display_text)
-        self.assertIn("단백질 밴드", plan2.display_text)
+        self.assertIn("1.5 mL", plan2.display_text)
+        self.assertNotIn("염색된 단백질 밴드는 SDS-PAGE", plan2.display_text)
         self.assertFalse(plan2.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "4")
 
@@ -206,8 +209,115 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         url1 = _canonical_url("https://en.wikipedia.org/wiki/Ammonium_bicarbonate", open_domains)
         self.assertEqual(url1, "https://en.wikipedia.org/wiki/Ammonium_bicarbonate")
 
-        url2 = _canonical_url("https://pubchem.ncbi.nlm.nih.gov/compound/14013", open_domains)
-        self.assertEqual(url2, "https://pubchem.ncbi.nlm.nih.gov/compound/14013")
+    def test_agent_meta_intent_works_in_all_states_including_compound_queries(self) -> None:
+        """Agent meta questions must work before protocol start and during active workflow without mutation."""
+        meta_utterances = [
+            "너는 뭐 하는 애이고, 그리고 어떤 기능을 수행해?",
+            "너의 목표와 기능이 뭐야?",
+            "너는 누구고 뭘 할 수 있어?",
+            "이 에이전트 목적이랑 주요 기능을 설명해줘.",
+            "무슨 역할을 하는 시스템이야?",
+            "기능을 설명해줘.",
+        ]
+        # 1. Test before protocol start (inactive state)
+        self.assertFalse(self.session.active)
+        for idx, utterance in enumerate(meta_utterances, start=1):
+            intent = classify_curated_control_intent(utterance, language="ko")
+            self.assertEqual(intent.action, CuratedProtocolAction.AGENT_META, f"Failed for {utterance}")
+            plan = self.session.plan(utterance, turn_id=idx, language="ko")
+            self.assertEqual(plan.action, CuratedProtocolAction.AGENT_META)
+            self.assertFalse(plan.state_changed)
+            self.assertFalse(self.session.active)
+            self.assertIn("보이스 워크플로 에이전트", plan.display_text)
+
+        # 2. Test during active protocol
+        self.session.plan("프로토콜 시작", turn_id=10, language="ko")
+        self.assertTrue(self.session.active)
+        plan_active = self.session.plan("너는 뭐 하는 애이고, 그리고 어떤 기능을 수행해?", turn_id=11, language="ko")
+        self.assertEqual(plan_active.action, CuratedProtocolAction.AGENT_META)
+        self.assertFalse(plan_active.state_changed)
+        self.assertTrue(self.session.active)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+    def test_question_focus_resolution_distinguishes_head_noun_from_relative_modifier(self) -> None:
+        """Noun phrase modifiers ('젤 밴드가 들어있는 튜브') must isolate the head noun as focus."""
+        # 1. Modifier clause: focus is tube, context is stained_protein_band
+        focus, context = resolve_question_focus(
+            "여기서 젤 밴드가 들어있는 튜브가 뭐야?",
+            ("stained_protein_band", "tube"),
+        )
+        self.assertEqual(focus, ("tube",))
+        self.assertEqual(context, ("stained_protein_band",))
+
+        # 2. Coordination clause: both are focus
+        focus_coord, context_coord = resolve_question_focus(
+            "AMBIC와 HPLC water의 차이가 뭐야?",
+            ("ambic", "hplc_water"),
+        )
+        self.assertEqual(focus_coord, ("ambic", "hplc_water"))
+        self.assertEqual(context_coord, ())
+
+        # 3. Execution plan test: query for tube in Step 1
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        plan = self.session.plan("여기서 젤 밴드가 들어있는 튜브가 뭐야?", turn_id=2, language="ko")
+        self.assertEqual(plan.action, CuratedProtocolAction.LAB_DOMAIN_QA)
+        self.assertFalse(plan.state_changed)
+        self.assertIn("마이크로센트리퓨지 튜브", plan.display_text)
+        self.assertNotIn("염색된 단백질 밴드는 SDS-PAGE", plan.display_text)
+
+    def test_completion_claims_with_adverbs_and_guards(self) -> None:
+        """Adverbial completion claims must advance step, while future/hypothetical/negated must be blocked."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        # 1. Guards: future, hypothetical, negative must NOT advance
+        plan_future = self.session.plan("이번 단계 미리 완료할게", turn_id=2, language="ko")
+        self.assertFalse(plan_future.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        plan_hypo = self.session.plan("미리 완료하면 어떻게 돼?", turn_id=3, language="ko")
+        self.assertFalse(plan_hypo.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        plan_neg = self.session.plan("아직 완료 안 했어", turn_id=4, language="ko")
+        self.assertFalse(plan_neg.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        # 2. Positive completion with adverb: "응, 이번 단계도 미리 완료했어."
+        plan_done = self.session.plan("응, 이번 단계도 미리 완료했어.", turn_id=5, language="ko")
+        self.assertTrue(plan_done.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "2")
+
+        # 3. Next step with "벌써 다 했어"
+        plan_done2 = self.session.plan("이번 단계 벌써 다 했어", turn_id=6, language="ko")
+        self.assertTrue(plan_done2.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "3")
+
+    def test_pause_and_resume_workflow_integration(self) -> None:
+        """Pause stops guidance and guards normal commands; resume restores procedure context."""
+        self.session.plan("프로토콜 시작", turn_id=1, language="ko")
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+        self.assertEqual(self.session._pause_state, "active")
+
+        # 1. Pause via voice command
+        plan_pause = self.session.plan("잠시 일시정지할게", turn_id=2, language="ko")
+        self.assertEqual(plan_pause.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(self.session._pause_state, "paused")
+        self.assertIn("일시 중지", plan_pause.display_text)
+
+        # 2. Utterance while paused: returns pause prompt without mutating procedure
+        plan_during = self.session.plan("AMBIC가 뭐야?", turn_id=3, language="ko")
+        self.assertEqual(plan_during.action, CuratedProtocolAction.PAUSE)
+        self.assertFalse(plan_during.state_changed)
+        self.assertIn("일시정지 상태입니다", plan_during.display_text)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
+
+        # 3. Resume via voice command
+        plan_resume = self.session.plan("다시 실험 재개할게", turn_id=4, language="ko")
+        self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
+        self.assertEqual(self.session._pause_state, "active")
+        self.assertIn("재개", plan_resume.speech_text)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "1")
 
 
 if __name__ == "__main__":

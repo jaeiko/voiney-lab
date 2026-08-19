@@ -712,6 +712,7 @@
 
     .turn-diagnostics{grid-column:2;margin-top:.3rem;color:var(--muted);font-size:.76rem}
     .turn-diagnostics summary{cursor:pointer;color:var(--blurple);font-weight:800}
+    .turn-diagnostics-body{margin-top:.35rem;display:flex;flex-direction:column;gap:.25rem;white-space:pre-wrap}
     .turn-diagnostics>div{margin-top:.35rem;white-space:pre-wrap}
 
     .turn .replay-status{grid-column:2;color:var(--muted);font-size:.76rem}
@@ -799,6 +800,7 @@
     </div>
     <div class="rail-right">
       <button id="rail-new-session" type="button" class="btn-rail-secondary">새 세션</button>
+      <button id="rail-pause-session" type="button" class="btn-rail-secondary" disabled>일시정지</button>
       <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
       <button id="toggle-setup-btn" type="button" class="btn-rail-ghost" aria-expanded="true" aria-controls="hero-setup">⚙️ 설정 접기</button>
     </div>
@@ -1025,12 +1027,25 @@ const TURN_STATE_TRANSITIONS={listening:new Set(["transcribing","cancelled","err
 const TOOL_ERROR_LABELS={observation_evidence_mismatch:"음성 원문과 관찰값 불일치",observation_required:"필수 관찰값 없음",timer_not_configured:"현재 단계에 타이머 없음",timer_not_started:"타이머 시작 필요",timer_not_elapsed:"타이머 진행 중",procedure_blocked_for_handoff:"관리자 인계로 진행 차단",explicit_confirmation_required:"명시적 단계 완료 확인 필요",step_mismatch:"현재 단계 불일치",observation_not_allowed:"현재 단계에서 관찰 기록 불가",observation_value_invalid:"관찰값 형식 오류",procedure_store_unavailable:"워크플로 저장소 오류",no_active_procedure:"진행 중인 워크플로 없음"};
 const REPORT_LABELS={awaiting_user_confirmation:"사용자 제출 확인 대기",submitting:"보고서 제출 중",confirmed:"제출 확인됨",submission_failed:"제출에 실패했습니다. 다시 승인하거나 취소할 수 있습니다.",cancelled:"보고 초안 취소됨",queued_for_handoff:"관리자 인계 대기",processing:"관리자 인계문 작성 중",retry_pending:"인계문 작성 재시도 대기",handoff_ready:"관리자 인계문 준비 완료",failed:"인계문 작성 실패"};
 
+let workflowPaused=false;
+function updatePauseState(isPaused){
+ workflowPaused=Boolean(isPaused);
+ const btn=$("rail-pause-session");
+ if(btn){btn.textContent=workflowPaused?"재개":"일시정지";btn.disabled=!sessionActive;}
+}
+function togglePauseSession(){
+ if(!sessionActive||!socket||socket.readyState!==WebSocket.OPEN)return;
+ const action=workflowPaused?"workflow.resume":"workflow.pause";
+ socket.send(JSON.stringify({type:action,configuration_id:acceptedSessionConfiguration?.configuration_id,generation:sessionGeneration}));
+}
+
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}
 function renderState(state,detail=""){
  const view=UI[state]||UI.ERROR;visibleState=UI[state]?state:"ERROR";$("state").textContent=visibleState;$("status").textContent=detail||view[0];
  if($("rail-state"))$("rail-state").textContent=visibleState;
  setDisabled($("start"),view[1]);setDisabled($("stop"),view[2]);
  setDisabled($("rail-stop-session"),view[2]);
+ setDisabled($("rail-pause-session"),!sessionActive);
  const configurationLocked=!["IDLE","ERROR"].includes(visibleState);
  for(const id of ["protocol-id","protocol-pdf","register-protocol"]){setDisabled($(id),configurationLocked);}
  $("protocol-id")?.setAttribute?.("aria-busy",String(visibleState==="CONNECTING"));
@@ -1408,7 +1423,8 @@ function renderProcedureState(value){
 
 function renderMarkdownToContainer(container,markdownText){
  if(!container)return;
- const lines=String(markdownText??"").replace(/\r\n/g,"\n").split("\n");
+ const preprocessed=String(markdownText??"").replace(/([^\n])\s+•\s+/g,"$1\n• ");
+ const lines=preprocessed.replace(/\r\n/g,"\n").split("\n");
  let inList=false,listElement=null,currentParagraph=[];
  const flushParagraph=()=>{
   if(!currentParagraph.length)return;
@@ -1457,7 +1473,7 @@ function turnNode(id,browserGeneration=sessionGeneration){
  const key=turnBrowserKey(id,browserGeneration);
  if(turns.has(key))return turns.get(key);
  const node=document.createElement("div");node.className="turn";
- node.innerHTML=`<b>Turn ${id}</b><div class="label">USER</div><div class="transcript">듣는 중…</div><div class="label">AGENT 🤖</div><div class="reply"></div><div class="filler-status" hidden></div><div class="turn-visual" hidden></div><div class="turn-status">듣는 중…</div><div class="tools" hidden></div><div class="server-operation" hidden></div><div class="stats"></div><div class="error"></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div></div></details><div class="replay-status"></div>`;
+ node.innerHTML=`<b>Turn ${id}</b><div class="label">USER</div><div class="transcript">듣는 중…</div><div class="label">AGENT 🤖</div><div class="reply"></div><div class="filler-status" hidden></div><div class="turn-visual" hidden></div><div class="turn-status">듣는 중…</div><div class="error"></div><details class="turn-diagnostics"><summary>근거·처리·지연시간 세부정보</summary><div class="turn-diagnostics-body"><div class="server-operation" hidden></div><div class="tools" hidden></div><div class="stats"></div></div></details><div class="replay-status"></div>`;
  const log=$("log");
  if(log){
   if(typeof log.insertBefore==="function")log.insertBefore(node,log.firstChild);
@@ -2001,13 +2017,14 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}
  if(m.type==="audio.replay.available"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){}
  if(m.type==="audio.replay.request"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){const node=turnNode(m.turn_id,generation),status=node.querySelector(".replay-status");if(lastReplayableAudio){pendingVoiceReplay=true;if(status)status.textContent="현재 안내 뒤에 마지막 답변을 한 번 다시 재생합니다.";pump(generation);}else if(status)status.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";}
- if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;turnNode(m.turn_id,generation).querySelector(".stats").textContent=`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
- if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
+ if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?"경로 server_greeting · 세션 안내":`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
+ if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const isGreeting=Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(stats&&!isGreeting&&!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
  if(m.type==="error"){renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(m.message,m.turn_id);}
 }
 
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
+$("rail-pause-session")?.addEventListener("click",togglePauseSession);
 $("rail-stop-session")?.addEventListener("click",stopSession);
 $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();resetSessionUI();announceMilestone("새 세션이 준비되었습니다.");});
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});

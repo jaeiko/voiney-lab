@@ -341,7 +341,10 @@ let successCalls=0;fetch=async()=>{successCalls++;if(successCalls===1)return{ok:
         self.assertIn('top:4.5rem', html)
         self.assertIn('calc(100dvh - 5.5rem)', html)
         self.assertIn('class="turn-diagnostics"', html)
+        self.assertIn('class="turn-diagnostics-body"', html)
+        self.assertIn('id="rail-pause-session"', html)
         self.assertIn('summary>근거·처리·지연시간 세부정보', html)
+        self.assertIn('<div class="turn-diagnostics-body"><div class="server-operation" hidden></div><div class="tools" hidden></div><div class="stats"></div></div>', html)
         self.assertLess(
             html.index('class="panel timeline"'),
             html.index('class="example-strip"'),

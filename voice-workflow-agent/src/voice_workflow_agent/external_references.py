@@ -485,6 +485,7 @@ class XaiAuthoritativeWebSearch:
         self,
         query: str,
         *,
+        language: str = "ko",
         include_images: bool = False,
         on_partial_sources: Any = None,
     ) -> tuple[Any, dict[str, Any]]:
@@ -498,9 +499,16 @@ class XaiAuthoritativeWebSearch:
             tool_spec["filters"] = {
                 "allowed_domains": list(self.settings.allowed_domains)
             }
+        lang_prompt = (
+            "Write the explanatory research answer directly in natural, professional Korean (한국어). "
+            "Keep canonical scientific identifiers (e.g. AMBIC, HPLC, DTT, trypsin, SDS-PAGE) in their standard form. "
+            if language == "ko" else
+            f"Write the explanatory research answer in {language}. "
+        )
         system_prompt = (
             "You are a concise lab assistant. Answer the user's specific concept question "
             "using 1-2 reliable web sources. Be concise and direct (under 2 sentences). "
+            f"{lang_prompt}"
             "Do NOT place citation markers (such as [[1]]), source numbers, Markdown links, raw URLs, or source metadata "
             "in the answer text because sources are rendered separately by the application. "
             "When searching for visual/image requests, include direct image Markdown links ![description](image_url) from reliable sources. "
@@ -510,6 +518,7 @@ class XaiAuthoritativeWebSearch:
         ) if include_images else (
             "You are a concise lab assistant. Answer the user's specific concept question "
             "using 1-2 reliable web sources. Be concise and direct (under 2 sentences). "
+            f"{lang_prompt}"
             "Do NOT place citation markers (such as [[1]]), source numbers, Markdown links, raw URLs, or source metadata "
             "in the answer text because sources are rendered separately by the application. "
             "Stop once sufficient information exists. Do not perform broad literature review. "
@@ -684,6 +693,7 @@ class XaiAuthoritativeWebSearch:
             response, stream_telemetry = await asyncio.wait_for(
                 self._request(
                     query,
+                    language=language,
                     include_images=include_images,
                     on_partial_sources=on_partial_sources,
                 ),

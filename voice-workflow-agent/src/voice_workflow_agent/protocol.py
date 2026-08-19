@@ -61,6 +61,12 @@ def parse_control(raw: str) -> dict[str, Any]:
                 **({"language":language} if mode=="manual" else {})}
     if message["type"]=="session.reset": return {"type":"session.reset"}
     if message["type"]=="session.stop": return {"type":"session.stop"}
+    if message["type"] in {"workflow.pause", "workflow.resume"}:
+        return {
+            "type": message["type"],
+            "configuration_id": message.get("configuration_id"),
+            "generation": message.get("generation"),
+        }
     if message["type"]=="report.status.get":
         report_id=message.get("report_id")
         if not isinstance(report_id,str):

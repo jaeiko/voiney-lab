@@ -18,7 +18,8 @@ _NEGATIVE_OR_QUESTION_PATTERNS = (
     re.compile(r"(?:조건|기준|의미|뜻|방법)(?:이|은|는|을|를|\s*)?(?:뭐|무엇|어떻게|알려|설명|인가|인지)"),
     re.compile(r"(?:완료|끝)(?:한\s*거야|한\s*건가|인가|인가요|인\s*상태|해야\s*해|해야\s*하나요|할까|해도\s*될까|했나요|했습니까)\b"),
     re.compile(r"(?:완료|끝)(?:라는|란|이라는)\s*(?:게|것|말|뜻|의미)"),
-    re.compile(r"(?:완료|끝)(?:하면|했을\s*때|했다고\s*치면|한다고\s*가정하면|한\s*뒤에)"),
+    re.compile(r"(?:완료|끝)(?:하면|했을\s*때|했다고\s*치면|한다고\s*가정하면|한\s*뒤에|한다면)"),
+    re.compile(r"(?:완료|끝|마칠)\s*(?:할게|할\s*거야|하겠|예정)"),
     re.compile(r"다음\s*단계.*(?:완료|끝)"),
     re.compile(r"(?:몇|어떤)\s*단계.*완료"),
     # Negations
@@ -29,10 +30,11 @@ _NEGATIVE_OR_QUESTION_PATTERNS = (
 
 # Positive completion command patterns
 _POSITIVE_COMPLETION_PATTERNS = (
-    # Standard prefix + completion verb:
-    # "현재/지금/이번/이 단계/작업 [도/를/은/는/이/가/로] 완료했어/끝냈어/마쳤어/다 했어"
+    # Standard prefix + optional adverbs + completion verb:
+    # "현재/지금/이번/이 단계/작업 [도/를/은/는/이/가/로] [미리/이미/벌써/방금/아까/다/완전히/모두] 완료했어/끝냈어/마쳤어/다 했어"
     re.compile(
         r"^(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
+        r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
         r"(?:완료(?:했어|했어요|했습니다|했으니|했으니까|함)?|"
         r"끝(?:냈어|냈어요|냈습니다|났어|났어요|났습니다)|"
         r"다\s*(?:했어|했어요|했습니다)|"
@@ -40,12 +42,13 @@ _POSITIVE_COMPLETION_PATTERNS = (
     ),
     # Exact noun shorthand: "현재 단계 완료", "이번 단계 완료", "이 단계 완료"
     re.compile(r"^(?:현재|지금|이번|이)\s*(?:단계|작업)\s*완료$"),
-    # Natural completion with "여기까지" or "방금":
-    re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다)$"),
+    # Natural completion with "여기까지", "방금", "벌써", "이미", "미리":
+    re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?|벌써|이미|미리)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다)$"),
     # Compound completion + proceed:
-    # "현재/이번 단계 [도] 완료했으니 다음으로 넘어가자/넘어가줘" or "다 했으니까 다음으로 넘어가줘"
+    # "현재/이번 단계 [도] [미리/이미] 완료했으니 다음으로 넘어가자/넘어가줘" or "다 했으니까 다음으로 넘어가줘"
     re.compile(
         r"^(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)?"
+        r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
         r"(?:완료(?:했어|했어요|했습니다|했으니|했으니까|했으므로)|"
         r"끝(?:냈어|냈어요|냈습니다|났어|났어요|났습니다|냈으니|냈으니까|났으니|났으니까)|"
         r"다\s*(?:했어|했어요|했습니다|했으니|했으니까)|"
@@ -57,8 +60,8 @@ _POSITIVE_COMPLETION_PATTERNS = (
 
 
 def _normalize_conversational_utterance(text: str) -> str:
-    # Strip leading fillers e.g. "Okay,", "어 음", "네", "좋아"
-    cleaned = re.sub(r"^(?:okay|ok|네|예|어\s*음|어|음|좋아|아|그래|자|그럼)[\s,]+", "", text, flags=re.IGNORECASE)
+    # Strip leading fillers e.g. "Okay,", "어 음", "네", "응", "좋아", "자"
+    cleaned = re.sub(r"^(?:okay|ok|네|예|응|어\s*음|어|음|좋아|아|그래|자|그럼)[\s,]+", "", text, flags=re.IGNORECASE)
     # Deduplicate repeated words e.g. "현재 현재" -> "현재", "지금 지금" -> "지금"
     cleaned = re.sub(r"\b(\w+)\s+\1\b", r"\1", cleaned)
     return cleaned.strip()

@@ -1374,27 +1374,30 @@ _COMPLETION_AND_NEXT_PATTERNS = (
 )
 _COMPLETION_ONLY_PATTERNS = (
     re.compile(
-        r"^(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
+        r"^(?:(?:네|예|응|그래|자|그럼)?,?\s*)?"
+        r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
+        r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
         r"(?:완료(?:했어|했어요|했습니다|함)?|끝냈어|끝냈어요|끝났습니다|"
         r"끝났어|끝났어요|마쳤어|마쳤어요|마쳤습니다|다\s*했어|다\s*했어요)$"
     ),
     re.compile(r"^(?:현재|지금|이번|이)\s*(?:단계|작업)\s*완료$"),
-    re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다|끝났습니다)$"),
-    re.compile(r"^(?:i\s+)?completed\s+(?:the\s+)?current\s+step$"),
-    re.compile(r"^(?:this|the\s+current)\s+step\s+is\s+(?:finished|complete)$"),
+    re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?|벌써|이미|미리)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다|끝났습니다)$"),
+    re.compile(r"^(?:i\s+)?(?:already\s+)?completed\s+(?:the\s+)?current\s+step$"),
+    re.compile(r"^(?:this|the\s+current)\s+step\s+is\s+(?:already\s+)?(?:finished|complete)$"),
     re.compile(r"^(?:completed|finished|done)\s*했어$"),
 )
 _COMPLETION_CLAIM = re.compile(
     r"(?:"
     r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|는|은|를|을|이|가|로)?\s*)"
-    r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까|함)?|"
-    r"끝(?:났어|났어요|났습니다|냈어|냈어요|냈고)?|"
+    r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
+    r"(?:완료(?:했어|했어요|했습니다|해서|했으니|했으니까|함)|"
+    r"끝(?:났어|났어요|났습니다|냈어|냈어요|냈고)|"
     r"다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까|마쳤어|마쳤어요|마쳤습니다|"
     r"completed\s*했어|finish\s*했어)"
     r"|(?:completed|finished|done)\s*했어"
-    r"|(?:여기까지|방금\s*(?:작업|단계)?)\s*(?:다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까)"
-    r"|(?:i\s+)?(?:completed|finished|done)\s+(?:this|the\s+current)\s+step"
-    r"|(?:this|the\s+current)\s+step\s+is\s+(?:complete|finished|done)"
+    r"|(?:여기까지|방금\s*(?:작업|단계)?|벌써|이미|미리)\s*(?:다\s*했어|다\s*했어요|다\s*했고|다\s*했으니까|마쳤어|마쳤어요|끝났어|끝냈어|완료했어)"
+    r"|(?:i\s+)?(?:already\s+)?(?:completed|finished|done)\s+(?:this|the\s+current)\s+step"
+    r"|(?:this|the\s+current)\s+step\s+is\s+(?:already\s+)?(?:complete|finished|done)"
     r"|this\s+step\s+is\s+done"
     r")"
 )
@@ -1404,12 +1407,12 @@ _NEXT_STEP_REQUEST = re.compile(
 )
 _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"^(?:(?:네|예|응|그래|맞아|맞아요)(?:\s+(?:(?:현재|지금|이번|이)\s*"
-    r"(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:완료(?:했어|했어요|했습니다)?|"
+    r"(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:미리|이미|벌써|다)?\s*(?:완료(?:했어|했어요|했습니다)?|"
     r"끝냈어|끝냈어요|다\s*했어|다\s*했어요|했어|했어요))?|"
-    r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:완료(?:했어|했어요|했습니다)|"
+    r"(?:(?:현재|지금|이번|이)\s*(?:단계|작업)?\s*(?:도|를|을|는|은|이|가)?\s*)?(?:미리|이미|벌써|다)?\s*(?:완료(?:했어|했어요|했습니다)|"
     r"끝냈어|끝냈어요|다\s*했어|다\s*했어요|마쳤어|마쳤어요)|"
-    r"yes(?:\s*,?\s*(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?)?|"
-    r"(?:i\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?|"
+    r"yes(?:\s*,?\s*(?:i\s+)?(?:already\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?)?|"
+    r"(?:i\s+)?(?:already\s+)?(?:finished|completed)(?:\s+it|\s+the\s+step)?|"
     r"done|"
     r"(?:다음\s*단계로\s*)?(?:이동할게|이동해\s*줘|넘어갈게|넘어가자|진행해|옮겨)|"
     r"yes[, ]*move\s+on|let(?:'|’)s\s+continue|proceed|"
@@ -1418,7 +1421,7 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
 _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"^(?:아니|아니요|아직|아직\s*아니야|아직\s*안\s*(?:끝났어|했어|했어요)|"
     r"아니요?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
-    r"아니[,.]?\s*아직\s*안\s*끝났어|no|not\s+yet)$"
+    r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet)$"
 )
 
 
@@ -1430,9 +1433,8 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
     patterns and question guards run first so phrases such as "not transparent"
     or questions like "투명한가요?" never become a positive result by substring overlap.
     """
-
     key = _semantic_utterance_key(transcript)
-    if step_label == "7":
+    if step_label in {"7"}:
         if re.search(
             r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
             r"투명해지면\s*어떻게|is\s+it\s+transparent|should\s+it\s+be\s+transparent|"
@@ -1480,6 +1482,9 @@ _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
         r"(?:완료|끝)(?:\s*조건|하려면|이라는\s*건)|"
         r"(?:condition|criteria).*(?:complete|finish)"
+    )),
+    ("future_completion", re.compile(
+        r"(?:완료|끝|마칠)\s*(?:할게|할\s*거야|하겠|예정|하려고|하려\s*함)"
     )),
     ("negated_completion", re.compile(
         r"(?:아직|안)\s*(?:완료|끝)|(?:완료|끝)(?:하지|내지)\s*않|"
@@ -1563,7 +1568,7 @@ _AGENT_META_PATTERNS = (
     re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:의)?\s*(?:목적|역할|목표).*(?:뭐|무엇|알려|설명|있어)"),
     re.compile(r"(?:이\s*)?(?:에이전트|보이스\s*에이전트|너|네|당신|ai|시스템)\s*(?:는|가|는\s*대체)?\s*(?:하는\s*기능|무슨\s*기능|어떤\s*기능|주요\s*기능|무슨\s*일|어떤\s*일|기능이|역할이).*(?:뭐|무엇|알려|설명|있어|해)"),
     re.compile(r"^(?:너|네|당신|에이전트|이\s*시스템)(?:는)?\s*(?:뭐\s*(?:할\s*수\s*있어|하는\s*(?:거야|애야|에이전트야|일이야|로봇이야|것이야)|해)|무슨\s*(?:기능이\s*있어|일을\s*해)|어떤\s*역할을\s*해)\??$"),
-    re.compile(r"^(?:하는\s*기능이?|무슨\s*기능이?|어떤\s*기능이?|주요\s*기능이?|기능이?|역할이?)\s*(?:뭐야?|무엇|알려줘|설명해줘|소개해줘|있어)\??$"),
+    re.compile(r"^(?:하는\s*기능(?:이|을)?|무슨\s*기능(?:이|을)?|어떤\s*기능(?:이|을)?|주요\s*기능(?:이|을)?|기능(?:이|을)?|역할(?:이|을)?)\s*(?:뭐야?|무엇|알려줘|설명해줘|소개해줘|있어)\??$"),
     re.compile(r"(?:에이전트|시스템|너|네|당신).*(?:기능|역할|목적|능력|소개).*(?:뭐|무엇|알려|설명|소개)"),
     re.compile(r"(?:what\s+(?:is|are|'s|’s)\s+(?:the\s+)?(?:purpose|function|functions|role|roles|capabilities|features?)\s+(?:of\s+this\s+agent|of\s+you|of\s+the\s+agent)?|what\s+(?:can|do|does)\s+(?:this\s+agent|you|the\s+agent)\s+do|what\s+are\s+(?:your\s+)?(?:capabilities|functions|roles)|what\s+are\s+you(?:\s+for)?|what(?:'s|’s|\s+is|\s+are)\s+(?:your\s+)?(?:function|functions|role|roles|purpose|capability|capabilities))\??$", re.I),
     re.compile(r"(?:tell\s+me\s+(?:about\s+)?(?:yourself|your\s+(?:function|functions|role|roles|capabilities|purpose))|explain\s+(?:your|the)\s+(?:function|functions|role|roles|capabilities|purpose)|how\s+can\s+you\s+help(?:\s+me)?|who\s+are\s+you.*)\??$", re.I),
@@ -2247,6 +2252,105 @@ def _binary_frame_reply(value: str) -> str | None:
     return None
 
 
+def resolve_question_focus(
+    transcript: str,
+    entities: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Distinguish FOCUS / REQUESTED entities from CONTEXT / MODIFIER entities.
+
+    Returns:
+        (focus_entities, context_entities)
+    """
+    if len(entities) <= 1:
+        return entities, ()
+
+    key = transcript.casefold()
+
+    # Explicit coordination check (A와 B, A 그리고 B, 둘 다, 각각 등)
+    if re.search(
+        r"(?:(?:와|과|랑|하고|,)\s+|그리고\s+|둘\s*다|각각|모두|차이|비교|vs|-vs-)",
+        key,
+    ):
+        return entities, ()
+
+    # Relative modifier clause check:
+    # Pattern: [Context Entity] (이|가|를|을)? (들어있는|담긴|담은|사용하는|안에 있는|포함된|넣은|넣어둔) [Focus Entity]
+    entity_spans: list[tuple[int, int, str]] = []
+    for pattern, name in _TERM_QUESTION_PATTERNS:
+        if name in entities:
+            for match in pattern.finditer(key):
+                entity_spans.append((match.start(), match.end(), name))
+
+    entity_spans.sort(key=lambda s: s[0])
+    unique_spans: list[tuple[int, int, str]] = []
+    last_end = -1
+    for s_start, s_end, ent in entity_spans:
+        if s_start >= last_end:
+            unique_spans.append((s_start, s_end, ent))
+            last_end = s_end
+
+    if len(unique_spans) >= 2:
+        first_span = unique_spans[0]
+        second_span = unique_spans[1]
+        between = key[first_span[1]:second_span[0]].strip()
+        modifier_match = re.search(
+            r"^(?:(?:이|가|를|을|에)?\s*)?(?:들어\s*있는|담긴|담은|사용하는|안에\s*있는|포함된|넣은|넣어\s*둔|채운|섞은)",
+            between,
+        )
+        if modifier_match:
+            focus = (second_span[2],)
+            context = (first_span[2],)
+            return focus, context
+
+    return entities, ()
+
+
+def classify_agent_meta_intent(transcript: str, language: str = "ko") -> CuratedControlIntent | None:
+    key = _utterance_key(transcript)
+    if not key:
+        return None
+
+    if re.search(
+        r"(?:what\s+(?:is|are|'s|’s)\s+(?:the\s+)?(?:purpose|function|functions|role|roles|capabilities|features?)"
+        r"|what\s+(?:can|do|does)\s+(?:this\s+agent|you|the\s+agent)\s+do"
+        r"|what\s+are\s+(?:your\s+)?(?:capabilities|functions|roles)"
+        r"|what\s+are\s+you(?:\s+for)?"
+        r"|tell\s+me\s+(?:about\s+)?(?:yourself|your\s+(?:function|functions|role|roles|capabilities|purpose))"
+        r"|explain\s+(?:your|the)\s+(?:function|functions|role|roles|capabilities|purpose)"
+        r"|how\s+can\s+you\s+help|who\s+are\s+you)",
+        key,
+        re.I,
+    ):
+        return CuratedControlIntent(
+            intent_kind="agent_meta",
+            action=CuratedProtocolAction.AGENT_META,
+            question_kind="agent_meta",
+            language=language,
+            normalized_transcript=key,
+        )
+
+    has_subject = bool(re.search(r"(?:너|네|당신|에이전트|보이스\s*에이전트|시스템|ai|누구)", key))
+    has_identity = bool(re.search(r"(?:뭐\s*하는\s*(?:애|거|사람|에이전트|로봇|시스템|일)|누구|정체|이름)", key))
+    has_purpose = bool(re.search(r"(?:목표|목적|존재\s*이유|만들(?:어|어진)|취지)", key))
+    has_capability = bool(re.search(r"(?:기능|역할|할\s*수\s*있는\s*(?:일|거)|수행|도움|지원|지원해|도와줘)", key))
+
+    is_meta = False
+    if has_subject and (has_identity or has_purpose or has_capability):
+        is_meta = True
+    elif any(pattern.search(key) for pattern in _AGENT_META_PATTERNS):
+        is_meta = True
+
+    if is_meta:
+        return CuratedControlIntent(
+            intent_kind="agent_meta",
+            action=CuratedProtocolAction.AGENT_META,
+            question_kind="agent_meta",
+            language=language,
+            normalized_transcript=key,
+        )
+    return None
+
+
 def classify_curated_control_intent(
     transcript: str,
     *,
@@ -2261,11 +2365,19 @@ def classify_curated_control_intent(
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
+    if meta_intent := classify_agent_meta_intent(transcript, language=language):
+        return meta_intent
+
     key, normalized_entities, correction_note, corrections = (
         normalize_scientific_request(
         transcript, entity_inventory=entity_inventory
         )
     )
+    focus_entities, _context_entities = resolve_question_focus(
+        transcript, normalized_entities
+    )
+    if focus_entities:
+        normalized_entities = focus_entities
     coreference=resolve_bounded_coreference(
         key,explicit_entities=normalized_entities,context=discourse_context)
     if (
@@ -5495,6 +5607,29 @@ class CuratedProtocolSession:
         )
         changed = False
 
+        if self._pause_state == "paused" and command not in {
+            CuratedProtocolAction.RESUME,
+            CuratedProtocolAction.STOP,
+            CuratedProtocolAction.PAUSE,
+        }:
+            response = (
+                "현재 실험 안내가 일시정지 상태입니다. '실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+                if language == "ko" else
+                "Workflow guidance is currently paused. Please say 'resume' or click the resume button to continue."
+            )
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PAUSE,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+            )
+
         if command is CuratedProtocolAction.STOP:
             changed = self.active or self._experiment_started_at is not None
             self.active = False
@@ -7033,6 +7168,8 @@ class CuratedProtocolSession:
                 intent_kind="lab_domain_qa",
                 target_step=current_step.source_label,
                 primary_text=response,
+                requested_entity=intent.requested_entity or "tube",
+                requested_entities=intent.requested_entities or ("tube",),
             )
         elif command is CuratedProtocolAction.OFF_TOPIC:
             step = steps[self.current_index]
