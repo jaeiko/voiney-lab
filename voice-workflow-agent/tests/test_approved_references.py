@@ -24,6 +24,7 @@ from voice_workflow_agent.external_references import (
     SupplementalKnowledgeSettings,
     XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
+    sanitize_external_search_answer,
 )
 from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
 from voice_workflow_agent.tools import ToolContext, search_approved_lab_references
@@ -577,6 +578,52 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         tools = captured_kwargs.get("tools", [])
         self.assertEqual(len(tools), 1)
         self.assertTrue(tools[0].get("enable_image_search"))
+
+    def test_external_search_answer_sanitization_patterns(self):
+        # Case 1: inline marker + url parenthetical
+        raw1 = "AMBIC is ammonium bicarbonate [[1]](https://en.wikipedia.org/wiki/Ammonium_bicarbonate) used for in-gel digestion."
+        self.assertEqual(
+            sanitize_external_search_answer(raw1),
+            "AMBIC is ammonium bicarbonate used for in-gel digestion.",
+        )
+
+        # Case 2: inline marker + whitespace + url parenthetical + provider EOS
+        raw2 = "AMBIC provides a basic pH [[1]] (https://pubchem.ncbi.nlm.nih.gov/compound/14013) for trypsin cleavage.</eos>"
+        self.assertEqual(
+            sanitize_external_search_answer(raw2),
+            "AMBIC provides a basic pH for trypsin cleavage.",
+        )
+
+        # Case 3: raw HTTP/HTTPS URL
+        raw3 = "Refer to https://pubchem.ncbi.nlm.nih.gov/compound/14013 for buffer properties."
+        self.assertEqual(
+            sanitize_external_search_answer(raw3),
+            "Refer to for buffer properties.",
+        )
+
+        # Case 4: preserve scientific notation, units, bracketed slices, and pH
+        raw4 = "AMBIC is ammonium bicarbonate (pH ~8.0, 25–50 mM) used on [1-2 mm³] gel slices incubated for [15 min]."
+        self.assertEqual(
+            sanitize_external_search_answer(raw4),
+            "AMBIC is ammonium bicarbonate (pH ~8.0, 25–50 mM) used on [1-2 mm³] gel slices incubated for [15 min].",
+        )
+
+    async def test_web_search_sanitizes_provider_raw_output_cleanly(self):
+        async def create(**kwargs):
+            return {
+                "output_text": "AMBIC buffer maintains pH 8.0 [[1]](https://en.wikipedia.org/wiki/Ammonium_bicarbonate) for trypsin.</eos>",
+                "citations": ["https://en.wikipedia.org/wiki/Ammonium_bicarbonate"],
+                "output": [{"type": "web_search_call", "status": "completed"}],
+            }
+        searcher = XaiAuthoritativeWebSearch(
+            SimpleNamespace(responses=SimpleNamespace(create=create)),
+            ExternalReferenceSettings(True, ("en.wikipedia.org",), "grok-4.6", 90.0, 5, "open"),
+        )
+        res = await searcher.search("AMBIC buffer", language="en")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["answer"], "AMBIC buffer maintains pH 8.0 for trypsin.")
+        self.assertEqual(len(res["matches"]), 1)
+        self.assertEqual(res["matches"][0]["canonical_url"], "https://en.wikipedia.org/wiki/Ammonium_bicarbonate")
 
 
 if __name__ == "__main__":

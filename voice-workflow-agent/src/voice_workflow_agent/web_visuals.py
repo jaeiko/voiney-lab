@@ -190,7 +190,7 @@ class XaiAuthoritativeImageSearch:
                 "title": str(title).strip()[:300] or "Web reference image",
                 "caption": str(item.get("caption") or "").strip()[:800],
                 "rights": str(rights).strip()[:300] if rights else None,
-                "verification_label": "웹 참고 이미지 · 프로토콜 절차 근거 아님",
+                "verification_label": "웹 참고 이미지 · 실험 PDF 원문 이미지는 아니에요",
                 "display_mode": "web_image" if image_url else "source_link",
                 "reason": "web_reference_image",
             })
@@ -215,7 +215,7 @@ class XaiAuthoritativeImageSearch:
                 "title": (match.group(1).strip() or "Web reference image")[:300],
                 "caption": match.group(1).strip()[:800],
                 "rights": None,
-                "verification_label": "웹 참고 이미지 · 프로토콜 절차 근거 아님",
+                "verification_label": "웹 참고 이미지 · 실험 PDF 원문 이미지는 아니에요",
                 "display_mode": "web_image",
                 "reason": "web_reference_image",
             })
