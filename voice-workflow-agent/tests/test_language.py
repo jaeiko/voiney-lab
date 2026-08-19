@@ -43,10 +43,10 @@ class LanguageTests(unittest.TestCase):
             "Please show the approved spill procedure.", "en",
             mode="manual", manual_language="ko",
         )
-        self.assertEqual(result.language, "en")
+        self.assertEqual(result.language, "ko")
         korean = resolve_turn_language(
             "현재 단계를 알려 주세요.", "ko",
-            mode="manual", manual_language="en",
+            mode="manual", manual_language="ko",
         )
         self.assertEqual(korean.language, "ko")
         neutral = resolve_turn_language(

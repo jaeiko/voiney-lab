@@ -10,11 +10,6 @@ class ProtocolTests(unittest.TestCase):
         }
         self.assertEqual(parse_control(json.dumps(canonical_start)),canonical_start)
         self.assertEqual(parse_control(json.dumps({
-            **canonical_start,"mode":"native","protocol_id":None,
-        })),{
-            **canonical_start,"mode":"native","protocol_id":None,
-        })
-        self.assertEqual(parse_control(json.dumps({
             "type":"session.start","pipeline":"cascade","language":"ko",
             "protocol_id":"candidate-a-curated-development-v1",
             "configuration_id":2,
@@ -49,24 +44,10 @@ class ProtocolTests(unittest.TestCase):
             },
         }
         self.assertEqual(parse_control(json.dumps(constraints)),constraints)
-        self.assertEqual(parse_control(json.dumps({
-            "type":"native.playback.truncate","response_id":"r1",
-            "item_id":"i1","audio_end_ms":120})),{
-                "type":"native.playback.truncate","response_id":"r1",
-                "item_id":"i1","audio_end_ms":120})
-        self.assertEqual(parse_control(json.dumps({
-            "type":"native.playback.ended","response_id":"r1"})),{
-                "type":"native.playback.ended","response_id":"r1"})
-        metrics={
-            "type":"native.playback.metrics","response_id":"r1",
-            "provider_gap_count":1,"provider_gap_ms":12,
-            "client_underrun_count":0,"client_underrun_ms":0,
-            "scheduled_chunks":4,"audio_context_state":"running",
-        }
-        self.assertEqual(parse_control(json.dumps(metrics)),metrics)
         for payload in (
             {"type":"session.start"},
             {"type":"session.start","pipeline":"direct"},
+            {"type":"session.start","mode":"native","language":"ko","protocol_id":None,"configuration_id":1},
             {"type":"session.start","mode":"cascade","language":"ko",
              "configuration_id":1},
             {"type":"session.start","mode":"cascade","language":"ko",

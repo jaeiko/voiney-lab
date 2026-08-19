@@ -109,7 +109,8 @@ from voice_workflow_agent.protocol_catalog import (
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
-    CLARIFICATION_TEXT, Transcription, classify_input_event,
+    CLARIFICATION_TEXT, ServerVoicePolicy, Transcription, classify_input_event,
+    classify_korean_admission,
     clean_speech_text,
     normalize_provider_language,
     resolve_turn_language, transcription_quality_issue,
@@ -163,7 +164,6 @@ log=logging.getLogger("voice_workflow_agent")
 def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
     """Log non-secret endpoint settings once when the application starts."""
     cascade=settings.cascade
-    native=settings.native
     log.info(
         "vad.configuration "
         "cascade_mode=%d cascade_processing_onset_voiced_frames=%d "
@@ -175,9 +175,7 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
         "cascade_endpoint_silence_ms=%d cascade_min_speech_ms=%d "
         "cascade_max_utterance_ms=%d cascade_cooldown_ms=%d "
         "cascade_playback_onset_voiced_frames=%d "
-        "cascade_playback_onset_window_frames=%d "
-        "native_threshold=%s native_prefix_padding_ms=%d "
-        "native_silence_duration_ms=%d",
+        "cascade_playback_onset_window_frames=%d",
         cascade.mode,cascade.onset_voiced_frames,cascade.onset_window_frames,
         cascade.listening_onset_voiced_frames,
         cascade.listening_onset_window_frames,
@@ -186,8 +184,7 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
         cascade.prefix_ms,cascade.endpoint_silence_ms,
         cascade.minimum_speech_ms,cascade.maximum_utterance_ms,
         cascade.cooldown_ms,cascade.playback_onset_voiced_frames,
-        cascade.playback_onset_window_frames,native.threshold,native.prefix_padding_ms,
-        native.silence_duration_ms,
+        cascade.playback_onset_window_frames,
     )
 
 
@@ -1710,7 +1707,10 @@ def cascade_transcription_context(
     pending_frame=None
     keyterms:tuple[str,...]=()
     if curated is not None:
-        keyterms=curated.stt_keyterms()
+        try:
+            keyterms = curated.stt_keyterms(include_control_terms=True)
+        except TypeError:
+            keyterms = curated.stt_keyterms()
         if curated.active:
             step_id=curated.fixture.steps[curated.current_index].step_id
         if curated.pending_observation_confirmation is not None:
@@ -1720,7 +1720,7 @@ def cascade_transcription_context(
             )
         elif curated.pending_completion_confirmation is not None:
             pending_frame="completion"
-    language=session.manual_language if session.language_mode=="manual" else None
+    language = "ko"
     return CascadeTranscriptionContext(
         configuration_id=session.accepted_configuration_id,
         session_id=session.session_id,
@@ -2863,6 +2863,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    admission = classify_korean_admission(transcript, transcription.detected_language, expected_language="ko")
+    if admission.correction_class is not None:
+        transcript = admission.admitted_text
     if not await current_text("transcript",turn_id=turn_id,text=transcript): return
     cleaned_source=clean_path(source_pcm)
     diagnostic_wav=pcm_to_wav(cleaned_source)
@@ -2888,9 +2891,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "response_duration_seconds":transcription.duration_seconds,
         "word_count":len(transcription.words),
         "detected_language":transcription.detected_language,
-        "raw_transcript":transcript,
+        "raw_transcript":transcription.text,
         "normalized_transcript":" ".join(transcript.strip().split()),
-        "correction_class":None,"clarification_required":False,
+        "correction_class":admission.correction_class,"clarification_required":admission.clarification_required,
         "intent_kind":None,"action":None,"mutation_authorized":False,
         "browser_audio_constraints":dict(session.client_audio_constraints),
         "wav_sha256":hashlib.sha256(diagnostic_wav).hexdigest(),
@@ -2982,12 +2985,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         else None
     )
     if pending_intent is not None:
-        # A validated draft owns the language of this bounded confirmation.
-        # Provider metadata and the current auto-language state cannot override it.
         turn_language=pending_language
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    elif session.curated_protocol_session is not None:
+        turn_language="ko"
+        session.last_confirmed_language="ko"
     else:
         resolution=resolve_turn_language(
             transcript,transcription.detected_language,mode=session.language_mode,

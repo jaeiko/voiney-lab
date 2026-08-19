@@ -6,7 +6,6 @@ from voice_workflow_agent import server
 from voice_workflow_agent.configuration import (
     CascadeVadSettings,
     ConfigurationError,
-    NativeVadSettings,
     VoiceVadSettings,
     milliseconds_to_frames,
 )
@@ -16,10 +15,9 @@ from pathlib import Path
 
 
 class VadConfigurationTests(unittest.TestCase):
-    def test_defaults_preserve_existing_cascade_and_native_behavior(self):
+    def test_defaults_preserve_existing_cascade_behavior(self):
         settings=VoiceVadSettings.from_environment({})
         self.assertEqual(settings.cascade,CascadeVadSettings())
-        self.assertEqual(settings.native,NativeVadSettings())
         self.assertEqual(
             VadConfig.from_settings(settings.cascade),
             VadConfig())
@@ -36,7 +34,7 @@ class VadConfigurationTests(unittest.TestCase):
             (8,12,6,10),
         )
 
-    def test_every_cascade_and_native_setting_can_be_overridden(self):
+    def test_every_cascade_setting_can_be_overridden(self):
         environment={
             "CASCADE_VAD_MODE":"2",
             "CASCADE_VAD_ONSET_VOICED_FRAMES":"5",
@@ -53,18 +51,12 @@ class VadConfigurationTests(unittest.TestCase):
             "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"13",
             "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"7",
             "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"11",
-            "XAI_REALTIME_VAD_THRESHOLD":"0.45",
-            "NATIVE_VAD_PREFIX_PADDING_MS":"444",
-            "XAI_REALTIME_SILENCE_DURATION_MS":"1200",
         }
         settings=VoiceVadSettings.from_environment(environment)
         self.assertEqual(
             settings.cascade,
             CascadeVadSettings(
                 2,5,8,321,860,777,281,16001,450,11,14,9,13,7,11))
-        self.assertEqual(
-            settings.native,
-            NativeVadSettings(0.45,444,1200))
         config=VadConfig.from_settings(settings.cascade)
         self.assertEqual(
             (
@@ -94,9 +86,6 @@ class VadConfigurationTests(unittest.TestCase):
             ("CASCADE_VAD_MODE","not-an-integer","must be an integer"),
             ("CASCADE_VAD_PREFIX_MS","20.5","must be an integer"),
             ("CASCADE_BARGE_IN_PREFIX_MS","x","must be an integer"),
-            ("XAI_REALTIME_VAD_THRESHOLD","not-a-float","must be a number"),
-            ("NATIVE_VAD_PREFIX_PADDING_MS","x","must be an integer"),
-            ("XAI_REALTIME_SILENCE_DURATION_MS","1.5","must be an integer"),
         )
         for name,value,message in cases:
             with self.subTest(name=name),self.assertRaisesRegex(
@@ -107,12 +96,6 @@ class VadConfigurationTests(unittest.TestCase):
     def test_ranges_and_onset_relationship_are_validated(self):
         cases=(
             ({"CASCADE_VAD_MODE":"4"},"CASCADE_VAD_MODE"),
-            ({"XAI_REALTIME_VAD_THRESHOLD":"0.91"},
-             "XAI_REALTIME_VAD_THRESHOLD"),
-            ({"XAI_REALTIME_SILENCE_DURATION_MS":"499"},
-             "XAI_REALTIME_SILENCE_DURATION_MS"),
-            ({"XAI_REALTIME_SILENCE_DURATION_MS":"3001"},
-             "XAI_REALTIME_SILENCE_DURATION_MS"),
             (
                 {
                     "CASCADE_VAD_ONSET_VOICED_FRAMES":"7",
@@ -128,11 +111,11 @@ class VadConfigurationTests(unittest.TestCase):
                 "PLAYBACK_ONSET_VOICED_FRAMES cannot exceed",
             ),
             ({"CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"0"},
-             "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES"),
+              "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES"),
             ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"-1"},
-             "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+              "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
             ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"101"},
-             "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+              "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
             (
                 {
                     "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"13",
@@ -148,13 +131,13 @@ class VadConfigurationTests(unittest.TestCase):
                 "LISTENING_RESUME_VOICED_FRAMES cannot exceed",
             ),
             ({"CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"0"},
-             "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES"),
+              "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES"),
             ({"CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"101"},
-             "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES"),
+              "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES"),
             ({"CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"-1"},
-             "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES"),
+              "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES"),
             ({"CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"101"},
-             "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES"),
+              "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES"),
             (
                 {
                     "CASCADE_VAD_MIN_SPEECH_MS":"2000",
@@ -176,25 +159,6 @@ class VadConfigurationTests(unittest.TestCase):
         )
         with self.assertRaises(ConfigurationError):
             milliseconds_to_frames(0)
-
-    def test_native_silence_default_custom_and_bounds(self):
-        self.assertEqual(
-            NativeVadSettings.from_environment({}).silence_duration_ms,
-            1600,
-        )
-        for value in (500,1600,2200,3000):
-            with self.subTest(value=value):
-                settings=NativeVadSettings.from_environment({
-                    "XAI_REALTIME_SILENCE_DURATION_MS":str(value),
-                })
-                self.assertEqual(settings.silence_duration_ms,value)
-        for value in ("not-an-integer","499","3001"):
-            with self.subTest(value=value),self.assertRaisesRegex(
-                ConfigurationError,"XAI_REALTIME_SILENCE_DURATION_MS",
-            ):
-                NativeVadSettings.from_environment({
-                    "XAI_REALTIME_SILENCE_DURATION_MS":value,
-                })
 
 
 class VadStartupTests(unittest.IsolatedAsyncioTestCase):
@@ -233,8 +197,6 @@ class VadStartupTests(unittest.IsolatedAsyncioTestCase):
             "cascade_listening_resume_window_frames=10",messages[0])
         self.assertIn("cascade_playback_onset_voiced_frames=12",messages[0])
         self.assertIn("cascade_playback_onset_window_frames=15",messages[0])
-        self.assertIn("native_threshold=0.6",messages[0])
-        self.assertIn("native_silence_duration_ms=1600",messages[0])
         self.assertNotIn("API_KEY",messages[0])
 
 

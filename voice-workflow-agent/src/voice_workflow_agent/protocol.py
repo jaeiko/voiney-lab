@@ -19,8 +19,8 @@ def parse_control(raw: str) -> dict[str, Any]:
         mode=mode if mode is not None else legacy_pipeline
         if mode is None:
             mode = "cascade"
-        if mode not in ("cascade", "native"):
-            raise ProtocolError("session.start mode must be cascade or native")
+        if mode != "cascade":
+            raise ProtocolError("session.start mode must be cascade")
         language=message.get("language")
         if not isinstance(language,str) or not language.strip():
             raise ProtocolError("session.start language must be a non-empty string")
@@ -81,43 +81,6 @@ def parse_control(raw: str) -> dict[str, Any]:
         turn_id=message.get("turn_id")
         if not isinstance(turn_id,int) or isinstance(turn_id,bool) or turn_id<=0: raise ProtocolError("playback.ended needs a positive integer turn_id")
         return {"type":"playback.ended","turn_id":turn_id}
-    if message["type"]=="native.playback.truncate":
-        response_id=message.get("response_id")
-        item_id=message.get("item_id")
-        audio_end_ms=message.get("audio_end_ms")
-        if (not isinstance(response_id,str) or not response_id or
-                not isinstance(item_id,str) or not item_id or
-                not isinstance(audio_end_ms,int) or isinstance(audio_end_ms,bool) or
-                audio_end_ms<0):
-            raise ProtocolError("native.playback.truncate metadata is invalid")
-        return {
-            "type":"native.playback.truncate","response_id":response_id,
-            "item_id":item_id,"audio_end_ms":audio_end_ms,
-        }
-    if message["type"]=="native.playback.ended":
-        response_id=message.get("response_id")
-        if not isinstance(response_id,str) or not response_id:
-            raise ProtocolError("native.playback.ended needs a response_id")
-        return {"type":"native.playback.ended","response_id":response_id}
-    if message["type"]=="native.playback.metrics":
-        response_id=message.get("response_id")
-        if not isinstance(response_id,str) or not response_id:
-            raise ProtocolError("native.playback.metrics needs a response_id")
-        fields = ("provider_gap_count", "provider_gap_ms", "client_underrun_count", "client_underrun_ms", "scheduled_chunks")
-        for f in fields:
-            val = message.get(f, 0)
-            if not isinstance(val, int) or isinstance(val, bool) or val < 0:
-                raise ProtocolError(f"native.playback.metrics {f} must be a non-negative integer")
-        return {
-            "type":"native.playback.metrics",
-            "response_id":response_id,
-            "provider_gap_count":message.get("provider_gap_count",0),
-            "provider_gap_ms":message.get("provider_gap_ms",0),
-            "client_underrun_count":message.get("client_underrun_count",0),
-            "client_underrun_ms":message.get("client_underrun_ms",0),
-            "scheduled_chunks":message.get("scheduled_chunks",0),
-            "audio_context_state":message.get("audio_context_state","unknown"),
-        }
     if message["type"]=="client.audio_constraints":
         requested=message.get("requested")
         actual=message.get("actual")

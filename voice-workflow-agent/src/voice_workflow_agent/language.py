@@ -48,6 +48,122 @@ class Transcription:
 
 
 @dataclass(frozen=True)
+class ServerVoicePolicy:
+    """Server-owned voice policy for laboratory workflow sessions."""
+
+    response_language: str = "ko"
+    stt_language: str = "ko"
+    tts_language: str = "ko"
+
+
+@dataclass(frozen=True)
+class KoreanTranscriptionAdmission:
+    """Bounded transcript admission decision for server-owned Korean voice policy."""
+
+    raw_text: str
+    admitted_text: str
+    detected_language: str | None
+    expected_language: str = "ko"
+    mismatch_status: str | None = None
+    correction_class: str | None = None
+    clarification_required: bool = False
+    clarification_message: str | None = None
+
+
+_SHORT_KOREAN_DISCOURSE_ALIASES = {
+    "ani": "아니",
+    "ani.": "아니.",
+    "ani?": "아니?",
+    "annie": "아니",
+    "annie.": "아니.",
+    "annie?": "아니?",
+    "anny": "아니",
+    "anny.": "아니.",
+    "anny?": "아니?",
+}
+
+
+def classify_korean_admission(
+    raw_text: str,
+    detected_language: str | None,
+    *,
+    expected_language: str = "ko",
+) -> KoreanTranscriptionAdmission:
+    """Evaluate transcript against the server-owned Korean voice policy."""
+    cleaned = raw_text.strip()
+    if not cleaned:
+        return KoreanTranscriptionAdmission(
+            raw_text=raw_text,
+            admitted_text="",
+            detected_language=detected_language,
+            expected_language=expected_language,
+            mismatch_status="empty",
+            clarification_required=True,
+            clarification_message="음성을 인식하지 못했습니다. 다시 말씀해 주세요.",
+        )
+
+    lowered = cleaned.casefold()
+    if lowered in _SHORT_KOREAN_DISCOURSE_ALIASES:
+        admitted = _SHORT_KOREAN_DISCOURSE_ALIASES[lowered]
+        return KoreanTranscriptionAdmission(
+            raw_text=raw_text,
+            admitted_text=admitted,
+            detected_language=detected_language,
+            expected_language=expected_language,
+            correction_class="short_korean_discourse_alias",
+            clarification_required=False,
+        )
+
+    # If text contains Hangul characters, admit directly
+    if _HANGUL.search(cleaned):
+        return KoreanTranscriptionAdmission(
+            raw_text=raw_text,
+            admitted_text=raw_text,
+            detected_language=detected_language,
+            expected_language=expected_language,
+            clarification_required=False,
+        )
+
+    # Check if text is known scientific/technical terminology (e.g. "AMBIC", "HPLC water", "SDS-PAGE")
+    tokens = [t.casefold() for t in re.findall(r"[0-9A-Za-z_-]+", cleaned)]
+    scientific_known = {
+        "ambic", "ammonium", "bicarbonate", "hplc", "water", "acetonitrile",
+        "dtt", "iodoacetamide", "trypsin", "sds", "page", "sds-page", "gel",
+        "thermomixer", "rpm", "evotip", "formic", "acid", "lc-ms", "lc", "ms",
+        "solution", "a", "b", "plug", "band", "keratin", "contamination",
+    }
+    if tokens and all(t in scientific_known or t.isdigit() for t in tokens):
+        return KoreanTranscriptionAdmission(
+            raw_text=raw_text,
+            admitted_text=raw_text,
+            detected_language=detected_language,
+            expected_language=expected_language,
+            clarification_required=False,
+        )
+
+    # Check for strong English request / contradiction without Hangul
+    ko_chars, en_words, _ = _signals(cleaned)
+    if ko_chars == 0 and (en_words >= 1 or len(tokens) >= 3 or detected_language == "en"):
+        return KoreanTranscriptionAdmission(
+            raw_text=raw_text,
+            admitted_text=raw_text,
+            detected_language=detected_language,
+            expected_language=expected_language,
+            mismatch_status="contradiction",
+            clarification_required=True,
+            clarification_message="음성을 정확히 인식하지 못했어요. 다시 말씀해 주세요.",
+        )
+
+    return KoreanTranscriptionAdmission(
+        raw_text=raw_text,
+        admitted_text=raw_text,
+        detected_language=detected_language,
+        expected_language=expected_language,
+        clarification_required=False,
+    )
+
+
+@dataclass(frozen=True)
 class InputEventDecision:
     """Shared post-STT decision made before a user Turn is committed."""
 
@@ -285,9 +401,10 @@ def resolve_turn_language(
     if mode == "manual":
         if manual_language not in SUPPORTED_LANGUAGES:
             return LanguageResolution(None, "invalid_manual_language")
-        # Manual mode biases STT and the pre-turn greeting. A clearly complete
-        # utterance still owns this Turn's response language, which keeps a
-        # code-switched voice exchange natural without changing session state.
+        # Fixed Korean session policy: do not let unverified Latin/English STT
+        # override manual Korean session authority.
+        if manual_language == "ko":
+            return LanguageResolution("ko")
         if has_language_bearing_content(transcript):
             ko, en, vi = _signals(transcript)
             korean = ko >= 8 or bool(_KO_ENDINGS.search(transcript))
@@ -323,9 +440,9 @@ def resolve_turn_language(
 
 
 CLARIFICATION_TEXT = {
-    "ko": "언어를 확인할 수 없습니다. 한국어 또는 English를 선택한 뒤 질문을 다시 말씀해 주세요.",
-    "en": "Please choose Korean or English, then repeat your question.",
-    "vi": "Vui lòng chọn tiếng Hàn hoặc tiếng Anh, rồi nhắc lại câu hỏi.",
+    "ko": "음성을 정확히 인식하지 못했어요. 다시 말씀해 주세요.",
+    "en": "Please repeat your question.",
+    "vi": "Vui lòng nhắc lại câu hỏi.",
 }
 
 

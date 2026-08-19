@@ -178,30 +178,8 @@ class CascadeSttSettings:
 
 
 @dataclass(frozen=True)
-class NativeVadSettings:
-    threshold: float=0.6
-    prefix_padding_ms: int=333
-    silence_duration_ms: int=1600
-
-    @classmethod
-    def from_environment(
-        cls,environment: Mapping[str,str]|None=None
-    )->"NativeVadSettings":
-        env=os.environ if environment is None else environment
-        return cls(
-            threshold=_floating(
-                env,"XAI_REALTIME_VAD_THRESHOLD",0.6,0.1,0.9),
-            prefix_padding_ms=_integer(
-                env,"NATIVE_VAD_PREFIX_PADDING_MS",333,0,5000),
-            silence_duration_ms=_integer(
-                env,"XAI_REALTIME_SILENCE_DURATION_MS",1600,500,3000),
-        )
-
-
-@dataclass(frozen=True)
 class VoiceVadSettings:
     cascade: CascadeVadSettings
-    native: NativeVadSettings
     stt: CascadeSttSettings
 
     @classmethod
@@ -211,6 +189,5 @@ class VoiceVadSettings:
         env=os.environ if environment is None else environment
         return cls(
             cascade=CascadeVadSettings.from_environment(env),
-            native=NativeVadSettings.from_environment(env),
             stt=CascadeSttSettings.from_environment(env),
         )

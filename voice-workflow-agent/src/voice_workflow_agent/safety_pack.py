@@ -81,6 +81,7 @@ class StepSafetyGuidance:
     ppe_requirements: tuple[str, ...]
     handling_precautions: tuple[str, ...]
     citation_label: str
+    display_bullets: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +92,7 @@ class StepSafetyGuidance:
             "ppe_requirements": list(self.ppe_requirements),
             "handling_precautions": list(self.handling_precautions),
             "citation_label": self.citation_label,
+            "display_bullets": list(self.display_bullets),
         }
 
 
@@ -317,6 +319,16 @@ def resolve_step_safety_context(
             else:
                 handling.append(doc.summary_text)
 
+    bullets: list[str] = []
+    for w in step_pdf_warnings:
+        cleaned_w = w.strip()
+        if cleaned_w:
+            bullets.append(f"• 주의: {cleaned_w}")
+    if ppe_reqs:
+        bullets.append(f"• 개인보호구(PPE): {', '.join(dict.fromkeys(ppe_reqs))}")
+    if handling:
+        bullets.append(f"• 안전 취급 주의: {' '.join(dict.fromkeys(handling))}")
+
     return StepSafetyGuidance(
         step_id=step_id,
         step_label=step_label,
@@ -325,6 +337,7 @@ def resolve_step_safety_context(
         ppe_requirements=tuple(ppe_reqs),
         handling_precautions=tuple(handling),
         citation_label=" · ".join(citations),
+        display_bullets=tuple(bullets[:3]),
     )
 
 

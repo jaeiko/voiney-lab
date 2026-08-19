@@ -3830,7 +3830,7 @@ class CuratedProtocolSession:
             "visual_intents": ("general_reference",),
         }
 
-    def stt_keyterms(self) -> tuple[str, ...]:
+    def stt_keyterms(self, *, include_control_terms: bool = False) -> tuple[str, ...]:
         """Return protocol-wide technical domain terms within xAI's cap.
 
         The STT request receives a bounded technical vocabulary (chemical reagents,
@@ -3845,7 +3845,13 @@ class CuratedProtocolSession:
             "stained protein band", "Thermomixer", "rpm", "incubation",
             "keratin", "contamination", "Evotip",
         )
-        return tuple(dict.fromkeys(scientific))[:100]
+        if include_control_terms:
+            control_korean = (
+                "아니", "네", "현재 단계", "이번 단계", "완료", "완료했어",
+                "시작", "다음 단계", "다시 알려줘",
+            )
+            return tuple(dict.fromkeys(scientific + control_korean))[:100]
+        return scientific[:100]
 
     def current_step_semantic_frame(self) -> StepSemanticFrame:
         return build_step_semantic_frame(self.fixture, self.current_index)
