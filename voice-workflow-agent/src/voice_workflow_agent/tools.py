@@ -35,6 +35,10 @@ COMPLETE_CURRENT_STEP_TOOL_NAME = "complete_current_step"
 RECORD_STEP_OBSERVATION_TOOL_NAME = "record_step_observation"
 START_STEP_TIMER_TOOL_NAME = "start_step_timer"
 GET_WORKFLOW_SUMMARY_TOOL_NAME = "get_workflow_summary"
+GET_STEP_LEARNING_CONTEXT_TOOL_NAME = "get_step_learning_context"
+GET_PROTOCOL_VERSION_INFO_TOOL_NAME = "get_protocol_version_info"
+GET_EXPERIMENT_HISTORY_TOOL_NAME = "get_experiment_history"
+CONTINUE_EXPERIMENT_TOOL_NAME = "continue_experiment"
 REPORT_ID_PATTERN = re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
 REPORT_WRITE_LOCK = threading.Lock()
 DEDUPLICATION_WINDOW_SECONDS = 60
@@ -416,10 +420,109 @@ GET_WORKFLOW_SUMMARY_TOOL = {
     },
 }
 
-PROCEDURE_TOOL_NAMES=frozenset({
-    START_PROCEDURE_TOOL_NAME,GET_CURRENT_STEP_TOOL_NAME,COMPLETE_CURRENT_STEP_TOOL_NAME,
-    RECORD_STEP_OBSERVATION_TOOL_NAME,START_STEP_TIMER_TOOL_NAME,
-    GET_WORKFLOW_SUMMARY_TOOL_NAME})
+GET_STEP_LEARNING_CONTEXT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
+        "description": (
+            "Call this when a researcher asks why a step is necessary, the purpose "
+            "or scientific rationale of a procedure, or common execution mistakes to avoid. "
+            "Returns approved educational step metadata."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "step_id": {
+                    "type": "string",
+                    "description": "Optional step ID. Omit to query the current active step.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+}
+
+GET_PROTOCOL_VERSION_INFO_TOOL = {
+    "type": "function",
+    "function": {
+        "name": GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
+        "description": (
+            "Call this when a researcher asks for the active SOP or protocol version, "
+            "document approval status, or cryptographic SHA256 protocol hash."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+}
+
+GET_EXPERIMENT_HISTORY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": GET_EXPERIMENT_HISTORY_TOOL_NAME,
+        "description": (
+            "Call this when a researcher asks to view recent experiment sessions, "
+            "multi-day experiment logs, or previous workflow history."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Maximum number of recent sessions to list (default: 5).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+}
+
+CONTINUE_EXPERIMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": CONTINUE_EXPERIMENT_TOOL_NAME,
+        "description": (
+            "Call this when a researcher asks to resume or continue a previous or "
+            "yesterday's experiment session by session ID."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The exact session ID of the experiment to resume.",
+                },
+            },
+            "required": ["session_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+EXTENDED_PROCEDURE_TOOLS = [
+    GET_STEP_LEARNING_CONTEXT_TOOL,
+    GET_PROTOCOL_VERSION_INFO_TOOL,
+    GET_EXPERIMENT_HISTORY_TOOL,
+    CONTINUE_EXPERIMENT_TOOL,
+]
+
+PROCEDURE_TOOL_NAMES = frozenset({
+    START_PROCEDURE_TOOL_NAME,
+    GET_CURRENT_STEP_TOOL_NAME,
+    COMPLETE_CURRENT_STEP_TOOL_NAME,
+    RECORD_STEP_OBSERVATION_TOOL_NAME,
+    START_STEP_TIMER_TOOL_NAME,
+    GET_WORKFLOW_SUMMARY_TOOL_NAME,
+    GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
+    GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
+    GET_EXPERIMENT_HISTORY_TOOL_NAME,
+    CONTINUE_EXPERIMENT_TOOL_NAME,
+})
 TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL,
          START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL,
          RECORD_STEP_OBSERVATION_TOOL,START_STEP_TIMER_TOOL,
@@ -884,6 +987,10 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
             {"expected_step_id","value"},{"expected_step_id","value"}),
         START_STEP_TIMER_TOOL_NAME: ({"expected_step_id"},{"expected_step_id"}),
         GET_WORKFLOW_SUMMARY_TOOL_NAME: (set(),set()),
+        GET_STEP_LEARNING_CONTEXT_TOOL_NAME: (set(), {"step_id"}),
+        GET_PROTOCOL_VERSION_INFO_TOOL_NAME: (set(), set()),
+        GET_EXPERIMENT_HISTORY_TOOL_NAME: (set(), {"limit"}),
+        CONTINUE_EXPERIMENT_TOOL_NAME: ({"session_id"}, {"session_id"}),
     }
     required, allowed = required_and_allowed[name]
     keys = set(arguments)
@@ -904,6 +1011,14 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
                                     language=context.language,usage_scope=context.usage_scope)
         if name==GET_CURRENT_STEP_TOOL_NAME:
             return controller.current()
+        if name==GET_STEP_LEARNING_CONTEXT_TOOL_NAME:
+            return controller.get_learning_context(arguments.get("step_id"))
+        if name==GET_PROTOCOL_VERSION_INFO_TOOL_NAME:
+            return controller.get_version_info()
+        if name==GET_EXPERIMENT_HISTORY_TOOL_NAME:
+            return controller.list_history(limit=arguments.get("limit", 5))
+        if name==CONTINUE_EXPERIMENT_TOOL_NAME:
+            return controller.resume(arguments["session_id"])
         if name==RECORD_STEP_OBSERVATION_TOOL_NAME:
             if (
                 context.current_transcript is not None

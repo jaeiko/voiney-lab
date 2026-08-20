@@ -93,9 +93,9 @@ _NUMBERED_COMPLETION_PATTERNS = (
         rf"^(?:(?:현재|지금|이번|이)\s*)?{_STEP_NUM_PREFIX}\s*완료$",
         re.IGNORECASE,
     ),
-    # English: "Step N is done", "I completed step N", "Step N completed"
+    # English: "Step N is done", "I completed step N", "Step N completed", "yep step N done"
     re.compile(
-        r"^(?:i\s+(?:have\s+)?(?:completed|finished|done)\s+)?step\s*(?P<en_num>[1-9]|1[0-9]|2[0-5])(?:\s+(?:is\s+)?(?:done|complete|completed|finished))?$",
+        r"^(?:(?:i\s+(?:have\s+)?(?:completed|finished|done)|yep|yes|ok|okay)\s+)?step\s*(?P<en_num>[1-9]|1[0-9]|2[0-5])(?:\s+(?:is\s+)?(?:done|complete|completed|finished))?$",
         re.IGNORECASE,
     ),
     # Compound numbered completion + proceed:
@@ -127,8 +127,8 @@ class CompletionIntentDecision:
 
 
 def _normalize_conversational_utterance(text: str) -> str:
-    # Strip leading fillers e.g. "Okay,", "어 음", "네", "응", "좋아", "자"
-    cleaned = re.sub(r"^(?:okay|ok|네|예|응|어\s*음|어|음|좋아|아|그래|자|그럼)[\s,]+", "", text, flags=re.IGNORECASE)
+    # Strip leading fillers e.g. "Okay,", "어 음", "네", "응", "좋아", "자", "맞아요", "네 맞아요", "yep", "yes", "alright"
+    cleaned = re.sub(r"^(?:okay|ok|yep|yes|alright|sure|네\s*맞아요|맞아요|네|예|응|어\s*음|어|음|좋아|아|그래|자|그럼)[\s,]+", "", text, flags=re.IGNORECASE)
     # Deduplicate repeated words e.g. "현재 현재" -> "현재", "지금 지금" -> "지금"
     cleaned = re.sub(r"\b(\w+)\s+\1\b", r"\1", cleaned)
     return cleaned.strip()
@@ -236,3 +236,42 @@ def classify_korean_completion_command(transcript: str, language: str = "ko") ->
     """Determine whether an utterance is an authorized current-step or explicit-step completion command."""
     decision = resolve_korean_completion_decision(transcript, language=language)
     return decision.is_completion
+
+
+def is_learning_question(text: str) -> bool:
+    """Classify if the user is asking about the rationale, purpose, or common mistakes of a step/procedure."""
+    normalized = _normalize_conversational_utterance(text).casefold()
+    learning_patterns = (
+        r"(?:왜\s*(?:이|이번|해당|이런)?\s*(?:단계|것|거|작업|과정)?|이\s*단계(?:는|를|가)?\s*왜|단계(?:가|는)?\s*왜|왜\s*(?:해야\s*(?:돼|되|하)|필요)|필요한\s*이유|목적이\s*(?:뭐|무엇)|목적\s*(?:알려|설명)|이걸\s*왜)",
+        r"(?:흔한\s*실수|자주\s*하는\s*실수|주의해야\s*할\s*(?:점|실수)|주의할\s*점|주의사항|실수하기\s*쉬운|조심해야\s*할)",
+        r"(?:원리가\s*(?:뭐|무엇)|이유가\s*(?:뭐|무엇)|이유를?\s*설명|원리를?\s*설명|배경\s*설명)",
+        r"\b(?:why\s+(?:do\s+we\s+)?(?:do|need)\s+this\s+step|why\s+is\s+this\s+step|purpose\s+of\s+(?:this\s+)?(?:step|procedure)|common\s+mistakes|what\s+mistakes|precautions)\b",
+    )
+    return any(re.search(p, normalized) is not None for p in learning_patterns)
+
+
+def is_version_question(text: str) -> bool:
+    """Classify if the user is asking about active protocol version, document origin, or cryptographic hash."""
+    normalized = _normalize_conversational_utterance(text).casefold()
+    version_patterns = (
+        r"(?:프로토콜\s*버전|sop\s*버전|절차\s*버전|문서\s*버전|버전이\s*(?:뭐|무엇|몇)|몇\s*버전|버전\s*(?:정보|확인|알려))",
+        r"(?:프로토콜\s*해시|문서\s*해시|sha256|해시값|해시\s*(?:정보|알려))",
+        r"\b(?:protocol\s+version|sop\s+version|which\s+version|document\s+version|protocol\s+hash|sha256|document\s+hash)\b",
+    )
+    return any(re.search(p, normalized) is not None for p in version_patterns)
+
+
+def is_history_or_continuation_intent(text: str) -> tuple[str, str | None] | None:
+    """Classify if the user is asking to view previous experiments or resume/continue an experiment."""
+    normalized = _normalize_conversational_utterance(text).casefold()
+    if any(re.search(p, normalized) is not None for p in (
+        r"(?:어제|이전|지난|전에|기존)\s*(?:하던|진행하던)?\s*(?:것|실험|세션|워크플로)?\s*(?:이어서|계속|불러와|재개)",
+        r"\b(?:continue\s+(?:the\s+)?(?:previous\s+)?experiment|resume\s+experiment|continue\s+yesterday)\b",
+    )):
+        return "continue", None
+    if any(re.search(p, normalized) is not None for p in (
+        r"(?:이전|최근|과거|지난)?\s*(?:실험|세션|워크플로|기록|이력)+(?:\s*(?:목록|이력|기록|내역))?\s*(?:보여|조회|알려|리스트|확인|불러)",
+        r"\b(?:experiment\s+history|recent\s+experiments|previous\s+sessions|list\s+experiments)\b",
+    )):
+        return "history", None
+    return None

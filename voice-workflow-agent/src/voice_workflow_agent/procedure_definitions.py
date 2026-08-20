@@ -1,6 +1,7 @@
 """Fail-closed immutable ProcedureDefinition loading."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -30,6 +31,10 @@ class ProcedureStep:
     source: SourceReference
     timer: dict[str, Any] | None = None
     observation_schema: dict[str, Any] | None = None
+    purpose: str | None = None
+    rationale: str | None = None
+    common_mistakes: tuple[str, ...] | None = None
+    conditional_transitions: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,11 @@ class ProcedureDefinition:
     document_language: str
     document_source: SourceReference
     steps: tuple[ProcedureStep, ...]
+
+    @property
+    def protocol_sha256(self) -> str:
+        content = f"{self.procedure_id}:{self.version}:{self.document_id}:{self.document_version}"
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _text(value: Any, field: str) -> str:
@@ -116,6 +126,43 @@ def _observation(raw: Any, field: str) -> dict[str, Any] | None:
                 f"{field}.utterance_subjects is malformed")
         result["utterance_subjects"]=normalized
     return result
+
+
+def _optional_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ProcedureDefinitionError(f"{field} must be a non-empty string when provided")
+    return value.strip()
+
+
+def _optional_string_tuple(value: Any, field: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise ProcedureDefinitionError(f"{field} must be a non-empty list of strings")
+    result = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ProcedureDefinitionError(f"{field}[{idx}] must be a non-empty string")
+        result.append(item.strip())
+    return tuple(result)
+
+
+def _optional_transitions(value: Any, field: str) -> tuple[dict[str, Any], ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise ProcedureDefinitionError(f"{field} must be a non-empty list of transition objects")
+    result = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict) or "condition" not in item or "target_step_id" not in item:
+            raise ProcedureDefinitionError(f"{field}[{idx}] must contain 'condition' and 'target_step_id'")
+        result.append({
+            "condition": _text(item["condition"], f"{field}[{idx}].condition"),
+            "target_step_id": _text(item["target_step_id"], f"{field}[{idx}].target_step_id"),
+        })
+    return tuple(result)
 
 
 def load_procedure_definitions(
@@ -210,8 +257,9 @@ def load_procedure_definitions(
         for s_index, step in enumerate(raw["steps"]):
             sp=f"{p}.steps[{s_index}]"
             allowed={"step_id","order","title","approved_spoken_instruction","completion_mode",
-                     "source_reference","timer","observation_schema"}
-            required_step=allowed-{"timer","observation_schema"}
+                     "source_reference","timer","observation_schema","purpose","rationale",
+                     "common_mistakes","conditional_transitions"}
+            required_step={"step_id","order","title","approved_spoken_instruction","completion_mode","source_reference"}
             if not isinstance(step,dict) or not required_step.issubset(step) or not set(step).issubset(allowed):
                 raise ProcedureDefinitionError(f"{sp} is malformed")
             step_id=_text(step["step_id"],f"{sp}.step_id")
@@ -234,7 +282,11 @@ def load_procedure_definitions(
                 step_id,order,_text(step["title"],f"{sp}.title"),
                 instruction,
                 step["completion_mode"],source,_timer(step.get("timer"),f"{sp}.timer"),
-                _observation(step.get("observation_schema"),f"{sp}.observation_schema")))
+                _observation(step.get("observation_schema"),f"{sp}.observation_schema"),
+                _optional_text(step.get("purpose"),f"{sp}.purpose"),
+                _optional_text(step.get("rationale"),f"{sp}.rationale"),
+                _optional_string_tuple(step.get("common_mistakes"),f"{sp}.common_mistakes"),
+                _optional_transitions(step.get("conditional_transitions"),f"{sp}.conditional_transitions")))
         if [step.order for step in steps] != list(range(1,len(steps)+1)):
             raise ProcedureDefinitionError("step order must be contiguous and one-based")
         result[procedure_id]=ProcedureDefinition(

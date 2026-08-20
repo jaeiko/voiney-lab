@@ -581,8 +581,8 @@ def validate_tts_pcm(response:requests.Response)->bytes:
 
 def _tts_voice() -> str:
     return (
-        os.environ.get("TTS_VOICE", os.environ.get("XAI_TTS_VOICE", "lux")).strip()
-        or "lux"
+        os.environ.get("TTS_VOICE", os.environ.get("XAI_TTS_VOICE", "leo")).strip()
+        or "leo"
     )
 
 def synthesize(text:str,language:str|None=None)->bytes:

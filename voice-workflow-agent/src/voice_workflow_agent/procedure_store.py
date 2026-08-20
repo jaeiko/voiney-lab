@@ -88,6 +88,7 @@ class ProcedureStore:
         self._connection=sqlite3.connect(target)
         self._connection.row_factory=sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys=ON")
+        self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.executescript(SCHEMA)
     def close(self): self._connection.close()
     def foreign_keys_enabled(self): return self._connection.execute("PRAGMA foreign_keys").fetchone()[0]
@@ -219,11 +220,30 @@ class ProcedureStore:
         handoff=self.get_handoff(session_id)
         if handoff is None: raise ProcedureTransitionError("handoff unavailable")
         return handoff,False
-    def complete_step(self,session_id:str,step_id:str,expected_index:int,resulting_index:int,*,final:bool)->dict[str,Any]:
+
+    def list_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._connection.execute(
+            "SELECT * FROM procedure_sessions ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_latest_active_session(self, procedure_id: str | None = None) -> dict[str, Any] | None:
+        query = "SELECT * FROM procedure_sessions WHERE status='active'"
+        params: list[Any] = []
+        if procedure_id is not None:
+            query += " AND procedure_id=?"
+            params.append(procedure_id)
+        query += " ORDER BY updated_at DESC LIMIT 1"
+        row = self._connection.execute(query, params).fetchone()
+        return dict(row) if row else None
+
+    def complete_step(self,session_id:str,step_id:str,expected_index:int,resulting_index:int,*,final:bool,allow_branch:bool=False)->dict[str,Any]:
         if (not isinstance(step_id,str) or not step_id.strip() or
                 not isinstance(expected_index,int) or isinstance(expected_index,bool) or
                 not isinstance(resulting_index,int) or isinstance(resulting_index,bool) or
-                expected_index<0 or resulting_index<0 or resulting_index!=expected_index+1):
+                expected_index<0 or resulting_index<0 or
+                (resulting_index!=expected_index+1 and not (allow_branch and resulting_index>expected_index))):
             raise ProcedureTransitionError("invalid transition")
         try:
             self._connection.execute("BEGIN IMMEDIATE")

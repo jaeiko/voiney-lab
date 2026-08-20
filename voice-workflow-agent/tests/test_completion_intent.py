@@ -37,6 +37,12 @@ class CompletionIntentTests(unittest.TestCase):
             "현재 단계 완료했어.",
             "이번 단계도 완료했어!",
             "현재 단계도 완료했습니다~",
+            "네 맞아요 이번 단계 다 완료했어",
+            "맞아요 현재 단계 완료했습니다",
+            "okay 이번 단계 완료했으니 다음으로 넘어가줘",
+            "step 1 is done",
+            "I completed step 2",
+            "yep step 1 done",
         ]
 
         for text in positive_utterances:

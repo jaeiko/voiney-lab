@@ -719,10 +719,37 @@ class ProcedureController:
                     "status":"error","code":"timer_not_elapsed",
                     "remaining_seconds":timer.get("remaining_seconds"),"state":state,
                 }
-        final=index==len(definition.steps)-1
+        target_step_index = index + 1
+        if current.conditional_transitions:
+            observations = self.store.list_observations(row["session_id"], current.step_id)
+            latest_obs = str(observations[-1]["value"]).strip() if observations else ""
+            for trans in current.conditional_transitions:
+                cond = trans.get("condition", "")
+                target_id = trans.get("target_step_id", "")
+                matched = False
+                if cond.startswith("observation_equals:"):
+                    target_val = cond[len("observation_equals:"):].strip()
+                    if latest_obs.casefold() == target_val.casefold():
+                        matched = True
+                elif cond.startswith("observation_contains:"):
+                    target_val = cond[len("observation_contains:"):].strip()
+                    if target_val.casefold() in latest_obs.casefold():
+                        matched = True
+                elif cond == "always":
+                    matched = True
+
+                if matched:
+                    for s_idx, s in enumerate(definition.steps):
+                        if s.step_id == target_id:
+                            target_step_index = s_idx
+                            break
+                    break
+        final = target_step_index >= len(definition.steps)
+        resulting_index = len(definition.steps) if final else target_step_index
         try:
             updated=self.store.complete_step(
-                row["session_id"],current.step_id,index,index+1,final=final)
+                row["session_id"],current.step_id,index,resulting_index,final=final,
+                allow_branch=bool(current.conditional_transitions))
         except ProcedureTransitionError:
             return {"status":"error","code":"step_mismatch","state":self._public(definition,row)}
         except Exception:
@@ -731,4 +758,82 @@ class ProcedureController:
             "status":"success","operation":"complete","idempotent":False,
             "completed_step_id":current.step_id,"completed":final,
             "state":self._public(definition,updated),
+        }
+
+    def resume(self, session_id: str) -> dict[str, Any]:
+        row = self.store.get_session(session_id.strip())
+        if not row:
+            return {"status": "error", "code": "session_not_found"}
+        definition = self.definitions.get(row["procedure_id"])
+        if not definition:
+            return {"status": "error", "code": "procedure_not_available"}
+        self.attached_session_id = row["session_id"]
+        return {
+            "status": "success",
+            "operation": "resume",
+            "idempotent": True,
+            "state": self._public(definition, row),
+        }
+
+    def list_history(self, limit: int = 5) -> dict[str, Any]:
+        sessions = self.store.list_sessions(limit=limit)
+        history = []
+        for s in sessions:
+            def_obj = self.definitions.get(s["procedure_id"])
+            title = def_obj.title if def_obj else s["procedure_id"]
+            history.append({
+                "session_id": s["session_id"],
+                "procedure_id": s["procedure_id"],
+                "procedure_title": title,
+                "procedure_version": s["procedure_version"],
+                "status": s["status"],
+                "current_step_index": s["current_step_index"],
+                "started_at": s["started_at"],
+                "updated_at": s["updated_at"],
+            })
+        return {"status": "success", "sessions": history}
+
+    def get_learning_context(self, step_id: str | None = None) -> dict[str, Any]:
+        definition, row = self._attached()
+        if not definition or not row:
+            return {"status": "error", "code": "no_active_procedure"}
+        if step_id is None:
+            if row["current_step_index"] >= len(definition.steps):
+                return {"status": "error", "code": "procedure_already_completed"}
+            step = definition.steps[row["current_step_index"]]
+        else:
+            step = next((s for s in definition.steps if s.step_id == step_id), None)
+            if step is None:
+                return {"status": "error", "code": "step_not_found"}
+        return {
+            "status": "success",
+            "procedure_id": definition.procedure_id,
+            "step_id": step.step_id,
+            "step_number": step.order,
+            "step_title": step.title,
+            "purpose": step.purpose or f"{step.title} 표준 확인 및 실행",
+            "rationale": step.rationale or f"승인된 {definition.title}의 {step.order}단계 표준 절차에 따릅니다.",
+            "common_mistakes": list(step.common_mistakes or []),
+            "source_reference": {
+                "section": step.source.section_reference,
+                "pages": f"p.{step.source.page_start}-{step.source.page_end}",
+            },
+        }
+
+    def get_version_info(self) -> dict[str, Any]:
+        definition, row = self._attached()
+        if not definition or not row:
+            return {"status": "error", "code": "no_active_procedure"}
+        return {
+            "status": "success",
+            "procedure_id": definition.procedure_id,
+            "title": definition.title,
+            "version": definition.version,
+            "approval_status": definition.approval_status,
+            "protocol_sha256": definition.protocol_sha256,
+            "document_id": definition.document_id,
+            "document_version": definition.document_version,
+            "language": definition.language,
+            "facility_id": definition.facility_id,
+            "active_session_id": row["session_id"],
         }

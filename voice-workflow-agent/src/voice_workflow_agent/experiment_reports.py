@@ -91,6 +91,7 @@ class ExperimentReportStore:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS experiment_report_metadata (

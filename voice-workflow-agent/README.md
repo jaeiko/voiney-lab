@@ -379,8 +379,8 @@ Voice Workflow Agent는 PDF 원문 기반의 단백질 In-Gel Digestion 프로�
    - SQLite 원장 이벤트를 기반으로 환각 없이 작성되는 `ReportDraftState` 및 `ReportWriterBrain`.
    - 학부 및 전문 연구실 표준 10개 섹션(실험 개요, 목적, 시약 및 준비물, 기기 및 설정 조건, 실행 타임라인, 관찰 기록, 이상상황 조치 내역, 배양/타이머 분석, 토의, 결론 및 서명) DOCX 내보내기 지원.
 
-5. **Calm Professor-Style Korean Voice Profile**:
-   - 차분하고 신뢰감 있는 교수/연구원 톤의 `lux` 보이스를 기본(`TTS_VOICE=lux`) 적용.
+5. **Calm Professor-Style Korean Voice Profile (Leo)**:
+   - 차분하고 신뢰감 있는 교수/연구원 멘토 톤의 `leo` 보이스를 기본(`TTS_VOICE=leo`) 적용.
    - 한국어(`ko`) 명시 파라미터 전달 및 깨끗한 음성 합성.
 
 ---

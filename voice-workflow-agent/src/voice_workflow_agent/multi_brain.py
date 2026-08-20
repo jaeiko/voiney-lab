@@ -310,16 +310,17 @@ class HybridMultiBrain:
     def start(self, snapshot: BrainSnapshot, activation: BrainActivation) -> "BrainRun":
         tasks: dict[str, asyncio.Task[BrainTerminal]] = {}
         if activation.answer and self.settings.answer_brain_enabled:
-            tasks["answer"] = asyncio.create_task(self._timed("answer", self._answer(snapshot), self.settings.answer_timeout_seconds))
+            tasks["answer"] = asyncio.create_task(self._timed("answer", lambda: self._answer(snapshot), self.settings.answer_timeout_seconds))
         if activation.source and self.settings.source_brain_enabled:
-            tasks["source"] = asyncio.create_task(self._timed("source", self._source(snapshot), self.settings.planner_timeout_seconds))
+            tasks["source"] = asyncio.create_task(self._timed("source", lambda: self._source(snapshot), self.settings.planner_timeout_seconds))
         if activation.visual and self.settings.visual_brain_enabled:
-            tasks["visual"] = asyncio.create_task(self._timed("visual", self._visual(snapshot), self.settings.planner_timeout_seconds))
+            tasks["visual"] = asyncio.create_task(self._timed("visual", lambda: self._visual(snapshot), self.settings.planner_timeout_seconds))
         return BrainRun(snapshot, activation, tasks)
 
-    async def _timed(self, role: str, operation: Awaitable[Any], timeout: float) -> BrainTerminal:
+    async def _timed(self, role: str, operation: Awaitable[Any] | Callable[[], Awaitable[Any]], timeout: float) -> BrainTerminal:
         started = self.clock()
-        provider_task = asyncio.create_task(operation)
+        coro = operation() if callable(operation) else operation
+        provider_task = asyncio.create_task(coro)
         try:
             done, _ = await asyncio.wait({provider_task}, timeout=timeout)
             if not done:

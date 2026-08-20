@@ -280,6 +280,28 @@
       font-weight:900;
       transition:all .3s ease;
     }
+    .pulse.listening{
+      background:rgba(53,237,126,.25);
+      color:var(--green-cta);
+      box-shadow:0 0 0 0 rgba(53,237,126,.7);
+      animation:pulse-listening 1.5s infinite;
+    }
+    .pulse.speaking{
+      background:rgba(236,72,189,.25);
+      color:var(--magenta);
+      box-shadow:0 0 0 0 rgba(236,72,189,.7);
+      animation:pulse-speaking 1.2s infinite;
+    }
+    @keyframes pulse-listening{
+      0%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(53,237,126,.6)}
+      70%{transform:scale(1.06);box-shadow:0 0 0 10px rgba(53,237,126,0)}
+      100%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(53,237,126,0)}
+    }
+    @keyframes pulse-speaking{
+      0%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(236,72,189,.6)}
+      70%{transform:scale(1.06);box-shadow:0 0 0 10px rgba(236,72,189,0)}
+      100%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(236,72,189,0)}
+    }
     #state{font-weight:850;letter-spacing:.05em;color:var(--ink);font-size:.95rem}
     #status{color:var(--muted);font-size:.84rem}
     .controls{display:flex;gap:.6rem}
@@ -1095,6 +1117,12 @@ function renderState(state,detail=""){
  if(typeof document?.querySelectorAll==="function"){
   for(const dot of document.querySelectorAll(".session-dot")){
    dot.style.background=["LISTENING","SPEAKING"].includes(visibleState)?"#35ed7e":visibleState==="ERROR"?"#fa777c":"#8ea199";
+  }
+  for(const pulse of document.querySelectorAll(".pulse")){
+   if(pulse?.classList){
+    pulse.classList.toggle("listening",visibleState==="LISTENING");
+    pulse.classList.toggle("speaking",visibleState==="SPEAKING");
+   }
   }
  }
 }

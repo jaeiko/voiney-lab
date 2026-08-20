@@ -50,6 +50,13 @@ class BrainTests(unittest.TestCase):
         c=SentenceChunker(minimum_length=1)
         out=c.feed("가.나?다!라。마？바！")
         self.assertEqual(len(out),6)
+    def test_chunker_handles_scientific_abbreviations(self):
+        c = SentenceChunker()
+        out = c.feed("See Fig. 1 for details approx. 5 min vs. standard buffer. Done!")
+        out.extend(c.flush())
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0].text, "See Fig. 1 for details approx. 5 min vs. standard buffer.")
+        self.assertEqual(out[1].text, "Done!")
     def test_history_preserves_groups_and_resets(self):
         h=ConversationHistory(max_turns=2)
         h.commit([{"role":"user","content":"1"},{"role":"assistant","content":"a"}])
