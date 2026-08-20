@@ -242,7 +242,7 @@ def is_learning_question(text: str) -> bool:
     """Classify if the user is asking about the rationale, purpose, or common mistakes of a step/procedure."""
     normalized = _normalize_conversational_utterance(text).casefold()
     learning_patterns = (
-        r"(?:왜\s*(?:이|이번|해당|이런)?\s*(?:단계|것|거|작업|과정)?|이\s*단계(?:는|를|가)?\s*왜|단계(?:가|는)?\s*왜|왜\s*(?:해야\s*(?:돼|되|하)|필요)|필요한\s*이유|목적이\s*(?:뭐|무엇)|목적\s*(?:알려|설명)|이걸\s*왜)",
+        r"(?:왜\s*(?:이|이번|해당|이런)?\s*(?:단계|것|거|작업|과정)?|이\s*단계(?:는|를|가|도)?\s*왜|단계(?:가|는)?\s*왜|왜\s*(?:해야\s*(?:돼|되|하)|필요|하는)|필요한\s*이유|목적이\s*(?:뭐|무엇)|목적\s*(?:알려|설명)|이걸\s*왜|왜\s*해야\s*돼|왜\s*해야\s*되)",
         r"(?:흔한\s*실수|자주\s*하는\s*실수|주의해야\s*할\s*(?:점|실수)|주의할\s*점|주의사항|실수하기\s*쉬운|조심해야\s*할)",
         r"(?:원리가\s*(?:뭐|무엇)|이유가\s*(?:뭐|무엇)|이유를?\s*설명|원리를?\s*설명|배경\s*설명)",
         r"\b(?:why\s+(?:do\s+we\s+)?(?:do|need)\s+this\s+step|why\s+is\s+this\s+step|purpose\s+of\s+(?:this\s+)?(?:step|procedure)|common\s+mistakes|what\s+mistakes|precautions)\b",
@@ -254,8 +254,8 @@ def is_version_question(text: str) -> bool:
     """Classify if the user is asking about active protocol version, document origin, or cryptographic hash."""
     normalized = _normalize_conversational_utterance(text).casefold()
     version_patterns = (
-        r"(?:프로토콜\s*버전|sop\s*버전|절차\s*버전|문서\s*버전|버전이\s*(?:뭐|무엇|몇)|몇\s*버전|버전\s*(?:정보|확인|알려))",
-        r"(?:프로토콜\s*해시|문서\s*해시|sha256|해시값|해시\s*(?:정보|알려))",
+        r"(?:프로토콜(?:의)?\s*버전|sop(?:의)?\s*버전|절차(?:의)?\s*버전|문서(?:의)?\s*버전|버전(?:이|을)?\s*(?:뭐|무엇|몇|알려|확인)|몇\s*버전|버전\s*(?:정보|확인|알려))",
+        r"(?:프로토콜(?:의)?\s*해시|문서(?:의)?\s*해시|sha256|해시값|해시(?:를|의)?\s*(?:정보|알려|확인))",
         r"\b(?:protocol\s+version|sop\s+version|which\s+version|document\s+version|protocol\s+hash|sha256|document\s+hash)\b",
     )
     return any(re.search(p, normalized) is not None for p in version_patterns)
@@ -265,7 +265,7 @@ def is_history_or_continuation_intent(text: str) -> tuple[str, str | None] | Non
     """Classify if the user is asking to view previous experiments or resume/continue an experiment."""
     normalized = _normalize_conversational_utterance(text).casefold()
     if any(re.search(p, normalized) is not None for p in (
-        r"(?:어제|이전|지난|전에|기존)\s*(?:하던|진행하던)?\s*(?:것|실험|세션|워크플로)?\s*(?:이어서|계속|불러와|재개)",
+        r"(?:어제|이전|지난|전에|기존)\s*(?:하던|진행하던)?\s*(?:것|실험|세션|워크플로)?\s*(?:을|를)?\s*(?:이어서|이어줘|계속|불러와|재개)",
         r"\b(?:continue\s+(?:the\s+)?(?:previous\s+)?experiment|resume\s+experiment|continue\s+yesterday)\b",
     )):
         return "continue", None
@@ -275,3 +275,27 @@ def is_history_or_continuation_intent(text: str) -> tuple[str, str | None] | Non
     )):
         return "history", None
     return None
+
+
+def is_combined_learning_and_next_question(text: str) -> bool:
+    """Classify compound queries asking why the current step is done and what the next step is."""
+    normalized = _normalize_conversational_utterance(text).casefold()
+    has_why = any(re.search(p, normalized) is not None for p in (
+        r"(?:왜\s*(?:하는지|해야\s*(?:하는지|돼|되|하는)|필요한지)|이유|목적)",
+        r"\b(?:why\s+(?:we\s+do|this\s+step)|purpose)\b",
+    ))
+    has_next = any(re.search(p, normalized) is not None for p in (
+        r"(?:다음\s*단계(?:도)?\s*(?:알려|설명|뭐|무엇)|다음(?:으로)?\s*(?:알려|설명))",
+        r"\b(?:next\s+step|what(?:'s|\s+is)\s+next)\b",
+    ))
+    return has_why and has_next
+
+
+def is_speculative_or_uncertainty_question(text: str) -> bool:
+    """Classify speculative outcome or ungrounded experiment prediction questions."""
+    normalized = _normalize_conversational_utterance(text).casefold()
+    patterns = (
+        r"(?:실험\s*(?:결과(?:가)?)?\s*(?:성공|잘\s*될|실패)|결과가\s*(?:성공|잘\s*나올|좋을)|성공할까|성공할\s*수\s*있을까|잘\s*될까|성공할지|성공\s*여부|망할까)",
+        r"\b(?:will\s+(?:this\s+)?experiment\s+succeed|will\s+it\s+work|is\s+it\s+successful)\b",
+    )
+    return any(re.search(p, normalized) is not None for p in patterns)
