@@ -94,6 +94,27 @@ confirmations, model output, conversation history, or active timers.
 The dashboard transition endpoint permits explicit pause/resume/stop/block but
 cannot claim completion—completion remains a protocol-authority action.
 
+Each started session also has an append-only observation timeline. Researchers
+can say “메모 추가해: …”, say “record observation” and answer the bounded
+follow-up, or add a manual note from the bench workspace. Observation wording is
+stored with its exact protocol step, author, category, capture source, and
+timestamp as `observation_only`; it never becomes an instruction or approved
+protocol fact. Source-defined positive/negative observations continue through
+the existing completion gates.
+
+Images and documents can be attached as opaque evidence. Uploads are streamed,
+capped at 32 MiB, hashed, and stored by content identity. The system records
+metadata with `not_interpreted` status and does not run OCR or image/document
+interpretation in this phase. Internal storage references are not returned by
+the API or timeline UI.
+
+Timeline endpoints are:
+
+- `GET /api/workspace/experiments/{session_id}/timeline`;
+- `POST /api/workspace/experiments/{session_id}/observations`;
+- `POST /api/workspace/experiments/{session_id}/evidence`; and
+- `POST /api/workspace/reviewer/experiments/{session_id}/actions`.
+
 ## Protocol onboarding and lifecycle
 
 The browser implements the explicit lifecycle:
@@ -336,7 +357,8 @@ The browser consumes these main groups:
 - `/api/workspace/session` and `/protocol-library`: identity-aware workspace and
   quick protocol access;
 - `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
-  experiment dashboard, recovery version, completed steps, and lifecycle events;
+  experiment dashboard, recovery version, completed steps, observations,
+  opaque evidence metadata, reviewer actions, and lifecycle timeline;
 - `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
   knowledge promotion, and dry-lab review;
 - `/api/workspace/admin/*`: memberships, connector configuration, retention,

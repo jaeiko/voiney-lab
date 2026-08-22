@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
+import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -591,6 +591,55 @@ def _record_workspace_experiment_progress(
         )
     return state
 
+
+def _record_workspace_observation(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    plan,
+    *,
+    turn_id:int,
+    generation:int,
+    pre_transition_index:int,
+)->dict[str,object]|None:
+    """Persist user wording as a non-authoritative timeline observation."""
+
+    settings=_workspace_settings()
+    if not settings.enabled or session.experiment_state_version is None:
+        return None
+    content=(plan.observation_outcome or plan.anomaly_text or "").strip()
+    if not content:
+        raise WorkspaceError("Observation content is unavailable.")
+    if plan.action is CuratedProtocolAction.REPORT_ANOMALY:
+        category="deviation"
+    elif plan.observation_predicate in {
+        "note","appearance","measurement","deviation","other",
+    }:
+        category=plan.observation_predicate
+    elif plan.observation_predicate in {"positive","negative"}:
+        category="appearance"
+    else:
+        category="other"
+    step=curated.fixture.steps[pre_transition_index]
+    principal,store=_commercial_workspace()
+    try:
+        store.record_observation(
+            principal,
+            session.session_id,
+            event_key=(
+                f"voice-{generation}-{turn_id}-observation-"
+                f"{plan.action.value}"
+            ),
+            content=content,
+            category=category,
+            capture_source="voice",
+            protocol_step_id=step.step_id,
+        )
+        state=store.get_experiment(principal,session.session_id)
+        session.experiment_state_version=int(state["version"])
+        return state
+    finally:
+        store.close()
+
 def normalize_session_language(value:str)->str:
     normalized=value.strip().casefold().replace("_","-")
     if normalized in ("ko","ko-kr"): return "ko"
@@ -1127,7 +1176,7 @@ async def _json_object(request:Request)->dict[str,object]:
 
 
 @app.get("/api/workspace/session")
-def get_workspace_session()->dict[str,object]:
+async def get_workspace_session()->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
@@ -1213,6 +1262,218 @@ async def transition_workspace_experiment(
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/experiments/{session_id}/timeline")
+def get_workspace_experiment_timeline(session_id:str)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.experiment_timeline(principal,session_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post(
+    "/api/workspace/experiments/{session_id}/observations",
+    status_code=201,
+)
+async def create_workspace_experiment_observation(
+    session_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.record_observation(
+                principal,
+                session_id,
+                event_key=str(payload.get("idempotency_key", "")),
+                content=str(payload.get("content", "")),
+                category=str(payload.get("category", "note")),
+                capture_source="manual",
+                protocol_step_id=(
+                    str(payload["protocol_step_id"])
+                    if payload.get("protocol_step_id") is not None else None
+                ),
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post(
+    "/api/workspace/reviewer/experiments/{session_id}/actions",
+    status_code=201,
+)
+async def create_workspace_experiment_review_action(
+    session_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            state=store.record_experiment_review_action(
+                principal,
+                session_id,
+                event_key=str(payload.get("idempotency_key", "")),
+                action=str(payload.get("action", "")),
+                comment=str(payload.get("comment", "")),
+            )
+            return {
+                "session_id":state["session_id"],
+                "version":state["version"],
+                "recorded":True,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post(
+    "/api/workspace/experiments/{session_id}/evidence",
+    status_code=201,
+)
+async def upload_workspace_experiment_evidence(
+    session_id:str,
+    request:Request,
+    filename:str,
+    idempotency_key:str,
+)->dict[str,object]:
+    allowed={
+        "image/jpeg":("image",".jpg"),
+        "image/png":("image",".png"),
+        "image/webp":("image",".webp"),
+        "application/pdf":("document",".pdf"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document":(
+            "document",".docx"),
+    }
+    media_type=(
+        request.headers.get("content-type","")
+        .split(";",1)[0].strip().casefold()
+    )
+    if media_type not in allowed:
+        raise HTTPException(
+            status_code=415,detail="evidence_media_type_unsupported"
+        )
+    declared=request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_size=int(declared)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,detail="invalid_content_length"
+            ) from exc
+        if declared_size<1 or declared_size>32*1024*1024:
+            raise HTTPException(status_code=413,detail="evidence_too_large")
+    temporary:Path|None=None
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            experiment=store.get_experiment(principal,session_id)
+            safe_session_id=str(experiment["session_id"])
+            settings=_workspace_settings()
+            assert settings.data_dir is not None
+            tenant_bucket=hashlib.sha256(
+                principal.organization_id.encode("utf-8")
+            ).hexdigest()[:24]
+            directory=(
+                settings.data_dir/"evidence"/tenant_bucket/safe_session_id
+            )
+            directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+            descriptor,raw_path=tempfile.mkstemp(
+                prefix=".evidence-upload-",dir=directory
+            )
+            temporary=Path(raw_path)
+            digest=hashlib.sha256()
+            byte_size=0
+            try:
+                with os.fdopen(descriptor,"wb") as stream:
+                    async for chunk in request.stream():
+                        if not chunk:
+                            continue
+                        byte_size+=len(chunk)
+                        if byte_size>32*1024*1024:
+                            raise HTTPException(
+                                status_code=413,detail="evidence_too_large"
+                            )
+                        digest.update(chunk)
+                        stream.write(chunk)
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                temporary=None
+                raise
+            if byte_size==0:
+                temporary.unlink(missing_ok=True)
+                temporary=None
+                raise HTTPException(status_code=422,detail="evidence_empty")
+            checksum=digest.hexdigest()
+            evidence_kind,suffix=allowed[media_type]
+            target=directory/f"{checksum}{suffix}"
+            try:
+                os.link(temporary,target)
+            except FileExistsError:
+                existing_descriptor=os.open(
+                    target,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)
+                )
+                target_stat=os.fstat(existing_descriptor)
+                if (
+                    not stat.S_ISREG(target_stat.st_mode)
+                    or target_stat.st_size!=byte_size
+                ):
+                    os.close(existing_descriptor)
+                    raise WorkspaceError(
+                        "Existing evidence storage object failed integrity checks."
+                    )
+                existing_digest=hashlib.sha256()
+                with os.fdopen(existing_descriptor,"rb") as existing_stream:
+                    for existing_chunk in iter(
+                        lambda:existing_stream.read(1024*1024),b""
+                    ):
+                        existing_digest.update(existing_chunk)
+                if not hmac.compare_digest(
+                    existing_digest.hexdigest(),checksum
+                ):
+                    raise WorkspaceError(
+                        "Existing evidence storage object failed integrity checks."
+                    )
+            finally:
+                temporary.unlink(missing_ok=True)
+                temporary=None
+            relative=target.relative_to(settings.data_dir).as_posix()
+            evidence=store.record_evidence(
+                principal,
+                safe_session_id,
+                event_key=idempotency_key,
+                evidence_kind=evidence_kind,
+                original_filename=filename,
+                media_type=media_type,
+                byte_size=byte_size,
+                sha256=checksum,
+                storage_reference=relative,
+            )
+            return {
+                key:evidence[key]
+                for key in (
+                    "evidence_id","session_id","protocol_step_id",
+                    "protocol_step_label","evidence_kind","original_filename",
+                    "media_type","byte_size","sha256","interpretation_status",
+                    "created_at",
+                )
+            }
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 @app.get("/api/workspace/protocol-library")
@@ -4376,6 +4637,8 @@ def _record_experiment_report_plan(
             payload["completion_source"]="user_command"
     elif plan.action is CuratedProtocolAction.NEXT and plan.speech_mode.value=="blocked":
         event_type=("observation" if plan.reported_observation else "blocked")
+    elif plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
+        event_type="observation"
     elif plan.action is CuratedProtocolAction.REPORT_ANOMALY:
         event_type="anomaly"
     elif plan.action is CuratedProtocolAction.STOP and plan.state_changed:
@@ -4406,7 +4669,7 @@ def _record_experiment_report_plan(
             step_id=step_id,
             step_label=step_label,
             user_wording=(plan.anomaly_text or plan.observation_outcome),
-            category=plan.anomaly_category,
+            category=(plan.anomaly_category or plan.observation_predicate),
             severity=("unknown" if plan.reported_anomaly else None),
             confirmation_state=(
                 "user_reported"
@@ -5352,7 +5615,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 CuratedProtocolAction.REPORT_ANOMALY,
                 CuratedProtocolAction.SHOW_REPORT,
             }:
-                if session.experiment_report_store is None:
+                if (
+                    session.experiment_report_store is None
+                    and plan.action is CuratedProtocolAction.SHOW_REPORT
+                ):
                     unavailable=(
                         "실험 기록 기능이 이 세션에서 활성화되지 않았습니다. "
                         "프로토콜 상태는 변경하지 않았습니다."
@@ -5364,7 +5630,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         plan,display_text=unavailable,speech_text=unavailable,
                         speech_mode=CuratedProtocolSpeechMode.BLOCKED,
                     )
-                else:
+                elif session.experiment_report_store is not None:
                     try:
                         report=await asyncio.to_thread(
                             _record_experiment_report_plan,
@@ -5438,6 +5704,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     CuratedProtocolAction.NEXT_INFORMATION,
                     CuratedProtocolAction.COMPLETION_CRITERIA,
                     CuratedProtocolAction.OPERATIONAL_DEVIATION,
+                    CuratedProtocolAction.RECORD_OBSERVATION,
                     CuratedProtocolAction.PROTOCOL_QUERY,
                     CuratedProtocolAction.STEP_RANGE,
                     CuratedProtocolAction.LAB_DOMAIN_QA,
@@ -5532,6 +5799,102 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             speech_text=f"{acknowledgment} {plan.speech_text}",
                         )
                     await report_state(report)
+            workspace_observation_requested=bool(
+                plan.reported_observation or plan.reported_anomaly
+            )
+            workspace_observation_required=bool(
+                plan.action is CuratedProtocolAction.RECORD_OBSERVATION
+                and plan.reported_observation
+            )
+            if workspace_observation_requested:
+                if session.experiment_state_version is None:
+                    if workspace_observation_required:
+                        failed=(
+                            "실험 세션 기록이 활성화되지 않아 관찰 내용을 저장하지 못했습니다. 프로토콜 상태는 변경하지 않았습니다."
+                            if turn_language=="ko" else
+                            "Experiment-session recording is unavailable, so the observation was not saved. The protocol state did not change."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                            state_changed=False,
+                        )
+                        session.set_turn_terminal_outcome(
+                            turn_id,generation,"blocked")
+                else:
+                    try:
+                        observation_state=await asyncio.to_thread(
+                            _record_workspace_observation,
+                            session,curated,plan,
+                            turn_id=turn_id,generation=generation,
+                            pre_transition_index=pre_transition_index,
+                        )
+                    except Exception as exc:
+                        if plan.state_changed:
+                            curated._restore(checkpoint)
+                        failed=(
+                            "관찰 내용을 실험 세션 타임라인에 저장하지 못했습니다. 완료나 단계 이동은 확정하지 않았습니다."
+                            if turn_language=="ko" else
+                            "The observation could not be saved to the experiment-session timeline. Completion or step movement was not committed."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                            state_changed=False,
+                        )
+                        session.set_turn_terminal_outcome(
+                            turn_id,generation,"blocked")
+                        log.warning(
+                            "experiment observation update failed turn_id=%s error=%s",
+                            turn_id,type(exc).__name__,
+                        )
+                        await current_text(
+                            "experiment.session.error",turn_id=turn_id,
+                            code=getattr(exc,"code","workspace_error"))
+                    else:
+                        if observation_state is not None:
+                            await current_text(
+                                "experiment.session.state",turn_id=turn_id,
+                                state=observation_state)
+                        if plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
+                            acknowledgment=(
+                                f"말씀한 관찰 내용을 현재 {plan.step_label}단계 실험 타임라인에 기록했습니다. 프로토콜 상태는 변경하지 않았습니다."
+                                if turn_language=="ko" else
+                                f"I recorded the observation in the experiment timeline for Step {plan.step_label}. The protocol state did not change."
+                            )
+                            plan=replace(
+                                plan,display_text=acknowledgment,
+                                speech_text=acknowledgment,
+                                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                            )
+                        elif (
+                            plan.action is CuratedProtocolAction.REPORT_ANOMALY
+                            and not report_prepared
+                        ):
+                            acknowledgment=(
+                                f"말씀한 이상 사항을 현재 {plan.step_label}단계 실험 타임라인에 기록했습니다. 프로토콜 상태는 변경하지 않았습니다."
+                                if turn_language=="ko" else
+                                f"I recorded the reported issue in the experiment timeline for Step {plan.step_label}. The protocol state did not change."
+                            )
+                            plan=replace(
+                                plan,display_text=acknowledgment,
+                                speech_text=acknowledgment,
+                                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                            )
+                        elif (
+                            plan.action is CuratedProtocolAction.NEXT
+                            and session.experiment_report_store is None
+                        ):
+                            acknowledgment=(
+                                "말씀한 관찰 결과를 실험 세션 타임라인에 기록했습니다."
+                                if turn_language=="ko" else
+                                "I recorded the reported observation in the experiment-session timeline."
+                            )
+                            plan=replace(
+                                plan,
+                                display_text=f"{acknowledgment}\n\n{plan.display_text}",
+                                speech_text=f"{acknowledgment} {plan.speech_text}",
+                            )
             if (
                 session.experiment_state_version is not None
                 and plan.state_changed
@@ -5651,6 +6014,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.AUDIO_RECOVERY:"audio_replay_request",
             CuratedProtocolAction.TRANSCRIPT_UNRELIABLE:"transcript_retry_required",
             CuratedProtocolAction.CANCEL_READONLY:"readonly_operation_cancelled",
+            CuratedProtocolAction.RECORD_OBSERVATION:"experiment_observation_recorded",
             CuratedProtocolAction.REPORT_ANOMALY:"experiment_anomaly_recorded",
             CuratedProtocolAction.SHOW_REPORT:"experiment_report_view",
             CuratedProtocolAction.PROTOCOL_QUERY:(

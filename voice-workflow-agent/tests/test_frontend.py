@@ -12,6 +12,29 @@ def run_node_harness(harness: str):
     )
 
 class FrontendSessionTests(unittest.TestCase):
+    def test_experiment_timeline_workspace_is_present_and_safely_rendered(self):
+        html = (
+            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        for required in (
+            'id="experiment-session-ledger"',
+            'id="experiment-session-select"',
+            'id="manual-observation-content"',
+            'id="experiment-evidence-file"',
+            'id="experiment-event-timeline"',
+            "function renderExperimentTimeline",
+            "function saveManualObservation",
+            "function uploadExperimentEvidence",
+            "관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.",
+            "자동 해석 안 함",
+        ):
+            self.assertIn(required, html)
+        render_block = html.split(
+            "function renderExperimentTimeline", 1
+        )[1].split("async function loadExperimentTimeline", 1)[0]
+        self.assertNotIn("innerHTML", render_block)
+        self.assertIn("textContent", render_block)
+
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (
             ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"

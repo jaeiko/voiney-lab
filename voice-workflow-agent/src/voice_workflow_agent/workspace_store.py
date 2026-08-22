@@ -26,7 +26,7 @@ from voice_workflow_agent.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 2
+WORKSPACE_SCHEMA_VERSION = 3
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -78,6 +78,14 @@ _EXPERIMENT_TRANSITIONS = {
     "completed": set(),
     "stopped": set(),
 }
+_OBSERVATION_CATEGORIES = {
+    "note",
+    "appearance",
+    "measurement",
+    "deviation",
+    "other",
+}
+_EVIDENCE_KINDS = {"image", "document"}
 
 
 class WorkspaceError(RuntimeError):
@@ -568,6 +576,63 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=2)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(2);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
+MIGRATION_2_TO_3 = """
+CREATE TABLE experiment_observations(
+ observation_id TEXT PRIMARY KEY,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ session_id TEXT NOT NULL REFERENCES experiment_sessions(session_id),
+ protocol_step_id TEXT NOT NULL,
+ protocol_step_label TEXT,
+ author_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ content TEXT NOT NULL,
+ category TEXT NOT NULL CHECK(category IN ('note','appearance','measurement','deviation','other')),
+ capture_source TEXT NOT NULL CHECK(capture_source IN ('voice','manual')),
+ knowledge_effect TEXT NOT NULL CHECK(knowledge_effect='observation_only'),
+ created_at TEXT NOT NULL,
+ UNIQUE(session_id,observation_id)
+);
+CREATE INDEX experiment_observations_tenant_session_created
+ ON experiment_observations(organization_id,session_id,created_at);
+
+CREATE TABLE experiment_evidence(
+ evidence_id TEXT PRIMARY KEY,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ session_id TEXT NOT NULL REFERENCES experiment_sessions(session_id),
+ protocol_step_id TEXT NOT NULL,
+ protocol_step_label TEXT,
+ uploader_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('image','document')),
+ original_filename TEXT NOT NULL,
+ media_type TEXT NOT NULL,
+ byte_size INTEGER NOT NULL CHECK(byte_size>=0 AND byte_size<=1073741824),
+ sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+ storage_reference TEXT NOT NULL,
+ caption TEXT,
+ interpretation_status TEXT NOT NULL CHECK(interpretation_status='not_interpreted'),
+ created_at TEXT NOT NULL,
+ UNIQUE(session_id,sha256,protocol_step_id)
+);
+CREATE INDEX experiment_evidence_tenant_session_created
+ ON experiment_evidence(organization_id,session_id,created_at);
+
+CREATE TRIGGER experiment_observations_no_update BEFORE UPDATE ON experiment_observations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_observations_no_delete BEFORE DELETE ON experiment_observations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_evidence_no_update BEFORE UPDATE ON experiment_evidence
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_evidence_no_delete BEFORE DELETE ON experiment_evidence
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=3)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(3);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -1319,6 +1384,459 @@ class WorkspaceStore:
             self._connection.rollback()
             raise
         return self.get_experiment(principal, session_id)
+
+    @staticmethod
+    def _capture_allowed(row: sqlite3.Row) -> None:
+        if row["status"] not in {"in_progress", "paused", "blocked"}:
+            raise WorkspaceConflictError(
+                "Observations and evidence require a started experiment."
+            )
+
+    def _require_experiment_step(
+        self, row: sqlite3.Row, step_id: str
+    ) -> tuple[str, str | None]:
+        step_id = _identifier(step_id, "Protocol step identifier")
+        if row["current_step_id"] == step_id:
+            return step_id, row["current_step_label"]
+        completed = self._connection.execute(
+            """SELECT step_label FROM experiment_completed_steps
+            WHERE session_id=? AND step_id=?""",
+            (row["session_id"], step_id),
+        ).fetchone()
+        if completed is None:
+            raise WorkspaceConflictError(
+                "Capture can only reference the current or a completed step."
+            )
+        return step_id, completed["step_label"]
+
+    def record_observation(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        event_key: str,
+        content: str,
+        category: str,
+        capture_source: str,
+        protocol_step_id: str | None = None,
+    ) -> dict[str, object]:
+        """Persist researcher wording without changing approved knowledge."""
+
+        row = self._experiment_row(principal, session_id, write=True)
+        self._capture_allowed(row)
+        event_key = _identifier(event_key, "Observation idempotency key")
+        content = _text(content, "Observation content", maximum=4000)
+        if category not in _OBSERVATION_CATEGORIES:
+            raise WorkspaceError("Observation category is invalid.")
+        if capture_source not in {"voice", "manual"}:
+            raise WorkspaceError("Observation capture source is invalid.")
+        selected_step = protocol_step_id or row["current_step_id"]
+        if not isinstance(selected_step, str):
+            raise WorkspaceConflictError(
+                "Observation capture requires an authoritative protocol step."
+            )
+        step_id, step_label = self._require_experiment_step(row, selected_step)
+        observation_id = "observation-" + hashlib.sha256(
+            f"{principal.organization_id}:{session_id}:{event_key}".encode("utf-8")
+        ).hexdigest()[:32]
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing_event = self._connection.execute(
+                """SELECT event_type,payload_json FROM experiment_session_events
+                WHERE session_id=? AND event_key=?""",
+                (session_id, event_key),
+            ).fetchone()
+            existing = self._connection.execute(
+                "SELECT * FROM experiment_observations WHERE observation_id=?",
+                (observation_id,),
+            ).fetchone()
+            if existing_event is not None:
+                event_payload = json.loads(existing_event["payload_json"])
+                if (
+                    existing_event["event_type"] != "observation_recorded"
+                    or event_payload.get("observation_id") != observation_id
+                    or existing is None
+                    or existing["session_id"] != session_id
+                    or existing["protocol_step_id"] != step_id
+                    or existing["content"] != content
+                    or existing["category"] != category
+                    or existing["capture_source"] != capture_source
+                ):
+                    raise WorkspaceConflictError(
+                        "Observation idempotency key was reused with different content."
+                    )
+            elif existing is not None:
+                raise WorkspaceConflictError(
+                    "Observation record is missing its append-only event."
+                )
+            else:
+                self._connection.execute(
+                    """INSERT INTO experiment_observations(
+                    observation_id,organization_id,session_id,protocol_step_id,
+                    protocol_step_label,author_principal_id,content,category,
+                    capture_source,knowledge_effect,created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,'observation_only',?)""",
+                    (
+                        observation_id,
+                        principal.organization_id,
+                        session_id,
+                        step_id,
+                        step_label,
+                        principal.principal_id,
+                        content,
+                        category,
+                        capture_source,
+                        now,
+                    ),
+                )
+                self._append_experiment_event(
+                    principal,
+                    session_id=session_id,
+                    event_key=event_key,
+                    event_type="observation_recorded",
+                    step_id=step_id,
+                    step_label=step_label,
+                    payload={
+                        "observation_id": observation_id,
+                        "category": category,
+                        "capture_source": capture_source,
+                        "knowledge_effect": "observation_only",
+                    },
+                    created_at=now,
+                )
+                self._connection.execute(
+                    """UPDATE experiment_sessions SET updated_at=?,version=version+1
+                    WHERE session_id=? AND organization_id=?""",
+                    (now, session_id, principal.organization_id),
+                )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        stored = self._connection.execute(
+            "SELECT * FROM experiment_observations WHERE observation_id=?",
+            (observation_id,),
+        ).fetchone()
+        assert stored is not None
+        return dict(stored)
+
+    def record_evidence(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        event_key: str,
+        evidence_kind: str,
+        original_filename: str,
+        media_type: str,
+        byte_size: int,
+        sha256: str,
+        storage_reference: str,
+        caption: str | None = None,
+        protocol_step_id: str | None = None,
+    ) -> dict[str, object]:
+        """Attach opaque file metadata without interpreting scientific content."""
+
+        row = self._experiment_row(principal, session_id, write=True)
+        self._capture_allowed(row)
+        event_key = _identifier(event_key, "Evidence idempotency key")
+        if evidence_kind not in _EVIDENCE_KINDS:
+            raise WorkspaceError("Evidence kind is invalid.")
+        filename = _text(original_filename, "Evidence filename", maximum=255)
+        if (
+            Path(filename).name != filename
+            or any(ord(character) < 32 for character in filename)
+        ):
+            raise WorkspaceError("Evidence filename is invalid.")
+        media_type = _text(media_type, "Evidence media type", maximum=200)
+        allowed_media = {
+            "image": {"image/jpeg", "image/png", "image/webp"},
+            "document": {
+                "application/pdf",
+                "text/plain",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            },
+        }
+        if media_type not in allowed_media[evidence_kind]:
+            raise WorkspaceError("Evidence media type is invalid.")
+        if (
+            not isinstance(byte_size, int)
+            or isinstance(byte_size, bool)
+            or not 0 < byte_size <= 32 * 1024 * 1024
+        ):
+            raise WorkspaceError("Evidence size is outside allowed bounds.")
+        if not isinstance(sha256, str) or _SHA256.fullmatch(sha256) is None:
+            raise WorkspaceError("Evidence checksum is invalid.")
+        storage_reference = _text(
+            storage_reference, "Evidence storage reference", maximum=1000
+        )
+        if (
+            storage_reference.startswith("/")
+            or ".." in Path(storage_reference).parts
+            or "\\" in storage_reference
+        ):
+            raise WorkspaceError("Evidence storage reference is invalid.")
+        if caption is not None:
+            caption = _text(caption, "Evidence caption", maximum=1000)
+        selected_step = protocol_step_id or row["current_step_id"]
+        if not isinstance(selected_step, str):
+            raise WorkspaceConflictError(
+                "Evidence capture requires an authoritative protocol step."
+            )
+        step_id, step_label = self._require_experiment_step(row, selected_step)
+        evidence_id = "evidence-" + hashlib.sha256(
+            f"{principal.organization_id}:{session_id}:{event_key}".encode("utf-8")
+        ).hexdigest()[:32]
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing_event = self._connection.execute(
+                """SELECT event_type,payload_json FROM experiment_session_events
+                WHERE session_id=? AND event_key=?""",
+                (session_id, event_key),
+            ).fetchone()
+            existing = self._connection.execute(
+                "SELECT * FROM experiment_evidence WHERE evidence_id=?",
+                (evidence_id,),
+            ).fetchone()
+            if existing_event is not None:
+                event_payload = json.loads(existing_event["payload_json"])
+                expected = (
+                    session_id,
+                    step_id,
+                    evidence_kind,
+                    filename,
+                    media_type,
+                    byte_size,
+                    sha256,
+                    storage_reference,
+                    caption,
+                )
+                actual = (
+                    tuple(
+                        existing[key]
+                        for key in (
+                            "session_id",
+                            "protocol_step_id",
+                            "evidence_kind",
+                            "original_filename",
+                            "media_type",
+                            "byte_size",
+                            "sha256",
+                            "storage_reference",
+                            "caption",
+                        )
+                    )
+                    if existing is not None else None
+                )
+                if (
+                    existing_event["event_type"] != "evidence_attached"
+                    or event_payload.get("evidence_id") != evidence_id
+                    or existing is None
+                    or actual != expected
+                ):
+                    raise WorkspaceConflictError(
+                        "Evidence idempotency key was reused with different metadata."
+                    )
+            elif existing is not None:
+                raise WorkspaceConflictError(
+                    "Evidence record is missing its append-only event."
+                )
+            else:
+                self._connection.execute(
+                    """INSERT INTO experiment_evidence(
+                    evidence_id,organization_id,session_id,protocol_step_id,
+                    protocol_step_label,uploader_principal_id,evidence_kind,
+                    original_filename,media_type,byte_size,sha256,
+                    storage_reference,caption,interpretation_status,created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'not_interpreted',?)""",
+                    (
+                        evidence_id,
+                        principal.organization_id,
+                        session_id,
+                        step_id,
+                        step_label,
+                        principal.principal_id,
+                        evidence_kind,
+                        filename,
+                        media_type,
+                        byte_size,
+                        sha256,
+                        storage_reference,
+                        caption,
+                        now,
+                    ),
+                )
+                self._append_experiment_event(
+                    principal,
+                    session_id=session_id,
+                    event_key=event_key,
+                    event_type="evidence_attached",
+                    step_id=step_id,
+                    step_label=step_label,
+                    payload={
+                        "evidence_id": evidence_id,
+                        "evidence_kind": evidence_kind,
+                        "interpretation_status": "not_interpreted",
+                    },
+                    created_at=now,
+                )
+                self._connection.execute(
+                    """UPDATE experiment_sessions SET updated_at=?,version=version+1
+                    WHERE session_id=? AND organization_id=?""",
+                    (now, session_id, principal.organization_id),
+                )
+            self._connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._connection.rollback()
+            raise WorkspaceConflictError(
+                "Evidence is already attached to this protocol step."
+            ) from exc
+        except Exception:
+            self._connection.rollback()
+            raise
+        stored = self._connection.execute(
+            "SELECT * FROM experiment_evidence WHERE evidence_id=?",
+            (evidence_id,),
+        ).fetchone()
+        assert stored is not None
+        return dict(stored)
+
+    def record_experiment_review_action(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        event_key: str,
+        action: str,
+        comment: str,
+    ) -> dict[str, object]:
+        require_permission(principal, Permission.PROTOCOL_REVIEW)
+        row = self._experiment_row(principal, session_id)
+        event_key = _identifier(event_key, "Reviewer action idempotency key")
+        action = _identifier(action, "Review action")
+        if action not in {
+            "review_requested",
+            "reviewed",
+            "flagged",
+            "commented",
+            "acknowledged",
+        }:
+            raise WorkspaceError("Experiment reviewer action is invalid.")
+        comment = _text(comment, "Review comment", maximum=4000)
+        payload = {"action": action, "comment": comment}
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._connection.execute(
+                """SELECT event_type,payload_json FROM experiment_session_events
+                WHERE session_id=? AND event_key=?""",
+                (session_id, event_key),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["event_type"] != "reviewer_action"
+                    or json.loads(existing["payload_json"]) != payload
+                ):
+                    raise WorkspaceConflictError(
+                        "Reviewer idempotency key was reused with different content."
+                    )
+            else:
+                self._append_experiment_event(
+                    principal,
+                    session_id=session_id,
+                    event_key=event_key,
+                    event_type="reviewer_action",
+                    step_id=row["current_step_id"],
+                    step_label=row["current_step_label"],
+                    payload=payload,
+                    created_at=now,
+                )
+                self._connection.execute(
+                    """UPDATE experiment_sessions SET updated_at=?,version=version+1
+                    WHERE session_id=? AND organization_id=?""",
+                    (now, session_id, principal.organization_id),
+                )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, session_id)
+
+    def experiment_timeline(
+        self, principal: Principal, session_id: str
+    ) -> dict[str, object]:
+        session = self.get_experiment(principal, session_id)
+        observations = {
+            row["observation_id"]: dict(row)
+            for row in self._connection.execute(
+                """SELECT * FROM experiment_observations WHERE session_id=?
+                ORDER BY created_at,observation_id""",
+                (session_id,),
+            ).fetchall()
+        }
+        evidence = {
+            row["evidence_id"]: {
+                key: row[key]
+                for key in (
+                    "evidence_id",
+                    "protocol_step_id",
+                    "protocol_step_label",
+                    "uploader_principal_id",
+                    "evidence_kind",
+                    "original_filename",
+                    "media_type",
+                    "byte_size",
+                    "sha256",
+                    "caption",
+                    "interpretation_status",
+                    "created_at",
+                )
+            }
+            for row in self._connection.execute(
+                """SELECT * FROM experiment_evidence WHERE session_id=?
+                ORDER BY created_at,evidence_id""",
+                (session_id,),
+            ).fetchall()
+        }
+        timeline = []
+        for event in session["events"]:
+            payload = event.get("payload") or {}
+            item = dict(event)
+            observation_id = payload.get("observation_id")
+            evidence_id = payload.get("evidence_id")
+            if isinstance(observation_id, str):
+                item["observation"] = observations.get(observation_id)
+            if isinstance(evidence_id, str):
+                item["evidence"] = evidence.get(evidence_id)
+            timeline.append(item)
+        return {
+            "session": {
+                key: session[key]
+                for key in (
+                    "session_id",
+                    "protocol_id",
+                    "protocol_revision_id",
+                    "status",
+                    "current_step_id",
+                    "current_step_label",
+                    "version",
+                    "started_at",
+                    "paused_at",
+                    "ended_at",
+                    "updated_at",
+                )
+            },
+            "timeline": timeline,
+            "observation_count": len(observations),
+            "evidence_count": len(evidence),
+            "separation": {
+                "observations_are_instructions": False,
+                "evidence_autonomously_interpreted": False,
+                "approved_protocol_knowledge_unchanged": True,
+            },
+        }
 
     def create_protocol_family(
         self, principal: Principal, *, title: str, family_id: str | None = None
@@ -2774,6 +3292,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 2
+    if version == 2:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_2_TO_3 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 3
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

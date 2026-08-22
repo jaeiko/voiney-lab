@@ -55,12 +55,65 @@ continuation.
 - Disconnect does not imply stop or completion. The experiment remains
   recoverable with its current optimistic version.
 
+## Phase 2 — Observation and Event Timeline
+
+Status: implemented; final full-suite result is recorded in the phase validation
+ledger below.
+
+### Laboratory pain point
+
+Bench observations are often captured after the fact in a notebook, detached
+from the exact SOP step and without a durable author/time identity. Images may
+also be scattered across devices. This causes memory-dependent reconstruction,
+weak deviation context, and extra reviewer follow-up. The timeline lets a
+researcher capture wording and opaque evidence at the moment of work while
+keeping those records separate from approved instructions.
+
+### Implementation
+
+- Added append-only observation entities with experiment session, exact current
+  or completed protocol step, author, content, category, voice/manual capture
+  source, timestamp, and a fixed `observation_only` knowledge effect.
+- Added append-only image/document evidence metadata with uploader, original
+  filename, media type, bounded size, SHA-256, storage reference, and a fixed
+  `not_interpreted` status. Bytes are streamed to content-addressed tenant
+  storage and internal paths are omitted from public responses.
+- Added one unified tenant-scoped timeline projection for lifecycle, protocol
+  progress, observations, attachments, and reviewer actions.
+- Added manual observation, evidence upload, timeline read, and reviewer action
+  APIs plus a researcher bench timeline with session selection, manual capture,
+  and evidence upload.
+- Added deterministic Korean/English voice capture for explicit notes and a
+  one-turn “record observation” prompt. “The sample looks different” is an
+  appearance observation; a spill remains an anomaly. Neither observation path
+  changes the protocol step or approved knowledge.
+- Bound voice acknowledgement to a successful durable observation write. A
+  failed write cannot be announced as recorded; an observation accompanying a
+  completion cannot authorize a step transition if the timeline write fails.
+- Kept the existing Cascade WebSocket, VAD/barge-in, turn/generation fences,
+  intent arbitration, `CuratedProtocolSession`, source-defined completion gates,
+  and report path in place.
+
+### Safety and migration evidence
+
+- Schema 2 → 3 is forward-only and transactional. A schema-2 fixture preserves
+  its existing experiment session and exact revision while adding observation
+  and evidence tables and append-only triggers.
+- Reused idempotency keys must point to the same event and identical content;
+  they cannot overwrite a lifecycle event or silently create an orphan record.
+- Evidence uploads allow JPEG, PNG, WebP, PDF, and DOCX only, enforce a 32 MiB
+  streaming cap, verify an existing content-addressed file before reuse, and run
+  no OCR or autonomous interpretation.
+- Timeline reads remain owner/tenant scoped. Reviewer actions require the
+  existing protocol-review permission; reviewers still cannot alter SOP
+  instructions through this path.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
 |---|---|---|---|---|---|
 | 1. Experiment Session | 187 tests + 249 subtests passed; production WebSocket recovery passed | 741 passed + 683 subtests in 132.23s | passed | v1→v2 fixture passed | architecture map, report, migration notes, README |
-| 2. Observation/Event Timeline | pending | pending | pending | pending | pending |
+| 2. Observation/Event Timeline | 188 tests + 250 subtests passed; voice/manual/evidence/API/UI boundaries passed | 748 passed + 684 subtests in 131.44s | passed | v1→v3 and v2→v3 fixtures passed | report, migration notes, README, researcher timeline |
 | 3. Lab Adaptation | pending | pending | pending | pending | pending |
 | 4. Role UX | pending | pending | pending | pending | pending |
 | 5. Source Connectors | pending | pending | pending | pending | pending |

@@ -4343,3 +4343,64 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         curated_session.start_timer()
         plan_after = curated_session.plan(prompt, turn_id=2, language="ko")
         self.assertNotIn("타이머를 시작하려면 말씀해주세요", plan_after.speech_text)
+
+    def test_voice_observation_capture_is_read_only_protocol_context(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+        original_step = curated_session.current_index
+
+        plan = curated_session.plan(
+            "메모 추가해: 시료가 평소보다 탁해 보인다",
+            turn_id=1,
+            language="ko",
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.RECORD_OBSERVATION)
+        self.assertTrue(plan.reported_observation)
+        self.assertEqual(plan.observation_predicate, "note")
+        self.assertIn("탁해", plan.observation_outcome)
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(curated_session.current_index, original_step)
+
+    def test_voice_observation_prompt_captures_exact_next_descriptive_turn(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+
+        prompt = curated_session.plan(
+            "record observation", turn_id=1, language="en"
+        )
+        self.assertEqual(prompt.action, CuratedProtocolAction.RECORD_OBSERVATION)
+        self.assertFalse(prompt.reported_observation)
+        self.assertEqual(
+            curated_session.context_capsule().pending_interaction,
+            "observation_note",
+        )
+
+        recorded = curated_session.plan(
+            "The sample is slightly cloudy", turn_id=2, language="en"
+        )
+        self.assertEqual(recorded.action, CuratedProtocolAction.RECORD_OBSERVATION)
+        self.assertTrue(recorded.reported_observation)
+        self.assertEqual(
+            recorded.observation_outcome, "The sample is slightly cloudy"
+        )
+        self.assertFalse(recorded.state_changed)
+        self.assertEqual(curated_session.current_index, 0)
+
+    def test_appearance_observation_does_not_become_anomaly_or_completion(self):
+        curated_session = CuratedProtocolSession(self.fixture)
+        curated_session.active = True
+
+        plan = curated_session.plan(
+            "The sample looks different", turn_id=1, language="en"
+        )
+        self.assertEqual(plan.action, CuratedProtocolAction.RECORD_OBSERVATION)
+        self.assertEqual(plan.observation_predicate, "appearance")
+        self.assertFalse(plan.reported_anomaly)
+        self.assertFalse(plan.reported_completion)
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(curated_session.current_index, 0)
+
+        anomaly = curated_session.plan(
+            "There is a spill", turn_id=2, language="en"
+        )
+        self.assertEqual(anomaly.action, CuratedProtocolAction.REPORT_ANOMALY)

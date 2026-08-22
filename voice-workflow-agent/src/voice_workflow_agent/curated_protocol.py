@@ -82,6 +82,7 @@ class CuratedProtocolAction(str, Enum):
     AUDIO_RECOVERY = "audio_recovery"
     TRANSCRIPT_UNRELIABLE = "transcript_unreliable"
     CANCEL_READONLY = "cancel_readonly"
+    RECORD_OBSERVATION = "record_observation"
     REPORT_ANOMALY = "report_anomaly"
     SHOW_REPORT = "show_report"
     PROTOCOL_QUERY = "protocol_query"
@@ -926,6 +927,7 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
         _NEXT_INFORMATION_PATTERNS,
         _AUDIO_RECOVERY_PATTERNS,
         _REPORT_REQUEST_PATTERNS,
+        _OBSERVATION_COMMAND_PATTERNS,
         _COMPLETION_AND_NEXT_PATTERNS,
         _COMPLETION_ONLY_PATTERNS,
         _PREVIEW_STEP_PATTERNS,
@@ -1825,6 +1827,36 @@ _REPORT_REQUEST_PATTERNS = (
     re.compile(r"(?:현재\s*)?(?:실험\s*)?(?:기록|보고서).*(?:보여|열어|내보내|export)"),
     re.compile(r"(?:show|export|open).*(?:experiment\s*)?(?:report|record)"),
 )
+_OBSERVATION_COMMAND_PATTERNS = (
+    re.compile(
+        r"^(?:관찰(?:\s*(?:사항|결과))?|메모|노트)(?:를|을)?\s*"
+        r"(?:기록|추가|남겨)(?:해\s*줘|해줘|해|할게|합니다)?"
+        r"(?:\s*[:：]\s*|\s+)?(?P<content>.*)$"
+    ),
+    re.compile(
+        r"^(?:record|add|log)\s+(?:an?\s+)?(?:observation|note)"
+        r"(?:\s+that|\s*[:：])?\s*(?P<content>.*)$",
+        re.I,
+    ),
+)
+_APPEARANCE_OBSERVATION = re.compile(
+    r"(?:(?:시료|샘플).*(?:평소와|처음과|예상과)?\s*(?:다르게|달라|다르|변해|변했)|"
+    r"(?:sample|specimen).*(?:looks?|appears?)\s+different)",
+    re.I,
+)
+
+
+def _observation_capture(transcript: str) -> tuple[str, str | None] | None:
+    key = _semantic_utterance_key(transcript)
+    for pattern in _OBSERVATION_COMMAND_PATTERNS:
+        if match := pattern.fullmatch(key):
+            content = (match.groupdict().get("content") or "").strip(" .,:;：")
+            return "note", content or None
+    if _APPEARANCE_OBSERVATION.search(key):
+        return "appearance", transcript.strip()[:4000]
+    return None
+
+
 _ANOMALY_PATTERNS = (
     (re.compile(r"(?:이상\s*(?:상황|현상|발생|사항|있어|생겼)|문제가\s*(?:생겼|발생|있어)|뭔가\s*이상|실수가\s*있었|something\s+went\s+wrong|there\s+is\s+an\s+issue|anomaly|abnormal)"), "protocol_block"),
     (re.compile(r"(?:용액|시약).*(?:잘못|틀리게).*(?:넣|준비)"), "reagent_preparation_issue"),
@@ -2919,6 +2951,22 @@ def classify_curated_control_intent(
             coreference_status=coreference.status.value,
             coreference_reason=coreference.reason_code,
         )
+    observation_capture = _observation_capture(transcript)
+    if observation_capture is not None:
+        category, content = observation_capture
+        return CuratedControlIntent(
+            intent_kind=(
+                "record_observation" if content is not None
+                else "observation_content_required"
+            ),
+            action=CuratedProtocolAction.RECORD_OBSERVATION,
+            target_step="authoritative_current_step",
+            reported_observation=content is not None,
+            observation_predicate=category,
+            observation_outcome=content,
+            language=language,
+            normalized_transcript=key,
+        )
     if any(pattern.search(key) for pattern in _REPORT_REQUEST_PATTERNS):
         return CuratedControlIntent(
             intent_kind="show_experiment_report",
@@ -4003,6 +4051,7 @@ class CuratedProtocolSession:
         self._experiment_started_at: float | None = None
         self._experiment_ended_at: float | None = None
         self._pending_anomaly: dict[str, Any] | None = None
+        self._pending_note_capture: dict[str, Any] | None = None
         self._pause_state: str = "active"
         self._paused_at: float | None = None
         self._total_paused_seconds: float = 0.0
@@ -5015,6 +5064,7 @@ class CuratedProtocolSession:
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
+        self._pending_note_capture = None
         self._pause_state = "active"
         self._paused_at = None
         self._total_paused_seconds = 0.0
@@ -5087,6 +5137,7 @@ class CuratedProtocolSession:
         self._experiment_started_at = None
         self._experiment_ended_at = None
         self._pending_anomaly = None
+        self._pending_note_capture = None
         self._pause_state = "active"
         self._paused_at = None
         self._total_paused_seconds = 0.0
@@ -5114,6 +5165,8 @@ class CuratedProtocolSession:
             pending = "completion_gate"
         elif self._pending_observation_confirmation:
             pending = "observation_gate"
+        elif self._pending_note_capture:
+            pending = "observation_note"
 
         last_intent = None
         if self._replay:
@@ -5130,7 +5183,11 @@ class CuratedProtocolSession:
             pending_observation_gate=bool(self._pending_observation_confirmation),
             active_timer_state=timer_state,
             recent_semantic_focus=(
-                self._discourse_context.entity
+                (
+                    self._discourse_context.focused_entities[0]
+                    if self._discourse_context.focused_entities
+                    else self._discourse_context.semantic_topic
+                )
                 or self._discourse_context.focus_kind.value
             ),
             recent_explicit_entities=tuple(self._recent_verified_entities),
@@ -5160,6 +5217,7 @@ class CuratedProtocolSession:
         float | None,
         float | None,
         dict[str, Any] | None,
+        dict[str, Any] | None,
     ]:
         return (
             self.active,
@@ -5181,6 +5239,7 @@ class CuratedProtocolSession:
             self._experiment_started_at,
             self._experiment_ended_at,
             self._pending_anomaly,
+            self._pending_note_capture,
         )
 
     def _restore(
@@ -5209,10 +5268,14 @@ class CuratedProtocolSession:
             self._experiment_started_at = checkpoint[16]
             self._experiment_ended_at = checkpoint[17]
             self._pending_anomaly = checkpoint[18]
+            self._pending_note_capture = (
+                checkpoint[19] if len(checkpoint) >= 20 else None
+            )
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
             self._pending_anomaly = None
+            self._pending_note_capture = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -5774,6 +5837,7 @@ class CuratedProtocolSession:
         pending = self._pending_completion_confirmation
         observation_pending = self._pending_observation_confirmation
         transcript_pending = self._pending_transcript_confirmation
+        note_pending = self._pending_note_capture
         pending_valid = bool(
             pending is not None
             and self.active
@@ -5827,12 +5891,32 @@ class CuratedProtocolSession:
                 or generation >= transcript_pending.requested_generation
             )
         )
+        note_pending_valid = bool(
+            note_pending is not None
+            and self.active
+            and self.current_index == note_pending.get("step_index")
+            and self.fixture.steps[self.current_index].step_id
+            == note_pending.get("step_id")
+            and self._revision == note_pending.get("workflow_revision")
+            and turn_id == note_pending.get("requested_turn_id", -2) + 1
+            and (
+                note_pending.get("configuration_id") is None
+                or configuration_id == note_pending.get("configuration_id")
+            )
+            and (
+                note_pending.get("requested_generation") is None
+                or generation is None
+                or generation >= note_pending.get("requested_generation")
+            )
+        )
         if pending is not None and not pending_valid:
             self._pending_completion_confirmation = None
         if observation_pending is not None and not observation_pending_valid:
             self._pending_observation_confirmation = None
         if transcript_pending is not None and not transcript_pending_valid:
             self._pending_transcript_confirmation = None
+        if note_pending is not None and not note_pending_valid:
+            self._pending_note_capture = None
         binary_reply = _binary_frame_reply(transcript)
         pending_language_mismatch = bool(
             (pending_valid or observation_pending_valid or transcript_pending_valid)
@@ -5840,7 +5924,24 @@ class CuratedProtocolSession:
             and re.fullmatch(r"[a-z]{1,4}", normalized_confirmation)
             and normalized_confirmation not in {"yes", "no", "done"}
         )
-        if transcript_pending_valid and (
+        if (
+            note_pending_valid
+            and not _utterance_looks_like_new_command(transcript)
+            and transcript.strip()
+        ):
+            self._pending_note_capture = None
+            intent = CuratedControlIntent(
+                intent_kind="pending_observation_note_received",
+                action=CuratedProtocolAction.RECORD_OBSERVATION,
+                target_step="authoritative_current_step",
+                reported_observation=True,
+                observation_predicate=str(note_pending.get("category") or "note"),
+                observation_outcome=transcript.strip()[:4000],
+                confidence_source="server_pending_observation_note",
+                language=language,
+                normalized_transcript=normalized_confirmation,
+            )
+        elif transcript_pending_valid and (
             _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
             or binary_reply == "affirmative"
         ):
@@ -5980,6 +6081,9 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         else:
+            if note_pending_valid:
+                # A new command cancels the one-turn note prompt before routing.
+                self._pending_note_capture = None
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
                 self._pending_completion_confirmation = None
@@ -6620,6 +6724,52 @@ class CuratedProtocolSession:
                 final_step=False,
                 state_changed=False,
                 intent_kind=intent.intent_kind,
+            )
+        elif command is CuratedProtocolAction.RECORD_OBSERVATION:
+            step = steps[self.current_index]
+            category = intent.observation_predicate or "note"
+            content = (intent.observation_outcome or "").strip()[:4000]
+            if content:
+                self._pending_note_capture = None
+                response = (
+                    f"I recognized an observation for Step {step.source_label}. "
+                    "I will confirm it only after the experiment record accepts it."
+                    if language == "en" else
+                    f"현재 {step.source_label}단계의 관찰 내용을 확인했습니다. "
+                    "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다."
+                )
+                reported = True
+            else:
+                self._pending_note_capture = {
+                    "configuration_id": configuration_id,
+                    "requested_generation": generation,
+                    "workflow_revision": self._revision,
+                    "step_index": self.current_index,
+                    "step_id": step.step_id,
+                    "requested_turn_id": turn_id,
+                    "category": category,
+                }
+                response = (
+                    "What should I record as the observation? No protocol state has changed."
+                    if language == "en" else
+                    "어떤 관찰 내용을 기록할까요? 프로토콜 상태는 변경하지 않았습니다."
+                )
+                reported = False
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.RECORD_OBSERVATION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=self.fixture.facts_for_step(self.current_index),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+                target_step="authoritative_current_step",
+                reported_observation=reported,
+                observation_predicate=category,
+                observation_outcome=content or None,
             )
         elif command is CuratedProtocolAction.REPORT_ANOMALY:
             step = steps[self.current_index]

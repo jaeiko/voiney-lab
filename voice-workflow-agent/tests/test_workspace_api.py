@@ -78,12 +78,22 @@ def _configure(monkeypatch, tmp_path, *, scope="demo"):
         monkeypatch.delenv(name, raising=False)
 
 
-async def _request(method, path, *, profile=None, json_body=None):
-    headers = {"X-Voice-Dev-Profile": profile} if profile else {}
+async def _request(
+    method, path, *, profile=None, json_body=None, content=None, headers=None
+):
+    request_headers = dict(headers or {})
+    if profile:
+        request_headers["X-Voice-Dev-Profile"] = profile
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        return await client.request(method, path, headers=headers, json=json_body)
+        return await client.request(
+            method,
+            path,
+            headers=request_headers,
+            json=json_body,
+            content=content,
+        )
 
 
 def _create_revision(tmp_path, *, source_status="Published"):
@@ -194,6 +204,149 @@ def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned
         )
     )
     assert forbidden_completion.status_code == 400
+
+
+def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch, tmp_path)
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    researcher = _principal("researcher-a")
+    reviewer = _principal("reviewer-a")
+    outsider = _principal("reviewer-b")
+    for principal in (researcher, reviewer, outsider):
+        store.bootstrap_principal(principal)
+    experiment = store.start_experiment(
+        researcher,
+        session_id="experiment-timeline-api-1",
+        protocol_id="in-gel-digestion",
+        protocol_revision_id="approved-revision-1",
+        current_step_id="step-1",
+        current_step_label="1",
+    )
+    store.record_experiment_progress(
+        researcher,
+        experiment["session_id"],
+        event_key="protocol-started",
+        event_type="protocol_started",
+        step_id="step-1",
+        step_label="1",
+    )
+    store.close()
+
+    observed = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/experiments/{experiment['session_id']}/observations",
+            profile="researcher-a",
+            json_body={
+                "idempotency_key": "manual-observation-1",
+                "content": "Sample is slightly cloudy.",
+                "category": "appearance",
+                "protocol_step_id": "step-1",
+            },
+        )
+    )
+    assert observed.status_code == 201, observed.text
+    assert observed.json()["knowledge_effect"] == "observation_only"
+
+    evidence_bytes = b"\xff\xd8\xff" + b"opaque-evidence"
+    uploaded = asyncio.run(
+        _request(
+            "POST",
+            (
+                f"/api/workspace/experiments/{experiment['session_id']}/evidence"
+                "?filename=sample.jpg&idempotency_key=evidence-upload-1"
+            ),
+            profile="researcher-a",
+            content=evidence_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.json()["interpretation_status"] == "not_interpreted"
+    assert "storage_reference" not in uploaded.json()
+    assert uploaded.json()["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+    replayed_upload = asyncio.run(
+        _request(
+            "POST",
+            (
+                f"/api/workspace/experiments/{experiment['session_id']}/evidence"
+                "?filename=sample.jpg&idempotency_key=evidence-upload-1"
+            ),
+            profile="researcher-a",
+            content=evidence_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+    )
+    assert replayed_upload.status_code == 201, replayed_upload.text
+    assert replayed_upload.json()["evidence_id"] == uploaded.json()["evidence_id"]
+
+    unsupported = asyncio.run(
+        _request(
+            "POST",
+            (
+                f"/api/workspace/experiments/{experiment['session_id']}/evidence"
+                "?filename=payload.bin&idempotency_key=evidence-upload-2"
+            ),
+            profile="researcher-a",
+            content=b"untrusted",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+    )
+    assert unsupported.status_code == 415
+
+    reviewed = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/reviewer/experiments/{experiment['session_id']}/actions",
+            profile="reviewer-a",
+            json_body={
+                "idempotency_key": "review-action-1",
+                "action": "acknowledged",
+                "comment": "Reviewed as an observation only; SOP unchanged.",
+            },
+        )
+    )
+    assert reviewed.status_code == 201, reviewed.text
+    assert reviewed.json()["recorded"] is True
+
+    timeline = asyncio.run(
+        _request(
+            "GET",
+            f"/api/workspace/experiments/{experiment['session_id']}/timeline",
+            profile="researcher-a",
+        )
+    )
+    assert timeline.status_code == 200
+    body = timeline.json()
+    assert body["observation_count"] == 1
+    assert body["evidence_count"] == 1
+    assert body["separation"]["approved_protocol_knowledge_unchanged"] is True
+    evidence_event = next(
+        item for item in body["timeline"]
+        if item["event_type"] == "evidence_attached"
+    )
+    assert "storage_reference" not in evidence_event["evidence"]
+    assert any(
+        item["event_type"] == "reviewer_action" for item in body["timeline"]
+    )
+
+    hidden = asyncio.run(
+        _request(
+            "GET",
+            f"/api/workspace/experiments/{experiment['session_id']}/timeline",
+            profile="reviewer-b",
+        )
+    )
+    assert hidden.status_code == 404
+
+    stored_files = [
+        path for path in (tmp_path / "evidence").rglob("*.jpg")
+        if path.is_file()
+    ]
+    assert len(stored_files) == 1
+    assert stored_files[0].read_bytes() == evidence_bytes
 
 
 def test_protocol_library_uses_authoritative_catalog_execution_state(
