@@ -186,6 +186,55 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
         self.assertFalse(decision["state_mutation"])
         self.assertNotIn("raw_transcript", decision)
 
+    def test_korean_language_mismatch_cannot_complete_a_step(self) -> None:
+        workflow = self.active_workflow()
+        before = workflow.state()
+        session = ListenerSession(
+            tool_context=ToolContext(
+                Path("/unused/offline-catalog"), None, "ko", "test_only"
+            ),
+            curated_protocol_session=workflow,
+        )
+        session.active = True
+        session.active_turn_id = 1
+        session.next_turn_id = 2
+        session.turn_generations[1] = session.generation
+        session.accept_configuration(41, "cascade", "ko", self.fixture.protocol_id)
+        session.detector.state = TurnState.PROCESSING
+        socket = RecordingSocket()
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch(
+            "voice_workflow_agent.server.transcribe",
+            return_value=Transcription("Current step complete.", "en"),
+        ), patch(
+            "voice_workflow_agent.server.synthesize",
+            return_value=b"\0\0",
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=immediate,
+        ), patch(
+            "voice_workflow_agent.server.route_curated_runtime_turn",
+            side_effect=AssertionError("language mismatch must stop before routing"),
+        ):
+            asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+        mismatch = next(
+            item for item in socket.text if item["type"] == "stt.language_mismatch"
+        )
+        self.assertEqual(mismatch["configured_language"], "ko")
+        self.assertEqual(mismatch["detected_language"], "en")
+        self.assertFalse(mismatch["mutation_authorized"])
+        self.assertFalse(any(item["type"] == "transcript" for item in socket.text))
+        reply = next(item for item in socket.text if item["type"] == "reply.complete")
+        self.assertEqual(
+            reply["text"],
+            "음성 인식 언어가 불확실합니다. 다시 한 번 말씀해 주세요.",
+        )
+        self.assertEqual(workflow.state(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

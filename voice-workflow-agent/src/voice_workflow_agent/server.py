@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
+import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -11,7 +11,7 @@ from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
 from voice_workflow_agent.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
@@ -102,6 +102,7 @@ from voice_workflow_agent.notifications import (
 from voice_workflow_agent.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
+    ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogError,
     ProtocolCatalogNotFoundError,
@@ -112,9 +113,10 @@ from voice_workflow_agent.protocol_catalog import (
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
-    CLARIFICATION_TEXT, ServerVoicePolicy, Transcription, classify_input_event,
-    classify_korean_admission,
+    CLARIFICATION_TEXT, InputLanguagePreference, ServerVoicePolicy,
+    Transcription, classify_input_event, classify_transcription_language,
     clean_speech_text,
+    normalize_input_language_preference,
     normalize_provider_language,
     resolve_turn_language, transcription_quality_issue,
 )
@@ -160,6 +162,48 @@ from voice_workflow_agent.procedures import (
 from voice_workflow_agent.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voice_workflow_agent.runtime_routing import route_curated_runtime_turn
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
+from voice_workflow_agent.identity import (
+    AuthenticationRequiredError,
+    AuthorizationDeniedError,
+    DevIdentityProvider,
+    IdentityConfigurationError,
+    IdentityResolver,
+    OidcSettings,
+    Permission,
+    Principal,
+    Role,
+    require_permission,
+)
+from voice_workflow_agent.protocol_sources import (
+    GitHubConnector,
+    GoogleDriveConnector,
+    ProtocolSourceHub,
+    ProtocolsIoConnector,
+    SourceSnapshot,
+    SourceConnectorError,
+    verify_github_webhook_signature,
+)
+from voice_workflow_agent.drylab_workflows import (
+    DryLabWorkflowRegistry,
+    inspect_nextflow_snapshot,
+    inspect_snakemake_snapshot,
+)
+from voice_workflow_agent.eln_connectors import (
+    CompletedStep,
+    ELabFtwConnector,
+    ElnConnectorError,
+    ExperimentWriteback,
+    Observation as ElnObservation,
+)
+from voice_workflow_agent.workspace_store import (
+    ApprovalReplayError,
+    TranslationIntegrityError,
+    WorkspaceConflictError,
+    WorkspaceError,
+    WorkspaceNotFoundError,
+    WorkspaceSettings,
+    initialize_workspace_store,
+)
 
 PROJECT_ROOT=Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -208,6 +252,192 @@ async def lifespan(_: FastAPI):
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
 STATIC_DIR=Path(__file__).with_name("static")
+_PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Task[None]]={}
+_REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar(
+    "voice_workflow_request_principal",default=None)
+
+
+def _runtime_usage_scope()->str:
+    return os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE","demo").strip() or "demo"
+
+
+def _identity_resolver()->IdentityResolver:
+    scope=_runtime_usage_scope()
+    oidc=OidcSettings.from_environment()
+    return IdentityResolver(
+        usage_scope=scope,
+        oidc_settings=oidc,
+        dev_provider=(
+            None if scope=="operational" else DevIdentityProvider.from_environment()
+        ),
+    )
+
+
+def _workspace_settings()->WorkspaceSettings:
+    return WorkspaceSettings.from_environment()
+
+
+def _workspace_http_error(exc:Exception)->HTTPException:
+    if isinstance(exc,AuthenticationRequiredError):
+        return HTTPException(status_code=401,detail=exc.code)
+    if isinstance(exc,AuthorizationDeniedError):
+        return HTTPException(status_code=403,detail=exc.code)
+    if isinstance(exc,WorkspaceNotFoundError):
+        return HTTPException(status_code=404,detail=exc.code)
+    if isinstance(exc,(ApprovalReplayError,WorkspaceConflictError)):
+        return HTTPException(status_code=409,detail=exc.code)
+    if isinstance(exc,(TranslationIntegrityError,SourceConnectorError,ElnConnectorError)):
+        return HTTPException(status_code=422,detail=getattr(exc,"code","invalid_request"))
+    if isinstance(exc,(IdentityConfigurationError,ConfigurationError)):
+        return HTTPException(status_code=503,detail=getattr(exc,"code","configuration_invalid"))
+    return HTTPException(
+        status_code=400 if isinstance(exc,WorkspaceError) else 500,
+        detail=getattr(exc,"code","workspace_error"),
+    )
+
+
+@app.middleware("http")
+async def commercial_identity_boundary(request:Request,call_next):
+    """Authenticate every API request when the commercial workspace is enabled."""
+
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    if request.url.path.startswith("/api/workspace/webhooks/github/"):
+        # GitHub authenticates this machine-to-machine boundary with the raw-body
+        # HMAC and delivery identifier; it does not carry a user bearer token.
+        return await call_next(request)
+    try:
+        settings=_workspace_settings()
+        operational=_runtime_usage_scope()=="operational"
+        if not settings.enabled and not operational:
+            return await call_next(request)
+        if (
+            operational
+            and not settings.enabled
+            and request.url.path.endswith("/activate-development")
+        ):
+            return await call_next(request)
+        if not settings.enabled:
+            raise IdentityConfigurationError(
+                "Operational scope requires the tenant workspace."
+            )
+        principal=_identity_resolver().resolve(
+            request.headers.get("authorization"),
+            dev_profile_id=request.headers.get("x-voice-dev-profile"),
+        )
+        store=initialize_workspace_store(settings)
+        try:
+            store.bootstrap_principal(principal)
+            principal=store.effective_principal(principal)
+        finally:
+            store.close()
+        request.state.principal=principal
+        token=_REQUEST_PRINCIPAL.set(principal)
+        try:
+            return await call_next(request)
+        finally:
+            _REQUEST_PRINCIPAL.reset(token)
+    except Exception as exc:
+        error=_workspace_http_error(exc)
+        return JSONResponse(status_code=error.status_code,content={"detail":error.detail})
+
+
+def _commercial_workspace()->tuple[Principal,object]:
+    settings=_workspace_settings()
+    if not settings.enabled:
+        raise WorkspaceError("Commercial workspace is disabled.")
+    principal=_REQUEST_PRINCIPAL.get()
+    if principal is None:
+        raise AuthenticationRequiredError("Authentication is required.")
+    store=initialize_workspace_store(settings)
+    try:
+        principal=store.effective_principal(principal)
+    except Exception:
+        store.close()
+        raise
+    return principal,store
+
+
+def _scope_catalog_resource(
+    protocol_id:str,*,bind:bool=False
+)->None:
+    _scope_tenant_resource("protocol_catalog",protocol_id,bind=bind)
+
+
+def _scope_tenant_resource(
+    resource_type:str,resource_id:str,*,bind:bool=False
+)->None:
+    settings=_workspace_settings()
+    if not settings.enabled:
+        return
+    principal,store=_commercial_workspace()
+    try:
+        if bind:
+            store.bind_resource(principal,resource_type,resource_id)
+        else:
+            store.require_resource(principal,resource_type,resource_id)
+    finally:
+        store.close()
+
+
+def _visible_catalog_resource_ids()->frozenset[str]|None:
+    if not _workspace_settings().enabled:
+        return None
+    principal,store=_commercial_workspace()
+    try:
+        return store.resource_ids(principal,"protocol_catalog")
+    finally:
+        store.close()
+
+
+def _resolve_server_secret(reference:str)->str:
+    """Resolve an opaque credential reference through a server-owned env mapping."""
+
+    raw=os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","").strip()
+    try:
+        mapping=json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise WorkspaceError("Server secret reference mapping is invalid.") from exc
+    variable=mapping.get(reference) if isinstance(mapping,dict) else None
+    if not isinstance(variable,str) or re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}",variable) is None:
+        raise WorkspaceError("Connector credential is not configured.")
+    value=os.environ.get(variable,"")
+    if not value:
+        raise WorkspaceError("Connector credential is not configured.")
+    return value
+
+
+def _record_workspace_metric(
+    *,
+    category:str,
+    metric_name:str,
+    metric_value:float=1.0,
+    dimensions:dict[str,str]|None=None,
+    principal:Principal|None=None,
+)->None:
+    """Best-effort privacy-safe pilot telemetry; never affects workflow authority."""
+
+    try:
+        settings=_workspace_settings()
+        if not settings.enabled:
+            return
+        actor=principal or _REQUEST_PRINCIPAL.get()
+        if actor is None:
+            return
+        store=initialize_workspace_store(settings)
+        try:
+            actor=store.effective_principal(actor)
+            store.record_analytics(
+                actor,category=category,metric_name=metric_name,
+                metric_value=metric_value,dimensions=dimensions,
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        log.warning(
+            "workspace.analytics.record_failed category=%s metric=%s error=%s",
+            category,metric_name,type(exc).__name__,
+        )
 
 def normalize_session_language(value:str)->str:
     normalized=value.strip().casefold().replace("_","-")
@@ -699,6 +929,8 @@ def log_protocol_catalog_runtime_configuration()->None:
 
 
 def _catalog_http_error(exc:Exception)->HTTPException:
+    if isinstance(exc,(AuthenticationRequiredError,AuthorizationDeniedError,WorkspaceError)):
+        return _workspace_http_error(exc)
     if isinstance(exc,ProtocolPdfTooLargeError):
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
     if isinstance(exc,ProtocolPdfTypeError):
@@ -718,6 +950,8 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         ),
     ):
         return HTTPException(status_code=503,detail="protocol_catalog_unavailable")
+    if isinstance(exc,ProtocolAnalysisUnavailableError):
+        return HTTPException(status_code=503,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolApprovalError):
@@ -728,6 +962,947 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         status_code=409 if isinstance(exc,ProtocolCatalogError) else 500,
         detail=getattr(exc,"code","protocol_catalog_error"),
     )
+
+
+async def _json_object(request:Request)->dict[str,object]:
+    try:
+        payload=await request.json()
+    except (json.JSONDecodeError,UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400,detail="invalid_json") from exc
+    if not isinstance(payload,dict):
+        raise HTTPException(status_code=400,detail="invalid_json")
+    return payload
+
+
+@app.get("/api/workspace/session")
+def get_workspace_session()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            routes=["researcher"]
+            if any(role.value in {"reviewer","lab_admin","organization_admin"}
+                   for role in principal.roles):
+                routes.append("reviewer")
+            if any(role.value in {"lab_admin","organization_admin"}
+                   for role in principal.roles):
+                routes.append("admin")
+            return {
+                "principal_id":principal.principal_id,
+                "display_name":principal.display_name,
+                "organization_id":principal.organization_id,
+                "roles":sorted(role.value for role in principal.roles),
+                "workspaces":routes,
+                "authentication_method":principal.authentication_method,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/protocol-library")
+def get_workspace_protocol_library(search:str="")->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            protocols=list(store.protocol_library(principal,search=search))
+        finally:
+            store.close()
+        catalog_protocols={
+            str(item["catalog_protocol_id"])
+            for item in protocols
+            if isinstance(item.get("catalog_protocol_id"),str)
+            and item["catalog_protocol_id"]
+        }
+        if catalog_protocols:
+            try:
+                catalog,catalog_store=_open_protocol_catalog()
+            except (
+                ProtocolCatalogError,
+                ProtocolConfigurationError,
+                ProtocolFeatureDisabledError,
+            ):
+                for item in protocols:
+                    if item.get("catalog_protocol_id") in catalog_protocols:
+                        item["executable"]=False
+            else:
+                try:
+                    for item in protocols:
+                        protocol_id=item.get("catalog_protocol_id")
+                        if protocol_id not in catalog_protocols:
+                            continue
+                        try:
+                            _scope_catalog_resource(str(protocol_id))
+                            entry=catalog.get_entry(str(protocol_id))
+                        except (HTTPException,ProtocolCatalogError):
+                            item["executable"]=False
+                            continue
+                        item["executable"]=entry.available_for_execution
+                        item["catalog_revision_id"]=entry.revision_id
+                        item["approval_state"]=entry.approval_status
+                        item["risk_state"]=entry.lifecycle_state
+                finally:
+                    catalog_store.close()
+        return {"protocols":protocols}
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.put("/api/workspace/protocol-library/{family_id}/preference")
+async def set_workspace_protocol_preference(
+    family_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    tags=payload.get("tags")
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            store.set_protocol_preference(
+                principal,family_id,
+                favorite=payload.get("favorite") is True,
+                tags=(tuple(str(item) for item in tags)
+                      if isinstance(tags,list) else ()),
+            )
+            return {"family_id":family_id,"saved":True}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/admin/memberships")
+def get_workspace_memberships()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"memberships":list(store.membership_summaries(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.put("/api/workspace/admin/memberships/{target_principal_id}")
+async def set_workspace_membership(
+    target_principal_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.set_membership(
+                principal,
+                target_principal_id=target_principal_id,
+                target_subject=str(payload.get("subject", "")),
+                display_name=str(payload.get("display_name", "")),
+                role=str(payload.get("role", "")),
+                active=payload.get("active") is True,
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.put("/api/workspace/admin/retention")
+async def update_workspace_retention(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        retention_days=int(payload.get("analytics_retention_days", 0))
+    except (TypeError,ValueError) as exc:
+        raise HTTPException(status_code=422,detail="retention_invalid") from exc
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.update_analytics_retention(
+                principal,retention_days=retention_days)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/reviewer/inbox")
+def get_workspace_reviewer_inbox()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"items":list(store.source_inbox(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/reviewer/revisions/{revision_id}/diff")
+def get_workspace_revision_diff(revision_id:str)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            require_permission(principal,Permission.PROTOCOL_REVIEW)
+            return store.revision_diff(principal,revision_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/reviewer/revisions/{revision_id}/decision")
+async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            event=store.record_approval(
+                principal,
+                revision_id=revision_id,
+                action=str(payload.get("action", "")),
+                comment=str(payload.get("comment", "")),
+                idempotency_key=str(payload.get("idempotency_key", "")),
+                replacement_revision_id=(
+                    str(payload["replacement_revision_id"])
+                    if payload.get("replacement_revision_id") else None
+                ),
+            )
+            store.record_analytics(
+                principal,
+                category="protocol",
+                metric_name="review_decision",
+                dimensions={"status":event.action,"event_kind":"approval"},
+            )
+            return {"event":event.__dict__,"state":store.revision_operational_state(principal,revision_id)}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/reviewer/revisions/{revision_id}/translations")
+async def add_workspace_translation(revision_id:str,request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            translation_id=store.add_translation(
+                principal,
+                revision_id=revision_id,
+                language=str(payload.get("language", "")),
+                original_text=str(payload.get("original_text", "")),
+                translated_text=str(payload.get("translated_text", "")),
+                status=str(payload.get("status", "machine")),
+            )
+            return {"translation_id":translation_id,"label":str(payload.get("status","machine"))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/knowledge")
+def get_workspace_knowledge()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"entries":list(store.knowledge_entries(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/knowledge",status_code=201)
+async def create_workspace_knowledge(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            knowledge_id=store.add_knowledge(
+                principal,
+                kind=str(payload.get("kind", "")),
+                body=str(payload.get("body", "")),
+                provenance=(payload.get("provenance")
+                            if isinstance(payload.get("provenance"),dict) else {}),
+                revision_id=(str(payload["revision_id"])
+                             if payload.get("revision_id") else None),
+            )
+            return {"knowledge_id":knowledge_id,"effective_kind":str(payload.get("kind",""))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/reviewer/knowledge/{knowledge_id}/promote")
+async def promote_workspace_knowledge(knowledge_id:str,request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            promotion_id=store.promote_knowledge(
+                principal,knowledge_id=knowledge_id,
+                comment=str(payload.get("comment", "")),
+            )
+            return {"promotion_id":promotion_id,"effective_kind":"approved_protocol_fact"}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/assets")
+def get_workspace_assets()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"assets":list(store.asset_cards(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/assets/{asset_id}/diff")
+def get_workspace_asset_diff(asset_id:str)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.asset_card_diff(principal,asset_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/admin/assets",status_code=201)
+async def create_workspace_asset(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            version_id=store.add_asset_card_version(
+                principal,
+                asset_id=str(payload.get("asset_id", "")),
+                asset_kind=str(payload.get("asset_kind", "")),
+                name=str(payload.get("name", "")),
+                location=(payload.get("location")
+                          if isinstance(payload.get("location"),dict) else {}),
+                review_status=str(payload.get("review_status", "draft")),
+                photo_url=(str(payload["photo_url"]) if payload.get("photo_url") else None),
+                barcode=(str(payload["barcode"]) if payload.get("barcode") else None),
+                sds_url=(str(payload["sds_url"]) if payload.get("sds_url") else None),
+            )
+            return {"version_id":version_id}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/connectors")
+def get_workspace_connectors()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"connectors":list(store.connector_summaries(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/admin/connectors",status_code=201)
+async def configure_workspace_connector(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    roots=payload.get("allowed_roots")
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            connector=store.configure_connector(
+                principal,
+                connector_kind=str(payload.get("connector_kind", "")),
+                display_name=str(payload.get("display_name", "")),
+                credential_reference=str(payload.get("credential_reference", "")),
+                allowed_roots=(tuple(str(item) for item in roots)
+                               if isinstance(roots,list) else ()),
+                webhook_secret_reference=(
+                    str(payload["webhook_secret_reference"])
+                    if payload.get("webhook_secret_reference") else None
+                ),
+                enabled=payload.get("enabled",True) is True,
+            )
+            return {
+                "connector_id":connector.connector_id,
+                "connector_kind":connector.connector_kind,
+                "display_name":connector.display_name,
+                "allowed_roots":list(connector.allowed_roots),
+                "enabled":connector.enabled,
+                "credential_configured":True,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/eln/elabftw/writeback",status_code=201)
+async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
+    """Write one exact completed report only after an explicit user confirmation."""
+
+    payload=await _json_object(request)
+    if payload.get("confirmed") is not True:
+        raise HTTPException(status_code=409,detail="eln_confirmation_required")
+    connector_id=str(payload.get("connector_id", ""))
+    report_id=str(payload.get("report_id", ""))
+    revision_id=str(payload.get("protocol_revision_id", ""))
+    idempotency_key=str(payload.get("idempotency_key", ""))
+    principal=None
+    store=None
+    claimed=False
+    try:
+        principal,store=_commercial_workspace()
+        configured=store.connector_for_use(
+            principal,connector_id,expected_kind="elabftw")
+        revision=store.get_revision(principal,revision_id)
+        source=store.source_for_revision(principal,revision_id)
+        report_settings=ExperimentReportSettings.from_environment()
+        if not report_settings.enabled or report_settings.database_path is None:
+            raise WorkspaceNotFoundError("Experiment report is not available.")
+        store.require_resource(principal,"experiment_report",report_id)
+        report=ExperimentReportStore(report_settings.database_path).get_report(report_id)
+        if report.get("status")!="completed" or not report.get("ended_at"):
+            raise WorkspaceConflictError(
+                "Only a completed experiment report can be written back.")
+        identity=revision.content.get("execution_identity")
+        identity_matches=(
+            revision.source_hash==report.get("protocol_sha256")
+            or (
+                isinstance(identity,dict)
+                and identity.get("protocol_id")==report.get("protocol_id")
+                and identity.get("source_sha256")==report.get("protocol_sha256")
+            )
+        )
+        if not identity_matches:
+            raise WorkspaceConflictError(
+                "The report and selected protocol lineage revision do not match.")
+        bases=tuple(
+            root.rstrip("/") for root in configured.allowed_roots
+            if root.startswith("https://")
+        )
+        if len(bases)!=1:
+            raise WorkspaceError("eLabFTW connector origin is invalid.")
+        completed_steps=[]
+        observations=[]
+        timer_events=[]
+        deviations=[]
+        for item in report.get("events",[]):
+            if not isinstance(item,dict):
+                continue
+            event_type=item.get("event_type")
+            step_id=str(item.get("step_id") or item.get("step_label") or "unlabeled")
+            created_at=str(item.get("created_at") or report["started_at"])
+            wording=item.get("user_wording")
+            if event_type=="step_completed":
+                completed_steps.append(CompletedStep(step_id,created_at,None))
+            elif event_type=="observation":
+                value=(wording if isinstance(wording,str) and wording.strip()
+                       else str((item.get("payload") or {}).get("summary") or "recorded"))
+                observations.append(ElnObservation(step_id,created_at,value[:2000]))
+            elif event_type=="timer_started":
+                timer=(item.get("payload") or {}).get("timer")
+                safe_timer={
+                    key:value for key,value in (timer.items() if isinstance(timer,dict) else ())
+                    if key in {
+                        "source_duration_seconds","started_at","elapsed_seconds",
+                        "remaining_seconds","completion_state","demo_bypassed",
+                    } and isinstance(value,(str,int,float,bool))
+                }
+                timer_events.append({
+                    "event_type":"timer_started","step_id":step_id,
+                    "recorded_at":created_at,"timer":safe_timer,
+                })
+            elif event_type in {"anomaly","blocked"}:
+                label=wording if isinstance(wording,str) and wording.strip() else event_type
+                deviations.append(f"{step_id}: {label[:2000]}")
+        experiment=ExperimentWriteback(
+            report_id=report_id,
+            protocol_id=str(report["protocol_id"]),
+            protocol_revision_id=revision_id,
+            protocol_title=str(report["protocol_title"]),
+            protocol_version=(source.version_identity or str(revision.revision_number)),
+            protocol_source_url=source.canonical_url,
+            source_status=str(source.metadata.get("source_status") or "Imported draft"),
+            started_at=str(report["started_at"]),
+            ended_at=str(report["ended_at"]),
+            completed_steps=tuple(completed_steps),
+            observations=tuple(observations),
+            timer_events=tuple(timer_events),
+            deviations=tuple(deviations),
+            report_url=None,
+        )
+        store.claim_eln_writeback_request(
+            principal,connector_id=connector_id,report_id=report_id,
+            protocol_revision_id=revision_id,idempotency_key=idempotency_key,
+        )
+        claimed=True
+        result=await asyncio.to_thread(
+            ELabFtwConnector(
+                server_configured_base_url=bases[0],
+                api_key=_resolve_server_secret(configured.credential_reference),
+            ).write_completed_experiment,
+            experiment,confirmed=True,
+        )
+        writeback_id=store.record_eln_writeback(
+            principal,connector_id=connector_id,report_id=report_id,
+            protocol_revision_id=revision_id,
+            external_experiment_id=result.external_experiment_id,
+            request_sha256=result.request_sha256,
+            idempotency_key=idempotency_key,
+        )
+        store.finish_eln_writeback_request(
+            principal,idempotency_key,succeeded=True)
+        store.record_analytics(
+            principal,category="connector",metric_name="eln_writeback",
+            dimensions={"connector_kind":"elabftw","status":"ok"},
+        )
+        return {
+            "writeback_id":writeback_id,
+            "connector_kind":"elabftw",
+            "external_experiment_id":result.external_experiment_id,
+            "location":result.location,
+            "raw_audio_transmitted":False,
+            "transcript_transmitted":False,
+        }
+    except Exception as exc:
+        if store is not None and principal is not None and claimed:
+            try:
+                store.finish_eln_writeback_request(
+                    principal,idempotency_key,succeeded=False)
+            except Exception:
+                pass
+        raise _workspace_http_error(exc) from exc
+    finally:
+        if store is not None:
+            store.close()
+
+
+@app.post("/api/workspace/sources/protocols-io/import")
+async def import_protocols_io_source(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            connector=store.connector_for_use(
+                principal,str(payload.get("connector_id", "")),
+                expected_kind="protocols_io",
+            )
+            snapshot=await asyncio.to_thread(
+                ProtocolsIoConnector(
+                    access_token=_resolve_server_secret(connector.credential_reference)
+                ).fetch,
+                str(payload.get("identifier", "")),
+            )
+            imported=ProtocolSourceHub(store).ingest(principal,snapshot)
+            store.record_analytics(
+                principal,category="connector",metric_name="source_import",
+                dimensions={"connector_kind":"protocols_io","status":imported.inbox_state},
+            )
+            return {
+                "family_id":imported.family_id,
+                "revision_id":imported.revision.revision_id,
+                "changed":imported.changed,
+                "inbox_state":imported.inbox_state,
+                "source":snapshot.metadata,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/sources/google-drive/sync")
+async def sync_google_drive_source(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            configured=store.connector_for_use(
+                principal,str(payload.get("connector_id", "")),
+                expected_kind="google_drive",
+            )
+            folder_id=str(payload.get("folder_id", ""))
+            folder_roots=tuple(root.removeprefix("folder:") for root in configured.allowed_roots if root.startswith("folder:"))
+            shared=next((root.removeprefix("shared-drive:") for root in configured.allowed_roots if root.startswith("shared-drive:")),None)
+            connector=GoogleDriveConnector(
+                access_token=_resolve_server_secret(configured.credential_reference),
+                allowed_folder_ids=folder_roots,
+                shared_drive_id=shared,
+            )
+            cursor=store.connector_cursor(
+                principal,configured.connector_id,cursor_kind="drive_changes")
+            if cursor is None:
+                next_cursor=await asyncio.to_thread(connector.start_page_token)
+                snapshots=await asyncio.to_thread(connector.list_snapshots,folder_id)
+                sync_mode="initial_snapshot"
+            else:
+                changed_ids,next_cursor=await asyncio.to_thread(
+                    connector.changed_file_ids,cursor)
+                snapshots=(
+                    await asyncio.to_thread(connector.list_snapshots,folder_id)
+                    if changed_ids else ()
+                )
+                changed_set=frozenset(changed_ids)
+                snapshots=tuple(
+                    item for item in snapshots
+                    if item.metadata.get("drive_file_id") in changed_set
+                )
+                sync_mode="change_log"
+            results=[]
+            hub=ProtocolSourceHub(store)
+            for snapshot in snapshots:
+                imported=hub.ingest(principal,snapshot)
+                results.append({
+                    "family_id":imported.family_id,
+                    "revision_id":imported.revision.revision_id,
+                    "changed":imported.changed,
+                    "inbox_state":imported.inbox_state,
+                })
+            store.record_analytics(
+                principal,category="connector",metric_name="source_sync",
+                metric_value=len(results),dimensions={"connector_kind":"google_drive","status":"ok"},
+            )
+            store.set_connector_cursor(
+                principal,configured.connector_id,
+                cursor_kind="drive_changes",opaque_cursor=next_cursor,
+            )
+            return {
+                "imports":results,
+                "read_only":True,
+                "sync_mode":sync_mode,
+                "change_token_persisted":True,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/sources/github/import")
+async def import_github_source(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            configured=store.connector_for_use(
+                principal,str(payload.get("connector_id", "")),expected_kind="github"
+            )
+            repository=str(payload.get("repository", ""))
+            ref=str(payload.get("ref", ""))
+            path=str(payload.get("path", ""))
+            allowed=[]
+            for root in configured.allowed_roots:
+                match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
+                if match:
+                    allowed.append(match.groups())
+            matching=[item for item in allowed if item[0]==repository and item[1]==ref and path.startswith(item[2].rstrip("/")+"/")]
+            if not matching:
+                raise AuthorizationDeniedError("GitHub source is outside the connector allowlist.")
+            snapshot=await asyncio.to_thread(
+                GitHubConnector(
+                    installation_token=_resolve_server_secret(configured.credential_reference),
+                    allowed_repositories=(repository,),allowed_refs=(ref,),
+                    allowed_path_prefixes=tuple(item[2] for item in matching),
+                ).fetch,
+                repository,ref,path,
+            )
+            imported=ProtocolSourceHub(store).ingest(principal,snapshot)
+            store.record_analytics(
+                principal,category="connector",metric_name="source_import",
+                dimensions={"connector_kind":"github","status":imported.inbox_state},
+            )
+            return {
+                "family_id":imported.family_id,
+                "revision_id":imported.revision.revision_id,
+                "changed":imported.changed,
+                "inbox_state":imported.inbox_state,
+                "source":snapshot.metadata,
+                "code_executed":False,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/webhooks/github/{connector_id}",status_code=202)
+async def receive_github_webhook(
+    connector_id:str,
+    request:Request,
+    x_hub_signature_256:str|None=Header(default=None),
+    x_github_delivery:str|None=Header(default=None),
+    x_github_event:str|None=Header(default=None),
+)->dict[str,object]:
+    """Verify one GitHub delivery and import allowlisted changed source files."""
+
+    content_length=request.headers.get("content-length")
+    if content_length:
+        try:
+            parsed_content_length=int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400,detail="invalid_content_length") from exc
+        if parsed_content_length<0 or parsed_content_length>1_000_000:
+            raise HTTPException(status_code=413,detail="webhook_payload_too_large")
+    raw=await request.body()
+    if not raw or len(raw)>1_000_000:
+        raise HTTPException(status_code=413,detail="webhook_payload_invalid")
+    if not x_github_delivery or not x_github_event:
+        raise HTTPException(status_code=400,detail="webhook_headers_missing")
+    store=None
+    delivery_started=False
+    try:
+        settings=_workspace_settings()
+        if not settings.enabled:
+            raise WorkspaceError("Commercial workspace is disabled.")
+        store=initialize_workspace_store(settings)
+        organization_id,configured=store.github_webhook_configuration(connector_id)
+        webhook_reference=configured.webhook_secret_reference
+        assert webhook_reference is not None
+        if not verify_github_webhook_signature(
+            raw,x_hub_signature_256,_resolve_server_secret(webhook_reference)
+        ):
+            raise AuthenticationRequiredError("Webhook signature is invalid.")
+        body_sha256=hashlib.sha256(raw).hexdigest()
+        store.begin_github_webhook_delivery(
+            organization_id=organization_id,
+            connector_id=connector_id,
+            delivery_id=x_github_delivery,
+            body_sha256=body_sha256,
+            event_name=x_github_event,
+        )
+        delivery_started=True
+        try:
+            payload=json.loads(raw)
+        except (json.JSONDecodeError,UnicodeDecodeError) as exc:
+            raise SourceConnectorError("Webhook payload is invalid JSON.") from exc
+        if not isinstance(payload,dict):
+            raise SourceConnectorError("Webhook payload must be an object.")
+        if x_github_event=="ping":
+            store.finish_github_webhook_delivery(
+                connector_id,x_github_delivery,succeeded=True)
+            return {"accepted":True,"event":"ping","imports":[]}
+        if x_github_event!="push":
+            store.finish_github_webhook_delivery(
+                connector_id,x_github_delivery,succeeded=True)
+            return {"accepted":True,"event":x_github_event,"imports":[]}
+        repository_value=payload.get("repository")
+        repository=(
+            repository_value.get("full_name")
+            if isinstance(repository_value,dict) else None
+        )
+        raw_ref=payload.get("ref")
+        commit_sha=payload.get("after")
+        if (
+            not isinstance(repository,str)
+            or not isinstance(raw_ref,str)
+            or not raw_ref.startswith("refs/heads/")
+            or not isinstance(commit_sha,str)
+            or re.fullmatch(r"[0-9a-f]{40,64}",commit_sha) is None
+        ):
+            raise SourceConnectorError("GitHub push identity is invalid.")
+        branch=raw_ref.removeprefix("refs/heads/")
+        allowed=[]
+        for root in configured.allowed_roots:
+            match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
+            if match and match.group(1)==repository and match.group(2)==branch:
+                allowed.append(match.group(3).rstrip("/"))
+        if not allowed:
+            raise AuthorizationDeniedError("GitHub push is outside the connector allowlist.")
+        changed:set[str]=set()
+        commits=payload.get("commits")
+        for commit in commits if isinstance(commits,list) else []:
+            if not isinstance(commit,dict):
+                continue
+            for key in ("added","modified"):
+                values=commit.get(key)
+                for value in values if isinstance(values,list) else []:
+                    if isinstance(value,str) and len(value)<=1000:
+                        changed.add(value)
+        selected=tuple(sorted(
+            path for path in changed
+            if any(path==prefix or path.startswith(prefix+"/") for prefix in allowed)
+        ))[:100]
+        service=Principal(
+            principal_id=("system:github:"+hashlib.sha256(
+                f"{organization_id}:{connector_id}".encode()).hexdigest()[:24]),
+            subject=f"system:github:{connector_id}",
+            organization_id=organization_id,
+            display_name="GitHub Source Connector",
+            roles=frozenset({Role.RESEARCHER}),
+            authentication_method="webhook",
+        )
+        store.bootstrap_principal(service)
+        service=store.effective_principal(service)
+        token=_resolve_server_secret(configured.credential_reference)
+        hub=ProtocolSourceHub(store)
+        imports=[]
+        for path in selected:
+            prefixes=tuple(
+                prefix for prefix in allowed
+                if path==prefix or path.startswith(prefix+"/")
+            )
+            snapshot=await asyncio.to_thread(
+                GitHubConnector(
+                    installation_token=token,
+                    allowed_repositories=(repository,),
+                    allowed_refs=(commit_sha,),
+                    allowed_path_prefixes=prefixes,
+                ).fetch,
+                repository,commit_sha,path,
+            )
+            imported=hub.ingest(service,snapshot)
+            imports.append({
+                "revision_id":imported.revision.revision_id,
+                "changed":imported.changed,
+                "inbox_state":imported.inbox_state,
+                "path":path,
+            })
+        store.record_analytics(
+            service,category="connector",metric_name="webhook_import",
+            metric_value=len(imports),
+            dimensions={"connector_kind":"github","status":"ok"},
+        )
+        store.finish_github_webhook_delivery(
+            connector_id,x_github_delivery,succeeded=True)
+        return {
+            "accepted":True,
+            "event":"push",
+            "commit_sha":commit_sha,
+            "imports":imports,
+            "code_executed":False,
+        }
+    except Exception as exc:
+        if store is not None and delivery_started:
+            try:
+                store.finish_github_webhook_delivery(
+                    connector_id,x_github_delivery or "invalid",succeeded=False)
+            except Exception:
+                pass
+        raise _workspace_http_error(exc) from exc
+    finally:
+        if store is not None:
+            store.close()
+
+
+@app.get("/api/workspace/dry-lab/workflows")
+def get_dry_lab_workflows()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {"workflows":list(store.computational_workflows(principal))}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/sources/github/dry-lab/import",status_code=201)
+async def import_github_dry_lab_workflow(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            configured=store.connector_for_use(
+                principal,str(payload.get("connector_id", "")),expected_kind="github"
+            )
+            repository=str(payload.get("repository", ""))
+            ref=str(payload.get("ref", ""))
+            path=str(payload.get("path", ""))
+            engine=str(payload.get("engine", "")).casefold()
+            allowed=[]
+            for root in configured.allowed_roots:
+                match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
+                if match and match.group(1)==repository and match.group(2)==ref:
+                    prefix=match.group(3).rstrip("/")
+                    if path==prefix or path.startswith(prefix+"/"):
+                        allowed.append(prefix)
+            if not allowed:
+                raise AuthorizationDeniedError(
+                    "GitHub workflow is outside the connector allowlist.")
+            snapshot=await asyncio.to_thread(
+                GitHubConnector(
+                    installation_token=_resolve_server_secret(
+                        configured.credential_reference),
+                    allowed_repositories=(repository,),allowed_refs=(ref,),
+                    allowed_path_prefixes=tuple(allowed),
+                ).fetch,
+                repository,ref,path,
+            )
+            if engine=="snakemake":
+                metadata=inspect_snakemake_snapshot(snapshot)
+            elif engine=="nextflow":
+                metadata=inspect_nextflow_snapshot(snapshot)
+            else:
+                raise WorkspaceError("Dry-lab workflow engine is invalid.")
+            imported=DryLabWorkflowRegistry(store).import_metadata(
+                principal,snapshot,metadata)
+            store.record_analytics(
+                principal,category="connector",metric_name="dry_lab_import",
+                dimensions={"connector_kind":"github","status":"review_required"},
+            )
+            return {**imported,"code_executed":False,"metadata_only":True}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/reviewer/dry-lab/{workflow_revision_id}/decision")
+async def decide_dry_lab_workflow(
+    workflow_revision_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.review_computational_workflow(
+                principal,workflow_revision_id,
+                action=str(payload.get("action", "")),
+                comment=str(payload.get("comment", "")),
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/dry-lab/links",status_code=201)
+async def link_dry_lab_workflow(request:Request)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            link_id=store.link_wet_dry_workflow(
+                principal,
+                experiment_session_id=str(payload.get("experiment_session_id", "")),
+                protocol_revision_id=str(payload.get("protocol_revision_id", "")),
+                workflow_revision_id=str(payload.get("workflow_revision_id", "")),
+            )
+            return {"link_id":link_id,"execution_started":False}
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/admin/analytics")
+def get_workspace_analytics()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.analytics_summary(principal)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
 
 
 async def _spool_protocol_pdf_upload(
@@ -765,6 +1940,9 @@ def list_protocol_catalog()->dict[str,object]:
 
     try:
         entries,_,_=_public_protocol_catalog_entries()
+        visible=_visible_catalog_resource_ids()
+        if visible is not None:
+            entries=[item for item in entries if item.get("protocol_id") in visible]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
     return {"protocols":entries}
@@ -773,6 +1951,7 @@ def list_protocol_catalog()->dict[str,object]:
 @app.get("/api/protocols/{protocol_id}")
 def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
     try:
+        _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
         if candidate is not None and candidate.protocol_id==protocol_id:
@@ -816,6 +1995,44 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     source_filename=filename,
                     media_type=media_type,
                 )
+                _scope_catalog_resource(result.entry.protocol_id,bind=True)
+                if _workspace_settings().enabled:
+                    principal,workspace=_commercial_workspace()
+                    try:
+                        ProtocolSourceHub(workspace).ingest(
+                            principal,
+                            SourceSnapshot(
+                                connector_kind="local_pdf",
+                                external_id=f"upload:{result.entry.source_filename}",
+                                version_identity=result.entry.source_sha256,
+                                source_hash=result.entry.source_sha256,
+                                canonical_url=None,
+                                title=result.entry.title,
+                                metadata={
+                                    "source_status":"Uploaded draft",
+                                    "risk_state":"review_required",
+                                    "owner":principal.display_name,
+                                    "catalog_protocol_id":result.entry.protocol_id,
+                                },
+                                content={
+                                    "document":{
+                                        "format":"pdf",
+                                        "sha256":result.entry.source_sha256,
+                                        "analysis_state":result.entry.analysis_status,
+                                    },
+                                    "execution_identity":{
+                                        "protocol_id":result.entry.protocol_id,
+                                        "source_sha256":result.entry.source_sha256,
+                                    },
+                                },
+                            ),
+                        )
+                    finally:
+                        workspace.close()
+                _record_workspace_metric(
+                    category="protocol",metric_name="upload",
+                    dimensions={"source_kind":"local_pdf","status":"stored"},
+                )
                 return {
                     "protocol":result.entry.public_dict(),
                     "deduplicated":result.deduplicated,
@@ -857,19 +2074,48 @@ def _development_activation_allowed() -> bool:
     return scope in {"demo", "reference_only", "test_only"}
 
 
-@app.post("/api/protocols/{protocol_id}/analysis")
-async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
-    """The only HTTP boundary that may explicitly request PDF analysis."""
+@app.post("/api/protocols/{protocol_id}/analysis",status_code=202)
+async def trigger_protocol_analysis(
+    protocol_id:str,background:bool=True
+)->dict[str,object]:
+    """Persist a request, then run provider analysis outside the request path."""
 
-    def run_explicit_analysis()->dict[str,object]:
+    _scope_catalog_resource(protocol_id)
+    analysis_id=f"analysis-{secrets.token_hex(16)}"
+    metric_principal=_REQUEST_PRINCIPAL.get()
+
+    def prepare_analysis()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.request_analysis(protocol_id,analysis_id)
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    def run_explicit_analysis(*,request_first:bool)->dict[str,object]:
         # SQLite connections are thread-affine.  Construct and close the
         # catalog in the same worker that performs bounded Provider work.
         catalog,store=_open_protocol_catalog()
         try:
+            if request_first:
+                catalog.request_analysis(protocol_id,analysis_id)
+            try:
+                model=_protocol_analysis_model()
+            except RuntimeError as exc:
+                catalog.fail_analysis_request(
+                    protocol_id,analysis_id,
+                    failure_code="provider_configuration_missing",
+                )
+                raise ProtocolAnalysisUnavailableError(
+                    "Protocol analysis provider is not configured."
+                ) from exc
             entry=catalog.analyze(
                 protocol_id,
-                _protocol_analysis_model(),
-                analysis_id=f"analysis-{secrets.token_hex(16)}",
+                model,
+                analysis_id=analysis_id,
             )
             if _auto_activate_ready_uploads_enabled():
                 try:
@@ -886,8 +2132,74 @@ async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
         finally:
             store.close()
 
+    async def background_worker()->None:
+        try:
+            completed=await asyncio.to_thread(
+                run_explicit_analysis,request_first=False)
+            _record_workspace_metric(
+                category="protocol",metric_name="analysis",
+                dimensions={
+                    "status":str(completed.get("analysis_status") or "complete")[:100],
+                    "source_kind":"local_pdf",
+                },
+                principal=metric_principal,
+            )
+        except Exception as exc:
+            # The catalog persists bounded failure codes.  Provider responses,
+            # prompts, and source text never enter logs or the lifecycle record.
+            log.warning(
+                "protocol.analysis.background_failed protocol_id=%s error=%s",
+                protocol_id,type(exc).__name__,
+            )
+            _record_workspace_metric(
+                category="protocol",metric_name="analysis",
+                dimensions={
+                    "status":"failed",
+                    "reason_code":str(getattr(exc,"code","analysis_failed"))[:100],
+                    "source_kind":"local_pdf",
+                },
+                principal=metric_principal,
+            )
+
     try:
-        return await asyncio.to_thread(run_explicit_analysis)
+        if not background:
+            completed=await asyncio.to_thread(
+                run_explicit_analysis,request_first=True)
+            _record_workspace_metric(
+                category="protocol",metric_name="analysis",
+                dimensions={
+                    "status":str(completed.get("analysis_status") or "complete")[:100],
+                    "source_kind":"local_pdf",
+                },
+                principal=metric_principal,
+            )
+            return completed
+        running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
+        if running is not None and not running.done():
+            catalog,store=_open_protocol_catalog()
+            try:
+                public=catalog.get_entry(protocol_id).public_dict()
+                public["analysis_run"]=catalog.analysis_run_status(
+                    protocol_id).public_dict()
+                public["analysis_request_deduplicated"]=True
+                return public
+            finally:
+                store.close()
+        public=await asyncio.to_thread(prepare_analysis)
+        state=(public.get("analysis_run") or {}).get("state")
+        if state in {"review_required","approved","revoked"}:
+            public["analysis_request_deduplicated"]=True
+            return public
+        task=asyncio.create_task(background_worker())
+        _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
+        task.add_done_callback(
+            lambda completed,pid=protocol_id: (
+                _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
+                if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
+            )
+        )
+        public["analysis_request_accepted"]=True
+        return public
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
 
@@ -897,6 +2209,7 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
     """Read persisted lifecycle state without starting or resuming analysis."""
 
     try:
+        _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
             return catalog.analysis_run_status(protocol_id).public_dict()
@@ -911,6 +2224,7 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
     """Expose the source-linked analysis draft without approving or activating it."""
 
     try:
+        _scope_catalog_resource(protocol_id)
         catalog, store = _open_protocol_catalog()
         try:
             review = catalog.review(protocol_id)
@@ -938,15 +2252,33 @@ def approve_protocol_revision(
     """Service-authorized approval; deliberately absent from the public UI."""
 
     try:
+        _scope_catalog_resource(protocol_id)
         catalog,store=_open_protocol_catalog()
         try:
-            policy=SharedSecretApprovalPolicy(
-                os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"))
+            actor=None
+            role=None
+            if _workspace_settings().enabled:
+                actor=_REQUEST_PRINCIPAL.get()
+                if actor is None:
+                    raise AuthenticationRequiredError("Authentication is required.")
+                require_permission(actor,Permission.PROTOCOL_APPROVE)
+                role=next(
+                    item.value for item in actor.roles
+                    if item.value in {"reviewer","lab_admin","organization_admin"}
+                )
+                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
+                presented="tenant-rbac-authorized"
+            else:
+                policy=SharedSecretApprovalPolicy(
+                    os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"))
+                presented=x_protocol_approval_token
             return catalog.approve(
                 protocol_id,
                 revision_id,
                 policy=policy,
-                presented_secret=x_protocol_approval_token,
+                presented_secret=presented,
+                actor_principal_id=actor.principal_id if actor else None,
+                actor_role=role,
             ).public_dict()
         finally:
             store.close()
@@ -963,6 +2295,7 @@ def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
             detail="development_activation_not_allowed",
         )
     try:
+        _scope_catalog_resource(protocol_id)
         catalog, store = _open_protocol_catalog()
         try:
             entry = catalog.activate_development(protocol_id)
@@ -987,6 +2320,7 @@ def get_protocol_visual_asset(
     protocol_id:str,revision_id:str,asset_id:str,
 ):
     try:
+        _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
         if candidate is not None and candidate.protocol_id==protocol_id:
@@ -1064,6 +2398,7 @@ def get_protocol_visual_asset(
 def get_generated_visual_asset(asset_id:str):
     """Serve one validated generated image through an opaque same-origin ID."""
 
+    _scope_tenant_resource("generated_visual",asset_id)
     asset=GENERATED_VISUALS.get(asset_id)
     if asset is None:
         raise HTTPException(status_code=404,detail="Generated visual is unknown.")
@@ -1085,6 +2420,7 @@ def get_generated_visual_asset(asset_id:str):
 def get_web_visual_asset(asset_id:str):
     """Serve one validated proxied web image through an opaque same-origin ID."""
 
+    _scope_tenant_resource("web_visual",asset_id)
     asset=WEB_VISUAL_REGISTRY.get(asset_id)
     if asset is None:
         raise HTTPException(status_code=404,detail="Web visual is unknown.")
@@ -1121,6 +2457,18 @@ def get_admin_metrics(
 )->dict[str,object]:
     """Return aggregate product/operations signals without private lab content."""
 
+    if _workspace_settings().enabled:
+        try:
+            principal,workspace=_commercial_workspace()
+            try:
+                return {
+                    "workspace":workspace.analytics_summary(principal),
+                    "legacy_global_metrics_disabled":True,
+                }
+            finally:
+                workspace.close()
+        except Exception as exc:
+            raise _workspace_http_error(exc) from exc
     _require_admin_access(x_voice_workflow_admin_token)
     try:
         report_settings=ExperimentReportSettings.from_environment()
@@ -1189,6 +2537,7 @@ def get_admin_metrics(
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
+    _scope_tenant_resource("experiment_report",report_id)
 
     try:
         settings=ExperimentReportSettings.from_environment()
@@ -1264,6 +2613,7 @@ def get_protocol_source_page(
     """Secondary same-origin exact-page view; it is never labelled a source image."""
 
     try:
+        _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
         if candidate is not None and candidate.protocol_id==protocol_id:
@@ -1402,6 +2752,7 @@ class ListenerSession:
         self.accepted_configuration_id:int|None=None
         self.accepted_mode:str|None=None
         self.accepted_language:str|None=None
+        self.accepted_input_language=InputLanguagePreference.AUTO
         self.accepted_protocol_id:str|None=None
         self.accepted_revision_id:str|None=None
         self.turn_generations:dict[int,int]={}
@@ -1512,6 +2863,7 @@ class ListenerSession:
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self.accepted_configuration_id=None; self.accepted_mode=None
         self.accepted_language=None; self.accepted_protocol_id=None
+        self.accepted_input_language=InputLanguagePreference.AUTO
         self.accepted_revision_id=None
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
@@ -1521,11 +2873,15 @@ class ListenerSession:
     def accept_configuration(
         self,configuration_id:int,mode:str,language:str,
         protocol_id:str|None,revision_id:str|None=None,
+        input_language:InputLanguagePreference|str=InputLanguagePreference.KOREAN,
     )->None:
         """Record only the exact non-secret configuration accepted by the server."""
         self.accepted_configuration_id=configuration_id
         self.accepted_mode=mode
         self.accepted_language=language
+        self.accepted_input_language=normalize_input_language_preference(
+            input_language
+        )
         self.accepted_protocol_id=protocol_id
         self.accepted_revision_id=revision_id
     def set_curated_protocol_fixture(
@@ -1868,7 +3224,11 @@ def cascade_transcription_context(
             )
         elif curated.pending_completion_confirmation is not None:
             pending_frame="completion"
-    language = "ko"
+    language = (
+        None
+        if session.accepted_input_language is InputLanguagePreference.AUTO
+        else session.accepted_input_language.value
+    )
     return CascadeTranscriptionContext(
         configuration_id=session.accepted_configuration_id,
         session_id=session.session_id,
@@ -2009,6 +3369,7 @@ async def _queue_curated_generated_visual(
         try:
             asset,cache_hit=await GENERATED_VISUALS.obtain(
                 specification,settings,generate)
+            _scope_tenant_resource("generated_visual",asset.asset_id,bind=True)
             if not session.owns_visual_result(
                 turn_id,generation,configuration_id,specification.protocol_id):
                 return
@@ -2084,6 +3445,7 @@ async def _prepare_external_visual_candidate(
         prepared["verification_label"]=(
             "출처 링크만 제공 · 이미지 바이트 검증 실패")
         return prepared
+    _scope_tenant_resource("web_visual",asset.asset_id,bind=True)
     prepared["image_url"]=f"/api/web-visuals/{asset.asset_id}"
     prepared["display_mode"]="web_image"
     prepared["rights"]=rights.strip()[:300]
@@ -2729,6 +4091,8 @@ def _open_experiment_report(
             development_only=curated.fixture.development_only,
         )
         session.experiment_report_id=report["report_id"]
+        _scope_tenant_resource(
+            "experiment_report",session.experiment_report_id,bind=True)
     return store.get_report(session.experiment_report_id)
 
 
@@ -2865,6 +4229,19 @@ def _record_experiment_report_plan(
             session.experiment_report_id,
             status="completed",
             event_key=f"{event_key}-finalize",
+        )
+        _record_workspace_metric(
+            category="workflow",metric_name="completion",
+            dimensions={"event_kind":"workflow_completed","status":"completed"},
+        )
+    if event_type is not None:
+        _record_workspace_metric(
+            category="workflow",metric_name="report_event",
+            dimensions={
+                "event_kind":event_type,
+                "status":"recorded",
+                "step_bucket":str(step_label or "unlabeled")[:100],
+            },
         )
     return report
 
@@ -3105,6 +4482,58 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             turn_id,generation,state,route=route,timings_ms=timings_ms)
         if fields is None: return False
         await sender.text("turn.state",**fields); return True
+    async def finish_blocked_voice(text:str,route:str)->None:
+        """Complete one deterministic non-mutating clarification turn."""
+
+        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
+        if not await current_text(
+            "reply.delta",turn_id=turn_id,segment_index=0,text=text
+        ):
+            return
+        session.set_turn_terminal_outcome(turn_id,generation,"blocked")
+        try:
+            await progress("synthesizing",route=route)
+            pcm=await asyncio.to_thread(
+                synthesize,text,session.accepted_language or "ko"
+            )
+            frames=frame_complete_audio(pcm)
+            if filler is not None:
+                await filler.primary_ready()
+        except Exception:
+            log.exception("blocked clarification TTS failed")
+            await progress("error",route=route)
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=0)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text(
+                "turn.done",turn_id=turn_id,timings_ms=timings,
+                segment_count=0,input_frames=input_frames,output_frames=0,
+                tools_used=[],route=route,
+            )
+            if session.complete_without_playback(turn_id):
+                await sender.text(
+                    "state.changed",state=session.state.value,turn_id=turn_id,
+                    cooldown_ms=session.detector.config.cooldown_ms,
+                )
+            return
+        if session.start_playback(turn_id):
+            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
+            await progress(
+                "playing",route=route,
+                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]},
+            )
+            await current_text(
+                "state.changed",state=session.state.value,turn_id=turn_id
+            )
+            await sender.segment(turn_id,0,frames,generation)
+            await current_text("reply.complete",turn_id=turn_id,text=text)
+            await current_text("audio.complete",turn_id=turn_id,segment_count=1)
+            timings["total_ms"]=round((clock()-endpoint)*1000)
+            await current_text(
+                "turn.done",turn_id=turn_id,timings_ms=timings,
+                segment_count=1,input_frames=input_frames,
+                output_frames=len(frames),tools_used=[],route=route,
+            )
     timings["utterance_to_status_ms"]=round((clock()-endpoint)*1000)
     await progress(
         "transcribing",
@@ -3128,6 +4557,17 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     # working in manual mode while production returns structured metadata.
     if isinstance(transcription,str):
         transcription=Transcription(transcription,None)
+    _record_workspace_metric(
+        category="voice",metric_name="stt_latency_ms",
+        metric_value=float(timings["stt"]),
+        dimensions={
+            "language_preference":getattr(
+                session.accepted_input_language,"value",str(session.accepted_input_language)
+            ),
+            "detected_language":transcription.detected_language or "unknown",
+            "status":"ok",
+        },
+    )
     transcript=transcription.text
     if not transcript.strip():
         if session.reject_empty_transcript(turn_id):
@@ -3152,10 +4592,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
-    admission = classify_korean_admission(transcript, transcription.detected_language, expected_language="ko")
+    admission = classify_transcription_language(
+        transcription,session.accepted_input_language
+    )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
-    if not await current_text("transcript",turn_id=turn_id,text=transcript): return
     cleaned_source=clean_path(source_pcm)
     diagnostic_wav=pcm_to_wav(cleaned_source)
     stt_diagnostic_metadata={
@@ -3223,6 +4664,36 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     timings["route_started_ms"]=round((clock()-endpoint)*1000)
     await progress(
         "routing",timings_ms={"route_started":timings["route_started_ms"]})
+    if admission.clarification_required:
+        _record_workspace_metric(
+            category="voice",metric_name="language_mismatch",
+            dimensions={
+                "language_preference":admission.expected_language or "auto",
+                "detected_language":admission.detected_language or "unknown",
+                "reason_code":admission.mismatch_status or "language_uncertain",
+                "status":"blocked",
+            },
+        )
+        await current_text(
+            "stt.language_mismatch",turn_id=turn_id,
+            configured_language=admission.expected_language,
+            detected_language=admission.detected_language,
+            reason=admission.mismatch_status or "language_uncertain",
+            mutation_authorized=False,
+        )
+        await current_text(
+            "session.language_confirmation_required",turn_id=turn_id,
+            reason=admission.mismatch_status or "language_uncertain",
+            languages=[admission.expected_language],
+        )
+        await finish_blocked_voice(
+            admission.clarification_message
+            or "음성 인식 언어가 불확실합니다. 다시 한 번 말씀해 주세요.",
+            "language_clarification",
+        )
+        return
+    if not await current_text("transcript",turn_id=turn_id,text=transcript):
+        return
     emergency=recognize_emergency(transcript)
     if emergency is not None:
         text=emergency.response
@@ -3398,6 +4869,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     None if plan.answer_origin not in {"unsupported","current_protocol"}
                     else "local_specialized_answer_unavailable"
                 ),
+            )
+            _record_workspace_metric(
+                category="agent",metric_name="turn_route",
+                dimensions={
+                    "intent":routed_turn.arbitration.intent.value,
+                    "route":"curated_protocol",
+                    "answer_origin":plan.answer_origin,
+                    "reason_code":routed_turn.arbitration.reason_code or "none",
+                    "status":"mutated" if plan.state_changed else "read_only",
+                },
             )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
@@ -4008,6 +5489,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 role:{"status":terminal.status,"elapsed_ms":terminal.elapsed_ms}
                 for role,terminal in brain_terminals.items()
             })
+        _record_workspace_metric(
+            category="workflow",metric_name="turn",
+            metric_value=float(timings.get("total_ms",0)),
+            dimensions={
+                "event_kind":plan.action.value,
+                "status":"mutated" if plan.state_changed else "read_only",
+                "route":"curated_protocol",
+                "answer_origin":plan.answer_origin,
+            },
+        )
         source_output=None
         visual_output=None
         if brain_run is not None and brain_snapshot is not None:
@@ -4419,6 +5910,17 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if not await current_text("audio.complete",turn_id=turn_id,segment_count=segment_count): return
         timings["total_ms"]=round((clock()-endpoint)*1000)
         if not await current_text("turn.done",turn_id=turn_id,timings_ms=timings,segment_count=segment_count,input_frames=input_frames,output_frames=output_frames,tools_used=result.tools_used,route="brain"): return
+        _record_workspace_metric(
+            category="agent",metric_name="turn_route",
+            metric_value=float(timings.get("total_ms",0)),
+            dimensions={
+                "intent":request_arbitration.intent.value,
+                "route":"brain",
+                "answer_origin":"model_or_tool",
+                "reason_code":request_arbitration.reason_code or "none",
+                "status":"complete",
+            },
+        )
         if not session.is_current(turn_id,generation): return
         session.history.commit(result.messages,result.source_references)
     finally:
@@ -4610,11 +6112,45 @@ async def cancel_cascade_generation(
     }
     if interruption.latency_ms is not None:
         fields["barge_in_to_silence_ms"]=interruption.latency_ms
+        _record_workspace_metric(
+            category="voice",metric_name="barge_in_latency_ms",
+            metric_value=float(interruption.latency_ms),
+            dimensions={"status":"confirmed","event_kind":"barge_in"},
+        )
     await websocket.send_text(event("cascade.playback.clear",**fields))
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
     await websocket.accept()
+    workspace_context_token=None
+    try:
+        settings=_workspace_settings()
+        operational=_runtime_usage_scope()=="operational"
+        if settings.enabled or operational:
+            if not settings.enabled:
+                raise IdentityConfigurationError(
+                    "Operational scope requires the tenant workspace.")
+            headers=getattr(websocket,"headers",{})
+            query_params=getattr(websocket,"query_params",{})
+            principal=_identity_resolver().resolve(
+                headers.get("authorization"),
+                dev_profile_id=(
+                    headers.get("x-voice-dev-profile")
+                    or query_params.get("dev_profile")
+                ),
+            )
+            workspace=initialize_workspace_store(settings)
+            try:
+                workspace.bootstrap_principal(principal)
+                principal=workspace.effective_principal(principal)
+            finally:
+                workspace.close()
+            workspace_context_token=_REQUEST_PRINCIPAL.set(principal)
+    except Exception as exc:
+        await websocket.send_text(event(
+            "error",message=getattr(exc,"code","authentication_failed")))
+        await websocket.close(code=1008,reason="authentication required")
+        return
     try:
         vad_settings=VoiceVadSettings.from_environment()
         config=VadConfig.from_settings(vad_settings.cascade)
@@ -4823,6 +6359,9 @@ async def voice_socket(websocket:WebSocket):
                 requested_mode=control["mode"]
                 configuration_id=control["configuration_id"]
                 requested_protocol_id=control["protocol_id"]
+                requested_input_language=normalize_input_language_preference(
+                    control.get("input_language",control["language"])
+                )
                 configuration_stage="server_policy"
                 try:
                     trusted_config=trusted_config or server_config()
@@ -4836,6 +6375,7 @@ async def voice_socket(websocket:WebSocket):
                         if requested_protocol_id is None:
                             selection_failure="protocol_selection_required"
                         else:
+                            _scope_catalog_resource(requested_protocol_id)
                             if trusted_config.curated_protocol_fixture_path is not None:
                                 configuration_stage="curated_protocol_fixture"
                                 curated_fixture=curated_fixture or load_curated_protocol_fixture(
@@ -4925,6 +6465,8 @@ async def voice_socket(websocket:WebSocket):
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
+                    _scope_tenant_resource(
+                        "experiment_session",session.session_id,bind=True)
                     session.start()
                     if session.curated_protocol_session is not None and selected_curated_fixture is not None:
                         try:
@@ -4982,7 +6524,8 @@ async def voice_socket(websocket:WebSocket):
                     pipeline="cascade"
                     session.accept_configuration(
                         configuration_id,pipeline,context.language,
-                        requested_protocol_id,selected_revision_id)
+                        requested_protocol_id,selected_revision_id,
+                        requested_input_language)
                 except (RuntimeError,ValueError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
@@ -5022,6 +6565,7 @@ async def voice_socket(websocket:WebSocket):
                     "generation":session.generation,
                     "mode":session.accepted_mode,
                     "language":session.accepted_language,
+                    "input_language":session.accepted_input_language.value,
                     "protocol_id":session.accepted_protocol_id,
                     "research_capabilities":research_capabilities,
                 }
@@ -5289,5 +6833,7 @@ async def voice_socket(websocket:WebSocket):
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         session.stop()
         if procedure_store is not None: procedure_store.close()
+        if workspace_context_token is not None:
+            _REQUEST_PRINCIPAL.reset(workspace_context_token)
 
 app.mount("/",StaticFiles(directory=STATIC_DIR,html=True),name="static")

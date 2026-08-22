@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 SUPPORTED_LANGUAGES = frozenset({"ko", "en", "vi"})
@@ -21,6 +22,36 @@ PROVIDER_LANGUAGE_NAMES = {
     "vi": "vi",
     "vi-vn": "vi",
 }
+
+
+class InputLanguagePreference(str, Enum):
+    """User-selected STT bias, separate from the response language."""
+
+    AUTO = "auto"
+    KOREAN = "ko"
+    ENGLISH = "en"
+
+
+def normalize_input_language_preference(value: object) -> InputLanguagePreference:
+    if isinstance(value, InputLanguagePreference):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("input language preference is invalid")
+    aliases = {
+        "auto": InputLanguagePreference.AUTO,
+        "ko": InputLanguagePreference.KOREAN,
+        "ko-kr": InputLanguagePreference.KOREAN,
+        "korean": InputLanguagePreference.KOREAN,
+        "en": InputLanguagePreference.ENGLISH,
+        "en-us": InputLanguagePreference.ENGLISH,
+        "en-gb": InputLanguagePreference.ENGLISH,
+        "english": InputLanguagePreference.ENGLISH,
+    }
+    normalized = value.strip().casefold().replace("_", "-")
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("input language preference is invalid") from exc
 
 
 def normalize_provider_language(value: Any) -> str | None:
@@ -68,6 +99,11 @@ class KoreanTranscriptionAdmission:
     correction_class: str | None = None
     clarification_required: bool = False
     clarification_message: str | None = None
+
+
+LANGUAGE_MISMATCH_CLARIFICATION_KO = (
+    "음성 인식 언어가 불확실합니다. 다시 한 번 말씀해 주세요."
+)
 
 
 _SHORT_KOREAN_DISCOURSE_ALIASES = {
@@ -151,7 +187,7 @@ def classify_korean_admission(
             expected_language=expected_language,
             mismatch_status="contradiction",
             clarification_required=True,
-            clarification_message="음성을 정확히 인식하지 못했어요. 다시 말씀해 주세요.",
+            clarification_message=LANGUAGE_MISMATCH_CLARIFICATION_KO,
         )
 
     return KoreanTranscriptionAdmission(
@@ -160,6 +196,51 @@ def classify_korean_admission(
         detected_language=detected_language,
         expected_language=expected_language,
         clarification_required=False,
+    )
+
+
+def classify_transcription_language(
+    transcription: Transcription,
+    preference: InputLanguagePreference | str,
+) -> KoreanTranscriptionAdmission:
+    """Fail closed on a selected-language contradiction before any mutation."""
+
+    selected = normalize_input_language_preference(preference)
+    if selected is InputLanguagePreference.AUTO:
+        return KoreanTranscriptionAdmission(
+            raw_text=transcription.text,
+            admitted_text=transcription.text,
+            detected_language=transcription.detected_language,
+            expected_language="auto",
+        )
+    if selected is InputLanguagePreference.KOREAN:
+        return classify_korean_admission(
+            transcription.text,
+            transcription.detected_language,
+            expected_language="ko",
+        )
+
+    cleaned = transcription.text.strip()
+    ko_chars, en_words, _ = _signals(cleaned)
+    contradiction = bool(
+        cleaned
+        and (
+            transcription.detected_language == "ko"
+            or (ko_chars >= 3 and en_words == 0)
+        )
+    )
+    return KoreanTranscriptionAdmission(
+        raw_text=transcription.text,
+        admitted_text=transcription.text,
+        detected_language=transcription.detected_language,
+        expected_language="en",
+        mismatch_status="contradiction" if contradiction else None,
+        clarification_required=contradiction,
+        clarification_message=(
+            "The speech-recognition language is uncertain. Please say that again."
+            if contradiction
+            else None
+        ),
     )
 
 

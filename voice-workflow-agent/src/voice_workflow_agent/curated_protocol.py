@@ -1203,7 +1203,8 @@ class ProtocolKnowledgeView:
 
     @classmethod
     def from_fixture(cls,fixture:CuratedProtocolFixture)->"ProtocolKnowledgeView":
-        pages=fixture.draft.protocol.metadata.pdf.pages
+        protocol=fixture.draft.protocol
+        pages=protocol.metadata.pdf.pages
         page2=next((page.text for page in pages if page.source_page_number==2),"")
 
         def span(start:str,end:str)->str:
@@ -1214,12 +1215,51 @@ class ProtocolKnowledgeView:
                     "Protocol-wide source span is unavailable.")
             return page2[start_at+len(start):end_at].strip()
 
-        purpose=span("Abstract\n","\nProtocol materials")
-        safety=span("Safety warnings\n","\nBefore start")
+        candidate_layout=(
+            "Abstract\n" in page2
+            and "\nProtocol materials" in page2
+            and "Safety warnings\n" in page2
+            and "\nBefore start" in page2
+        )
+        if candidate_layout:
+            purpose_fact=CuratedProtocolFact(
+                "protocol_purpose","purpose",
+                span("Abstract\n","\nProtocol materials"),2,
+            )
+            safety_facts=(CuratedProtocolFact(
+                "protocol_safety_warning","warning",
+                span("Safety warnings\n","\nBefore start"),2,
+            ),)
+        else:
+            description=protocol.description
+            metadata_evidence=protocol.metadata.evidence
+            purpose_text=(
+                description.source_text if description is not None
+                else protocol.metadata.title
+            )
+            purpose_page=(
+                description.evidence.source_page_number
+                if description is not None
+                else metadata_evidence.source_page_number
+                if metadata_evidence is not None
+                else 1
+            )
+            purpose_fact=CuratedProtocolFact(
+                "protocol_purpose","purpose",purpose_text,purpose_page,
+            )
+            warnings=[]
+            for section in protocol.sections:
+                for step in section.steps:
+                    warnings.extend(step.warnings)
+                    for action in step.sub_actions:
+                        warnings.extend(action.warnings)
+            safety_facts=tuple(CuratedProtocolFact(
+                f"protocol_safety_warning_{index}","warning",
+                warning.source_text,warning.evidence.source_page_number,
+            ) for index,warning in enumerate(warnings,1))
         return cls(
             title=fixture.title,status=fixture.status,
-            purpose=CuratedProtocolFact(
-                "protocol_purpose","purpose",purpose,2),
+            purpose=purpose_fact,
             before_start=tuple(CuratedProtocolFact(
                 f"before_start_{index}","prerequisite",item.source_text,
                 item.evidence.source_page_number,
@@ -1232,14 +1272,16 @@ class ProtocolKnowledgeView:
                 f"protocol_equipment_{index}","equipment",item.name_source_text,
                 item.evidence.source_page_number,
             ) for index,item in enumerate(fixture.draft.protocol.equipment,1)),
-            safety=(CuratedProtocolFact(
-                "protocol_safety_warning","warning",safety,2),),
+            safety=safety_facts,
             sections=tuple(CuratedProtocolFact(
                 f"protocol_section_{index}","protocol_section",
-                f"{section.title_source_text}: steps "
-                f"{section.steps[0].source_label}-{section.steps[-1].source_label}",
+                (
+                    f"{section.title_source_text}: steps "
+                    f"{section.steps[0].source_label}-{section.steps[-1].source_label}"
+                    if section.steps else section.title_source_text
+                ),
                 section.evidence.source_page_number,
-            ) for index,section in enumerate(fixture.draft.protocol.sections,1)),
+            ) for index,section in enumerate(protocol.sections,1)),
         )
 
 
@@ -4285,6 +4327,7 @@ class CuratedProtocolSession:
         frame = self.current_step_semantic_frame()
         facts = self.related_facts(transcript)
         knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
+        candidate_a = self.fixture.protocol_id == "candidate-a-curated-development-v1"
         claims: list[ClaimRequest] = []
 
         def add(
@@ -4320,8 +4363,12 @@ class CuratedProtocolSession:
         if intent.protocol_scope == "purpose":
             answer = (
                 "이 프로토콜은 젤 안의 단백질을 소화해 Evotip과 질량분석에 사용할 시료를 준비하는 실험입니다."
-                if language == "ko" else
+                if candidate_a and language == "ko" else
                 "This protocol prepares in-gel digests for loading onto Evotips and mass-spectrometry analysis."
+                if candidate_a else
+                f"활성 프로토콜 원문에 표시된 목적 또는 제목은 다음과 같습니다: {knowledge.purpose.text}"
+                if language == "ko" else
+                f"The active protocol source states this purpose or title: {knowledge.purpose.text}"
             )
             add(
                 ClaimTargetType.PROTOCOL_PROPOSITION, "protocol_purpose", "purpose",
@@ -4330,8 +4377,12 @@ class CuratedProtocolSession:
         elif intent.question_kind == "protocol_benefit":
             answer = (
                 "이 과정이 유용한 이유는 젤 안의 단백질을 소화한 뒤 Evotip과 질량분석으로 이어질 수 있는 시료 상태를 만들기 때문입니다."
-                if language == "ko" else
+                if candidate_a and language == "ko" else
                 "It is useful because it turns protein in the gel into an in-gel digest that the source says is ready for Evotips and mass-spectrometry analysis."
+                if candidate_a else
+                f"활성 원문에서 확인되는 범위는 ‘{knowledge.purpose.text}’입니다. 별도의 과학적 이점은 원문 근거 없이 추정하지 않습니다."
+                if language == "ko" else
+                f"The active source supports only ‘{knowledge.purpose.text}’. I will not infer a separate scientific benefit without source evidence."
             )
             add(
                 ClaimTargetType.PROTOCOL_PROPOSITION, "protocol_purpose",
@@ -4423,6 +4474,10 @@ class CuratedProtocolSession:
                 "In this protocol, the tube refers to the 1.5 mL microcentrifuge reaction tube that holds the excised 1 mm³ gel plug during washing, destaining, reduction/alkylation, and enzymatic digestion. The source protocol does not restrict specific tube materials or brands."
             ),
         }
+        if not candidate_a:
+            # These curated explanations were reviewed only for Candidate A.
+            # Arbitrary PDFs may share entity names but not context or authority.
+            entity_answers = {}
         alias_map = {
             "ambic": ("ambic", "ammonium bicarbonate"),
             "hplc_water": ("hplc water", "hplc"),

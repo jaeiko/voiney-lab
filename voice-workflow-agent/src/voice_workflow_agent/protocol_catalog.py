@@ -54,6 +54,9 @@ _SAFE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.pdf$", re.IGNORECASE)
 _STABLE_PROTOCOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+))?$")
 _APPROVAL_EVENT = "protocol_revision_approved"
+_ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
+_ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
+_ANALYSIS_READY_EVENT = "protocol_analysis_ready"
 _ANALYSIS_FAILED_EVENT = "protocol_analysis_failed"
 _CHUNK_PLAN_EVENT = "protocol_chunk_plan_created"
 _CHUNK_STARTED_EVENT = "protocol_chunk_analysis_started"
@@ -62,6 +65,7 @@ _CHUNK_FAILED_EVENT = "protocol_chunk_analysis_failed"
 _MERGE_STARTED_EVENT = "protocol_chunk_merge_started"
 _MERGE_CONFLICT_EVENT = "protocol_chunk_merge_conflict"
 _REVIEW_REQUIRED_EVENT = "protocol_chunk_review_required"
+_SINGLE_REVIEW_REQUIRED_EVENT = "protocol_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 _DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
@@ -82,6 +86,10 @@ class ProtocolCatalogNotFoundError(ProtocolCatalogError):
 
 class ProtocolCatalogUnavailableError(ProtocolCatalogError):
     code = "protocol_catalog_unavailable"
+
+
+class ProtocolAnalysisUnavailableError(ProtocolCatalogError):
+    code = "protocol_analysis_not_configured"
 
 
 class ProtocolApprovalError(ProtocolCatalogError):
@@ -134,6 +142,7 @@ class ProtocolCatalogEntry:
     step_count: int
     created_at: str
     available_for_execution: bool
+    lifecycle_state: str = "uploaded"
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -149,6 +158,7 @@ class ProtocolCatalogEntry:
             "created_at": self.created_at,
             "available_for_execution": self.available_for_execution,
             "development_only": self.approval_status == "development_only",
+            "lifecycle_state": self.lifecycle_state,
         }
 
 
@@ -188,6 +198,7 @@ class ProtocolAnalysisRunStatus:
     failure_code: str | None = None
     merge_status: str | None = None
     restart_behavior: str = "explicit_analysis_request_only"
+    lifecycle_state: str = "uploaded"
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -203,6 +214,7 @@ class ProtocolAnalysisRunStatus:
             "failure_code": self.failure_code,
             "merge_status": self.merge_status,
             "restart_behavior": self.restart_behavior,
+            "lifecycle_state": self.lifecycle_state,
         }
 
 
@@ -389,16 +401,57 @@ class ProtocolCatalog:
         events = self._latest_chunk_events(revision)
         if not events:
             entry = self._entry_for_revision(revision)
+            lifecycle_events = tuple(
+                event for event in self.store.list_events(revision.experiment_id)
+                if event.protocol_revision_number == revision.revision_number
+                and event.event_type in {
+                    _ANALYSIS_REQUESTED_EVENT,
+                    _ANALYSIS_STARTED_EVENT,
+                    _ANALYSIS_FAILED_EVENT,
+                    _ANALYSIS_READY_EVENT,
+                    _SINGLE_REVIEW_REQUIRED_EVENT,
+                }
+            )
+            latest_failure = next(
+                (
+                    event.payload.get("failure_code")
+                    for event in reversed(lifecycle_events)
+                    if event.event_type == _ANALYSIS_FAILED_EVENT
+                    and isinstance(event.payload, dict)
+                    and isinstance(event.payload.get("failure_code"), str)
+                ),
+                None,
+            )
+            analysis_run_id = next(
+                (
+                    event.payload.get("analysis_id")
+                    for event in reversed(lifecycle_events)
+                    if isinstance(event.payload, dict)
+                    and isinstance(event.payload.get("analysis_id"), str)
+                ),
+                None,
+            )
+            state = entry.analysis_status
+            if lifecycle_events:
+                state = {
+                    _ANALYSIS_REQUESTED_EVENT: "analysis_pending",
+                    _ANALYSIS_STARTED_EVENT: "analyzing",
+                    _ANALYSIS_FAILED_EVENT: "analysis_failed",
+                    _ANALYSIS_READY_EVENT: "analysis_ready",
+                    _SINGLE_REVIEW_REQUIRED_EVENT: "review_required",
+                }[lifecycle_events[-1].event_type]
             return ProtocolAnalysisRunStatus(
                 protocol_id=protocol_id,
                 candidate_revision_id=candidate_revision_id,
-                analysis_run_id=None,
-                state=entry.analysis_status,
+                analysis_run_id=analysis_run_id,
+                state=state,
                 total_chunks=0,
                 completed_chunks=0,
                 failed_chunks=0,
                 pending_chunks=0,
                 chunks=(),
+                failure_code=latest_failure,
+                lifecycle_state=entry.lifecycle_state,
             )
         plan_event = next(
             event for event in events if event.event_type == _CHUNK_PLAN_EVENT
@@ -410,6 +463,7 @@ class ProtocolCatalog:
         state = "chunk_planned"
         failure_code = None
         merge_status = None
+        cancelled = False
         for event in events:
             payload = event.payload
             if event.event_type == _CHUNK_STARTED_EVENT:
@@ -439,6 +493,14 @@ class ProtocolCatalog:
             elif event.event_type == _RUN_CANCELLED_EVENT:
                 state = "chunk_analysis_cancelled"
                 failure_code = "analysis_cancelled"
+                cancelled = True
+        # Cancellation is a terminal fence. A worker may already be between
+        # scheduling members of one batch when another connection appends the
+        # cancellation event, so a later benign "started" event must never make
+        # the run appear resumable or in progress again.
+        if cancelled:
+            state = "chunk_analysis_cancelled"
+            failure_code = "analysis_cancelled"
         for raw in raw_chunks if isinstance(raw_chunks, list) else []:
             if not isinstance(raw, dict) or not isinstance(raw.get("chunk_id"), str):
                 continue
@@ -476,6 +538,17 @@ class ProtocolCatalog:
                 if state in {"chunk_planned", "chunk_analysis_in_progress", "merge_in_progress"}
                 else "explicit_analysis_request_only"
             ),
+            lifecycle_state=(
+                "review_required"
+                if state == "review_required"
+                else "blocked"
+                if state in {
+                    "merge_conflict",
+                    "chunk_analysis_failed",
+                    "chunk_analysis_cancelled",
+                }
+                else "analyzing"
+            ),
         )
 
     def _entry_for_revision(
@@ -492,6 +565,7 @@ class ProtocolCatalog:
         )
         extraction = extract_protocol_pdf(source_path)
         analysis_status = "review_required" if analysis else _analysis_state(extraction)
+        lifecycle_state = "review_required" if analysis else "uploaded"
         if analysis is None:
             chunk_events = self._latest_chunk_events(revision)
             if chunk_events:
@@ -522,6 +596,24 @@ class ProtocolCatalog:
             )
             if failed is not None and not chunk_events:
                 analysis_status = "analysis_failed"
+            lifecycle_events = tuple(
+                event
+                for event in self.store.list_events(revision.experiment_id)
+                if event.protocol_revision_number == revision.revision_number
+                and event.event_type in {
+                    _ANALYSIS_REQUESTED_EVENT,
+                    _ANALYSIS_STARTED_EVENT,
+                    _ANALYSIS_FAILED_EVENT,
+                }
+            )
+            if lifecycle_events:
+                lifecycle_state = {
+                    _ANALYSIS_REQUESTED_EVENT: "analysis_pending",
+                    _ANALYSIS_STARTED_EVENT: "analyzing",
+                    _ANALYSIS_FAILED_EVENT: "blocked",
+                }[lifecycle_events[-1].event_type]
+            elif analysis_status == "ocr_required":
+                lifecycle_state = "blocked"
         approved = self._is_approved(revision, analysis)
         if approved:
             is_dev_only = any(
@@ -531,11 +623,18 @@ class ProtocolCatalog:
             )
             analysis_status = "active_development" if is_dev_only else "approved"
             approval_status = "development_only" if is_dev_only else "approved"
+            lifecycle_state = "executable_draft" if is_dev_only else "approved"
         else:
             approval_status = "unapproved"
         readiness = (
             analysis.readiness_status if analysis else "analysis_required"
         )
+        if analysis is not None and not approved:
+            lifecycle_state = (
+                "review_required"
+                if readiness == domain.ReadinessStatus.GUIDANCE_READY.value
+                else "blocked"
+            )
         available = bool(
             approved
             and analysis is not None
@@ -565,6 +664,7 @@ class ProtocolCatalog:
             ),
             created_at=revision.created_at,
             available_for_execution=available,
+            lifecycle_state=lifecycle_state,
         )
 
     def list_entries(self) -> tuple[ProtocolCatalogEntry, ...]:
@@ -697,9 +797,39 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
+        revision_events = tuple(
+            event
+            for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        )
+        latest_failure = next(
+            (
+                event.payload.get("failure_code")
+                for event in reversed(revision_events)
+                if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+                and isinstance(event.payload, dict)
+                and isinstance(event.payload.get("failure_code"), str)
+            ),
+            None,
+        )
         base: dict[str, object] = {
             **entry.public_dict(),
             "analysis_available": analysis is not None,
+            "lifecycle_state": entry.lifecycle_state,
+            "analysis_failure": (
+                {
+                    "code": latest_failure,
+                    "retryable": latest_failure
+                    not in {"ocr_required", "protocol_pdf_too_large"},
+                    "action": (
+                        "Configure XAI_API_KEY and PROTOCOL_ANALYSIS_MODEL, then retry."
+                        if latest_failure == "provider_configuration_missing"
+                        else "Review the failure code and explicitly retry analysis."
+                    ),
+                }
+                if latest_failure is not None
+                else None
+            ),
             "source": {
                 "filename": revision.original_filename,
                 "sha256": revision.pdf_checksum,
@@ -726,11 +856,37 @@ class ProtocolCatalog:
                 ],
             },
             "capability_policy_id": domain.P1_CAPABILITY_POLICY.profile_id,
+            "gates": {
+                "parsing": "passed",
+                "structural_readiness": "pending",
+                "hazard_review": "pending",
+                "human_approval": "pending",
+                "operational_authorization": "blocked",
+            },
+            "reviewer_actions": ["retry_analysis"],
         }
         if analysis is None:
             return base
 
         protocol = analysis.protocol
+        hazard_terms = (
+            "sulfuric acid", "sulphuric acid", "황산", "concentrated acid",
+            "hot surface", "hot equipment", "corrosive", "72%",
+        )
+        warning_texts = tuple(
+            statement.source_text
+            for section in protocol.sections
+            for step in section.steps
+            for statement in (
+                *step.warnings,
+                *(warning for action in step.sub_actions for warning in action.warnings),
+            )
+        )
+        hazard_review_required = any(
+            term in "\n".join(warning_texts).casefold() for term in hazard_terms
+        ) or (protocol.metadata.source_status or "").casefold() in {
+            "in development", "development", "draft"
+        }
         metadata = {
             field.name: _review_value(getattr(protocol.metadata, field.name))
             for field in fields(protocol.metadata)
@@ -753,6 +909,36 @@ class ProtocolCatalog:
                 "readiness": _review_value(analysis.readiness),
                 "capability_policy_id": analysis.capability_policy_id,
                 "analysis_payload_sha256": analysis.payload_sha256,
+                "hazard_review_required": hazard_review_required,
+                "gates": {
+                    "parsing": "passed",
+                    "structural_readiness": (
+                        "passed"
+                        if analysis.readiness_status
+                        == domain.ReadinessStatus.GUIDANCE_READY.value
+                        else "blocked"
+                    ),
+                    "hazard_review": (
+                        "review_required" if hazard_review_required else "passed"
+                    ),
+                    "human_approval": (
+                        "passed" if entry.approval_status == "approved" else "pending"
+                    ),
+                    "operational_authorization": (
+                        "passed"
+                        if entry.approval_status == "approved"
+                        and entry.available_for_execution
+                        else "simulation_only"
+                        if entry.approval_status == "development_only"
+                        and entry.available_for_execution
+                        else "blocked"
+                    ),
+                },
+                "reviewer_actions": (
+                    ["review_hazards", "approve", "reject"]
+                    if hazard_review_required
+                    else ["approve", "reject"]
+                ),
             }
         )
         return base
@@ -1125,6 +1311,13 @@ class ProtocolCatalog:
         """Run analysis only at this explicit caller-owned boundary."""
 
         revision = self._latest_protocol_revision(protocol_id)
+        self.store.append_event(
+            f"analysis-started-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _ANALYSIS_STARTED_EVENT,
+            {"status": "analyzing", "analysis_id": analysis_id},
+        )
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
         if pdf_object is None:
             raise ProtocolCatalogUnavailableError(
@@ -1168,13 +1361,71 @@ class ProtocolCatalog:
             assigned_protocol = replace(draft.protocol, protocol_id=protocol_id)
             domain.validate_protocol(assigned_protocol)
             draft = replace(draft, protocol=assigned_protocol)
-        self.store.append_analysis_revision(
+        analysis = self.store.append_analysis_revision(
             protocol_id,
             revision.revision_number,
             analysis_id,
             draft.protocol,
             draft.readiness,
             draft.capability_policy_id,
+        )
+        self.store.append_event(
+            f"analysis-ready-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _ANALYSIS_READY_EVENT,
+            {
+                "status": "analysis_ready",
+                "analysis_payload_sha256": analysis.payload_sha256,
+            },
+            analysis_revision_number=analysis.analysis_revision_number,
+        )
+        self.store.append_event(
+            f"review-required-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _SINGLE_REVIEW_REQUIRED_EVENT,
+            {
+                "status": "review_required",
+                "analysis_payload_sha256": analysis.payload_sha256,
+            },
+            analysis_revision_number=analysis.analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def request_analysis(self, protocol_id: str, analysis_id: str) -> ProtocolCatalogEntry:
+        """Persist an explicit analysis request without contacting a provider."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        if self._latest_analysis(revision) is not None:
+            return self.get_entry(protocol_id)
+        self.store.append_event(
+            f"analysis-requested-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _ANALYSIS_REQUESTED_EVENT,
+            {"status": "analysis_pending", "analysis_id": analysis_id},
+        )
+        return self.get_entry(protocol_id)
+
+    def fail_analysis_request(
+        self,
+        protocol_id: str,
+        analysis_id: str,
+        *,
+        failure_code: str,
+    ) -> ProtocolCatalogEntry:
+        """Persist only a bounded failure code for an analysis that did not start."""
+
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", failure_code):
+            failure_code = "analysis_failed"
+        revision = self._latest_protocol_revision(protocol_id)
+        self.store.append_event(
+            f"analysis-failed-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _ANALYSIS_FAILED_EVENT,
+            {"status": "failed", "failure_code": failure_code},
         )
         return self.get_entry(protocol_id)
 
@@ -1185,6 +1436,9 @@ class ProtocolCatalog:
         *,
         policy: ApprovalPolicy,
         presented_secret: str | None,
+        actor_principal_id: str | None = None,
+        actor_role: str | None = None,
+        comment: str | None = None,
     ) -> ProtocolCatalogEntry:
         if not policy.permits(presented_secret):
             raise ProtocolApprovalError("Protocol approval authorization failed.")
@@ -1207,6 +1461,17 @@ class ProtocolCatalog:
             raise ProtocolApprovalError(
                 "Protocol analysis is not ready for execution approval."
             )
+        payload = {"decision": "approved", "authority": "service_policy"}
+        if actor_principal_id is not None:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",actor_principal_id):
+                raise ProtocolApprovalError("Protocol approval actor is invalid.")
+            if actor_role not in {"reviewer","lab_admin","organization_admin"}:
+                raise ProtocolApprovalError("Protocol approval role is invalid.")
+            payload.update({
+                "actor_principal_id":actor_principal_id,
+                "actor_role":actor_role,
+                "comment":(comment or "Tenant RBAC approval.")[:4000],
+            })
         self.store.append_event(
             (
                 f"approved-{protocol_id[-16:]}-{protocol_revision_number}-"
@@ -1215,7 +1480,7 @@ class ProtocolCatalog:
             protocol_id,
             protocol_revision_number,
             _APPROVAL_EVENT,
-            {"decision": "approved", "authority": "service_policy"},
+            payload,
             analysis_revision_number=analysis_revision_number,
         )
         return self.get_entry(protocol_id)

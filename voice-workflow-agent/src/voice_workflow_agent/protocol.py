@@ -24,6 +24,12 @@ def parse_control(raw: str) -> dict[str, Any]:
         language=message.get("language")
         if not isinstance(language,str) or not language.strip():
             raise ProtocolError("session.start language must be a non-empty string")
+        has_input_language="input_language" in message
+        input_language=message.get("input_language",language)
+        if input_language not in {"auto","ko","en"}:
+            raise ProtocolError(
+                "session.start input_language must be auto, ko, or en"
+            )
         if "protocol_id" not in message:
             raise ProtocolError("session.start needs an explicit protocol_id")
         protocol_id=message["protocol_id"]
@@ -43,6 +49,7 @@ def parse_control(raw: str) -> dict[str, Any]:
             "language":language,
             "protocol_id":protocol_id,
             "configuration_id":configuration_id,
+            **({"input_language":input_language} if has_input_language else {}),
         }
     if message["type"]=="session.set_language":
         language=message.get("language")

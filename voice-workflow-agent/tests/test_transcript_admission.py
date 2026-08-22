@@ -6,7 +6,9 @@ from voice_workflow_agent.curated_protocol import (
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.language import (
+    InputLanguagePreference,
     Transcription,
+    classify_transcription_language,
     classify_input_event,
     _is_keyterm_echo,
 )
@@ -105,6 +107,33 @@ class TranscriptAdmissionGateTests(unittest.TestCase):
                 f"Authentic command was incorrectly rejected: {cmd} (reason: {decision.reason})"
             )
             self.assertFalse(_is_keyterm_echo(t, keyterms=self.keyterms))
+
+    def test_selected_korean_blocks_apparent_english_translation(self) -> None:
+        for transcript in (
+            "I get it, I get it.",
+            "Oh, hello. I am in the lab, so I will do it again later.",
+            "Current step complete.",
+            "Resume the protocol.",
+        ):
+            with self.subTest(transcript=transcript):
+                admission = classify_transcription_language(
+                    Transcription(transcript, "en"),
+                    InputLanguagePreference.KOREAN,
+                )
+                self.assertTrue(admission.clarification_required)
+                self.assertEqual(admission.mismatch_status, "contradiction")
+
+    def test_auto_and_scientific_terms_remain_usable(self) -> None:
+        auto = classify_transcription_language(
+            Transcription("Current step complete.", "en"),
+            InputLanguagePreference.AUTO,
+        )
+        self.assertFalse(auto.clarification_required)
+        scientific = classify_transcription_language(
+            Transcription("AMBIC", "en"),
+            InputLanguagePreference.KOREAN,
+        )
+        self.assertFalse(scientific.clarification_required)
 
 
 if __name__ == "__main__":

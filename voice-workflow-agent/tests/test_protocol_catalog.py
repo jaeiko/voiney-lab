@@ -19,6 +19,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent import server as server_module
 from voice_workflow_agent.curated_protocol import (
+    CuratedProtocolAction,
     CuratedProtocolFixtureError,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
@@ -218,6 +219,21 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertEqual(second.workflow_status, "ready")
         self.assertEqual(second.current_index, 0)
 
+    def test_arbitrary_pdf_visual_request_does_not_require_candidate_a_layout(self):
+        approved = self._approve(self.alpha, "alpha.pdf")
+        workflow = CuratedProtocolSession(
+            self.catalog.load_executable_fixture(approved.protocol_id)
+        )
+        workflow.activate_configured()
+        workflow.plan("프로토콜 시작해 줘", turn_id=1, language="ko")
+
+        plan = workflow.plan(
+            "이 단계 사진 보여줘", turn_id=2, language="ko"
+        )
+
+        self.assertEqual(plan.action, CuratedProtocolAction.VISUAL_REQUEST)
+        self.assertFalse(plan.state_changed)
+
     def test_duplicate_sha_is_idempotent_and_filename_cannot_choose_storage(self):
         first = self.catalog.register(
             self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
@@ -350,7 +366,9 @@ class ProtocolCatalogTests(unittest.TestCase):
             "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
             return_value=draft,
         ) as analyze:
-            response = asyncio.run(trigger_protocol_analysis(entry.protocol_id))
+            response = asyncio.run(
+                trigger_protocol_analysis(entry.protocol_id, background=False)
+            )
             status = get_protocol_analysis_status(entry.protocol_id)
 
         self.assertEqual(response["analysis_status"], "review_required")
@@ -359,6 +377,77 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertNotEqual(open_threads[0], caller_thread)
         self.assertEqual(open_threads[-1], caller_thread)
         analyze.assert_called_once()
+
+    def test_browser_analysis_request_is_persisted_then_completes_in_background(self):
+        entry = self.catalog.register(
+            self.alpha, source_filename="alpha-background.pdf", media_type="application/pdf"
+        ).entry
+        draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
+        settings = ProtocolPersistenceSettings(True, self.root / "catalog")
+
+        def open_catalog():
+            store = initialize_protocol_store(settings)
+            return ProtocolCatalog(store), store
+
+        async def scenario():
+            accepted = await trigger_protocol_analysis(entry.protocol_id)
+            self.assertTrue(accepted["analysis_request_accepted"])
+            self.assertEqual(accepted["analysis_run"]["state"], "analysis_pending")
+            task = server_module._PROTOCOL_ANALYSIS_TASKS[entry.protocol_id]
+            await task
+            await asyncio.sleep(0)
+
+        with patch(
+            "voice_workflow_agent.server._open_protocol_catalog",
+            side_effect=open_catalog,
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=_dedicated_to_thread,
+        ), patch(
+            "voice_workflow_agent.server._protocol_analysis_model",
+            return_value=Mock(),
+        ), patch(
+            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            return_value=draft,
+        ):
+            asyncio.run(scenario())
+            status = get_protocol_analysis_status(entry.protocol_id)
+
+        self.assertEqual(status["state"], "review_required")
+        self.assertEqual(status["lifecycle_state"], "review_required")
+
+    def test_missing_provider_configuration_is_actionable_persisted_failure(self):
+        entry = self.catalog.register(
+            self.alpha, source_filename="alpha-no-provider.pdf", media_type="application/pdf"
+        ).entry
+        settings = ProtocolPersistenceSettings(True, self.root / "catalog")
+
+        def open_catalog():
+            store = initialize_protocol_store(settings)
+            return ProtocolCatalog(store), store
+
+        async def scenario():
+            accepted = await trigger_protocol_analysis(entry.protocol_id)
+            self.assertEqual(accepted["analysis_run"]["state"], "analysis_pending")
+            await server_module._PROTOCOL_ANALYSIS_TASKS[entry.protocol_id]
+            await asyncio.sleep(0)
+
+        with patch(
+            "voice_workflow_agent.server._open_protocol_catalog",
+            side_effect=open_catalog,
+        ), patch(
+            "voice_workflow_agent.server.asyncio.to_thread",
+            side_effect=_dedicated_to_thread,
+        ), patch(
+            "voice_workflow_agent.server._protocol_analysis_model",
+            side_effect=RuntimeError("XAI_API_KEY is required"),
+        ):
+            asyncio.run(scenario())
+            status = get_protocol_analysis_status(entry.protocol_id)
+
+        self.assertEqual(status["state"], "analysis_failed")
+        self.assertEqual(status["lifecycle_state"], "blocked")
+        self.assertEqual(status["failure_code"], "provider_configuration_missing")
 
     def test_analysis_failure_is_persisted_safely_and_remains_unavailable(self):
         entry = self.catalog.register(

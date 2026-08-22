@@ -42,7 +42,7 @@ from voice_workflow_agent.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
-from voice_workflow_agent.language import Transcription
+from voice_workflow_agent.language import InputLanguagePreference, Transcription
 from voice_workflow_agent.multi_brain import MultiBrainSettings
 from voice_workflow_agent.server import (
     ListenerSession,
@@ -2574,6 +2574,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected, text=transcription.text):
                 session = self.make_session(index=2)
+                if expected == "audio_recovery":
+                    session.accepted_input_language = InputLanguagePreference.AUTO
                 socket = Socket()
 
                 async def immediate(function, *args, **kwargs):
