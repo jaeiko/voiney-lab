@@ -108,13 +108,56 @@ keeping those records separate from approved instructions.
   existing protocol-review permission; reviewers still cannot alter SOP
   instructions through this path.
 
+## Phase 3 — Lab Adaptation System
+
+Status: implemented; final full-suite result is recorded in the phase validation
+ledger below.
+
+### Laboratory pain point
+
+Published protocols commonly name equipment, reagent identities, and practical
+details that differ from a lab's qualified local setup. Informal edits in copied
+documents destroy source lineage and make it unclear whether a reviewer approved
+the change. A typed adaptation draft preserves the original while making every
+local difference reviewable.
+
+### Implementation
+
+- Added immutable `protocol_adaptation_revisions` linking an exact original
+  lineage revision to an exact adapted child revision and typed change set.
+- Added four bounded change types: equipment difference, reagent substitution,
+  lab note, and troubleshooting tip. Every item is step-linked and requires a
+  summary and rationale; equipment/reagent changes also require distinct
+  original and adapted values.
+- Adaptation creation copies the immutable base content into a new lineage
+  revision, adds explicit review-required adaptation metadata, and inserts the
+  normal reviewer inbox item in the same database transaction.
+- Reused the existing source diff, reviewer decision, approval history,
+  revocation, and executable-state machinery. No second approval authority was
+  introduced.
+- Added tenant-scoped create/list/read APIs. Reviewers approve the adapted
+  revision through the existing reviewer decision endpoint.
+
+### Safety and migration evidence
+
+- The original revision is never updated or deleted. Both lineage and
+  adaptation tables are protected by append-only/immutable triggers.
+- Rejected/revoked revisions and stale parents cannot be adapted. An adaptation
+  cannot be nested on another adaptation; authors must return to the original
+  source lineage.
+- A development-status source remains impossible to approve directly. Its
+  explicit adaptation child may become executable only after reviewer/admin
+  approval.
+- Schema 3 → 4 is transactional. A schema-3 fixture preserves the original
+  lineage content while adding the immutable adaptation relationship.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
 |---|---|---|---|---|---|
 | 1. Experiment Session | 187 tests + 249 subtests passed; production WebSocket recovery passed | 741 passed + 683 subtests in 132.23s | passed | v1→v2 fixture passed | architecture map, report, migration notes, README |
 | 2. Observation/Event Timeline | 188 tests + 250 subtests passed; voice/manual/evidence/API/UI boundaries passed | 748 passed + 684 subtests in 131.44s | passed | v1→v3 and v2→v3 fixtures passed | report, migration notes, README, researcher timeline |
-| 3. Lab Adaptation | pending | pending | pending | pending | pending |
+| 3. Lab Adaptation | 48 focused tests passed; typed changes, approval, immutability, IDOR and stale-parent cases passed | 752 passed + 684 subtests in 134.89s | passed | v1→v4 and v3→v4 fixtures passed | report, migration notes, README |
 | 4. Role UX | pending | pending | pending | pending | pending |
 | 5. Source Connectors | pending | pending | pending | pending | pending |
 | 6. ELN Integration | pending | pending | pending | pending | pending |

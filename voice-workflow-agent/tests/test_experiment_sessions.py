@@ -46,7 +46,7 @@ def test_schema_v1_migrates_forward_without_losing_workspace_identity(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 3
+        ).fetchone()[0] == 4
         assert store._connection.execute(
             "SELECT name FROM organizations WHERE organization_id='tenant-a'"
         ).fetchone()[0] == "Existing tenant"
@@ -98,7 +98,7 @@ def test_schema_v2_migrates_observation_tables_and_preserves_sessions(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 3
+        ).fetchone()[0] == 4
         assert store._connection.execute(
             "SELECT protocol_revision_id FROM experiment_sessions WHERE session_id='experiment-v2'"
         ).fetchone()[0] == "revision-a"

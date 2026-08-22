@@ -525,6 +525,82 @@ def test_in_development_revision_fails_closed_and_operational_requires_oidc(monk
     assert unauthenticated.json() == {"detail": "identity_configuration_invalid"}
 
 
+def test_lab_adaptation_api_requires_review_before_execution(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    revision = _create_revision(tmp_path, source_status="In development")
+    created = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/protocols/{revision.revision_id}/adaptations",
+            profile="researcher-a",
+            json_body={
+                "change_summary": "Use qualified local centrifuge",
+                "changes": [
+                    {
+                        "kind": "equipment_difference",
+                        "protocol_step_id": "step-1",
+                        "summary": "Local equipment mapping",
+                        "rationale": "Original model is not installed locally.",
+                        "original_value": "centrifuge A",
+                        "adapted_value": "qualified centrifuge B",
+                    },
+                    {
+                        "kind": "lab_note",
+                        "protocol_step_id": "step-1",
+                        "summary": "Local setup note",
+                        "rationale": "Make the approved local setup visible.",
+                        "original_value": None,
+                        "adapted_value": "Verify rotor qualification before starting.",
+                    },
+                ],
+            },
+        )
+    )
+    assert created.status_code == 201, created.text
+    adaptation = created.json()
+    assert adaptation["review_state"] == "review_required"
+    assert adaptation["executable"] is False
+    assert adaptation["original_protocol_unchanged"] is True
+
+    hidden = asyncio.run(
+        _request(
+            "GET",
+            (
+                "/api/workspace/protocol-adaptations/"
+                + adaptation["adapted_revision_id"]
+            ),
+            profile="reviewer-b",
+        )
+    )
+    assert hidden.status_code == 404
+
+    approved = asyncio.run(
+        _request(
+            "POST",
+            (
+                "/api/workspace/reviewer/revisions/"
+                f"{adaptation['adapted_revision_id']}/decision"
+            ),
+            profile="reviewer-a",
+            json_body={
+                "action": "approved",
+                "comment": "Equipment qualification and hazards reviewed.",
+                "idempotency_key": "adaptation-approval-1",
+            },
+        )
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["state"][
+        "available_for_new_operational_sessions"
+    ] is True
+
+    listed = asyncio.run(
+        _request("GET", "/api/workspace/protocol-adaptations", profile="researcher-a")
+    )
+    assert listed.status_code == 200
+    assert listed.json()["adaptations"][0]["review_state"] == "approved"
+
+
 def test_admin_membership_retention_and_cross_tenant_report_idor(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     membership = asyncio.run(

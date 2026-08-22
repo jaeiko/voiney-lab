@@ -1476,6 +1476,60 @@ async def upload_workspace_experiment_evidence(
             temporary.unlink(missing_ok=True)
 
 
+@app.get("/api/workspace/protocol-adaptations")
+def get_workspace_protocol_adaptations()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {
+                "adaptations":list(store.list_lab_adaptations(principal))
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/protocol-adaptations/{adapted_revision_id}")
+def get_workspace_protocol_adaptation(
+    adapted_revision_id:str,
+)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.lab_adaptation(principal,adapted_revision_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post(
+    "/api/workspace/protocols/{base_revision_id}/adaptations",
+    status_code=201,
+)
+async def create_workspace_protocol_adaptation(
+    base_revision_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    raw_changes=payload.get("changes")
+    if not isinstance(raw_changes,list):
+        raise HTTPException(status_code=400,detail="workspace_error")
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.create_lab_adaptation(
+                principal,
+                base_revision_id=base_revision_id,
+                changes=tuple(raw_changes),
+                change_summary=str(payload.get("change_summary", "")),
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 @app.get("/api/workspace/protocol-library")
 def get_workspace_protocol_library(search:str="")->dict[str,object]:
     try:

@@ -149,6 +149,30 @@ it is not displayed forever as an unexplained `analysis_required` state.
 Unsupported conditions, ambiguities, critical missing values, conflicts, scanned
 documents that require OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
+## Lab adaptations
+
+A local SOP difference is represented as a new immutable child revision, never
+as an edit to an imported original. The adaptation record pins the exact base
+and adapted revision IDs and accepts only step-linked equipment differences,
+reagent substitutions, lab notes, and troubleshooting tips. Equipment/reagent
+changes require explicit before/after values and a rationale.
+
+Every adaptation begins `review_required`, appears in the existing source-review
+inbox, uses the existing diff view, and becomes executable only after the
+existing reviewer/admin approval event. A development-status source cannot be
+approved directly; an explicit lab-adaptation child must be reviewed. Rejected,
+revoked, stale, or already adapted revisions fail closed.
+
+The tenant-scoped API is:
+
+- `POST /api/workspace/protocols/{base_revision_id}/adaptations`;
+- `GET /api/workspace/protocol-adaptations`; and
+- `GET /api/workspace/protocol-adaptations/{adapted_revision_id}`.
+
+Approval and revocation continue through
+`POST /api/workspace/reviewer/revisions/{revision_id}/decision`; there is no
+parallel approval mechanism.
+
 ## Korean STT reliability
 
 The input preference is `AUTO`, `KOREAN`, or `ENGLISH`; the browser defaults to
@@ -359,6 +383,8 @@ The browser consumes these main groups:
 - `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
   experiment dashboard, recovery version, completed steps, observations,
   opaque evidence metadata, reviewer actions, and lifecycle timeline;
+- `/api/workspace/protocol-adaptations`: immutable, typed local SOP drafts
+  linked to an exact original and the existing reviewer approval path;
 - `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
   knowledge promotion, and dry-lab review;
 - `/api/workspace/admin/*`: memberships, connector configuration, retention,

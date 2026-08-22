@@ -51,6 +51,25 @@ at 32 MiB, named by content hash, and checked before reuse. Public API and
 timeline responses omit the internal storage reference. No OCR, image model, or
 document interpretation runs as part of this phase.
 
+## Commercial workspace schema 3 → 4
+
+Schema 4 adds `protocol_adaptation_revisions`, an immutable relationship between
+an original lineage revision and a review-required adapted child revision. Each
+record stores the tenant/family, exact base and adapted revision IDs, author,
+typed change set, and timestamp. Update/delete triggers protect the adaptation
+relationship and typed changes.
+
+The adapted protocol content is inserted through the existing immutable
+`protocol_lineage_revisions` and review inbox transaction. Allowed change types
+are local equipment differences, reagent substitutions, lab notes, and
+troubleshooting tips. Equipment and reagent changes require distinct before and
+after values plus a rationale. The original revision is never updated.
+
+Approval remains an append-only `protocol_approval_events` action performed by a
+reviewer/admin. A development-status source still cannot be approved directly;
+only its explicit lab-adaptation child can pass through review to become
+available for a new operational session.
+
 ### Operator procedure
 
 1. Stop all application processes using the workspace SQLite file.
@@ -58,7 +77,7 @@ document interpretation runs as part of this phase.
    present.
 3. Start one application instance. Initialization performs the migration before
    serving workspace traffic.
-4. Confirm `schema_metadata.schema_version = 3` and exercise tenant login,
+4. Confirm `schema_metadata.schema_version = 4` and exercise tenant login,
    protocol library, connector listing, experiment dashboard reads, a manual
    observation, and a small evidence upload.
 5. Retain the backup until the pilot acceptance suite has completed.

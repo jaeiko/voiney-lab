@@ -26,7 +26,7 @@ from voice_workflow_agent.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 3
+WORKSPACE_SCHEMA_VERSION = 4
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -86,6 +86,12 @@ _OBSERVATION_CATEGORIES = {
     "other",
 }
 _EVIDENCE_KINDS = {"image", "document"}
+_ADAPTATION_KINDS = {
+    "equipment_difference",
+    "reagent_substitution",
+    "lab_note",
+    "troubleshooting_tip",
+}
 
 
 class WorkspaceError(RuntimeError):
@@ -174,6 +180,18 @@ class ProtocolLineageRevision:
     language: str
     translation_status: str
     content: dict[str, object]
+
+
+@dataclass(frozen=True)
+class LabAdaptationRevision:
+    adaptation_id: str
+    organization_id: str
+    family_id: str
+    base_revision_id: str
+    adapted_revision_id: str
+    author_principal_id: str
+    changes: tuple[dict[str, object], ...]
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -633,6 +651,35 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=3)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(3);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
+MIGRATION_3_TO_4 = """
+CREATE TABLE protocol_adaptation_revisions(
+ adaptation_id TEXT PRIMARY KEY,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ family_id TEXT NOT NULL REFERENCES protocol_families(family_id),
+ base_revision_id TEXT NOT NULL REFERENCES protocol_lineage_revisions(revision_id),
+ adapted_revision_id TEXT NOT NULL UNIQUE REFERENCES protocol_lineage_revisions(revision_id),
+ author_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ changes_json TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+CREATE INDEX protocol_adaptations_tenant_family_created
+ ON protocol_adaptation_revisions(organization_id,family_id,created_at);
+CREATE TRIGGER protocol_adaptations_no_update
+ BEFORE UPDATE ON protocol_adaptation_revisions
+ BEGIN SELECT RAISE(ABORT,'immutable'); END;
+CREATE TRIGGER protocol_adaptations_no_delete
+ BEFORE DELETE ON protocol_adaptation_revisions
+ BEGIN SELECT RAISE(ABORT,'immutable'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=4)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(4);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -1954,6 +2001,7 @@ class WorkspaceStore:
         parent_revision_id: str | None = None,
         language: str = "en",
         translation_status: str = "original",
+        _adaptation: Mapping[str, object] | None = None,
     ) -> ProtocolLineageRevision:
         require_permission(principal, Permission.PROTOCOL_IMPORT)
         family = self._family_row(principal, family_id)
@@ -1988,6 +2036,22 @@ class WorkspaceStore:
         content_hash = hashlib.sha256(content_json.encode("utf-8")).hexdigest()
         revision_id = f"revision-{hashlib.sha256(f'{family_id}:{revision_number}:{content_hash}'.encode()).hexdigest()[:32]}"
         now = _now()
+        adaptation_id = None
+        adaptation_changes_json = None
+        if _adaptation is not None:
+            base_revision_id = _adaptation.get("base_revision_id")
+            changes = _adaptation.get("changes")
+            if (
+                not isinstance(base_revision_id, str)
+                or base_revision_id != parent_revision_id
+                or not isinstance(changes, list)
+                or not changes
+            ):
+                raise WorkspaceError("Lab adaptation metadata is invalid.")
+            adaptation_changes_json = _canonical_json(changes)
+            adaptation_id = "adaptation-" + hashlib.sha256(
+                f"{family_id}:{base_revision_id}:{revision_id}".encode("utf-8")
+            ).hexdigest()[:32]
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._connection.execute(
@@ -2009,6 +2073,24 @@ class WorkspaceStore:
                     content_json,
                 ),
             )
+            if adaptation_id is not None:
+                assert adaptation_changes_json is not None
+                self._connection.execute(
+                    """INSERT INTO protocol_adaptation_revisions(
+                    adaptation_id,organization_id,family_id,base_revision_id,
+                    adapted_revision_id,author_principal_id,changes_json,created_at
+                    ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        adaptation_id,
+                        principal.organization_id,
+                        family_id,
+                        parent_revision_id,
+                        revision_id,
+                        principal.principal_id,
+                        adaptation_changes_json,
+                        now,
+                    ),
+                )
             change_kind = "new" if revision_number == 1 else "changed"
             item_id = f"inbox-{hashlib.sha256(revision_id.encode()).hexdigest()[:32]}"
             self._connection.execute(
@@ -2086,6 +2168,159 @@ class WorkspaceStore:
             "lines": list(lines[:500]),
             "truncated": truncated,
         }
+
+    @staticmethod
+    def _normalize_adaptation_changes(
+        changes: tuple[Mapping[str, object], ...],
+    ) -> tuple[dict[str, object], ...]:
+        if not isinstance(changes, tuple) or not 1 <= len(changes) <= 50:
+            raise WorkspaceError("Lab adaptation changes are invalid.")
+        allowed_fields = {
+            "kind",
+            "protocol_step_id",
+            "summary",
+            "rationale",
+            "original_value",
+            "adapted_value",
+        }
+        normalized: list[dict[str, object]] = []
+        for raw in changes:
+            if not isinstance(raw, Mapping) or set(raw) - allowed_fields:
+                raise WorkspaceError("Lab adaptation change is invalid.")
+            kind = raw.get("kind")
+            if kind not in _ADAPTATION_KINDS:
+                raise WorkspaceError("Lab adaptation kind is invalid.")
+            step_id = raw.get("protocol_step_id")
+            if not isinstance(step_id, str):
+                raise WorkspaceError("Lab adaptation protocol step is required.")
+            step_id = _identifier(step_id, "Adaptation protocol step")
+            summary = _text(raw.get("summary"), "Adaptation summary", maximum=1000)
+            rationale = _text(
+                raw.get("rationale"), "Adaptation rationale", maximum=2000
+            )
+            original = raw.get("original_value")
+            adapted = raw.get("adapted_value")
+            if adapted is None:
+                raise WorkspaceError("Adaptation value is required.")
+            adapted = _text(adapted, "Adapted value", maximum=4000)
+            if original is not None:
+                original = _text(original, "Original value", maximum=4000)
+            if kind in {"equipment_difference", "reagent_substitution"}:
+                if original is None or original.casefold() == adapted.casefold():
+                    raise WorkspaceError(
+                        "Equipment and reagent adaptations require a real before/after change."
+                    )
+            normalized.append(
+                {
+                    "kind":kind,
+                    "protocol_step_id":step_id,
+                    "summary":summary,
+                    "rationale":rationale,
+                    "original_value":original,
+                    "adapted_value":adapted,
+                }
+            )
+        return tuple(normalized)
+
+    def create_lab_adaptation(
+        self,
+        principal: Principal,
+        *,
+        base_revision_id: str,
+        changes: tuple[Mapping[str, object], ...],
+        change_summary: str,
+    ) -> dict[str, object]:
+        """Create a review-required immutable child without editing its source."""
+
+        require_permission(principal, Permission.PROTOCOL_IMPORT)
+        base = self.get_revision(principal, base_revision_id)
+        base_state = self.revision_operational_state(
+            principal,base_revision_id
+        )["state"]
+        if base_state in {"rejected", "revoked"}:
+            raise WorkspaceConflictError(
+                "A rejected or revoked revision cannot be adapted."
+            )
+        nested = self._connection.execute(
+            """SELECT 1 FROM protocol_adaptation_revisions
+            WHERE adapted_revision_id=?""",
+            (base_revision_id,),
+        ).fetchone()
+        if nested is not None:
+            raise WorkspaceConflictError(
+                "Create a new adaptation from the original protocol revision."
+            )
+        normalized = self._normalize_adaptation_changes(changes)
+        content = json.loads(_canonical_json(base.content))
+        if "lab_adaptation" in content:
+            raise WorkspaceConflictError(
+                "The base revision already contains adaptation metadata."
+            )
+        content["lab_adaptation"] = {
+            "base_revision_id":base_revision_id,
+            "review_state":"review_required",
+            "changes":list(normalized),
+            "approved_protocol_knowledge_unchanged":True,
+        }
+        revision = self.add_protocol_revision(
+            principal,
+            family_id=base.family_id,
+            source_id=base.source_id,
+            content=content,
+            change_summary=change_summary,
+            parent_revision_id=base_revision_id,
+            language=base.language,
+            translation_status=base.translation_status,
+            _adaptation={
+                "base_revision_id":base_revision_id,
+                "changes":list(normalized),
+            },
+        )
+        return self.lab_adaptation(principal,revision.revision_id)
+
+    def lab_adaptation(
+        self, principal: Principal, adapted_revision_id: str
+    ) -> dict[str, object]:
+        revision = self.get_revision(principal,adapted_revision_id)
+        row = self._connection.execute(
+            """SELECT * FROM protocol_adaptation_revisions
+            WHERE adapted_revision_id=? AND organization_id=?""",
+            (adapted_revision_id,principal.organization_id),
+        ).fetchone()
+        if row is None:
+            raise WorkspaceNotFoundError("Lab adaptation is not available.")
+        operational = self.revision_operational_state(
+            principal,adapted_revision_id
+        )
+        return {
+            "adaptation_id":row["adaptation_id"],
+            "organization_id":row["organization_id"],
+            "family_id":row["family_id"],
+            "base_revision_id":row["base_revision_id"],
+            "adapted_revision_id":row["adapted_revision_id"],
+            "author_principal_id":row["author_principal_id"],
+            "changes":json.loads(row["changes_json"]),
+            "created_at":row["created_at"],
+            "review_state":operational["state"],
+            "executable":operational["available_for_new_operational_sessions"],
+            "immutable":True,
+            "original_protocol_unchanged":True,
+            "revision_number":revision.revision_number,
+        }
+
+    def list_lab_adaptations(
+        self, principal: Principal
+    ) -> tuple[dict[str, object], ...]:
+        require_permission(principal, Permission.PROTOCOL_READ)
+        rows = self._connection.execute(
+            """SELECT adapted_revision_id FROM protocol_adaptation_revisions
+            WHERE organization_id=? ORDER BY created_at DESC,adaptation_id DESC""",
+            (principal.organization_id,),
+        ).fetchall()
+        return tuple(
+            self.lab_adaptation(principal,row["adapted_revision_id"])
+            for row in rows
+        )
 
     def latest_revision_for_source(
         self,
@@ -2309,11 +2544,16 @@ class WorkspaceStore:
         ).fetchone()
         metadata = json.loads(source[0]) if source is not None else {}
         source_status = str(metadata.get("source_status", "")).casefold()
+        adaptation = self._connection.execute(
+            """SELECT 1 FROM protocol_adaptation_revisions
+            WHERE adapted_revision_id=? AND organization_id=?""",
+            (revision_id,principal.organization_id),
+        ).fetchone()
         if action == "approved" and source_status in {
             "in development",
             "development",
             "draft",
-        }:
+        } and adaptation is None:
             raise WorkspaceConflictError(
                 "An in-development source must be adapted into a reviewed lab revision before operational approval."
             )
@@ -3304,6 +3544,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 3
+    if version == 3:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_3_TO_4 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 4
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")
