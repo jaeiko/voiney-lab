@@ -533,7 +533,10 @@ class XaiAuthoritativeWebSearch:
                 "content": system_prompt,
             }, {"role": "user", "content": query[:1200]}],
             "tools": [tool_spec],
-            "include": ["web_search_call.action.sources"],
+            # xAI Responses returns all citation URLs by default. Inline
+            # markers are disabled because the browser renders validated
+            # source cards separately from answer prose.
+            "include": ["no_inline_citations"],
             "stream": True,
             "max_output_tokens": self.settings.max_output_tokens,
             "timeout": httpx.Timeout(

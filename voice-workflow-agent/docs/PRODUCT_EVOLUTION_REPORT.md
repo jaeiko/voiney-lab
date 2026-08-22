@@ -1,5 +1,7 @@
 # Product Evolution Report: Voice Workflow Agent Commercial AI Platform
 
+> Historical product record. Do not use it as a current readiness claim; see `CODEX_FINAL_COMMERCIALIZATION_REPORT.md`.
+
 **Document**: `docs/PRODUCT_EVOLUTION_REPORT.md`  
 **Author**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  

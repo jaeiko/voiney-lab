@@ -16,7 +16,7 @@ from voice_workflow_agent.experiment_reports import (
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
@@ -51,6 +51,16 @@ class ServerTests(unittest.TestCase):
             "documents":[operational_document(usage_scope=usage_scope)],
         },path)
         return path
+
+    def test_cascade_voice_has_one_canonical_default_and_override(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_tts_voice(), "leo")
+        with patch.dict(
+            "os.environ",
+            {"TTS_VOICE": "custom-professor", "XAI_TTS_VOICE": "stale-alias"},
+            clear=True,
+        ):
+            self.assertEqual(_tts_voice(), "custom-professor")
 
     def emergency_session(self):
         session=ListenerSession(tool_context=ToolContext(
@@ -114,7 +124,7 @@ class ServerTests(unittest.TestCase):
                 session.active=True;session.active_turn_id=1
                 session.detector.state=TurnState.PROCESSING
                 async def fake_brain(client,history,transcript,on_sentence,on_first_token,
-                                     on_tool_event,tool_context):
+                                     on_tool_event,tool_context,arbitration=None):
                     await on_tool_event("tool.result",{"tool":"start_procedure",**fields})
                     await on_sentence(SentenceSegment(0,"가상 응답입니다."))
                     return BrainResult([],"가상 응답입니다.",0,["start_procedure"])
@@ -381,7 +391,7 @@ class ServerTests(unittest.TestCase):
         socket=Socket()
 
         async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
-                             tool_context):
+                             tool_context,arbitration=None):
             self.assertEqual(tool_context.language,"ko")
             await sentence(SentenceSegment(0,"수정 내용을 다시 확인하겠습니다."))
             return BrainResult(
@@ -414,7 +424,7 @@ class ServerTests(unittest.TestCase):
             async def send_bytes(self,value): self.binary.append(value)
         socket=Socket()
         async def fake_brain(client,history,transcript,sentence,mark_token,tool_event,
-                             tool_context):
+                             tool_context,arbitration=None):
             mark_token()
             await sentence(SentenceSegment(0,"Approved answer."))
             return BrainResult(
@@ -444,7 +454,7 @@ class ServerTests(unittest.TestCase):
             async def send_bytes(self,value): self.binary.append(value)
         socket=Socket()
         async def fake_brain(client,history,transcript,sentence,mark_token,
-                             tool_event,tool_context):
+                             tool_event,tool_context,arbitration=None):
             await tool_event("tool.call",{
                 "tool":"search_approved_safety_manual","round":0})
             await tool_event("tool.result",{
@@ -1733,6 +1743,50 @@ class ServerTests(unittest.TestCase):
                             response.headers["content-disposition"],
                             f'attachment; filename="{report["report_id"]}.{format_name}"',
                         )
+
+    def test_admin_metrics_fail_closed_and_return_only_safe_aggregates(self):
+        from fastapi import HTTPException
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(HTTPException) as missing:
+                get_admin_metrics("anything")
+        self.assertEqual(missing.exception.status_code, 503)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reports.sqlite"
+            store = ExperimentReportStore(path)
+            report = store.open_report(
+                session_id="session-admin-test", protocol_id="candidate-a",
+                protocol_title="Private protocol title",
+                protocol_revision="revision-1", protocol_sha256="8" * 64,
+                readiness_status="analysis_required", development_only=True,
+            )
+            store.append_event(
+                report["report_id"], event_key="blocked-1",
+                event_type="blocked", step_id="private-step", step_label="2",
+                user_wording="private operator wording",
+            )
+            environment = {
+                "VOICE_WORKFLOW_AGENT_ADMIN_TOKEN": "test-admin-token",
+                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
+                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(path),
+                "TTS_VOICE": "leo",
+            }
+            with patch.dict("os.environ", environment, clear=True), patch(
+                "voice_workflow_agent.server._public_protocol_catalog_entries",
+                return_value=([], SimpleNamespace(), False),
+            ):
+                with self.assertRaises(HTTPException) as denied:
+                    get_admin_metrics("wrong-token")
+                payload = get_admin_metrics("test-admin-token")
+            self.assertEqual(denied.exception.status_code, 403)
+            self.assertEqual(payload["voice"]["pipeline"], "cascade")
+            self.assertEqual(payload["voice"]["voice_id"], "leo")
+            self.assertEqual(
+                payload["experiment_reporting"]["quality"]["blockers"], 1)
+            encoded = json.dumps(payload)
+            self.assertNotIn(report["report_id"], encoded)
+            self.assertNotIn("session-admin-test", encoded)
+            self.assertNotIn("private", encoded.casefold())
 
     def test_curated_protocol_action_operation_labels_are_exhaustive(self):
         from voice_workflow_agent.curated_protocol import CuratedProtocolAction

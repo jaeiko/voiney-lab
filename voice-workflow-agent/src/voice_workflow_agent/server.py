@@ -1,11 +1,12 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, hashlib, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
+import asyncio, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, tempfile, textwrap, time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -87,6 +88,7 @@ from voice_workflow_agent.web_visuals import (
     PubChemChemistryAdapter,
     WEB_VISUAL_REGISTRY,
     WebVisualSettings,
+    WikimediaVisualAdapter,
     XaiAuthoritativeImageSearch,
 )
 from voice_workflow_agent.notifications import (
@@ -116,6 +118,8 @@ from voice_workflow_agent.language import (
     normalize_provider_language,
     resolve_turn_language, transcription_quality_issue,
 )
+from voice_workflow_agent.intent_arbitration import arbitrate_request
+from voice_workflow_agent.runtime_metrics import RUNTIME_METRICS
 from voice_workflow_agent.moss_retrieval import (
     start_moss_runtime_from_environment,
     stop_moss_runtime,
@@ -154,6 +158,7 @@ from voice_workflow_agent.procedures import (
     unattached_procedure_state,
 )
 from voice_workflow_agent.protocol import ProtocolError, audio_segment_start, event, parse_control
+from voice_workflow_agent.runtime_routing import route_curated_runtime_turn
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 
 PROJECT_ROOT=Path(__file__).resolve().parents[2]
@@ -580,10 +585,9 @@ def validate_tts_pcm(response:requests.Response)->bytes:
 
 
 def _tts_voice() -> str:
-    return (
-        os.environ.get("TTS_VOICE", os.environ.get("XAI_TTS_VOICE", "leo")).strip()
-        or "leo"
-    )
+    """Resolve the one active Cascade TTS voice configuration path."""
+
+    return os.environ.get("TTS_VOICE", "leo").strip() or "leo"
 
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
@@ -843,6 +847,16 @@ def _auto_activate_ready_uploads_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _development_activation_allowed() -> bool:
+    """Fail closed outside an explicitly non-operational runtime scope."""
+
+    scope = (
+        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
+        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+    ).strip().casefold()
+    return scope in {"demo", "reference_only", "test_only"}
+
+
 @app.post("/api/protocols/{protocol_id}/analysis")
 async def trigger_protocol_analysis(protocol_id:str)->dict[str,object]:
     """The only HTTP boundary that may explicitly request PDF analysis."""
@@ -892,6 +906,29 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
+@app.get("/api/protocols/{protocol_id}/review")
+def get_protocol_review(protocol_id: str) -> dict[str, object]:
+    """Expose the source-linked analysis draft without approving or activating it."""
+
+    try:
+        catalog, store = _open_protocol_catalog()
+        try:
+            review = catalog.review(protocol_id)
+            readiness = review.get("readiness")
+            review["development_activation_allowed"] = bool(
+                _development_activation_allowed()
+                and review.get("analysis_available") is True
+                and isinstance(readiness, dict)
+                and readiness.get("status") == "guidance_ready"
+                and review.get("available_for_execution") is not True
+            )
+            return review
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
 def approve_protocol_revision(
     protocol_id:str,
@@ -920,6 +957,11 @@ def approve_protocol_revision(
 @app.post("/api/protocols/{protocol_id}/activate-development")
 def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
     """Explicit developer action promoting an analyzed protocol draft to active development execution."""
+    if not _development_activation_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail="development_activation_not_allowed",
+        )
     try:
         catalog, store = _open_protocol_catalog()
         try:
@@ -1057,6 +1099,91 @@ def get_web_visual_asset(asset_id:str):
             "X-Protocol-Visual-Kind":"web_reference_image",
         },
     )
+
+
+def _require_admin_access(presented_token:str|None)->None:
+    """Fail closed without retaining or logging the presented credential."""
+
+    configured=os.environ.get("VOICE_WORKFLOW_AGENT_ADMIN_TOKEN","").strip()
+    if not configured:
+        raise HTTPException(status_code=503,detail="admin_access_not_configured")
+    if not presented_token:
+        raise HTTPException(status_code=403,detail="admin_access_denied")
+    configured_digest=hashlib.sha256(configured.encode()).digest()
+    presented_digest=hashlib.sha256(presented_token.encode()).digest()
+    if not hmac.compare_digest(configured_digest,presented_digest):
+        raise HTTPException(status_code=403,detail="admin_access_denied")
+
+
+@app.get("/api/admin/metrics")
+def get_admin_metrics(
+    x_voice_workflow_admin_token:str|None=Header(default=None),
+)->dict[str,object]:
+    """Return aggregate product/operations signals without private lab content."""
+
+    _require_admin_access(x_voice_workflow_admin_token)
+    try:
+        report_settings=ExperimentReportSettings.from_environment()
+    except ValueError:
+        report_settings=ExperimentReportSettings(False)
+        report_status="invalid_configuration"
+    else:
+        report_status="enabled" if report_settings.enabled else "disabled"
+    if report_settings.enabled and report_settings.database_path is not None:
+        report_metrics=ExperimentReportStore(
+            report_settings.database_path).aggregate_metrics()
+    else:
+        report_metrics={
+            "reports":{
+                "total":0,"completed":0,"completion_rate":None,
+                "by_status":{},
+            },
+            "workflow_events":{},
+            "quality":{
+                "anomalies":0,"blockers":0,"common_blocked_steps":[],
+            },
+            "privacy":{
+                "raw_audio_included":False,
+                "transcripts_included":False,
+                "free_text_included":False,
+                "report_identifiers_included":False,
+            },
+        }
+    try:
+        catalog_entries,_,_=_public_protocol_catalog_entries()
+        catalog_status="available"
+    except Exception:
+        catalog_entries=[]
+        catalog_status="unavailable"
+    analysis_counts:dict[str,int]={}
+    for entry in catalog_entries:
+        status=str(entry.get("analysis_status") or "unknown")
+        analysis_counts[status]=analysis_counts.get(status,0)+1
+    return {
+        "schema_version":1,
+        "voice":{
+            "pipeline":"cascade",
+            "provider":"xai",
+            "voice_id":_tts_voice(),
+            "persona":"professor",
+        },
+        "experiment_reporting":{
+            "status":report_status,
+            **report_metrics,
+        },
+        "protocol_catalog":{
+            "status":catalog_status,
+            "total":len(catalog_entries),
+            "executable":sum(
+                item.get("available_for_execution") is True
+                for item in catalog_entries),
+            "development_only":sum(
+                item.get("development_only") is True
+                for item in catalog_entries),
+            "by_analysis_status":analysis_counts,
+        },
+        "runtime":RUNTIME_METRICS.snapshot(),
+    }
 
 
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
@@ -1777,6 +1904,7 @@ class LockedSender:
     def __init__(self,websocket): self.websocket=websocket; self.lock=asyncio.Lock()
     async def text(self,kind:str,**fields):
         async with self.lock: await self.websocket.send_text(event(kind,**fields))
+        RUNTIME_METRICS.observe(kind,fields)
     async def segment(
         self,turn_id:int,index:int,frames:list[bytes],generation:int|None=None,
     ):
@@ -1919,6 +2047,49 @@ async def _queue_curated_generated_visual(
     session.track_visual_task(task)
 
 
+async def _prepare_external_visual_candidate(
+    candidate:dict[str,Any],
+)->dict[str,Any]|None:
+    """Proxy displayable bytes or reduce the result to a cited source link."""
+
+    prepared=dict(candidate)
+    source_url=prepared.get("source_page_url")
+    image_url=prepared.get("image_url")
+    publisher=prepared.get("publisher_domain")
+    if (
+        not isinstance(source_url,str) or not source_url.startswith("https://")
+        or not isinstance(publisher,str) or not publisher.strip()
+    ):
+        return None
+    rights=prepared.get("rights")
+    if not isinstance(rights,str) or not rights.strip():
+        prepared.pop("image_url",None)
+        prepared["display_mode"]="source_link"
+        prepared["verification_label"]=(
+            "출처 링크만 제공 · 이미지 표시 권한 미확인")
+        return prepared
+    if not isinstance(image_url,str) or not image_url.startswith("https://"):
+        prepared.pop("image_url",None)
+        prepared["display_mode"]="source_link"
+        return prepared
+    asset=await WEB_VISUAL_REGISTRY.obtain_or_register(
+        image_url=image_url,
+        source_url=source_url,
+        publisher_domain=publisher,
+        title=str(prepared.get("title") or "Web reference image"),
+    )
+    if asset is None:
+        prepared.pop("image_url",None)
+        prepared["display_mode"]="source_link"
+        prepared["verification_label"]=(
+            "출처 링크만 제공 · 이미지 바이트 검증 실패")
+        return prepared
+    prepared["image_url"]=f"/api/web-visuals/{asset.asset_id}"
+    prepared["display_mode"]="web_image"
+    prepared["rights"]=rights.strip()[:300]
+    return prepared
+
+
 async def _queue_curated_web_visual(
     *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
     endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
@@ -1948,7 +2119,10 @@ async def _queue_curated_web_visual(
         started = clock()
         try:
             await sender.text(
-                "tool.call", **identity, tool="search_authoritative_web", round=2
+                "tool.call", **identity, tool="search_authoritative_web", round=2,
+                image_search_enabled=False,
+                intent_triggered=True,
+                max_results=1,
             )
 
             # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests or known compounds)
@@ -1976,22 +2150,16 @@ async def _queue_curated_web_visual(
                     turn_id, generation, configuration_id, fixture.protocol_id
                 ):
                     return
-                raw_img = pubchem_match.get("image_url")
-                if raw_img and raw_img.startswith("https://"):
-                    asset = await WEB_VISUAL_REGISTRY.obtain_or_register(
-                        image_url=raw_img,
-                        source_url=pubchem_match.get("source_page_url") or raw_img,
-                        publisher_domain=pubchem_match.get("publisher_domain") or "pubchem.ncbi.nlm.nih.gov",
-                        title=pubchem_match.get("title") or "PubChem Chemical Structure",
-                    )
-                    if asset is not None:
-                        pubchem_match["image_url"] = f"/api/web-visuals/{asset.asset_id}"
-                        pubchem_match["display_mode"] = "web_image"
+                pubchem_match=await _prepare_external_visual_candidate(
+                    pubchem_match)
+                if pubchem_match is None:
+                    raise RuntimeError("PubChem candidate identity is invalid")
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
                     round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="pubchem_pug_rest", match_count=1
+                    retrieval_backend="pubchem_pug_rest", match_count=1,
+                    image_search_enabled=False,
                 )
                 await sender.text(
                     "protocol.visual.state", **identity, status="web_visual_ready",
@@ -2000,7 +2168,8 @@ async def _queue_curated_web_visual(
                 )
                 return
 
-            # 2. Parallel Fast Public Visual (Wikimedia) + Deep Grok Image Search
+            # 2. Try a bounded public catalog first.  Only contact the paid
+            # provider if that local policy path cannot produce a candidate.
             search_terms = [*detected_entities, step.instruction_source_text[:50]] if detected_entities else [step.instruction_source_text[:50]]
             wiki_adapter = WikimediaVisualAdapter(timeout_seconds=3.5)
 
@@ -2013,7 +2182,7 @@ async def _queue_curated_web_visual(
 
             web_visual_timeout = float(os.environ.get("VOICE_WORKFLOW_AGENT_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
 
-            async def _grok_image_search():
+            async def _grok_image_search() -> dict[str, Any]:
                 try:
                     client = AsyncOpenAI(
                         base_url=api_url(""),
@@ -2031,15 +2200,32 @@ async def _queue_curated_web_visual(
                         ref_copy = copy.deepcopy(search_settings.references)
                         object.__setattr__(ref_copy, "timeout_seconds", web_visual_timeout)
                         search_settings = WebVisualSettings(True, ref_copy)
+                    await sender.text(
+                        "tool.call", **identity,
+                        tool="search_authoritative_web", round=3,
+                        image_search_enabled=True,
+                        intent_triggered=True,
+                        max_results=1,
+                    )
+                    log.info(
+                        "web_visual.provider_request turn_id=%s generation=%s "
+                        "image_search_enabled=true max_results=1",
+                        turn_id, generation,
+                    )
                     res = await XaiAuthoritativeImageSearch(client, search_settings).search(query)
-                    if res.get("status") == "success" and res.get("matches"):
-                        return res["matches"][0]
+                    return res
                 except Exception as exc:
                     log.info("grok image search failed turn_id=%s class=%s", turn_id, type(exc).__name__)
-                return None
+                return {
+                    "status": "error",
+                    "matches": [],
+                    "image_search_enabled": True,
+                    "image_search_count": 0,
+                    "web_search_count": 0,
+                    "max_results": 1,
+                }
 
             fast_task = asyncio.create_task(_fast_public_search())
-            grok_task = asyncio.create_task(_grok_image_search())
 
             # Wait for fast public search with up to 3.5s budget
             fast_candidate = None
@@ -2049,44 +2235,61 @@ async def _queue_curated_web_visual(
                 fast_candidate = None
 
             if fast_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                raw_img = fast_candidate.get("image_url")
-                if raw_img and raw_img.startswith("https://"):
-                    asset = await WEB_VISUAL_REGISTRY.obtain_or_register(
-                        image_url=raw_img,
-                        source_url=fast_candidate.get("source_page_url") or raw_img,
-                        publisher_domain=fast_candidate.get("publisher_domain") or "en.wikipedia.org",
-                        title=fast_candidate.get("title") or "Wikimedia image",
-                    )
-                    if asset is not None:
-                        fast_candidate["image_url"] = f"/api/web-visuals/{asset.asset_id}"
-                        fast_candidate["display_mode"] = "web_image"
+                fast_candidate=await _prepare_external_visual_candidate(
+                    fast_candidate)
+                if fast_candidate is None:
+                    raise RuntimeError("Wikimedia candidate identity is invalid")
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
                     round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="wikimedia_rest", match_count=1
+                    retrieval_backend="wikimedia_rest", match_count=1,
+                    image_search_enabled=False,
                 )
                 await sender.text(
                     "protocol.visual.state", **identity, status="web_visual_ready",
                     visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
                     candidate=fast_candidate
                 )
-                grok_task.cancel()
                 return
 
-            # Wait for Grok image search under global deadline
-            grok_candidate = None
+            # No public-catalog match: run exactly one intent-triggered xAI
+            # image-search request under the global deadline.
+            grok_result: dict[str, Any]
             try:
-                grok_candidate = await asyncio.wait_for(grok_task, timeout=web_visual_timeout)
+                grok_result = await asyncio.wait_for(
+                    _grok_image_search(), timeout=web_visual_timeout
+                )
             except (asyncio.TimeoutError, Exception):
-                grok_candidate = None
+                grok_result = {
+                    "status": "timeout",
+                    "matches": [],
+                    "image_search_enabled": True,
+                    "image_search_count": 0,
+                    "web_search_count": 0,
+                    "max_results": 1,
+                }
+            grok_candidate = (
+                grok_result["matches"][0]
+                if grok_result.get("status") == "success"
+                and grok_result.get("matches")
+                else None
+            )
 
             if grok_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
+                grok_candidate=await _prepare_external_visual_candidate(
+                    grok_candidate)
+                if grok_candidate is None:
+                    raise RuntimeError("xAI image candidate identity is invalid")
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="xai_responses_web_image_search", match_count=1
+                    round=3, status="success", elapsed_ms=elapsed,
+                    retrieval_backend="xai_responses_web_image_search", match_count=1,
+                    image_search_enabled=True,
+                    web_search_count=grok_result.get("web_search_count", 0),
+                    image_search_count=grok_result.get("image_search_count", 0),
+                    max_results=1,
                 )
                 await sender.text(
                     "protocol.visual.state", **identity, status="web_visual_ready",
@@ -2099,7 +2302,13 @@ async def _queue_curated_web_visual(
                 elapsed = max(0, round((clock() - started) * 1000))
                 await sender.text(
                     "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="not_found", elapsed_ms=elapsed, match_count=0
+                    round=3, status="not_found", elapsed_ms=elapsed, match_count=0,
+                    image_search_enabled=bool(
+                        grok_result.get("image_search_enabled", False)
+                    ),
+                    web_search_count=grok_result.get("web_search_count", 0),
+                    image_search_count=grok_result.get("image_search_count", 0),
+                    max_results=1,
                 )
                 if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
                     visual_spec = _curated_visual_specification(curated)
@@ -3129,6 +3338,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         session.last_confirmed_language=turn_language
         await current_text("session.turn_language_resolved",turn_id=turn_id,
                            language=turn_language)
+    request_arbitration=arbitrate_request(transcript)
     if session.curated_protocol_session is not None:
         curated=session.curated_protocol_session
         checkpoint=curated._checkpoint()
@@ -3144,11 +3354,51 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             pre_transition_index=curated.current_index
-            plan=curated.plan(
+            routed_turn=route_curated_runtime_turn(
+                curated,
                 transcript,turn_id=turn_id,language=turn_language,
                 transcript_quality=transcription_quality_issue(transcription),
                 configuration_id=session.accepted_configuration_id,
-                generation=generation)
+                generation=generation,
+                arbitration=request_arbitration)
+            plan=routed_turn.plan
+            await current_text(
+                "turn.route_decision",turn_id=turn_id,
+                normalized_text=routed_turn.arbitration.normalized_text,
+                intent=routed_turn.arbitration.intent.value,
+                confidence=routed_turn.arbitration.confidence,
+                reason_code=routed_turn.arbitration.reason_code,
+                dimensions=list(routed_turn.arbitration.dimensions),
+                runtime_router=routed_turn.runtime_router,
+                action=plan.action.value,
+                state_mutation=bool(plan.state_changed),
+                answer_origin=plan.answer_origin,
+                fallback_reason=(
+                    None if plan.answer_origin not in {"unsupported","current_protocol"}
+                    else "local_specialized_answer_unavailable"
+                    if routed_turn.arbitration.intent.value in {
+                        "learning","protocol_audit","history_resume",
+                        "uncertainty","combined_learning_next",
+                    }
+                    else None
+                ),
+            )
+            log.info(
+                "turn.route_decision turn_id=%s generation=%s text_sha256=%s "
+                "intent=%s runtime_router=%s action=%s state_mutation=%s "
+                "answer_origin=%s fallback_reason=%s",
+                turn_id,generation,
+                hashlib.sha256(
+                    routed_turn.arbitration.normalized_text.encode("utf-8")
+                ).hexdigest()[:16],
+                routed_turn.arbitration.intent.value,
+                routed_turn.runtime_router,plan.action.value,
+                bool(plan.state_changed),plan.answer_origin,
+                (
+                    None if plan.answer_origin not in {"unsupported","current_protocol"}
+                    else "local_specialized_answer_unavailable"
+                ),
+            )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
                     plan.normalized_transcript
@@ -3296,12 +3546,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 translation_status="answer_brain_grounded",
                             )
             research_context=None
+            explanatory_visual_request=bool(
+                plan.action is CuratedProtocolAction.VISUAL_REQUEST
+                and plan.requested_entities
+                and re.search(
+                    r"(?:의미|뜻|역할|왜|설명|뭐\s*하는|what|why|meaning|role|explain|purpose)",
+                    transcript,
+                    re.IGNORECASE,
+                )
+            )
             if (
                 plan.action is CuratedProtocolAction.RELATED_QUESTION
-                or (
-                    plan.action is CuratedProtocolAction.VISUAL_REQUEST
-                    and bool(plan.requested_entities)
-                )
+                or explanatory_visual_request
             ) and curated.active:
                 step=curated.fixture.steps[curated.current_index]
                 facts=plan.facts or curated.related_facts(transcript)
@@ -3640,6 +3896,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.OPERATIONAL_DEVIATION:"operational_deviation_refused",
             CuratedProtocolAction.NEXT:"next_step_transition",
             CuratedProtocolAction.QUESTION:(
+                "step_learning_read"
+                if plan.intent_kind in {"current_step_learning","current_step_warning"}
+                else "experiment_history_read"
+                if plan.intent_kind in {"previous_experiment_resume","experiment_history"}
+                else "bounded_uncertainty_response"
+                if plan.intent_kind=="bounded_outcome_uncertainty"
+                else
                 "approved_reference_qa"
                 if plan.answer_origin=="approved_lab_corpus" else
                 "external_reference_qa"
@@ -3653,8 +3916,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.CANCEL_READONLY:"readonly_operation_cancelled",
             CuratedProtocolAction.REPORT_ANOMALY:"experiment_anomaly_recorded",
             CuratedProtocolAction.SHOW_REPORT:"experiment_report_view",
-            CuratedProtocolAction.PROTOCOL_QUERY:"protocol_structure_read",
-            CuratedProtocolAction.CLARIFY_COMPLETION:"completion_confirmation_required",
+            CuratedProtocolAction.PROTOCOL_QUERY:(
+                "protocol_audit_read"
+                if plan.intent_kind=="protocol_audit"
+                else "protocol_structure_read"
+            ),
+            CuratedProtocolAction.CLARIFY_COMPLETION:(
+                "learning_next_preview_confirmation"
+                if plan.intent_kind=="learning_and_next_preview"
+                else "completion_confirmation_required"
+            ),
             CuratedProtocolAction.DECLINE_COMPLETION:"completion_confirmation_declined",
             CuratedProtocolAction.CLARIFY_REFERENCE:"reference_clarification_required",
             CuratedProtocolAction.CLARIFY_PARAMETER:"parameter_clarification_required",
@@ -3920,6 +4191,19 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
         deterministic_arguments={}
     if deterministic_tool is not None:
+        await current_text(
+            "turn.route_decision",turn_id=turn_id,
+            normalized_text=request_arbitration.normalized_text,
+            intent=request_arbitration.intent.value,
+            confidence=request_arbitration.confidence,
+            reason_code=request_arbitration.reason_code,
+            dimensions=list(request_arbitration.dimensions),
+            runtime_router="deterministic_procedure",
+            action=deterministic_tool,
+            state_mutation=True,
+            answer_origin="server_workflow_state",
+            fallback_reason=None,
+        )
         await progress("checking_protocol",route="deterministic_procedure")
         await current_text(
             "tool.call",turn_id=turn_id,tool=deterministic_tool,round=0)
@@ -4110,10 +4394,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             output_frames+=len(frames); segment_count+=1
     consumer=asyncio.create_task(consume())
     try:
+        await current_text(
+            "turn.route_decision",turn_id=turn_id,
+            normalized_text=request_arbitration.normalized_text,
+            intent=request_arbitration.intent.value,
+            confidence=request_arbitration.confidence,
+            reason_code=request_arbitration.reason_code,
+            dimensions=list(request_arbitration.dimensions),
+            runtime_router="brain",
+            action="tool_or_grounded_response",
+            state_mutation=False,
+            answer_origin="pending",
+            fallback_reason=None,
+        )
         await progress("composing",route="brain")
         client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("CHAT_MODEL")
-        result=await stream_brain_turn(client,session.history,transcript,sentence,mark_token,tool_event,
-                                       tool_context=turn_context)
+        result=await stream_brain_turn(
+            client,session.history,transcript,sentence,mark_token,tool_event,
+            tool_context=turn_context,arbitration=request_arbitration)
         if result.tool_ms is not None: timings["tool_ms"]=result.tool_ms
         await queue.put(None); await consumer
         if not first_audio: raise RuntimeError("Grok produced no playable spoken response")
@@ -4368,6 +4666,12 @@ async def voice_socket(websocket:WebSocket):
                                     endpoint_silence_ms=config.endpoint_silence_frames*20,
                                     prefix_padding_ms=config.prefix_frames*20,
                                     barge_in_prefix_ms=config.barge_in_prefix_frames*20,
+                                    voice_profile={
+                                        "pipeline":"cascade",
+                                        "provider":"xai",
+                                        "voice_id":_tts_voice(),
+                                        "persona":"professor",
+                                    },
                                     research_capabilities=research_capabilities))
     try:
         while True:
@@ -4963,6 +5267,11 @@ async def voice_socket(websocket:WebSocket):
                         turn_id=control["turn_id"],
                         generation=generation,
                         playback_completion_ms=playback_completion_ms))
+                    RUNTIME_METRICS.observe("playback.completed",{
+                        "turn_id":control["turn_id"],
+                        "generation":generation,
+                        "playback_completion_ms":playback_completion_ms,
+                    })
                 await websocket.send_text(event(
                     "state.changed",state=session.state.value,
                     turn_id=control["turn_id"],generation=generation,

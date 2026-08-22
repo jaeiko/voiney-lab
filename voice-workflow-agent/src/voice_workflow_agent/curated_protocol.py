@@ -35,6 +35,11 @@ from voice_workflow_agent.completion_intent import (
     classify_korean_completion_command,
     resolve_korean_completion_decision,
 )
+from voice_workflow_agent.intent_arbitration import (
+    RequestArbitration,
+    RequestIntent,
+    arbitrate_request,
+)
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -3075,6 +3080,84 @@ def classify_curated_control_intent(
     )
 
 
+def curated_intent_from_arbitration(
+    decision: RequestArbitration,
+    *,
+    language: str,
+) -> CuratedControlIntent | None:
+    """Project shared read-only intents into the curated runtime contract.
+
+    Workflow-control candidates deliberately return ``None``: the curated
+    controller's stricter completion, timer, observation, pause, and stop gates
+    remain the only authority for those actions.
+    """
+
+    common = {
+        "language": language,
+        "normalized_transcript": decision.normalized_text,
+        "confidence": decision.confidence,
+        "confidence_source": "authoritative_request_arbiter",
+        "question_dimensions": decision.dimensions,
+    }
+    if decision.intent is RequestIntent.LEARNING:
+        warning_only = decision.reason_code == "current_step_warning"
+        return CuratedControlIntent(
+            intent_kind=("current_step_warning" if warning_only else "current_step_learning"),
+            action=CuratedProtocolAction.QUESTION,
+            requested_followup=("explain_warning" if warning_only else "explain_step_rationale"),
+            target_step="authoritative_current_step",
+            question_kind=("safety" if warning_only else "learning"),
+            **common,
+        )
+    if decision.intent is RequestIntent.COMBINED_LEARNING_NEXT:
+        return CuratedControlIntent(
+            intent_kind="learning_and_next_preview",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            requested_transition="next",
+            requested_followup="explain_rationale_preview_next_confirm_completion",
+            target_step="authoritative_current_step",
+            question_kind="combined_information",
+            requires_confirmation=True,
+            allows_state_mutation=False,
+            **common,
+        )
+    if decision.intent is RequestIntent.PROTOCOL_AUDIT:
+        return CuratedControlIntent(
+            intent_kind="protocol_audit",
+            action=CuratedProtocolAction.PROTOCOL_QUERY,
+            requested_followup="show_protocol_version",
+            question_kind="protocol_metadata",
+            protocol_scope="version",
+            **common,
+        )
+    if decision.intent is RequestIntent.HISTORY_RESUME:
+        return CuratedControlIntent(
+            intent_kind=(
+                "previous_experiment_resume"
+                if decision.history_action == "resume"
+                else "experiment_history"
+            ),
+            action=CuratedProtocolAction.QUESTION,
+            requested_followup=(
+                "find_resumable_session"
+                if decision.history_action == "resume"
+                else "list_experiment_history"
+            ),
+            question_kind="experiment_history",
+            **common,
+        )
+    if decision.intent is RequestIntent.UNCERTAINTY:
+        return CuratedControlIntent(
+            intent_kind="bounded_outcome_uncertainty",
+            action=CuratedProtocolAction.QUESTION,
+            requested_followup="state_evidence_needed",
+            target_step="authoritative_current_step",
+            question_kind="uncertainty",
+            **common,
+        )
+    return None
+
+
 _WORKFLOW_COMMANDS = {
     "시작": CuratedProtocolAction.START,
     "시작해": CuratedProtocolAction.START,
@@ -4659,6 +4742,122 @@ class CuratedProtocolSession:
         value = lookup(step_id, fact_id)
         return value if isinstance(value, str) and value.strip() else None
 
+    def _step_learning_presentation(
+        self,
+        *,
+        language: str,
+        warning_only: bool = False,
+    ) -> tuple[
+        str,
+        str,
+        tuple[CuratedProtocolFact, ...],
+        tuple[str, ...],
+    ]:
+        """Compose a fast, source-bounded purpose/warning answer for one step."""
+
+        step = self.fixture.steps[self.current_index]
+        step_facts = self.fixture.facts_for_step(self.current_index)
+        warning_facts = tuple(fact for fact in step_facts if fact.kind == "warning")
+        expected_facts = tuple(
+            fact for fact in step_facts if fact.kind == "expected_result"
+        )
+        current_fact = next(
+            (fact for fact in step_facts if fact.fact_id == "current_step"),
+            None,
+        )
+        evidence = tuple(
+            dict.fromkeys(
+                fact
+                for fact in (*expected_facts, *warning_facts, current_fact)
+                if fact is not None
+            )
+        )
+        localized_warnings = tuple(
+            self._localized_fact(step.step_id, fact.fact_id) or fact.text
+            for fact in warning_facts
+        )
+
+        def concise(value: str, limit: int = 220) -> str:
+            first = re.split(r"(?<=[.!?])\s+|\n+", value.strip(), maxsplit=1)[0]
+            return first if len(first) <= limit else first[: limit - 1].rstrip() + "…"
+
+        section_title = next(
+            (
+                section.title_source_text
+                for section in self.fixture.draft.protocol.sections
+                if any(item.step_id == step.step_id for item in section.steps)
+            ),
+            "",
+        )
+        section_key = section_title.casefold()
+        if language == "ko":
+            purpose = ""
+            if "band excision" in section_key:
+                purpose = "SDS-PAGE 젤에서 분석할 밴드 시료를 절취해 후속 처리를 위한 튜브에 준비하는 것"
+            elif "destain" in section_key:
+                purpose = "젤 밴드의 염색을 제거해 다음 처리 단계로 진행할 상태를 만드는 것"
+            elif "reduction" in section_key or "alkylation" in section_key:
+                purpose = "원문에 정의된 cysteine 환원·알킬화 구간을 수행하는 것"
+            elif "trypsin" in section_key or "digestion" in section_key:
+                purpose = "젤 안의 단백질을 trypsin 소화 단계로 처리하는 것"
+            elif "peptide" in section_key or "extract" in section_key:
+                purpose = "소화된 peptide를 회수해 후속 분석용 시료로 준비하는 것"
+            elif section_title:
+                purpose = f"원문의 ‘{concise(section_title, 90)}’ 구간을 수행하는 것"
+            else:
+                purpose = "현재 PDF에 정의된 순서에 따라 후속 단계를 준비하는 것"
+
+            if warning_only:
+                speech = (
+                    f"이 단계의 핵심 주의사항은 {concise(localized_warnings[0])}"
+                    if localized_warnings
+                    else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
+                )
+            else:
+                speech = f"이 단계의 수행 목적은 {purpose}입니다."
+                if expected_facts:
+                    localized_expected = (
+                        self._localized_fact(step.step_id, expected_facts[0].fact_id)
+                        or expected_facts[0].text
+                    )
+                    speech += f" 원문이 제시한 확인 결과는 {concise(localized_expected)}"
+                else:
+                    speech += " 원문에는 별도의 과학적 작용 기전은 명시되어 있지 않습니다."
+                if localized_warnings:
+                    speech += f" 주의할 점은 {concise(localized_warnings[0])}"
+        else:
+            purpose = (
+                f"perform the source section '{concise(section_title, 100)}'"
+                if section_title
+                else "prepare the protocol-defined next operation"
+            )
+            if warning_only:
+                speech = (
+                    f"The source warning for this step is: {concise(warning_facts[0].text)}"
+                    if warning_facts
+                    else "The active PDF states no separate warning for this step. Ask the responsible supervisor for any additional safety decision."
+                )
+            else:
+                speech = f"The operational purpose of this step is to {purpose}."
+                speech += (
+                    f" The source-defined expected result is: {concise(expected_facts[0].text)}"
+                    if expected_facts
+                    else " The source does not state a separate scientific mechanism."
+                )
+                if warning_facts:
+                    speech += f" The source warning is: {concise(warning_facts[0].text)}"
+
+        display_lines = [speech, "", "Source evidence"]
+        display_lines.extend(
+            f"- PDF p.{fact.source_page} · {fact.text}" for fact in evidence
+        )
+        limitations = (
+            ()
+            if expected_facts
+            else ("scientific_rationale_not_explicit_in_active_protocol",)
+        )
+        return "\n".join(display_lines), speech, evidence, limitations
+
     def _step_index_for_label(self, label: str | None) -> int | None:
         if label in (None, "authoritative_current_step"):
             return self.current_index
@@ -5471,6 +5670,7 @@ class CuratedProtocolSession:
         transcript_quality: str | None = None,
         configuration_id: int | None = None,
         generation: int | None = None,
+        arbitration: RequestArbitration | None = None,
     ) -> CuratedProtocolTurnPlan:
         if turn_id in self._replay:
             return self._replay[turn_id]
@@ -5749,7 +5949,11 @@ class CuratedProtocolSession:
                         self._replay[turn_id] = plan
                         return plan
 
-                intent = classify_curated_control_intent(
+                shared_decision = arbitration or arbitrate_request(transcript)
+                intent = curated_intent_from_arbitration(
+                    shared_decision,
+                    language=language,
+                ) or classify_curated_control_intent(
                     transcript,
                     language=language,
                     entity_inventory=self._entity_inventory(),
@@ -6285,6 +6489,7 @@ class CuratedProtocolSession:
                 CuratedProtocolAction.PREVIEW_STEP,
                 CuratedProtocolAction.CURRENT,
                 CuratedProtocolAction.FULL_DETAIL,
+                CuratedProtocolAction.QUESTION,
                 CuratedProtocolAction.RELATED_QUESTION,
                 CuratedProtocolAction.VISUAL_REQUEST,
                 CuratedProtocolAction.REPORT_HANDOFF,
@@ -6429,10 +6634,51 @@ class CuratedProtocolSession:
                 raise CuratedProtocolFixtureError(
                     "Protocol query scope is unavailable."
                 )
-            display, speech, protocol_facts = _protocol_query_presentation(
-                self.fixture, current_index=self.current_index,
-                scope=intent.protocol_scope, language=language,
-            )
+            if intent.protocol_scope == "version":
+                document_version = (
+                    self.fixture.draft.protocol.metadata.version
+                    or "not stated in source metadata"
+                )
+                protocol_version = self.fixture.revision_id
+                checksum = self.fixture.source_pdf_sha256 or "unavailable"
+                if language == "ko":
+                    speech = (
+                        f"현재 프로토콜은 {self.fixture.title}, 리비전 {protocol_version}입니다. "
+                        f"원문 문서 버전은 {document_version}이며 전체 해시는 화면에 표시했습니다."
+                    )
+                    display = (
+                        f"프로토콜 감사 정보\n- 제목: {self.fixture.title}\n"
+                        f"- 실행 리비전: {protocol_version}\n"
+                        f"- 원문 문서 버전: {document_version}\n"
+                        f"- 원문 PDF SHA-256: {checksum}\n"
+                        f"- 구조화 fixture SHA-256: {self.fixture.fixture_sha256}"
+                    )
+                else:
+                    speech = (
+                        f"The active protocol is {self.fixture.title}, revision {protocol_version}. "
+                        f"The source document version is {document_version}; full hashes are shown on screen."
+                    )
+                    display = (
+                        f"Protocol audit\n- Title: {self.fixture.title}\n"
+                        f"- Runtime revision: {protocol_version}\n"
+                        f"- Source document version: {document_version}\n"
+                        f"- Source PDF SHA-256: {checksum}\n"
+                        f"- Structured fixture SHA-256: {self.fixture.fixture_sha256}"
+                    )
+                source_page = self.fixture.steps[0].evidence.source_page_number
+                protocol_facts = (
+                    CuratedProtocolFact(
+                        "protocol_audit_identity",
+                        "protocol_metadata",
+                        f"{self.fixture.title}; revision={protocol_version}; document_version={document_version}; sha256={checksum}",
+                        source_page,
+                    ),
+                )
+            else:
+                display, speech, protocol_facts = _protocol_query_presentation(
+                    self.fixture, current_index=self.current_index,
+                    scope=intent.protocol_scope, language=language,
+                )
             step = steps[self.current_index]
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PROTOCOL_QUERY,
@@ -6450,7 +6696,102 @@ class CuratedProtocolSession:
                 ),
                 intent_kind=intent.intent_kind,
                 question_kind=intent.question_kind,
-                answer_origin="current_protocol",
+                answer_origin=(
+                    "protocol_metadata"
+                    if intent.protocol_scope == "version"
+                    else "current_protocol"
+                ),
+            )
+        elif command is CuratedProtocolAction.QUESTION and intent.intent_kind in {
+            "current_step_learning",
+            "current_step_warning",
+        }:
+            step = steps[self.current_index]
+            display, speech, learning_facts, limitations = (
+                self._step_learning_presentation(
+                    language=language,
+                    warning_only=intent.intent_kind == "current_step_warning",
+                )
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.QUESTION,
+                display_text=display,
+                speech_text=speech,
+                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                facts=learning_facts,
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=speech,
+                source_texts=tuple(fact.text for fact in learning_facts),
+                source_pages=tuple(fact.source_page for fact in learning_facts),
+                evidence_ids=tuple(fact.fact_id for fact in learning_facts),
+                translation_status=(
+                    "verified_sidecar" if language == "ko" else "source_language"
+                ),
+                intent_kind=intent.intent_kind,
+                requested_followup=intent.requested_followup,
+                target_step=step.source_label,
+                question_kind=intent.question_kind,
+                answer_origin="approved_step_metadata",
+                limitations=limitations,
+                normalized_transcript=intent.normalized_transcript,
+                question_dimensions=intent.question_dimensions,
+            )
+        elif command is CuratedProtocolAction.QUESTION and intent.intent_kind in {
+            "previous_experiment_resume",
+            "experiment_history",
+        }:
+            step = steps[self.current_index]
+            response = (
+                "저장된 진행 중인 이전 실험 세션을 찾지 못했습니다. 현재 프로토콜을 이전 실험으로 간주하지 않았습니다."
+                if language == "ko" and intent.intent_kind == "previous_experiment_resume"
+                else "이 실행 경로에서 확인할 수 있는 이전 실험 기록이 없습니다. 현재 세션 상태는 변경하지 않았습니다."
+                if language == "ko"
+                else "No saved previous in-progress experiment session was found. The current protocol was not treated as a previous experiment."
+                if intent.intent_kind == "previous_experiment_resume"
+                else "No previous experiment history is available to this runtime. The current session was not changed."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.QUESTION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+                requested_followup=intent.requested_followup,
+                question_kind=intent.question_kind,
+                answer_origin="session_history",
+                limitations=("curated_runtime_has_no_resumable_persisted_snapshot",),
+                normalized_transcript=intent.normalized_transcript,
+            )
+        elif command is CuratedProtocolAction.QUESTION and intent.intent_kind == "bounded_outcome_uncertainty":
+            step = steps[self.current_index]
+            response = (
+                "현재 정보만으로 실험 성공 여부를 판단할 수 없습니다. 관찰 결과나 측정값을 기록하면 확인 가능한 범위에서 함께 살펴볼 수 있습니다."
+                if language == "ko"
+                else "The current information cannot determine whether the experiment will succeed. Record observations or measurements so they can be assessed within the available evidence."
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.QUESTION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=step.source_label,
+                final_step=self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind=intent.intent_kind,
+                requested_followup=intent.requested_followup,
+                question_kind=intent.question_kind,
+                answer_origin="bounded_uncertainty",
+                limitations=("outcome_not_determinable_from_current_evidence",),
+                normalized_transcript=intent.normalized_transcript,
             )
         elif command is CuratedProtocolAction.NEXT_INFORMATION:
             current = steps[self.current_index]
@@ -7162,7 +7503,66 @@ class CuratedProtocolSession:
                 )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
-            if intent.intent_kind == "observation_confirmation_required":
+            if intent.intent_kind == "learning_and_next_preview":
+                learning_display, learning_speech, learning_facts, limitations = (
+                    self._step_learning_presentation(language=language)
+                )
+                if self.current_index < len(steps) - 1:
+                    next_step = steps[self.current_index + 1]
+                    next_instruction = (
+                        self._localized_fact(next_step.step_id, "current_step")
+                        if language == "ko"
+                        else None
+                    ) or next_step.instruction_source_text
+                    next_facts = self.fixture.facts_for_step(self.current_index + 1)
+                    preview = (
+                        f"다음 단계는 {next_step.source_label}단계이며, {next_instruction}"
+                        if language == "ko"
+                        else f"The next step is Step {next_step.source_label}: {next_instruction}"
+                    )
+                else:
+                    next_step = None
+                    next_facts = ()
+                    preview = (
+                        "현재 단계가 마지막 단계라 미리 볼 다음 단계가 없습니다."
+                        if language == "ko"
+                        else "The current step is the final step, so there is no next step to preview."
+                    )
+                confirmation = (
+                    "현재 단계를 실제로 완료하셨나요? 확인 전에는 상태를 변경하지 않습니다."
+                    if language == "ko"
+                    else "Have you actually completed the current step? The state will not change before confirmation."
+                )
+                response = f"{learning_display}\n\nNext-step preview\n{preview}\n\n{confirmation}"
+                speech = f"{learning_speech} {preview} {confirmation}"
+                combined_facts = (*learning_facts, *next_facts[:4])
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                    display_text=response,
+                    speech_text=speech,
+                    speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                    facts=combined_facts,
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    primary_text=speech,
+                    source_texts=tuple(fact.text for fact in combined_facts),
+                    source_pages=tuple(fact.source_page for fact in combined_facts),
+                    evidence_ids=tuple(fact.fact_id for fact in combined_facts),
+                    translation_status=(
+                        "verified_sidecar" if language == "ko" else "source_language"
+                    ),
+                    intent_kind=intent.intent_kind,
+                    requested_transition="next",
+                    requested_followup=intent.requested_followup,
+                    target_step=step.source_label,
+                    intent_confidence=intent.confidence,
+                    answer_origin="approved_step_metadata",
+                    limitations=limitations,
+                    normalized_transcript=intent.normalized_transcript,
+                    question_dimensions=intent.question_dimensions,
+                )
+            elif intent.intent_kind == "observation_confirmation_required":
                 if step.source_label == "7":
                     response = (
                         "Is the gel fully destained and transparent? I will not record completion until you report that observation."
@@ -7194,25 +7594,26 @@ class CuratedProtocolSession:
                     "명확히 말씀해 주세요. 상태는 변경하지 않았습니다."
                 ),
                 }).get(language, "현재 단계를 완료하고 다음으로 이동할지 확인해 주세요.")
-            plan = CuratedProtocolTurnPlan(
-                action=CuratedProtocolAction.CLARIFY_COMPLETION,
-                display_text=response,
-                speech_text=response,
-                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-                facts=(),
-                step_label=step.source_label,
-                final_step=self.current_index == len(steps) - 1,
-                state_changed=False,
-                intent_kind=intent.intent_kind,
-                target_step=intent.target_step,
-                intent_confidence=intent.confidence,
-                normalized_transcript=intent.normalized_transcript,
-                transcript_correction_note=intent.transcript_correction_note,
-                transcript_corrections=intent.transcript_corrections,
-                reported_observation=intent.reported_observation,
-                observation_predicate=intent.observation_predicate,
-                observation_outcome=intent.observation_outcome,
-            )
+            if intent.intent_kind != "learning_and_next_preview":
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                    facts=(),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    intent_kind=intent.intent_kind,
+                    target_step=intent.target_step,
+                    intent_confidence=intent.confidence,
+                    normalized_transcript=intent.normalized_transcript,
+                    transcript_correction_note=intent.transcript_correction_note,
+                    transcript_corrections=intent.transcript_corrections,
+                    reported_observation=intent.reported_observation,
+                    observation_predicate=intent.observation_predicate,
+                    observation_outcome=intent.observation_outcome,
+                )
         elif command is CuratedProtocolAction.DECLINE_COMPLETION:
             step = steps[self.current_index]
             response = {
@@ -7592,7 +7993,10 @@ class CuratedProtocolSession:
             self._revision += 1
         if (
             plan.action is CuratedProtocolAction.CLARIFY_COMPLETION
-            and plan.intent_kind == "next_step_confirmation_required"
+            and plan.intent_kind in {
+                "next_step_confirmation_required",
+                "learning_and_next_preview",
+            }
         ):
             step = self.fixture.steps[self.current_index]
             self._pending_completion_confirmation = PendingCompletionConfirmation(

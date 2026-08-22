@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import csv
 import io
 import os
@@ -110,6 +111,32 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["step_label"], "4")
         self.assertEqual(rows[0]["user_wording"], "현재 단계를 완료했어요.")
         self.assertNotIn("chain_of_thought", content.decode("utf-8-sig"))
+
+    def test_admin_aggregate_metrics_exclude_private_report_content(self):
+        report = self.open()
+        self.store.append_event(
+            report["report_id"], event_key="timer-1", event_type="timer_started",
+            step_id="candidate-a-step-03", step_label="3",
+            user_wording="private timer wording",
+        )
+        self.store.append_event(
+            report["report_id"], event_key="block-1", event_type="blocked",
+            step_id="candidate-a-step-03", step_label="3",
+            user_wording="private blocker wording",
+        )
+        metrics = self.store.aggregate_metrics()
+        self.assertEqual(metrics["reports"]["total"], 1)
+        self.assertEqual(metrics["workflow_events"]["timer_started"], 1)
+        self.assertEqual(metrics["quality"]["blockers"], 1)
+        self.assertEqual(
+            metrics["quality"]["common_blocked_steps"],
+            [{"step_label": "3", "count": 1}],
+        )
+        encoded = json.dumps(metrics)
+        self.assertNotIn(report["report_id"], encoded)
+        self.assertNotIn("session-test-1", encoded)
+        self.assertNotIn("private", encoded)
+        self.assertFalse(metrics["privacy"]["raw_audio_included"])
 
     def test_docx_export_uses_human_readable_labels_and_blank_student_fields(self):
         report = self.open()
@@ -284,8 +311,18 @@ class ExperimentReportStoreTests(unittest.TestCase):
 
     def test_http_docx_export_returns_200_and_valid_document(self):
         """Direct HTTP test for GET /api/experiment-reports/{report_id}.docx."""
-        from starlette.testclient import TestClient
+        import httpx
         from voice_workflow_agent.server import app
+
+        async def run_inline(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        async def fetch_report(url: str):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                return await client.get(url)
 
         report = self.open()
         self.store.append_event(
@@ -301,9 +338,13 @@ class ExperimentReportStoreTests(unittest.TestCase):
             "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
             "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(self.store.path),
             "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_DATABASE": str(self.store.path),
-        }):
-            client = TestClient(app)
-            response = client.get(f"/api/experiment-reports/{report['report_id']}.docx")
+            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_ENABLED": "false",
+        }), unittest.mock.patch(
+            "fastapi.routing.run_in_threadpool", side_effect=run_inline,
+        ):
+            response = asyncio.run(fetch_report(
+                f"/api/experiment-reports/{report['report_id']}.docx"
+            ))
             self.assertEqual(response.status_code, 200)
             self.assertEqual(
                 response.headers["content-type"],

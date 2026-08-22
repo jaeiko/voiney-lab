@@ -12,7 +12,8 @@ import hmac
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -147,6 +148,7 @@ class ProtocolCatalogEntry:
             "step_count": self.step_count,
             "created_at": self.created_at,
             "available_for_execution": self.available_for_execution,
+            "development_only": self.approval_status == "development_only",
         }
 
 
@@ -232,6 +234,27 @@ def _display_filename(value: str) -> str:
         raise ProtocolRegistrationError(
             "Protocol filename must be one plain PDF filename."
         )
+    return value
+
+
+def _review_value(value: object) -> object:
+    """Convert selected Protocol records into a stable, JSON-safe review view."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value):
+        return {
+            field.name: _review_value(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, (tuple, list)):
+        return [_review_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(_review_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            str(key): _review_value(item) for key, item in value.items()
+        }
     return value
 
 
@@ -658,6 +681,81 @@ class ProtocolCatalog:
         return self._entry_for_revision(
             self._latest_protocol_revision(protocol_id)
         )
+
+    def review(self, protocol_id: str) -> dict[str, object]:
+        """Return a source-linked, read-only view of the latest analysis draft."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        entry = self._entry_for_revision(revision)
+        analysis = self._latest_analysis(revision)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        source = self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        )
+        extraction = extract_protocol_pdf(source)
+        base: dict[str, object] = {
+            **entry.public_dict(),
+            "analysis_available": analysis is not None,
+            "source": {
+                "filename": revision.original_filename,
+                "sha256": revision.pdf_checksum,
+                "media_type": extraction.media_type,
+                "byte_size": extraction.byte_size,
+                "page_count": extraction.page_count,
+                "all_pages_inspected": extraction.all_pages_inspected,
+                "extraction_warnings": list(extraction.warnings),
+            },
+            "metadata": {},
+            "before_start": [],
+            "materials": [],
+            "equipment": [],
+            "sections": [],
+            "constructs": [],
+            "readiness": {
+                "status": domain.ReadinessStatus.ANALYSIS_REQUIRED.value,
+                "label": "Structured analysis has not been completed.",
+                "reasons": [
+                    {
+                        "code": entry.analysis_status,
+                        "message": "Explicit structured analysis is required before review or execution.",
+                    }
+                ],
+            },
+            "capability_policy_id": domain.P1_CAPABILITY_POLICY.profile_id,
+        }
+        if analysis is None:
+            return base
+
+        protocol = analysis.protocol
+        metadata = {
+            field.name: _review_value(getattr(protocol.metadata, field.name))
+            for field in fields(protocol.metadata)
+            if field.name != "pdf"
+        }
+        base.update(
+            {
+                "metadata": metadata,
+                "before_start": _review_value(protocol.before_start),
+                "materials": _review_value(protocol.materials),
+                "equipment": _review_value(protocol.equipment),
+                "sections": _review_value(protocol.sections),
+                "constructs": [
+                    {
+                        "construct_type": type(construct).__name__,
+                        **_review_value(construct),
+                    }
+                    for construct in protocol.constructs
+                ],
+                "readiness": _review_value(analysis.readiness),
+                "capability_policy_id": analysis.capability_policy_id,
+                "analysis_payload_sha256": analysis.payload_sha256,
+            }
+        )
+        return base
 
     def register(
         self,

@@ -1,5 +1,7 @@
 # Voice Routing Failure Analysis: Conversational Routing Breakdown & Diagnosis
 
+> Historical failure analysis. The production route defect described here has been replaced by the shared runtime boundary documented in `CODEX_COMMERCIALIZATION_AUDIT.md`.
+
 **Document**: `docs/VOICE_ROUTING_FAILURE_ANALYSIS.md`  
 **Author**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  

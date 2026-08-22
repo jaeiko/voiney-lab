@@ -1,5 +1,7 @@
 # Candidate A grounded Q&A, reports, and Native resilience
 
+> Historical Candidate A/Native design record. The current product is Cascade-only and generic-PDF capable; see the root README.
+
 Status: development-only design record, implemented offline on 2026-08-11.
 Candidate A remains `analysis_required`; Steps 7, 9, and 20 remain fail-closed.
 

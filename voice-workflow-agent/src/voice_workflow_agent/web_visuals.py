@@ -21,6 +21,7 @@ from .external_references import (
     _canonical_url,
     _field,
     _response_text,
+    _tool_usage_counts,
 )
 
 
@@ -260,7 +261,7 @@ class XaiAuthoritativeImageSearch:
                     ),
                 }, {"role": "user", "content": query[:1800]}],
                 tools=[tool_spec],
-                include=["web_search_call.action.sources"],
+                include=["no_inline_citations"],
                 stream=False,
                 max_output_tokens=300,
             )
@@ -278,11 +279,20 @@ class XaiAuthoritativeImageSearch:
                 timeout=self.settings.timeout_seconds,
             )
         except Exception:
-            return {"status": "not_found", "matches": []}
+            return {
+                "status": "not_found",
+                "matches": [],
+                "image_search_enabled": True,
+                "max_results": 1,
+            }
 
         output = _field(response, "output", []) or []
-        tool_used = any(
+        output_tool_used = any(
             _field(item, "type") == "web_search_call" for item in output
+        )
+        web_search_count, image_search_count = _tool_usage_counts(response)
+        tool_used = bool(
+            output_tool_used or web_search_count or image_search_count
         )
         candidates: list[dict[str, Any]] = []
         for item in _walk(output):
@@ -347,7 +357,14 @@ class XaiAuthoritativeImageSearch:
             if item.get("image_url") or item.get("source_page_url")
         }
         if not tool_used or not unique:
-            return {"status": "not_found", "matches": []}
+            return {
+                "status": "not_found",
+                "matches": [],
+                "image_search_enabled": True,
+                "web_search_count": web_search_count,
+                "image_search_count": image_search_count,
+                "max_results": 1,
+            }
 
         for item in unique.values():
             raw_img = item.get("image_url")
@@ -366,6 +383,10 @@ class XaiAuthoritativeImageSearch:
             "status": "success",
             "matches": list(unique.values())[:1],
             "backend": "xai_responses_web_image_search",
+            "image_search_enabled": True,
+            "web_search_count": web_search_count,
+            "image_search_count": image_search_count,
+            "max_results": 1,
         }
 
 
@@ -484,6 +505,7 @@ class PubChemChemistryAdapter:
                 "publisher_domain": "pubchem.ncbi.nlm.nih.gov",
                 "title": f"{known['name']} 2D Chemical Structure (PubChem CID {cid})",
                 "caption": f"Authoritative chemical structure for {known['name']} ({known['formula']}, MW {known['weight']})",
+                "rights": "PubChem public-domain data",
                 "display_mode": "structure_image",
                 "backend": "pubchem_pug_rest",
             }
@@ -515,6 +537,7 @@ class PubChemChemistryAdapter:
                             "publisher_domain": "pubchem.ncbi.nlm.nih.gov",
                             "title": f"{key.title()} Chemical Structure (PubChem CID {cid})",
                             "caption": f"Authoritative chemical structure for {key.title()} ({formula})",
+                            "rights": "PubChem public-domain data",
                             "display_mode": "structure_image",
                             "backend": "pubchem_pug_rest",
                         }
@@ -524,7 +547,7 @@ class PubChemChemistryAdapter:
 
 
 class WikimediaVisualAdapter:
-    """Public scientific image discovery using Wikimedia REST API."""
+    """Public scientific image discovery with source-license metadata."""
 
     def __init__(self, timeout_seconds: float = 4.0) -> None:
         self.timeout_seconds = timeout_seconds
@@ -535,15 +558,17 @@ class WikimediaVisualAdapter:
         clean_q = " ".join(re.findall(r"[0-9A-Za-z가-힣-]+", query))
         if not clean_q:
             return None
-        url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({
+        url = "https://commons.wikimedia.org/w/api.php?" + urllib.parse.urlencode({
             "action": "query",
             "generator": "search",
             "gsrsearch": clean_q[:100],
+            "gsrnamespace": 6,
             "gsrlimit": 2,
-            "prop": "pageimages|info",
-            "pithumbsize": 500,
-            "inprop": "url",
+            "prop": "imageinfo",
+            "iiprop": "url|extmetadata",
+            "iiurlwidth": 500,
             "format": "json",
+            "origin": "*",
         })
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -556,12 +581,18 @@ class WikimediaVisualAdapter:
                 data = resp.json()
                 pages = data.get("query", {}).get("pages", {})
                 for _, page in pages.items():
-                    thumb = page.get("thumbnail", {}).get("source")
-                    if thumb:
+                    image_info = (page.get("imageinfo") or [{}])[0]
+                    thumb = image_info.get("thumburl") or image_info.get("url")
+                    metadata = image_info.get("extmetadata") or {}
+                    license_name = (
+                        (metadata.get("LicenseShortName") or {}).get("value")
+                        or (metadata.get("UsageTerms") or {}).get("value")
+                    )
+                    if thumb and license_name:
                         title = page.get("title") or clean_q
                         fullurl = (
-                            page.get("fullurl")
-                            or f"https://en.wikipedia.org/?curid={page.get('pageid')}"
+                            image_info.get("descriptionurl")
+                            or f"https://commons.wikimedia.org/?curid={page.get('pageid')}"
                         )
                         return {
                             "kind": "web_image_reference",
@@ -571,7 +602,8 @@ class WikimediaVisualAdapter:
                             "caption": f"Representative reference image for {title}",
                             "image_url": thumb,
                             "source_page_url": fullurl,
-                            "publisher_domain": "en.wikipedia.org",
+                            "publisher_domain": "commons.wikimedia.org",
+                            "rights": str(license_name).strip()[:300],
                             "display_mode": "concept_image",
                             "reason": "public_reference_image",
                             "backend": "wikimedia_rest",
@@ -590,5 +622,3 @@ class WikimediaVisualAdapter:
 
 
 WikimediaSearchProvider = WikimediaVisualAdapter
-
-

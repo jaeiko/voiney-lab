@@ -1,5 +1,8 @@
 # Security, Privacy & Safety Rules
 
+The current build is a controlled-pilot prototype. A configured shared token on
+the aggregate admin endpoint is a fail-closed MVP control, not production IAM.
+
 ## 1. Safety & Approved Knowledge Boundary
 
 1. **Approved Knowledge Exclusivity**:
@@ -20,7 +23,19 @@
 2. **API Key Hygiene**:
    - API keys (`XAI_API_KEY`, etc.) must NEVER be logged in server logs, rendered in the browser UI, or committed to version control.
    - All external model and STT/TTS calls are executed purely server-side.
-3. **Audit Trail Immutability**:
+   - Do not use credential values in metric labels, exception details, URLs, or
+     browser storage. Compare the admin token with constant-time digests and clear
+     the UI input after each request.
+3. **Audio and Transcript Minimization**:
+   - Raw audio is not retained by default. Diagnostic retention is opt-in, bounded,
+     ignored by Git, and prohibited for private lab work without an approved policy.
+   - Operational aggregates must exclude transcripts, free-form wording, protocol
+     titles, report/session IDs, prompts, and model reasoning.
+4. **External Image Boundary**:
+   - Never hotlink provider image URLs. Display requires a rights label, HTTPS and
+     SSRF validation, size/MIME/dimension checks, and same-origin proxying.
+   - When rights or bytes cannot be validated, emit only a cited source link.
+5. **Audit Trail Immutability**:
    - Experiment event logs (`experiment_report_events`) and procedure session records (`procedure_sessions`) are append-only.
    - No mechanism exists to delete or alter historical incident records or timestamped observations.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -290,6 +291,35 @@ class ProtocolCatalogTests(unittest.TestCase):
                 entry.protocol_id, fake_model, analysis_id="analysis-explicit"
             )
         analyze.assert_called_once()
+
+    def test_review_is_read_only_source_linked_and_does_not_make_draft_executable(self):
+        entry = self.catalog.register(
+            self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
+        ).entry
+        before = self.catalog.review(entry.protocol_id)
+        self.assertFalse(before["analysis_available"])
+        self.assertEqual(before["source"]["sha256"], entry.source_sha256)
+        self.assertFalse(before["available_for_execution"])
+
+        draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
+        self.store.append_analysis_revision(
+            entry.protocol_id,
+            1,
+            "analysis-review-contract",
+            draft.protocol,
+            draft.readiness,
+            draft.capability_policy_id,
+        )
+        review = self.catalog.review(entry.protocol_id)
+        self.assertTrue(review["analysis_available"])
+        self.assertEqual(review["readiness"]["status"], "guidance_ready")
+        self.assertEqual(review["sections"][0]["steps"][0]["source_label"], "1")
+        self.assertEqual(
+            review["sections"][0]["steps"][0]["evidence"]["source_page_number"],
+            1,
+        )
+        self.assertFalse(review["available_for_execution"])
+        self.assertEqual(self.catalog.get_entry(entry.protocol_id).approval_status, "unapproved")
 
 
     def test_analysis_endpoint_owns_store_in_worker_and_status_is_read_only(self):
@@ -868,6 +898,65 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(
             response.json()["protocol"]["analysis_status"], "ocr_required"
+        )
+        self.provider_factory.assert_not_called()
+
+    async def test_review_and_development_activation_are_explicit_and_scope_gated(self):
+        source = self.root / "reviewable.pdf"
+        source_bytes = write_text_pdf(
+            source,
+            "Protocol Reviewable\nSection preparation\n1. Add solution.",
+            title="Protocol Reviewable",
+        )
+        registration = await self._request(
+            "POST",
+            "/api/protocols?filename=reviewable.pdf",
+            content=source_bytes,
+        )
+        protocol_id = registration.json()["protocol"]["protocol_id"]
+        catalog, store = self._open_catalog()
+        try:
+            draft = analysis_draft(source, protocol_id, "Protocol Reviewable")
+            store.append_analysis_revision(
+                protocol_id,
+                1,
+                "analysis-reviewable",
+                draft.protocol,
+                draft.readiness,
+                draft.capability_policy_id,
+            )
+        finally:
+            store.close()
+
+        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}):
+            review = await self._request(
+                "GET",
+                f"/api/protocols/{protocol_id}/review",
+                content_type="application/json",
+            )
+            self.assertEqual(review.status_code, 200, review.text)
+            self.assertTrue(review.json()["development_activation_allowed"])
+            self.assertFalse(review.json()["available_for_execution"])
+            activated = await self._request(
+                "POST",
+                f"/api/protocols/{protocol_id}/activate-development",
+                content_type="application/json",
+            )
+            self.assertEqual(activated.status_code, 200, activated.text)
+            self.assertTrue(activated.json()["available_for_execution"])
+            self.assertTrue(activated.json()["development_only"])
+
+        with patch.dict(
+            os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "operational"}
+        ):
+            blocked = await self._request(
+                "POST",
+                f"/api/protocols/{protocol_id}/activate-development",
+                content_type="application/json",
+            )
+        self.assertEqual(blocked.status_code, 403, blocked.text)
+        self.assertEqual(
+            blocked.json(), {"detail": "development_activation_not_allowed"}
         )
         self.provider_factory.assert_not_called()
 

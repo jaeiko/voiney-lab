@@ -23,12 +23,10 @@ from voice_workflow_agent.tools import (
     execute_tool,
     normalize_report_arguments,
 )
-from voice_workflow_agent.completion_intent import (
-    is_learning_question,
-    is_version_question,
-    is_history_or_continuation_intent,
-    is_combined_learning_and_next_question,
-    is_speculative_or_uncertainty_question,
+from voice_workflow_agent.intent_arbitration import (
+    RequestArbitration,
+    RequestIntent,
+    arbitrate_request,
 )
 
 MAX_TOOL_ROUNDS = 4
@@ -797,6 +795,7 @@ async def stream_brain_turn(
     on_first_token: Callable[[], None] = lambda: None,
     on_tool_event: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     tool_context: ToolContext | None = None,
+    arbitration: RequestArbitration | None = None,
 ) -> BrainResult:
     """Run a bounded tool loop and speak only the final user-facing response."""
     user = {"role": "user", "content": transcript}
@@ -908,11 +907,13 @@ async def stream_brain_turn(
             + json.dumps(pending, ensure_ascii=False)
         )})
 
+    request = arbitration or arbitrate_request(transcript)
+
     if tool_context is not None and getattr(tool_context, "procedure_controller", None) is not None:
         controller = tool_context.procedure_controller
 
         # Fast-Path 1: Speculative Outcome & Scientific Uncertainty Question
-        if is_speculative_or_uncertainty_question(transcript):
+        if request.intent is RequestIntent.UNCERTAINTY:
             text = (
                 "현재 정보만으로 실험 성공 여부를 판단할 수 없습니다. 관찰 결과와 측정 데이터를 기록하면 함께 확인할 수 있습니다."
                 if language == "ko" else
@@ -924,7 +925,7 @@ async def stream_brain_turn(
             return BrainResult(group, text, None, [])
 
         # Fast-Path 2: Combined Question (Learning Context + Next Step Preview + Confirmation)
-        if is_combined_learning_and_next_question(transcript):
+        if request.intent is RequestIntent.COMBINED_LEARNING_NEXT:
             import time
             started = time.perf_counter()
             learning = controller.get_learning_context()
@@ -965,7 +966,7 @@ async def stream_brain_turn(
             return BrainResult(group, text, elapsed_ms, [GET_STEP_LEARNING_CONTEXT_TOOL_NAME])
 
         # Fast-Path 3: Learning Question
-        if is_learning_question(transcript):
+        if request.intent is RequestIntent.LEARNING:
             import time
             started = time.perf_counter()
             learning = controller.get_learning_context()
@@ -1011,7 +1012,7 @@ async def stream_brain_turn(
             return BrainResult(group, text, elapsed_ms, [GET_STEP_LEARNING_CONTEXT_TOOL_NAME])
 
         # Fast-Path 4: Protocol Version & Audit Inquiry
-        if is_version_question(transcript):
+        if request.intent is RequestIntent.PROTOCOL_AUDIT:
             import time
             started = time.perf_counter()
             info = controller.get_version_info()
@@ -1038,8 +1039,8 @@ async def stream_brain_turn(
             return BrainResult(group, text, elapsed_ms, [GET_PROTOCOL_VERSION_INFO_TOOL_NAME])
 
         # Fast-Path 5: Multi-Session Continuation & History
-        if (hist_cont := is_history_or_continuation_intent(transcript)) is not None:
-            kind = hist_cont[0]
+        if request.intent is RequestIntent.HISTORY_RESUME:
+            kind = "continue" if request.history_action == "resume" else "history"
             import time
             started = time.perf_counter()
             if kind == "continue":

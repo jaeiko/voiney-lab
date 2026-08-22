@@ -1,5 +1,7 @@
 # Intent Arbitration Fix Report: Server-Owned Priority & Laboratory Reliability
 
+> Historical implementation record. Current behavior is verified at the real `run_turn` boundary; see `CODEX_FINAL_COMMERCIALIZATION_REPORT.md`.
+
 **Document**: `docs/INTENT_ARBITRATION_FIX_REPORT.md`  
 **Author**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  

@@ -1,70 +1,67 @@
-# Product Context: Voice Workflow Agent (Voice Workflow Guide Lab Copilot)
+# Product context
 
-## 1. Product Vision & Mission
+## Product promise
 
-**Voice Workflow Agent** is an intelligent, hands-free AI Workflow Agent designed specifically for wet-lab research environments. 
-In biological, chemical, and materials science laboratories, researchers must maintain sterile conditions, wear protective gloves (PPE), handle delicate instruments, and execute complex multi-step protocols. Interacting with keyboards, touchscreens, or paper manuals during active experimentation causes contamination risks, protocol deviation, cognitive overload, and distraction.
+Voice Workflow Agent is an integration-light bench execution layer between a
+reviewed protocol document and an ELN/LIMS. It helps a scientist keep hands and
+attention on the experiment while providing concise source-linked instructions,
+timers, explicit observation capture, bounded explanations, and an audit-ready
+event record.
 
-**Core Mission**:
-Empower laboratory researchers to execute approved scientific workflows with zero manual tool-switching, complete traceability, grounded step-by-step guidance, and fail-safe human handoff.
+The product is not an autonomous scientist, safety authority, protocol approver,
+or system of record. It must be useful before deep instrument or ELN integration,
+but its commercial value increases when canonical events can be written to those
+systems under customer governance.
 
-```text
-+------------------+       +---------------------+       +-----------------------+
-|  GUIDE (Copilot) |  ==>  |  RECORD (Ledger)    |  ==>  |  HANDOFF (Safety Net) |
-|  Approved SOPs   |       |  Verbatim Notes     |       |  Structured Incident  |
-|  Strict Grounding|       |  Timers & Anomalies |       |  Supervisor Review    |
-+------------------+       +---------------------+       +-----------------------+
-```
+## Initial customer and use case
 
----
+The recommended initial customer is a small biotech, CRO team, university core
+facility, or training lab with 5–20 bench users and one repetitive, low-hazard,
+multi-step protocol currently run from PDF/paper with delayed data entry. The
+first pilot should avoid clinical decisions, controlled substances, autonomous
+equipment control, and high-hazard or regulated release workflows.
 
-## 2. Target Personas & Stakeholders
+Primary user jobs:
 
-### Primary Users (Hands-on Researchers)
-1. **Undergraduate Student Researchers & Interns**:
-   - *Characteristics*: Novice lab experience, high uncertainty, unfamiliar with specific protocol nuances or chemical safety boundaries.
-   - *Needs*: Clear, unambiguous step-by-step guidance; immediate clarification on terminology/units; automatic timer tracking; reassurance without guessing.
-   - *Pain Points*: Fear of making procedural mistakes; hesitation when encountering unexpected color/texture changes; difficulty recording observation data with gloved hands.
-2. **Graduate Researchers (Master's & Ph.D. Candidates)**:
-   - *Characteristics*: Proficient in standard laboratory routines, conducting repetitive yet sensitive multi-hour protocols.
-   - *Needs*: High-speed hands-free interaction; low voice latency; rapid step confirmation; reliable audit trail for laboratory notebooks; ability to log anomalies on the fly.
-   - *Pain Points*: Context switching between benchtop pipette and lab notebook; missed incubation timeframes; incomplete metadata for reproducibility.
+- “Tell me the exact current action without making me touch a screen.”
+- “Explain why this step exists without changing my workflow.”
+- “Keep the timer and record only what I actually observed.”
+- “Show the source page or a clearly labeled external visual.”
+- “Let me interrupt, repeat, pause, or ask a side question without losing state.”
 
-### Secondary Users (Laboratory Governance & Safety)
-1. **Laboratory Managers**:
-   - *Characteristics*: Responsible for lab safety, chemical inventory, equipment calibration, regulatory compliance, and incident resolution.
-   - *Needs*: Standardized incident reports with exact timestamps, step numbers, chemical names, and exposure status; zero unapproved protocol deviations.
-   - *Pain Points*: Under-reported near misses; vague verbal incident accounts; delayed communication of hazardous spills or malfunctioning equipment.
-2. **Principal Investigators (PIs)**:
-   - *Characteristics*: Oversee research projects, grant funding, and laboratory integrity.
-   - *Needs*: Verifiable protocol adherence; immutable digital experiment records; reproducible experimental results; complete audit summaries.
-   - *Pain Points*: Experimental irreproducibility caused by undocumented variations in student execution.
+Buyer/admin jobs:
 
----
+- Import and review a customer protocol without code changes.
+- Know why a protocol is not executable and who approved a revision.
+- See adoption, completion, latency, correction, and blocked-step aggregates
+  without exposing research content.
+- Export a traceable record and integrate it into the existing informatics stack.
 
-## 3. Core Product Principles
+## Product principles
 
-### Principle 1: Grounded Operation (Zero Hallucination)
-- The agent strictly differentiates between:
-  1. **Supported Information**: Facts explicitly present in the active approved SOP, safety catalog, or chemical data sheet.
-  2. **Unsupported Information**: Any query or instruction not covered by approved sources. The agent must state clearly: *"This information is not present in the approved protocol/manual. Please consult the lab manager."*
-  3. **Uncertain Information**: Ambiguous user speech or partial data must be clarified rather than guessed.
-- Numbers, units, chemical formulas, temperatures, and durations must be preserved verbatim.
+1. Reliability over personality. The professor persona is calm and concise, but
+   bounded truth and stable workflow behavior matter more than conversational
+   fluency.
+2. Preview before mutation. Explanations, audits, history, uncertainty, and
+   visuals are read-only. Ambiguous combined requests require confirmation.
+3. Evidence is visible. Source file, hash, revision, pages, citations, rights, and
+   limitations must survive every projection.
+4. Adoption is a workflow problem. Support noisy environments, accents, careful
+   protocol deviation, interruptions, multimodal displays, and quick recovery.
+5. Admin analytics are privacy-minimized. Aggregate operational metadata, not
+   audio, transcripts, private titles, identities, or model reasoning.
 
-### Principle 2: Human-Centered Safety (Human-in-the-Loop)
-- The AI copilot is an assistant, not an authority.
-- The agent **NEVER**:
-  - Authorizes resumption of a blocked or halted experiment.
-  - Determines that a hazardous chemical spill or contaminated area is "safe".
-  - Overrides required PPE or ventilation safety rules.
-  - Modifies approved SOP steps dynamically.
-- When an abnormal situation, spill, or exposure is detected:
-  - Collect: Location, factual summary, urgency, exposure status, equipment/material.
-  - Seek explicit human confirmation to submit.
-  - Block the active workflow (`blocked_for_handoff`).
-  - Queue a structured handoff artifact for the supervisor.
+## Commercial success measures
 
-### Principle 3: Workflow-First Architecture
-- The foundational entity of the system is the **Workflow State Machine**, not an open-ended conversational session.
-- State transitions (start, observation logging, timer start, step completion, block, complete) are strictly server-owned and immutable.
-- Conversational inputs trigger deterministic verification gates before state mutations occur.
+- Time from PDF upload to reviewed executable draft.
+- Percent of required steps/quantities/timers/observations preserved.
+- Zero unauthorized state transitions.
+- First-playable-audio and total-turn p50/p95.
+- Speech rejection and correction rate by controlled test corpus.
+- Documentation completeness and time saved versus baseline.
+- Pilot weekly active users, completed workflows, blocked-step distribution, and
+  customer-approved expansion intent.
+
+Do not claim readiness for operational or regulated use from offline test success
+alone. Production readiness requires customer validation, identity and access
+controls, approved data handling, and workflow-specific safety review.

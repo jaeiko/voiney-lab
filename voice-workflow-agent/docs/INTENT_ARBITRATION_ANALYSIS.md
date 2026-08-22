@@ -1,5 +1,7 @@
 # Intent Arbitration Analysis: Server-Owned Routing Priority & Laboratory Reliability
 
+> Historical diagnosis. The current shared classifier and production boundary are `intent_arbitration.py` and `runtime_routing.py`; see `CODEX_COMMERCIALIZATION_AUDIT.md`.
+
 **Document**: `docs/INTENT_ARBITRATION_ANALYSIS.md`  
 **Author**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  

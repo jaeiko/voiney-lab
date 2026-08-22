@@ -42,6 +42,9 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         protocol_id = "candidate-a-curated-development-v1"
         placeholder = Path("/tmp/offline-session-contract")
 
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             reports_db = Path(tmpdir) / "reports.sqlite"
             report_settings = ExperimentReportSettings(enabled=True, database_path=reports_db)
@@ -113,6 +116,9 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             ), patch(
                 "voice_workflow_agent.server.synthesize",
                 return_value=b"\x00\x00" * 320,
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate_to_thread,
             ):
                 asyncio.run(voice_socket(socket))
 
@@ -259,4 +265,3 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

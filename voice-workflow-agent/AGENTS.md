@@ -1,67 +1,84 @@
-# AGENTS.md — Agent Operating System Guidelines
+# AGENTS.md — Voice Workflow Agent engineering contract
 
-Welcome to **Voice Workflow Agent (Voice Workflow Guide Lab Copilot)**.
-This document is the root entrypoint and operating manual for all autonomous coding agents, AI pair programmers, and engineering contributors working on this repository.
+Voice Workflow Agent is a hands-free laboratory workflow copilot, not a generic
+chatbot. Its central authority is deterministic server-owned workflow state and
+source-linked protocol evidence.
 
----
+## Non-negotiable rules
 
-## 1. Prime Directive
+1. Never invent protocol steps, quantities, units, timers, chemical properties,
+   safety limits, observations, history, approval, or completion.
+2. LLM output never mutates workflow state. Every mutation passes deterministic
+   intent, identity, revision, observation, timer, confirmation, and safety gates.
+3. Learning, audit, history, uncertainty, combined, visual, current-step, and
+   state-control requests must use the shared `RequestArbitration` boundary. Do
+   not add a competing intent classifier in a helper or prompt.
+4. A read-only request must leave all workflow checkpoints unchanged. Combined
+   “explain + next” requests stage an explicit completion confirmation.
+5. Provider/model failures are visible, bounded, and non-mutating. External web
+   content is supplementary, untrusted context; it never overrides protocol or
+   approved safety evidence.
+6. Never log/commit API keys, `.env`, raw audio, private lab PDFs, transcripts,
+   user identifiers, runtime databases, or model reasoning. Logs and admin
+   metrics use explicit privacy-safe allowlists.
+7. Preserve canonical event schemas, exact scientific strings, source identity,
+   append-only ledgers, and stale generation/turn cancellation fences.
+8. The current voice product is Cascade-only. Do not document or configure a
+   Native/Realtime path unless executable code and integration tests are added.
 
-> **Voice Workflow Agent is a hands-free AI Workflow Agent for laboratory research, not a generic conversational chatbot.**
-> The central domain entity is **Workflow State**, strictly governed by server-owned deterministic gates and approved protocol definitions.
+## Current architecture map
 
-### Non-Negotiable Operating Principles:
-1. **Grounded Operation**: The agent relies exclusively on approved knowledge sources (approved SOPs, safety catalogs, verified protocols). Unsupported or missing information must be explicitly communicated as unsupported. The agent NEVER hallucinates chemical properties, SOP steps, exposure limits, or lab numbers.
-2. **Human-Centered Safety**: The agent NEVER makes safety-critical decisions, NEVER authorizes experiment restart after an anomaly, NEVER overrides PPE requirements, and NEVER replaces human lab managers or Principal Investigators (PIs).
-3. **Workflow-First Integrity**: The conversational layer (STT/LLM/TTS) is an interface to the server-owned Workflow State Machine. Model output cannot directly mutate workflow state; mutations must pass through strict validation gates, exact allow-lists, and deterministic preconditions.
-4. **Zero Unnecessary Rewrites**: Preserve all existing working behaviors, regression tests, and canonical contracts. Prefer minimal, surgical, safe changes over sweeping rewrites.
+- `src/voice_workflow_agent/server.py`: FastAPI, WebSocket, Cascade voice loop,
+  protocol APIs, external visual jobs, admin boundary.
+- `intent_arbitration.py`: shared deterministic request classifier.
+- `runtime_routing.py`: production curated-protocol routing boundary.
+- `curated_protocol.py`: source-bounded plan and checkpoint state machine.
+- `protocol_catalog.py`: immutable PDF/catalog lifecycle and source-linked review.
+- `experiment_protocol*.py`: structured analysis model, validation, readiness,
+  persistence, and fail-closed advanced constructs.
+- `web_visuals.py` / `external_references.py`: feature-gated current xAI/public
+  research adapters and same-origin visual proxy.
+- `experiment_reports.py`: append-only workflow event ledger and exports.
+- `runtime_metrics.py`: bounded content-free route/tool/latency aggregates.
+- `static/index.html`: production browser cockpit; it renders canonical server
+  events and never derives state from assistant prose.
 
----
+## Required change discipline
 
-## 2. Agent Documentation Suite (`/.agent/`)
+- Read the relevant files under `.agent/` before changing behavior.
+- Add a production-boundary test, not only a helper test, for routing/provider/UI
+  changes.
+- PDF lifecycle work must test success, corrupt/unsupported input, long-running
+  status, missing values, unsupported constructs, and operational approval gates.
+- Provider calls must be fake-backed offline. Live tests are opt-in, bounded, and
+  may never print credentials or full proprietary prompts/documents.
+- Use immutable typed models for durable domain objects. Validate external data at
+  ingress and use parameterized SQL.
+- Keep frontend text insertion on `textContent`; external images must be rights-
+  labeled, byte-validated, and same-origin proxied.
 
-All agents MUST consult the specialized manuals in `/.agent/` for detailed rules, architecture blueprints, testing protocols, and design systems:
+## Verification
 
-| Document | Purpose |
-|---|---|
-| [`product_context.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/product_context.md) | Product vision, personas (undergraduates, graduate researchers, lab managers, PIs), user journeys, and non-functional requirements. |
-| [`architecture.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/architecture.md) | Full architectural blueprint: Voice pipeline, Agent LLM orchestration, Workflow engine, Data layer, Worker handoff, and Frontend. |
-| [`coding_rules.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/coding_rules.md) | Strict engineering guidelines: type annotations, immutability, error handling, backward compatibility, and style constraints. |
-| [`testing_strategy.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/testing_strategy.md) | Testing requirements: unit tests, integration tests, latency benchmarks, interruption tests, and coverage criteria. |
-| [`security_rules.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/security_rules.md) | Security policies: approved knowledge boundary, sensitive research data handling, input sanitization, and audit trails. |
-| [`evaluation_strategy.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/evaluation_strategy.md) | Evaluation metrics: grounding accuracy, intent classification F1, tool selection precision, and handoff reliability. |
-| [`product_improvement_strategy.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/product_improvement_strategy.md) | Framework for product discovery, user pain point prioritization, feasibility scoring, and feature staging. |
-| [`roadmap.md`](file:///home/student/voice-ai-course/voice-workflow-agent/.agent/roadmap.md) | Strategic engineering and product roadmap from prototype to enterprise-grade wet-lab platform. |
-
----
-
-## 3. Quick Reference for Developers & Agents
-
-### Development Environment & Commands
 ```bash
-# Activate virtual environment
 source .venv/bin/activate
-
-# Run complete test suite
-pytest -q
-
-# Run fast unit tests only
-pytest tests/test_server_helpers.py tests/test_completion_intent.py tests/test_procedures.py
-
-# Start Voice Workflow Agent Server
-uvicorn voice_workflow_agent.server:app --host 0.0.0.0 --port 8000 --reload
-
-# Start Asynchronous Handoff Worker
-python -m voice_workflow_agent.worker
+python scripts/replay_turns.py
+python -m pytest -q
+python -m compileall -q src tests scripts
+git diff --check
 ```
 
-### Key Architectural File Map
-- **Core Server & Routing**: [`src/voice_workflow_agent/server.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/server.py)
-- **Agent Persona & LLM Loop**: [`src/voice_workflow_agent/brain.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/brain.py)
-- **Multi-Brain Roles**: [`src/voice_workflow_agent/multi_brain.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/multi_brain.py)
-- **Deterministic Tools**: [`src/voice_workflow_agent/tools.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/tools.py)
-- **Workflow State Controller**: [`src/voice_workflow_agent/procedures.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/procedures.py)
-- **Intent Classification Gates**: [`src/voice_workflow_agent/completion_intent.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/completion_intent.py)
-- **Audit Reports & Event Ledger**: [`src/voice_workflow_agent/experiment_reports.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/experiment_reports.py)
-- **Safety Handoff Worker**: [`src/voice_workflow_agent/worker.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/worker.py)
-- **Frontend Cockpit Dashboard**: [`src/voice_workflow_agent/static/index.html`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/static/index.html)
+Do not weaken or delete a regression test to make a change pass. If a documented
+claim is not exercised by code and tests, mark it historical or future work.
+
+## Documentation authority
+
+- `README.md`: current runnable product contract.
+- `docs/CODEX_COMMERCIALIZATION_AUDIT.md`: finding/fix/evidence/remaining-risk
+  ledger.
+- `docs/CODEX_FINAL_COMMERCIALIZATION_REPORT.md`: final verification and product
+  handoff.
+- `.agent/architecture.md`, `product_context.md`, `evaluation_strategy.md`,
+  `security_rules.md`, and `roadmap.md`: contributor design constraints.
+
+Older phase-numbered documents are historical evidence and cannot override current
+code, tests, or the documents above.

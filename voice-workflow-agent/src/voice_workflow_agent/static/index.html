@@ -332,10 +332,11 @@
     .setup-grid{
       margin-top:.85rem;
       display:grid;
-      grid-template-columns:1fr 1fr;
+      grid-template-columns:minmax(0,1fr) minmax(0,1fr);
       gap:1.25rem;
       align-items:start;
     }
+    .setup-grid>*{min-width:0}
     .setup-col-left{
       display:flex;
       flex-direction:column;
@@ -407,6 +408,23 @@
     }
     .protocol-register small{display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem}
     .protocol-register small:empty{display:none}
+    .protocol-review{
+      grid-column:1/-1;
+      border:1px solid var(--border-accent);
+      border-radius:var(--radius-sm);
+      background:rgba(88,101,242,.06);
+      padding:.65rem .8rem;
+    }
+    .protocol-review summary{cursor:pointer;color:var(--ink);font-size:.82rem;font-weight:800}
+    .protocol-review-status{margin:.55rem 0;color:var(--subtext);font-size:.78rem}
+    .protocol-review-content{display:grid;gap:.55rem;min-width:0;max-height:22rem;overflow:auto}
+    .protocol-review-group{padding:.6rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
+    .protocol-review-group h4{margin:0 0 .35rem;color:var(--blurple);font-size:.78rem}
+    .protocol-review-group p{margin:.2rem 0;color:var(--subtext);font-size:.75rem;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+    .protocol-review-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.65rem}
+    .protocol-review-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.45rem .7rem;font-weight:750;cursor:pointer}
+    .protocol-review-actions button:disabled{cursor:not-allowed;opacity:.45}
+    #protocol-development-activate{border-color:var(--green-cta);color:var(--green-cta)}
 
     .session-context{
       display:flex;
@@ -452,6 +470,15 @@
       border-radius:var(--radius-sm);
       background:rgba(10,13,58,.4);
     }
+    .admin-console{grid-column:1/-1;margin-top:.25rem;font-size:.75rem;color:var(--muted)}
+    .admin-console summary{cursor:pointer;color:var(--amber);font-weight:800}
+    .admin-access{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
+    .admin-access input{flex:1 1 15rem;min-width:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .7rem}
+    .admin-access button{border:1px solid var(--amber);border-radius:var(--radius-sm);background:rgba(240,178,50,.12);color:var(--amber);padding:.5rem .75rem;font-weight:800;cursor:pointer}
+    .admin-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.5rem;margin-top:.55rem}
+    .admin-metric{padding:.55rem .65rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
+    .admin-metric b{display:block;color:var(--ink);font-size:1rem}
+    .admin-privacy{grid-column:1/-1;color:var(--green-cta)}
     .context-chip{
       display:inline-flex;
       align-items:center;
@@ -813,7 +840,7 @@
     @media(max-width:980px){
       .shell{grid-template-columns:minmax(0,1fr);grid-template-areas:"setup" "work" "chat"}
       .voice-panel{grid-template-columns:1fr}
-      .setup-grid{grid-template-columns:1fr}
+      .setup-grid{grid-template-columns:minmax(0,1fr)}
       .task-body-split{grid-template-columns:1fr}
       .timeline{position:static;height:auto;max-height:none;min-height:0;width:100%}
     }
@@ -907,12 +934,23 @@
                   <option value="">카탈로그를 불러오는 중…</option>
               </select></label>
             </div>
+            <details id="protocol-review-panel" class="protocol-review" hidden open>
+              <summary>업로드 분석 검토 · 원문 근거와 실행 준비 상태</summary>
+              <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
+              <div id="protocol-review-content" class="protocol-review-content"></div>
+              <div class="protocol-review-actions">
+                <button id="protocol-review-refresh" type="button">검토 새로고침</button>
+                <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
+                <button id="protocol-development-activate" type="button" hidden>데모·연구용 초안 활성화</button>
+              </div>
+            </details>
             <details class="dev-diagnostics" style="grid-column:1/-1;margin-top:.35rem;">
               <summary>개발 상세 정보</summary>
               <div class="dev-chips">
                 <span class="context-chip"><b>실험 PDF</b><span id="protocol-readiness">카탈로그 확인 중</span></span>
                 <span class="context-chip"><b>안내 언어</b><span id="language-status">서버 고정 · 한국어</span></span>
                 <span class="context-chip"><b>마이크</b><span id="audio-processing-capability">확인 전</span></span>
+                <span class="context-chip"><b>음성</b><span id="voice-profile">Cascade · 확인 중</span></span>
                 <span class="context-chip"><b>리비전</b><span id="protocol-revision">—</span></span>
                 <span class="context-chip"><b>세션</b><span id="session-configuration-status">서버 확인 대기</span></span>
                 <span class="context-chip"><b>문서 분석</b><span id="protocol-analysis-progress">상태 없음</span></span>
@@ -923,6 +961,15 @@
                 <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
                 <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
               </div>
+            </details>
+            <details class="admin-console">
+              <summary>운영 관리자 · 비식별 집계</summary>
+              <div class="admin-access">
+                <input id="admin-token" type="password" autocomplete="off" aria-label="관리자 접근 토큰" placeholder="관리자 토큰">
+                <button id="admin-metrics-load" type="button">집계 불러오기</button>
+              </div>
+              <p id="admin-metrics-status" role="status">토큰은 이 요청에만 사용되며 브라우저에 저장하지 않습니다.</p>
+              <div id="admin-metrics" class="admin-metrics" hidden></div>
             </details>
           </div>
         </div>
@@ -1082,7 +1129,7 @@ const UI={
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"웹 참고 자료 검색",generate_instructional_visual:"설명용 이미지 생성",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인",start_procedure:"승인 절차 시작",get_current_step:"현재 절차 단계 확인",complete_current_step:"현재 절차 단계 완료",record_step_observation:"현재 단계 관찰 기록",start_step_timer:"현재 단계 타이머 시작",get_workflow_summary:"워크플로 감사 요약"};
-const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 참고 자료 질의",external_reference_qa:"웹 참고 자료 확인",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",completion_confirmation_declined:"완료 및 이동 취소",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단",agent_meta_information:"에이전트 역할 및 목적 안내",workflow_paused:"실험 일시 중지",workflow_resumed:"실험 재개",step_timer_started:"단계 타이머 시작",step_timer_status_read:"단계 타이머 상태 조회",step_preview_read:"단계 미리보기",expected_result_explanation:"예상 결과 설명",completion_criteria_read:"완료 조건 조회",operational_deviation_refused:"임의 절차 변경 거절",parameter_clarification_required:"파라미터 확인 필요",readonly_operation_cancelled:"조회 작업 취소"};
+const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",step_learning_read:"현재 단계 학습·주의 근거 조회",protocol_audit_read:"프로토콜 버전·해시 조회",experiment_history_read:"이전 실험 세션 조회",bounded_uncertainty_response:"실험 결과 불확실성 안내",learning_next_preview_confirmation:"단계 이유·다음 단계 미리보기·완료 확인",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 참고 자료 질의",external_reference_qa:"웹 참고 자료 확인",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",completion_confirmation_declined:"완료 및 이동 취소",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단",agent_meta_information:"에이전트 역할 및 목적 안내",workflow_paused:"실험 일시 중지",workflow_resumed:"실험 재개",step_timer_started:"단계 타이머 시작",step_timer_status_read:"단계 타이머 상태 조회",step_preview_read:"단계 미리보기",expected_result_explanation:"예상 결과 설명",completion_criteria_read:"완료 조건 조회",operational_deviation_refused:"임의 절차 변경 거절",parameter_clarification_required:"파라미터 확인 필요",readonly_operation_cancelled:"조회 작업 취소"};
 const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
 const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
 const TURN_ROUTE_LABELS={approved_information:"승인된 정보",brain:"일반 응답",curated_protocol:"개발용 절차",deterministic_emergency:"긴급 응답",deterministic_procedure:"승인 절차",language_clarification:"언어 확인"};
@@ -1182,6 +1229,8 @@ function startWorkflowTimer(){
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
 function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${report.report_id} · ${report.status||"unknown"}`;row.appendChild(title);container.appendChild(row);}return true;}
 function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`Step ${event.step_label}`:"일반";title.textContent=`${stepLabel} ${event.event_type||"이벤트"}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(String(timer.completion_state));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);container.appendChild(row);}return true;}
+function renderAdminMetrics(payload){const target=$("admin-metrics");if(!target||!payload||typeof payload!=="object")return false;const reporting=payload.experiment_reporting||{},reports=reporting.reports||{},quality=reporting.quality||{},events=reporting.workflow_events||{},catalog=payload.protocol_catalog||{},voice=payload.voice||{},runtime=payload.runtime||{},counters=runtime.counters||{},latency=runtime.latency_ms||{},firstAudio=latency.first_audio_ms?.p95,total=latency.total_ms?.p95;const values=[["실험 기록",Number(reports.total)||0],["완료율",Number.isFinite(reports.completion_rate)?`${Math.round(reports.completion_rate*100)}%`:"—"],["완료 단계",Number(events.step_completed)||0],["타이머 시작",Number(events.timer_started)||0],["차단",Number(quality.blockers)||0],["이상",Number(quality.anomalies)||0],["실행 PDF",`${Number(catalog.executable)||0}/${Number(catalog.total)||0}`],["완료 Turn",Number(counters.turns_completed)||0],["첫 음성 p95",Number.isFinite(firstAudio)?`${firstAudio} ms`:"—"],["전체 p95",Number.isFinite(total)?`${total} ms`:"—"],["이미지 검색",Number(counters.image_search_calls)||0],["음성",`${voice.pipeline||"—"} · ${voice.voice_id||"—"}`]];target.replaceChildren();for(const [label,value] of values){const card=document.createElement("div"),strong=document.createElement("b"),caption=document.createElement("span");card.className="admin-metric";strong.textContent=String(value);caption.textContent=label;card.append(strong,caption);target.appendChild(card);}const privacy=document.createElement("div");privacy.className="admin-privacy";privacy.textContent="원음·대화문·사용자 표현·보고서 식별자를 포함하지 않는 집계입니다.";target.appendChild(privacy);target.hidden=false;return true;}
+async function loadAdminMetrics(){const input=$("admin-token"),status=$("admin-metrics-status"),target=$("admin-metrics"),token=input?.value||"";if(!token){if(status)status.textContent="관리자 토큰을 입력해 주세요.";return false;}if(status)status.textContent="비식별 집계를 불러오는 중…";try{const response=await fetch("/api/admin/metrics",{method:"GET",cache:"no-store",headers:{"X-Voice-Workflow-Admin-Token":token}});if(!response.ok)throw new Error(response.status===403?"접근이 거부되었습니다.":response.status===503?"관리자 집계가 구성되지 않았습니다.":"집계를 불러오지 못했습니다.");const payload=await response.json();renderAdminMetrics(payload);if(status)status.textContent="운영 집계를 갱신했습니다.";return true;}catch(error){if(target)target.hidden=true;if(status)status.textContent=error?.message||"집계를 불러오지 못했습니다.";return false;}finally{if(input)input.value="";}}
 function startReportPolling(reportId){
  if(typeof reportId!=="string"||!reportId)return;
  lastReportId=reportId;stopReportPolling();
@@ -1229,16 +1278,11 @@ function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
   container.hidden=false;
   announceMilestone("시각 자료를 찾지 못했습니다.");
  }else if(message.status==="web_visual_ready"){
-  const candidate=message.candidate;
+ const candidate=message.candidate;
   let page,imgUrl=null;
   try{page=new URL(candidate?.source_page_url||candidate?.image_url,window.location.origin);}catch(_){return false;}
-  if(candidate?.image_url){
-   if(typeof candidate.image_url==="string"&&candidate.image_url.startsWith("/api/web-visuals/")){
-    imgUrl=candidate.image_url;
-   }else{
-    try{const imgObj=new URL(candidate.image_url);if(imgObj.protocol==="https:")imgUrl=candidate.image_url;}catch(_){}
-   }
-  }
+  if(page.protocol!=="https:"||typeof candidate?.publisher_domain!=="string"||page.hostname!==candidate.publisher_domain)return false;
+  if(typeof candidate?.image_url==="string"&&/^\/api\/web-visuals\/[0-9a-f]{64}$/.test(candidate.image_url))imgUrl=candidate.image_url;
   if(!["web_image_reference","chemical_structure_visual"].includes(candidate?.kind))return false;
   container.replaceChildren();
   container.hidden=false;
@@ -1265,6 +1309,7 @@ function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
    cap.textContent=normalizePresentationText(candidate.caption);
    container.appendChild(cap);
   }
+  if(candidate.rights){const rights=document.createElement("p");rights.textContent=`표시 권한 · ${normalizePresentationText(candidate.rights)}`;container.appendChild(rights);}
   const link=document.createElement("a");
   link.href=candidate.source_page_url||candidate.image_url;
   link.target="_blank";
@@ -1885,6 +1930,15 @@ function applyBrainAnswerEnrichment(message,browserGeneration=sessionGeneration)
  if(!currentResearchEvent(message,browserGeneration)||message.status!=="ready"||typeof message.display_answer!=="string"||!message.display_answer.trim())return false;
  const key=`${message.configuration_id}:${message.generation}:${message.turn_id}:answer-enrichment`;if(brainEvents.has(key))return false;brainEvents.set(key,{terminal:true,status:"ready"});const node=turnNode(message.turn_id,browserGeneration),reply=node.querySelector?.(".reply"),snapshot=beginChatPatch(node);if(!reply)return false;const block=document.createElement("div");block.className="research-supplement brain-enrichment";const heading=document.createElement("b");heading.textContent="추가 설명 · 읽기 전용";const body=document.createElement("span");body.textContent=normalizePresentationText(message.display_answer);block.appendChild(heading);block.appendChild(body);reply.appendChild(block);finishChatPatch(snapshot,"answer-enrichment");return true;
 }
+function applyRouteDecision(message,browserGeneration=sessionGeneration){
+ const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);
+ if(!accepted||accepted.mode!=="cascade"||message.configuration_id!==accepted.configuration_id||!Number.isInteger(message.turn_id)||!Number.isInteger(message.generation)||known!==message.generation||typeof message.intent!=="string"||typeof message.runtime_router!=="string"||typeof message.action!=="string"||typeof message.answer_origin!=="string"||typeof message.state_mutation!=="boolean")return false;
+ const node=turnNode(message.turn_id,browserGeneration),details=node.querySelector?.(".turn-diagnostics-body"),snapshot=beginChatPatch(node);if(!details)return false;
+ let line=details.querySelector?.(".route-decision");if(!line){line=document.createElement("div");line.className="route-decision";details.prepend(line);}
+ const fallback=typeof message.fallback_reason==="string"&&message.fallback_reason?` · fallback ${message.fallback_reason}`:"";
+ line.textContent=`Route · ${message.runtime_router} · intent ${message.intent} · action ${message.action} · mutation ${message.state_mutation?"yes":"no"} · origin ${message.answer_origin}${fallback}`;
+ finishChatPatch(snapshot,"route");return true;
+}
 function turnProgressKey(turnId,serverGeneration){return `${serverGeneration}:${turnId}`;}
 function turnBrowserKey(turnId,browserGeneration=sessionGeneration){return `${browserGeneration}:${turnId}`;}
 function validTurnStateTransition(previous,next){if(previous===null)return !["complete","blocked"].includes(next);return TURN_STATE_TRANSITIONS[previous]?.has(next)===true;}
@@ -1981,7 +2035,32 @@ async function startSession(){
   sendControl("session.start",pending);
  }catch(e){if(generation===sessionGeneration)fail(e);}
 }
-async function loadProtocolCatalog(){const selector=$("protocol-id");if(!selector||typeof fetch!=="function")return;const selected=selector.value,status=$("protocol-upload-status");selector.setAttribute?.("aria-busy","true");$("protocol-readiness").textContent="카탈로그 불러오는 중";if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";try{const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)throw new Error("catalog unavailable");const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];protocolCatalog.clear();selector.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);for(const item of entries){if(!item||typeof item.protocol_id!=="string"||typeof item.title!=="string"||typeof item.revision_id!=="string")continue;protocolCatalog.set(item.protocol_id,{...item});const option=document.createElement("option");option.value=item.protocol_id;option.disabled=item.available_for_execution!==true;option.textContent=`${item.title} · ${catalogStatus(item).label}`;option.dataset.revisionId=item.revision_id;selector.appendChild(option);}if([...selector.options].some(option=>option.value===selected&&!option.disabled))selector.value=selected;else{const first=[...selector.options].find(option=>option.value&&!option.disabled);selector.value=first?.value||"";}if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 선택할 수 있습니다.`;renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();}catch(_){protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";}finally{selector.setAttribute?.("aria-busy","false");}}
+async function loadProtocolCatalog(preferredProtocolId=null){
+ const selector=$("protocol-id");
+ if(!selector||typeof fetch!=="function")return;
+ const selected=preferredProtocolId||selector.value,status=$("protocol-upload-status");
+ selector.setAttribute?.("aria-busy","true");
+ $("protocol-readiness").textContent="카탈로그 불러오는 중";
+ if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
+ try{
+  const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
+  if(!response.ok)throw new Error("catalog unavailable");
+  const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
+  protocolCatalog.clear();selector.replaceChildren();
+  const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);
+  for(const item of entries){
+   if(!item||typeof item.protocol_id!=="string"||typeof item.title!=="string"||typeof item.revision_id!=="string")continue;
+   protocolCatalog.set(item.protocol_id,{...item});
+   const option=document.createElement("option");option.value=item.protocol_id;option.disabled=item.available_for_execution!==true;option.textContent=`${item.title} · ${catalogStatus(item).label}`;option.dataset.revisionId=item.revision_id;selector.appendChild(option);
+  }
+  if([...selector.options].some(option=>option.value===selected&&!option.disabled))selector.value=selected;
+  else{const first=[...selector.options].find(option=>option.value&&!option.disabled);selector.value=first?.value||"";}
+  if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 선택할 수 있습니다.`;
+  renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();
+ }catch(_){
+  protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";
+ }finally{selector.setAttribute?.("aria-busy","false");}
+}
 
 const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  invalid_pdf:"PDF 파일이 손상되었거나 다운로드가 완료되지 않았습니다. 원본 파일을 다시 내려받아 선택해 주세요.",
@@ -1991,6 +2070,11 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  protocol_pdf_too_large:"PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요.",
  pdf_too_large:"PDF 파일 크기가 등록 한도를 초과했습니다. 더 작은 파일을 선택해 주세요.",
  protocol_catalog_unavailable:"프로토콜 등록 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요.",
+ ocr_required:"스캔 문서로 감지되어 OCR 텍스트 추출이 필요합니다. 원문을 수정하지 않고 별도 OCR 절차를 진행해 주세요.",
+ analysis_failed:"구조 분석에 실패했습니다. 원문은 보존되었으며 다시 시도할 수 있습니다.",
+ chunk_analysis_failed:"대형 문서 일부 분석에 실패했습니다. 실패 상태를 검토한 뒤 새 분석을 요청해 주세요.",
+ merge_conflict:"대형 문서 분석 결과에 병합 충돌이 있습니다. 사람의 검토가 필요합니다.",
+ development_activation_not_allowed:"운영 범위에서는 개발용 활성화를 사용할 수 없습니다. 승인된 서비스 절차를 이용해 주세요.",
  network_error:"서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
  unexpected_server_error:"PDF 등록 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 });
@@ -2001,6 +2085,87 @@ async function safeProtocolUploadPayload(response){
  try{const payload=await response.json();return payload&&typeof payload==="object"&&!Array.isArray(payload)?payload:null;}catch(_){return null;}
 }
 let isRegisteringProtocol=false;
+let currentProtocolReviewId=null;
+let protocolAnalysisPollHandle=null;
+
+function stopProtocolAnalysisPolling(){if(protocolAnalysisPollHandle!==null){clearInterval(protocolAnalysisPollHandle);protocolAnalysisPollHandle=null;}}
+function reviewEvidenceText(evidence){return evidence&&Number.isInteger(evidence.source_page_number)?`원문 p.${evidence.source_page_number} · ${String(evidence.source_excerpt||"")}`:"원문 근거 없음";}
+function reviewScientificValues(values){return(Array.isArray(values)?values:[]).map(value=>value?.source_text).filter(value=>typeof value==="string"&&value).join(", ");}
+function appendProtocolReviewGroup(title,lines){
+ const content=$("protocol-review-content");if(!content)return;
+ const group=document.createElement("section"),heading=document.createElement("h4");group.className="protocol-review-group";heading.textContent=title;group.appendChild(heading);
+ for(const line of lines.filter(value=>typeof value==="string"&&value.trim())){const paragraph=document.createElement("p");paragraph.textContent=line;group.appendChild(paragraph);}
+ content.appendChild(group);
+}
+function renderProtocolReview(review){
+ const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),activate=$("protocol-development-activate");
+ if(!panel||!content||!status)return false;
+ panel.hidden=false;panel.open=true;content.replaceChildren();
+ const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
+ status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
+ appendProtocolReviewGroup("원문과 분석 리비전",[
+  `파일 · ${source.filename||review?.source_filename||"—"}`,
+  `원문 SHA-256 · ${source.sha256||review?.source_sha256||"—"}`,
+  `페이지 · ${Number.isInteger(source.page_count)?source.page_count:"—"} · 리비전 ${review?.revision_id||"—"}`,
+  `분석 페이로드 SHA-256 · ${review?.analysis_payload_sha256||"분석 전"}`,
+ ]);
+ appendProtocolReviewGroup("실행 준비 판정",[
+  `상태 · ${readiness.status||review?.readiness_status||"analysis_required"} · ${readiness.label||""}`,
+  ...reasons.map(reason=>`${reason.code||"reason"} · ${reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
+  review?.available_for_execution===true?"실행 가능":"검토·승인 또는 명시적 개발 활성화 전 실행 불가",
+ ]);
+ const materials=(Array.isArray(review?.materials)?review.materials:[]).map(item=>`${item.name_source_text||item.material_id}${reviewScientificValues(item.quantities)?` · ${reviewScientificValues(item.quantities)}`:""} · ${reviewEvidenceText(item.evidence)}`);
+ const equipment=(Array.isArray(review?.equipment)?review.equipment:[]).map(item=>`${item.name_source_text||item.equipment_id}${reviewScientificValues(item.settings)?` · ${reviewScientificValues(item.settings)}`:""} · ${reviewEvidenceText(item.evidence)}`);
+ if(materials.length||equipment.length)appendProtocolReviewGroup("재료·장비",[...materials,...equipment]);
+ for(const section of Array.isArray(review?.sections)?review.sections:[]){
+  for(const step of Array.isArray(section?.steps)?section.steps:[]){
+   const lines=[step.instruction_source_text,reviewEvidenceText(step.evidence)];
+   for(const action of Array.isArray(step.sub_actions)?step.sub_actions:[]){
+    lines.push(`동작 · ${action.instruction_source_text||action.action_id}`);
+    const quantity=reviewScientificValues(action.quantities);if(quantity)lines.push(`수량·조건 · ${quantity}`);
+    if(action.process_timer?.duration?.source_text)lines.push(`타이머 · ${action.process_timer.duration.source_text}`);
+    for(const warning of Array.isArray(action.warnings)?action.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
+    for(const missing of Array.isArray(action.missing_execution_values)?action.missing_execution_values:[])lines.push(`누락값 · ${missing.description} · ${reviewEvidenceText(missing.evidence)}`);
+    lines.push(reviewEvidenceText(action.evidence));
+   }
+   for(const warning of Array.isArray(step.warnings)?step.warnings:[])lines.push(`주의 · ${warning.source_text} · ${reviewEvidenceText(warning.evidence)}`);
+   appendProtocolReviewGroup(`${section.title_source_text||section.section_id||"섹션"} · ${step.source_label||step.step_id}단계`,lines);
+  }
+ }
+ for(const construct of Array.isArray(review?.constructs)?review.constructs:[]){
+  const description=construct.source_text||construct.condition_source_text||construct.range_source_text||construct.resolution_source_text||"구조화 워크플로 항목";
+  appendProtocolReviewGroup(`분기·반복·모호성 · ${construct.construct_type||"workflow_construct"}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)]);
+ }
+ if(retry){retry.hidden=!(["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status));retry.disabled=isRegisteringProtocol;}
+ if(activate){activate.hidden=review?.development_activation_allowed!==true;activate.disabled=isRegisteringProtocol;}
+ return true;
+}
+async function loadProtocolReview(protocolId=currentProtocolReviewId){
+ if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
+ currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status");if(panel){panel.hidden=false;panel.open=true;}if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload);return payload;}catch(_){if(status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
+}
+async function pollProtocolAnalysisStatus(protocolId){
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis/status`,{headers:{Accept:"application/json"},redirect:"error"});if(!response.ok)return;const run=await response.json();if(currentProtocolReviewId!==protocolId)return;const output=$("protocol-analysis-progress");if(output)output.textContent=`분석 처리 중 · ${run.state||"요청됨"} · 완료 ${run.completed_chunks||0} / 전체 ${run.total_chunks||0} · 실행 상태 변경 없음`; }catch(_){}
+}
+function startProtocolAnalysisPolling(protocolId){stopProtocolAnalysisPolling();protocolAnalysisPollHandle=setInterval(()=>{void pollProtocolAnalysisStatus(protocolId);},1000);protocolAnalysisPollHandle?.unref?.();}
+async function analyzeRegisteredProtocol(protocolId){
+ const status=$("protocol-upload-status");currentProtocolReviewId=protocolId;if(status)status.textContent="원문 PDF 등록 완료 · 구조 분석 진행 중…";startProtocolAnalysisPolling(protocolId);
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/analysis`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"analysis_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}
+  if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return null;}
+  if(payload.available_for_execution===true||payload.analysis_status==="active_development")status.textContent="구조 분석 완료 · 실행 가능한 개발 리비전입니다.";
+  else if(payload.readiness_status==="guidance_ready")status.textContent="구조 분석 완료 · 원문 근거를 검토한 뒤 데모·연구용으로 활성화할 수 있습니다.";
+  else status.textContent="구조 분석 완료 · 모호성·누락값 또는 지원하지 않는 워크플로 때문에 실행할 수 없습니다.";
+  await loadProtocolReview(protocolId);return payload;
+ }catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");await loadProtocolReview(protocolId);return null;}finally{stopProtocolAnalysisPolling();}
+}
+async function activateReviewedProtocol(){
+ const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-development-activate");if(!protocolId||isRegisteringProtocol)return;
+ if(button)button.disabled=true;if(status)status.textContent="데모·연구용 활성화 정책을 확인하는 중…";
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/activate-development`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);return;}if(status)status.textContent="개발용 초안 활성화 완료 · 최종 승인 리비전은 아닙니다.";await loadProtocolCatalog(protocolId);await loadProtocolReview(protocolId);}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");}finally{if(button)button.disabled=false;}
+}
 async function registerSelectedProtocol(){
  const input=$("protocol-pdf"),status=$("protocol-upload-status"),file=input?.files?.[0];
  if(!file){if(status)status.textContent="등록할 PDF를 선택해 주세요.";return;}
@@ -2016,30 +2181,15 @@ async function registerSelectedProtocol(){
   const payload=await safeProtocolUploadPayload(response);
   if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);if(input)input.value="";return;}
   if(!payload){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");if(input)input.value="";return;}
-  if(payload.protocol_id){
-   if(status)status.textContent="원문 PDF 등록 완료 · 구조 분석 진행 중…";
-   try{
-    const analysisRes=await fetch(`/api/protocols/${encodeURIComponent(payload.protocol_id)}/analysis`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"});
-    if(analysisRes.ok){
-     const aPayload=await analysisRes.json();
-     if(aPayload.available_for_execution===true||aPayload.analysis_status==="active_development"||aPayload.readiness_status==="guidance_ready"){
-      if(status)status.textContent="구조 분석 완료! 실험 가이드가 준비되었습니다.";
-     }else if(aPayload.analysis_status==="ocr_required"){
-      if(status)status.textContent="스캔 문서(OCR 필요)로 감지되어 텍스트 추출이 필요합니다.";
-     }else{
-      if(status)status.textContent="구조 분석 완료 · 검토 후 사용 가능합니다.";
-     }
-    }
-   }catch(_){}
-  }else{
-   if(status)status.textContent=payload.deduplicated?"동일 PDF가 이미 등록되어 있습니다.":"등록 완료 · 분석·검토·승인 전에는 실행할 수 없습니다.";
-  }
-  await loadProtocolCatalog();
-  if(payload.protocol_id&&$("protocol-id")){
-   $("protocol-id").value=payload.protocol_id;
-   renderSelectedProtocolContext();
-  }
- }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");}
+  const registered=payload.protocol&&typeof payload.protocol==="object"?payload.protocol:null,protocolId=typeof registered?.protocol_id==="string"?registered.protocol_id:null;
+  if(!protocolId){if(status)status.textContent=protocolUploadErrorMessage("unexpected_server_error");return;}
+  currentProtocolReviewId=protocolId;
+  const analyzable=["structured_analysis_ready","chunked_analysis_required","analysis_failed","chunk_analysis_failed","merge_conflict"].includes(registered.analysis_status);
+  if(registered.available_for_execution===true){if(status)status.textContent=payload.deduplicated?"동일한 실행 가능 PDF가 이미 등록되어 있습니다.":"등록 완료 · 실행 가능한 리비전입니다.";await loadProtocolReview(protocolId);}
+  else if(analyzable)await analyzeRegisteredProtocol(protocolId);
+  else{if(status)status.textContent=registered.analysis_status==="ocr_required"?protocolUploadErrorMessage("ocr_required"):"등록 완료 · 분석 결과를 검토해 주세요.";await loadProtocolReview(protocolId);}
+  await loadProtocolCatalog(protocolId);
+ }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const activate=$("protocol-development-activate");if(activate&&!activate.hidden)activate.disabled=false;}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode="manual";acknowledgedLanguage="ko";const names={ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","서버 고정 · "+(names[language]||"한국어"));}
 function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
@@ -2087,7 +2237,7 @@ async function onMessage(e,generation,current){
   return;
  }
  const m=JSON.parse(e.data);
- if(m.type==="ready"){renderResearchCapabilities(m.research_capabilities);if(visibleState==="IDLE")renderState("IDLE");}
+ if(m.type==="ready"){renderResearchCapabilities(m.research_capabilities);if(m.voice_profile&&typeof m.voice_profile==="object")$("voice-profile").textContent=`${m.voice_profile.persona||"assistant"} · ${m.voice_profile.voice_id||"unknown"} · ${m.voice_profile.pipeline||"cascade"}`;if(visibleState==="IDLE")renderState("IDLE");}
  if(m.type==="session.ready"){
   const pending=pendingSessionConfiguration,revisionValid=pending?.protocol_id===null?(m.revision_id===null||m.revision_id===undefined):(typeof m.revision_id==="string"&&m.revision_id.length>0),valid=pending&&Number.isInteger(m.configuration_id)&&m.configuration_id===pending.configuration_id&&m.mode===pending.mode&&m.language===pending.language&&m.protocol_id===pending.protocol_id&&revisionValid;
   if(!valid)return;
@@ -2124,6 +2274,7 @@ async function onMessage(e,generation,current){
  if(m.type==="research.result")applyResearchResult(m,generation);
  if(m.type==="brain.state")applyBrainState(m,generation);
  if(m.type==="brain.answer.enrichment")applyBrainAnswerEnrichment(m,generation);
+ if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
   const report=m.report;lastReportId=report.report_id;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${report.status} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
@@ -2168,6 +2319,10 @@ $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-sessio
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});
 $("toggle-setup-btn")?.addEventListener("click",()=>{const hero=$("hero-setup"),btn=$("toggle-setup-btn");if(!hero||!btn)return;const c=hero.classList.toggle("collapsed");btn.textContent=c?"⚙️ 설정 열기":"⚙️ 설정 접기";btn.setAttribute("aria-expanded",String(!c));});
 $("protocol-id")?.addEventListener("change",renderSelectedProtocolContext);$("repeat-step")?.addEventListener("click",()=>voiceCommandHint("다시 말해 줘"));$("next-step")?.addEventListener("click",()=>voiceCommandHint("다음 단계로 넘어가 줘"));
+$("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolReview();});
+$("protocol-analysis-retry")?.addEventListener("click",async()=>{if(!currentProtocolReviewId)return;await analyzeRegisteredProtocol(currentProtocolReviewId);await loadProtocolCatalog(currentProtocolReviewId);});
+$("protocol-development-activate")?.addEventListener("click",()=>{void activateReviewedProtocol();});
+$("admin-metrics-load")?.addEventListener("click",()=>{void loadAdminMetrics();});
 
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});

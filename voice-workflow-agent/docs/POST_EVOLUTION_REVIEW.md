@@ -1,5 +1,7 @@
 # Post-Implementation Architecture Review: Voice Workflow Agent
 
+> Historical review. Superseded by the 2026-08-22 commercialization audit and current `.agent/architecture.md`.
+
 **Document**: `docs/POST_EVOLUTION_REVIEW.md`  
 **Auditor**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  

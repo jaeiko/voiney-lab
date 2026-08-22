@@ -340,6 +340,100 @@ class ExperimentReportStore:
             for row in rows
         ]
 
+    def aggregate_metrics(self) -> dict[str, Any]:
+        """Return privacy-minimized operational aggregates for administrators.
+
+        This projection intentionally omits report/session identifiers, protocol
+        titles, free-form user wording, event payloads, and citation identities.
+        """
+
+        tracked_events = (
+            "session_started",
+            "step_presented",
+            "step_completed",
+            "timer_started",
+            "observation",
+            "anomaly",
+            "blocked",
+            "workflow_paused",
+            "workflow_resumed",
+            "source_consulted",
+            "workflow_completed",
+        )
+        with self._connect() as connection:
+            report_row = connection.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
+                       SUM(anomaly_count) AS anomalies,
+                       SUM(blocker_count) AS blockers
+                  FROM experiment_reports
+                """
+            ).fetchone()
+            status_rows = connection.execute(
+                """
+                SELECT status,COUNT(*) AS count
+                  FROM experiment_reports
+                 GROUP BY status ORDER BY status
+                """
+            ).fetchall()
+            placeholders = ",".join("?" for _ in tracked_events)
+            event_rows = connection.execute(
+                f"""
+                SELECT event_type,COUNT(*) AS count
+                  FROM experiment_report_events
+                 WHERE event_type IN ({placeholders})
+                 GROUP BY event_type ORDER BY event_type
+                """,
+                tracked_events,
+            ).fetchall()
+            blocked_rows = connection.execute(
+                """
+                SELECT COALESCE(step_label,'unlabeled') AS step_label,
+                       COUNT(*) AS count
+                  FROM experiment_report_events
+                 WHERE event_type='blocked'
+                 GROUP BY COALESCE(step_label,'unlabeled')
+                 ORDER BY count DESC,step_label
+                 LIMIT 10
+                """
+            ).fetchall()
+        total = int(report_row["total"] or 0)
+        completed = int(report_row["completed"] or 0)
+        event_counts = {item: 0 for item in tracked_events}
+        event_counts.update(
+            {str(row["event_type"]): int(row["count"]) for row in event_rows}
+        )
+        return {
+            "reports": {
+                "total": total,
+                "completed": completed,
+                "completion_rate": round(completed / total, 4) if total else None,
+                "by_status": {
+                    str(row["status"]): int(row["count"])
+                    for row in status_rows
+                },
+            },
+            "workflow_events": event_counts,
+            "quality": {
+                "anomalies": int(report_row["anomalies"] or 0),
+                "blockers": int(report_row["blockers"] or 0),
+                "common_blocked_steps": [
+                    {
+                        "step_label": str(row["step_label"]),
+                        "count": int(row["count"]),
+                    }
+                    for row in blocked_rows
+                ],
+            },
+            "privacy": {
+                "raw_audio_included": False,
+                "transcripts_included": False,
+                "free_text_included": False,
+                "report_identifiers_included": False,
+            },
+        }
+
     def export_json(self, report_id: str) -> bytes:
         return (
             json.dumps(

@@ -1,33 +1,44 @@
-# Product & Engineering Roadmap: From Prototype to Commercial AI Platform
+# Product and engineering roadmap
 
-## Phase 1: Stability Hardening & Production Reliability (Immediate / Current Milestone)
-- **Goal**: Transform the AX Program prototype into an unbreakable, robust lab agent MVP.
-- **Key Deliverables**:
-  - Comprehensive Agent Operating System documentation (`/AGENTS.md`, `/.agent/*`).
-  - Rigorous engineering and product discovery audits (`docs/FINAL_ENGINEERING_AUDIT.md`, `docs/PRODUCT_IMPROVEMENT_PROPOSAL.md`).
-  - Zero-flakiness test suite (640+ automated unit and integration tests passing).
-  - Robust exception handling and graceful fallbacks for all external dependencies (LLM, STT, TTS, Moss, PubChem).
-  - Production-ready session lifecycle management and resilient WebSocket reconnect handling.
+## P0 — controlled pilot readiness
 
-## Phase 2: Enhanced Grounding & Multi-Modal Lab Assistance (Q3 2026)
-- **Goal**: Expand real-time laboratory perception and multi-modal guidance.
-- **Key Deliverables**:
-  - **Dynamic Visual Grounding**: Real-time rendering of apparatus schematics, chemical safety pictograms (GHS), and titration curves.
-  - **Researcher Learning & Context Mode**: On-demand verbal explanations of *why* specific steps are required and common execution pitfalls.
-  - **Multi-lingual Hardening**: Full native conversational fluency and terminology grounding across Korean, English, and Vietnamese.
-  - **Enhanced Noise Suppression**: Lab-tuned audio preprocessing for centrifuges, ultrasonic baths, and laminar flow hoods.
+- Finish actual-browser upload/review/session/error recovery checks in CI.
+- Add OIDC/SSO, tenant-scoped RBAC, admin roles, CSRF policy, rate limits, and
+  centralized secret management; replace the shared admin token.
+- Define encryption, backup, retention, deletion, incident response, DPA, and
+  provider data-handling policy.
+- Add one production-grade ELN write-back connector with idempotency and human
+  review; keep the app out of the system-of-record role.
+- Run noisy-lab/accent evaluations with real target users and publish correction,
+  task-completion, interruption, and latency distributions.
+- Establish protocol approval roles, revision diff/revocation, and audit export.
 
-## Phase 3: Non-Linear Workflows & Multi-Day Experiment Lifecycle (Q4 2026)
-- **Goal**: Support complex, conditional scientific protocols and multi-session workflows.
-- **Key Deliverables**:
-  - **Workflow DAG Engine**: Support conditional branching based on quantitative observations (e.g. *if pH < 6.5, branch to Step 3B*).
-  - **Session Continuation & Cross-Shift Handover**: "Continue yesterday's PCR protocol" with historical observation pre-loading and pending step review.
-  - **Protocol Ingestion Studio**: Automated conversion and chunking of arbitrary lab PDF/DOCX protocols with human approval workflow.
-  - **Structured Lab Knowledge Layer**: Clustering anomalous observations across experiments into actionable institutional SOP improvements.
+## P1 — repeatable commercial product
 
-## Phase 4: Enterprise Lab Integration & Compliance (2027)
-- **Goal**: Seamless deployment into regulated pharmaceutical, biotech, and university labs.
-- **Key Deliverables**:
-  - **ELN/LIMS Integration**: Two-way synchronization with Electronic Lab Notebooks (Benchling, LabArchives) and LIMS platforms.
-  - **GLP/GMP Compliance & Audit Certification**: 21 CFR Part 11 compliant digital signatures, immutable audit logs, and role-based access control (RBAC).
-  - **Supervisor Analytics Dashboard**: Lab-wide metrics on protocol adherence, step bottleneck analysis, and incident frequency heatmaps.
+- Protocol review workspace with assigned reviewers, inline source diffs,
+  clarification resolution, and approval signatures.
+- Durable monitoring/export for route, tool, latency, onboarding funnel, provider
+  spend, correction, abandonment, and blocked-step metrics.
+- ELN/LIMS/instrument connector SDK and customer-specific data maps.
+- Organization/tenant isolation, regional deployment, SCIM, audit API, and support
+  tooling.
+- Offline/degraded mode and lab-device/headset qualification.
+- Accessibility/usability validation for gloves, PPE, mobility, vision, and noisy
+  environments.
+
+## P2 — advanced workflows
+
+- Reviewed execution semantics for conditionals, repeats, parallel work, reusable
+  subprocedures, multi-day continuation, and cross-shift handoff.
+- Human-approved anomaly clustering and protocol improvement suggestions.
+- Multilingual terminology packs evaluated per language and facility.
+- Richer source-linked diagrams and equipment imagery with rights provenance.
+
+## Explicit non-goals until separately validated
+
+- autonomous protocol approval or modification;
+- autonomous safety decisions or work-resume authorization;
+- clinical or medical decision support;
+- unsupervised equipment control;
+- claims of 21 CFR Part 11, GLP/GMP, ISO, or GxP compliance from architecture or
+  unit tests alone.

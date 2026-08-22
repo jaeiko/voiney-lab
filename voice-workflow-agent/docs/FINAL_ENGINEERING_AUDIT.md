@@ -1,5 +1,7 @@
 # Comprehensive Engineering Audit: Voice Workflow Agent
 
+> Historical snapshot. Superseded by `CODEX_COMMERCIALIZATION_AUDIT.md` (2026-08-22); claims here may describe older routes or test counts.
+
 **Document**: `docs/FINAL_ENGINEERING_AUDIT.md`  
 **Auditor**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Baseline Git Tag**: `before-antigravity-final-audit`  

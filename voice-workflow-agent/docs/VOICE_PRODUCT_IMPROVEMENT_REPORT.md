@@ -1,5 +1,7 @@
 # Voice Product Improvement Report: Intelligent Conversational Routing & Lab Assistant UX
 
+> Historical proposal. Current product scope, market evidence, and remaining gates are in `CODEX_COMMERCIALIZATION_AUDIT.md`.
+
 **Document**: `docs/VOICE_PRODUCT_IMPROVEMENT_REPORT.md`  
 **Author**: Principal AI Engineer, AI Agent Architect & Startup CTO  
 **Repository**: `/home/student/voice-ai-course/voice-workflow-agent`  
