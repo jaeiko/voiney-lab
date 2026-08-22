@@ -22,6 +22,11 @@ from voice_workflow_agent.server import (
     ServerConfig,
     voice_socket,
 )
+from voice_workflow_agent.identity import Principal, Role
+from voice_workflow_agent.workspace_store import (
+    WorkspaceSettings,
+    initialize_workspace_store,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -143,6 +148,124 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(report_state)
             self.assertIn("report", report_state)
             self.assertEqual(report_state["report"]["status"], "in_progress")
+
+    def test_workspace_voice_session_is_durable_and_ready_recovery_does_not_start_protocol(
+        self,
+    ) -> None:
+        protocol_id = "candidate-a-curated-development-v1"
+        placeholder = Path("/tmp/offline-session-contract")
+        config = ServerConfig(
+            placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
+            None, None, placeholder, placeholder, placeholder,
+        )
+
+        class Socket:
+            def __init__(self, start_payload):
+                self.sent = []
+                self.headers = {"x-voice-dev-profile": "researcher-a"}
+                self.query_params = {}
+                self.messages = iter((
+                    {"text": json.dumps(start_payload)},
+                    {"type": "websocket.disconnect", "code": 1000},
+                ))
+
+            async def accept(self):
+                pass
+
+            async def send_text(self, value):
+                self.sent.append(json.loads(value))
+
+            async def send_bytes(self, value):
+                pass
+
+            async def receive(self):
+                return next(self.messages)
+
+        profile = {
+            "profile_id": "researcher-a",
+            "principal_id": "principal-researcher-a",
+            "organization_id": "tenant-a",
+            "display_name": "Researcher A",
+            "roles": ["researcher"],
+        }
+        principal = Principal(
+            principal_id=profile["principal_id"],
+            subject="dev:researcher-a",
+            organization_id=profile["organization_id"],
+            display_name=profile["display_name"],
+            roles=frozenset({Role.RESEARCHER}),
+            authentication_method="development",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            store.bootstrap_principal(principal)
+            store.bind_resource(principal, "protocol_catalog", protocol_id)
+            store.close()
+            environment = {
+                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
+                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace_dir),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
+                "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+            }
+            initial = {
+                "type": "session.start",
+                "configuration_id": 1,
+                "mode": "cascade",
+                "language": "ko",
+                "protocol_id": protocol_id,
+            }
+            first = Socket(initial)
+            with patch.dict("os.environ", environment, clear=False), patch(
+                "voice_workflow_agent.server.server_config", return_value=config
+            ), patch(
+                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                return_value=ExperimentReportSettings(False),
+            ), patch(
+                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                return_value=self.fixture,
+            ):
+                asyncio.run(voice_socket(first))
+            ready = next(item for item in first.sent if item["type"] == "session.ready")
+            session_id = ready["experiment_session_id"]
+            version = ready["experiment_session_version"]
+            self.assertFalse(ready["experiment_recovered"])
+            first_state = next(
+                item["state"] for item in first.sent
+                if item["type"] == "experiment.session.state"
+            )
+            self.assertEqual(first_state["status"], "ready")
+
+            recovery = {
+                **initial,
+                "configuration_id": 2,
+                "experiment_session_id": session_id,
+                "experiment_session_version": version,
+            }
+            second = Socket(recovery)
+            with patch.dict("os.environ", environment, clear=False), patch(
+                "voice_workflow_agent.server.server_config", return_value=config
+            ), patch(
+                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                return_value=ExperimentReportSettings(False),
+            ), patch(
+                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                return_value=self.fixture,
+            ):
+                asyncio.run(voice_socket(second))
+            recovered = next(
+                item for item in second.sent if item["type"] == "session.ready"
+            )
+            self.assertEqual(recovered["experiment_session_id"], session_id)
+            self.assertTrue(recovered["experiment_recovered"])
+            fixture_state = next(
+                item["state"] for item in second.sent
+                if item["type"] == "protocol.fixture.state"
+            )
+            self.assertFalse(fixture_state["active"])
+            self.assertEqual(fixture_state["workflow_status"], "ready")
 
     def test_multi_turn_live_microphone_reproduction(self) -> None:
         """Reproduce exact live microphone turn sequence and assert authoritative state transitions."""

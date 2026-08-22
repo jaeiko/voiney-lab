@@ -206,6 +206,30 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
             self.fixture.draft.extraction,
         )
 
+    def test_persisted_progress_restore_requires_contiguous_exact_revision_steps(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.restore_experiment_progress(
+            current_step_id=self.fixture.steps[2].step_id,
+            completed_step_ids=tuple(
+                step.step_id for step in self.fixture.steps[:2]
+            ),
+        )
+        self.assertTrue(session.active)
+        self.assertEqual(session.current_index, 2)
+        self.assertEqual(session.state()["current_step_id"], self.fixture.steps[2].step_id)
+        self.assertEqual(session.timer_status()["state"], "not_started")
+
+        with self.assertRaises(CuratedProtocolFixtureError):
+            CuratedProtocolSession(self.fixture).restore_experiment_progress(
+                current_step_id=self.fixture.steps[2].step_id,
+                completed_step_ids=(self.fixture.steps[0].step_id,),
+            )
+        with self.assertRaises(CuratedProtocolFixtureError):
+            CuratedProtocolSession(self.fixture).restore_experiment_progress(
+                current_step_id="unknown-step",
+                completed_step_ids=(),
+            )
+
     def test_fixture_identity_schema_decoder_evidence_and_development_status(self):
         raw = FIXTURE.read_bytes()
         schema_bytes = json.dumps(

@@ -126,6 +126,76 @@ def test_workspace_session_routes_and_server_allowlisted_dev_identity(monkeypatc
     assert invented.json() == {"detail": "authentication_required"}
 
 
+def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch, tmp_path)
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    researcher = _principal("researcher-a")
+    outsider = _principal("reviewer-b")
+    store.bootstrap_principal(researcher)
+    store.bootstrap_principal(outsider)
+    experiment = store.start_experiment(
+        researcher,
+        session_id="experiment-dashboard-1",
+        protocol_id="in-gel-digestion",
+        protocol_revision_id="approved-revision-1",
+        current_step_id="step-1",
+        current_step_label="1",
+    )
+    experiment = store.record_experiment_progress(
+        researcher,
+        experiment["session_id"],
+        event_key="protocol-started",
+        event_type="protocol_started",
+        step_id="step-1",
+        step_label="1",
+    )
+    store.close()
+
+    listed = asyncio.run(
+        _request("GET", "/api/workspace/experiments", profile="researcher-a")
+    )
+    assert listed.status_code == 200
+    assert listed.json()["experiments"][0]["session_id"] == experiment["session_id"]
+    hidden = asyncio.run(
+        _request(
+            "GET",
+            f"/api/workspace/experiments/{experiment['session_id']}",
+            profile="reviewer-b",
+        )
+    )
+    assert hidden.status_code == 404
+
+    paused = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/experiments/{experiment['session_id']}/transition",
+            profile="researcher-a",
+            json_body={
+                "action": "pause",
+                "expected_version": experiment["version"],
+                "event_key": "dashboard-pause-1",
+            },
+        )
+    )
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    forbidden_completion = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/experiments/{experiment['session_id']}/transition",
+            profile="researcher-a",
+            json_body={
+                "action": "complete",
+                "expected_version": paused.json()["version"],
+                "event_key": "unsafe-dashboard-complete",
+            },
+        )
+    )
+    assert forbidden_completion.status_code == 400
+
+
 def test_protocol_library_uses_authoritative_catalog_execution_state(
     monkeypatch, tmp_path
 ):

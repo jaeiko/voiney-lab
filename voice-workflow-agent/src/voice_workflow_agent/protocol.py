@@ -43,6 +43,21 @@ def parse_control(raw: str) -> dict[str, Any]:
         if (not isinstance(configuration_id,int) or isinstance(configuration_id,bool)
                 or configuration_id<=0):
             raise ProtocolError("session.start needs a positive configuration_id")
+        experiment_session_id=message.get("experiment_session_id")
+        experiment_session_version=message.get("experiment_session_version")
+        if (experiment_session_id is None) != (experiment_session_version is None):
+            raise ProtocolError(
+                "experiment recovery requires both session id and version"
+            )
+        if experiment_session_id is not None and (
+            not isinstance(experiment_session_id,str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",experiment_session_id)
+            is None
+            or not isinstance(experiment_session_version,int)
+            or isinstance(experiment_session_version,bool)
+            or experiment_session_version<=0
+        ):
+            raise ProtocolError("experiment recovery metadata is invalid")
         return {
             "type":"session.start",
             "mode":mode,
@@ -50,6 +65,13 @@ def parse_control(raw: str) -> dict[str, Any]:
             "protocol_id":protocol_id,
             "configuration_id":configuration_id,
             **({"input_language":input_language} if has_input_language else {}),
+            **(
+                {
+                    "experiment_session_id":experiment_session_id,
+                    "experiment_session_version":experiment_session_version,
+                }
+                if experiment_session_id is not None else {}
+            ),
         }
     if message["type"]=="session.set_language":
         language=message.get("language")

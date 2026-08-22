@@ -54,7 +54,8 @@ Browser AudioWorklet (16 kHz PCM)
   → canonical events and browser playback
 
 Canonical workflow events
-  → append-only experiment report
+  → tenant-owned persistent ExperimentSession
+  → append-only experiment timeline and report
   → JSON / Markdown / CSV / DOCX export
   → explicit confirmed eLabFTW write-back
   → tenant-scoped privacy-safe aggregates
@@ -65,6 +66,33 @@ The main runtime routing boundary is
 `identity.py` and `workspace_store.py`. Protocol source adapters are in
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
 ELN boundary is in `eln_connectors.py`.
+
+The pre-extension component and authority map is documented in
+[`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md). Implementation and phase
+evidence are tracked in
+[`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`](docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md),
+with forward-only storage details in
+[`docs/MIGRATION_NOTES.md`](docs/MIGRATION_NOTES.md).
+
+## Persistent experiment sessions
+
+When workspace mode is enabled, every accepted voice configuration is bound to a
+tenant-owned `ExperimentSession` pinned to the exact protocol revision. The
+session begins in `ready`; the existing deterministic START intent moves it to
+`in_progress`. Step completions update an append-only completed-step set and the
+current-step recovery projection. Pause, resume, stop, block, and completion are
+explicit lifecycle events.
+
+A WebSocket reconnect may supply the server-issued `experiment_session_id` and
+`experiment_session_version`. Recovery succeeds only for the original protocol
+and revision and a fresh optimistic version. The server restores only contiguous
+completed steps and the authoritative current step. It does not restore pending
+confirmations, model output, conversation history, or active timers.
+
+`GET /api/workspace/experiments` lists sessions visible to the current role;
+`GET /api/workspace/experiments/{session_id}` returns the durable event history.
+The dashboard transition endpoint permits explicit pause/resume/stop/block but
+cannot claim completion—completion remains a protocol-authority action.
 
 ## Protocol onboarding and lifecycle
 
@@ -307,6 +335,8 @@ The browser consumes these main groups:
   development activation, approval, source pages, and verified assets;
 - `/api/workspace/session` and `/protocol-library`: identity-aware workspace and
   quick protocol access;
+- `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
+  experiment dashboard, recovery version, completed steps, and lifecycle events;
 - `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
   knowledge promotion, and dry-lab review;
 - `/api/workspace/admin/*`: memberships, connector configuration, retention,

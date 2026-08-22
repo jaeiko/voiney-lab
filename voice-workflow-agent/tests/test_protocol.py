@@ -9,6 +9,12 @@ class ProtocolTests(unittest.TestCase):
             "configuration_id":1,
         }
         self.assertEqual(parse_control(json.dumps(canonical_start)),canonical_start)
+        recovery_start={
+            **canonical_start,
+            "experiment_session_id":"experiment-session-1",
+            "experiment_session_version":4,
+        }
+        self.assertEqual(parse_control(json.dumps(recovery_start)),recovery_start)
         self.assertEqual(parse_control(json.dumps({
             "type":"session.start","pipeline":"cascade","language":"ko",
             "protocol_id":"candidate-a-curated-development-v1",
@@ -57,6 +63,10 @@ class ProtocolTests(unittest.TestCase):
              "configuration_id":1},
             {"type":"session.start","mode":"cascade","pipeline":"native",
              "language":"ko","protocol_id":None,"configuration_id":1},
+            {**canonical_start,"experiment_session_id":"experiment-session-1"},
+            {**canonical_start,"experiment_session_version":1},
+            {**canonical_start,"experiment_session_id":"bad session","experiment_session_version":1},
+            {**canonical_start,"experiment_session_id":"experiment-session-1","experiment_session_version":True},
             {"type":"session.set_language_mode","mode":"automatic"},
             {"type":"session.set_language_mode","mode":"manual"},
             {"type":"session.set_language_mode","mode":"auto","language":"en"},

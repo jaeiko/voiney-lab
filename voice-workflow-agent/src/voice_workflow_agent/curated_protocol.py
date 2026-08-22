@@ -5025,6 +5025,47 @@ class CuratedProtocolSession:
         ):
             self._revision += 1
 
+    def restore_experiment_progress(
+        self,
+        *,
+        current_step_id: str,
+        completed_step_ids: tuple[str, ...],
+    ) -> None:
+        """Restore only a server-persisted exact-revision progress checkpoint.
+
+        Timers, pending confirmations, conversational context, and model output
+        are intentionally not restored.  The durable session may select the
+        current authoritative step, but it cannot bypass an incomplete earlier
+        step or alter any protocol instruction.
+        """
+
+        indexes = {
+            step.step_id: index for index, step in enumerate(self.fixture.steps)
+        }
+        if current_step_id not in indexes:
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery step is not in the exact protocol revision."
+            )
+        current_index = indexes[current_step_id]
+        completed = tuple(dict.fromkeys(completed_step_ids))
+        if any(step_id not in indexes for step_id in completed):
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery contains an unknown completed step."
+            )
+        expected = tuple(
+            step.step_id for step in self.fixture.steps[:current_index]
+        )
+        if completed != expected:
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery cannot bypass an incomplete protocol step."
+            )
+        self.activate_configured()
+        self.current_index = current_index
+        self.active = True
+        self._workflow_status = "active"
+        self._experiment_started_at = time.time()
+        self._revision += 1
+
     def reset(self) -> None:
         opening = (self.active, self.current_index, self._block_reason)
         self.active = False

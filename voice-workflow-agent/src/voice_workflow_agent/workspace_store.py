@@ -26,7 +26,7 @@ from voice_workflow_agent.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 1
+WORKSPACE_SCHEMA_VERSION = 2
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -61,6 +61,22 @@ _ANALYTICS_DIMENSIONS = {
     "connector_kind",
     "event_kind",
     "step_bucket",
+}
+_EXPERIMENT_STATUSES = {
+    "ready",
+    "in_progress",
+    "paused",
+    "completed",
+    "stopped",
+    "blocked",
+}
+_EXPERIMENT_TRANSITIONS = {
+    "ready": {"in_progress", "stopped", "blocked"},
+    "in_progress": {"paused", "completed", "stopped", "blocked"},
+    "paused": {"in_progress", "stopped", "blocked"},
+    "blocked": {"in_progress", "stopped"},
+    "completed": set(),
+    "stopped": set(),
 }
 
 
@@ -177,6 +193,24 @@ class ConnectorConfiguration:
     allowed_roots: tuple[str, ...]
     enabled: bool
     created_at: str
+
+
+@dataclass(frozen=True)
+class ExperimentSession:
+    session_id: str
+    organization_id: str
+    owner_principal_id: str
+    protocol_id: str
+    protocol_revision_id: str
+    status: str
+    current_step_id: str | None
+    current_step_label: str | None
+    version: int
+    started_at: str
+    paused_at: str | None
+    ended_at: str | None
+    updated_at: str
+    last_voice_connection_id: str | None
 
 
 SCHEMA = """
@@ -470,6 +504,75 @@ CREATE TRIGGER eln_writebacks_no_delete BEFORE DELETE ON eln_writeback_events BE
 """
 
 
+MIGRATION_1_TO_2 = """
+CREATE TABLE experiment_sessions(
+ session_id TEXT PRIMARY KEY,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ owner_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ protocol_id TEXT NOT NULL,
+ protocol_revision_id TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('ready','in_progress','paused','completed','stopped','blocked')),
+ current_step_id TEXT,
+ current_step_label TEXT,
+ version INTEGER NOT NULL CHECK(version>0),
+ started_at TEXT NOT NULL,
+ paused_at TEXT,
+ ended_at TEXT,
+ updated_at TEXT NOT NULL,
+ last_voice_connection_id TEXT,
+ UNIQUE(organization_id,session_id)
+);
+CREATE INDEX experiment_sessions_tenant_status_started
+ ON experiment_sessions(organization_id,status,started_at DESC);
+CREATE INDEX experiment_sessions_owner_started
+ ON experiment_sessions(organization_id,owner_principal_id,started_at DESC);
+
+CREATE TABLE experiment_session_events(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ event_id TEXT NOT NULL UNIQUE,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ session_id TEXT NOT NULL REFERENCES experiment_sessions(session_id),
+ event_key TEXT NOT NULL,
+ event_type TEXT NOT NULL,
+ actor_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ step_id TEXT,
+ step_label TEXT,
+ payload_json TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ UNIQUE(session_id,event_key)
+);
+CREATE INDEX experiment_events_tenant_session_sequence
+ ON experiment_session_events(organization_id,session_id,sequence_id);
+
+CREATE TABLE experiment_completed_steps(
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ session_id TEXT NOT NULL REFERENCES experiment_sessions(session_id),
+ step_id TEXT NOT NULL,
+ step_label TEXT,
+ completed_by_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ completed_at TEXT NOT NULL,
+ event_id TEXT NOT NULL REFERENCES experiment_session_events(event_id),
+ PRIMARY KEY(session_id,step_id)
+);
+
+CREATE TRIGGER experiment_events_no_update BEFORE UPDATE ON experiment_session_events
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_events_no_delete BEFORE DELETE ON experiment_session_events
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_completed_no_update BEFORE UPDATE ON experiment_completed_steps
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER experiment_completed_no_delete BEFORE DELETE ON experiment_completed_steps
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=2)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(2);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -747,6 +850,475 @@ class WorkspaceStore:
             (principal.organization_id, _identifier(resource_type, "Resource type")),
         ).fetchall()
         return frozenset(row[0] for row in rows)
+
+    def _experiment_row(
+        self, principal: Principal, session_id: str, *, write: bool = False
+    ) -> sqlite3.Row:
+        require_permission(
+            principal, Permission.REPORT_WRITE if write else Permission.REPORT_READ
+        )
+        self.verify_membership(principal)
+        session_id = _identifier(session_id, "Experiment session identifier")
+        row = self._connection.execute(
+            "SELECT * FROM experiment_sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if row is None or row["organization_id"] != principal.organization_id:
+            raise WorkspaceNotFoundError("Experiment session is not available.")
+        elevated = bool(
+            principal.roles.intersection(
+                {Role.REVIEWER, Role.LAB_ADMIN, Role.ORGANIZATION_ADMIN}
+            )
+        )
+        if not elevated and row["owner_principal_id"] != principal.principal_id:
+            raise WorkspaceNotFoundError("Experiment session is not available.")
+        return row
+
+    @staticmethod
+    def _experiment(row: sqlite3.Row) -> ExperimentSession:
+        return ExperimentSession(
+            session_id=row["session_id"],
+            organization_id=row["organization_id"],
+            owner_principal_id=row["owner_principal_id"],
+            protocol_id=row["protocol_id"],
+            protocol_revision_id=row["protocol_revision_id"],
+            status=row["status"],
+            current_step_id=row["current_step_id"],
+            current_step_label=row["current_step_label"],
+            version=int(row["version"]),
+            started_at=row["started_at"],
+            paused_at=row["paused_at"],
+            ended_at=row["ended_at"],
+            updated_at=row["updated_at"],
+            last_voice_connection_id=row["last_voice_connection_id"],
+        )
+
+    def _append_experiment_event(
+        self,
+        principal: Principal,
+        *,
+        session_id: str,
+        event_key: str,
+        event_type: str,
+        step_id: str | None = None,
+        step_label: str | None = None,
+        payload: Mapping[str, object] | None = None,
+        created_at: str | None = None,
+    ) -> tuple[str, bool]:
+        event_key = _identifier(event_key, "Experiment event key")
+        event_type = _identifier(event_type, "Experiment event type")
+        if step_id is not None:
+            step_id = _identifier(step_id, "Protocol step identifier")
+        if step_label is not None:
+            step_label = _text(step_label, "Protocol step label", maximum=200)
+        payload_json = _canonical_json(dict(payload or {}))
+        if len(payload_json) > 16_000:
+            raise WorkspaceError("Experiment event payload is too large.")
+        event_id = "event-" + hashlib.sha256(
+            f"{principal.organization_id}:{session_id}:{event_key}".encode("utf-8")
+        ).hexdigest()[:32]
+        cursor = self._connection.execute(
+            """INSERT OR IGNORE INTO experiment_session_events(
+            event_id,organization_id,session_id,event_key,event_type,
+            actor_principal_id,step_id,step_label,payload_json,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                event_id,
+                principal.organization_id,
+                session_id,
+                event_key,
+                event_type,
+                principal.principal_id,
+                step_id,
+                step_label,
+                payload_json,
+                created_at or _now(),
+            ),
+        )
+        return event_id, bool(cursor.rowcount)
+
+    def start_experiment(
+        self,
+        principal: Principal,
+        *,
+        protocol_id: str,
+        protocol_revision_id: str,
+        session_id: str | None = None,
+        current_step_id: str | None = None,
+        current_step_label: str | None = None,
+        voice_connection_id: str | None = None,
+    ) -> dict[str, object]:
+        """Create one durable experiment bound to an exact protocol revision."""
+
+        require_permission(principal, Permission.REPORT_WRITE)
+        self.verify_membership(principal)
+        selected_id = session_id or f"experiment-{secrets.token_hex(16)}"
+        selected_id = _identifier(selected_id, "Experiment session identifier")
+        protocol_id = _identifier(protocol_id, "Protocol identifier")
+        protocol_revision_id = _identifier(
+            protocol_revision_id, "Protocol revision identifier"
+        )
+        if current_step_id is not None:
+            current_step_id = _identifier(current_step_id, "Protocol step identifier")
+        if current_step_label is not None:
+            current_step_label = _text(
+                current_step_label, "Protocol step label", maximum=200
+            )
+        if voice_connection_id is not None:
+            voice_connection_id = _identifier(
+                voice_connection_id, "Voice connection identifier"
+            )
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                """INSERT INTO experiment_sessions(
+                session_id,organization_id,owner_principal_id,protocol_id,
+                protocol_revision_id,status,current_step_id,current_step_label,
+                version,started_at,paused_at,ended_at,updated_at,
+                last_voice_connection_id
+                ) VALUES(?,?,?,?,?,'ready',?,?,1,?,NULL,NULL,?,?)""",
+                (
+                    selected_id,
+                    principal.organization_id,
+                    principal.principal_id,
+                    protocol_id,
+                    protocol_revision_id,
+                    current_step_id,
+                    current_step_label,
+                    now,
+                    now,
+                    voice_connection_id,
+                ),
+            )
+            self._connection.execute(
+                "INSERT INTO resource_bindings VALUES(?,?,?,?,?)",
+                (
+                    principal.organization_id,
+                    "experiment_session",
+                    selected_id,
+                    principal.principal_id,
+                    now,
+                ),
+            )
+            self._append_experiment_event(
+                principal,
+                session_id=selected_id,
+                event_key="session-started",
+                event_type="session_started",
+                step_id=current_step_id,
+                step_label=current_step_label,
+                payload={
+                    "protocol_id": protocol_id,
+                    "protocol_revision_id": protocol_revision_id,
+                    "voice_bound": voice_connection_id is not None,
+                },
+                created_at=now,
+            )
+            self._connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._connection.rollback()
+            raise WorkspaceConflictError(
+                "Experiment session already exists."
+            ) from exc
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, selected_id)
+
+    def get_experiment(
+        self, principal: Principal, session_id: str
+    ) -> dict[str, object]:
+        session = self._experiment(self._experiment_row(principal, session_id))
+        completed = self._connection.execute(
+            """SELECT step_id,step_label,completed_by_principal_id,completed_at,event_id
+            FROM experiment_completed_steps WHERE session_id=?
+            ORDER BY completed_at,step_id""",
+            (session.session_id,),
+        ).fetchall()
+        events = self._connection.execute(
+            """SELECT event_id,event_key,event_type,actor_principal_id,step_id,
+            step_label,payload_json,created_at FROM experiment_session_events
+            WHERE session_id=? ORDER BY sequence_id""",
+            (session.session_id,),
+        ).fetchall()
+        return {
+            **session.__dict__,
+            "completed_steps": [dict(row) for row in completed],
+            "events": [
+                {
+                    **{
+                        key: row[key]
+                        for key in (
+                            "event_id",
+                            "event_key",
+                            "event_type",
+                            "actor_principal_id",
+                            "step_id",
+                            "step_label",
+                            "created_at",
+                        )
+                    },
+                    "payload": json.loads(row["payload_json"]),
+                }
+                for row in events
+            ],
+        }
+
+    def list_experiments(
+        self, principal: Principal, *, active_only: bool = False
+    ) -> tuple[dict[str, object], ...]:
+        require_permission(principal, Permission.REPORT_READ)
+        self.verify_membership(principal)
+        clauses = ["organization_id=?"]
+        parameters: list[object] = [principal.organization_id]
+        if not principal.roles.intersection(
+            {Role.REVIEWER, Role.LAB_ADMIN, Role.ORGANIZATION_ADMIN}
+        ):
+            clauses.append("owner_principal_id=?")
+            parameters.append(principal.principal_id)
+        if active_only:
+            clauses.append("status IN ('ready','in_progress','paused','blocked')")
+        rows = self._connection.execute(
+            f"""SELECT * FROM experiment_sessions WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC,session_id DESC""",
+            tuple(parameters),
+        ).fetchall()
+        return tuple(
+            {
+                **self._experiment(row).__dict__,
+                "completed_step_count": self._connection.execute(
+                    "SELECT COUNT(*) FROM experiment_completed_steps WHERE session_id=?",
+                    (row["session_id"],),
+                ).fetchone()[0],
+            }
+            for row in rows
+        )
+
+    def resume_experiment(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        expected_version: int,
+        protocol_id: str,
+        protocol_revision_id: str,
+        voice_connection_id: str,
+    ) -> dict[str, object]:
+        """Recover an existing exact-revision session with optimistic locking."""
+
+        row = self._experiment_row(principal, session_id, write=True)
+        protocol_id = _identifier(protocol_id, "Protocol identifier")
+        protocol_revision_id = _identifier(
+            protocol_revision_id, "Protocol revision identifier"
+        )
+        voice_connection_id = _identifier(
+            voice_connection_id, "Voice connection identifier"
+        )
+        if row["protocol_id"] != protocol_id or row["protocol_revision_id"] != protocol_revision_id:
+            raise WorkspaceConflictError(
+                "Experiment recovery requires the original exact protocol revision."
+            )
+        if row["status"] not in {"ready", "in_progress", "paused", "blocked"}:
+            raise WorkspaceConflictError("Experiment session cannot be resumed.")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise WorkspaceError("Experiment version is invalid.")
+        target_version = expected_version + 1
+        target_status = (
+            "in_progress" if row["status"] in {"paused", "blocked"} else row["status"]
+        )
+        now = _now()
+        event_key = f"voice-recovery-v{target_version}"
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self._connection.execute(
+                """UPDATE experiment_sessions SET status=?,paused_at=NULL,
+                ended_at=NULL,updated_at=?,version=?,last_voice_connection_id=?
+                WHERE session_id=? AND organization_id=? AND version=?""",
+                (
+                    target_status,
+                    now,
+                    target_version,
+                    voice_connection_id,
+                    session_id,
+                    principal.organization_id,
+                    expected_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise WorkspaceConflictError(
+                    "Experiment session changed; refresh before resuming."
+                )
+            self._append_experiment_event(
+                principal,
+                session_id=session_id,
+                event_key=event_key,
+                event_type=(
+                    "session_resumed" if row["status"] == "paused" else "session_recovered"
+                ),
+                step_id=row["current_step_id"],
+                step_label=row["current_step_label"],
+                payload={"previous_status": row["status"]},
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, session_id)
+
+    def transition_experiment(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        action: str,
+        expected_version: int,
+        event_key: str,
+        reason: str | None = None,
+    ) -> dict[str, object]:
+        row = self._experiment_row(principal, session_id, write=True)
+        target = {
+            "pause": "paused",
+            "resume": "in_progress",
+            "complete": "completed",
+            "stop": "stopped",
+            "block": "blocked",
+        }.get(action)
+        if target is None or target not in _EXPERIMENT_TRANSITIONS[row["status"]]:
+            raise WorkspaceConflictError("Experiment transition is not allowed.")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise WorkspaceError("Experiment version is invalid.")
+        if reason is not None:
+            reason = _text(reason, "Experiment transition reason", maximum=2000)
+        event_key = _identifier(event_key, "Experiment event key")
+        now = _now()
+        target_version = expected_version + 1
+        paused_at = now if target == "paused" else None
+        ended_at = now if target in {"completed", "stopped"} else None
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self._connection.execute(
+                """UPDATE experiment_sessions SET status=?,paused_at=?,ended_at=?,
+                updated_at=?,version=? WHERE session_id=? AND organization_id=?
+                AND version=?""",
+                (
+                    target,
+                    paused_at,
+                    ended_at,
+                    now,
+                    target_version,
+                    session_id,
+                    principal.organization_id,
+                    expected_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise WorkspaceConflictError(
+                    "Experiment session changed; refresh before retrying."
+                )
+            self._append_experiment_event(
+                principal,
+                session_id=session_id,
+                event_key=event_key,
+                event_type=f"session_{target}",
+                step_id=row["current_step_id"],
+                step_label=row["current_step_label"],
+                payload={"reason": reason} if reason is not None else {},
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, session_id)
+
+    def record_experiment_progress(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        event_key: str,
+        event_type: str,
+        step_id: str | None,
+        step_label: str | None,
+        next_step_id: str | None = None,
+        next_step_label: str | None = None,
+        mark_completed: bool = False,
+        payload: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Append a server-authorized step event and update the recovery projection."""
+
+        row = self._experiment_row(principal, session_id, write=True)
+        protocol_start = event_type == "protocol_started" and row["status"] == "ready"
+        if row["status"] != "in_progress" and not protocol_start:
+            raise WorkspaceConflictError(
+                "Only an in-progress experiment can record step progress."
+            )
+        if step_id is not None:
+            step_id = _identifier(step_id, "Protocol step identifier")
+        if step_label is not None:
+            step_label = _text(step_label, "Protocol step label", maximum=200)
+        if next_step_id is not None:
+            next_step_id = _identifier(next_step_id, "Next step identifier")
+        if next_step_label is not None:
+            next_step_label = _text(next_step_label, "Next step label", maximum=200)
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            event_id, inserted = self._append_experiment_event(
+                principal,
+                session_id=session_id,
+                event_key=event_key,
+                event_type=event_type,
+                step_id=step_id,
+                step_label=step_label,
+                payload=payload,
+                created_at=now,
+            )
+            if inserted:
+                if mark_completed:
+                    if step_id is None:
+                        raise WorkspaceError(
+                            "Completed progress requires a protocol step."
+                        )
+                    self._connection.execute(
+                        """INSERT INTO experiment_completed_steps(
+                        organization_id,session_id,step_id,step_label,
+                        completed_by_principal_id,completed_at,event_id
+                        ) VALUES(?,?,?,?,?,?,?)""",
+                        (
+                            principal.organization_id,
+                            session_id,
+                            step_id,
+                            step_label,
+                            principal.principal_id,
+                            now,
+                            event_id,
+                        ),
+                    )
+                self._connection.execute(
+                    """UPDATE experiment_sessions SET current_step_id=?,
+                    current_step_label=?,status=?,updated_at=?,version=version+1
+                    WHERE session_id=? AND organization_id=?""",
+                    (
+                        next_step_id if next_step_id is not None else step_id,
+                        next_step_label if next_step_label is not None else step_label,
+                        "in_progress" if protocol_start else row["status"],
+                        now,
+                        session_id,
+                        principal.organization_id,
+                    ),
+                )
+            self._connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._connection.rollback()
+            raise WorkspaceConflictError(
+                "Experiment step was already completed."
+            ) from exc
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, session_id)
 
     def create_protocol_family(
         self, principal: Principal, *, title: str, family_id: str | None = None
@@ -2186,7 +2758,23 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
     row = connection.execute(
         "SELECT schema_version FROM schema_metadata"
     ).fetchone()
-    if row is None or row[0] != WORKSPACE_SCHEMA_VERSION:
+    if row is None:
+        connection.close()
+        raise WorkspaceError("Commercial workspace schema is unsupported.")
+    version = int(row[0])
+    if version == 1:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_1_TO_2 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 2
+    if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")
     return WorkspaceStore(

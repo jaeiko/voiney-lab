@@ -439,6 +439,158 @@ def _record_workspace_metric(
             category,metric_name,type(exc).__name__,
         )
 
+
+def _start_or_resume_workspace_experiment(
+    session:ListenerSession,
+    *,
+    protocol_id:str,
+    protocol_revision_id:str,
+    recovery_session_id:str|None=None,
+    recovery_version:int|None=None,
+)->dict[str,object]|None:
+    """Bind a voice connection to one durable, tenant-owned experiment."""
+
+    settings=_workspace_settings()
+    if not settings.enabled:
+        return None
+    principal,store=_commercial_workspace()
+    try:
+        if recovery_session_id is not None:
+            if recovery_version is None:
+                raise WorkspaceError("Experiment recovery version is required.")
+            state=store.resume_experiment(
+                principal,recovery_session_id,
+                expected_version=recovery_version,
+                protocol_id=protocol_id,
+                protocol_revision_id=protocol_revision_id,
+                voice_connection_id=session.voice_connection_id,
+            )
+        else:
+            first_step=(
+                session.curated_protocol_session.fixture.steps[0]
+                if session.curated_protocol_session is not None
+                and session.curated_protocol_session.fixture.steps else None
+            )
+            state=store.start_experiment(
+                principal,
+                session_id=session.session_id,
+                protocol_id=protocol_id,
+                protocol_revision_id=protocol_revision_id,
+                current_step_id=first_step.step_id if first_step else None,
+                current_step_label=first_step.source_label if first_step else None,
+                voice_connection_id=session.voice_connection_id,
+            )
+        session.session_id=str(state["session_id"])
+        session.experiment_state_version=int(state["version"])
+        return state
+    finally:
+        store.close()
+
+
+def _transition_workspace_experiment(
+    session:ListenerSession,
+    *,
+    action:str,
+    event_key:str,
+    reason:str|None=None,
+)->dict[str,object]|None:
+    settings=_workspace_settings()
+    if not settings.enabled or session.experiment_state_version is None:
+        return None
+    principal,store=_commercial_workspace()
+    try:
+        state=store.transition_experiment(
+            principal,session.session_id,action=action,
+            expected_version=session.experiment_state_version,
+            event_key=event_key,reason=reason,
+        )
+        session.experiment_state_version=int(state["version"])
+        return state
+    finally:
+        store.close()
+
+
+def _record_workspace_experiment_progress(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    plan,
+    *,
+    turn_id:int,
+    generation:int,
+    pre_transition_index:int,
+)->dict[str,object]|None:
+    """Mirror only deterministic committed protocol actions into recovery state."""
+
+    settings=_workspace_settings()
+    if not settings.enabled or session.experiment_state_version is None:
+        return None
+    if not plan.state_changed or plan.action not in {
+        CuratedProtocolAction.START,
+        CuratedProtocolAction.NEXT,
+        CuratedProtocolAction.STOP,
+        CuratedProtocolAction.PAUSE,
+        CuratedProtocolAction.RESUME,
+    }:
+        return None
+    key=f"voice-{generation}-{turn_id}-{plan.action.value}"
+    if plan.action is CuratedProtocolAction.STOP:
+        return _transition_workspace_experiment(
+            session,action="stop",event_key=key,reason="voice_command"
+        )
+    if plan.action is CuratedProtocolAction.PAUSE:
+        return _transition_workspace_experiment(
+            session,action="pause",event_key=key,reason="voice_command"
+        )
+    if plan.action is CuratedProtocolAction.RESUME:
+        return _transition_workspace_experiment(
+            session,action="resume",event_key=key,reason="voice_command"
+        )
+    previous=curated.fixture.steps[pre_transition_index]
+    current=(
+        curated.fixture.steps[curated.current_index]
+        if curated.active else None
+    )
+    principal,store=_commercial_workspace()
+    try:
+        state=store.record_experiment_progress(
+            principal,session.session_id,
+            event_key=key,
+            event_type=(
+                "protocol_started"
+                if plan.action is CuratedProtocolAction.START else
+                "step_completed" if plan.reported_completion else "step_advanced"
+            ),
+            step_id=previous.step_id,
+            step_label=previous.source_label,
+            next_step_id=current.step_id if current else None,
+            next_step_label=current.source_label if current else None,
+            mark_completed=bool(
+                plan.action is CuratedProtocolAction.NEXT
+                and plan.reported_completion
+            ),
+            payload={
+                "authority":"curated_protocol",
+                "intent_kind":plan.intent_kind,
+                "configuration_id":session.accepted_configuration_id,
+                "turn_id":turn_id,
+                "generation":generation,
+            },
+        )
+        session.experiment_state_version=int(state["version"])
+    finally:
+        store.close()
+    if (
+        plan.action is CuratedProtocolAction.NEXT
+        and not curated.active
+        and curated._workflow_status=="completed"
+    ):
+        state=_transition_workspace_experiment(
+            session,action="complete",
+            event_key=f"{key}-workflow-completed",
+            reason="all_protocol_steps_completed",
+        )
+    return state
+
 def normalize_session_language(value:str)->str:
     normalized=value.strip().casefold().replace("_","-")
     if normalized in ("ko","ko-kr"): return "ko"
@@ -994,6 +1146,69 @@ def get_workspace_session()->dict[str,object]:
                 "workspaces":routes,
                 "authentication_method":principal.authentication_method,
             }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/experiments")
+def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {
+                "experiments":list(
+                    store.list_experiments(principal,active_only=active_only)
+                )
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/experiments/{session_id}")
+def get_workspace_experiment(session_id:str)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.get_experiment(principal,session_id)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/experiments/{session_id}/transition")
+async def transition_workspace_experiment(
+    session_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            action=str(payload.get("action", ""))
+            expected_version=payload.get("expected_version")
+            if action not in {"pause","resume","stop","block"}:
+                raise WorkspaceError(
+                    "Only explicit non-completion dashboard transitions are allowed."
+                )
+            if (
+                not isinstance(expected_version,int)
+                or isinstance(expected_version,bool)
+                or expected_version<=0
+            ):
+                raise WorkspaceError("Experiment version is invalid.")
+            return store.transition_experiment(
+                principal,session_id,action=action,
+                expected_version=expected_version,
+                event_key=str(payload.get("event_key", "")),
+                reason=(
+                    str(payload["reason"])
+                    if payload.get("reason") is not None else None
+                ),
+            )
         finally:
             store.close()
     except Exception as exc:
@@ -2749,6 +2964,8 @@ class ListenerSession:
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
         self.experiment_report_id:str|None=None
         self.session_id=new_session_id()
+        self.voice_connection_id="voice-"+secrets.token_hex(16)
+        self.experiment_state_version:int|None=None
         self.accepted_configuration_id:int|None=None
         self.accepted_mode:str|None=None
         self.accepted_language:str|None=None
@@ -2839,7 +3056,7 @@ class ListenerSession:
     def track_visual_task(self,task:asyncio.Task)->None:
         self.visual_tasks.add(task)
         task.add_done_callback(self.visual_tasks.discard)
-    def start(self):
+    def start(self,experiment_session_id:str|None=None):
         self.generation+=1
         self.greeting_emitted=False
         self.greeting_audio_ready=False
@@ -2850,7 +3067,8 @@ class ListenerSession:
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self._reset_turn_identity()
-        self.session_id=new_session_id()
+        self.session_id=experiment_session_id or new_session_id()
+        self.experiment_state_version=None
         self.experiment_report_id=None
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
@@ -5314,6 +5532,44 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             speech_text=f"{acknowledgment} {plan.speech_text}",
                         )
                     await report_state(report)
+            if (
+                session.experiment_state_version is not None
+                and plan.state_changed
+            ):
+                try:
+                    experiment_state=await asyncio.to_thread(
+                        _record_workspace_experiment_progress,
+                        session,curated,plan,
+                        turn_id=turn_id,generation=generation,
+                        pre_transition_index=pre_transition_index,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "experiment session update failed turn_id=%s error=%s",
+                        turn_id,type(exc).__name__,
+                    )
+                    if session.experiment_report_store is None:
+                        curated._restore(checkpoint)
+                        failed=(
+                            "실험 세션을 저장하지 못해 상태 변경을 확정하지 않았습니다. 현재 단계를 유지합니다."
+                            if turn_language=="ko" else
+                            "The experiment session could not be saved, so the workflow change was not committed. The current step is unchanged."
+                        )
+                        plan=replace(
+                            plan,display_text=failed,speech_text=failed,
+                            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                            state_changed=False,
+                        )
+                        session.set_turn_terminal_outcome(
+                            turn_id,generation,"blocked")
+                    await current_text(
+                        "experiment.session.error",turn_id=turn_id,
+                        code=getattr(exc,"code","workspace_error"))
+                else:
+                    if experiment_state is not None:
+                        await current_text(
+                            "experiment.session.state",turn_id=turn_id,
+                            state=experiment_state)
             # Report persistence is the acknowledgement gate.  Re-read the
             # possibly replaced plan only after that gate so neither display
             # nor TTS can use pre-persistence success language.
@@ -6465,9 +6721,16 @@ async def voice_socket(websocket:WebSocket):
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
-                    _scope_tenant_resource(
-                        "experiment_session",session.session_id,bind=True)
-                    session.start()
+                    recovery_session_id=control.get("experiment_session_id")
+                    recovery_version=control.get("experiment_session_version")
+                    if recovery_session_id is not None and not _workspace_settings().enabled:
+                        raise WorkspaceError(
+                            "Experiment recovery requires the tenant workspace."
+                        )
+                    session.start(
+                        str(recovery_session_id)
+                        if recovery_session_id is not None else None
+                    )
                     if session.curated_protocol_session is not None and selected_curated_fixture is not None:
                         try:
                             log.info(
@@ -6521,12 +6784,39 @@ async def voice_socket(websocket:WebSocket):
                             revision_id=selected_revision_id,
                             safety_pack=pack_dict,
                         ))
+                    configuration_stage="experiment_session"
+                    experiment_state=_start_or_resume_workspace_experiment(
+                        session,
+                        protocol_id=str(requested_protocol_id),
+                        protocol_revision_id=str(selected_revision_id),
+                        recovery_session_id=(
+                            str(recovery_session_id)
+                            if recovery_session_id is not None else None
+                        ),
+                        recovery_version=(
+                            int(recovery_version)
+                            if recovery_version is not None else None
+                        ),
+                    )
+                    if (
+                        recovery_session_id is not None
+                        and experiment_state is not None
+                        and session.curated_protocol_session is not None
+                        and experiment_state["status"]=="in_progress"
+                    ):
+                        session.curated_protocol_session.restore_experiment_progress(
+                            current_step_id=str(experiment_state["current_step_id"]),
+                            completed_step_ids=tuple(
+                                str(item["step_id"])
+                                for item in experiment_state["completed_steps"]
+                            ),
+                        )
                     pipeline="cascade"
                     session.accept_configuration(
                         configuration_id,pipeline,context.language,
                         requested_protocol_id,selected_revision_id,
                         requested_input_language)
-                except (RuntimeError,ValueError) as exc:
+                except (RuntimeError,ValueError,WorkspaceError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
                         str(exc)
@@ -6571,7 +6861,16 @@ async def voice_socket(websocket:WebSocket):
                 }
                 if session.accepted_protocol_id is not None:
                     ready_fields["revision_id"]=session.accepted_revision_id
+                ready_fields["experiment_session_id"]=session.session_id
+                if session.experiment_state_version is not None:
+                    ready_fields["experiment_session_version"]=(
+                        session.experiment_state_version)
+                    ready_fields["experiment_recovered"]=(
+                        recovery_session_id is not None)
                 await websocket.send_text(event("session.ready",**ready_fields))
+                if experiment_state is not None:
+                    await websocket.send_text(event(
+                        "experiment.session.state",state=experiment_state))
                 if session.curated_protocol_session is not None:
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -6651,11 +6950,46 @@ async def voice_socket(websocket:WebSocket):
                     await _finish_all_research_operations(
                         sender,session,"cancelled")
                     task.cancel()
+                if session.experiment_state_version is not None:
+                    try:
+                        experiment_state=_transition_workspace_experiment(
+                            session,action="stop",
+                            event_key=(
+                                f"connection-{session.voice_connection_id}-stop"
+                            ),
+                            reason="explicit_session_stop",
+                        )
+                    except WorkspaceError as exc:
+                        await websocket.send_text(event(
+                            "error",message=getattr(exc,"code","workspace_error")))
+                        continue
+                    if experiment_state is not None:
+                        await websocket.send_text(event(
+                            "experiment.session.state",state=experiment_state))
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
             elif control["type"]=="workflow.pause":
                 if session.active and session.curated_protocol_session is not None:
-                    session.curated_protocol_session.pause_workflow()
+                    changed=session.curated_protocol_session.pause_workflow()
+                    if changed and session.experiment_state_version is not None:
+                        try:
+                            experiment_state=_transition_workspace_experiment(
+                                session,action="pause",
+                                event_key=(
+                                    f"connection-{session.voice_connection_id}-"
+                                    f"pause-v{session.experiment_state_version}"
+                                ),
+                                reason="bench_control",
+                            )
+                        except WorkspaceError as exc:
+                            session.curated_protocol_session.resume_workflow()
+                            await websocket.send_text(event(
+                                "error",message=getattr(
+                                    exc,"code","workspace_error")))
+                            continue
+                        if experiment_state is not None:
+                            await websocket.send_text(event(
+                                "experiment.session.state",state=experiment_state))
                     if task and not task.done():
                         await _finish_all_research_operations(sender,session,"cancelled")
                         task.cancel()
@@ -6668,7 +7002,26 @@ async def voice_socket(websocket:WebSocket):
                     ))
             elif control["type"]=="workflow.resume":
                 if session.active and session.curated_protocol_session is not None:
-                    session.curated_protocol_session.resume_workflow()
+                    changed=session.curated_protocol_session.resume_workflow()
+                    if changed and session.experiment_state_version is not None:
+                        try:
+                            experiment_state=_transition_workspace_experiment(
+                                session,action="resume",
+                                event_key=(
+                                    f"connection-{session.voice_connection_id}-"
+                                    f"resume-v{session.experiment_state_version}"
+                                ),
+                                reason="bench_control",
+                            )
+                        except WorkspaceError as exc:
+                            session.curated_protocol_session.pause_workflow()
+                            await websocket.send_text(event(
+                                "error",message=getattr(
+                                    exc,"code","workspace_error")))
+                            continue
+                        if experiment_state is not None:
+                            await websocket.send_text(event(
+                                "experiment.session.state",state=experiment_state))
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
