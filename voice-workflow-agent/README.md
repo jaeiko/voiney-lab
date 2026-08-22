@@ -1,225 +1,396 @@
 # Voice Workflow Agent
 
-Voice Workflow Agent is a voice-first laboratory workflow copilot. It turns a
-reviewed protocol PDF into source-linked, step-by-step guidance; records explicit
-observations and timers; answers bounded protocol questions; and prepares an
-auditable handoff when work is blocked.
+Voice Workflow Agent is a voice-first laboratory protocol knowledge and
+execution layer. Its product wedge is:
 
-This repository is a commercially oriented prototype, not a validated medical,
-clinical, GLP/GMP, or safety-control system. It does not approve a protocol,
-declare an area safe, or authorize work to resume. Operational deployments still
-require facility approval, identity/access controls, validation, retention policy,
-and ELN/LIMS integration.
+> reviewed protocol source → hands-free bench execution → auditable experiment
+> record → integration
 
-## Current product contract
+It combines immutable source ingestion, human-controlled protocol lifecycle,
+deterministic workflow mutation, source-grounded voice guidance, and controlled
+downstream write-back. It is a controlled-pilot system—not a validated
+GLP/GMP/clinical system, a full ELN/LIMS, an autonomous scientist, or a safety
+authority.
 
-- The only active voice path is **Cascade**: browser PCM → WebRTC VAD → xAI STT →
-  deterministic/shared routing → grounded response or tool → xAI TTS.
-- The default TTS voice is `leo`, presented as a calm professor/research mentor.
-  `TTS_VOICE` is the single configuration override.
-- Workflow mutation is server-owned. Model prose cannot advance a step, start a
-  timer, record an observation, submit a report, or resume blocked work.
-- Protocol learning, audit, history, uncertainty, combined “why + next” requests,
-  visual requests, current-step requests, and state commands share one intent
-  arbitration boundary.
-- Read-only requests do not mutate workflow state. A combined explanation and
-  “next step” request explains and previews first, then waits for an explicit
-  completion confirmation.
-- Responses and visuals stay linked to source identities, pages, evidence IDs,
-  revisions, and canonical server events.
+## Product contract
 
-There is no xAI Realtime/Native speech path in the current codebase. Older design
-documents that describe one are historical; active configuration and tests use
-Cascade only.
+- The active voice path is Cascade: browser PCM → WebRTC VAD → xAI STT → shared
+  intent arbitration → deterministic workflow/tool boundary → xAI TTS.
+- Protocol learning, audit, history, combined “why + next,” visual requests,
+  completion, pause/resume, and interruption stay on the production WebSocket
+  path covered by integration tests.
+- Model prose cannot advance a step, record an observation, start a timer,
+  approve a protocol, resume blocked work, or write to an ELN.
+- Read-only questions do not mutate workflow state. Combined explanation/next
+  requests explain and preview, then wait for explicit completion.
+- Every executable session is pinned to an exact protocol revision and source
+  identity. Source changes create drafts; they never overwrite an approved
+  revision or rebind a running experiment.
+- Parsing, structural readiness, hazard review, human approval, and operational
+  authorization are separate gates.
+- Raw audio, unrestricted transcripts, prompts, model reasoning, and connector
+  secrets are excluded from persistent pilot analytics.
 
 ## Architecture
 
 ```text
-Browser AudioWorklet (16 kHz PCM)
-  → WebSocket /ws
-  → FrameBuffer + WebRTC VAD + interruption gate
-  → xAI /v1/stt
-  → shared RequestArbitration
-      ├─ emergency / deterministic workflow gates
-      ├─ curated protocol runtime router
-      ├─ approved references / bounded external research
-      └─ general agent tool loop
-  → sentence-segmented xAI /v1/tts (Leo by default)
-  → canonical events + browser playback
+Local PDF / protocols.io / Drive / GitHub
+  → source connector boundary
+  → immutable source identity + tenant-scoped lineage revision
+  → inbox + source/evidence review + diff
+  → reviewer decision / explicit non-operational development activation
+  → exact executable protocol revision
 
-PDF upload
-  → bounded PDF extraction and byte identity
-  → explicit structured analysis
-  → source-linked review
-  → human/facility approval, or explicit non-operational development activation
-  → executable catalog revision
+Browser AudioWorklet (16 kHz PCM)
+  → FastAPI WebSocket + FrameBuffer + WebRTC VAD
+  → xAI POST /v1/stt
+  → language-consistency and transcript-admission gates
+  → shared RequestArbitration
+      ├─ emergency and deterministic state gates
+      ├─ curated/executable protocol router
+      ├─ approved reference retrieval
+      └─ bounded general agent tool loop
+  → sentence-segmented xAI TTS
+  → canonical events and browser playback
 
 Canonical workflow events
-  → append-only SQLite experiment report
+  → append-only experiment report
   → JSON / Markdown / CSV / DOCX export
-  → privacy-minimized admin aggregates
+  → explicit confirmed eLabFTW write-back
+  → tenant-scoped privacy-safe aggregates
 ```
 
-The main production routing boundary is
-`src/voice_workflow_agent/runtime_routing.py`. The shared classifier is
-`src/voice_workflow_agent/intent_arbitration.py`; legacy intent helpers are
-compatibility projections over that classifier.
+The main runtime routing boundary is
+`src/voice_workflow_agent/runtime_routing.py`. Tenant/RBAC logic is in
+`identity.py` and `workspace_store.py`. Protocol source adapters are in
+`protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
+ELN boundary is in `eln_connectors.py`.
 
-## Protocol PDF onboarding
+## Protocol onboarding and lifecycle
 
-1. Select a PDF in the browser.
-2. `POST /api/protocols?filename=...` streams the PDF to a bounded temporary file,
-   validates it, calculates its SHA-256 identity, and stores the immutable source.
-3. The browser explicitly requests `POST /api/protocols/{id}/analysis` and polls
-   persisted status for long documents.
-4. `GET /api/protocols/{id}/review` shows source filename/hash/page count,
-   prerequisites, materials, equipment, sections, steps, sub-actions, quantities,
-   timers, warnings, missing values, advanced constructs, and readiness reasons.
-5. Operational scope requires the existing service-authorized approval endpoint.
-   `activate-development` is available only in `demo`, `reference_only`, or
-   `test_only`; it fails closed in `operational`.
+The browser implements the explicit lifecycle:
 
-Ambiguous values, missing execution-critical values, unsupported conditionals,
-conflicts, corrupt PDFs, encrypted PDFs, and oversized uploads do not become
-executable guidance.
+```text
+uploaded
+  → analysis_pending
+  → analyzing
+  → analysis_ready
+  → review_required
+  → executable_draft OR blocked
+  → approved
+  → revoked
+```
 
-## External research and visuals
+1. `POST /api/protocols?filename=...` streams a PDF to a bounded temporary file,
+   validates its type/size/encryption state, extracts pages, calculates its exact
+   SHA-256, and stores immutable bytes.
+2. The browser calls `POST /api/protocols/{id}/analysis`. The API responds `202`
+   and runs analysis in a background task; the browser polls
+   `GET /api/protocols/{id}/analysis/status` until a terminal state.
+3. `GET /api/protocols/{id}/review` exposes source identity, evidence, structure,
+   warnings, missing values, readiness blockers, and lifecycle gates.
+4. In `demo`, `reference_only`, or `test_only`, a user may explicitly activate a
+   guidance-ready revision as a development-only draft. Operational scope never
+   permits this shortcut.
+5. Approval/revocation history is append-only. Revocation prevents new
+   operational sessions but does not erase historical experiment provenance.
 
-External research is feature-gated and domain-bounded. It is supplementary
-reference context, never protocol evidence and never an authority for workflow
-mutation.
+Missing provider configuration is persisted as an actionable failure with retry;
+it is not displayed forever as an unexplained `analysis_required` state.
+Unsupported conditions, ambiguities, critical missing values, conflicts, scanned
+documents that require OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
-For explicit visual intent, the server tries a bounded public scientific catalog
-first and makes at most one paid xAI image-search request only if needed. Displayed
-external images must include a rights label, pass URL/SSRF and image-byte checks,
-and be served through `/api/web-visuals/{sha256}`. Otherwise the UI shows only the
-cited source page. Remote image hotlinking is rejected.
+## Korean STT reliability
 
-The xAI request shape was checked against the current official documentation on
-2026-08-22:
+The input preference is `AUTO`, `KOREAN`, or `ENGLISH`; the browser defaults to
+Korean for this deployment. Korean mode sends `language=ko`, `format=true`, and
+bounded scientific/protocol key terms to xAI. The official API documents that
+`language` enables formatting; it does not force the model to transcribe in that
+language. The response’s detected BCP-47 language is therefore treated as
+evidence, not as a guarantee.
 
-- [Web search and `enable_image_search`](https://docs.x.ai/developers/tools/web-search)
-- [Tool usage details](https://docs.x.ai/developers/tools/tool-usage-details)
-- [Citations and `no_inline_citations`](https://docs.x.ai/developers/tools/citations)
-- [Speech-to-speech model and voices](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech)
-- [Text-to-speech `voice_id`](https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
+When Korean is selected and the detected language or script conflicts with the
+preference, transcript admission emits the fixed clarification:
 
-## Operations and privacy
+```text
+음성 인식 언어가 불확실합니다. 다시 한 번 말씀해 주세요.
+```
 
-`GET /api/admin/metrics` is unavailable until
-`VOICE_WORKFLOW_AGENT_ADMIN_TOKEN` is configured and requires the
-`X-Voice-Workflow-Admin-Token` header. The browser’s closed admin panel uses the
-token for one request and clears the input.
+No workflow mutation is executed from that mismatched transcript. Sanitized
+analytics retain only the mismatch classification and timing—not transcript
+text. See the [official xAI STT documentation](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text).
 
-The endpoint exposes only aggregates: report status/completion, workflow event
-counts, common blocked step labels, protocol lifecycle counts, route/intent/tool
-counters, and bounded average/p95 timing samples. It excludes audio, transcripts,
-free-form user wording, session/report identifiers, protocol titles, prompts, and
-model reasoning. Runtime samples are in memory and bounded; persisted report
-metrics come from the configured SQLite ledger.
+## Workspace identity and authorization
 
-Audio is not retained by default. Optional STT diagnostics are explicit opt-in,
-bounded, and must use an ignored runtime directory. Do not enable them for private
-or regulated lab work without an approved retention and access policy.
+Workspace mode models organizations, principals, roles, memberships, ownership,
+and tenant-scoped resources. Roles are `researcher`, `reviewer`, `lab_admin`, and
+`organization_admin`; permissions are enforced centrally.
+
+OIDC bearer tokens require signed `RS256` or `ES256` JWTs with matching issuer and
+audience plus `exp`, `iat`, `iss`, `aud`, and `sub`. The tenant and roles come from
+server-configured claims. Effective permissions are the intersection of verified
+OIDC roles and active local memberships. External subjects are represented by an
+opaque issuer-scoped principal ID.
+
+An allowlisted development identity provider is available only outside
+`operational` scope. Operational workspace access requires a complete OIDC
+configuration. Client-supplied tenant IDs are never accepted as an ownership
+override. HTTP and WebSocket access share the same identity boundary.
+
+## Protocol Source Hub
+
+All imports produce an immutable `ProtocolSource` and a new lineage revision when
+the source identity changes.
+
+### protocols.io
+
+- Accepts an exact DOI, protocol URL, URI, or version-qualified `/vN` identity.
+- Calls `GET /api/v4/protocols/{id}` with a server-side bearer token and requests
+  structured Markdown content.
+- Preserves DOI, version URI, authors, license, source status, material/step
+  structure, warnings, and canonical URL.
+- Never upgrades an “In development” source to approved.
+
+Official contract: [protocols.io API](https://apidoc.protocols.io/).
+
+### Google Drive and Shared Drives
+
+- Read-only folder allowlists; supports PDFs and Google Docs exported as PDF.
+- Preserves file ID, modified timestamp, head revision where available, parents,
+  owner metadata allowed by Drive, and Shared Drive identity.
+- Uses `supportsAllDrives`, `includeItemsFromAllDrives`, and the Drive change-log
+  cursor. The next cursor is persisted per connector/root.
+- A changed file becomes a review-required revision; active revisions are never
+  overwritten.
+
+Official contracts: [Drive files](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
+and [Drive changes](https://developers.google.com/workspace/drive/api/reference/rest/v3/changes/list).
+
+### GitHub
+
+- Read-only repository/ref/path allowlists; source content is pinned to the
+  resolved commit SHA.
+- Preserves repository, branch/tag, commit, path, license, and source URL.
+- Webhooks verify `X-Hub-Signature-256` over the raw body with HMAC-SHA256 and a
+  constant-time comparison, enforce delivery replay protection, and import only
+  changed allowlisted paths.
+- Imported repository content is never executed by the FastAPI process.
+
+Official contract: [GitHub webhook validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
+
+## Dry-lab workflow registry
+
+Snakemake and Nextflow imports are metadata-only. The registry recognizes exact
+entry points, configuration/schema/environment files, declared rules or
+processes, engine metadata, repository identity, and commit. Reviewer decisions
+are append-only. An explicit link can connect an exact wet-lab experiment and
+sample/data reference to an approved computational workflow revision.
+
+There is no arbitrary workflow execution, validation sandbox, or Seqera launch in
+this service. `SeqeraWorkflowBoundary` is an integration interface for a future
+separate execution plane. The registry follows the repository-structure patterns
+documented by the [Snakemake Workflow Catalog](https://snakemake.github.io/snakemake-workflow-catalog/docs/snakemake.html)
+and [Nextflow](https://docs.seqera.io/nextflow/workflow).
+
+## Knowledge, translations, and asset cards
+
+The workspace store separates `ApprovedProtocolFact`, `LabTip`,
+`HistoricalObservation`, and `TroubleshootingNote`. Observations and tips remain
+non-authoritative until a reviewer explicitly promotes them into an approved
+annotation; provenance is retained.
+
+Translations are linked to the original revision, labeled machine-generated or
+reviewed, and rejected if protected scientific numeric tokens differ from the
+source. Lightweight reagent/equipment cards store tenant-scoped location,
+optional photo/QR/barcode metadata, and an HTTPS SDS/source link. Location changes
+produce a reviewable history rather than a hidden overwrite.
+
+## eLabFTW write-back
+
+`ElnConnector` is the generic boundary; `ELabFtwConnector` implements the real
+eLabFTW API v2 create-then-patch contract. A write-back requires:
+
+- a completed, tenant-owned experiment report;
+- the exact tenant-owned protocol lineage revision and matching source/execution
+  identity;
+- an enabled eLabFTW connector with an allowlisted HTTPS origin;
+- explicit user confirmation; and
+- a unique idempotency key reserved before the network write.
+
+The server builds the payload from its own report store. Raw audio, full
+transcripts, model reasoning, and secrets are never sent. Unpublished protocol
+instructions are withheld by default. Cross-origin `Location` responses are
+rejected before PATCH to prevent follow-up SSRF. See the
+[eLabFTW API v2 documentation](https://doc.elabftw.net/api/v2/).
 
 ## Setup
 
+Python 3.12 or newer is required.
+
 ```bash
-cd voice-workflow-agent
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e .
 cp .env.example .env
 ```
 
-Set your own values in `.env`; never commit `.env`, API keys, audio, private PDFs,
-or runtime databases. At minimum, configure the xAI models/credential and the
-required server policy paths/scope shown in `.env.example`.
-
-Start the app:
+Create the approved safety catalog and choose absolute, ignored runtime data
+directories. Configure `.env`, then start:
 
 ```bash
-source .venv/bin/activate
 uvicorn voice_workflow_agent.server:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. The browser requires microphone permission and a
-secure context outside localhost.
-
-The optional safety-handoff worker is separate from the low-latency voice loop:
+The optional safety-handoff worker remains separate from the low-latency voice
+loop:
 
 ```bash
-source .venv/bin/activate
 python -m voice_workflow_agent.worker
 ```
 
-## Useful configuration
+### Core configuration
 
 | Variable | Purpose |
 |---|---|
 | `XAI_API_KEY` | Server-only xAI credential |
-| `XAI_BASE_URL` | OpenAI-compatible xAI API root |
-| `CHAT_MODEL` / `WORKER_MODEL` | Agent and worker models |
-| `PROTOCOL_ANALYSIS_MODEL` | Structured PDF analysis model |
-| `TTS_VOICE` | Cascade TTS voice; default `leo` |
+| `CHAT_MODEL`, `WORKER_MODEL` | Agent and handoff-worker models |
+| `PROTOCOL_ANALYSIS_MODEL` | Structured protocol analysis model |
+| `TTS_VOICE` | Cascade voice; defaults to `leo` |
 | `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
-| `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` | Protocol catalog/object storage root |
-| `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | Approved safety catalog path |
-| `EXTERNAL_REFERENCES_ENABLED` | Domain-bounded text research gate |
-| `WEB_VISUAL_SEARCH_ENABLED` | Explicit web-image research gate |
-| `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Append-only experiment report gate |
-| `VOICE_WORKFLOW_AGENT_ADMIN_TOKEN` | Guard for privacy-minimized admin metrics |
+| `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | Absolute approved safety-catalog path |
+| `VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
+| `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` | Absolute ignored protocol-store directory |
+| `VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED` | Enables tenant/RBAC/source workspace |
+| `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR` | Absolute ignored workspace directory |
+| `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
+| `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
+| `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
 
-See `.env.example` for the complete, sanitized configuration surface.
+### Identity configuration
+
+For operational workspace mode, configure all of:
+
+```dotenv
+VOICE_WORKFLOW_AGENT_OIDC_ISSUER=https://id.example.test/
+VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE=voice-workflow-agent
+VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL=https://id.example.test/.well-known/jwks.json
+VOICE_WORKFLOW_AGENT_OIDC_TENANT_CLAIM=organization_id
+VOICE_WORKFLOW_AGENT_OIDC_ROLES_CLAIM=roles
+VOICE_WORKFLOW_AGENT_OIDC_NAME_CLAIM=name
+```
+
+For a non-operational local demo, omit OIDC values and optionally set a JSON
+allowlist in `VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES`. If omitted, one local
+lab-admin profile is created. Do not enable development identities in operational
+scope.
+
+### Connector secrets
+
+Connector records contain opaque `secret://` references, never credential values.
+The application resolves them through a server-owned environment mapping:
+
+```dotenv
+VOICE_WORKFLOW_AGENT_SECRET_REFERENCES={"secret://tenant-a/protocols-io":"PROTOCOLS_IO_TOKEN","secret://tenant-a/drive":"DRIVE_ACCESS_TOKEN","secret://tenant-a/github":"GITHUB_INSTALLATION_TOKEN","secret://tenant-a/github-webhook":"GITHUB_WEBHOOK_SECRET","secret://tenant-a/elabftw":"ELABFTW_API_KEY"}
+```
+
+Set the referenced environment variables only in the process secret manager.
+Connector `allowed_roots` constrain Drive folders/shared drives, GitHub
+repository/ref/path, or an eLabFTW HTTPS origin. Live OAuth/App provisioning is an
+operator responsibility; local tests use fakes.
+
+## API surface
+
+The browser consumes these main groups:
+
+- `/api/protocols`: local upload, lifecycle, analysis status, evidence review,
+  development activation, approval, source pages, and verified assets;
+- `/api/workspace/session` and `/protocol-library`: identity-aware workspace and
+  quick protocol access;
+- `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
+  knowledge promotion, and dry-lab review;
+- `/api/workspace/admin/*`: memberships, connector configuration, retention,
+  asset cards, and tenant analytics;
+- `/api/workspace/sources/*`: protocols.io, Drive, GitHub, and dry-lab import;
+- `/api/workspace/webhooks/github/{connector_id}`: signed, replay-protected source
+  updates;
+- `/api/workspace/eln/elabftw/writeback`: confirmed experiment export; and
+- `/api/experiment-reports/*`: tenant-scoped report reads/exports.
+
+All sensitive workspace APIs derive the tenant from the authenticated principal.
+Connector list responses never return credential references or resolved secrets.
+
+## Replay and voice evaluation
+
+The A–G replay no longer relies on an ad-hoc `PYTHONPATH`:
+
+```bash
+voice-workflow-replay
+# Equivalent project-native invocation:
+python -m voice_workflow_agent.replay_turns
+# The historical script remains a thin compatibility wrapper:
+python scripts/replay_turns.py
+```
+
+Evaluate a sanitized JSON manifest of recognized/reference outcomes without
+loading audio:
+
+```bash
+voice-workflow-evaluate path/to/results.json
+```
+
+The manifest reports WER, semantic and command accuracy, false mutation rate,
+VAD error, endpoint/barge-in latency, and repeat/correction rate. Field recordings
+require an explicit consent ID and bounded retention. See
+[`docs/VOICE_FIELD_EVALUATION_PLAN.md`](docs/VOICE_FIELD_EVALUATION_PLAN.md).
 
 ## Verification
 
 ```bash
-source .venv/bin/activate
-
-# Acceptance replay for the required A–G request families
-python scripts/replay_turns.py
-
-# Focused commercial hardening checks
-python -m pytest \
-  tests/test_runtime_intent_routing.py \
-  tests/test_commercial_protocol_fixtures.py \
-  tests/test_protocol_catalog.py \
-  tests/test_web_visuals.py \
-  tests/test_runtime_metrics.py \
-  tests/test_frontend.py -q
-
-# Complete offline suite and static checks
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
 ```
 
-Automated tests use local fakes and must not require a provider credential. Live
-provider tests are opt-in and must remain bounded.
+Tests are provider-free unless explicitly marked otherwise. Connector and eLabFTW
+contracts use fakes; the real adapters remain in the production code path. The
+Pass 2 report records which external systems were actually live-tested:
+[`docs/CODEX_COMMERCIALIZATION_PASS2_REPORT.md`](docs/CODEX_COMMERCIALIZATION_PASS2_REPORT.md).
 
-## Product status and next gates
+## Security and privacy boundaries
 
-The current build is suitable for controlled demos, usability studies, and
-non-operational pilots with fictional or approved non-sensitive documents. Before
-a real regulated deployment, complete SSO/RBAC, tenant isolation, secrets
-management, encrypted storage/backups, retention/deletion controls, formal
-computer-system validation, electronic signatures, facility-specific emergency
-policy, observability export, accessibility testing with users, noisy-lab voice
-evaluation, and validated ELN/LIMS/instrument connectors.
+- Immutable source hashes, exact revisions, tenant bindings, central RBAC, and
+  negative IDOR tests protect protocol/report/asset ownership.
+- OIDC tokens are signature/issuer/audience/time validated; production does not
+  fall back to a shared admin token or development identity.
+- PDFs and connector documents have byte limits, strict identifiers, sanitized
+  filenames, and no executable path.
+- protocols.io and GitHub identifiers reject alternate origins, credentials,
+  traversal, and unallowlisted roots. eLabFTW and displayed web assets enforce
+  HTTPS/same-origin or SSRF controls.
+- GitHub webhooks verify the raw payload before normal workspace middleware and
+  fence repeated delivery IDs.
+- Approval and write-back idempotency keys are append-only replay fences.
+- Analytics persist allowlisted categories/dimensions only and purge according to
+  tenant retention policy.
+- Audio diagnostics are disabled by default, bounded when enabled, and must stay
+  in an ignored runtime directory.
 
-The recommended commercial wedge is an integration-light pilot for 5–20 bench
-scientists using one repetitive, low-hazard workflow, measured on time-to-first
-executable protocol, documentation completeness, correction rate, time saved, and
-blocked-step frequency. Do not market autonomous science or autonomous safety.
+This is not a claim of electronic-signature, GLP/GMP, HIPAA, or other regulatory
+compliance. A controlled deployment still requires an IdP, secrets manager,
+encrypted backup/storage policy, facility-specific approval, validation evidence,
+and user-accessibility/noisy-lab studies.
 
-## Current reports
+## Known limitations and deliberate non-goals
 
-- [Commercialization audit](docs/CODEX_COMMERCIALIZATION_AUDIT.md)
-- [Final commercialization report](docs/CODEX_FINAL_COMMERCIALIZATION_REPORT.md)
-- [Moss retrieval boundary](docs/MOSS_RETRIEVAL.md)
-- [Approved document operations](docs/APPROVED_DOCUMENT_OPERATIONS.md)
-
-Older phase-numbered and Candidate A reports are retained as historical evidence;
-where they conflict with this README or the two current reports above, the current
-documents and executable code are authoritative.
+- No autonomous protocol approval or safety decision.
+- No full ELN/LIMS, inventory, video hosting, or facility directory.
+- No arbitrary GitHub/Snakemake/Nextflow execution in the voice server.
+- No live Seqera, Google Drive, GitHub App, protocols.io authenticated import, or
+  eLabFTW instance verification without operator credentials.
+- No claim of field STT performance until the consented noisy-lab evaluation plan
+  is executed.
+- No cross-process job queue yet: PDF analysis background tasks are process-local;
+  persisted lifecycle state and explicit retry make restarts visible and safe.
+- The development UI is suitable for a controlled pilot, not a substitute for
+  facility operating procedures or emergency systems.
