@@ -1,4 +1,9 @@
-"""Separate durable SQLite state for ProcedureSession transitions."""
+"""Separate durable SQLite state for ProcedureSession transitions.
+
+See procedures.py's module docstring: this backs the legacy, explicitly
+config-gated ProcedureSession lane, not the production
+ExperimentSession/WorkspaceStore authority.
+"""
 from __future__ import annotations
 import json
 import secrets

@@ -399,6 +399,8 @@ voice server into an arbitrary code runner.
 | 10. Product Experience | 10 `test_frontend.py` cases + 28 Playwright browser cases (desktop + mobile) passed | 761 passed + 684 subtests in 144.37s | passed | no schema change | report, README, DEMO_WALKTHROUGH_PHASE10.md |
 | 11. Repository Root Promotion | editable install, CLI entry points, live server smoke test (index/static/WebSocket/`/api/workspace/session`) passed from new root | 761 passed + 684 subtests, matching pre-migration baseline | passed | no schema change; `docs/demo_script.md` sha256 unchanged | report, README, AGENTS.md, new CLAUDE.md |
 | 12. Pilot Acceptance Hardening | `evaluate_candidate_a_hardening.py` (98% route accuracy, 0 unintended mutations; 2 pre-existing routing-copy failures confirmed present at the Phase 9 baseline, unrelated to Phases 10-11) and `evaluate_candidate_a_grounded_qa.py` (20/20 cases, 1.0 accuracy) | 761 passed + 684 subtests | passed | no schema change | report (this ledger), external integration classification below |
+| 14. Independent Repository + CI | GitHub Actions green on both jobs after fixing 2 real CI-only portability gaps (see docs/COMMERCIALIZATION_PASS4_REPORT.md) | 762 passed + 684 subtests locally; CI runs a documented subset (excludes 13 modules needing an uncommittable external PDF) | passed | no schema change | README, this report, docs/COMMERCIALIZATION_PASS4_REPORT.md |
+| 15. Workflow Authority Reconciliation | 1 new regression test proving curated-vs-legacy mutual exclusivity even when both are configured; verified by intentionally breaking the guard and observing the new test fail | 762 passed + 684 subtests | passed | no schema change | this report (below), module docstrings in procedures.py/procedure_store.py/procedure_definitions.py |
 
 ## External integration classification (Phase 12)
 
@@ -420,14 +422,37 @@ never made one during Phases 10-12.
 | Snakemake/Nextflow metadata inspection | IMPLEMENTED | `drylab_workflows.py` performs static/regex metadata parsing only; deliberately has no execution function |
 | Seqera / future execution boundary | NOT VALIDATED | `SeqeraLaunchBoundary` is a bare `Protocol` interface with zero implementations and zero tests |
 
-## Known limitation: legacy procedure stack
+## Legacy procedure stack: reconciled (Phase 15)
 
 A second, older workflow-state-machine (`procedures.py` / `procedure_store.py`,
 with its own `procedure_sessions`/`procedure_step_events` schema and its own
 tool set) runs alongside the production `ExperimentSession` /
 `CuratedProtocolSession` authority. It predates the commercialization pass and
-was not introduced by Phases 10-12. It is reachable in production code
-(`PROVIDER_TOOL_DECISIONS` marks its tools "retained"), not dead code, but its
-relationship to the current authority model (intentional demo/tutorial lane
-vs. candidate for retirement) was not resolved during this pass. Treat this
-as a scoped follow-up, not something to silently extend further.
+is reachable in production code (`PROVIDER_TOOL_DECISIONS` marks its tools
+"retained"), not dead code.
+
+Phase 15's evidence-driven audit found:
+
+- It only activates when an operator explicitly sets **both**
+  `VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG` and
+  `VOICE_WORKFLOW_AGENT_PROCEDURE_STORE`. Neither is set by
+  `scripts/run_candidate_a.sh` or documented as a normal deployment default -
+  the commercial/demo path never activates it.
+- `server.py`'s protocol-selection logic gates the legacy lookup on
+  `selected_curated_fixture is None`, so a single session can never be bound
+  to both authorities at once - verified by directly breaking that guard and
+  confirming the existing test suite catches it, then adding a permanent
+  regression test
+  (`test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists`
+  in `test_curated_protocol_cascade.py`) that configures **both** authorities
+  simultaneously and asserts `ProcedureStore`/`ProcedureController`/
+  `load_procedure_definitions` are never touched when a curated protocol is
+  selected.
+
+**Disposition: ISOLATE**, not retire. The stack has its own substantial test
+coverage and appears to be an earlier, simpler, non-tenant tutorial mode built
+before the curated/commercial system - not evidently dead or safe to delete
+without further product input. It is now documented in
+`procedures.py`/`procedure_store.py`/`procedure_definitions.py`'s own module
+docstrings as a distinct, explicitly config-gated, non-default lane. No
+behavior changed; only documentation and one new regression test were added.

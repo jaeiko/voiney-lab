@@ -55,9 +55,12 @@ duplicate workflow state machine, another `ExperimentSession` authority, a
 parallel approval subsystem, or a parallel protocol store — see `AGENTS.md`
 rule 2–3 for the full boundary. (A pre-existing, older `procedures.py` /
 `procedure_store.py` workflow stack runs alongside the production
-`ExperimentSession` / `CuratedProtocolSession` stack from before this
-convention was written; treat it as a known limitation to reconcile
-separately, not something to silently extend or duplicate further.)
+`ExperimentSession` / `CuratedProtocolSession` stack. It is explicitly
+config-gated off by default — see its module docstring and
+`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`'s "Legacy procedure stack:
+reconciled" section — and mutual exclusivity is regression-tested. Treat it
+as an isolated, documented lane, not something to silently extend, merge
+with the production authority, or duplicate further.)
 
 ## Terminology: Protocol vs. SOP
 

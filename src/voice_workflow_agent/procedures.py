@@ -1,4 +1,19 @@
-"""Server-owned ProcedureSession controller and canonical workflow state."""
+"""Server-owned ProcedureSession controller and canonical workflow state.
+
+Architecture status (Phase 15 reconciliation, docs/COMMERCIALIZATION_PASS3_REPORT.md):
+this is a separate, explicitly config-gated workflow authority from the
+production ExperimentSession/CuratedProtocolSession stack in
+workspace_store.py/curated_protocol.py. It only activates when an operator
+sets both VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG and
+VOICE_WORKFLOW_AGENT_PROCEDURE_STORE - neither is set by the commercial demo
+launcher (scripts/run_candidate_a.sh) or documented as a normal deployment
+default. server.py's protocol-selection logic only attempts a legacy
+ProcedureController lookup when no curated fixture was selected
+(`selected_curated_fixture is None`), so a single session can never be bound
+to both authorities at once. Do not wire this into the commercial/curated
+path, and do not add a second production authority alongside it - extend
+ExperimentSession/CuratedProtocolSession instead.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

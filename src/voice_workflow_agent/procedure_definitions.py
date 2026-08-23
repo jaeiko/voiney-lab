@@ -1,4 +1,9 @@
-"""Fail-closed immutable ProcedureDefinition loading."""
+"""Fail-closed immutable ProcedureDefinition loading.
+
+See procedures.py's module docstring: this backs the legacy, explicitly
+config-gated ProcedureSession lane, not the production
+ExperimentSession/WorkspaceStore authority.
+"""
 from __future__ import annotations
 
 import hashlib

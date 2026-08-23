@@ -4231,6 +4231,92 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(states[-1]["state"]["active"], False)
         self.assertEqual(states[-2]["state"]["current_step_label"], "2")
 
+    def test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists(self):
+        """Phase 15 reconciliation: a session must never be bound to both the
+        production curated-protocol authority and the legacy ProcedureController
+        authority at once. server.py's selection logic only attempts a legacy
+        procedure lookup when `selected_curated_fixture is None` - this proves
+        that guard actually holds end to end even when an operator has fully
+        configured *both* authorities, not just when the legacy one is unset."""
+        configuration_id = 91
+        config = ServerConfig(
+            Path("/unused/offline-catalog.sqlite"),
+            None,
+            "test_only",
+            frozenset({"ko"}),
+            "ko",
+            ROOT / "data" / "procedure_demo" / "procedures.ko.json",
+            Path(tempfile.mkdtemp()) / "legacy_procedure_sessions.sqlite",
+            FIXTURE,
+            PROVENANCE,
+            SOURCE_PDF,
+        )
+        self_protocol_id = self.fixture.protocol_id
+
+        class ReadySocket(Socket):
+            def __init__(self):
+                super().__init__()
+                self.ready = asyncio.Event()
+                self.disconnect = asyncio.Event()
+                self.receive_count = 0
+
+            async def accept(self):
+                return None
+
+            async def receive(self):
+                self.receive_count += 1
+                if self.receive_count == 1:
+                    return {"text": json.dumps({
+                        "type": "session.start",
+                        "mode": "cascade",
+                        "language": "ko",
+                        "protocol_id": self_protocol_id,
+                        "configuration_id": configuration_id,
+                    })}
+                await self.disconnect.wait()
+                return {"type": "websocket.disconnect", "code": 1000}
+
+            async def send_text(self, value: str) -> None:
+                await super().send_text(value)
+                if self.text[-1]["type"] == "session.ready":
+                    self.ready.set()
+
+        socket = ReadySocket()
+
+        async def scenario():
+            server_task = asyncio.create_task(voice_socket(socket))
+            await asyncio.wait_for(socket.ready.wait(), timeout=5)
+            socket.disconnect.set()
+            await server_task
+
+        with patch(
+            "voice_workflow_agent.server.server_config",
+            return_value=config,
+        ), patch(
+            "voice_workflow_agent.server.ProcedureStore",
+            side_effect=AssertionError(
+                "legacy ProcedureStore must not be constructed when a "
+                "curated protocol was selected"),
+        ) as procedure_store, patch(
+            "voice_workflow_agent.server.ProcedureController",
+            side_effect=AssertionError(
+                "legacy ProcedureController must not be constructed when a "
+                "curated protocol was selected"),
+        ) as procedure_controller, patch(
+            "voice_workflow_agent.server.load_procedure_definitions",
+            side_effect=AssertionError(
+                "legacy procedure catalog must not be loaded when a "
+                "curated protocol was selected"),
+        ) as load_definitions:
+            asyncio.run(scenario())
+
+        procedure_store.assert_not_called()
+        procedure_controller.assert_not_called()
+        load_definitions.assert_not_called()
+        ready = [item for item in socket.text if item["type"] == "session.ready"]
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(ready[0]["protocol_id"], self.fixture.protocol_id)
+
     def test_readiness_blocked_next_is_spoken_without_llm_or_state_change(self):
         session = self.make_session(index=6)
         socket = Socket()
