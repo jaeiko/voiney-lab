@@ -111,6 +111,21 @@ External display bytes require a rights label, HTTPS/SSRF admission, MIME/dimens
 validation, size bounds, and same-origin SHA-256 asset serving. Without those, only
 the source link is emitted.
 
+## Computational workflow metadata
+
+`drylab_workflows.py` inspects UTF-8 Snakemake/Nextflow entry points fetched by
+the read-only GitHub connector. Repository, resolved commit, relative path,
+source hash, engine declarations, config/schema/environment paths, and declared
+rules/processes form an immutable review-required revision. The in-process
+registry has no execute method; the future `SeqeraLaunchBoundary` protocol is not
+implemented or called.
+
+A wet/dry link is admitted only for a real visible durable ExperimentSession,
+its source-hash-bound matching protocol lineage, and an approved metadata-only
+workflow revision. Link and review events are append-only; a revoked revision
+cannot be reapproved. The read API returns pinned repository/commit/path evidence
+and fixed `execution_supported:false` / `execution_started:false` fields.
+
 ## Persistence and reporting
 
 - Protocol catalog: SQLite plus content-addressed source objects.

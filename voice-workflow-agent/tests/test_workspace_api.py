@@ -349,6 +349,121 @@ def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
     assert stored_files[0].read_bytes() == evidence_bytes
 
 
+def test_computational_metadata_link_api_is_exact_and_never_executes(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch, tmp_path)
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    admin = _principal("admin-a")
+    researcher = _principal("researcher-a")
+    outsider = _principal("reviewer-b")
+    for principal in (admin, researcher, outsider):
+        store.bootstrap_principal(principal)
+    source_hash = hashlib.sha256(b"wet-protocol").hexdigest()
+    family = store.create_protocol_family(admin, title="Wet protocol")
+    source = store.register_source(
+        admin,
+        connector_kind="local_pdf",
+        external_id="upload:wet.pdf",
+        version_identity=source_hash,
+        source_hash=source_hash,
+        canonical_url=None,
+        metadata={"source_status": "Published"},
+    )
+    lineage = store.add_protocol_revision(
+        admin,
+        family_id=family.family_id,
+        source_id=source.source_id,
+        content={
+            "execution_identity": {
+                "protocol_id": "protocol-wet-api",
+                "source_sha256": source_hash,
+                "catalog_revision_id": "pdf-1",
+            }
+        },
+        change_summary="Exact immutable PDF",
+    )
+    store.start_experiment(
+        researcher,
+        session_id="experiment-dry-link-api",
+        protocol_id="protocol-wet-api",
+        protocol_revision_id="pdf-1-analysis-1",
+    )
+    workflow_source_hash = hashlib.sha256(b"rule all").hexdigest()
+    workflow = store.register_computational_workflow(
+        admin,
+        name="analysis",
+        engine="snakemake",
+        repository="lab/analysis",
+        commit_sha="a" * 40,
+        source_path="workflow/Snakefile",
+        source_hash=workflow_source_hash,
+        metadata={
+            "engine": "snakemake",
+            "name": "analysis",
+            "entry_point": "workflow/Snakefile",
+            "workflow_version": "1.0",
+            "language_version": None,
+            "rules_or_processes": ["all"],
+            "config_files": [],
+            "config_schema_files": [],
+            "environment_files": [],
+            "repository": "lab/analysis",
+            "commit_sha": "a" * 40,
+            "source_url": (
+                "https://github.com/lab/analysis/blob/"
+                + "a" * 40
+                + "/workflow/Snakefile"
+            ),
+            "validation_state": "metadata_only_unexecuted",
+            "execution_supported": False,
+        },
+    )
+    store.review_computational_workflow(
+        admin,
+        workflow["workflow_revision_id"],
+        action="approved",
+        comment="Pinned metadata reviewed; execution remains external.",
+    )
+    store.close()
+
+    linked = asyncio.run(
+        _request(
+            "POST",
+            "/api/workspace/dry-lab/links",
+            profile="researcher-a",
+            json_body={
+                "experiment_session_id": "experiment-dry-link-api",
+                "protocol_revision_id": lineage.revision_id,
+                "workflow_revision_id": workflow["workflow_revision_id"],
+            },
+        )
+    )
+    assert linked.status_code == 201, linked.text
+    assert linked.json()["execution_started"] is False
+    listed = asyncio.run(
+        _request(
+            "GET",
+            "/api/workspace/dry-lab/links"
+            "?experiment_session_id=experiment-dry-link-api",
+            profile="researcher-a",
+        )
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["execution_supported"] is False
+    assert listed.json()["links"][0]["commit_sha"] == "a" * 40
+    assert listed.json()["links"][0]["execution_started"] is False
+    hidden = asyncio.run(
+        _request(
+            "GET",
+            "/api/workspace/dry-lab/links"
+            "?experiment_session_id=experiment-dry-link-api",
+            profile="reviewer-b",
+        )
+    )
+    assert hidden.status_code == 404
+
+
 def test_protocol_library_uses_authoritative_catalog_execution_state(
     monkeypatch, tmp_path
 ):

@@ -3104,6 +3104,17 @@ class WorkspaceStore:
             raise WorkspaceError("Computational workflow engine is invalid.")
         if _SHA256.fullmatch(source_hash) is None:
             raise WorkspaceError("Computational workflow source hash is invalid.")
+        if (
+            metadata.get("engine") != engine
+            or metadata.get("repository") != repository
+            or metadata.get("commit_sha") != commit_sha
+            or metadata.get("entry_point") != source_path
+            or metadata.get("validation_state") != "metadata_only_unexecuted"
+            or metadata.get("execution_supported") is not False
+        ):
+            raise WorkspaceError(
+                "Computational workflow metadata boundary is invalid."
+            )
         identity = hashlib.sha256(
             f"{principal.organization_id}:{engine}:{repository}:{source_path}".encode()
         ).hexdigest()[:32]
@@ -3187,6 +3198,13 @@ class WorkspaceStore:
         ).fetchone()
         if row is None or row["organization_id"] != principal.organization_id:
             raise WorkspaceNotFoundError("Computational workflow is not available.")
+        current_state = row["approval_state"]
+        if (
+            action == "approved" and current_state != "review_required"
+        ) or (action == "revoked" and current_state != "approved"):
+            raise WorkspaceConflictError(
+                "Computational workflow review transition is not allowed."
+            )
         actor_role = next(
             role.value
             for role in (
@@ -3267,8 +3285,26 @@ class WorkspaceStore:
         workflow_revision_id: str,
     ) -> str:
         require_permission(principal, Permission.PROTOCOL_EXECUTE)
-        self.require_resource(principal, "experiment_session", experiment_session_id)
-        self.get_revision(principal, protocol_revision_id)
+        experiment = self.get_experiment(principal, experiment_session_id)
+        revision = self.get_revision(principal, protocol_revision_id)
+        identity = revision.content.get("execution_identity")
+        if (
+            not isinstance(identity, dict)
+            or identity.get("protocol_id") != experiment["protocol_id"]
+            or identity.get("source_sha256") != revision.source_hash
+        ):
+            raise WorkspaceConflictError(
+                "Experiment and wet-lab protocol lineage do not match."
+            )
+        lineage_catalog_revision = identity.get("catalog_revision_id")
+        runtime_revision = experiment["protocol_revision_id"]
+        if isinstance(lineage_catalog_revision, str) and not (
+            runtime_revision == lineage_catalog_revision
+            or runtime_revision.startswith(f"{lineage_catalog_revision}-analysis-")
+        ):
+            raise WorkspaceConflictError(
+                "Experiment runtime revision does not match the wet-lab lineage."
+            )
         workflow = self._connection.execute(
             "SELECT * FROM computational_workflow_revisions WHERE workflow_revision_id=?",
             (workflow_revision_id,),
@@ -3279,21 +3315,88 @@ class WorkspaceStore:
             or workflow["approval_state"] != "approved"
         ):
             raise WorkspaceNotFoundError("Approved computational workflow is not available.")
+        workflow_metadata = json.loads(workflow["metadata_json"])
+        if (
+            workflow_metadata.get("execution_supported") is not False
+            or workflow_metadata.get("validation_state")
+            != "metadata_only_unexecuted"
+        ):
+            raise WorkspaceConflictError(
+                "Computational workflow is not metadata-only."
+            )
         link_id = f"wet-dry-link-{secrets.token_hex(16)}"
-        self._connection.execute(
-            "INSERT INTO wet_dry_workflow_links VALUES(?,?,?,?,?,?,?)",
-            (
-                link_id,
-                principal.organization_id,
-                experiment_session_id,
-                protocol_revision_id,
-                workflow_revision_id,
-                principal.principal_id,
-                _now(),
-            ),
-        )
-        self._connection.commit()
+        try:
+            self._connection.execute(
+                "INSERT INTO wet_dry_workflow_links VALUES(?,?,?,?,?,?,?)",
+                (
+                    link_id,
+                    principal.organization_id,
+                    experiment_session_id,
+                    protocol_revision_id,
+                    workflow_revision_id,
+                    principal.principal_id,
+                    _now(),
+                ),
+            )
+            self._connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._connection.rollback()
+            raise WorkspaceConflictError(
+                "Experiment and computational workflow are already linked."
+            ) from exc
         return link_id
+
+    def wet_dry_workflow_links(
+        self,
+        principal: Principal,
+        *,
+        experiment_session_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        """Return metadata-only links for one visible durable experiment."""
+
+        experiment = self.get_experiment(principal, experiment_session_id)
+        rows = self._connection.execute(
+            """SELECT link.link_id,link.experiment_session_id,
+            link.protocol_revision_id,link.workflow_revision_id,
+            link.actor_principal_id,link.created_at,workflow.engine,
+            workflow.repository,workflow.commit_sha,workflow.source_path,
+            workflow.source_hash,workflow.approval_state,workflow.metadata_json
+            FROM wet_dry_workflow_links AS link
+            JOIN computational_workflow_revisions AS workflow
+              ON workflow.workflow_revision_id=link.workflow_revision_id
+            WHERE link.organization_id=? AND link.experiment_session_id=?
+            ORDER BY link.created_at,link.link_id""",
+            (principal.organization_id, experiment_session_id),
+        ).fetchall()
+        return tuple(
+            {
+                **{
+                    key: row[key]
+                    for key in (
+                        "link_id",
+                        "experiment_session_id",
+                        "protocol_revision_id",
+                        "workflow_revision_id",
+                        "actor_principal_id",
+                        "created_at",
+                        "engine",
+                        "repository",
+                        "commit_sha",
+                        "source_path",
+                        "source_hash",
+                        "approval_state",
+                    )
+                },
+                "experiment_protocol_id": experiment["protocol_id"],
+                "experiment_runtime_revision_id": experiment[
+                    "protocol_revision_id"
+                ],
+                "metadata": json.loads(row["metadata_json"]),
+                "execution_supported": False,
+                "execution_started": False,
+            }
+            for row in rows
+        )
 
     def record_eln_writeback(
         self,

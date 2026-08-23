@@ -341,6 +341,48 @@ reviewable, and keeps OCR errors away from protocol execution authority.
   unchanged. The test adapter is offline; a real OCR service or engine remains a
   deployment configuration choice.
 
+## Phase 9 — Computational Workflow Metadata
+
+Status: validated and tightened as a metadata-only integration layer; final
+full-suite result is recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Wet-lab samples often move into a separate Snakemake or Nextflow analysis, but
+the notebook loses which repository commit and entry point were intended. A
+pinned, reviewed association makes that handoff reproducible without turning the
+voice server into an arbitrary code runner.
+
+### Implementation
+
+- Retained the GitHub-backed Snakemake/Nextflow inspectors for entry point,
+  rules/processes, config/schema/environment paths, engine version metadata,
+  repository, resolved commit, path, source URL, and source hash.
+- Tightened import admission to an exact resolved commit and safe relative
+  repository path. The stored envelope must retain
+  `metadata_only_unexecuted` and `execution_supported:false`.
+- Replaced resource-binding-only link admission with proof of a real visible
+  durable ExperimentSession. Its protocol ID/runtime revision must match a
+  source-hash-bound wet-lab lineage identity, and the computational revision must
+  be approved and metadata-only.
+- Added tenant/owner-scoped link read-back plus researcher controls showing the
+  exact wet revision, workflow revision, repository, commit, and entry point.
+  Both write and read APIs explicitly report that no execution starts.
+- Made computational review transitions monotonic: review-required metadata may
+  be approved, approved metadata may be revoked, and a revoked immutable
+  revision cannot be silently reapproved.
+
+### Safety and migration evidence
+
+- The application exposes no workflow runner, shell, container, clone, Seqera
+  submission, or imported-code execution function. `SeqeraLaunchBoundary`
+  remains an unused future out-of-process interface.
+- Cross-tenant/other-owner sessions, fabricated session bindings, mismatched
+  wet-lab lineage, incompatible catalog revisions, unapproved/revoked workflow
+  metadata, duplicate links, and execution-capable envelopes fail closed.
+- Phase 9 adds no schema. Existing schema-5 workflow/link rows are preserved;
+  stricter validation applies only to new imports, reviews, and links.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
@@ -353,5 +395,5 @@ reviewable, and keeps OCR errors away from protocol execution authority.
 | 6. Identity/Workspace | 37 focused tests passed | 752 passed + 684 subtests in 135.37s | passed | no schema change; v1→v4 regression passed | report, README, identity architecture |
 | 7. ELN Integration | 25 focused tests passed | 753 passed + 684 subtests in 135.98s | passed | v4→v5 legacy-row fixture and v1→v5 regression passed | report, migration notes, README |
 | 8. OCR/Document Intelligence | 102 focused tests + 69 subtests passed | 757 passed + 684 subtests in 140.94s | passed | no schema change; existing event ledger | report, migration notes, README, architecture |
-| 9. Computational Metadata | pending | pending | pending | pending | pending |
+| 9. Computational Metadata | 55 focused tests passed | 760 passed + 684 subtests in 142.37s | passed | no schema change; schema-5 regression passed | report, migration notes, README, architecture, researcher UI |
 | 10. Product Experience | pending | pending | pending | pending | pending |

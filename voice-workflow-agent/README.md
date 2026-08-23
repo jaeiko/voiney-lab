@@ -280,14 +280,24 @@ Official contract: [GitHub webhook validation](https://docs.github.com/en/webhoo
 Snakemake and Nextflow imports are metadata-only. The registry recognizes exact
 entry points, configuration/schema/environment files, declared rules or
 processes, engine metadata, repository identity, and commit. Reviewer decisions
-are append-only. An explicit link can connect an exact wet-lab experiment and
-sample/data reference to an approved computational workflow revision.
+are append-only. An explicit link connects a real tenant-owned durable
+ExperimentSession, its matching source-hash-bound wet-lab lineage revision, and
+one approved computational workflow revision. The researcher cockpit shows that
+link with its repository, commit, and entry point; the API always reports
+`execution_supported:false` and `execution_started:false`.
 
 There is no arbitrary workflow execution, validation sandbox, or Seqera launch in
-this service. `SeqeraWorkflowBoundary` is an integration interface for a future
+this service. `SeqeraLaunchBoundary` is an integration interface for a future
 separate execution plane. The registry follows the repository-structure patterns
 documented by the [Snakemake Workflow Catalog](https://snakemake.github.io/snakemake-workflow-catalog/docs/snakemake.html)
 and [Nextflow](https://docs.seqera.io/nextflow/workflow).
+
+New links fail closed when the experiment is only a fabricated resource binding,
+the wet-lab lineage protocol/source identity differs, the runtime revision is
+incompatible with the catalog revision, the workflow is unreviewed/revoked, or
+the stored metadata claims execution support. Revocation is terminal for that
+immutable workflow revision; a changed workflow must be imported and reviewed as
+a new revision.
 
 ## Knowledge, translations, and asset cards
 

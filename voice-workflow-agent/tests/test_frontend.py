@@ -22,11 +22,18 @@ class FrontendSessionTests(unittest.TestCase):
             'id="manual-observation-content"',
             'id="experiment-evidence-file"',
             'id="experiment-event-timeline"',
+            'id="experiment-protocol-lineage"',
+            'id="experiment-workflow-revision"',
+            'id="experiment-workflow-link"',
+            'id="experiment-workflow-links"',
             "function renderExperimentTimeline",
             "function saveManualObservation",
             "function uploadExperimentEvidence",
+            "function linkDryLabWorkflow",
+            "function loadDryLabLinks",
             "관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.",
             "자동 해석 안 함",
+            "코드는 실행하지 않습니다.",
         ):
             self.assertIn(required, html)
         render_block = html.split(
@@ -34,6 +41,11 @@ class FrontendSessionTests(unittest.TestCase):
         )[1].split("async function loadExperimentTimeline", 1)[0]
         self.assertNotIn("innerHTML", render_block)
         self.assertIn("textContent", render_block)
+        link_block = html.split("async function loadDryLabLinks", 1)[1].split(
+            "async function linkDryLabWorkflow", 1
+        )[0]
+        self.assertNotIn("innerHTML", link_block)
+        self.assertIn("workspaceRow", link_block)
 
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (

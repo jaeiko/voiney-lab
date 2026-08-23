@@ -53,6 +53,27 @@ _NEXTFLOW_MANIFEST_VERSION = re.compile(
 _NEXTFLOW_MANIFEST_NAME = re.compile(
     r"(?ms)manifest\s*\{.*?\bname\s*=\s*[\"']([^\"']+)[\"']"
 )
+_GITHUB_REPOSITORY = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
+)
+_GIT_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+def _repository_path(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 500
+        or value.startswith("/")
+        or "\\" in value
+        or "\x00" in value
+    ):
+        raise DryLabWorkflowError("Workflow repository path is invalid.")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise DryLabWorkflowError("Workflow repository path is invalid.")
+    return value
 
 
 def _github_identity(snapshot: SourceSnapshot) -> tuple[str, str, str]:
@@ -61,9 +82,16 @@ def _github_identity(snapshot: SourceSnapshot) -> tuple[str, str, str]:
     repository = snapshot.metadata.get("repository")
     commit_sha = snapshot.metadata.get("commit_sha")
     path = snapshot.metadata.get("path")
-    if not all(isinstance(item, str) and item for item in (repository, commit_sha, path)):
+    if (
+        not isinstance(repository, str)
+        or _GITHUB_REPOSITORY.fullmatch(repository) is None
+        or not isinstance(commit_sha, str)
+        or _GIT_COMMIT.fullmatch(commit_sha) is None
+        or not isinstance(path, str)
+        or snapshot.version_identity != commit_sha
+    ):
         raise DryLabWorkflowError("GitHub workflow provenance is incomplete.")
-    return repository, commit_sha, path
+    return repository, commit_sha, _repository_path(path)
 
 
 def _text(snapshot: SourceSnapshot) -> str:
@@ -85,7 +113,7 @@ def inspect_snakemake_snapshot(
     if not rules:
         raise DryLabWorkflowError("Snakemake metadata contains no declared rules.")
     configured = tuple(dict.fromkeys(_SNAKEMAKE_CONFIG.findall(content)))
-    paths = tuple(path for path in repository_paths if isinstance(path, str))
+    paths = tuple(_repository_path(path) for path in repository_paths)
     schemas = tuple(
         sorted(
             item
@@ -139,7 +167,7 @@ def inspect_nextflow_snapshot(
     config = nextflow_config_text if isinstance(nextflow_config_text, str) else ""
     version = _NEXTFLOW_MANIFEST_VERSION.search(config)
     name = _NEXTFLOW_MANIFEST_NAME.search(config)
-    paths = tuple(path for path in repository_paths if isinstance(path, str))
+    paths = tuple(_repository_path(path) for path in repository_paths)
     config_files = tuple(sorted(item for item in paths if item.endswith(".config")))
     environments = tuple(
         sorted(
@@ -187,6 +215,9 @@ class DryLabWorkflowRegistry:
             metadata.repository != repository
             or metadata.commit_sha != commit_sha
             or metadata.entry_point != path
+            or metadata.engine not in {"snakemake", "nextflow"}
+            or metadata.validation_state != "metadata_only_unexecuted"
+            or metadata.execution_supported is not False
         ):
             raise DryLabWorkflowError("Workflow metadata provenance does not match its source.")
         return self.store.register_computational_workflow(

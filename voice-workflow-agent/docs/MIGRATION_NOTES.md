@@ -141,3 +141,19 @@ adapter, compare each page to the preserved PDF, and accept or reject it. An
 accepted result only enables a separate structured-analysis request; it does not
 backfill an approval or execution record. Rollback leaves the new event types as
 unknown append-only history and the original source PDF remains authoritative.
+
+## Phase 9 computational metadata compatibility
+
+The computational workflow phase adds no schema and leaves commercial workspace
+schema 5 unchanged. Existing Snakemake/Nextflow families, immutable revisions,
+append-only review events, and wet/dry link rows remain readable. New imports
+must carry the existing fixed `metadata_only_unexecuted` state and
+`execution_supported:false`; new links now resolve a real durable experiment and
+verify its wet-lab protocol/source identity instead of accepting a standalone
+resource binding.
+
+Legacy link rows are not rewritten or deleted. Their read projection remains
+metadata-only. A legacy workflow revision that does not contain the fixed
+non-execution metadata is not eligible for a new link and should be re-imported
+from its pinned GitHub commit as a new review-required revision. Revoked workflow
+revisions remain revoked; re-enabling requires a new immutable source revision.

@@ -2463,6 +2463,27 @@ async def link_dry_lab_workflow(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+@app.get("/api/workspace/dry-lab/links")
+def get_dry_lab_workflow_links(
+    experiment_session_id:str,
+)->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return {
+                "experiment_session_id":experiment_session_id,
+                "links":list(store.wet_dry_workflow_links(
+                    principal,
+                    experiment_session_id=experiment_session_id,
+                )),
+                "execution_supported":False,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 @app.get("/api/workspace/admin/analytics")
 def get_workspace_analytics()->dict[str,object]:
     try:
@@ -2593,6 +2614,7 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                                     "execution_identity":{
                                         "protocol_id":result.entry.protocol_id,
                                         "source_sha256":result.entry.source_sha256,
+                                        "catalog_revision_id":result.entry.revision_id,
                                     },
                                 },
                             ),
