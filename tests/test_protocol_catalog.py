@@ -740,6 +740,65 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         # tearDown owns a live handle; reopen it after the endpoint closed its own.
         self.store = initialize_protocol_store(self.settings)
 
+    def test_public_catalog_exempts_candidate_from_tenant_rbac_filtering(self):
+        """Tenant resource-visibility filtering must not hide the shared
+        curated fixture, even though it is never bound via bind_resource
+        (regression: it was previously stripped out alongside unbound
+        tenant-owned protocols)."""
+
+        pdf_path = self.root / "leaf-carbon.pdf"
+        write_text_pdf(
+            pdf_path, "Leaf carbon fractions", title="Leaf carbon fractions"
+        )
+        registered = self.catalog.register(
+            pdf_path, source_filename="leaf-carbon.pdf", media_type="application/pdf"
+        )
+        self.catalog.bootstrap_development_fixture(self.fixture)
+        self.store.close()
+
+        def open_catalog():
+            store = initialize_protocol_store(self.settings)
+            return ProtocolCatalog(store), store
+
+        with patch.object(
+            server_module, "server_config", return_value=SimpleNamespace()
+        ), patch.object(
+            server_module,
+            "_configured_candidate_fixture",
+            return_value=self.fixture,
+        ), patch.object(
+            server_module,
+            "_protocol_store_settings",
+            return_value=self.settings,
+        ), patch.object(
+            server_module, "_open_protocol_catalog", side_effect=open_catalog
+        ), patch.object(
+            server_module,
+            "_visible_catalog_resource_ids",
+            return_value=frozenset(),
+        ), patch.object(
+            server_module, "_protocol_analysis_model"
+        ), patch.object(
+            server_module, "ProcedureStore"
+        ):
+            payload = list_protocol_catalog()
+
+        visible_ids = {item["protocol_id"] for item in payload["protocols"]}
+        self.assertIn(
+            self.fixture.protocol_id,
+            visible_ids,
+            "the shared curated fixture must stay visible even when no "
+            "tenant resource binding exists for it",
+        )
+        self.assertNotIn(
+            registered.entry.protocol_id,
+            visible_ids,
+            "an ordinary tenant-owned protocol must stay RBAC-filtered",
+        )
+
+        # tearDown owns a live handle; reopen it after the endpoint closed its own.
+        self.store = initialize_protocol_store(self.settings)
+
     def test_candidate_launcher_uses_isolated_catalog_without_reload(self):
         repository = Path(__file__).resolve().parents[1]
         launcher = (repository / "scripts/run_candidate_a.sh").read_text(

@@ -1124,17 +1124,24 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
 
 
 def _public_protocol_catalog_entries(
-)->tuple[list[dict[str,object]],ProtocolPersistenceSettings,bool]:
-    """Resolve visible catalog entries without analysis or approval side effects."""
+)->tuple[list[dict[str,object]],ProtocolPersistenceSettings,str|None]:
+    """Resolve visible catalog entries without analysis or approval side effects.
+
+    The third element is the configured development fixture's protocol_id (or
+    None). It is not tenant-owned, so callers that apply per-tenant resource
+    visibility must exempt this id the same way get_protocol_catalog_entry
+    already does for single-entry lookups.
+    """
 
     config=server_config()
     candidate=_configured_candidate_fixture(config)
+    candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
     if candidate is not None:
         entries.append(_candidate_catalog_dict(candidate))
     settings=_protocol_store_settings()
     if not settings.enabled:
-        return entries,settings,candidate is not None
+        return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
         for item in catalog.list_entries():
@@ -1150,16 +1157,17 @@ def _public_protocol_catalog_entries(
             entries.append(public)
     finally:
         store.close()
-    return entries,settings,candidate is not None
+    return entries,settings,candidate_protocol_id
 
 
 def log_protocol_catalog_runtime_configuration()->None:
     """Log only sanitized protocol backend identity and visible entry count."""
 
     try:
-        entries,settings,development_fixture_enabled=(
+        entries,settings,candidate_protocol_id=(
             _public_protocol_catalog_entries()
         )
+        development_fixture_enabled=candidate_protocol_id is not None
         if settings.enabled and settings.data_dir is not None:
             data_dir=settings.data_dir.resolve()
             backend="sqlite+curated_fixture" if development_fixture_enabled else "sqlite"
@@ -2565,10 +2573,14 @@ def list_protocol_catalog()->dict[str,object]:
     """Read catalog metadata only; never trigger automated analysis."""
 
     try:
-        entries,_,_=_public_protocol_catalog_entries()
+        entries,_,candidate_protocol_id=_public_protocol_catalog_entries()
         visible=_visible_catalog_resource_ids()
         if visible is not None:
-            entries=[item for item in entries if item.get("protocol_id") in visible]
+            entries=[
+                item for item in entries
+                if item.get("protocol_id") in visible
+                or item.get("protocol_id")==candidate_protocol_id
+            ]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
     return {"protocols":entries}
@@ -7294,7 +7306,6 @@ async def voice_socket(websocket:WebSocket):
                         if requested_protocol_id is None:
                             selection_failure="protocol_selection_required"
                         else:
-                            _scope_catalog_resource(requested_protocol_id)
                             if trusted_config.curated_protocol_fixture_path is not None:
                                 configuration_stage="curated_protocol_fixture"
                                 curated_fixture=curated_fixture or load_curated_protocol_fixture(
@@ -7308,6 +7319,11 @@ async def voice_socket(websocket:WebSocket):
                                         curated_fixture,"revision_id",
                                         f"fixture-{requested_protocol_id}")
                             if selected_curated_fixture is None:
+                                # The shared curated development fixture is not
+                                # tenant-owned and is exempt above; every other
+                                # protocol/procedure selection stays tenant-scoped.
+                                configuration_stage="session_language"
+                                _scope_catalog_resource(requested_protocol_id)
                                 settings=_protocol_store_settings()
                                 if settings.enabled:
                                     configuration_stage="protocol_catalog"

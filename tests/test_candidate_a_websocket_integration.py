@@ -267,6 +267,124 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             self.assertFalse(fixture_state["active"])
             self.assertEqual(fixture_state["workflow_status"], "ready")
 
+    def test_candidate_a_session_starts_without_tenant_resource_binding(self) -> None:
+        """Regression: bootstrap_development_fixture() never calls
+        bind_resource() for the shared curated fixture, so it must still be
+        selectable under tenant RBAC. A real, unbound tenant protocol_id must
+        still be rejected."""
+
+        protocol_id = "candidate-a-curated-development-v1"
+        placeholder = Path("/tmp/offline-session-contract")
+        config = ServerConfig(
+            placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
+            None, None, placeholder, placeholder, placeholder,
+        )
+
+        class Socket:
+            def __init__(self, start_payload):
+                self.sent = []
+                self.headers = {"x-voice-dev-profile": "researcher-a"}
+                self.query_params = {}
+                self.messages = iter((
+                    {"text": json.dumps(start_payload)},
+                    {"type": "websocket.disconnect", "code": 1000},
+                ))
+
+            async def accept(self):
+                pass
+
+            async def send_text(self, value):
+                self.sent.append(json.loads(value))
+
+            async def send_bytes(self, value):
+                pass
+
+            async def receive(self):
+                return next(self.messages)
+
+        profile = {
+            "profile_id": "researcher-a",
+            "principal_id": "principal-researcher-a",
+            "organization_id": "tenant-a",
+            "display_name": "Researcher A",
+            "roles": ["researcher"],
+        }
+        principal = Principal(
+            principal_id=profile["principal_id"],
+            subject="dev:researcher-a",
+            organization_id=profile["organization_id"],
+            display_name=profile["display_name"],
+            roles=frozenset({Role.RESEARCHER}),
+            authentication_method="development",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            store.bootstrap_principal(principal)
+            # Deliberately no bind_resource() call: the curated fixture's own
+            # bootstrap never binds it either, so this must still work.
+            store.close()
+            environment = {
+                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
+                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace_dir),
+                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
+                "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+            }
+            patches = (
+                patch(
+                    "voice_workflow_agent.server.server_config",
+                    return_value=config,
+                ),
+                patch(
+                    "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                    return_value=ExperimentReportSettings(False),
+                ),
+                patch(
+                    "voice_workflow_agent.server.load_curated_protocol_fixture",
+                    return_value=self.fixture,
+                ),
+            )
+
+            allowed = Socket({
+                "type": "session.start",
+                "configuration_id": 1,
+                "mode": "cascade",
+                "language": "ko",
+                "protocol_id": protocol_id,
+            })
+            with patch.dict("os.environ", environment, clear=False):
+                with patches[0], patches[1], patches[2]:
+                    asyncio.run(voice_socket(allowed))
+            ready = next(
+                item for item in allowed.sent if item["type"] == "session.ready"
+            )
+            self.assertEqual(ready["protocol_id"], protocol_id)
+            self.assertFalse(any(
+                item.get("message") == "invalid session configuration"
+                for item in allowed.sent
+            ))
+
+            denied = Socket({
+                "type": "session.start",
+                "configuration_id": 2,
+                "mode": "cascade",
+                "language": "ko",
+                "protocol_id": "some-other-tenants-protocol",
+            })
+            with patch.dict("os.environ", environment, clear=False):
+                with patches[0], patches[1], patches[2]:
+                    asyncio.run(voice_socket(denied))
+            self.assertTrue(any(
+                item.get("message") == "invalid session configuration"
+                for item in denied.sent
+            ))
+            self.assertFalse(any(
+                item["type"] in ("session.ready", "session.started")
+                for item in denied.sent
+            ))
+
     def test_multi_turn_live_microphone_reproduction(self) -> None:
         """Reproduce exact live microphone turn sequence and assert authoritative state transitions."""
         session = CuratedProtocolSession(self.fixture)
