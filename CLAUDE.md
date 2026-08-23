@@ -14,7 +14,7 @@ system). This repository root **is** the project — there is no nested
 Authoritative docs, in order of precedence: `README.md` (current runnable
 contract) → `docs/ARCHITECTURE_MAP.md` and
 `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md` (architecture and phase
-evidence) → `docs/COMMERCIALIZATION_PASS3_REPORT.md` (current handoff of
+evidence) → `docs/COMMERCIALIZATION_PASS4_REPORT.md` (current handoff of
 record) → `docs/MIGRATION_NOTES.md` (schema history) → `AGENTS.md` and
 `.agent/*.md` (contributor design constraints). Older phase-numbered or
 `CODEX_*`-prefixed documents under `docs/` are historical evidence; they
