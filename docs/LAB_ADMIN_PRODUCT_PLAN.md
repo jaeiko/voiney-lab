@@ -27,7 +27,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 |  [ Principal Investigator / Professor ]  <--- "Are my grants producing reproducible data with zero compliance risk?"  |
 |         |                                                                                                             |
 |         v                                                                                                             |
-|  [ Lab Manager / Safety Officer ]        <--- "Are SOPs followed strictly? Are dangerous deviations caught instantly?"|
+|  [ Lab Manager / Safety Officer ]        <--- "Are protocols followed strictly? Are dangerous deviations caught instantly?"|
 |         |                                                                                                             |
 |         v                                                                                                             |
 |  [ Graduate Students / Postdocs ]        <--- "Can I run complex assays without contamination or mistakes?"           |
@@ -39,7 +39,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 
 ### Persona 1: The Principal Investigator (PI) / University Professor
 - **Pain Points**: High researcher turnover (students graduate every 2–4 years), loss of institutional lab knowledge, un-reproducible published data, grant audits.
-- **Value Proposition**: Guaranteed SOP execution fidelity, cryptographic experiment history, and automated student publication/grant draft outputs.
+- **Value Proposition**: Guaranteed protocol execution fidelity, cryptographic experiment history, and automated student publication/grant draft outputs.
 
 ### Persona 2: The Laboratory Manager / Compliance Officer
 - **Pain Points**: Unrecorded protocol deviations, lost sample lot numbers, manual spreadsheet tracking, calibration/timer non-compliance.
@@ -47,7 +47,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 
 ### Persona 3: The Bio-Pharma R&D Director
 - **Pain Points**: Extremely high cost per failed run ($5,000–$50,000 in reagents/enzymes), strict FDA 21 CFR Part 11 requirements.
-- **Value Proposition**: Cryptographically hashed SOPs (`protocol_sha256`), tamper-proof timestamped audit trails, and deterministic workflow gates.
+- **Value Proposition**: Cryptographically hashed protocols (`protocol_sha256`), tamper-proof timestamped audit trails, and deterministic workflow gates.
 
 ---
 
@@ -61,7 +61,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 |  - Real-Time Bench Run Visualizer      - Compliance & Deviation Heatmap        - Researcher Competency Dashboard      |
 |  -------------------------------------------------------------------------------------------------------------------  |
 |  [ Aggregation & Analytics Engine ]                                                                                   |
-|  - SOP Version Control & Diff Tool    - Anomaly / Fallback Root Cause Engine   - Reagent Utilization Analytics        |
+|  - Protocol Version Control & Diff Tool - Anomaly / Fallback Root Cause Engine  - Reagent Utilization Analytics        |
 |  -------------------------------------------------------------------------------------------------------------------  |
 |  [ Compliance & Ledger Service ]                                                                                      |
 |  - Immutable Run History Store         - Multi-Tenant RBAC & Sign-Off Gating   - 21 CFR Part 11 Compliant Audit Log   |
@@ -77,22 +77,22 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 - **Export Formats**: Standardized JSON, Markdown, and 10-section formal DOCX reports.
 
 ### Feature 2: Protocol Compliance & Deviation Heatmap
-- **Description**: Automatic comparison of executed run telemetry against approved master SOPs.
+- **Description**: Automatic comparison of executed run telemetry against approved master protocols.
 - **Capabilities**:
   - Highlights steps with repeated timeout violations or manual skip requests.
   - Generates deviation severity scores (Minor, Major, Critical Handoff).
 
 ### Feature 3: Common Rookie Mistake & Failure Step Analytics
 - **Description**: Aggregate telemetry on steps where researchers most frequently ask Learning Mode questions or report anomalies.
-- **Benefit**: Empowers PIs to identify ambiguous steps in written SOPs and refine laboratory protocols.
+- **Benefit**: Empowers PIs to identify ambiguous steps in written protocols and refine laboratory procedures.
 
 ### Feature 4: Researcher Training & Competency Ledger
 - **Description**: Tracks onboarding progression for junior researchers across foundational protocols (e.g., In-Gel Digestion, PCR, Western Blot).
 - **Capability**: Grants certified "Autonomous Operator" credentials once a researcher executes 3 consecutive runs with 0 deviations.
 
-### Feature 5: Enterprise SOP Lifecycle & Governance
-- **Description**: Full version control system for laboratory SOPs with draft, review, approved, and retired states.
-- **Governance**: Only approved SOPs can be activated on the bench voice agent; non-operational draft SOPs remain locked in test sandbox mode.
+### Feature 5: Enterprise Protocol Lifecycle & Governance
+- **Description**: Full version control system for laboratory protocols with draft, review, approved, and retired states.
+- **Governance**: Only approved protocol revisions can be activated on the bench voice agent; non-operational draft revisions remain locked in test sandbox mode.
 
 ---
 
@@ -101,7 +101,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 | Priority | Feature Module | Target Persona | User Value | Willingness to Pay | Tech Complexity | Recommended Phase |
 |:---:|---|---|:---:|:---:|:---:|:---:|
 | **P0** | **Central Experiment History & Audit Web Portal** | PI / Lab Manager | **Critical** | Very High | Low (Built on SQLite Store) | **Phase 1 (Immediate)** |
-| **P0** | **SOP Compliance & Anomaly Reporting Dashboard** | Safety Officer | **Critical** | High | Low | **Phase 1 (Immediate)** |
+| **P0** | **Protocol Compliance & Anomaly Reporting Dashboard** | Safety Officer | **Critical** | High | Low | **Phase 1 (Immediate)** |
 | **P1** | **Common Mistake & Step Failure Analytics** | Professor | High | High | Medium | **Phase 2** |
 | **P1** | **Researcher Onboarding & Training Progress** | Lab Manager | High | Medium | Medium | **Phase 2** |
 | **P2** | **Full 21 CFR Part 11 Electronic Signature Gateway** | Pharma Director | High | Extreme | High | **Phase 3** |
@@ -118,7 +118,7 @@ To transform the **Voice Workflow Agent** into an enterprise B2B SaaS platform, 
 |  [ Academic Lab Tier ]             [ Biotech Scale-Up Tier ]           [ Enterprise Pharma Tier ]                     |
 |  - $199 / lab / month              - $999 / lab / month                - Custom Annual Contract ($25k - $100k)        |
 |  - Up to 10 bench users            - Up to 35 bench users              - Unlimited users & multi-site facilities      |
-|  - 5 active SOPs                   - Unlimited SOPs                    - Custom LIMS/ELN integration                  |
+|  - 5 active protocols              - Unlimited protocols               - Custom LIMS/ELN integration                  |
 |  - Standard DOCX Reports           - Compliance Analytics Dashboard    - Full 21 CFR Part 11 & Dedicated Support      |
 +-----------------------------------------------------------------------------------------------------------------------+
 ```

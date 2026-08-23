@@ -96,7 +96,7 @@ This proposal presents **7 strategic product improvement areas**, evaluated acro
 
 #### 3.4 Technical Feasibility & Architecture
 - **Knowledge Ingestion Pipeline**: Asynchronous background aggregation of verified observations into an anonymized, indexed lab knowledge base (`LabKnowledgeGraph`).
-- **Safety Gate**: Knowledge recommendations must be flagged as *historical reference only* and never override active SOP constraints.
+- **Safety Gate**: Knowledge recommendations must be flagged as *historical reference only* and never override active protocol constraints.
 
 #### 3.5 Evaluation Scorecard
 - **User Pain Point**: Medium
@@ -111,7 +111,7 @@ This proposal presents **7 strategic product improvement areas**, evaluated acro
 ### 4. Contextual Researcher Learning Mode (Trainee Onboarding)
 
 #### 4.1 User Pain Point
-- Undergraduate students and novice interns often follow SOP steps blindly without understanding *why* a step is necessary (e.g., *"Why must the tube be kept on ice?"* or *"What happens if I centrifuge at 14,000 rpm instead of 10,000 rpm?"*).
+- Undergraduate students and novice interns often follow protocol steps blindly without understanding *why* a step is necessary (e.g., *"Why must the tube be kept on ice?"* or *"What happens if I centrifuge at 14,000 rpm instead of 10,000 rpm?"*).
 - Asking human supervisors for basic conceptual clarifications interrupts senior researchers.
 
 #### 4.2 Expected User Benefit
@@ -138,7 +138,7 @@ This proposal presents **7 strategic product improvement areas**, evaluated acro
 
 #### 5.1 User Pain Point
 - Regulated pharmaceutical and clinical labs must adhere to Good Laboratory Practice (GLP) / Good Manufacturing Practice (GMP).
-- Uncontrolled SOP updates or running an outdated protocol version can invalidate clinical trial data or violate FDA/EMA regulations.
+- Uncontrolled protocol updates or running an outdated protocol version can invalidate clinical trial data or violate FDA/EMA regulations.
 
 #### 5.2 Expected User Benefit
 - Guarantees that every experiment is executed against an approved, immutable protocol hash (`protocol_sha256`); alerts the researcher immediately if a newer version is active.
@@ -191,7 +191,7 @@ This proposal presents **7 strategic product improvement areas**, evaluated acro
 - Lab managers and PIs lack visibility into workflow execution metrics, step bottlenecks, frequent points of failure, or voice interaction drop-offs across their lab.
 
 #### 7.2 Expected User Benefit
-- PIs can identify which protocol steps cause the most confusion or frequent timer overruns, enabling targeted training and SOP refinement.
+- PIs can identify which protocol steps cause the most confusion or frequent timer overruns, enabling targeted training and protocol refinement.
 
 #### 7.3 Business & Commercial Value
 - Core enterprise feature providing executive value; enables ROI demonstration for enterprise software licensing.

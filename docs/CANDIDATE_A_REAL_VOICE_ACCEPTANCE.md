@@ -257,7 +257,7 @@ loads the exact curated fixture/provenance, and materializes only the already
 reviewed development catalog entry before starting one Uvicorn worker:
 
 ```bash
-cd /home/student/voice-ai-course/voice-workflow-agent
+cd /home/student/voice-ai-course
 ./scripts/run_candidate_a.sh
 ```
 

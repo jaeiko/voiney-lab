@@ -47,7 +47,7 @@ To transition from an engineering-hardened platform into a **commercially differ
 |  +---------------------------------------------+---------------------------------------------------+  |
 |  |                      Structured Laboratory Knowledge & Insight Layer                            |  |
 |  |                      - Aggregated verified observations and anomaly clustering                  |  |
-|  |                      - Historical context recommendations (Never overriding active SOPs)        |  |
+|  |                      - Historical context recommendations (Never overriding active protocols)   |  |
 |  +-------------------------------------------------------------------------------------------------+  |
 +-------------------------------------------------------------------------------------------------------+
 ```
@@ -177,7 +177,7 @@ To transition from an engineering-hardened platform into a **commercially differ
 - Builds proprietary organizational data network effects for institutional lab customers.
 
 #### 5.4 Technical Feasibility & Architecture Impact
-- **Strict Grounding Boundary**: Knowledge suggestions must be marked as historical reference notes and must NEVER authorize protocol deviations or override active SOP constraints.
+- **Strict Grounding Boundary**: Knowledge suggestions must be marked as historical reference notes and must NEVER authorize protocol deviations or override active protocol constraints.
 
 #### 5.5 Evaluation Matrix
 - **User Pain Point**: Medium
