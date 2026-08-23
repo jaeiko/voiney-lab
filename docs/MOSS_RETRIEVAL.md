@@ -49,7 +49,7 @@ command-line acknowledgement and is not enabled in the runtime by default.
 ## 1. Install the optional SDK
 
 ```bash
-cd ~/voice-ai-course/voice-workflow-agent
+cd ~/voice-workflow-agent
 source .venv/bin/activate
 python -m pip install -e '.[moss]'
 ```
@@ -57,7 +57,7 @@ python -m pip install -e '.[moss]'
 ## 2. Add Moss credentials locally
 
 Create a project in the Moss portal and place its values only in
-`voice-workflow-agent/.env`:
+the repository root `.env`:
 
 ```dotenv
 MOSS_PROJECT_ID=replace-with-moss-project-id

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/student/voice-ai-course/voice-workflow-agent"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"

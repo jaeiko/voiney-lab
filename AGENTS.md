@@ -61,6 +61,7 @@ source-linked protocol evidence.
 
 ```bash
 source .venv/bin/activate
+python -m pip install -e '.[test]'  # pytest + httpx are not in the runtime dependency set
 python scripts/replay_turns.py
 python -m pytest -q
 python -m compileall -q src tests scripts
