@@ -77,7 +77,12 @@ claim is not exercised by code and tests, mark it historical or future work.
 - `docs/CODEX_COMMERCIALIZATION_AUDIT.md`: finding/fix/evidence/remaining-risk
   ledger.
 - `docs/CODEX_FINAL_COMMERCIALIZATION_REPORT.md`: final verification and product
-  handoff.
+  handoff for the pre-Pass-2 baseline.
+- `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`: current phase-by-phase
+  validation ledger and external integration classification.
+- `docs/COMMERCIALIZATION_PASS3_REPORT.md`: current handoff of record (Product
+  Experience, repository re-rooting, pilot acceptance hardening, and
+  repository-identity cleanup).
 - `.agent/architecture.md`, `product_context.md`, `evaluation_strategy.md`,
   `security_rules.md`, and `roadmap.md`: contributor design constraints.
 
