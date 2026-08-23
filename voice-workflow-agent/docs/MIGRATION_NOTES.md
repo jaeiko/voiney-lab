@@ -100,3 +100,14 @@ one read-only import or change-log poll. Rotating a token does not require
 rewriting connector metadata. Never place an OAuth access token, protocols.io
 token, GitHub App installation token, or webhook secret directly in SQLite or a
 browser request.
+
+## Phase 6 identity compatibility
+
+The identity/workspace phase introduces no schema change. Existing tenant,
+principal, membership, and role rows remain valid. Before switching a deployment
+to `operational`, configure issuer, audience, HTTPS JWKS URL, and claim mappings;
+then create matching active local memberships for the verified tenant subjects.
+
+Development profile identifiers are not migrated into OIDC identities. Keep
+demo data isolated, and do not attempt to preserve authority by copying a local
+profile role into an operational token or membership automatically.

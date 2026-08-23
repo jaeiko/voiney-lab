@@ -215,6 +215,47 @@ second uncontrolled document store.
 - Offline adapters use fake transports; no credential is required or exposed by
   the regression suite. Live OAuth/App provisioning remains an operator step.
 
+## Phase 6 — Identity and Enterprise Workspace
+
+Status: validated as an existing production boundary; final full-suite result is
+recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Shared kiosk identities and client-selected roles make it impossible to prove
+who executed, reviewed, or approved work. The workspace boundary gives bench
+users a simple local demo mode while ensuring operational deployments derive
+tenant and role authority only from verified identity plus local membership.
+
+### Validated implementation
+
+- Central RBAC defines researcher, reviewer, lab-admin, and organization-admin
+  permissions. Role-specific HTTP and browser workspaces expose only authorized
+  actions.
+- Generic OIDC validates RS256/ES256 signature, issuer, audience, required time
+  claims, subject, and configurable tenant/role/name claims. The same standard
+  boundary supports Google Workspace, Microsoft Entra ID, Auth0, and Keycloak.
+- Effective roles are the intersection of signed claims and an active local
+  tenant membership; disabling or narrowing a membership takes effect without
+  trusting a stale role claim.
+- External subjects become opaque issuer-scoped principal identifiers. Client
+  payloads cannot choose tenant ownership, and cross-tenant resources remain
+  non-enumerable.
+- `Local Lab Admin` and other allowlisted development profiles remain available
+  only outside operational scope. Operational mode fails closed unless OIDC is
+  completely configured.
+
+### Safety and migration evidence
+
+- HTTP and WebSocket entrypoints share the identity resolver and tenant resource
+  bindings. Researcher-owned experiment reads, reviewer inbox actions, connector
+  administration, and aggregate admin views retain their existing permission
+  gates.
+- Phase 6 adds no schema. Existing organization, principal, membership, and role
+  rows survive the schema-v1-to-v4 migration regression.
+- Offline identity tests use generated/fake claims and never need real customer
+  tokens or expose secrets.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
@@ -224,7 +265,8 @@ second uncontrolled document store.
 | 3. Experiment Timeline | API/UI/tenant timeline tests included in Phase 2 focused gate | 748 passed + 684 subtests in 131.44s | passed | no additional schema beyond v3 | report, README, researcher timeline |
 | 4. Lab Adaptation | 48 focused tests passed | 752 passed + 684 subtests in 134.89s | passed | v1→v4 and v3→v4 fixtures passed | report, migration notes, README |
 | 5. Source Connectors | 39 focused tests passed | 752 passed + 684 subtests in 138.92s | passed | no schema change; v1→v4 regression passed | report, architecture/source hub, README |
-| 6. ELN Integration | pending | pending | pending | pending | pending |
-| 7. OCR | pending | pending | pending | pending | pending |
-| 8. Computational Metadata | pending | pending | pending | pending | pending |
-| 9. Product Polish | pending | pending | pending | pending | pending |
+| 6. Identity/Workspace | 37 focused tests passed | 752 passed + 684 subtests in 135.37s | passed | no schema change; v1→v4 regression passed | report, README, identity architecture |
+| 7. ELN Integration | pending | pending | pending | pending | pending |
+| 8. OCR/Document Intelligence | pending | pending | pending | pending | pending |
+| 9. Computational Metadata | pending | pending | pending | pending | pending |
+| 10. Product Experience | pending | pending | pending | pending | pending |

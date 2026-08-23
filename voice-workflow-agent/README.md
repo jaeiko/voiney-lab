@@ -205,6 +205,12 @@ server-configured claims. Effective permissions are the intersection of verified
 OIDC roles and active local memberships. External subjects are represented by an
 opaque issuer-scoped principal ID.
 
+The boundary is provider-neutral OpenID Connect and is compatible with Google
+Workspace, Microsoft Entra ID, Auth0, and Keycloak when each issuer supplies an
+HTTPS JWKS endpoint and the configured tenant/role claims. Provider setup and
+claim mapping remain deployment responsibilities; the application does not add
+provider-specific token shortcuts.
+
 An allowlisted development identity provider is available only outside
 `operational` scope. Operational workspace access requires a complete OIDC
 configuration. Client-supplied tenant IDs are never accepted as an ownership
