@@ -86,3 +86,17 @@ Back up the complete configured workspace data directory, not only the SQLite
 file, once evidence uploads are enabled. Downgrade is not automatic. A rollback
 uses the pre-migration backup; dropping the new tables manually is not
 supported.
+
+## Phase 5 connector compatibility
+
+The source-ecosystem phase introduces no database migration. Existing
+`connector_configurations`, `connector_sync_cursors`, `connector_webhook_events`,
+`protocol_sources`, lineage revisions, and reviewer inbox records remain the
+authoritative schema.
+
+Before enabling a live connector after upgrade, verify that its server-side
+secret reference resolves, retain the existing allowlisted roots, and perform
+one read-only import or change-log poll. Rotating a token does not require
+rewriting connector metadata. Never place an OAuth access token, protocols.io
+token, GitHub App installation token, or webhook secret directly in SQLite or a
+browser request.

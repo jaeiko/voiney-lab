@@ -55,7 +55,7 @@ continuation.
 - Disconnect does not imply stop or completion. The experiment remains
   recoverable with its current optimistic version.
 
-## Phase 2 — Observation and Event Timeline
+## Phase 2 — Observation and Evidence Layer
 
 Status: implemented; final full-suite result is recorded in the phase validation
 ledger below.
@@ -108,7 +108,31 @@ keeping those records separate from approved instructions.
   existing protocol-review permission; reviewers still cannot alter SOP
   instructions through this path.
 
-## Phase 3 — Lab Adaptation System
+## Phase 3 — Experiment Timeline
+
+Status: implemented with the Phase 2 persistence change; final full-suite result
+is recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Lifecycle, step progress, notes, attachments, and review decisions are difficult
+to reconstruct when they live in separate screens or exports. The unified,
+chronological timeline gives the researcher and reviewer one authoritative
+experiment history without treating chat text as workflow state.
+
+### Implementation and safety evidence
+
+- Added one tenant- and owner-scoped projection over append-only session events,
+  resolving observation and evidence detail without exposing internal storage
+  paths.
+- The researcher bench workspace uses the experiment timeline as its primary
+  history view and refreshes it from canonical API/WebSocket state.
+- Protocol start, completion, pause/resume, observations, evidence, and reviewer
+  actions retain their original actor, step, and timestamp identity.
+- Timeline reads are read-only. Observation text and attachments cannot mutate
+  protocol instructions, pass completion gates, or become approved knowledge.
+
+## Phase 4 — Lab Adaptation System
 
 Status: implemented; final full-suite result is recorded in the phase validation
 ledger below.
@@ -151,15 +175,55 @@ local difference reviewable.
 - Schema 3 → 4 is transactional. A schema-3 fixture preserves the original
   lineage content while adding the immutable adaptation relationship.
 
+## Phase 5 — Source Ecosystem Integration
+
+Status: validated as an existing production boundary; final full-suite result is
+recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Labs already govern protocol files in Drive, protocols.io, and GitHub. Manual
+download/re-upload breaks version identity and makes it difficult to prove which
+source changed. The source hub turns an allowlisted upstream version into an
+immutable, review-required lineage revision without making the voice service a
+second uncontrolled document store.
+
+### Validated implementation
+
+- `ProtocolsIoConnector` accepts bounded protocols.io identities, authenticates
+  with a server-resolved token, preserves structured source metadata, and never
+  promotes an in-development source to approved.
+- `GoogleDriveConnector` uses read-only folder/shared-drive allowlists, preserves
+  file/revision/modified identity, and advances a persisted changes cursor. A
+  changed file creates a new review item instead of overwriting an active SOP.
+- `GitHubConnector` uses repository/ref/path allowlists, pins imports to a commit
+  SHA, validates webhook HMAC and delivery replay, and never executes imported
+  repository content.
+- Connector rows contain only secret references and authorization metadata.
+  OAuth/App tokens are resolved at the server boundary and are excluded from
+  SQLite, API projections, logs, and browser state.
+- All three import paths reuse the existing tenant-scoped source, immutable
+  lineage revision, reviewer inbox, approval, and revocation machinery.
+
+### Safety and migration evidence
+
+- Connector imports are read-only upstream operations and fail closed on an
+  unallowlisted origin, root, repository, ref, path, alternate credentialed URL,
+  unsafe redirect, oversized response, or changed content identity.
+- Phase 5 adds no schema. Schema-v1-to-v4 migration fixtures and the connector
+  suite run against the same current workspace initializer.
+- Offline adapters use fake transports; no credential is required or exposed by
+  the regression suite. Live OAuth/App provisioning remains an operator step.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
 |---|---|---|---|---|---|
 | 1. Experiment Session | 187 tests + 249 subtests passed; production WebSocket recovery passed | 741 passed + 683 subtests in 132.23s | passed | v1→v2 fixture passed | architecture map, report, migration notes, README |
-| 2. Observation/Event Timeline | 188 tests + 250 subtests passed; voice/manual/evidence/API/UI boundaries passed | 748 passed + 684 subtests in 131.44s | passed | v1→v3 and v2→v3 fixtures passed | report, migration notes, README, researcher timeline |
-| 3. Lab Adaptation | 48 focused tests passed; typed changes, approval, immutability, IDOR and stale-parent cases passed | 752 passed + 684 subtests in 134.89s | passed | v1→v4 and v3→v4 fixtures passed | report, migration notes, README |
-| 4. Role UX | pending | pending | pending | pending | pending |
-| 5. Source Connectors | pending | pending | pending | pending | pending |
+| 2. Observation/Evidence | 188 tests + 250 subtests passed; voice/manual/evidence boundaries passed | 748 passed + 684 subtests in 131.44s | passed | v1→v3 and v2→v3 fixtures passed | report, migration notes, README |
+| 3. Experiment Timeline | API/UI/tenant timeline tests included in Phase 2 focused gate | 748 passed + 684 subtests in 131.44s | passed | no additional schema beyond v3 | report, README, researcher timeline |
+| 4. Lab Adaptation | 48 focused tests passed | 752 passed + 684 subtests in 134.89s | passed | v1→v4 and v3→v4 fixtures passed | report, migration notes, README |
+| 5. Source Connectors | 39 focused tests passed | 752 passed + 684 subtests in 138.92s | passed | no schema change; v1→v4 regression passed | report, architecture/source hub, README |
 | 6. ELN Integration | pending | pending | pending | pending | pending |
 | 7. OCR | pending | pending | pending | pending | pending |
 | 8. Computational Metadata | pending | pending | pending | pending | pending |
