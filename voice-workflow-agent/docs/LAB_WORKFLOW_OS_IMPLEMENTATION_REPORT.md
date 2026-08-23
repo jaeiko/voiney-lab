@@ -18,7 +18,7 @@ ledger below.
 ### Laboratory pain point
 
 A researcher can lose a browser connection, move benches, or return after an
-interruption. A transcript-only assistant cannot prove which exact SOP revision
+interruption. A transcript-only assistant cannot prove which exact protocol revision
 was running, which step was current, or whether prior steps were completed. The
 durable session reduces repeated setup and prevents informal, memory-based
 continuation.
@@ -63,7 +63,7 @@ ledger below.
 ### Laboratory pain point
 
 Bench observations are often captured after the fact in a notebook, detached
-from the exact SOP step and without a durable author/time identity. Images may
+from the exact protocol step and without a durable author/time identity. Images may
 also be scattered across devices. This causes memory-dependent reconstruction,
 weak deviation context, and extra reviewer follow-up. The timeline lets a
 researcher capture wording and opaque evidence at the moment of work while
@@ -105,7 +105,7 @@ keeping those records separate from approved instructions.
   streaming cap, verify an existing content-addressed file before reuse, and run
   no OCR or autonomous interpretation.
 - Timeline reads remain owner/tenant scoped. Reviewer actions require the
-  existing protocol-review permission; reviewers still cannot alter SOP
+  existing protocol-review permission; reviewers still cannot alter protocol
   instructions through this path.
 
 ## Phase 3 — Experiment Timeline
@@ -195,7 +195,7 @@ second uncontrolled document store.
   promotes an in-development source to approved.
 - `GoogleDriveConnector` uses read-only folder/shared-drive allowlists, preserves
   file/revision/modified identity, and advances a persisted changes cursor. A
-  changed file creates a new review item instead of overwriting an active SOP.
+  changed file creates a new review item instead of overwriting an active protocol.
 - `GitHubConnector` uses repository/ref/path allowlists, pins imports to a commit
   SHA, validates webhook HMAC and delivery replay, and never executes imported
   repository content.

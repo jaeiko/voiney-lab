@@ -169,7 +169,7 @@ unreviewed/invalid OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
 ## Lab adaptations
 
-A local SOP difference is represented as a new immutable child revision, never
+A local protocol difference is represented as a new immutable child revision, never
 as an edit to an imported original. The adaptation record pins the exact base
 and adapted revision IDs and accepts only step-linked equipment differences,
 reagent substitutions, lab notes, and troubleshooting tips. Equipment/reagent
@@ -419,7 +419,7 @@ The browser consumes these main groups:
 - `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
   experiment dashboard, recovery version, completed steps, observations,
   opaque evidence metadata, reviewer actions, and lifecycle timeline;
-- `/api/workspace/protocol-adaptations`: immutable, typed local SOP drafts
+- `/api/workspace/protocol-adaptations`: immutable, typed lab-adaptation drafts
   linked to an exact original and the existing reviewer approval path;
 - `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
   knowledge promotion, and dry-lab review;

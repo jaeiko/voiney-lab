@@ -38,4 +38,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-voice_workflow_agent = ["static/*.html", "static/*.js"]
+voice_workflow_agent = ["static/*.html", "static/*.js", "static/*.css"]

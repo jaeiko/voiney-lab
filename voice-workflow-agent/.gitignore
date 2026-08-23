@@ -9,3 +9,6 @@ __pycache__/
 /reports/
 /outbox/
 /data/runtime/
+node_modules/
+/playwright-report/
+/test-results/

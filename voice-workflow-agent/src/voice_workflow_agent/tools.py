@@ -447,7 +447,7 @@ GET_PROTOCOL_VERSION_INFO_TOOL = {
     "function": {
         "name": GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
         "description": (
-            "Call this when a researcher asks for the active SOP or protocol version, "
+            "Call this when a researcher asks for the active protocol version, "
             "document approval status, or cryptographic SHA256 protocol hash."
         ),
         "parameters": {

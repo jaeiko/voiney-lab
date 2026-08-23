@@ -35,4 +35,4 @@ Every proposed improvement or architecture extension must be evaluated using thi
 2. **Long-Term Experiment Lifecycle**: Seamless continuation of multi-day experiments across shifts and lab handovers.
 3. **Structured Research Knowledge Base**: Transforming raw step observations into institutional lab intelligence.
 4. **Interactive Researcher Learning Mode**: Contextual explanations of protocol rationale and common pitfalls for novice trainees.
-5. **Protocol Versioning & Digital Signatures**: Cryptographic verification of SOP versions for strict regulatory compliance (GLP/GMP).
+5. **Protocol Versioning & Digital Signatures**: Cryptographic verification of protocol versions for strict regulatory compliance (GLP/GMP).

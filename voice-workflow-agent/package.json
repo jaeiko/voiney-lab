@@ -1,0 +1,12 @@
+{
+  "name": "voice-workflow-agent-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Playwright browser acceptance tests for the Voice Workflow Agent researcher/reviewer/admin product UI.",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

@@ -51,11 +51,14 @@ class FrontendSessionTests(unittest.TestCase):
         html = (
             ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
         ).read_text(encoding="utf-8")
-        self.assertIn("align-items:start", html)
-        self.assertIn("position:sticky", html)
-        self.assertIn("top:4.5rem", html)
-        self.assertIn("calc(100dvh - 5.5rem)", html)
-        self.assertIn("overflow-y:auto", html)
+        css = (
+            ROOT / "src" / "voice_workflow_agent" / "static" / "app.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn("align-items:start", css)
+        self.assertIn("position:sticky", css)
+        self.assertIn("top:4.5rem", css)
+        self.assertIn("calc(100dvh - 5.5rem)", css)
+        self.assertIn("overflow-y:auto", css)
         self.assertIn('role="log"', html)
         script = html.split("<script>", 1)[1].split("</script>", 1)[0]
         harness = r"""
@@ -363,6 +366,9 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         html=(
             ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
         ).read_text(encoding="utf-8")
+        css=(
+            ROOT/"src"/"voice_workflow_agent"/"static"/"app.css"
+        ).read_text(encoding="utf-8")
         for control_id in (
             "protocol-ocr-run",
             "protocol-ocr-accept",
@@ -373,19 +379,19 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertIn("function reviewProtocolOcr", html)
         self.assertIn(
             'grid-template-areas:"setup setup" "work chat"',
-            html,
+            css,
         )
         self.assertIn(
-            'grid-template-areas:"setup" "work" "chat"', html
+            'grid-template-areas:"setup" "work" "chat"', css
         )
-        self.assertIn('.setup-grid{grid-template-columns:minmax(0,1fr)}', html)
-        self.assertIn('white-space:pre-wrap;overflow-wrap:anywhere', html)
+        self.assertIn('.setup-grid{grid-template-columns:minmax(0,1fr)}', css)
+        self.assertIn('white-space:pre-wrap;overflow-wrap:anywhere', css)
         self.assertNotIn('class="panel processing-card"', html)
         self.assertNotIn('id="voice-processing"', html)
-        self.assertIn('align-items:start', html)
-        self.assertIn('position:sticky', html)
-        self.assertIn('top:4.5rem', html)
-        self.assertIn('calc(100dvh - 5.5rem)', html)
+        self.assertIn('align-items:start', css)
+        self.assertIn('position:sticky', css)
+        self.assertIn('top:4.5rem', css)
+        self.assertIn('calc(100dvh - 5.5rem)', css)
         self.assertIn('class="turn-diagnostics"', html)
         self.assertIn('class="turn-diagnostics-body"', html)
         self.assertIn('id="rail-pause-session"', html)
@@ -402,14 +408,14 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
             html.index('class="panel timeline"'),
         )
         self.assertEqual(html.count('id="experiment-report-title"'), 1)
-        self.assertNotIn('grid-area:report', html)
+        self.assertNotIn('grid-area:report', css)
         self.assertIn("기록 보기 · 이상 사항 · 내보내기", html)
         self.assertIn("function applyBrainState", html)
         self.assertIn("function applyBrainAnswerEnrichment", html)
         self.assertIn('m.type==="session.greeting"', html)
         self.assertIn('message.status==="background_bounded"', html)
-        self.assertNotIn('--procedure-workspace-height', html)
-        self.assertIn('overflow-y:auto', html)
+        self.assertNotIn('--procedure-workspace-height', css)
+        self.assertIn('overflow-y:auto', css)
         self.assertNotIn('function syncConversationHeight', html)
         self.assertIn('function updateWorkflowTimer', html)
         self.assertIn('실험 진행 경과 시간', html)
@@ -434,7 +440,7 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertNotIn('id="register-protocol"', html)
         self.assertIn('class="btn-file-select"', html)
         self.assertIn('class="report-event-ledger"', html)
-        self.assertNotIn("overflow-x:scroll", html)
+        self.assertNotIn("overflow-x:scroll", css)
         self.assertNotIn("generated_schematic", html)
         self.assertNotIn("diagram-step-", html)
         self.assertNotIn("검증된 도식", html)
@@ -448,6 +454,16 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
             if getattr(route,"name",None)=="static")
         path,stat_result=static_mount.app.lookup_path(
             "mic-capture-worklet.js")
+        self.assertTrue(Path(path).is_file())
+        self.assertIsNotNone(stat_result)
+
+    def test_app_css_is_in_the_fastapi_static_mount(self):
+        from voice_workflow_agent.server import app
+
+        static_mount=next(
+            route for route in app.routes
+            if getattr(route,"name",None)=="static")
+        path,stat_result=static_mount.app.lookup_path("app.css")
         self.assertTrue(Path(path).is_file())
         self.assertIsNotNone(stat_result)
 
