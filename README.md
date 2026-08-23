@@ -1,5 +1,13 @@
 # Voice Workflow Agent
 
+[![CI](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml)
+
+Canonical repository: [`jaeiko/voice-workflow-agent`](https://github.com/jaeiko/voice-workflow-agent).
+This project originated inside the course repository
+[`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) (a fork
+of `civiliangame/voice-ai-course`); that repository is preserved as historical
+record but is no longer where active development happens.
+
 Voice Workflow Agent is a voice-first laboratory protocol knowledge and
 execution layer. Its product wedge is:
 
@@ -479,6 +487,15 @@ npm install
 npx playwright install --with-deps chromium
 npx playwright test
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs both on every push/PR to
+`main` and `refactor/**`. Its browser job uses `playwright.ci.config.ts` with
+`scripts/run_ci_server.sh`, a credential-free server launcher that runs with
+an empty protocol catalog instead of the full Candidate A demo fixture, since
+that fixture's integrity check requires an externally licensed source PDF
+that is intentionally not committed to the repository. Local development
+still uses `scripts/run_candidate_a.sh` (the default `playwright.config.ts`)
+for full-fidelity manual testing when that PDF is available.
 
 Tests are provider-free unless explicitly marked otherwise. Connector and eLabFTW
 contracts use fakes; the real adapters remain in the production code path. The
