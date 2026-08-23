@@ -77,7 +77,7 @@ available for a new operational session.
    present.
 3. Start one application instance. Initialization performs the migration before
    serving workspace traffic.
-4. Confirm `schema_metadata.schema_version = 4` and exercise tenant login,
+4. Confirm `schema_metadata.schema_version = 5` and exercise tenant login,
    protocol library, connector listing, experiment dashboard reads, a manual
    observation, and a small evidence upload.
 5. Retain the backup until the pilot acceptance suite has completed.
@@ -111,3 +111,17 @@ then create matching active local memberships for the verified tenant subjects.
 Development profile identifiers are not migrated into OIDC identities. Keep
 demo data isolated, and do not attempt to preserve authority by copying a local
 profile role into an operational token or membership automatically.
+
+## Commercial workspace schema 4 → 5
+
+Schema 5 adds nullable `experiment_session_id` provenance columns to existing
+`eln_writeback_requests` and append-only `eln_writeback_events`, plus a
+tenant/session/time index. New write-backs require and store the durable session
+identity. The server verifies that both the ExperimentSession and experiment
+report are completed and that their protocol and runtime-revision identities
+match before reserving an idempotency key or calling eLabFTW.
+
+The migration preserves legacy write-back request/event rows with a null session
+identity; it never invents an association. Those legacy rows remain audit
+history but cannot be replayed through the stricter write-back endpoint. A
+schema-4 fixture verifies that its existing request survives unchanged.

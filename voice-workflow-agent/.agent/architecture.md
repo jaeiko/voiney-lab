@@ -103,8 +103,12 @@ the source link is emitted.
 
 - Protocol catalog: SQLite plus content-addressed source objects.
 - Procedure state: SQLite, with deterministic observation/timer/completion gates.
-- Experiment reports: append-only SQLite metadata/events and deterministic
+- Experiment reports: append-only SQLite metadata/events associated by session
+  identity with the durable tenant ExperimentSession, plus deterministic
   JSON/Markdown/CSV/DOCX exports.
+- ELN write-back: explicit-confirmation eLabFTW adapter that requires a completed
+  durable session and matching completed report/revision, then records the
+  idempotent request and append-only external identity provenance.
 - Safety handoff: bounded JSONL queue and separate worker producing reviewable EML
   and status artifacts; it does not send mail automatically.
 - Runtime metrics: bounded in-memory aggregates derived from event allowlists.

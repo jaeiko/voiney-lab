@@ -154,6 +154,14 @@ def test_writeback_audit_is_tenant_scoped_append_only_and_idempotent(tmp_path):
             content={"steps": ["One"]},
             change_summary="Initial",
         )
+        experiment = store.start_experiment(
+            researcher,
+            session_id="experiment-report-123",
+            protocol_id="protocol-a",
+            protocol_revision_id="runtime-revision-a",
+            current_step_id="step-1",
+            current_step_label="1",
+        )
         connector = store.configure_connector(
             admin,
             connector_kind="elabftw",
@@ -165,6 +173,7 @@ def test_writeback_audit_is_tenant_scoped_append_only_and_idempotent(tmp_path):
         writeback = store.record_eln_writeback(
             researcher,
             connector_id=connector.connector_id,
+            experiment_session_id=experiment["session_id"],
             report_id="report-123",
             protocol_revision_id=revision.revision_id,
             external_experiment_id="321",
@@ -172,10 +181,17 @@ def test_writeback_audit_is_tenant_scoped_append_only_and_idempotent(tmp_path):
             idempotency_key="writeback-report-123-v1",
         )
         assert writeback.startswith("eln-writeback-")
+        persisted = store._connection.execute(
+            """SELECT report_id,experiment_session_id
+            FROM eln_writeback_events WHERE writeback_id=?""",
+            (writeback,),
+        ).fetchone()
+        assert tuple(persisted) == ("report-123", experiment["session_id"])
         with pytest.raises(ApprovalReplayError):
             store.record_eln_writeback(
                 researcher,
                 connector_id=connector.connector_id,
+                experiment_session_id=experiment["session_id"],
                 report_id="report-123",
                 protocol_revision_id=revision.revision_id,
                 external_experiment_id="322",

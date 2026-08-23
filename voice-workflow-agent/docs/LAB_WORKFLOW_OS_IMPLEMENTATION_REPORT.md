@@ -256,6 +256,48 @@ tenant and role authority only from verified identity plus local membership.
 - Offline identity tests use generated/fake claims and never need real customer
   tokens or expose secrets.
 
+## Phase 7 — ELN Integration
+
+Status: implemented and tightened around the durable ExperimentSession; final
+full-suite result is recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Researchers often re-enter a completed bench record into an ELN, losing exact
+revision identity and introducing transcription errors. A confirmed write-back
+reduces that duplicate work while leaving eLabFTW as the system of record and
+preserving human control over the transfer.
+
+### Implementation
+
+- Retained the generic `ElnConnector` boundary and production-shaped eLabFTW v2
+  create-then-patch adapter with an allowlisted HTTPS origin and server-resolved
+  credential.
+- Bound every new write-back to one tenant-owned, completed durable
+  ExperimentSession and its completed server report. Session and report protocol
+  ID/runtime revision must match, and the selected lineage revision must match
+  the report source/execution identity.
+- Explicit confirmation is required before any claim or network call. An
+  idempotency request is reserved first, finished as completed/failed, and paired
+  with an append-only write-back event including session, report, lineage,
+  external experiment, request hash, actor, and timestamp.
+- The payload contains bounded completed steps, observations, timers,
+  deviations, and source provenance. Raw audio, unrestricted transcripts,
+  private model reasoning, credentials, and unpublished instructions are not
+  included by default.
+
+### Safety and migration evidence
+
+- Schema 4 → 5 adds durable session provenance to write-back requests/events.
+  Legacy rows remain with a null association; the migration does not fabricate a
+  historical relationship.
+- A completed legacy report without a durable session fails before the connector
+  call. Session/report identity mismatches, incomplete records, unconfirmed
+  requests, replayed keys, cross-tenant resources, and unsafe eLabFTW locations
+  fail closed.
+- Provider-free fake transports verify the exact boundary. Live eLabFTW
+  credentials and tenant policy remain an operator/pilot release gate.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
@@ -266,7 +308,7 @@ tenant and role authority only from verified identity plus local membership.
 | 4. Lab Adaptation | 48 focused tests passed | 752 passed + 684 subtests in 134.89s | passed | v1→v4 and v3→v4 fixtures passed | report, migration notes, README |
 | 5. Source Connectors | 39 focused tests passed | 752 passed + 684 subtests in 138.92s | passed | no schema change; v1→v4 regression passed | report, architecture/source hub, README |
 | 6. Identity/Workspace | 37 focused tests passed | 752 passed + 684 subtests in 135.37s | passed | no schema change; v1→v4 regression passed | report, README, identity architecture |
-| 7. ELN Integration | pending | pending | pending | pending | pending |
+| 7. ELN Integration | 25 focused tests passed | 753 passed + 684 subtests in 135.98s | passed | v4→v5 legacy-row fixture and v1→v5 regression passed | report, migration notes, README |
 | 8. OCR/Document Intelligence | pending | pending | pending | pending | pending |
 | 9. Computational Metadata | pending | pending | pending | pending | pending |
 | 10. Product Experience | pending | pending | pending | pending | pending |

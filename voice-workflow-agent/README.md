@@ -289,7 +289,9 @@ produce a reviewable history rather than a hidden overwrite.
 `ElnConnector` is the generic boundary; `ELabFtwConnector` implements the real
 eLabFTW API v2 create-then-patch contract. A write-back requires:
 
-- a completed, tenant-owned experiment report;
+- a completed, tenant-owned durable ExperimentSession and its completed report;
+- exact agreement between the session protocol/revision and report
+  protocol/revision identities;
 - the exact tenant-owned protocol lineage revision and matching source/execution
   identity;
 - an enabled eLabFTW connector with an allowlisted HTTPS origin;

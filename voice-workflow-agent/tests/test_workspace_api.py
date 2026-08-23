@@ -756,6 +756,27 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
     reports.finalize(
         report["report_id"], status="completed", event_key="report-complete"
     )
+    legacy_report = reports.open_report(
+        session_id="legacy-session-without-durable-record",
+        protocol_id="protocol-writeback",
+        protocol_title="Reviewed protocol",
+        protocol_revision="pdf-1-analysis-1",
+        protocol_sha256=protocol_hash,
+        readiness_status="guidance_ready",
+        development_only=False,
+    )
+    reports.append_event(
+        legacy_report["report_id"],
+        event_key="legacy-step-complete",
+        event_type="step_completed",
+        step_id="step-1",
+        step_label="1",
+    )
+    reports.finalize(
+        legacy_report["report_id"],
+        status="completed",
+        event_key="legacy-report-complete",
+    )
     monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED", "true")
     monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB", str(report_path))
     monkeypatch.setenv("TEST_ELABFTW_KEY", "elab-api-key")
@@ -791,6 +812,30 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
         },
         change_summary="Exact local PDF",
     )
+    experiment = store.start_experiment(
+        researcher,
+        session_id=report["session_id"],
+        protocol_id=report["protocol_id"],
+        protocol_revision_id=report["protocol_revision"],
+        current_step_id="step-1",
+        current_step_label="1",
+    )
+    experiment = store.record_experiment_progress(
+        researcher,
+        experiment["session_id"],
+        event_key="protocol-started",
+        event_type="protocol_started",
+        step_id="step-1",
+        step_label="1",
+    )
+    store.transition_experiment(
+        researcher,
+        experiment["session_id"],
+        action="complete",
+        expected_version=experiment["version"],
+        event_key="workflow-completed",
+        reason="test_voice_authority",
+    )
     connector = store.configure_connector(
         admin,
         connector_kind="elabftw",
@@ -799,6 +844,7 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
         allowed_roots=("https://eln.example.test",),
     )
     store.bind_resource(researcher, "experiment_report", report["report_id"])
+    store.bind_resource(researcher, "experiment_report", legacy_report["report_id"])
     store.close()
 
     calls = []
@@ -833,6 +879,22 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
     )
     assert unconfirmed.status_code == 409
     assert calls == []
+    missing_session = asyncio.run(
+        _request(
+            "POST",
+            "/api/workspace/eln/elabftw/writeback",
+            profile="researcher-a",
+            json_body={
+                "connector_id": connector.connector_id,
+                "report_id": legacy_report["report_id"],
+                "protocol_revision_id": revision.revision_id,
+                "confirmed": True,
+                "idempotency_key": "legacy-writeback",
+            },
+        )
+    )
+    assert missing_session.status_code == 404
+    assert calls == []
     written = asyncio.run(
         _request(
             "POST",
@@ -849,6 +911,7 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
     )
     assert written.status_code == 201, written.text
     assert written.json()["raw_audio_transmitted"] is False
+    assert written.json()["experiment_session_id"] == report["session_id"]
     assert calls[0][0].report_id == report["report_id"]
     assert calls[0][0].completed_steps[0].step_id == "step-1"
     replay = asyncio.run(

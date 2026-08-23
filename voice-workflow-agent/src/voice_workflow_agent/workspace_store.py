@@ -26,7 +26,7 @@ from voice_workflow_agent.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 4
+WORKSPACE_SCHEMA_VERSION = 5
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -680,6 +680,23 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=4)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(4);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
+MIGRATION_4_TO_5 = """
+ALTER TABLE eln_writeback_events
+ ADD COLUMN experiment_session_id TEXT REFERENCES experiment_sessions(session_id);
+ALTER TABLE eln_writeback_requests
+ ADD COLUMN experiment_session_id TEXT REFERENCES experiment_sessions(session_id);
+CREATE INDEX eln_writebacks_tenant_session_created
+ ON eln_writeback_events(organization_id,experiment_session_id,created_at);
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=5)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(5);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -3283,6 +3300,7 @@ class WorkspaceStore:
         principal: Principal,
         *,
         connector_id: str,
+        experiment_session_id: str,
         report_id: str,
         protocol_revision_id: str,
         external_experiment_id: str,
@@ -3299,6 +3317,7 @@ class WorkspaceStore:
             raise WorkspaceNotFoundError("Connector is not available.")
         if connector["connector_kind"] != "elabftw" or not connector["enabled"]:
             raise WorkspaceError("Connector does not support ELN write-back.")
+        self._experiment_row(principal, experiment_session_id)
         self.require_resource(principal, "experiment_report", report_id)
         self.get_revision(principal, protocol_revision_id)
         if _SHA256.fullmatch(request_sha256) is None:
@@ -3309,7 +3328,8 @@ class WorkspaceStore:
                 """INSERT INTO eln_writeback_events
                 (writeback_id,idempotency_key,organization_id,connector_id,report_id,
                 protocol_revision_id,external_experiment_id,request_sha256,
-                actor_principal_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                actor_principal_id,created_at,experiment_session_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     writeback_id,
                     _identifier(idempotency_key, "Idempotency key"),
@@ -3321,6 +3341,9 @@ class WorkspaceStore:
                     request_sha256,
                     principal.principal_id,
                     _now(),
+                    _identifier(
+                        experiment_session_id, "Experiment session identifier"
+                    ),
                 ),
             )
             self._connection.commit()
@@ -3333,6 +3356,7 @@ class WorkspaceStore:
         principal: Principal,
         *,
         connector_id: str,
+        experiment_session_id: str,
         report_id: str,
         protocol_revision_id: str,
         idempotency_key: str,
@@ -3341,11 +3365,16 @@ class WorkspaceStore:
         connector = self.connector_for_use(
             principal, connector_id, expected_kind="elabftw"
         )
+        self._experiment_row(principal, experiment_session_id)
         self.require_resource(principal, "experiment_report", report_id)
         self.get_revision(principal, protocol_revision_id)
         try:
             self._connection.execute(
-                "INSERT INTO eln_writeback_requests VALUES(?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO eln_writeback_requests(
+                organization_id,idempotency_key,connector_id,report_id,
+                protocol_revision_id,actor_principal_id,status,created_at,
+                completed_at,experiment_session_id
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (
                     principal.organization_id,
                     _identifier(idempotency_key, "Idempotency key"),
@@ -3356,6 +3385,9 @@ class WorkspaceStore:
                     "processing",
                     _now(),
                     None,
+                    _identifier(
+                        experiment_session_id, "Experiment session identifier"
+                    ),
                 ),
             )
             self._connection.commit()
@@ -3556,6 +3588,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 4
+    if version == 4:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_4_TO_5 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 5
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

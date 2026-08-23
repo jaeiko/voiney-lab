@@ -1902,6 +1902,22 @@ async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
         if report.get("status")!="completed" or not report.get("ended_at"):
             raise WorkspaceConflictError(
                 "Only a completed experiment report can be written back.")
+        experiment_session_id=report.get("session_id")
+        if not isinstance(experiment_session_id,str):
+            raise WorkspaceConflictError(
+                "Experiment report has no durable session identity.")
+        experiment=store.get_experiment(principal,experiment_session_id)
+        if experiment.get("status")!="completed":
+            raise WorkspaceConflictError(
+                "Only a completed experiment session can be written back.")
+        if (
+            experiment.get("protocol_id")!=report.get("protocol_id")
+            or experiment.get("protocol_revision_id")
+            !=report.get("protocol_revision")
+        ):
+            raise WorkspaceConflictError(
+                "Experiment session and report protocol identities do not match."
+            )
         identity=revision.content.get("execution_identity")
         identity_matches=(
             revision.source_hash==report.get("protocol_sha256")
@@ -1970,7 +1986,8 @@ async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
             report_url=None,
         )
         store.claim_eln_writeback_request(
-            principal,connector_id=connector_id,report_id=report_id,
+            principal,connector_id=connector_id,
+            experiment_session_id=experiment_session_id,report_id=report_id,
             protocol_revision_id=revision_id,idempotency_key=idempotency_key,
         )
         claimed=True
@@ -1982,7 +1999,8 @@ async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
             experiment,confirmed=True,
         )
         writeback_id=store.record_eln_writeback(
-            principal,connector_id=connector_id,report_id=report_id,
+            principal,connector_id=connector_id,
+            experiment_session_id=experiment_session_id,report_id=report_id,
             protocol_revision_id=revision_id,
             external_experiment_id=result.external_experiment_id,
             request_sha256=result.request_sha256,
@@ -1997,6 +2015,7 @@ async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
         return {
             "writeback_id":writeback_id,
             "connector_kind":"elabftw",
+            "experiment_session_id":experiment_session_id,
             "external_experiment_id":result.external_experiment_id,
             "location":result.location,
             "raw_audio_transmitted":False,

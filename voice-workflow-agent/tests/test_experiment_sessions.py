@@ -7,6 +7,8 @@ import pytest
 from voice_workflow_agent.identity import Principal, Role
 from voice_workflow_agent.workspace_store import (
     MIGRATION_1_TO_2,
+    MIGRATION_2_TO_3,
+    MIGRATION_3_TO_4,
     SCHEMA,
     WORKSPACE_DATABASE_FILENAME,
     WorkspaceConflictError,
@@ -46,7 +48,7 @@ def test_schema_v1_migrates_forward_without_losing_workspace_identity(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 4
+        ).fetchone()[0] == 5
         assert store._connection.execute(
             "SELECT name FROM organizations WHERE organization_id='tenant-a'"
         ).fetchone()[0] == "Existing tenant"
@@ -98,7 +100,7 @@ def test_schema_v2_migrates_observation_tables_and_preserves_sessions(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 4
+        ).fetchone()[0] == 5
         assert store._connection.execute(
             "SELECT protocol_revision_id FROM experiment_sessions WHERE session_id='experiment-v2'"
         ).fetchone()[0] == "revision-a"
@@ -109,6 +111,107 @@ def test_schema_v2_migrates_observation_tables_and_preserves_sessions(tmp_path):
             ).fetchall()
         }
         assert {"experiment_observations", "experiment_evidence"} <= names
+    finally:
+        store.close()
+
+
+def test_schema_v4_adds_session_provenance_without_losing_legacy_writeback(tmp_path):
+    path = tmp_path / WORKSPACE_DATABASE_FILENAME
+    connection = sqlite3.connect(path)
+    connection.executescript(SCHEMA)
+    for migration in (MIGRATION_1_TO_2, MIGRATION_2_TO_3, MIGRATION_3_TO_4):
+        connection.executescript("BEGIN IMMEDIATE;\n" + migration + "\nCOMMIT;")
+    now = "2026-08-01T00:00:00+00:00"
+    connection.execute(
+        "INSERT INTO organizations VALUES(?,?,?)", ("tenant-a", "A", now)
+    )
+    connection.execute(
+        "INSERT INTO principals VALUES(?,?,?,?)",
+        ("principal-a", "test:a", "A", now),
+    )
+    connection.execute(
+        "INSERT INTO memberships VALUES(?,?,?,?,?)",
+        ("tenant-a", "principal-a", "researcher", 1, now),
+    )
+    connection.execute(
+        "INSERT INTO protocol_families VALUES(?,?,?,?,?)",
+        ("family-a", "tenant-a", "Protocol", "principal-a", now),
+    )
+    connection.execute(
+        """INSERT INTO protocol_sources VALUES(?,?,?,?,?,?,?,?,?)""",
+        (
+            "source-a",
+            "tenant-a",
+            "local_pdf",
+            "source.pdf",
+            "v1",
+            "a" * 64,
+            None,
+            "{}",
+            now,
+        ),
+    )
+    connection.execute(
+        """INSERT INTO protocol_lineage_revisions VALUES(
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            "lineage-a",
+            "family-a",
+            "tenant-a",
+            1,
+            None,
+            "source-a",
+            "principal-a",
+            now,
+            "Initial",
+            "b" * 64,
+            "a" * 64,
+            "en",
+            "original",
+            "{}",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO connector_configurations VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            "connector-a",
+            "tenant-a",
+            "elabftw",
+            "ELN",
+            "secret://tenant/eln",
+            None,
+            '["https://eln.example.test"]',
+            1,
+            now,
+        ),
+    )
+    connection.execute(
+        """INSERT INTO eln_writeback_requests VALUES(?,?,?,?,?,?,?,?,?)""",
+        (
+            "tenant-a",
+            "legacy-request",
+            "connector-a",
+            "report-a",
+            "lineage-a",
+            "principal-a",
+            "completed",
+            now,
+            now,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = _store(tmp_path)
+    try:
+        assert store._connection.execute(
+            "SELECT schema_version FROM schema_metadata"
+        ).fetchone()[0] == 5
+        legacy = store._connection.execute(
+            """SELECT report_id,experiment_session_id
+            FROM eln_writeback_requests WHERE idempotency_key='legacy-request'"""
+        ).fetchone()
+        assert tuple(legacy) == ("report-a", None)
     finally:
         store.close()
 
