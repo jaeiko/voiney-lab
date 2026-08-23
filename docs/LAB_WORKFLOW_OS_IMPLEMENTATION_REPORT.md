@@ -396,4 +396,38 @@ voice server into an arbitrary code runner.
 | 7. ELN Integration | 25 focused tests passed | 753 passed + 684 subtests in 135.98s | passed | v4→v5 legacy-row fixture and v1→v5 regression passed | report, migration notes, README |
 | 8. OCR/Document Intelligence | 102 focused tests + 69 subtests passed | 757 passed + 684 subtests in 140.94s | passed | no schema change; existing event ledger | report, migration notes, README, architecture |
 | 9. Computational Metadata | 55 focused tests passed | 760 passed + 684 subtests in 142.37s | passed | no schema change; schema-5 regression passed | report, migration notes, README, architecture, researcher UI |
-| 10. Product Experience | pending | pending | pending | pending | pending |
+| 10. Product Experience | 10 `test_frontend.py` cases + 28 Playwright browser cases (desktop + mobile) passed | 761 passed + 684 subtests in 144.37s | passed | no schema change | report, README, DEMO_WALKTHROUGH_PHASE10.md |
+| 11. Repository Root Promotion | editable install, CLI entry points, live server smoke test (index/static/WebSocket/`/api/workspace/session`) passed from new root | 761 passed + 684 subtests, matching pre-migration baseline | passed | no schema change; `docs/demo_script.md` sha256 unchanged | report, README, AGENTS.md, new CLAUDE.md |
+| 12. Pilot Acceptance Hardening | `evaluate_candidate_a_hardening.py` (98% route accuracy, 0 unintended mutations; 2 pre-existing routing-copy failures confirmed present at the Phase 9 baseline, unrelated to Phases 10-11) and `evaluate_candidate_a_grounded_qa.py` (20/20 cases, 1.0 accuracy) | 761 passed + 684 subtests | passed | no schema change | report (this ledger), external integration classification below |
+
+## External integration classification (Phase 12)
+
+Classified from code and test evidence only. **No integration below has
+in-repo evidence of a successful live external call** — this environment
+never made one during Phases 10-12.
+
+| Integration | Status | Evidence |
+|---|---|---|
+| xAI STT | IMPLEMENTED | Real `AsyncOpenAI`/`OpenAI` client wired in `server.py`; exercised only via manual, opt-in `STT_DIAGNOSTICS` mode, not in automated tests |
+| xAI TTS | IMPLEMENTED | Same as STT above |
+| LLM / structured protocol analysis | CONTRACT-TESTED | Tests use `FakeModel`/`FakeChunkModel`/`FakeClient`; real client exists in `worker.py` but is not exercised live |
+| Google Drive / Shared Drive | CONTRACT-TESTED | `protocol_sources.py` adapter tested against a `FakeTransport`; no Google OAuth was live-tested |
+| GitHub connector | CONTRACT-TESTED | Fake transport; no GitHub App installation was live-tested |
+| protocols.io | CONTRACT-TESTED | Fake-transport contract tests only |
+| OIDC | CONTRACT-TESTED | Tests use fake JWKS URLs (`identity.example.test`); no real IdP configured |
+| eLabFTW | CONTRACT-TESTED | `FakeElnTransport` against `eln.example.test`; no real instance |
+| OCR provider | CONTRACT-TESTED | `FakeOcrProvider` only; `protocol_ocr.py` defines a bounded `Protocol` interface with no bundled implementation — a deployment must inject a real adapter |
+| Snakemake/Nextflow metadata inspection | IMPLEMENTED | `drylab_workflows.py` performs static/regex metadata parsing only; deliberately has no execution function |
+| Seqera / future execution boundary | NOT VALIDATED | `SeqeraLaunchBoundary` is a bare `Protocol` interface with zero implementations and zero tests |
+
+## Known limitation: legacy procedure stack
+
+A second, older workflow-state-machine (`procedures.py` / `procedure_store.py`,
+with its own `procedure_sessions`/`procedure_step_events` schema and its own
+tool set) runs alongside the production `ExperimentSession` /
+`CuratedProtocolSession` authority. It predates the commercialization pass and
+was not introduced by Phases 10-12. It is reachable in production code
+(`PROVIDER_TOOL_DECISIONS` marks its tools "retained"), not dead code, but its
+relationship to the current authority model (intentional demo/tutorial lane
+vs. candidate for retirement) was not resolved during this pass. Treat this
+as a scoped follow-up, not something to silently extend further.
