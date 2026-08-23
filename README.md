@@ -497,6 +497,15 @@ that is intentionally not committed to the repository. Local development
 still uses `scripts/run_candidate_a.sh` (the default `playwright.config.ts`)
 for full-fidelity manual testing when that PDF is available.
 
+The same externally licensed PDF also backs 13 pytest modules' byte-exact
+source-identity checks and both `scripts/evaluate_candidate_a_*.py`
+evaluators. `tests/conftest.py` skips those modules (with an explicit reason)
+whenever the PDF is absent, and the CI workflow does the same for the
+evaluator scripts, rather than faking the file or hiding a real failure
+behind it. Everything else - the full non-PDF-dependent test suite, the
+Playwright browser suite, and `python scripts/replay_turns.py` - runs
+identically in CI and locally.
+
 Tests are provider-free unless explicitly marked otherwise. Connector and eLabFTW
 contracts use fakes; the real adapters remain in the production code path. The
 Pass 2 report records which external systems were actually live-tested:

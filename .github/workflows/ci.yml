@@ -32,12 +32,22 @@ jobs:
 
       - name: Deterministic routing evaluators (provider-free)
         run: |
-          python scripts/evaluate_candidate_a_grounded_qa.py
-          # evaluate_candidate_a_hardening.py has 2 known pre-existing failures
-          # (safety-general-followup, report-show) confirmed present since
-          # before Phase 10 - see docs/COMMERCIALIZATION_PASS3_REPORT.md.
-          # Run it for visibility without failing the build on those two.
-          python scripts/evaluate_candidate_a_hardening.py || true
+          # Both evaluators build their fixture from the real, externally
+          # licensed Candidate A source PDF (byte-exact identity check) -
+          # see tests/conftest.py for the same constraint on the pytest side.
+          # It is intentionally not committed to the repository, so these
+          # only run where a maintainer has it locally (never in CI).
+          if [ -f /home/student/protocol-test-files/in-gel-digestion.pdf ]; then
+            python scripts/evaluate_candidate_a_grounded_qa.py
+            # evaluate_candidate_a_hardening.py has 2 known pre-existing
+            # failures (safety-general-followup, report-show) confirmed
+            # present since before Phase 10 - see
+            # docs/COMMERCIALIZATION_PASS3_REPORT.md. Run it for visibility
+            # without failing the build on those two.
+            python scripts/evaluate_candidate_a_hardening.py || true
+          else
+            echo "Skipping: requires the externally licensed Candidate A source PDF, not present in CI."
+          fi
 
   e2e:
     name: Playwright browser acceptance
