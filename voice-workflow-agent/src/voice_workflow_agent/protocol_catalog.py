@@ -30,6 +30,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
 from voice_workflow_agent.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
+    ProtocolPdfPage,
     extract_protocol_pdf,
 )
 from voice_workflow_agent.experiment_protocol_store import (
@@ -47,6 +48,12 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     analyze_protocol_chunk,
     merge_validated_chunk_results,
     plan_protocol_chunks,
+)
+from voice_workflow_agent.protocol_ocr import (
+    OcrResult,
+    ProtocolOcrProvider,
+    ocr_result_payload,
+    validate_ocr_result,
 )
 
 
@@ -69,6 +76,10 @@ _SINGLE_REVIEW_REQUIRED_EVENT = "protocol_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 _DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
+_OCR_REQUESTED_EVENT = "protocol_ocr_requested"
+_OCR_COMPLETED_EVENT = "protocol_ocr_completed"
+_OCR_FAILED_EVENT = "protocol_ocr_failed"
+_OCR_REVIEWED_EVENT = "protocol_ocr_reviewed"
 _CHUNK_RUN_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 
@@ -98,6 +109,10 @@ class ProtocolApprovalError(ProtocolCatalogError):
 
 class ProtocolOcrRequiredError(ProtocolCatalogError):
     code = "ocr_required"
+
+
+class ProtocolOcrReviewError(ProtocolCatalogError):
+    code = "protocol_ocr_review_invalid"
 
 
 class ProtocolChunkedAnalysisRequiredError(ProtocolCatalogError):
@@ -346,6 +361,344 @@ class ProtocolCatalog:
         )
         return analyses[-1] if analyses else None
 
+    def _latest_ocr_events(
+        self, revision: ProtocolRevisionRecord
+    ) -> tuple[object, ...]:
+        events = tuple(
+            event
+            for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+            and event.event_type
+            in {
+                _OCR_REQUESTED_EVENT,
+                _OCR_COMPLETED_EVENT,
+                _OCR_FAILED_EVENT,
+                _OCR_REVIEWED_EVENT,
+            }
+        )
+        requested = tuple(
+            event for event in events if event.event_type == _OCR_REQUESTED_EVENT
+        )
+        if not requested or not isinstance(requested[-1].payload, dict):
+            return ()
+        ocr_id = requested[-1].payload.get("ocr_id")
+        if not isinstance(ocr_id, str):
+            return ()
+        return tuple(
+            event
+            for event in events
+            if isinstance(event.payload, dict)
+            and event.payload.get("ocr_id") == ocr_id
+        )
+
+    def _ocr_projection(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+        *,
+        include_text: bool,
+    ) -> dict[str, object]:
+        if _analysis_state(extraction) != "ocr_required":
+            return {
+                "state": "not_required",
+                "review_required": False,
+                "accepted_for_analysis": False,
+                "executable": False,
+            }
+        events = self._latest_ocr_events(revision)
+        if not events:
+            return {
+                "state": "ocr_required",
+                "review_required": False,
+                "accepted_for_analysis": False,
+                "executable": False,
+            }
+        request = events[0].payload
+        completed = next(
+            (
+                event.payload
+                for event in reversed(events)
+                if event.event_type == _OCR_COMPLETED_EVENT
+                and isinstance(event.payload, dict)
+            ),
+            None,
+        )
+        failed = next(
+            (
+                event.payload
+                for event in reversed(events)
+                if event.event_type == _OCR_FAILED_EVENT
+                and isinstance(event.payload, dict)
+            ),
+            None,
+        )
+        reviewed = next(
+            (
+                event.payload
+                for event in reversed(events)
+                if event.event_type == _OCR_REVIEWED_EVENT
+                and isinstance(event.payload, dict)
+            ),
+            None,
+        )
+        if reviewed is not None:
+            accepted = reviewed.get("decision") == "accepted"
+            state = "accepted_for_analysis" if accepted else "rejected"
+        elif completed is not None:
+            accepted = False
+            state = "review_required"
+        elif failed is not None:
+            accepted = False
+            state = "failed"
+        else:
+            accepted = False
+            state = "in_progress"
+        projection: dict[str, object] = {
+            "state": state,
+            "ocr_id": request.get("ocr_id"),
+            "source_sha256": revision.pdf_checksum,
+            "review_required": state == "review_required",
+            "accepted_for_analysis": accepted,
+            "executable": False,
+            "failure_code": (
+                failed.get("failure_code") if failed is not None else None
+            ),
+            "review": reviewed,
+        }
+        if completed is not None:
+            pages = completed.get("pages")
+            projection.update(
+                {
+                    "provider": completed.get("provider"),
+                    "provider_version": completed.get("provider_version"),
+                    "languages": completed.get("languages", []),
+                    "warnings": completed.get("warnings", []),
+                    "page_count": completed.get("page_count"),
+                    "pages": (
+                        pages
+                        if include_text
+                        else [
+                            {
+                                key: page.get(key)
+                                for key in (
+                                    "source_page_number",
+                                    "confidence",
+                                    "text_sha256",
+                                )
+                            }
+                            for page in pages
+                            if isinstance(page, dict)
+                        ]
+                        if isinstance(pages, list)
+                        else []
+                    ),
+                }
+            )
+        return projection
+
+    def ocr_status(
+        self, protocol_id: str, *, include_text: bool = True
+    ) -> dict[str, object]:
+        revision = self._latest_protocol_revision(protocol_id)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        source = self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        )
+        extraction = extract_protocol_pdf(source)
+        return {
+            "protocol_id": protocol_id,
+            "revision_id": _revision_id(revision.revision_number),
+            **self._ocr_projection(
+                revision, extraction, include_text=include_text
+            ),
+        }
+
+    def _extraction_for_analysis(
+        self,
+        revision: ProtocolRevisionRecord,
+        extraction: ProtocolPdfExtraction,
+    ) -> ProtocolPdfExtraction:
+        projection = self._ocr_projection(
+            revision, extraction, include_text=True
+        )
+        if projection.get("accepted_for_analysis") is not True:
+            return extraction
+        pages = projection.get("pages")
+        if not isinstance(pages, list) or len(pages) != extraction.page_count:
+            raise ProtocolOcrReviewError("Accepted OCR page evidence is invalid.")
+        reconstructed = []
+        for expected_number, page in enumerate(pages, start=1):
+            if (
+                not isinstance(page, dict)
+                or page.get("source_page_number") != expected_number
+                or not isinstance(page.get("text"), str)
+                or hashlib.sha256(page["text"].encode("utf-8")).hexdigest()
+                != page.get("text_sha256")
+            ):
+                raise ProtocolOcrReviewError(
+                    "Accepted OCR page evidence failed integrity validation."
+                )
+            reconstructed.append(
+                ProtocolPdfPage(
+                    source_page_number=expected_number,
+                    text=page["text"],
+                    text_empty=not page["text"].strip(),
+                    warning="Text was produced by OCR and accepted for structured review.",
+                )
+            )
+        return replace(
+            extraction,
+            pages=tuple(reconstructed),
+            warnings=tuple(
+                dict.fromkeys(
+                    (
+                        *extraction.warnings,
+                        "OCR-derived text is review evidence, not an approved protocol.",
+                    )
+                )
+            ),
+        )
+
+    def run_ocr(
+        self,
+        protocol_id: str,
+        provider: ProtocolOcrProvider,
+        *,
+        ocr_id: str,
+    ) -> dict[str, object]:
+        if not _STABLE_PROTOCOL_ID.fullmatch(ocr_id):
+            raise ProtocolOcrReviewError("OCR request identity is invalid.")
+        revision = self._latest_protocol_revision(protocol_id)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        source = self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        )
+        extraction = extract_protocol_pdf(source)
+        if _analysis_state(extraction) != "ocr_required":
+            raise ProtocolOcrReviewError("Protocol PDF does not require OCR.")
+        current = self._ocr_projection(
+            revision, extraction, include_text=False
+        )
+        if current["state"] in {
+            "in_progress",
+            "review_required",
+            "accepted_for_analysis",
+        }:
+            return self.ocr_status(protocol_id)
+        self.store.append_event(
+            f"ocr-requested-{ocr_id}",
+            protocol_id,
+            revision.revision_number,
+            _OCR_REQUESTED_EVENT,
+            {
+                "ocr_id": ocr_id,
+                "status": "in_progress",
+                "source_sha256": revision.pdf_checksum,
+                "page_count": extraction.page_count,
+            },
+        )
+        try:
+            result = provider.recognize(
+                source,
+                source_sha256=revision.pdf_checksum,
+                page_count=extraction.page_count,
+            )
+            validated = validate_ocr_result(
+                result,
+                expected_sha256=revision.pdf_checksum,
+                expected_page_count=extraction.page_count,
+            )
+            payload = {"ocr_id": ocr_id, **ocr_result_payload(validated)}
+            self.store.append_event(
+                f"ocr-completed-{ocr_id}",
+                protocol_id,
+                revision.revision_number,
+                _OCR_COMPLETED_EVENT,
+                payload,
+            )
+        except Exception as exc:
+            failure_code = getattr(exc, "code", "protocol_ocr_failed")
+            if not isinstance(failure_code, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_]{0,63}", failure_code
+            ):
+                failure_code = "protocol_ocr_failed"
+            self.store.append_event(
+                f"ocr-failed-{ocr_id}",
+                protocol_id,
+                revision.revision_number,
+                _OCR_FAILED_EVENT,
+                {
+                    "ocr_id": ocr_id,
+                    "status": "failed",
+                    "failure_code": failure_code,
+                },
+            )
+            raise
+        return self.ocr_status(protocol_id)
+
+    def review_ocr(
+        self,
+        protocol_id: str,
+        *,
+        decision: str,
+        policy: ApprovalPolicy,
+        presented_secret: str | None,
+        actor_principal_id: str | None = None,
+        actor_role: str | None = None,
+        comment: str = "OCR page text reviewed against the source PDF.",
+    ) -> dict[str, object]:
+        if not policy.permits(presented_secret):
+            raise ProtocolApprovalError("OCR review authorization failed.")
+        if decision not in {"accepted", "rejected"}:
+            raise ProtocolOcrReviewError("OCR review decision is invalid.")
+        revision = self._latest_protocol_revision(protocol_id)
+        current = self.ocr_status(protocol_id)
+        if current.get("state") != "review_required":
+            raise ProtocolOcrReviewError("OCR output is not awaiting review.")
+        ocr_id = current.get("ocr_id")
+        if not isinstance(ocr_id, str):
+            raise ProtocolOcrReviewError("OCR review identity is invalid.")
+        payload: dict[str, object] = {
+            "ocr_id": ocr_id,
+            "decision": decision,
+            "comment": comment[:4000],
+            "authority": "human_review",
+            "executable": False,
+        }
+        if actor_principal_id is not None:
+            if not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}", actor_principal_id
+            ):
+                raise ProtocolOcrReviewError("OCR reviewer identity is invalid.")
+            if actor_role not in {
+                "reviewer",
+                "lab_admin",
+                "organization_admin",
+            }:
+                raise ProtocolOcrReviewError("OCR reviewer role is invalid.")
+            payload.update(
+                {
+                    "actor_principal_id": actor_principal_id,
+                    "actor_role": actor_role,
+                }
+            )
+        self.store.append_event(
+            f"ocr-reviewed-{ocr_id}-{decision}",
+            protocol_id,
+            revision.revision_number,
+            _OCR_REVIEWED_EVENT,
+            payload,
+        )
+        return self.ocr_status(protocol_id)
+
     def _is_approved(
         self,
         revision: ProtocolRevisionRecord,
@@ -567,6 +920,21 @@ class ProtocolCatalog:
         analysis_status = "review_required" if analysis else _analysis_state(extraction)
         lifecycle_state = "review_required" if analysis else "uploaded"
         if analysis is None:
+            if analysis_status == "ocr_required":
+                ocr_state = self._ocr_projection(
+                    revision, extraction, include_text=False
+                )["state"]
+                analysis_status, lifecycle_state = {
+                    "ocr_required": ("ocr_required", "blocked"),
+                    "in_progress": ("ocr_in_progress", "analyzing"),
+                    "review_required": ("ocr_review_required", "review_required"),
+                    "accepted_for_analysis": (
+                        "structured_analysis_ready",
+                        "uploaded",
+                    ),
+                    "rejected": ("ocr_rejected", "blocked"),
+                    "failed": ("ocr_failed", "blocked"),
+                }.get(str(ocr_state), ("ocr_required", "blocked"))
             chunk_events = self._latest_chunk_events(revision)
             if chunk_events:
                 event_states = {
@@ -839,6 +1207,9 @@ class ProtocolCatalog:
                 "all_pages_inspected": extraction.all_pages_inspected,
                 "extraction_warnings": list(extraction.warnings),
             },
+            "ocr": self._ocr_projection(
+                revision, extraction, include_text=True
+            ),
             "metadata": {},
             "before_start": [],
             "materials": [],
@@ -1311,13 +1682,6 @@ class ProtocolCatalog:
         """Run analysis only at this explicit caller-owned boundary."""
 
         revision = self._latest_protocol_revision(protocol_id)
-        self.store.append_event(
-            f"analysis-started-{analysis_id}",
-            protocol_id,
-            revision.revision_number,
-            _ANALYSIS_STARTED_EVENT,
-            {"status": "analyzing", "analysis_id": analysis_id},
-        )
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
         if pdf_object is None:
             raise ProtocolCatalogUnavailableError(
@@ -1327,11 +1691,19 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
+        extraction = self._extraction_for_analysis(revision, extraction)
         status = _analysis_state(extraction)
         if status == "ocr_required":
             raise ProtocolOcrRequiredError(
-                "Protocol requires OCR before structured analysis."
+                "Protocol requires reviewed OCR before structured analysis."
             )
+        self.store.append_event(
+            f"analysis-started-{analysis_id}",
+            protocol_id,
+            revision.revision_number,
+            _ANALYSIS_STARTED_EVENT,
+            {"status": "analyzing", "analysis_id": analysis_id},
+        )
         if status == "chunked_analysis_required":
             return self._analyze_chunked(
                 revision,
@@ -1399,6 +1771,25 @@ class ProtocolCatalog:
         revision = self._latest_protocol_revision(protocol_id)
         if self._latest_analysis(revision) is not None:
             return self.get_entry(protocol_id)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        source = self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        )
+        extraction = extract_protocol_pdf(source)
+        if (
+            _analysis_state(extraction) == "ocr_required"
+            and self._ocr_projection(
+                revision, extraction, include_text=False
+            ).get("accepted_for_analysis")
+            is not True
+        ):
+            raise ProtocolOcrRequiredError(
+                "Protocol requires reviewed OCR before structured analysis."
+            )
         self.store.append_event(
             f"analysis-requested-{analysis_id}",
             protocol_id,

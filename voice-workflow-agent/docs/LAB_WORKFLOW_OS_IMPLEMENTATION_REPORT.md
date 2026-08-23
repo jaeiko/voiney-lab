@@ -298,6 +298,49 @@ preserving human control over the transfer.
 - Provider-free fake transports verify the exact boundary. Live eLabFTW
   credentials and tenant policy remain an operator/pilot release gate.
 
+## Phase 8 — OCR and Document Intelligence
+
+Status: implemented with a trusted provider boundary and mandatory page review;
+final full-suite result is recorded in the phase validation ledger below.
+
+### Laboratory pain point
+
+Many legacy SOPs are scans. Treating an empty extraction as an unusable upload
+forces manual retyping, while silently trusting OCR can change quantities,
+units, or warnings. The fallback preserves the original PDF, makes page text
+reviewable, and keeps OCR errors away from protocol execution authority.
+
+### Implementation
+
+- Added `ProtocolOcrProvider`, page/result envelopes, and a validator that pins
+  the exact immutable source SHA-256; requires every source page once and in
+  order; bounds page/document text; and validates provider, confidence,
+  language, and warning metadata.
+- Added explicit queued/in-progress/review-required/accepted/rejected/failed OCR
+  lifecycle states persisted as append-only protocol events. Failed or rejected
+  attempts can be retried without altering the source PDF or an earlier event.
+- Added trusted-provider trigger/status/review endpoints. Provider selection is
+  deployment-owned; a browser cannot submit a binary, command, provider URL, or
+  credential. Missing configuration returns an actionable fail-closed status.
+- Added page-level reviewer UI with provider/confidence/warning evidence and
+  explicit accept/reject controls. Rendering uses text nodes, not HTML.
+- Accepted OCR reconstructs source-page text only for a later explicit
+  structured-analysis request. OCR review does not start that request and never
+  grants approval or execution.
+
+### Safety and migration evidence
+
+- Provider results with a changed source hash, missing/reordered page, oversized
+  text, invalid confidence/language/provider metadata, or no extractable text
+  are rejected and recorded only as a bounded failure code.
+- OCR text is integrity-checked again when reconstructed for analysis. Human OCR
+  acceptance, structured protocol review, approval, and operational
+  authorization remain separate gates.
+- Phase 8 adds no schema. The existing protocol event ledger stores append-only
+  OCR evidence, while workspace schema 5 and text-native protocol paths remain
+  unchanged. The test adapter is offline; a real OCR service or engine remains a
+  deployment configuration choice.
+
 ## Phase validation ledger
 
 | Phase | Focused verification | Full regression | Compile | Migration | Documentation |
@@ -309,6 +352,6 @@ preserving human control over the transfer.
 | 5. Source Connectors | 39 focused tests passed | 752 passed + 684 subtests in 138.92s | passed | no schema change; v1→v4 regression passed | report, architecture/source hub, README |
 | 6. Identity/Workspace | 37 focused tests passed | 752 passed + 684 subtests in 135.37s | passed | no schema change; v1→v4 regression passed | report, README, identity architecture |
 | 7. ELN Integration | 25 focused tests passed | 753 passed + 684 subtests in 135.98s | passed | v4→v5 legacy-row fixture and v1→v5 regression passed | report, migration notes, README |
-| 8. OCR/Document Intelligence | pending | pending | pending | pending | pending |
+| 8. OCR/Document Intelligence | 102 focused tests + 69 subtests passed | 757 passed + 684 subtests in 140.94s | passed | no schema change; existing event ledger | report, migration notes, README, architecture |
 | 9. Computational Metadata | pending | pending | pending | pending | pending |
 | 10. Product Experience | pending | pending | pending | pending | pending |

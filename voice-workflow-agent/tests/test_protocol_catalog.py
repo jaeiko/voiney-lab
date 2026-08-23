@@ -44,6 +44,11 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
+from voice_workflow_agent.protocol_ocr import (
+    OcrPage,
+    OcrResult,
+    ProtocolOcrUnavailableError,
+)
 
 
 async def _dedicated_to_thread(function, *args, **kwargs):
@@ -988,6 +993,109 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             response.json()["protocol"]["analysis_status"], "ocr_required"
         )
+        self.provider_factory.assert_not_called()
+
+    async def test_ocr_endpoint_uses_trusted_provider_then_requires_review(self):
+        scanned = self.root / "scanned-endpoint.pdf"
+        scanned_bytes = write_text_pdf(scanned, None, title="Scanned endpoint")
+        registration = await self._request(
+            "POST",
+            "/api/protocols?filename=scanned-endpoint.pdf",
+            content=scanned_bytes,
+        )
+        protocol_id = registration.json()["protocol"]["protocol_id"]
+
+        with patch.object(
+            server_module,
+            "_protocol_ocr_provider",
+            side_effect=ProtocolOcrUnavailableError("not configured"),
+        ):
+            unavailable = await self._request(
+                "POST",
+                f"/api/protocols/{protocol_id}/ocr",
+                content_type="application/json",
+            )
+        self.assertEqual(unavailable.status_code, 503, unavailable.text)
+        self.assertEqual(
+            unavailable.json(), {"detail": "protocol_ocr_not_configured"}
+        )
+
+        class TrustedOcrProvider:
+            calls = 0
+
+            def recognize(self, source_pdf, *, source_sha256, page_count):
+                self.calls += 1
+                self.source_pdf = source_pdf
+                return OcrResult(
+                    source_sha256=source_sha256,
+                    provider="trusted-test-ocr",
+                    provider_version="1.0",
+                    pages=tuple(
+                        OcrPage(
+                            source_page_number=page,
+                            text=f"Exact fictional source text on page {page}.",
+                            confidence=0.98,
+                        )
+                        for page in range(1, page_count + 1)
+                    ),
+                    languages=("en",),
+                )
+
+        provider = TrustedOcrProvider()
+        transport = httpx.ASGITransport(app=server_module.app)
+        environment = {
+            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false",
+            "VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN": "review-token",
+        }
+        with (
+            patch.dict(os.environ, environment),
+            patch.object(server_module, "_open_protocol_catalog", self._open_catalog),
+            patch.object(
+                server_module, "_protocol_ocr_provider", return_value=provider
+            ),
+            patch(
+                "fastapi.routing.run_in_threadpool",
+                side_effect=_dedicated_to_thread,
+            ),
+            patch.object(
+                server_module.asyncio,
+                "to_thread",
+                side_effect=_dedicated_to_thread,
+            ),
+        ):
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                queued = await client.post(f"/api/protocols/{protocol_id}/ocr")
+                self.assertEqual(queued.status_code, 202, queued.text)
+                self.assertEqual(queued.json()["state"], "queued")
+                self.assertFalse(queued.json()["executable"])
+                task = server_module._PROTOCOL_OCR_TASKS.get(protocol_id)
+                if task is not None:
+                    await task
+
+                status = await client.get(f"/api/protocols/{protocol_id}/ocr")
+                self.assertEqual(status.status_code, 200, status.text)
+                self.assertEqual(status.json()["state"], "review_required")
+                self.assertEqual(status.json()["pages"][0]["source_page_number"], 1)
+                self.assertFalse(status.json()["executable"])
+
+                reviewed = await client.post(
+                    f"/api/protocols/{protocol_id}/ocr/review",
+                    json={"decision": "accepted", "comment": "Compared to PDF."},
+                    headers={"X-Protocol-Approval-Token": "review-token"},
+                )
+                self.assertEqual(reviewed.status_code, 200, reviewed.text)
+                payload = reviewed.json()
+                self.assertEqual(payload["ocr"]["state"], "accepted_for_analysis")
+                self.assertEqual(
+                    payload["protocol"]["analysis_status"],
+                    "structured_analysis_ready",
+                )
+                self.assertFalse(payload["structured_analysis_started"])
+                self.assertFalse(payload["executable"])
+        self.assertEqual(provider.calls, 1)
+        self.assertTrue(provider.source_pdf.is_file())
         self.provider_factory.assert_not_called()
 
     async def test_review_and_development_activation_are_explicit_and_scope_gated(self):

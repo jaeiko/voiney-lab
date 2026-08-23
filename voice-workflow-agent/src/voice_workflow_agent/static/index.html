@@ -993,6 +993,9 @@
               <div id="protocol-review-content" class="protocol-review-content"></div>
               <div class="protocol-review-actions">
                 <button id="protocol-review-refresh" type="button">검토 새로고침</button>
+                <button id="protocol-ocr-run" type="button" hidden>OCR 텍스트 추출</button>
+                <button id="protocol-ocr-accept" type="button" hidden>OCR 원문 대조 승인</button>
+                <button id="protocol-ocr-reject" type="button" hidden>OCR 결과 거절</button>
                 <button id="protocol-analysis-retry" type="button" hidden>분석 다시 시도</button>
                 <button id="protocol-development-activate" type="button" hidden>데모·연구용 초안 활성화</button>
               </div>
@@ -1477,7 +1480,7 @@ function resetCascadePlayback(){if(activeSource){activeSource.onended=null;try{a
 function clearPlayback(){playbackEpoch++;resetCascadePlayback();if(replaySource){replaySource.onended=null;try{replaySource.stop();}catch(_){}try{replaySource.disconnect();}catch(_){}replaySource=null;}}
 function interruptCascadePlayback(turnId,generation){if(turnId!==activeTurn||!Number.isInteger(generation)||generation!==activeCascadeGeneration)return false;playbackEpoch++;resetCascadePlayback();return true;}
 function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;renderProcedureState({attached:false});}
-function catalogStatus(entry){if(!entry)return{kind:"none",label:"프로토콜을 선택해 주세요."};if(entry.lifecycle_state==="revoked")return{kind:"failed",label:"승인 취소됨 · 새 세션 실행 불가"};if(entry.available_for_execution===true)return{kind:"ready",label:entry.development_only?"개발용 실행 가능 · 최종 승인 아님":"승인 리비전 · 실행 준비됨"};if(entry.lifecycle_state==="analysis_pending")return{kind:"analysis",label:"분석 대기 · 원문 보존됨"};if(entry.lifecycle_state==="analyzing")return{kind:"analysis",label:"구조 분석 중 · 실행 불가"};if(entry.lifecycle_state==="blocked")return{kind:"failed",label:"분석 또는 안전 검토 차단 · 조치 필요"};if(entry.analysis_status==="ocr_required")return{kind:"ocr",label:"OCR 필요 · 실행 불가"};if(["analysis_failed","chunk_analysis_failed"].includes(entry.analysis_status))return{kind:"failed",label:"분석 실패 · 실행 불가"};if(entry.analysis_status==="merge_conflict")return{kind:"failed",label:"병합 충돌 · 검토 필요 · 실행 불가"};if(["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(entry.analysis_status))return{kind:"analysis",label:"대형 문서 분석 진행 중 · 실행 불가"};if(entry.analysis_status==="chunked_analysis_required")return{kind:"deferred",label:"대형 문서 분석 요청 대기 · 실행 불가"};if(entry.analysis_status==="structured_analysis_ready")return{kind:"analysis",label:"구조화 분석 요청 대기 · 실행 불가"};return{kind:"review",label:"검토·승인 필요 · 실행 불가"};}
+function catalogStatus(entry){if(!entry)return{kind:"none",label:"프로토콜을 선택해 주세요."};if(entry.lifecycle_state==="revoked")return{kind:"failed",label:"승인 취소됨 · 새 세션 실행 불가"};if(entry.available_for_execution===true)return{kind:"ready",label:entry.development_only?"개발용 실행 가능 · 최종 승인 아님":"승인 리비전 · 실행 준비됨"};if(entry.analysis_status==="ocr_required")return{kind:"ocr",label:"OCR 필요 · 실행 불가"};if(entry.analysis_status==="ocr_in_progress")return{kind:"ocr",label:"OCR 추출 중 · 실행 불가"};if(entry.analysis_status==="ocr_review_required")return{kind:"review",label:"OCR 원문 대조 검토 필요 · 실행 불가"};if(entry.analysis_status==="ocr_rejected")return{kind:"failed",label:"OCR 결과 거절됨 · 재추출 필요 · 실행 불가"};if(entry.analysis_status==="ocr_failed")return{kind:"failed",label:"OCR 추출 실패 · 실행 불가"};if(entry.lifecycle_state==="analysis_pending")return{kind:"analysis",label:"분석 대기 · 원문 보존됨"};if(entry.lifecycle_state==="analyzing")return{kind:"analysis",label:"문서 처리 중 · 실행 불가"};if(entry.lifecycle_state==="blocked")return{kind:"failed",label:"분석 또는 안전 검토 차단 · 조치 필요"};if(["analysis_failed","chunk_analysis_failed"].includes(entry.analysis_status))return{kind:"failed",label:"분석 실패 · 실행 불가"};if(entry.analysis_status==="merge_conflict")return{kind:"failed",label:"병합 충돌 · 검토 필요 · 실행 불가"};if(["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(entry.analysis_status))return{kind:"analysis",label:"대형 문서 분석 진행 중 · 실행 불가"};if(entry.analysis_status==="chunked_analysis_required")return{kind:"deferred",label:"대형 문서 분석 요청 대기 · 실행 불가"};if(entry.analysis_status==="structured_analysis_ready")return{kind:"analysis",label:"구조화 분석 요청 대기 · 실행 불가"};return{kind:"review",label:"검토·승인 필요 · 실행 불가"};}
 function renderSelectedProtocolContext(){const entry=protocolCatalog.get($("protocol-id")?.value),status=catalogStatus(entry);$("protocol-readiness").textContent=status.label;$("protocol-revision").textContent=entry?.revision_id||"—";}
 function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entries)?entries.find(item=>item?.analysis_run&&Number.isInteger(item.analysis_run.total_chunks)&&item.analysis_run.total_chunks>0):null,output=$("protocol-analysis-progress");if(!output)return;if(!target){output.textContent="대형 문서 분석 상태 없음";return;}const run=target.analysis_run,total=run.total_chunks,completed=Number.isInteger(run.completed_chunks)?run.completed_chunks:0,failed=Number.isInteger(run.failed_chunks)?run.failed_chunks:0,pending=Number.isInteger(run.pending_chunks)?run.pending_chunks:Math.max(0,total-completed-failed),ranges=Array.isArray(run.chunks)?run.chunks.filter(chunk=>Number.isInteger(chunk?.source_page_start)&&Number.isInteger(chunk?.source_page_end)&&typeof chunk?.status==="string").map(chunk=>`p.${chunk.source_page_start}-${chunk.source_page_end} ${chunk.status}`).join(" · "):"";output.textContent=`대형 문서 분석 · ${run.state} · 전체 ${total} / 완료 ${completed} / 실패 ${failed} / 대기 ${pending}${ranges?` · ${ranges}`:""} · 검토·승인 전 실행 불가`;}
 
@@ -2303,6 +2306,11 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  protocol_analysis_not_configured:"원문은 안전하게 저장되었습니다. 서버에 XAI_API_KEY와 PROTOCOL_ANALYSIS_MODEL을 설정한 뒤 분석 다시 시도를 눌러 주세요.",
  provider_configuration_missing:"원문은 안전하게 저장되었습니다. 서버에 XAI_API_KEY와 PROTOCOL_ANALYSIS_MODEL을 설정한 뒤 분석 다시 시도를 눌러 주세요.",
  ocr_required:"스캔 문서로 감지되어 OCR 텍스트 추출이 필요합니다. 원문을 수정하지 않고 별도 OCR 절차를 진행해 주세요.",
+ protocol_ocr_not_configured:"원문은 안전하게 저장되었습니다. 관리자가 신뢰할 수 있는 OCR 공급자를 설정해야 합니다.",
+ protocol_ocr_result_invalid:"OCR 결과가 원문 해시·페이지·크기 검증을 통과하지 못했습니다. 원문은 변경되지 않았습니다.",
+ protocol_ocr_review_invalid:"현재 OCR 결과는 검토할 수 없습니다. 상태를 새로고침한 뒤 다시 시도해 주세요.",
+ protocol_ocr_failed:"OCR 텍스트 추출에 실패했습니다. 원문은 보존되었으며 다시 시도할 수 있습니다.",
+ ocr_failed:"OCR 텍스트 추출에 실패했습니다. 원문은 보존되었으며 다시 시도할 수 있습니다.",
  analysis_failed:"구조 분석에 실패했습니다. 원문은 보존되었으며 다시 시도할 수 있습니다.",
  chunk_analysis_failed:"대형 문서 일부 분석에 실패했습니다. 실패 상태를 검토한 뒤 새 분석을 요청해 주세요.",
  merge_conflict:"대형 문서 분석 결과에 병합 충돌이 있습니다. 사람의 검토가 필요합니다.",
@@ -2320,8 +2328,11 @@ let isRegisteringProtocol=false;
 let currentProtocolReviewId=null;
 let protocolAnalysisPollHandle=null;
 let protocolAnalysisPollBusy=false;
+let protocolOcrPollHandle=null;
+let protocolOcrPollBusy=false;
 
 function stopProtocolAnalysisPolling(){if(protocolAnalysisPollHandle!==null){clearInterval(protocolAnalysisPollHandle);protocolAnalysisPollHandle=null;}}
+function stopProtocolOcrPolling(){if(protocolOcrPollHandle!==null){clearInterval(protocolOcrPollHandle);protocolOcrPollHandle=null;}}
 function reviewEvidenceText(evidence){return evidence&&Number.isInteger(evidence.source_page_number)?`원문 p.${evidence.source_page_number} · ${String(evidence.source_excerpt||"")}`:"원문 근거 없음";}
 function reviewScientificValues(values){return(Array.isArray(values)?values:[]).map(value=>value?.source_text).filter(value=>typeof value==="string"&&value).join(", ");}
 function appendProtocolReviewGroup(title,lines){
@@ -2331,7 +2342,7 @@ function appendProtocolReviewGroup(title,lines){
  content.appendChild(group);
 }
 function renderProtocolReview(review){
- const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),activate=$("protocol-development-activate");
+ const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),activate=$("protocol-development-activate"),ocrRun=$("protocol-ocr-run"),ocrAccept=$("protocol-ocr-accept"),ocrReject=$("protocol-ocr-reject");
  if(!panel||!content||!status)return false;
  panel.hidden=false;panel.open=true;content.replaceChildren();
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -2348,6 +2359,18 @@ function renderProtocolReview(review){
   ...reasons.map(reason=>`${reason.code||"reason"} · ${reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
   review?.available_for_execution===true?"실행 가능":"검토·승인 또는 명시적 개발 활성화 전 실행 불가",
  ]);
+ const ocr=review?.ocr||{},ocrPages=Array.isArray(ocr.pages)?ocr.pages:[];
+ if(ocr.state&&ocr.state!=="not_required"){
+  appendProtocolReviewGroup("OCR 원문 대조 · 실행 권한 없음",[
+   `상태 · ${ocr.state}`,
+   ocr.provider?`공급자 · ${ocr.provider}${ocr.provider_version?` ${ocr.provider_version}`:""}`:"",
+   Array.isArray(ocr.languages)&&ocr.languages.length?`언어 · ${ocr.languages.join(", ")}`:"",
+   ...ocrPages.map(page=>`원문 p.${page.source_page_number} · 신뢰도 ${Number.isFinite(page.confidence)?Math.round(page.confidence*100)+"%":"미제공"} · ${String(page.text||"")}`),
+   ...(Array.isArray(ocr.warnings)?ocr.warnings.map(warning=>`주의 · ${warning}`):[]),
+   ocr.accepted_for_analysis===true?"사람의 원문 대조 승인 완료 · 구조 분석은 별도로 시작해야 함":"OCR 텍스트는 사람이 원본 PDF와 대조하기 전 구조 분석에 사용할 수 없음",
+   "OCR 결과 자체는 실행 가능한 프로토콜이 아님",
+  ]);
+ }
  const failure=review?.analysis_failure;if(failure)appendProtocolReviewGroup("분석 실패와 복구",[`코드 · ${failure.code||"analysis_failed"}`,`재시도 · ${failure.retryable===true?"가능":"사람의 조치 필요"}`,failure.action||""]);
  const gates=review?.gates||{};appendProtocolReviewGroup("실행 게이트",Object.entries(gates).map(([name,value])=>`${name} · ${value}`));
  const materials=(Array.isArray(review?.materials)?review.materials:[]).map(item=>`${item.name_source_text||item.material_id}${reviewScientificValues(item.quantities)?` · ${reviewScientificValues(item.quantities)}`:""} · ${reviewEvidenceText(item.evidence)}`);
@@ -2373,6 +2396,9 @@ function renderProtocolReview(review){
   appendProtocolReviewGroup(`분기·반복·모호성 · ${construct.construct_type||"workflow_construct"}`,[description,construct.resolved===false?"해결되지 않음":"",reviewEvidenceText(construct.evidence)]);
  }
  if(retry){retry.hidden=!(["analysis_failed","chunk_analysis_failed","merge_conflict","structured_analysis_ready","chunked_analysis_required"].includes(review?.analysis_status));retry.disabled=isRegisteringProtocol;}
+ if(ocrRun){ocrRun.hidden=!(ocr.state==="ocr_required"||ocr.state==="failed"||ocr.state==="rejected");ocrRun.disabled=isRegisteringProtocol;}
+ if(ocrAccept){ocrAccept.hidden=ocr.state!=="review_required";ocrAccept.disabled=isRegisteringProtocol;}
+ if(ocrReject){ocrReject.hidden=ocr.state!=="review_required";ocrReject.disabled=isRegisteringProtocol;}
  if(activate){activate.hidden=review?.development_activation_allowed!==true;activate.disabled=isRegisteringProtocol;}
  return true;
 }
@@ -2397,6 +2423,19 @@ async function pollProtocolAnalysisStatus(protocolId){
  }catch(_){return null;}finally{protocolAnalysisPollBusy=false;}
 }
 function startProtocolAnalysisPolling(protocolId){stopProtocolAnalysisPolling();protocolAnalysisPollHandle=setInterval(()=>{void pollProtocolAnalysisStatus(protocolId);},1000);protocolAnalysisPollHandle?.unref?.();}
+async function pollProtocolOcrStatus(protocolId){
+ if(protocolOcrPollBusy)return null;protocolOcrPollBusy=true;
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 텍스트를 추출하고 있습니다 · 원문 PDF는 변경되지 않습니다.";}else{stopProtocolOcrPolling();if(payload.state==="review_required"){if(status)status.textContent="OCR 추출 완료 · 원본 PDF와 페이지별 텍스트를 대조해 승인하거나 거절해 주세요.";}else if(payload.state==="failed"){if(status)status.textContent=protocolUploadErrorMessage(payload.failure_code||"protocol_ocr_failed");}await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){return null;}finally{protocolOcrPollBusy=false;}
+}
+function startProtocolOcrPolling(protocolId){stopProtocolOcrPolling();protocolOcrPollHandle=setInterval(()=>{void pollProtocolOcrStatus(protocolId);},1000);protocolOcrPollHandle?.unref?.();}
+async function runProtocolOcr(){
+ const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-ocr-run");if(!protocolId||isRegisteringProtocol)return null;if(button)button.disabled=true;if(status)status.textContent="OCR 요청을 검증하고 있습니다…";
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 원문을 보존하며 페이지별 텍스트를 추출합니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
+}
+async function reviewProtocolOcr(decision){
+ const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),buttons=[$("protocol-ocr-accept"),$("protocol-ocr-reject")];if(!protocolId||!["accepted","rejected"].includes(decision)||isRegisteringProtocol)return null;for(const button of buttons)if(button)button.disabled=true;
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr/review`,{method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({decision,comment:decision==="accepted"?"페이지별 OCR 텍스트를 원본 PDF와 대조했습니다.":"OCR 텍스트가 원본 PDF와 일치하지 않습니다."}),redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_review_invalid";if(status)status.textContent=protocolUploadErrorMessage(code);return null;}if(status)status.textContent=decision==="accepted"?"OCR 원문 대조 승인 완료 · 실행 권한은 부여되지 않았습니다. 구조 분석을 별도로 시작해 주세요.":"OCR 결과 거절 완료 · 원문은 보존되었으며 새 OCR을 요청할 수 있습니다.";await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{for(const button of buttons)if(button)button.disabled=false;}
+}
 async function analyzeRegisteredProtocol(protocolId){
  const status=$("protocol-upload-status");currentProtocolReviewId=protocolId;if(status)status.textContent="원문 PDF 등록 완료 · 구조 분석 진행 중…";startProtocolAnalysisPolling(protocolId);
  try{
@@ -2573,6 +2612,9 @@ $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-moda
 $("toggle-setup-btn")?.addEventListener("click",()=>{const hero=$("hero-setup"),btn=$("toggle-setup-btn");if(!hero||!btn)return;const c=hero.classList.toggle("collapsed");btn.textContent=c?"⚙️ 설정 열기":"⚙️ 설정 접기";btn.setAttribute("aria-expanded",String(!c));});
 $("protocol-id")?.addEventListener("change",renderSelectedProtocolContext);$("repeat-step")?.addEventListener("click",()=>voiceCommandHint("다시 말해 줘"));$("next-step")?.addEventListener("click",()=>voiceCommandHint("다음 단계로 넘어가 줘"));
 $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolReview();});
+$("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
+$("protocol-ocr-accept")?.addEventListener("click",()=>{void reviewProtocolOcr("accepted");});
+$("protocol-ocr-reject")?.addEventListener("click",()=>{void reviewProtocolOcr("rejected");});
 $("protocol-analysis-retry")?.addEventListener("click",async()=>{if(!currentProtocolReviewId)return;await analyzeRegisteredProtocol(currentProtocolReviewId);await loadProtocolCatalog(currentProtocolReviewId);});
 $("protocol-development-activate")?.addEventListener("click",()=>{void activateReviewedProtocol();});
 $("admin-metrics-load")?.addEventListener("click",()=>{void loadAdminMetrics();});

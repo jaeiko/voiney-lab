@@ -396,7 +396,7 @@ def prepare_protocol_analysis_request(
         )
     if extraction.non_empty_page_count == 0:
         raise ProtocolAnalysisInputError(
-            "Protocol PDF has no extractable text; OCR is outside this slice."
+            "Protocol PDF has no extractable text; reviewed OCR is required."
         )
     request = ProtocolAnalysisRequest(
         pdf_sha256=extraction.sha256,

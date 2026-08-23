@@ -125,3 +125,19 @@ The migration preserves legacy write-back request/event rows with a null session
 identity; it never invents an association. Those legacy rows remain audit
 history but cannot be replayed through the stricter write-back endpoint. A
 schema-4 fixture verifies that its existing request survives unchanged.
+
+## Phase 8 OCR compatibility
+
+The OCR/document-intelligence phase changes neither the protocol catalog schema
+nor commercial workspace schema 5. OCR request, completion, bounded failure, and
+human review records use the existing append-only `protocol_events` ledger and
+pin the current immutable protocol revision and source SHA-256. Older catalogs
+therefore open without a data rewrite, and text-native protocol behavior is
+unchanged.
+
+There is no automatic migration of a prior `ocr_required` row. After upgrade, a
+reviewer may explicitly request OCR using a deployment-configured trusted
+adapter, compare each page to the preserved PDF, and accept or reject it. An
+accepted result only enables a separate structured-analysis request; it does not
+backfill an approval or execution record. Rollback leaves the new event types as
+unknown append-only history and the original source PDF remains authoritative.

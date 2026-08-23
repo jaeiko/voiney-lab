@@ -68,6 +68,9 @@ only a later explicit confirmation can advance.
 raw PDF stream
   → size/media/encryption/structure checks
   → immutable source bytes + SHA-256 + extracted pages
+  → text-empty branch: trusted OCR adapter
+  → exact-source/page validation + append-only OCR evidence
+  → human accept/reject against the PDF
   → explicit analysis job (single or chunked)
   → typed ExperimentProtocol validation
   → fail-closed readiness assessment
@@ -81,6 +84,15 @@ equipment, sections, steps, sub-actions, quantities, timers, observations,
 warnings, missing values, advanced constructs, and readiness reasons. Unsupported
 conditional/parallel/repeat constructs and missing or conflicting execution values
 remain explicit and block execution.
+
+OCR is a source-preserving extraction boundary in `protocol_ocr.py`, not an
+approval or execution authority. HTTP callers cannot choose a provider; the
+server accepts only a deployment-injected `ProtocolOcrProvider`. Results must
+match the immutable PDF SHA-256 and contain every page exactly once and in order
+within per-page/document limits. Completed, failed, and reviewed states are
+append-only protocol events. Accepted OCR text becomes input only to a later
+explicit structured-analysis request; it never auto-starts analysis or produces
+an executable revision.
 
 ## Evidence and provider boundaries
 
@@ -121,7 +133,8 @@ boundary, not a substitute for production SSO/RBAC.
 ## Frontend authority
 
 The browser cockpit renders canonical server snapshots/events. It never infers
-completion or workflow state from assistant prose. Upload analysis has explicit
-loading, polling, retry, review, and development activation states. Turn cards
+completion or workflow state from assistant prose. Upload handling has explicit
+OCR extraction, page review, analysis polling/retry, structured review, and
+development activation states. Turn cards
 keep route/tool/latency diagnostics in an expandable region. Source and external
 visuals have distinct labels.

@@ -110,6 +110,11 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
+from voice_workflow_agent.protocol_ocr import (
+    ProtocolOcrError,
+    ProtocolOcrProvider,
+    ProtocolOcrUnavailableError,
+)
 from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
 from voice_workflow_agent.emergency import recognize_emergency
 from voice_workflow_agent.language import (
@@ -253,6 +258,7 @@ async def lifespan(_: FastAPI):
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
 STATIC_DIR=Path(__file__).with_name("static")
 _PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Task[None]]={}
+_PROTOCOL_OCR_TASKS:dict[str,asyncio.Task[None]]={}
 _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar(
     "voice_workflow_request_principal",default=None)
 
@@ -663,6 +669,17 @@ class ServerConfig:
 
 def _protocol_store_settings()->ProtocolPersistenceSettings:
     return ProtocolPersistenceSettings.from_environment()
+
+
+def _protocol_ocr_provider()->ProtocolOcrProvider:
+    """Return a trusted deployment-injected OCR adapter, never a client choice."""
+
+    provider=getattr(app.state,"protocol_ocr_provider",None)
+    if provider is None or not callable(getattr(provider,"recognize",None)):
+        raise ProtocolOcrUnavailableError(
+            "A trusted OCR provider has not been configured."
+        )
+    return provider
 
 
 def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
@@ -1153,6 +1170,10 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=503,detail="protocol_catalog_unavailable")
     if isinstance(exc,ProtocolAnalysisUnavailableError):
         return HTTPException(status_code=503,detail=exc.code)
+    if isinstance(exc,ProtocolOcrUnavailableError):
+        return HTTPException(status_code=503,detail=exc.code)
+    if isinstance(exc,ProtocolOcrError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolApprovalError):
@@ -2621,6 +2642,154 @@ def _development_activation_allowed() -> bool:
         or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     return scope in {"demo", "reference_only", "test_only"}
+
+
+@app.post("/api/protocols/{protocol_id}/ocr",status_code=202)
+async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
+    """Run one trusted OCR adapter outside the voice path and await review."""
+
+    try:
+        _scope_catalog_resource(protocol_id)
+        provider=_protocol_ocr_provider()
+        running=_PROTOCOL_OCR_TASKS.get(protocol_id)
+        if running is not None and not running.done():
+            catalog,store=_open_protocol_catalog()
+            try:
+                current=catalog.ocr_status(protocol_id,include_text=False)
+            finally:
+                store.close()
+            current["request_deduplicated"]=True
+            if current.get("state")=="ocr_required":
+                current["state"]="queued"
+            return current
+        catalog,store=_open_protocol_catalog()
+        try:
+            current=catalog.ocr_status(protocol_id,include_text=False)
+        finally:
+            store.close()
+        if current.get("state") in {
+            "in_progress","review_required","accepted_for_analysis",
+        }:
+            current["request_deduplicated"]=True
+            return current
+        if current.get("state")=="not_required":
+            raise ProtocolCatalogError("Protocol PDF does not require OCR.")
+        ocr_id=f"ocr-{secrets.token_hex(16)}"
+
+        def run_ocr()->None:
+            catalog,store=_open_protocol_catalog()
+            try:
+                catalog.run_ocr(
+                    protocol_id,provider,ocr_id=ocr_id
+                )
+            finally:
+                store.close()
+
+        async def background_worker()->None:
+            try:
+                await asyncio.to_thread(run_ocr)
+            except Exception as exc:
+                log.warning(
+                    "protocol.ocr.failed protocol_id=%s error=%s",
+                    protocol_id,type(exc).__name__,
+                )
+
+        task=asyncio.create_task(background_worker())
+        _PROTOCOL_OCR_TASKS[protocol_id]=task
+        task.add_done_callback(
+            lambda completed,pid=protocol_id: (
+                _PROTOCOL_OCR_TASKS.pop(pid,None)
+                if _PROTOCOL_OCR_TASKS.get(pid) is completed else None
+            )
+        )
+        return {
+            **current,
+            "ocr_id":ocr_id,
+            "state":"queued",
+            "request_accepted":True,
+            "review_required":True,
+            "executable":False,
+        }
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.get("/api/protocols/{protocol_id}/ocr")
+def get_protocol_ocr_status(protocol_id:str)->dict[str,object]:
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            status=catalog.ocr_status(protocol_id)
+        finally:
+            store.close()
+        running=_PROTOCOL_OCR_TASKS.get(protocol_id)
+        if running is not None and not running.done() and status.get("state")=="ocr_required":
+            status["state"]="queued"
+        return status
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/ocr/review")
+async def review_protocol_ocr(
+    protocol_id:str,
+    request:Request,
+    x_protocol_approval_token:str|None=Header(default=None),
+)->dict[str,object]:
+    payload=await _json_object(request)
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog,store=_open_protocol_catalog()
+        try:
+            actor=None
+            role=None
+            if _workspace_settings().enabled:
+                actor=_REQUEST_PRINCIPAL.get()
+                if actor is None:
+                    raise AuthenticationRequiredError(
+                        "Authentication is required."
+                    )
+                require_permission(actor,Permission.PROTOCOL_REVIEW)
+                role=next(
+                    item.value for item in actor.roles
+                    if item.value in {
+                        "reviewer","lab_admin","organization_admin",
+                    }
+                )
+                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
+                presented="tenant-rbac-authorized"
+            else:
+                policy=SharedSecretApprovalPolicy(
+                    os.environ.get(
+                        "VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"
+                    )
+                )
+                presented=x_protocol_approval_token
+            ocr=catalog.review_ocr(
+                protocol_id,
+                decision=str(payload.get("decision", "")),
+                policy=policy,
+                presented_secret=presented,
+                actor_principal_id=(actor.principal_id if actor else None),
+                actor_role=role,
+                comment=str(
+                    payload.get(
+                        "comment",
+                        "OCR page text reviewed against the source PDF.",
+                    )
+                ),
+            )
+            return {
+                "ocr":ocr,
+                "protocol":catalog.get_entry(protocol_id).public_dict(),
+                "structured_analysis_started":False,
+                "executable":False,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
 
 
 @app.post("/api/protocols/{protocol_id}/analysis",status_code=202)

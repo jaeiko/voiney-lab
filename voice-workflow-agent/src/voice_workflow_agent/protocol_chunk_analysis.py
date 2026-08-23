@@ -262,7 +262,7 @@ def plan_protocol_chunks(
         )
     if extraction.non_empty_page_count == 0:
         raise ProtocolChunkAdmissionError(
-            "Protocol has no extractable text; OCR is required."
+            "Protocol has no extractable text; reviewed OCR is required."
         )
     if extraction.page_count > limits.max_pages:
         raise ProtocolChunkAdmissionError(

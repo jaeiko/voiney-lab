@@ -144,10 +144,28 @@ uploaded
 5. Approval/revocation history is append-only. Revocation prevents new
    operational sessions but does not erase historical experiment provenance.
 
+For a scanned/text-empty PDF, onboarding pauses before structured analysis. A
+reviewer explicitly calls `POST /api/protocols/{id}/ocr`; the server invokes only
+the trusted deployment-injected `ProtocolOcrProvider` and validates the exact
+source SHA-256, complete ordered page set, bounded text, provider identity,
+confidence, language, and warnings. The browser polls `GET
+/api/protocols/{id}/ocr`, renders page text with `textContent`, and requires an
+accept/reject decision at `POST /api/protocols/{id}/ocr/review`. Acceptance only
+makes the reviewed text eligible for a separate structured-analysis request. It
+does not start analysis, approve a revision, or make anything executable.
+
+No OCR engine is bundled or selected by a client. A deployment that needs scan
+support must inject an adapter as `app.state.protocol_ocr_provider`; without one,
+the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
+PDF. The adapter contract is defined in
+`src/voice_workflow_agent/protocol_ocr.py`. This keeps local binaries, cloud OCR
+credentials, and provider choice outside HTTP input and the voice execution
+path.
+
 Missing provider configuration is persisted as an actionable failure with retry;
 it is not displayed forever as an unexplained `analysis_required` state.
-Unsupported conditions, ambiguities, critical missing values, conflicts, scanned
-documents that require OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
+Unsupported conditions, ambiguities, critical missing values, conflicts,
+unreviewed/invalid OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
 ## Lab adaptations
 
