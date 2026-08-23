@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,7 @@ class ProcedureDemoTests(unittest.TestCase):
     def test_setup_creates_fresh_validated_non_operational_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
             result=subprocess.run(
-                [str(ROOT/".venv"/"bin"/"python"),
+                [sys.executable,
                  str(ROOT/"scripts"/"setup_procedure_demo.py"),
                  "--output-dir",temporary],
                 cwd=ROOT,text=True,capture_output=True)
