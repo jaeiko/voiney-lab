@@ -128,6 +128,7 @@ from voice_workflow_agent.language import (
 from voice_workflow_agent.intent_arbitration import arbitrate_request
 from voice_workflow_agent.runtime_metrics import RUNTIME_METRICS
 from voice_workflow_agent.moss_retrieval import (
+    get_moss_runtime,
     start_moss_runtime_from_environment,
     stop_moss_runtime,
 )
@@ -256,6 +257,40 @@ async def lifespan(_: FastAPI):
 
 
 app=FastAPI(title="Voice Workflow Agent",lifespan=lifespan)
+
+
+@app.get("/healthz")
+async def healthz()->dict[str,object]:
+    """Liveness only: the process is up and can serve a request."""
+    return {"status":"ok"}
+
+
+@app.get("/readyz")
+async def readyz()->JSONResponse:
+    """Readiness: required configuration parses without exposing secrets.
+
+    Optional providers (moss, protocol analysis) report their configured
+    state rather than being required for the process to be "ready" - this
+    endpoint distinguishes configuration health from live external-provider
+    reachability, which no local health check can verify without a real
+    network call.
+    """
+    capabilities:dict[str,object]={}
+    try:
+        capabilities["workspace_enabled"]=_workspace_settings().enabled
+        capabilities["protocol_catalog_enabled"]=_protocol_store_settings().enabled
+        capabilities["moss_enabled"]=get_moss_runtime() is not None
+    except Exception as exc:
+        return JSONResponse(status_code=503,content={
+            "status":"not_ready",
+            "reason":type(exc).__name__,
+        })
+    return JSONResponse(status_code=200,content={
+        "status":"ok",
+        "capabilities":capabilities,
+    })
+
+
 STATIC_DIR=Path(__file__).with_name("static")
 _PROTOCOL_ANALYSIS_TASKS:dict[str,asyncio.Task[None]]={}
 _PROTOCOL_OCR_TASKS:dict[str,asyncio.Task[None]]={}

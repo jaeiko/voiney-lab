@@ -2,6 +2,7 @@ import asyncio, json, tempfile, unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from collections import deque
+import httpx
 from voice_workflow_agent.audio import FRAME_BYTES
 from voice_workflow_agent.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
@@ -16,7 +17,7 @@ from voice_workflow_agent.experiment_reports import (
 from pathlib import Path
 from voice_workflow_agent.language import Transcription
 from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
+from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, app, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
@@ -1835,5 +1836,53 @@ class ServerTests(unittest.TestCase):
             self.assertIsNotNone(fetched)
             self.assertEqual(fetched["report_id"], report["report_id"])
             self.assertEqual(len(fetched["events"]), 1)
+
+    def test_healthz_is_a_pure_liveness_check(self):
+        async def call():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/healthz")
+        response = asyncio.run(call())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_readyz_reports_capability_state_without_secrets(self):
+        async def call():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/readyz")
+        with patch.dict("os.environ", {
+            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
+            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
+            "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED": "false",
+        }):
+            response = asyncio.run(call())
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["capabilities"], {
+            "workspace_enabled": True,
+            "protocol_catalog_enabled": False,
+            "moss_enabled": False,
+        })
+        self.assertNotIn("key", json.dumps(body).lower())
+        self.assertNotIn("secret", json.dumps(body).lower())
+        self.assertNotIn("token", json.dumps(body).lower())
+
+    def test_readyz_fails_closed_on_invalid_configuration(self):
+        async def call():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/readyz")
+        with patch.dict("os.environ", {
+            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
+            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": "not-an-absolute-path",
+        }):
+            response = asyncio.run(call())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "not_ready")
 
 if __name__=="__main__": unittest.main()

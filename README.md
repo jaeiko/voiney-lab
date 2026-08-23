@@ -439,6 +439,14 @@ The browser consumes these main groups:
 - `/api/workspace/eln/elabftw/writeback`: confirmed experiment export; and
 - `/api/experiment-reports/*`: tenant-scoped report reads/exports.
 
+For deployment probes, `GET /healthz` is a pure liveness check (the process
+can serve a request); `GET /readyz` reports whether required configuration
+parsed successfully, plus non-secret capability booleans
+(`workspace_enabled`, `protocol_catalog_enabled`, `moss_enabled`) - optional
+providers report their configured state rather than blocking readiness, and
+a 503 means configuration failed to parse, not that a live external call
+was attempted.
+
 All sensitive workspace APIs derive the tenant from the authenticated principal.
 Connector list responses never return credential references or resolved secrets.
 
