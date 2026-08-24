@@ -156,6 +156,7 @@ def test_experiment_dashboard_api_is_tenant_scoped_and_completion_is_voice_owned
     experiment = store.record_experiment_progress(
         researcher,
         experiment["session_id"],
+        expected_version=experiment["version"],
         event_key="protocol-started",
         event_type="protocol_started",
         step_id="step-1",
@@ -227,6 +228,7 @@ def test_experiment_timeline_api_records_manual_observation_evidence_and_review(
     store.record_experiment_progress(
         researcher,
         experiment["session_id"],
+        expected_version=experiment["version"],
         event_key="protocol-started",
         event_type="protocol_started",
         step_id="step-1",
@@ -938,6 +940,7 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
     experiment = store.record_experiment_progress(
         researcher,
         experiment["session_id"],
+        expected_version=experiment["version"],
         event_key="protocol-started",
         event_type="protocol_started",
         step_id="step-1",

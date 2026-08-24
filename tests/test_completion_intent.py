@@ -34,6 +34,7 @@ class CompletionIntentTests(unittest.TestCase):
             "현재 단계 다 했어",
             "현재 단계 완료",
             "이번 단계 완료",
+            "다 했어",
             "현재 단계 완료했어.",
             "이번 단계도 완료했어!",
             "현재 단계도 완료했습니다~",

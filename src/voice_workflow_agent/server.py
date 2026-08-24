@@ -595,6 +595,8 @@ def _record_workspace_experiment_progress(
     try:
         state=store.record_experiment_progress(
             principal,session.session_id,
+            expected_version=session.experiment_state_version,
+            expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
                 "protocol_started"
@@ -5038,6 +5040,61 @@ def _record_experiment_report_plan(
     return report
 
 
+_EXPERIMENT_REPORT_ACTIONS=frozenset({
+    CuratedProtocolAction.START,CuratedProtocolAction.NEXT,
+    CuratedProtocolAction.STOP,CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
+    CuratedProtocolAction.FULL_DETAIL,CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.OPERATIONAL_DEVIATION,
+    CuratedProtocolAction.RECORD_OBSERVATION,
+    CuratedProtocolAction.PROTOCOL_QUERY,CuratedProtocolAction.STEP_RANGE,
+    CuratedProtocolAction.LAB_DOMAIN_QA,
+})
+
+
+def _acknowledge_report_persistence(plan:Any,language:str)->Any:
+    if (
+        plan.action is CuratedProtocolAction.NEXT
+        and plan.state_changed
+        and plan.reported_completion
+    ):
+        acknowledgment=(
+            (
+                "말씀한 관찰 결과와 현재 단계 완료를 실험 기록에 반영했습니다."
+                if plan.reported_observation else
+                "현재 단계 완료를 실험 기록에 반영했습니다."
+            )
+            if language=="ko" else
+            (
+                "I added the reported observation and current-step completion to the experiment record."
+                if plan.reported_observation else
+                "I added the current-step completion to the experiment record."
+            )
+        )
+        return replace(
+            plan,
+            display_text=f"{acknowledgment}\n\n{plan.display_text}",
+            speech_text=f"{acknowledgment} {plan.speech_text}",
+        )
+    if (
+        plan.action is CuratedProtocolAction.NEXT
+        and plan.reported_observation
+        and plan.observation_predicate=="negative"
+    ):
+        acknowledgment=(
+            "말씀한 관찰 결과를 현재 단계 실험 기록에 남겼습니다."
+            if language=="ko" else
+            "I added the reported observation to the current-step experiment record."
+        )
+        return replace(
+            plan,
+            display_text=f"{acknowledgment}\n\n{plan.display_text}",
+            speech_text=f"{acknowledgment} {plan.speech_text}",
+        )
+    return plan
+
+
 def _public_experiment_report_state(report:dict)->dict:
     events=list(report.get("events") or ())
     return {
@@ -5607,6 +5664,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         checkpoint=curated._checkpoint()
         curated_tools_used=[]
         report_prepared=False
+        workflow_mutation_committed=False
         plan=None
         brain_run=None
         brain_activation=None
@@ -6007,19 +6065,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if (
                 session.experiment_report_store is not None
                 and not report_prepared
-                and plan.action in {
-                    CuratedProtocolAction.START,CuratedProtocolAction.NEXT,
-                    CuratedProtocolAction.STOP,CuratedProtocolAction.QUESTION,
-                    CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
-                    CuratedProtocolAction.FULL_DETAIL,
-                    CuratedProtocolAction.NEXT_INFORMATION,
-                    CuratedProtocolAction.COMPLETION_CRITERIA,
-                    CuratedProtocolAction.OPERATIONAL_DEVIATION,
-                    CuratedProtocolAction.RECORD_OBSERVATION,
-                    CuratedProtocolAction.PROTOCOL_QUERY,
-                    CuratedProtocolAction.STEP_RANGE,
-                    CuratedProtocolAction.LAB_DOMAIN_QA,
-                }
+                and plan.action in _EXPERIMENT_REPORT_ACTIONS
+                and not (
+                    session.experiment_state_version is not None
+                    and plan.state_changed
+                )
             ):
                 try:
                     report=await asyncio.to_thread(
@@ -6029,16 +6079,26 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         pre_transition_index=pre_transition_index,
                     )
                     report_prepared=True
-                except Exception:
                     if (
-                        plan.action is CuratedProtocolAction.NEXT
-                        and plan.state_changed
+                        plan.state_changed
+                        and session.experiment_state_version is None
                     ):
+                        workflow_mutation_committed=True
+                except Exception:
+                    if plan.state_changed:
                         curated._restore(checkpoint)
                         failed=(
-                            "실험 기록을 저장하지 못해 단계 완료와 이동을 확정하지 않았습니다. 현재 단계를 유지합니다."
+                            (
+                                "실험 기록을 저장하지 못해 단계 완료와 이동을 확정하지 않았습니다. 현재 단계를 유지합니다."
+                                if plan.action is CuratedProtocolAction.NEXT else
+                                "실험 기록을 저장하지 못해 워크플로 상태 변경을 확정하지 않았습니다. 이전 상태를 유지합니다."
+                            )
                             if turn_language=="ko" else
-                            "The experiment record could not be saved, so completion and transition were not committed. The current step is unchanged."
+                            (
+                                "The experiment record could not be saved, so completion and transition were not committed. The current step is unchanged."
+                                if plan.action is CuratedProtocolAction.NEXT else
+                                "The experiment record could not be saved, so the workflow change was not committed. The previous state is unchanged."
+                            )
                         )
                         plan=replace(
                             plan,display_text=failed,speech_text=failed,
@@ -6071,44 +6131,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         "experiment.report.error",turn_id=turn_id,
                         code="report_persistence_failed")
                 else:
-                    if (
-                        plan.action is CuratedProtocolAction.NEXT
-                        and plan.state_changed
-                        and plan.reported_completion
-                    ):
-                        acknowledgment=(
-                            (
-                                "말씀한 관찰 결과와 현재 단계 완료를 실험 기록에 반영했습니다."
-                                if plan.reported_observation else
-                                "현재 단계 완료를 실험 기록에 반영했습니다."
-                            )
-                            if turn_language=="ko" else
-                            (
-                                "I added the reported observation and current-step completion to the experiment record."
-                                if plan.reported_observation else
-                                "I added the current-step completion to the experiment record."
-                            )
-                        )
-                        plan=replace(
-                            plan,
-                            display_text=f"{acknowledgment}\n\n{plan.display_text}",
-                            speech_text=f"{acknowledgment} {plan.speech_text}",
-                        )
-                    elif (
-                        plan.action is CuratedProtocolAction.NEXT
-                        and plan.reported_observation
-                        and plan.observation_predicate == "negative"
-                    ):
-                        acknowledgment=(
-                            "말씀한 관찰 결과를 현재 단계 실험 기록에 남겼습니다."
-                            if turn_language=="ko" else
-                            "I added the reported observation to the current-step experiment record."
-                        )
-                        plan=replace(
-                            plan,
-                            display_text=f"{acknowledgment}\n\n{plan.display_text}",
-                            speech_text=f"{acknowledgment} {plan.speech_text}",
-                        )
+                    plan=_acknowledge_report_persistence(plan,turn_language)
                     await report_state(report)
             workspace_observation_requested=bool(
                 plan.reported_observation or plan.reported_anomaly
@@ -6217,12 +6240,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         turn_id=turn_id,generation=generation,
                         pre_transition_index=pre_transition_index,
                     )
+                    if experiment_state is None:
+                        raise WorkspaceError(
+                            "Experiment progress persistence is unavailable."
+                        )
                 except Exception as exc:
                     log.warning(
                         "experiment session update failed turn_id=%s error=%s",
                         turn_id,type(exc).__name__,
                     )
-                    if session.experiment_report_store is None:
+                    if not workflow_mutation_committed:
                         curated._restore(checkpoint)
                         failed=(
                             "실험 세션을 저장하지 못해 상태 변경을 확정하지 않았습니다. 현재 단계를 유지합니다."
@@ -6241,12 +6268,51 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         code=getattr(exc,"code","workspace_error"))
                 else:
                     if experiment_state is not None:
+                        workflow_mutation_committed=True
                         await current_text(
                             "experiment.session.state",turn_id=turn_id,
                             state=experiment_state)
-            # Report persistence is the acknowledgement gate.  Re-read the
-            # possibly replaced plan only after that gate so neither display
-            # nor TTS can use pre-persistence success language.
+            if (
+                session.experiment_report_store is not None
+                and session.experiment_state_version is not None
+                and plan.state_changed
+                and plan.action in _EXPERIMENT_REPORT_ACTIONS
+                and workflow_mutation_committed
+                and not report_prepared
+            ):
+                try:
+                    report=await asyncio.to_thread(
+                        _record_experiment_report_plan,
+                        session,curated,plan,
+                        turn_id=turn_id,generation=generation,
+                        pre_transition_index=pre_transition_index,
+                    )
+                except Exception:
+                    warning=(
+                        "실험 세션의 상태 변경은 저장되었지만 보조 실험 보고서를 갱신하지 못했습니다. 현재 단계는 실험 세션 타임라인에서 확인해 주세요."
+                        if turn_language=="ko" else
+                        "The experiment-session change was saved, but the auxiliary experiment report could not be updated. Verify the current step in the experiment timeline."
+                    )
+                    plan=replace(
+                        plan,
+                        display_text=f"{warning}\n\n{plan.display_text}",
+                        speech_text=f"{warning} {plan.speech_text}",
+                    )
+                    log.warning(
+                        "experiment report update failed after workspace commit turn_id=%s",
+                        turn_id,
+                    )
+                    await current_text(
+                        "experiment.report.error",turn_id=turn_id,
+                        code="report_persistence_failed")
+                else:
+                    report_prepared=True
+                    plan=_acknowledge_report_persistence(plan,turn_language)
+                    await report_state(report)
+            # Durable workspace persistence is the mutation gate; report
+            # persistence is the reporting-acknowledgement gate. Re-read the
+            # possibly replaced plan only after both so neither display nor
+            # TTS can use pre-persistence success language.
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -6270,15 +6336,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         except asyncio.CancelledError:
             if brain_run is not None:
                 brain_run.cancel()
-            curated._restore(checkpoint)
+            if not workflow_mutation_committed:
+                curated._restore(checkpoint)
             raise
         except BaseException:
             if brain_run is not None:
                 brain_run.cancel()
-            if not (
-                report_prepared and plan is not None
-                and bool(plan.state_changed)
-            ):
+            if not workflow_mutation_committed:
                 curated._restore(checkpoint)
             raise
         timings["first_audio_ms"]=round((clock()-endpoint)*1000)

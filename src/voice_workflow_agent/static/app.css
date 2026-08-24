@@ -476,7 +476,7 @@
     .workspace-bar button[aria-current="page"]{background:var(--blurple);border-color:var(--blurple);color:white}
     .workspace-bar select{margin-left:auto;min-height:2.55rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.4rem .7rem}
     .workspace-page{max-width:92rem;margin:0 auto;padding:.75rem 1.5rem 4rem}
-    .workspace-page[hidden]{display:none}
+    .shell[hidden],.workspace-page[hidden]{display:none}
     .workspace-page-head{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin-bottom:1rem}
     .workspace-page-head h1{max-width:none}
     .workspace-page-head p{color:var(--muted);margin:.25rem 0 0}
@@ -495,7 +495,7 @@
     .workspace-field input,.workspace-field select,.workspace-field textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.6rem .7rem;color:var(--ink)}
     .workspace-field textarea{min-height:5.5rem;resize:vertical}
     .workspace-status{font-size:.78rem;color:var(--cyan);min-height:1.2rem}
-    .experiment-ledger{margin:1rem 0;padding:1.15rem}
+    .experiment-ledger{margin:0;padding:1.15rem}
     .experiment-ledger-head{display:flex;justify-content:space-between;align-items:end;gap:1rem;flex-wrap:wrap}
     .experiment-ledger-head h2{margin:0;font-size:1.1rem}
     .experiment-ledger-head p{margin:.25rem 0 0;color:var(--muted);font-size:.82rem}

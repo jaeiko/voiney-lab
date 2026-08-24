@@ -5,6 +5,8 @@ async function openReviewerWorkspace(page) {
   await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 10_000 });
   await page.locator('#workspace-reviewer').click();
   await expect(page.locator('#reviewer-workspace')).toBeVisible();
+  await expect(page.locator('#researcher-workspace')).toBeHidden();
+  await expect(page.locator('#admin-workspace')).toBeHidden();
 }
 
 test.describe('Reviewer workspace', () => {

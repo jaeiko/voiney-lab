@@ -5,6 +5,8 @@ async function openAdminWorkspace(page) {
   await page.locator('#workspace-admin').waitFor({ state: 'visible', timeout: 10_000 });
   await page.locator('#workspace-admin').click();
   await expect(page.locator('#admin-workspace')).toBeVisible();
+  await expect(page.locator('#researcher-workspace')).toBeHidden();
+  await expect(page.locator('#reviewer-workspace')).toBeHidden();
 }
 
 test.describe('Lab Admin workspace', () => {

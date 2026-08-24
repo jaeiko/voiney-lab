@@ -12,6 +12,32 @@ def run_node_harness(harness: str):
     )
 
 class FrontendSessionTests(unittest.TestCase):
+    def test_researcher_errors_are_actionable_and_do_not_expose_raw_codes(self):
+        html = (
+            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        block = html.split(
+            "const RESEARCHER_ERROR_MESSAGES", 1
+        )[1].split("function renderAdminMetrics", 1)[0]
+        harness = r"""
+const assert=(ok,message)=>{if(!ok)throw new Error(message)};
+const RESEARCHER_ERROR_MESSAGES""" + block.split(
+            "const RESEARCHER_ERROR_MESSAGES", 1
+        )[-1] + r"""
+const conflict=researcherErrorMessage("workspace_conflict");
+assert(conflict.includes("새로고침")&&!conflict.includes("workspace_conflict"),"workspace conflict leaked its raw code");
+const voice=researcherErrorMessage("voice turn processing failed");
+assert(voice.includes("단계가 변경되었다고 가정하지 말고")&&!voice.includes("processing failed"),"voice failure lacks safe recovery guidance");
+const unknown=researcherErrorMessage("SQLSTATE private detail");
+assert(unknown.includes("다시 시도")&&!unknown.includes("SQLSTATE"),"unknown server detail leaked to the researcher UI");
+const alreadySafe=researcherErrorMessage(conflict,"fallback");
+assert(alreadySafe===conflict,"safe mapped message was not stable through a catch boundary");
+"""
+        result = run_node_harness(harness)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('fail(researcherErrorMessage(m.message),m.turn_id)', html)
+        self.assertIn('m.type==="experiment.session.error"', html)
+
     def test_experiment_timeline_workspace_is_present_and_safely_rendered(self):
         html = (
             ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
@@ -34,8 +60,24 @@ class FrontendSessionTests(unittest.TestCase):
             "관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.",
             "자동 해석 안 함",
             "코드는 실행하지 않습니다.",
+            'new Set(["ready","in_progress","paused","blocked"])',
+            'experimentIsResumable()?"실험 이어하기":"새 실험 시작"',
+            'experiment_session_id:currentExperimentSessionId',
+            'experiment_session_version:currentExperimentSessionVersion',
         ):
             self.assertIn(required, html)
+        self.assertLess(
+            html.index('class="panel procedure-card"'),
+            html.index('id="experiment-session-ledger"'),
+        )
+        self.assertLess(
+            html.index('id="experiment-session-ledger"'),
+            html.index('id="timeline-title"'),
+        )
+        workflow = html.split(
+            '<section class="workflow-grid"', 1
+        )[1].split('<section class="panel timeline"', 1)[0]
+        self.assertIn('id="experiment-session-ledger"', workflow)
         render_block = html.split(
             "function renderExperimentTimeline", 1
         )[1].split("async function loadExperimentTimeline", 1)[0]
@@ -56,6 +98,7 @@ class FrontendSessionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("align-items:start", css)
         self.assertIn("position:sticky", css)
+        self.assertIn(".shell[hidden],.workspace-page[hidden]{display:none}", css)
         self.assertIn("top:4.5rem", css)
         self.assertIn("calc(100dvh - 5.5rem)", css)
         self.assertIn("overflow-y:auto", css)

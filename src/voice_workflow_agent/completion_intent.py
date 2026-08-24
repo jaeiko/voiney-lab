@@ -52,6 +52,10 @@ _STEP_NUM_PREFIX = (
 
 # Positive completion command patterns (Current step)
 _POSITIVE_COMPLETION_PATTERNS = (
+    # Concise, past-tense completion report while an authoritative current
+    # step is active. Question, negation, hypothetical, and future forms are
+    # rejected by the guards above before this grammar is evaluated.
+    re.compile(r"^(?:다|모두)\s*(?:했어|했어요|했습니다)$"),
     # Standard prefix + optional adverbs + completion verb:
     # "현재/지금/이번/이 단계/작업 [도/를/은/는/이/가/로] [미리/이미/벌써/방금/아까/다/완전히/모두] 완료했어/끝냈어/마쳤어/다 했어"
     re.compile(

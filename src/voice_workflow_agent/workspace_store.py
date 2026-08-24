@@ -1366,6 +1366,8 @@ class WorkspaceStore:
         principal: Principal,
         session_id: str,
         *,
+        expected_version: int,
+        expected_voice_connection_id: str | None = None,
         event_key: str,
         event_type: str,
         step_id: str | None,
@@ -1378,10 +1380,12 @@ class WorkspaceStore:
         """Append a server-authorized step event and update the recovery projection."""
 
         row = self._experiment_row(principal, session_id, write=True)
-        protocol_start = event_type == "protocol_started" and row["status"] == "ready"
-        if row["status"] != "in_progress" and not protocol_start:
-            raise WorkspaceConflictError(
-                "Only an in-progress experiment can record step progress."
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise WorkspaceError("Experiment version is invalid.")
+        if expected_voice_connection_id is not None:
+            expected_voice_connection_id = _identifier(
+                expected_voice_connection_id,
+                "Voice connection identifier",
             )
         if step_id is not None:
             step_id = _identifier(step_id, "Protocol step identifier")
@@ -1394,6 +1398,50 @@ class WorkspaceStore:
         now = _now()
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            existing = self._connection.execute(
+                """SELECT event_type,step_id,step_label,payload_json
+                FROM experiment_session_events
+                WHERE session_id=? AND event_key=?""",
+                (session_id, event_key),
+            ).fetchone()
+            expected_payload = _canonical_json(dict(payload or {}))
+            if existing is not None:
+                if (
+                    existing["event_type"] != event_type
+                    or existing["step_id"] != step_id
+                    or existing["step_label"] != step_label
+                    or existing["payload_json"] != expected_payload
+                ):
+                    raise WorkspaceConflictError(
+                        "Experiment progress idempotency key was reused with different content."
+                    )
+                self._connection.commit()
+                return self.get_experiment(principal, session_id)
+            row = self._connection.execute(
+                """SELECT * FROM experiment_sessions
+                WHERE session_id=? AND organization_id=?""",
+                (session_id, principal.organization_id),
+            ).fetchone()
+            assert row is not None
+            current_version = int(row["version"])
+            if current_version != expected_version:
+                same_voice_projection = bool(
+                    expected_voice_connection_id is not None
+                    and row["last_voice_connection_id"]
+                    == expected_voice_connection_id
+                    and row["current_step_id"] == step_id
+                )
+                if not same_voice_projection:
+                    raise WorkspaceConflictError(
+                        "Experiment session changed; refresh before recording progress."
+                    )
+            protocol_start = (
+                event_type == "protocol_started" and row["status"] == "ready"
+            )
+            if row["status"] != "in_progress" and not protocol_start:
+                raise WorkspaceConflictError(
+                    "Only an in-progress experiment can record step progress."
+                )
             event_id, inserted = self._append_experiment_event(
                 principal,
                 session_id=session_id,
@@ -1404,39 +1452,44 @@ class WorkspaceStore:
                 payload=payload,
                 created_at=now,
             )
-            if inserted:
-                if mark_completed:
-                    if step_id is None:
-                        raise WorkspaceError(
-                            "Completed progress requires a protocol step."
-                        )
-                    self._connection.execute(
-                        """INSERT INTO experiment_completed_steps(
-                        organization_id,session_id,step_id,step_label,
-                        completed_by_principal_id,completed_at,event_id
-                        ) VALUES(?,?,?,?,?,?,?)""",
-                        (
-                            principal.organization_id,
-                            session_id,
-                            step_id,
-                            step_label,
-                            principal.principal_id,
-                            now,
-                            event_id,
-                        ),
+            assert inserted
+            if mark_completed:
+                if step_id is None:
+                    raise WorkspaceError(
+                        "Completed progress requires a protocol step."
                     )
                 self._connection.execute(
-                    """UPDATE experiment_sessions SET current_step_id=?,
-                    current_step_label=?,status=?,updated_at=?,version=version+1
-                    WHERE session_id=? AND organization_id=?""",
+                    """INSERT INTO experiment_completed_steps(
+                    organization_id,session_id,step_id,step_label,
+                    completed_by_principal_id,completed_at,event_id
+                    ) VALUES(?,?,?,?,?,?,?)""",
                     (
-                        next_step_id if next_step_id is not None else step_id,
-                        next_step_label if next_step_label is not None else step_label,
-                        "in_progress" if protocol_start else row["status"],
-                        now,
-                        session_id,
                         principal.organization_id,
+                        session_id,
+                        step_id,
+                        step_label,
+                        principal.principal_id,
+                        now,
+                        event_id,
                     ),
+                )
+            cursor = self._connection.execute(
+                """UPDATE experiment_sessions SET current_step_id=?,
+                current_step_label=?,status=?,updated_at=?,version=version+1
+                WHERE session_id=? AND organization_id=? AND version=?""",
+                (
+                    next_step_id if next_step_id is not None else step_id,
+                    next_step_label if next_step_label is not None else step_label,
+                    "in_progress" if protocol_start else row["status"],
+                    now,
+                    session_id,
+                    principal.organization_id,
+                    current_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise WorkspaceConflictError(
+                    "Experiment session changed; refresh before recording progress."
                 )
             self._connection.commit()
         except sqlite3.IntegrityError as exc:

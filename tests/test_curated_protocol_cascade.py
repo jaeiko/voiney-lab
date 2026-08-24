@@ -2020,6 +2020,42 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 session.turn_terminal_outcome(1, session.generation), "blocked"
             )
 
+    def test_start_report_failure_rolls_back_report_only_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(index=0)
+            session.curated_protocol_session = CuratedProtocolSession(self.fixture)
+            session.curated_protocol_session.activate_configured()
+            session.experiment_report_store = ExperimentReportStore(
+                Path(directory) / "reports.sqlite"
+            )
+            socket = Socket()
+
+            async def immediate(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            with patch(
+                "voice_workflow_agent.server.transcribe",
+                return_value=Transcription("프로토콜 시작해줘", "ko"),
+            ), patch(
+                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+            ) as tts, patch(
+                "voice_workflow_agent.server._record_experiment_report_plan",
+                side_effect=RuntimeError("synthetic persistence failure"),
+            ), patch(
+                "voice_workflow_agent.server.asyncio.to_thread",
+                side_effect=immediate,
+            ):
+                asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
+
+            curated = session.curated_protocol_session
+            self.assertFalse(curated.active)
+            self.assertEqual(curated.workflow_status, "ready")
+            self.assertIn("상태 변경을 확정하지 않았습니다", tts.call_args.args[0])
+            self.assertEqual(
+                session.turn_terminal_outcome(1, session.generation), "blocked"
+            )
+            self.assertEqual(session.experiment_report_store.list_reports(), [])
+
     def test_completion_report_replay_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             session = self.make_session(index=1)

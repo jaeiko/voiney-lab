@@ -6316,7 +6316,7 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
             )
         elif command is CuratedProtocolAction.START:
-            resumed = self.active and bool(self._replay)
+            resumed = self.active
             clock_started = self._start_experiment_clock_once()
             if not self.active:
                 self.active = True

@@ -239,6 +239,7 @@ def test_experiment_lifecycle_persists_exact_revision_steps_and_events(tmp_path)
     running = store.record_experiment_progress(
         researcher,
         "experiment-session-1",
+        expected_version=started["version"],
         event_key="turn-1-protocol-started",
         event_type="protocol_started",
         step_id="step-1",
@@ -249,6 +250,7 @@ def test_experiment_lifecycle_persists_exact_revision_steps_and_events(tmp_path)
     progressed = store.record_experiment_progress(
         researcher,
         "experiment-session-1",
+        expected_version=running["version"],
         event_key="turn-2-step-1-completed",
         event_type="step_completed",
         step_id="step-1",
@@ -331,6 +333,7 @@ def test_recovery_requires_fresh_version_and_the_original_protocol_revision(tmp_
         session = store.record_experiment_progress(
             researcher,
             session["session_id"],
+            expected_version=session["version"],
             event_key="protocol-started",
             event_type="protocol_started",
             step_id=None,
@@ -361,6 +364,157 @@ def test_recovery_requires_fresh_version_and_the_original_protocol_revision(tmp_
                 protocol_revision_id="revision-a",
                 voice_connection_id="voice-2",
             )
+    finally:
+        store.close()
+
+
+def test_progress_requires_fresh_version_but_exact_replay_is_idempotent(tmp_path):
+    researcher = _principal("researcher", "tenant-a")
+    store = _store(tmp_path)
+    try:
+        store.bootstrap_principal(researcher)
+        created = store.start_experiment(
+            researcher,
+            session_id="experiment-progress-lock-1",
+            protocol_id="protocol-a",
+            protocol_revision_id="revision-a",
+            current_step_id="step-1",
+            current_step_label="1",
+        )
+        running = store.record_experiment_progress(
+            researcher,
+            created["session_id"],
+            expected_version=created["version"],
+            event_key="voice-1-start",
+            event_type="protocol_started",
+            step_id="step-1",
+            step_label="1",
+            payload={"authority": "curated_protocol"},
+        )
+        replayed = store.record_experiment_progress(
+            researcher,
+            created["session_id"],
+            expected_version=created["version"],
+            event_key="voice-1-start",
+            event_type="protocol_started",
+            step_id="step-1",
+            step_label="1",
+            payload={"authority": "curated_protocol"},
+        )
+        assert replayed["version"] == running["version"]
+        assert [
+            event["event_key"] for event in replayed["events"]
+        ].count("voice-1-start") == 1
+
+        with pytest.raises(WorkspaceConflictError, match="changed"):
+            store.record_experiment_progress(
+                researcher,
+                created["session_id"],
+                expected_version=created["version"],
+                event_key="voice-2-complete",
+                event_type="step_completed",
+                step_id="step-1",
+                step_label="1",
+                next_step_id="step-2",
+                next_step_label="2",
+                mark_completed=True,
+            )
+        unchanged = store.get_experiment(researcher, created["session_id"])
+        assert unchanged["version"] == running["version"]
+        assert unchanged["current_step_id"] == "step-1"
+        assert unchanged["completed_steps"] == []
+
+        with pytest.raises(WorkspaceConflictError, match="idempotency key"):
+            store.record_experiment_progress(
+                researcher,
+                created["session_id"],
+                expected_version=running["version"],
+                event_key="voice-1-start",
+                event_type="step_advanced",
+                step_id="step-1",
+                step_label="1",
+            )
+    finally:
+        store.close()
+
+
+def test_progress_allows_same_voice_timeline_capture_but_fences_recovered_voice(tmp_path):
+    researcher = _principal("researcher", "tenant-a")
+    store = _store(tmp_path)
+    try:
+        store.bootstrap_principal(researcher)
+        created = store.start_experiment(
+            researcher,
+            session_id="experiment-progress-capture-1",
+            protocol_id="protocol-a",
+            protocol_revision_id="revision-a",
+            current_step_id="step-1",
+            current_step_label="1",
+            voice_connection_id="voice-1",
+        )
+        running = store.record_experiment_progress(
+            researcher,
+            created["session_id"],
+            expected_version=created["version"],
+            expected_voice_connection_id="voice-1",
+            event_key="voice-1-start",
+            event_type="protocol_started",
+            step_id="step-1",
+            step_label="1",
+        )
+        store.record_observation(
+            researcher,
+            created["session_id"],
+            event_key="manual-observation-between-turns",
+            content="Opaque observation captured between voice turns.",
+            category="note",
+            capture_source="manual",
+            protocol_step_id="step-1",
+        )
+        captured = store.get_experiment(researcher, created["session_id"])
+        assert captured["version"] == running["version"] + 1
+
+        progressed = store.record_experiment_progress(
+            researcher,
+            created["session_id"],
+            expected_version=running["version"],
+            expected_voice_connection_id="voice-1",
+            event_key="voice-2-complete",
+            event_type="step_completed",
+            step_id="step-1",
+            step_label="1",
+            next_step_id="step-2",
+            next_step_label="2",
+            mark_completed=True,
+        )
+        assert progressed["current_step_id"] == "step-2"
+        assert progressed["version"] == captured["version"] + 1
+
+        recovered = store.resume_experiment(
+            researcher,
+            created["session_id"],
+            expected_version=progressed["version"],
+            protocol_id="protocol-a",
+            protocol_revision_id="revision-a",
+            voice_connection_id="voice-2",
+        )
+        with pytest.raises(WorkspaceConflictError, match="changed"):
+            store.record_experiment_progress(
+                researcher,
+                created["session_id"],
+                expected_version=progressed["version"],
+                expected_voice_connection_id="voice-1",
+                event_key="stale-voice-complete",
+                event_type="step_completed",
+                step_id="step-2",
+                step_label="2",
+                next_step_id="step-3",
+                next_step_label="3",
+                mark_completed=True,
+            )
+        unchanged = store.get_experiment(researcher, created["session_id"])
+        assert unchanged["version"] == recovered["version"]
+        assert unchanged["current_step_id"] == "step-2"
     finally:
         store.close()
 
@@ -408,6 +562,7 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
         store.record_experiment_progress(
             researcher,
             session["session_id"],
+            expected_version=session["version"],
             event_key="protocol-start",
             event_type="protocol_started",
             step_id="step-1",
