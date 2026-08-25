@@ -39,7 +39,7 @@ FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = ROOT / "data/development_protocols/candidate_a_source_in_gel_digestion.pdf"
 if not SOURCE_PDF.exists():
-    SOURCE_PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+    SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 
 def _dummy_evidence() -> SourceEvidence:

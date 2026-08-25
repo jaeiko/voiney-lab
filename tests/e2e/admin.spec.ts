@@ -74,6 +74,7 @@ test.describe('Lab Admin workspace', () => {
     });
 
     await openAdminWorkspace(page);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('#admin-connectors')).toContainText('구성 검사 필요');
     await expect(page.getByRole('button', { name: '연결 활성화' })).toHaveCount(0);
     await page.getByRole('button', { name: '구성 검사' }).click();

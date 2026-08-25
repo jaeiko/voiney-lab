@@ -64,7 +64,7 @@ from voice_workflow_agent.vad import EndpointDetector, TurnState
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
-SOURCE_PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 EXPECTED_FIXTURE_SHA256 = "c2779c24924dbeb3c83d2f905f81af472b1b51f1adfd0c7e3fe423270d7a76d7"
 EXPECTED_SCHEMA_SHA256 = "3d7970faf5f55cd7ad11abbccffa01cd4f8989bb5932a436740e77bac7f23923"
 

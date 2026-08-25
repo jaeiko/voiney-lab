@@ -25,7 +25,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         cls.fixture = load_curated_protocol_fixture(
             ROOT / "data/development_protocols/candidate_a_curated_analysis.json",
             ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
-            Path("/home/student/protocol-test-files/in-gel-digestion.pdf"),
+            (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"),
         )
 
     def session(self, label: str = "1") -> CuratedProtocolSession:

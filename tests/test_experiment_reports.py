@@ -277,7 +277,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
 
         fixture_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.json"
         provenance_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
-        pdf_path = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+        pdf_path = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         fixture = load_curated_protocol_fixture(fixture_path, provenance_path, pdf_path)
         protocol = fixture.draft.protocol
 

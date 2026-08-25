@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"
-SOURCE_PDF="/home/student/protocol-test-files/in-gel-digestion.pdf"
+SOURCE_PDF="${CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
 PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"
 
 EXPECTED_PDF_SHA256="63d81102fb644fca21e1c2296b566987756f2964ece06758fe52c73ba9c00bd9"

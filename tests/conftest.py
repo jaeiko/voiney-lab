@@ -16,7 +16,7 @@ require it, with an explicit, honest reason, whenever it is not present.
 import os
 from pathlib import Path
 
-CANDIDATE_A_SOURCE_PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
     "test_candidate_a_acceptance_phase2.py",

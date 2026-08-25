@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument(
         "--source-pdf",
         type=Path,
-        default=Path("/home/student/protocol-test-files/in-gel-digestion.pdf"),
+        default=ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf",
     )
     args = parser.parse_args()
     fixture = load_curated_protocol_fixture(

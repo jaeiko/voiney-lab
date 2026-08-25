@@ -100,7 +100,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.fixture_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
         cls.provenance_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
-        cls.pdf_path = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+        cls.pdf_path = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         cls.fixture = load_curated_protocol_fixture(
             cls.fixture_path,
             cls.provenance_path,

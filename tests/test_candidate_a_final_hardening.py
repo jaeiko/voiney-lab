@@ -25,7 +25,7 @@ from voice_workflow_agent.server import (
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data/development_protocols"
-SOURCE_PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 
 class CandidateAFinalHardeningTests(unittest.TestCase):

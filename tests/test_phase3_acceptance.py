@@ -36,7 +36,7 @@ from voice_workflow_agent.curated_protocol import (
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "development_protocols"
-SOURCE_PDF = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 
 def test_clean_speech_text_strips_markdown_and_bullets():

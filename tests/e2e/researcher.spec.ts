@@ -48,6 +48,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('recorded evidence exposes a same-origin opaque download action', async ({ page }) => {
     await page.goto('/');
+    await page.waitForLoadState('networkidle');
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.evaluate(() => renderExperimentTimeline({
       session: {
@@ -77,6 +78,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('long conversation stays contained beside the continuous step and timeline workspace', async ({ page }) => {
     await page.goto('/');
+    await page.waitForLoadState('networkidle');
     await page.locator('#hero-setup').evaluate((node) => node.classList.add('collapsed'));
     await page.evaluate(() => {
       for (let turnId = 1; turnId <= 18; turnId += 1) {
@@ -139,6 +141,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('only explicitly selected open experiments use the resume action', async ({ page }) => {
     await page.goto('/');
+    await page.waitForLoadState('networkidle');
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.evaluate(() => renderExperimentTimeline({
       session: {

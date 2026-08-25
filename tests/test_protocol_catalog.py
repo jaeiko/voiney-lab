@@ -680,7 +680,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             / "data/development_protocols/candidate_a_curated_analysis.json",
             repository
             / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
-            Path("/home/student/protocol-test-files/in-gel-digestion.pdf"),
+            (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"),
         )
         self.settings = ProtocolPersistenceSettings(
             True, self.root / "candidate-a-live-acceptance"
@@ -990,7 +990,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
             duplicate.json()["protocol"]["protocol_id"], protocol_id
         )
 
-        candidate = Path("/home/student/protocol-test-files/in-gel-digestion.pdf")
+        candidate = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         candidate_response = await self._request(
             "POST",
             "/api/protocols?filename=in-gel-digestion.pdf",
