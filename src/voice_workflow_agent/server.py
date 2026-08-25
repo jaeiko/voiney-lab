@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -104,6 +105,7 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
+    ProtocolCatalogEntry,
     ProtocolCatalogError,
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
@@ -178,6 +180,7 @@ from voice_workflow_agent.identity import (
     Permission,
     Principal,
     Role,
+    permissions_for_roles,
     require_permission,
 )
 from voice_workflow_agent.protocol_sources import (
@@ -187,6 +190,7 @@ from voice_workflow_agent.protocol_sources import (
     ProtocolsIoConnector,
     SourceSnapshot,
     SourceConnectorError,
+    normalize_protocols_io_identifier,
     verify_github_webhook_signature,
 )
 from voice_workflow_agent.drylab_workflows import (
@@ -277,8 +281,16 @@ async def readyz()->JSONResponse:
     """
     capabilities:dict[str,object]={}
     try:
-        capabilities["workspace_enabled"]=_workspace_settings().enabled
-        capabilities["protocol_catalog_enabled"]=_protocol_store_settings().enabled
+        identity=_identity_resolver()
+        workspace=_workspace_settings()
+        protocol=_protocol_store_settings()
+        reports=ExperimentReportSettings.from_environment()
+        capabilities["identity_mode"]=(
+            "oidc" if identity.oidc_settings is not None else "development"
+        )
+        capabilities["workspace_enabled"]=workspace.enabled
+        capabilities["protocol_catalog_enabled"]=protocol.enabled
+        capabilities["experiment_reports_enabled"]=reports.enabled
         capabilities["moss_enabled"]=get_moss_runtime() is not None
     except Exception as exc:
         return JSONResponse(status_code=503,content={
@@ -446,6 +458,104 @@ def _resolve_server_secret(reference:str)->str:
     if not value:
         raise WorkspaceError("Connector credential is not configured.")
     return value
+
+
+def _server_credential_options(principal:Principal)->tuple[dict[str,object], ...]:
+    """Expose tenant-scoped credential handles, never references or values."""
+
+    raw=os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","").strip()
+    try:
+        mapping=json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise WorkspaceError("Server secret reference mapping is invalid.") from exc
+    if not isinstance(mapping,dict):
+        raise WorkspaceError("Server secret reference mapping is invalid.")
+    prefix=f"secret://{principal.organization_id}/"
+    options=[]
+    for reference,variable in sorted(mapping.items()):
+        if (
+            not isinstance(reference,str)
+            or not reference.startswith(prefix)
+            or not isinstance(variable,str)
+            or re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}",variable) is None
+        ):
+            continue
+        suffix=reference.removeprefix(prefix)
+        if not suffix or len(suffix)>120:
+            continue
+        options.append({
+            "credential_handle":(
+                "credential-"+hashlib.sha256(reference.encode("utf-8")).hexdigest()[:24]
+            ),
+            "display_name":suffix.replace("-"," ").replace("_"," ").strip().title(),
+            "available":bool(os.environ.get(variable,"")),
+        })
+    return tuple(options)
+
+
+def _credential_reference_from_handle(principal:Principal,handle:str)->str:
+    for option in _server_credential_options(principal):
+        if hmac.compare_digest(str(option["credential_handle"]),handle):
+            raw=json.loads(os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","{}"))
+            prefix=f"secret://{principal.organization_id}/"
+            for reference in raw:
+                candidate=("credential-"+hashlib.sha256(
+                    reference.encode("utf-8")).hexdigest()[:24]
+                    if isinstance(reference,str) and reference.startswith(prefix)
+                    else "")
+                if candidate and hmac.compare_digest(candidate,handle):
+                    return reference
+    raise WorkspaceError("Secure connector credential is not available.")
+
+
+def _connector_configuration_failure(connector:object)->str|None:
+    """Validate server-owned credential availability and allowlisted scope syntax."""
+
+    try:
+        _resolve_server_secret(str(connector.credential_reference))
+        if connector.webhook_secret_reference:
+            _resolve_server_secret(str(connector.webhook_secret_reference))
+    except WorkspaceError:
+        return "credential_unavailable"
+    roots=tuple(connector.allowed_roots)
+    kind=str(connector.connector_kind)
+    if kind=="google_drive":
+        folders=[root.removeprefix("folder:") for root in roots if root.startswith("folder:")]
+        shared=[root.removeprefix("shared-drive:") for root in roots if root.startswith("shared-drive:")]
+        valid=(
+            bool(folders)
+            and len(shared)<=1
+            and len(folders)+len(shared)==len(roots)
+            and all(re.fullmatch(r"[A-Za-z0-9_-]{3,200}",value) for value in (*folders,*shared))
+        )
+    elif kind=="github":
+        valid=all(
+            re.fullmatch(r"[^/@\s]+/[^/@\s]+@[^:\s]+:[^\s]+",root)
+            and ".." not in root
+            and "\\" not in root
+            for root in roots
+        )
+    elif kind=="elabftw":
+        parsed=urlparse(roots[0]) if len(roots)==1 else None
+        valid=bool(
+            parsed
+            and parsed.scheme=="https"
+            and parsed.netloc
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    elif kind=="protocols_io":
+        valid=all(
+            root.startswith("protocol:")
+            and len(root)>len("protocol:")
+            and len(root)<=300
+            for root in roots
+        )
+    else:
+        valid=False
+    return None if valid else "scope_invalid"
 
 
 def _record_workspace_metric(
@@ -1122,7 +1232,25 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "created_at":None,
         "available_for_execution":True,
         "development_only":True,
+        "approval":{
+            "status":"development_only",
+            "final_approval":False,
+            "actor_principal_id":None,
+            "actor_role":None,
+            "recorded_at":None,
+            "authority":"development_fixture",
+        },
     }
+
+
+def _catalog_entry_projection(
+    catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
+)->dict[str,object]:
+    """Project one catalog entry with its existing approval evidence."""
+
+    public=entry.public_dict()
+    public["approval"]=catalog.approval_context(entry.protocol_id)
+    return public
 
 
 def _public_protocol_catalog_entries(
@@ -1153,7 +1281,7 @@ def _public_protocol_catalog_entries(
                 raise ProtocolCatalogUnavailableError(
                     "Configured development fixture conflicts with catalog state."
                 )
-            public=item.public_dict()
+            public=_catalog_entry_projection(catalog,item)
             public["analysis_run"]=catalog.analysis_run_status(
                 item.protocol_id).public_dict()
             entries.append(public)
@@ -1246,6 +1374,7 @@ async def get_workspace_session()->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
+            store.record_workspace_access(principal)
             routes=["researcher"]
             if any(role.value in {"reviewer","lab_admin","organization_admin"}
                    for role in principal.roles):
@@ -1542,6 +1671,103 @@ async def upload_workspace_experiment_evidence(
             temporary.unlink(missing_ok=True)
 
 
+@app.get("/api/workspace/experiments/{session_id}/evidence/{evidence_id}")
+def download_workspace_experiment_evidence(
+    session_id:str,evidence_id:str
+)->Response:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            evidence=store.evidence_for_download(
+                principal,session_id,evidence_id)
+            settings=_workspace_settings()
+            if settings.data_dir is None:
+                raise WorkspaceNotFoundError(
+                    "Experiment evidence storage is not available."
+                )
+            root=settings.data_dir.resolve()
+            relative=Path(str(evidence["storage_reference"]))
+            if (
+                relative.is_absolute()
+                or not relative.parts
+                or any(part in {"", ".", ".."} for part in relative.parts)
+            ):
+                raise WorkspaceError(
+                    "Experiment evidence storage path is invalid."
+                )
+            path=root/relative
+            try:
+                resolved=path.resolve(strict=True)
+            except FileNotFoundError as exc:
+                raise WorkspaceNotFoundError(
+                    "Experiment evidence file is not available."
+                ) from exc
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise WorkspaceError(
+                    "Experiment evidence storage path is invalid."
+                ) from exc
+            if resolved!=path:
+                raise WorkspaceError(
+                    "Experiment evidence storage path cannot contain links."
+                )
+            descriptor=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+            try:
+                metadata=os.fstat(descriptor)
+                expected_size=int(evidence["byte_size"])
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_size!=expected_size
+                    or expected_size<1
+                    or expected_size>32*1024*1024
+                ):
+                    raise WorkspaceError(
+                        "Experiment evidence failed its size check."
+                    )
+                digest=hashlib.sha256()
+                chunks=[]
+                with os.fdopen(descriptor,"rb") as stream:
+                    descriptor=-1
+                    for chunk in iter(lambda:stream.read(1024*1024),b""):
+                        digest.update(chunk)
+                        chunks.append(chunk)
+                if not hmac.compare_digest(
+                    digest.hexdigest(),str(evidence["sha256"])
+                ):
+                    raise WorkspaceError(
+                        "Experiment evidence failed its checksum."
+                    )
+            finally:
+                if descriptor>=0:
+                    os.close(descriptor)
+            suffix={
+                "image/jpeg":".jpg","image/png":".png","image/webp":".webp",
+                "application/pdf":".pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document":".docx",
+            }.get(str(evidence["media_type"]),"")
+            return Response(
+                content=b"".join(chunks),
+                media_type=str(evidence["media_type"]),
+                headers={
+                    "Content-Disposition":(
+                        f'attachment; filename="evidence-{evidence_id}{suffix}"'
+                    ),
+                    "Cache-Control":"private, no-store",
+                    "X-Evidence-SHA256":str(evidence["sha256"]),
+                    "X-Evidence-Interpretation":"not_interpreted",
+                },
+            )
+        finally:
+            store.close()
+    except FileNotFoundError as exc:
+        raise _workspace_http_error(
+            WorkspaceNotFoundError("Experiment evidence file is not available.")
+        ) from exc
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 @app.get("/api/workspace/protocol-adaptations")
 def get_workspace_protocol_adaptations()->dict[str,object]:
     try:
@@ -1671,7 +1897,16 @@ def get_workspace_memberships()->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
-            return {"memberships":list(store.membership_summaries(principal))}
+            return {
+                "memberships":list(store.membership_summaries(principal)),
+                "permission_levels":[
+                    {
+                        "role":role.value,
+                        "permissions":list(permissions_for_roles((role,))),
+                    }
+                    for role in Role
+                ],
+            }
         finally:
             store.close()
     except Exception as exc:
@@ -1906,6 +2141,22 @@ def get_workspace_connectors()->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+@app.get("/api/workspace/admin/connector-credentials")
+def get_workspace_connector_credentials()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            require_permission(principal,Permission.CONNECTOR_MANAGE)
+            return {
+                "credentials":list(_server_credential_options(principal)),
+                "credential_values_exposed":False,
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 @app.post("/api/workspace/admin/connectors",status_code=201)
 async def configure_workspace_connector(request:Request)->dict[str,object]:
     payload=await _json_object(request)
@@ -1913,18 +2164,36 @@ async def configure_workspace_connector(request:Request)->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
+            credential_reference=(
+                _credential_reference_from_handle(
+                    principal,str(payload.get("credential_handle", "")))
+                if payload.get("credential_handle")
+                else str(payload.get("credential_reference", ""))
+            )
+            webhook_reference=(
+                _credential_reference_from_handle(
+                    principal,str(payload.get("webhook_credential_handle", "")))
+                if payload.get("webhook_credential_handle")
+                else (
+                    str(payload["webhook_secret_reference"])
+                    if payload.get("webhook_secret_reference") else None
+                )
+            )
+            tenant_prefix=f"secret://{principal.organization_id}/"
+            if not credential_reference.startswith(tenant_prefix) or (
+                webhook_reference is not None
+                and not webhook_reference.startswith(tenant_prefix)
+            ):
+                raise WorkspaceError("Connector credential is outside the tenant scope.")
             connector=store.configure_connector(
                 principal,
                 connector_kind=str(payload.get("connector_kind", "")),
                 display_name=str(payload.get("display_name", "")),
-                credential_reference=str(payload.get("credential_reference", "")),
+                credential_reference=credential_reference,
                 allowed_roots=(tuple(str(item) for item in roots)
                                if isinstance(roots,list) else ()),
-                webhook_secret_reference=(
-                    str(payload["webhook_secret_reference"])
-                    if payload.get("webhook_secret_reference") else None
-                ),
-                enabled=payload.get("enabled",True) is True,
+                webhook_secret_reference=webhook_reference,
+                enabled=False,
             )
             return {
                 "connector_id":connector.connector_id,
@@ -1933,7 +2202,54 @@ async def configure_workspace_connector(request:Request)->dict[str,object]:
                 "allowed_roots":list(connector.allowed_roots),
                 "enabled":connector.enabled,
                 "credential_configured":True,
+                "validation_status":connector.validation_status,
+                "next_action":"test_configuration",
             }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post("/api/workspace/admin/connectors/{connector_id}/test")
+def test_workspace_connector_configuration(connector_id:str)->dict[str,object]:
+    """Check server credential resolution and scope syntax without provider I/O."""
+
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            connector=store.get_connector(principal,connector_id)
+            require_permission(principal,Permission.CONNECTOR_MANAGE)
+            failure_code=_connector_configuration_failure(connector)
+            result=store.record_connector_configuration_test(
+                principal,connector_id,
+                succeeded=failure_code is None,
+                failure_code=failure_code,
+            )
+            return {
+                **result,
+                "test_scope":"server_configuration",
+                "provider_connection_tested":False,
+                "next_action":("enable" if failure_code is None else "fix_configuration"),
+            }
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.put("/api/workspace/admin/connectors/{connector_id}/enabled")
+async def set_workspace_connector_enabled(
+    connector_id:str,request:Request
+)->dict[str,object]:
+    payload=await _json_object(request)
+    if not isinstance(payload.get("enabled"),bool):
+        raise HTTPException(status_code=422,detail="connector_state_invalid")
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.set_connector_enabled(
+                principal,connector_id,enabled=payload["enabled"])
         finally:
             store.close()
     except Exception as exc:
@@ -2110,11 +2426,26 @@ async def import_protocols_io_source(request:Request)->dict[str,object]:
                 principal,str(payload.get("connector_id", "")),
                 expected_kind="protocols_io",
             )
+            selected_identifier=normalize_protocols_io_identifier(
+                str(payload.get("identifier", ""))
+            )
+            allowed_prefixes=tuple(
+                root.removeprefix("protocol:").casefold()
+                for root in connector.allowed_roots
+                if root.startswith("protocol:")
+            )
+            if not allowed_prefixes or not any(
+                selected_identifier.casefold().startswith(prefix)
+                for prefix in allowed_prefixes
+            ):
+                raise AuthorizationDeniedError(
+                    "protocols.io source is outside the connector allowlist."
+                )
             snapshot=await asyncio.to_thread(
                 ProtocolsIoConnector(
                     access_token=_resolve_server_secret(connector.credential_reference)
                 ).fetch,
-                str(payload.get("identifier", "")),
+                selected_identifier,
             )
             imported=ProtocolSourceHub(store).ingest(principal,snapshot)
             store.record_analytics(
@@ -2541,6 +2872,36 @@ def get_workspace_analytics()->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+@app.get("/api/workspace/admin/pilot-metrics")
+def get_workspace_pilot_metrics()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            return store.pilot_metrics_summary(principal)
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.get("/api/workspace/admin/security")
+def get_workspace_admin_security()->dict[str,object]:
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            overview=store.admin_security_overview(principal)
+            overview["authentication"]={
+                "current_method":principal.authentication_method,
+                "production_requirement":"oidc",
+                "development_identity_operationally_accepted":False,
+            }
+            return overview
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
 async def _spool_protocol_pdf_upload(
     request:Request,
     destination:Path,
@@ -2598,7 +2959,9 @@ def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
             return _candidate_catalog_dict(candidate)
         catalog,store=_open_protocol_catalog()
         try:
-            public=catalog.get_entry(protocol_id).public_dict()
+            public=_catalog_entry_projection(
+                catalog,catalog.get_entry(protocol_id)
+            )
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
             return public
@@ -3061,14 +3424,15 @@ def approve_protocol_revision(
                 policy=SharedSecretApprovalPolicy(
                     os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"))
                 presented=x_protocol_approval_token
-            return catalog.approve(
+            entry=catalog.approve(
                 protocol_id,
                 revision_id,
                 policy=policy,
                 presented_secret=presented,
                 actor_principal_id=actor.principal_id if actor else None,
                 actor_role=role,
-            ).public_dict()
+            )
+            return _catalog_entry_projection(catalog,entry)
         finally:
             store.close()
     except Exception as exc:
@@ -5420,6 +5784,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     transcript=transcription.text
     if not transcript.strip():
         if session.reject_empty_transcript(turn_id):
+            _record_workspace_metric(
+                category="voice",metric_name="command_failure",
+                dimensions={"status":"rejected","reason_code":"empty_transcript"},
+            )
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
         return
@@ -5430,6 +5798,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     if not input_decision.accepted:
         if session.reject_empty_transcript(turn_id):
+            _record_workspace_metric(
+                category="voice",metric_name="command_failure",
+                dimensions={
+                    "status":"rejected",
+                    "reason_code":str(input_decision.reason or "non_speech")[:100],
+                },
+            )
             await sender.text(
                 "speech.rejected",turn_id=turn_id,generation=generation,
                 reason=input_decision.reason or "non_speech",
@@ -6086,6 +6461,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         workflow_mutation_committed=True
                 except Exception:
                     if plan.state_changed:
+                        _record_workspace_metric(
+                            category="workflow",metric_name="mutation_failure",
+                            dimensions={
+                                "status":"rolled_back",
+                                "reason_code":"report_persistence_failed",
+                                "event_kind":plan.action.value,
+                            },
+                        )
                         curated._restore(checkpoint)
                         failed=(
                             (
@@ -6164,6 +6547,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             pre_transition_index=pre_transition_index,
                         )
                     except Exception as exc:
+                        _record_workspace_metric(
+                            category="workflow",metric_name="mutation_failure",
+                            dimensions={
+                                "status":"rolled_back",
+                                "reason_code":str(
+                                    getattr(exc,"code","workspace_error"))[:100],
+                                "event_kind":"observation_recorded",
+                            },
+                        )
                         if plan.state_changed:
                             curated._restore(checkpoint)
                         failed=(
@@ -6245,6 +6637,15 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             "Experiment progress persistence is unavailable."
                         )
                 except Exception as exc:
+                    _record_workspace_metric(
+                        category="workflow",metric_name="mutation_failure",
+                        dimensions={
+                            "status":"rolled_back",
+                            "reason_code":str(
+                                getattr(exc,"code","workspace_error"))[:100],
+                            "event_kind":plan.action.value,
+                        },
+                    )
                     log.warning(
                         "experiment session update failed turn_id=%s error=%s",
                         turn_id,type(exc).__name__,
@@ -6969,6 +7370,10 @@ async def run_turn_safely(
         raise
     except WebSocketDisconnect: session.cascade_failed(turn_id)
     except Exception:
+        _record_workspace_metric(
+            category="voice",metric_name="command_failure",
+            dimensions={"status":"failed","reason_code":"turn_processing_failed"},
+        )
         await _finish_research_operation(
             sender,session,turn_id,generation,"failed",
             limitation="근거 확인이 오류로 종료되었습니다.",
@@ -7703,6 +8108,14 @@ async def voice_socket(websocket:WebSocket):
                             reason="explicit_session_stop",
                         )
                     except WorkspaceError as exc:
+                        _record_workspace_metric(
+                            category="workflow",metric_name="mutation_failure",
+                            dimensions={
+                                "status":"rolled_back",
+                                "reason_code":str(getattr(exc,"code","workspace_error"))[:100],
+                                "event_kind":"session_stopped",
+                            },
+                        )
                         await websocket.send_text(event(
                             "error",message=getattr(exc,"code","workspace_error")))
                         continue
@@ -7725,6 +8138,14 @@ async def voice_socket(websocket:WebSocket):
                                 reason="bench_control",
                             )
                         except WorkspaceError as exc:
+                            _record_workspace_metric(
+                                category="workflow",metric_name="mutation_failure",
+                                dimensions={
+                                    "status":"rolled_back",
+                                    "reason_code":str(getattr(exc,"code","workspace_error"))[:100],
+                                    "event_kind":"session_paused",
+                                },
+                            )
                             session.curated_protocol_session.resume_workflow()
                             await websocket.send_text(event(
                                 "error",message=getattr(
@@ -7757,6 +8178,14 @@ async def voice_socket(websocket:WebSocket):
                                 reason="bench_control",
                             )
                         except WorkspaceError as exc:
+                            _record_workspace_metric(
+                                category="workflow",metric_name="mutation_failure",
+                                dimensions={
+                                    "status":"rolled_back",
+                                    "reason_code":str(getattr(exc,"code","workspace_error"))[:100],
+                                    "event_kind":"session_resumed",
+                                },
+                            )
                             session.curated_protocol_session.pause_workflow()
                             await websocket.send_text(event(
                                 "error",message=getattr(

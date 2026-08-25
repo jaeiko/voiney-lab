@@ -125,6 +125,20 @@ def require_permission(principal: Principal, permission: Permission) -> None:
         raise AuthorizationDeniedError("The principal lacks the required role.")
 
 
+def permissions_for_roles(roles: frozenset[Role] | tuple[Role, ...]) -> tuple[str, ...]:
+    """Return the canonical effective permissions for trusted role values."""
+
+    return tuple(
+        sorted(
+            {
+                permission.value
+                for role in roles
+                for permission in _ROLE_PERMISSIONS[role]
+            }
+        )
+    )
+
+
 def require_same_tenant(principal: Principal, resource_tenant_id: str) -> None:
     if principal.organization_id != resource_tenant_id:
         raise AuthorizationDeniedError("The resource is not available.")

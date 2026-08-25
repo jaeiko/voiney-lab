@@ -21,6 +21,7 @@ from voice_workflow_agent.identity import (
 from voice_workflow_agent.workspace_store import (
     ApprovalReplayError,
     TranslationIntegrityError,
+    WorkspaceConflictError,
     WorkspaceError,
     WorkspaceNotFoundError,
     WorkspaceSettings,
@@ -164,6 +165,22 @@ def test_protocol_lineage_diff_translation_approval_and_revocation(workspace):
     difference = workspace.revision_diff(admin, second.revision_id)
     assert difference["parent_revision_id"] == first.revision_id
     assert any("hood" in line for line in difference["lines"])
+    assert difference["review_context"]["protocol_title"] == "ANKOM fiber analysis"
+    assert difference["review_context"]["version_label"] == "v2"
+    assert difference["review_context"]["requester_display_name"] == "admin"
+    assert difference["review_context"]["change_reason"] == "Clarify acid warning"
+    assert difference["change_summary"]["changed_fields"] == ["steps", "warnings"]
+    assert difference["experimental_impact"]["status"] == "not_assessed"
+    assert difference["risk"] == {
+        "level": "not_assessed",
+        "source_signal": None,
+        "summary": "No reviewed risk level is stored for this revision.",
+    }
+    assert difference["decision_state"]["allowed_actions"] == [
+        "approved",
+        "rejected",
+    ]
+    assert difference["history"] == []
 
     translation_id = workspace.add_translation(
         admin,
@@ -194,6 +211,20 @@ def test_protocol_lineage_diff_translation_approval_and_revocation(workspace):
     assert workspace.revision_operational_state(admin, second.revision_id)[
         "available_for_new_operational_sessions"
     ]
+    approved_packet = workspace.revision_diff(admin, second.revision_id)
+    assert approved_packet["decision_state"]["allowed_actions"] == ["revoked"]
+    assert approved_packet["history"][0]["actor_display_name"] == "admin"
+    assert approved_packet["history"][0]["affected_version"] == "v2"
+    inbox_item = next(
+        item
+        for item in workspace.source_inbox(admin)
+        if item["revision_id"] == second.revision_id
+    )
+    assert inbox_item["status"] == "resolved"
+    assert inbox_item["protocol_title"] == "ANKOM fiber analysis"
+    assert inbox_item["version_label"] == "v2"
+    assert inbox_item["request_reason"] == "Clarify acid warning"
+    assert inbox_item["risk_level"] == "not_assessed"
     with pytest.raises(ApprovalReplayError):
         workspace.record_approval(
             admin,
@@ -201,6 +232,14 @@ def test_protocol_lineage_diff_translation_approval_and_revocation(workspace):
             action="approved",
             comment="Replay attempt.",
             idempotency_key="approve-second-v1",
+        )
+    with pytest.raises(WorkspaceConflictError, match="stale"):
+        workspace.record_approval(
+            admin,
+            revision_id=second.revision_id,
+            action="approved",
+            comment="A second approval must not overwrite current state.",
+            idempotency_key="approve-second-v2",
         )
 
     workspace.record_approval(
@@ -215,6 +254,38 @@ def test_protocol_lineage_diff_translation_approval_and_revocation(workspace):
     assert state["state"] == "revoked"
     assert state["available_for_new_operational_sessions"] is False
     assert len(state["history"]) == 2
+    with pytest.raises(WorkspaceConflictError, match="stale"):
+        workspace.record_approval(
+            admin,
+            revision_id=second.revision_id,
+            action="approved",
+            comment="A revoked revision needs a new revision, not a new decision.",
+            idempotency_key="approve-revoked-v1",
+        )
+
+    third = workspace.add_protocol_revision(
+        admin,
+        family_id=family.family_id,
+        source_id=source.source_id,
+        parent_revision_id=second.revision_id,
+        change_summary="Requester must clarify the exposure control",
+        content=second.content,
+    )
+    workspace.record_approval(
+        admin,
+        revision_id=third.revision_id,
+        action="rejected",
+        comment="Exposure control is not sufficiently specified.",
+        idempotency_key="request-revision-third-v1",
+    )
+    with pytest.raises(WorkspaceConflictError, match="stale"):
+        workspace.record_approval(
+            admin,
+            revision_id=third.revision_id,
+            action="approved",
+            comment="A rejected immutable revision cannot later be approved.",
+            idempotency_key="approve-rejected-third-v1",
+        )
 
 
 def test_in_development_source_cannot_be_operationally_approved(workspace):
@@ -313,6 +384,82 @@ def test_privacy_safe_analytics_are_tenant_scoped_and_reject_free_text(workspace
             metric_name="turn",
             dimensions={"transcript": "raw spoken private protocol"},
         )
+
+
+def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(workspace):
+    admin = _principal("pilot-admin", "tenant-a", Role.LAB_ADMIN)
+    outsider = _principal("other-admin", "tenant-b", Role.LAB_ADMIN)
+    workspace.bootstrap_principal(admin)
+    workspace.bootstrap_principal(outsider)
+    experiment = workspace.start_experiment(
+        admin,
+        session_id="pilot-metrics-session",
+        protocol_id="protocol-a",
+        protocol_revision_id="revision-a",
+        current_step_id="step-1",
+        current_step_label="1",
+        voice_connection_id="voice-a",
+    )
+    experiment = workspace.resume_experiment(
+        admin,
+        experiment["session_id"],
+        expected_version=experiment["version"],
+        protocol_id=experiment["protocol_id"],
+        protocol_revision_id=experiment["protocol_revision_id"],
+        voice_connection_id="voice-b",
+    )
+    experiment = workspace.record_experiment_progress(
+        admin,
+        experiment["session_id"],
+        expected_version=experiment["version"],
+        event_key="protocol-started",
+        event_type="protocol_started",
+        step_id="step-1",
+        step_label="1",
+    )
+    workspace.transition_experiment(
+        admin,
+        experiment["session_id"],
+        action="complete",
+        expected_version=experiment["version"],
+        event_key="workflow-completed",
+    )
+    workspace.record_analytics(
+        admin,
+        category="voice",
+        metric_name="command_failure",
+        dimensions={"status": "rejected", "reason_code": "empty_transcript"},
+    )
+    workspace.record_analytics(
+        admin,
+        category="workflow",
+        metric_name="mutation_failure",
+        dimensions={"status": "rolled_back", "reason_code": "workspace_error"},
+    )
+    for action in ("current", "next"):
+        workspace.record_analytics(
+            admin,
+            category="workflow",
+            metric_name="turn",
+            metric_value=100,
+            dimensions={"status": "read_only", "event_kind": action},
+        )
+
+    metrics = workspace.pilot_metrics_summary(admin)
+    assert metrics["completed_workflows"] == 1
+    assert metrics["failed_commands"] == 1
+    assert metrics["recovery_events"] == 1
+    assert metrics["mutation_failures"] == 1
+    assert metrics["user_actions"] == 2
+    assert metrics["workflow_completion_rate"] == 1.0
+    assert metrics["details"]["durable_actions_by_type"]["session_completed"] == 1
+    assert metrics["privacy"] == {
+        "raw_audio": False,
+        "transcripts": False,
+        "identifiers": False,
+        "free_text": False,
+    }
+    assert workspace.pilot_metrics_summary(outsider)["completed_workflows"] == 0
 
 
 def test_workspace_settings_require_explicit_absolute_storage(tmp_path):

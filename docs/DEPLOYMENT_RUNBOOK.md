@@ -39,44 +39,75 @@ committed file) for secrets, matching the "no fake external validation" and
 
 - `GET /healthz` — liveness only. A monitoring/orchestration layer should
   restart the process if this stops responding.
-- `GET /readyz` — configuration readiness. Returns `503` if required
-  configuration failed to parse (e.g. workspace enabled without an absolute
-  data directory); returns `200` with non-secret capability booleans
-  otherwise. This does **not** verify live reachability of xAI or any other
-  external provider — no local check can do that without making a real,
-  billable request on every probe.
+- `GET /readyz` — configuration readiness. Returns `503` if identity,
+  workspace, protocol-catalog, or report configuration fails to parse (for
+  example, operational scope without complete OIDC settings); returns `200`
+  with non-secret identity mode and capability flags otherwise. This does
+  **not** verify live reachability of xAI or any other external provider — no
+  local probe should make a billable provider call.
 
 ## Durable state and backup
 
-All durable pilot state is SQLite, rooted under the directories named by
+Durable pilot metadata is stored in SQLite, rooted under the directories named by
 `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR`, `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR`,
 and `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB`. There is no object-store
 backend in this build — evidence/asset bytes referenced from these databases
-also live under the same data directories (`objects/sha256/`), so a backup
-must capture the whole tree, not just the `.sqlite` files.
+also live under the same data directories (`objects/sha256/` and `evidence/`),
+so a backup must capture the allowlisted files as well as the `.sqlite` files.
 
-**Backup** (process stopped, to guarantee a consistent snapshot — SQLite's
-own WAL/journal makes a live copy of just the `.sqlite` file unsafe without
-using `sqlite3 .backup`):
+Use `scripts/pilot_state_backup.py`; its allowlist includes SQLite databases,
+protocol objects, and explicitly attached evidence, while excluding `.env`,
+raw audio, and unallowlisted files. It uses SQLite's backup API, runs
+`PRAGMA quick_check` on source and copied databases, hashes every archived
+file, and writes a versioned manifest. Stop the process for a point-in-time
+snapshot across all three stores and their object files:
 
 ```bash
 systemctl stop voice-workflow-agent
-tar czf "backup-$(date +%Y%m%d-%H%M%S).tar.gz" -C /opt/voice-workflow-agent data
+sudo -u voice-workflow-agent /opt/voice-workflow-agent/.venv/bin/python \
+  /opt/voice-workflow-agent/scripts/pilot_state_backup.py create \
+  --protocol-data-dir /var/lib/voice-workflow-agent/protocol \
+  --workspace-data-dir /var/lib/voice-workflow-agent/workspace \
+  --report-database /var/lib/voice-workflow-agent/reports/experiment_reports.sqlite \
+  --output /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
+/opt/voice-workflow-agent/.venv/bin/python \
+  /opt/voice-workflow-agent/scripts/pilot_state_backup.py verify \
+  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
 systemctl start voice-workflow-agent
+curl --fail http://127.0.0.1:8000/healthz
+curl --fail http://127.0.0.1:8000/readyz
 ```
 
-**Restore** (into a fresh/disposable directory, verified before promoting):
+The command refuses relative source paths, filesystem roots, output overwrite,
+symlinks in a source tree, corrupt SQLite files, unsafe archive entries, and
+checksum mismatches. Store the archive on organization-approved encrypted
+storage with access controls and retention matching the pilot agreement. Take
+one backup immediately before and after each pilot session; periodically
+exercise restoration rather than treating archive creation as proof of
+recoverability.
+
+Restore only into a fresh absolute directory, verify it, point a disposable
+instance at the restored component paths, and run a smoke test before any
+promotion:
 
 ```bash
-mkdir -p /tmp/restore-test && tar xzf backup-*.tar.gz -C /tmp/restore-test
-VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR=/tmp/restore-test/data/... \
-  python -m pytest -q tests/test_experiment_protocol_store.py  # sanity check the restored catalog opens
+/opt/voice-workflow-agent/.venv/bin/python \
+  /opt/voice-workflow-agent/scripts/pilot_state_backup.py restore \
+  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz \
+  /var/lib/voice-workflow-agent-restore-001
+/opt/voice-workflow-agent/.venv/bin/python \
+  /opt/voice-workflow-agent/scripts/pilot_state_backup.py verify \
+  /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
+
+export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/protocol
+export VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/workspace
+export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB=/var/lib/voice-workflow-agent-restore-001/reports/experiment_reports.sqlite
 ```
 
-This is a documented, file-copy-based procedure verified conceptually
-against the existing data-directory layout; it has not been exercised
-against a live pilot dataset in this environment (no such dataset exists
-here) and should be dry-run before the first real pilot session.
+The automated test suite exercises create, verify, restore, collision refusal,
+privacy exclusions, a corrupt archive, and SQLite/object/evidence integrity.
+No live pilot dataset was available here, so an operator must still perform a
+deployment-specific restore drill before the first participant session.
 
 ## Configuration fails closed
 
@@ -91,7 +122,22 @@ development identity.
 ## Observability
 
 `runtime_metrics.py` records bounded, content-free route/tool/latency
-aggregates. Do not add logging of secrets, raw audio, full transcripts, or
-model reasoning — this is an existing, tested invariant
-(`tests/test_runtime_metrics.py`, `tests/test_identity_and_workspace.py`),
-not a new one introduced here.
+aggregates. The tenant admin analytics page and
+`GET /api/workspace/admin/pilot-metrics` add completed-workflow, failed-command,
+recovery-event, mutation-failure, user-action, and completion-rate counters.
+Durable session counts are lifetime values; voice/action/failure counters obey
+the configured analytics-retention window. Neither includes raw audio,
+transcripts, identities, free text, credential values, or model reasoning.
+
+Monitor at minimum:
+
+- `/healthz` availability and `/readyz` non-200 responses;
+- increases in failed commands or mutation failures;
+- recovery events and completion rate per controlled pilot window;
+- service restart frequency, disk capacity, and backup verification failures.
+
+On a mutation failure, leave the workflow at its last server-confirmed state,
+ask the researcher to refresh the timeline, and preserve the sanitized service
+log plus the session identifier in the incident record. Never copy raw audio,
+transcripts, bearer tokens, `.env`, evidence bytes, or internal database paths
+into logs or tickets.

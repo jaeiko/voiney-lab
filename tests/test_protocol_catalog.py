@@ -342,6 +342,50 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertFalse(review["available_for_execution"])
         self.assertEqual(self.catalog.get_entry(entry.protocol_id).approval_status, "unapproved")
 
+    def test_approval_context_projects_only_recorded_approval_evidence(self):
+        entry = self.catalog.register(
+            self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
+        ).entry
+        self.assertEqual(
+            self.catalog.approval_context(entry.protocol_id),
+            {
+                "status": "review_required",
+                "final_approval": False,
+                "actor_principal_id": None,
+                "actor_role": None,
+                "recorded_at": None,
+                "authority": None,
+            },
+        )
+        draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
+        analysis = self.store.append_analysis_revision(
+            entry.protocol_id,
+            1,
+            "analysis-approval-context",
+            draft.protocol,
+            draft.readiness,
+            draft.capability_policy_id,
+        )
+        approved = self.catalog.approve(
+            entry.protocol_id,
+            f"pdf-1-analysis-{analysis.analysis_revision_number}",
+            policy=SharedSecretApprovalPolicy("secret"),
+            presented_secret="secret",
+            actor_principal_id="reviewer-approval-context",
+            actor_role="reviewer",
+            comment="Source, hazards, and readiness reviewed.",
+        )
+        context = self.catalog.approval_context(entry.protocol_id)
+        self.assertEqual(context["status"], "approved")
+        self.assertTrue(context["final_approval"])
+        self.assertEqual(
+            context["actor_principal_id"], "reviewer-approval-context"
+        )
+        self.assertEqual(context["actor_role"], "reviewer")
+        self.assertEqual(context["authority"], "service_policy")
+        self.assertIsInstance(context["recorded_at"], str)
+        self.assertEqual(approved.revision_id, f"pdf-1-analysis-{analysis.analysis_revision_number}")
+
 
     def test_analysis_endpoint_owns_store_in_worker_and_status_is_read_only(self):
         entry = self.catalog.register(
@@ -726,6 +770,17 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             "development_only_not_final_acceptance",
         )
         self.assertTrue(matching[0]["development_only"])
+        self.assertEqual(
+            matching[0]["approval"],
+            {
+                "status": "development_only",
+                "final_approval": False,
+                "actor_principal_id": None,
+                "actor_role": None,
+                "recorded_at": None,
+                "authority": "development_fixture",
+            },
+        )
         rendered = "\n".join(logs.output)
         self.assertIn(
             str(self.settings.data_dir / "protocol_workspace.sqlite"), rendered

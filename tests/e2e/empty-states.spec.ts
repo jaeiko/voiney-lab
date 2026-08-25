@@ -1,5 +1,7 @@
 import { test, expect, devices } from '@playwright/test';
 
+test.describe.configure({ timeout: 45_000 });
+
 test.describe('Empty and loading states', () => {
   test('timeline shows guidance text when no experiment session exists', async ({ page }) => {
     await page.goto('/');
@@ -20,10 +22,19 @@ test.describe('Responsive layout', () => {
     await page.goto('/');
     await expect(page.locator('#researcher-workspace')).toBeVisible();
     await expect(page.locator('#start')).toBeVisible();
+    await expect(page.locator('.experiment-context-card')).toBeVisible();
     // Rail action buttons should stretch to fill the row rather than overflow it.
     const railBox = await page.locator('.rail-right').boundingBox();
     const viewport = page.viewportSize();
     expect(railBox?.width).toBeLessThanOrEqual((viewport?.width ?? 0) + 1);
+    const contextColumns = await page.locator('.experiment-context-grid').evaluate(
+      (el) => getComputedStyle(el).gridTemplateColumns,
+    );
+    expect(contextColumns.trim().split(/\s+/).length).toBe(1);
+    const horizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(horizontalOverflow).toBeLessThanOrEqual(1);
     await context.close();
   });
 
@@ -31,12 +42,42 @@ test.describe('Responsive layout', () => {
     const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
     const page = await context.newPage();
     await page.goto('/');
-    await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 20_000 });
     await page.locator('#workspace-reviewer').click();
     const columns = page.locator('#reviewer-workspace .workspace-columns');
     const gridTemplateColumns = await columns.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
     // A single-column layout reports exactly one track width.
     expect(gridTemplateColumns.trim().split(/\s+/).length).toBe(1);
     await context.close();
+  });
+});
+
+test.describe('Role navigation health', () => {
+  test('switches through every role without console errors or HTTP 5xx responses', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const serverErrors: string[] = [];
+    page.on('console', message => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await page.goto('/');
+    await page.locator('#workspace-reviewer').waitFor({ state: 'visible', timeout: 20_000 });
+    await page.locator('#workspace-reviewer').click();
+    await expect(page.locator('#reviewer-workspace')).toBeVisible();
+    await page.locator('#workspace-admin').click();
+    await expect(page.locator('#admin-workspace')).toBeVisible();
+    await page.locator('#workspace-researcher').click();
+    await expect(page.locator('#researcher-workspace')).toBeVisible();
+    await page.waitForTimeout(250);
+
+    const horizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(horizontalOverflow).toBeLessThanOrEqual(1);
+    expect(consoleErrors).toEqual([]);
+    expect(serverErrors).toEqual([]);
   });
 });

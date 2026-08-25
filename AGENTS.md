@@ -80,10 +80,13 @@ claim is not exercised by code and tests, mark it historical or future work.
   handoff for the pre-Pass-2 baseline.
 - `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`: current phase-by-phase
   validation ledger and external integration classification.
-- `docs/COMMERCIALIZATION_PASS4_REPORT.md`: current handoff of record
-  (independent repository + CI, workflow-authority reconciliation, real
-  integration validation, wet-lab pilot readiness, deployment hardening).
-  `docs/COMMERCIALIZATION_PASS3_REPORT.md` (Product Experience, repository
+- `docs/PRODUCTIZATION_FINAL_REPORT.md`: current productization and controlled-
+  pilot handoff of record (role UX, workflow trust, operations, metrics,
+  backup/recovery, evidence, documentation, and remaining commercial gates).
+  `docs/COMMERCIALIZATION_PASS4_REPORT.md` retains the prior independent
+  repository/CI, workflow-authority, live-integration, and deployment evidence;
+  it is superseded but not invalidated. `docs/COMMERCIALIZATION_PASS3_REPORT.md`
+  (Product Experience, repository
   re-rooting, pilot acceptance hardening, repository-identity cleanup) is the
   prior handoff, superseded but not invalidated.
 - `.agent/architecture.md`, `product_context.md`, `evaluation_strategy.md`,

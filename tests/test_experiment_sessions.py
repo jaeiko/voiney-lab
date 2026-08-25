@@ -48,7 +48,7 @@ def test_schema_v1_migrates_forward_without_losing_workspace_identity(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
         assert store._connection.execute(
             "SELECT name FROM organizations WHERE organization_id='tenant-a'"
         ).fetchone()[0] == "Existing tenant"
@@ -100,7 +100,7 @@ def test_schema_v2_migrates_observation_tables_and_preserves_sessions(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
         assert store._connection.execute(
             "SELECT protocol_revision_id FROM experiment_sessions WHERE session_id='experiment-v2'"
         ).fetchone()[0] == "revision-a"
@@ -206,12 +206,20 @@ def test_schema_v4_adds_session_provenance_without_losing_legacy_writeback(tmp_p
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
         legacy = store._connection.execute(
             """SELECT report_id,experiment_session_id
             FROM eln_writeback_requests WHERE idempotency_key='legacy-request'"""
         ).fetchone()
         assert tuple(legacy) == ("report-a", None)
+        migrated_connector = store._connection.execute(
+            """SELECT enabled,validation_status,last_checked_at,last_failure_code
+            FROM connector_configurations WHERE connector_id='connector-a'"""
+        ).fetchone()
+        assert tuple(migrated_connector) == (1, "untested", None, None)
+        assert store._connection.execute(
+            "SELECT name FROM sqlite_master WHERE name='admin_audit_events'"
+        ).fetchone()[0] == "admin_audit_events"
     finally:
         store.close()
 
@@ -498,6 +506,24 @@ def test_progress_allows_same_voice_timeline_capture_but_fences_recovered_voice(
             protocol_revision_id="revision-a",
             voice_connection_id="voice-2",
         )
+        timeline = store.experiment_timeline(researcher, created["session_id"])
+        assert timeline["recovery"] == {
+            "eligible": True,
+            "last_event_type": "session_recovered",
+            "restored": {
+                "protocol_id": "protocol-a",
+                "protocol_revision_id": "revision-a",
+                "current_step_id": "step-2",
+                "current_step_label": "2",
+                "completed_step_count": 1,
+            },
+            "not_restored": [
+                "pending_confirmations",
+                "conversation_history",
+                "active_timers",
+            ],
+            "next_action": "resume_voice_session",
+        }
         with pytest.raises(WorkspaceConflictError, match="changed"):
             store.record_experiment_progress(
                 researcher,
@@ -619,6 +645,23 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
         timeline = store.experiment_timeline(researcher, session["session_id"])
         assert timeline["observation_count"] == 1
         assert timeline["evidence_count"] == 1
+        assert timeline["recovery"] == {
+            "eligible": True,
+            "last_event_type": None,
+            "restored": {
+                "protocol_id": "protocol-a",
+                "protocol_revision_id": "revision-a",
+                "current_step_id": "step-1",
+                "current_step_label": "1",
+                "completed_step_count": 0,
+            },
+            "not_restored": [
+                "pending_confirmations",
+                "conversation_history",
+                "active_timers",
+            ],
+            "next_action": "resume_voice_session",
+        }
         assert timeline["separation"] == {
             "observations_are_instructions": False,
             "evidence_autonomously_interpreted": False,

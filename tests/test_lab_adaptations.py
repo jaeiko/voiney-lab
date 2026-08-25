@@ -154,7 +154,7 @@ def test_schema_v3_migrates_adaptation_table_and_preserves_lineage(tmp_path):
     try:
         assert store._connection.execute(
             "SELECT schema_version FROM schema_metadata"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
         assert store._connection.execute(
             "SELECT content_json FROM protocol_lineage_revisions WHERE revision_id='revision-a'"
         ).fetchone()[0] == '{"steps":[]}'

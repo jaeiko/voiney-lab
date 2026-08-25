@@ -12,10 +12,10 @@ Protocol Revision → ExperimentSession → deterministic START → voice guidan
 disconnect/recovery → Timeline → completion → report → optional ELN
 boundary) is exercised end to end by:
 
-- 765 pytest cases + 684 subtests (full local suite), including
+- 790 pytest cases + 691 subtests (current full local suite), including
   `test_curated_protocol_cascade.py`'s multi-turn scenario tests and
   `test_server_procedure_integration.py`.
-- 28 Playwright browser tests (`tests/e2e/`) across desktop and mobile,
+- 38 Playwright browser tests (`tests/e2e/`) across desktop and mobile,
   covering the researcher/reviewer/admin workspaces.
 - `python scripts/replay_turns.py` and both
   `scripts/evaluate_candidate_a_*.py` evaluators (deterministic,
@@ -28,38 +28,34 @@ No demo shortcut bypasses the production authority model: every completion
 still requires the server-computed confirmation gate; no test or demo path
 weakens `authorized_completion_step_id`/`authorized_observation_arguments`.
 
-## 2. Field metrics — what's already measurable vs. what would need new code
+## 2. Field metrics — pilot-ready read-only rollup
 
 `runtime_metrics.py` (`RUNTIME_METRICS`) already aggregates, per its explicit
 allowlist, without raw audio/transcripts/identities: **route distribution**,
 **barge-in cancellation count**, and **turn latency percentiles**.
 
-The rest of the requested KPIs are **already recorded as durable, per-tenant
-data** by the existing `ExperimentSession` append-only timeline
-(`workspace_store.py`) and experiment reports (`experiment_reports.py`), just
-not yet rolled up into the lightweight in-memory metrics view:
+The admin workspace and `GET /api/workspace/admin/pilot-metrics` now provide a
+tenant-scoped, read-only rollup. The endpoint combines durable
+`ExperimentSession` event metadata with retention-bounded analytics; it never
+returns raw audio, transcripts, user identifiers, free text, secrets, or model
+reasoning.
 
-| KPI | Where the data already lives |
+| KPI | Definition and source |
 |---|---|
-| Task/workflow completion | `ExperimentSession` lifecycle events (`session_completed`) |
-| Pause/resume success | `session_paused`/`session_resumed` timeline events |
-| Recovery success | `session_recovered` timeline event; WebSocket reconnect path |
-| Step omission / invalid transition rejection | Rejected transitions never produce a `step_completed` event; `procedure_step_events`/experiment timeline only records accepted ones |
-| Observation/evidence capture | `observation_recorded`/`evidence_attached` timeline events |
-| Documentation completeness | `GET /api/workspace/experiments/{id}/timeline`'s `observation_count`/`evidence_count` |
-| Voice admission/rejection | Existing transcript-admission gates (language mismatch, low-confidence) already produce the fixed clarification text; not yet counted |
-| Correction/repeat rate | "다시 말해줘" (repeat) turns are routed deterministically but not yet counted separately from other read-only turns |
-| Session abandonment | Absence of a `session_completed`/`session_stopped` event after a period — needs a query, not new capture |
+| Completed workflows | Experiment sessions whose durable state is `completed` |
+| Failed commands | Empty/non-speech admissions and bounded turn-processing failures recorded as privacy-safe analytics |
+| Recovery events | Durable `session_recovered` timeline events |
+| Mutation failures | Failed report/session/observation/pause/resume/stop persistence attempts whose state was rejected or rolled back |
+| User actions | Retained server-accepted workflow-turn samples |
+| Completion rate | Completed experiment sessions divided by all tenant experiment sessions |
+| Documentation completeness | Durable `observation_recorded` and `evidence_attached` event totals plus per-session timeline counts |
+| Pause/resume activity | Durable `session_paused` and `session_resumed` event totals |
 
-**Not implemented this pass**: a rollup job/endpoint that aggregates these
-existing durable events into the same kind of privacy-safe summary
-`runtime_metrics.py` provides for routes/latency. This was deliberately
-deferred rather than rushed — adding new aggregation touchpoints across
-`server.py`'s turn-handling paths late in a long session carries real risk
-in a safety-critical codebase, and every one of the KPIs above is already
-recoverable from existing durable records via a read-only query. Treat this
-as a scoped, low-risk follow-up (a query script or admin-analytics endpoint
-addition), not a blocker to running a pilot.
+The response labels its measurement window: session/event counters are lifetime
+for retained durable records, while failed-command, mutation-failure, and user-
+action counters follow analytics retention. Step-omission attempts, correction
+rate, and time-based abandonment do not yet have dedicated counters; do not
+infer those values from missing events.
 
 ## 3. Pilot package materials
 
@@ -67,7 +63,8 @@ addition), not a blocker to running a pilot.
 - [ ] `python -m pytest -q` and `npx playwright test` both green on the exact commit being piloted.
 - [ ] `GET /readyz` returns `200` with the expected capability flags for this deployment.
 - [ ] Protocol to be used is an **Approved Protocol Revision** (not a development/draft activation) unless the pilot explicitly intends to demonstrate the review flow.
-- [ ] Backup taken per `docs/DEPLOYMENT_RUNBOOK.md` before the session.
+- [ ] Backup created **and verified** with `scripts/pilot_state_backup.py` per
+  `docs/DEPLOYMENT_RUNBOOK.md` before the session.
 - [ ] Participant briefed per the privacy/data-handling explanation below.
 
 ### Researcher quick-start
@@ -94,9 +91,9 @@ or multi-session pilot. Record every deviation from expected behavior using
 the incident template below, not just "it worked" / "it didn't."
 
 ### Measurable KPI definitions
-Use the mapping in Section 2. A pilot report should state each KPI's value
-and, where it comes from durable-but-not-yet-aggregated data, the exact
-query used to derive it (for reproducibility).
+Capture the admin pilot-metrics response at the start and end of the agreed
+pilot window. Report both snapshots, their difference where appropriate, the
+configured analytics-retention period, and the explicit limitations above.
 
 ### Incident/error recording template
 ```
@@ -154,11 +151,12 @@ Stop the pilot session immediately if:
   did not affect correctness.
 - **Low**: cosmetic or minor wording issues.
 
-## 4. Voice acceptance — provider-backed evidence from this pass
+## 4. Voice acceptance — retained provider-backed evidence
 
-Beyond the deterministic, provider-free evaluators (Phase 12), this pass
-performed genuine live validation (Phase 16) of the two capabilities a real
-pilot session actually depends on moment-to-moment:
+Beyond the deterministic, provider-free evaluators, Commercialization Pass 4
+performed genuine live validation of the two capabilities a real pilot session
+depends on moment-to-moment. This evidence was not re-created during the current
+productization phases:
 
 - **xAI TTS**: real `POST /v1/tts` call via `voice_workflow_agent.server.synthesize`, 56,016 bytes of PCM returned for a short Korean phrase.
 - **xAI STT**: the TTS output was fed back through `voice_workflow_agent.server.transcribe` (real `POST /v1/stt`), returning `response_status=200`, `detected_language="ko"` (correct), transcript length matching the source text, in ~415ms.

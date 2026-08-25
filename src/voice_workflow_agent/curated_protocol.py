@@ -7094,42 +7094,67 @@ class CuratedProtocolSession:
             step = steps[self.current_index]
             step_facts = self.fixture.facts_for_step(self.current_index)
             expected = tuple(fact for fact in step_facts if fact.kind == "expected_result")
+            current_fact = next(
+                (fact for fact in step_facts if fact.fact_id == "current_step"),
+                None,
+            )
+            current_task = (
+                self._localized_fact(step.step_id, "current_step")
+                or (current_fact.text if current_fact is not None else step.instruction_source_text)
+            )
+            expected_text = " ".join(
+                self._localized_fact(step.step_id, fact.fact_id) or fact.text
+                for fact in expected
+            )
             blocker = self._current_step_readiness_blocker()
             if blocker is not None:
-                reason = (
-                    "the observed end point required by the repeat-until instruction is not connected to a supported server completion signal"
+                review_reason = (
+                    "The repeat end point still needs review before it can be used to confirm completion."
                     if blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL else
-                    "the source contains an unresolved execution ambiguity"
+                    "The source instruction is ambiguous and still needs review."
                 )
-                response = (
-                    f"Step {step.source_label} cannot be marked complete yet: {reason}. "
-                    "No completion rule is being inferred, and the workflow state is unchanged."
-                    if language == "en" else
-                    f"{step.source_label}단계는 아직 완료 처리할 수 없습니다. "
-                    + (
-                        "반복 종료에 필요한 관찰 결과가 지원되는 서버 완료 신호에 연결되어 있지 않습니다. "
-                        if blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL else
-                        "원문의 실행 의미가 미해결 상태입니다. "
+                if language == "en":
+                    response = (
+                        f"The documented check for this step is: {expected_text} "
+                        f"{review_reason} Do not mark this step complete until that review is resolved."
+                        if expected else
+                        f"The document does not state a separate completion criterion for this step. "
+                        f"The current task is: {current_task} {review_reason} "
+                        "Do not mark this step complete until that review is resolved."
                     )
-                    + "확인되지 않은 완료 조건은 만들지 않았고 워크플로 상태도 변경하지 않았습니다."
-                )
+                else:
+                    review_reason = (
+                        "반복 종료 확인 방식은 아직 검토가 필요합니다."
+                        if blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL else
+                        "원문의 실행 의미가 모호해 아직 검토가 필요합니다."
+                    )
+                    response = (
+                        f"문서에 명시된 이 단계의 확인 기준은 다음과 같습니다: {expected_text} "
+                        f"다만 {review_reason} 검토가 끝날 때까지 이 단계를 완료 처리하지 마세요."
+                        if expected else
+                        "이 단계에는 별도의 완료 기준이 문서에 명시되어 있지 않습니다. "
+                        f"현재 해야 할 작업은 {current_task}입니다. 다만 {review_reason} "
+                        "검토가 끝날 때까지 이 단계를 완료 처리하지 마세요."
+                    )
             elif expected:
                 response = (
-                    f"Step {step.source_label} is complete only when its verified expected result is satisfied. "
-                    "The source evidence is shown below; this explanation does not record completion."
+                    f"The documented check for this step is: {expected_text} "
+                    "After confirming it and finishing the current task, say, 'I completed the current step.'"
                     if language == "en" else
-                    f"{step.source_label}단계의 완료 기준은 원문에 확인된 예상 결과가 충족되는 것입니다. "
-                    "아래에 근거를 표시하며, 이 설명만으로 완료가 기록되지는 않습니다."
+                    f"문서에 명시된 이 단계의 확인 기준은 다음과 같습니다: {expected_text} "
+                    "이 기준을 확인하고 현재 작업을 마쳤다면 '현재 단계 완료했어'라고 말해 주세요."
                 )
             else:
                 response = (
-                    f"The active protocol gives the Step {step.source_label} action but no separate verified completion criterion. "
-                    "A clear completion report can use the server's normal validation path; this question itself changes nothing."
+                    "The document does not state a separate completion criterion for this step. "
+                    f"The current task is: {current_task} "
+                    "After finishing it, say, 'I completed the current step.'"
                     if language == "en" else
-                    f"활성 프로토콜은 {step.source_label}단계의 동작을 제시하지만 별도의 검증된 완료 기준은 명시하지 않습니다. "
-                    "명확한 완료 보고는 서버의 기존 검증 경로로 처리되며, 지금 질문은 상태를 바꾸지 않습니다."
+                    "이 단계에는 별도의 완료 기준이 문서에 명시되어 있지 않습니다. "
+                    f"현재 해야 할 작업은 {current_task}입니다. "
+                    "이 작업을 마쳤다면 '현재 단계 완료했어'라고 말해 주세요."
                 )
-            evidence = expected or tuple(fact for fact in step_facts if fact.fact_id == "current_step")
+            evidence = expected or ((current_fact,) if current_fact is not None else ())
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.COMPLETION_CRITERIA,
                 display_text=response,

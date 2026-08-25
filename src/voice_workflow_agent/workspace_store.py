@@ -20,13 +20,14 @@ from voice_workflow_agent.identity import (
     Permission,
     Principal,
     Role,
+    permissions_for_roles,
     require_permission,
     require_same_tenant,
 )
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 5
+WORKSPACE_SCHEMA_VERSION = 6
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -219,6 +220,10 @@ class ConnectorConfiguration:
     allowed_roots: tuple[str, ...]
     enabled: bool
     created_at: str
+    validation_status: str
+    last_checked_at: str | None
+    last_failure_code: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -702,6 +707,43 @@ ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
 
 
+MIGRATION_5_TO_6 = """
+ALTER TABLE connector_configurations
+ ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'untested'
+ CHECK(validation_status IN ('untested','configuration_verified','failed'));
+ALTER TABLE connector_configurations ADD COLUMN last_checked_at TEXT;
+ALTER TABLE connector_configurations ADD COLUMN last_failure_code TEXT;
+ALTER TABLE connector_configurations ADD COLUMN updated_at TEXT;
+UPDATE connector_configurations SET updated_at=created_at WHERE updated_at IS NULL;
+
+CREATE TABLE admin_audit_events(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ event_id TEXT NOT NULL UNIQUE,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ actor_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ action TEXT NOT NULL,
+ target_kind TEXT NOT NULL,
+ target_id TEXT NOT NULL,
+ outcome TEXT NOT NULL CHECK(outcome IN ('success','failure')),
+ reason_code TEXT,
+ created_at TEXT NOT NULL
+);
+CREATE INDEX admin_audit_tenant_sequence
+ ON admin_audit_events(organization_id,sequence_id DESC);
+CREATE TRIGGER admin_audit_no_update BEFORE UPDATE ON admin_audit_events
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER admin_audit_no_delete BEFORE DELETE ON admin_audit_events
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=6)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(6);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -749,6 +791,42 @@ class WorkspaceStore:
 
     def close(self) -> None:
         self._connection.close()
+
+    def _record_admin_audit(
+        self,
+        principal: Principal,
+        *,
+        action: str,
+        target_kind: str,
+        target_id: str,
+        outcome: str = "success",
+        reason_code: str | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        """Append one privacy-safe administrative control-plane event."""
+
+        if outcome not in {"success", "failure"}:
+            raise WorkspaceError("Administrative audit outcome is invalid.")
+        self._connection.execute(
+            """INSERT INTO admin_audit_events(
+            event_id,organization_id,actor_principal_id,action,target_kind,
+            target_id,outcome,reason_code,created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                f"admin-audit-{secrets.token_hex(16)}",
+                principal.organization_id,
+                principal.principal_id,
+                _identifier(action, "Administrative action"),
+                _identifier(target_kind, "Administrative target kind"),
+                _identifier(target_id, "Administrative target identifier"),
+                outcome,
+                (
+                    _identifier(reason_code, "Administrative reason code")
+                    if reason_code is not None
+                    else None
+                ),
+                created_at or _now(),
+            ),
+        )
 
     def bootstrap_principal(
         self, principal: Principal, *, organization_name: str | None = None
@@ -810,6 +888,25 @@ class WorkspaceStore:
             self._connection.rollback()
             raise WorkspaceError("Identity could not be stored.") from exc
 
+    def record_workspace_access(self, principal: Principal) -> None:
+        """Record one authenticated workspace entry without request content."""
+
+        self.verify_membership(principal)
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._record_admin_audit(
+                principal,
+                action="workspace.accessed",
+                target_kind="workspace",
+                target_id=principal.organization_id,
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def verify_membership(self, principal: Principal) -> None:
         rows = self._connection.execute(
             """SELECT role FROM memberships
@@ -858,6 +955,9 @@ class WorkspaceStore:
                 "principal_id": row["principal_id"],
                 "display_name": row["display_name"],
                 "role": row["role"],
+                "permissions": list(
+                    permissions_for_roles((Role(row["role"]),))
+                ),
                 "active": bool(row["active"]),
                 "created_at": row["created_at"],
             }
@@ -916,6 +1016,13 @@ class WorkspaceStore:
                     now,
                 ),
             )
+            self._record_admin_audit(
+                principal,
+                action="membership.updated",
+                target_kind="membership",
+                target_id=f"{target_principal_id}:{selected_role.value}",
+                created_at=now,
+            )
             self._connection.commit()
         except Exception:
             self._connection.rollback()
@@ -924,6 +1031,7 @@ class WorkspaceStore:
             "principal_id": target_principal_id,
             "display_name": display_name,
             "role": selected_role.value,
+            "permissions": list(permissions_for_roles((selected_role,))),
             "active": active,
         }
 
@@ -1820,6 +1928,25 @@ class WorkspaceStore:
         assert stored is not None
         return dict(stored)
 
+    def evidence_for_download(
+        self, principal: Principal, session_id: str, evidence_id: str
+    ) -> dict[str, object]:
+        """Return tenant-scoped evidence metadata including its server-only path."""
+
+        require_permission(principal, Permission.REPORT_READ)
+        self._experiment_row(principal, session_id)
+        selected_id = _identifier(evidence_id, "Evidence identifier")
+        row = self._connection.execute(
+            """SELECT evidence_id,session_id,evidence_kind,original_filename,
+            media_type,byte_size,sha256,storage_reference,interpretation_status,
+            created_at FROM experiment_evidence
+            WHERE evidence_id=? AND session_id=? AND organization_id=?""",
+            (selected_id, session_id, principal.organization_id),
+        ).fetchone()
+        if row is None:
+            raise WorkspaceNotFoundError("Experiment evidence is not available.")
+        return dict(row)
+
     def record_experiment_review_action(
         self,
         principal: Principal,
@@ -1928,6 +2055,35 @@ class WorkspaceStore:
             if isinstance(evidence_id, str):
                 item["evidence"] = evidence.get(evidence_id)
             timeline.append(item)
+        recovery_events = tuple(
+            event
+            for event in timeline
+            if event.get("event_type") in {"session_recovered", "session_resumed"}
+        )
+        status = str(session["status"])
+        recovery = {
+            "eligible": status in {"ready", "in_progress", "paused", "blocked"},
+            "last_event_type": (
+                recovery_events[-1]["event_type"] if recovery_events else None
+            ),
+            "restored": {
+                "protocol_id": session["protocol_id"],
+                "protocol_revision_id": session["protocol_revision_id"],
+                "current_step_id": session["current_step_id"],
+                "current_step_label": session["current_step_label"],
+                "completed_step_count": len(session["completed_steps"]),
+            },
+            "not_restored": [
+                "pending_confirmations",
+                "conversation_history",
+                "active_timers",
+            ],
+            "next_action": (
+                "resume_voice_session"
+                if status in {"ready", "in_progress", "paused", "blocked"}
+                else "start_new_experiment"
+            ),
+        }
         return {
             "session": {
                 key: session[key]
@@ -1948,6 +2104,7 @@ class WorkspaceStore:
             "timeline": timeline,
             "observation_count": len(observations),
             "evidence_count": len(evidence),
+            "recovery": recovery,
             "separation": {
                 "observations_are_instructions": False,
                 "evidence_autonomously_interpreted": False,
@@ -2232,11 +2389,126 @@ class WorkspaceStore:
             )
         )
         truncated = len(lines) > 500
+        family = self._family_row(principal, revision.family_id)
+        source = self.source_for_revision(principal, revision_id)
+        requester = self._connection.execute(
+            """SELECT p.display_name FROM principals p
+            JOIN memberships m ON m.principal_id=p.principal_id
+            WHERE p.principal_id=? AND m.organization_id=? AND m.active=1
+            LIMIT 1""",
+            (revision.author_principal_id, principal.organization_id),
+        ).fetchone()
+        adaptation = self._connection.execute(
+            """SELECT changes_json FROM protocol_adaptation_revisions
+            WHERE adapted_revision_id=? AND organization_id=?""",
+            (revision_id, principal.organization_id),
+        ).fetchone()
+        structured_changes = (
+            json.loads(adaptation["changes_json"]) if adaptation is not None else []
+        )
+        changed_fields = sorted(
+            key
+            for key in set(before) | set(revision.content)
+            if before.get(key) != revision.content.get(key)
+        )
+        before_steps = before.get("steps")
+        after_steps = revision.content.get("steps")
+        before_warnings = before.get("warnings")
+        after_warnings = revision.content.get("warnings")
+        history = []
+        for event in self.approval_history(principal, revision_id):
+            actor = self._connection.execute(
+                """SELECT p.display_name FROM principals p
+                JOIN memberships m ON m.principal_id=p.principal_id
+                WHERE p.principal_id=? AND m.organization_id=? AND m.active=1
+                LIMIT 1""",
+                (event.actor_principal_id, principal.organization_id),
+            ).fetchone()
+            history.append(
+                {
+                    **event.__dict__,
+                    "actor_display_name": (
+                        actor["display_name"]
+                        if actor is not None
+                        else event.actor_principal_id
+                    ),
+                    "affected_version": f"v{revision.revision_number}",
+                }
+            )
+        current_state = history[-1]["action"] if history else "review_required"
+        decision_options = {
+            "review_required": ["approved", "rejected"],
+            "approved": ["revoked"],
+        }.get(str(current_state), [])
+        risk_signal = source.metadata.get("risk_state")
+        if (
+            not isinstance(risk_signal, str)
+            or not risk_signal.strip()
+            or len(risk_signal) > 200
+        ):
+            risk_signal = None
+        source_status = source.metadata.get("source_status")
+        if not isinstance(source_status, str) or not source_status.strip():
+            source_status = None
         return {
             "revision_id": revision.revision_id,
             "parent_revision_id": revision.parent_revision_id,
             "lines": list(lines[:500]),
             "truncated": truncated,
+            "review_context": {
+                "protocol_title": family["title"],
+                "revision_id": revision.revision_id,
+                "version_label": f"v{revision.revision_number}",
+                "requester_principal_id": revision.author_principal_id,
+                "requester_display_name": (
+                    requester["display_name"]
+                    if requester is not None
+                    else revision.author_principal_id
+                ),
+                "requested_at": revision.created_at,
+                "change_reason": revision.change_summary,
+                "source": {
+                    "connector_kind": source.connector_kind,
+                    "version_identity": source.version_identity,
+                    "canonical_url": source.canonical_url,
+                    "source_status": source_status,
+                },
+            },
+            "change_summary": {
+                "changed_fields": changed_fields,
+                "step_count_before": (
+                    len(before_steps) if isinstance(before_steps, list) else None
+                ),
+                "step_count_after": (
+                    len(after_steps) if isinstance(after_steps, list) else None
+                ),
+                "warning_count_before": (
+                    len(before_warnings) if isinstance(before_warnings, list) else None
+                ),
+                "warning_count_after": (
+                    len(after_warnings) if isinstance(after_warnings, list) else None
+                ),
+                "structured_adaptation_changes": structured_changes,
+            },
+            "experimental_impact": {
+                "status": "not_assessed",
+                "summary": (
+                    "No reviewed experimental impact assessment is stored for this revision."
+                ),
+            },
+            "risk": {
+                "level": "not_assessed",
+                "source_signal": risk_signal,
+                "summary": "No reviewed risk level is stored for this revision.",
+            },
+            "decision_state": {
+                "state": current_state,
+                "available_for_new_operational_sessions": (
+                    current_state == "approved"
+                ),
+                "allowed_actions": decision_options,
+            },
+            "history": history,
         }
 
     @staticmethod
@@ -2428,14 +2700,55 @@ class WorkspaceStore:
         rows = self._connection.execute(
             """SELECT i.item_id,i.change_kind,i.status,i.created_at,
             s.connector_kind,s.external_id,s.version_identity,s.canonical_url,
-            r.revision_id,r.family_id,r.change_summary
+            s.metadata_json,r.revision_id,r.family_id,r.revision_number,
+            r.author_principal_id,r.change_summary,f.title AS protocol_title,
+            p.display_name AS requester_display_name
             FROM source_inbox i
             JOIN protocol_sources s ON s.source_id=i.source_id
             LEFT JOIN protocol_lineage_revisions r ON r.revision_id=i.revision_id
+            LEFT JOIN protocol_families f ON f.family_id=r.family_id
+            LEFT JOIN principals p ON p.principal_id=r.author_principal_id
             WHERE i.organization_id=? ORDER BY i.created_at DESC""",
             (principal.organization_id,),
         ).fetchall()
-        return tuple(dict(row) for row in rows)
+        items: list[dict[str, object]] = []
+        for row in rows:
+            item = dict(row)
+            metadata = json.loads(str(item.pop("metadata_json")))
+            risk_signal = metadata.get("risk_state")
+            if (
+                not isinstance(risk_signal, str)
+                or not risk_signal.strip()
+                or len(risk_signal) > 200
+            ):
+                risk_signal = None
+            metadata_title = metadata.get("title")
+            if not isinstance(metadata_title, str) or not metadata_title.strip():
+                metadata_title = None
+            metadata_owner = metadata.get("owner")
+            if not isinstance(metadata_owner, str) or not metadata_owner.strip():
+                metadata_owner = None
+            item.update(
+                {
+                    "protocol_title": item.get("protocol_title")
+                    or metadata_title
+                    or item["external_id"],
+                    "version_label": (
+                        f"v{item['revision_number']}"
+                        if isinstance(item.get("revision_number"), int)
+                        else str(item["version_identity"])
+                    ),
+                    "requester_display_name": item.get("requester_display_name")
+                    or metadata_owner
+                    or "Not recorded",
+                    "request_reason": item.get("change_summary")
+                    or "No change reason was recorded.",
+                    "risk_level": "not_assessed",
+                    "source_risk_signal": risk_signal,
+                }
+            )
+            items.append(item)
+        return tuple(items)
 
     def set_inbox_status(
         self, principal: Principal, item_id: str, *, status: str
@@ -2600,8 +2913,25 @@ class WorkspaceStore:
         revision = self.get_revision(principal, revision_id)
         if action not in {"approved", "rejected", "revoked"}:
             raise WorkspaceError("Approval action is invalid.")
-        comment = _text(comment, "Approval comment", maximum=4000)
         idempotency_key = _identifier(idempotency_key, "Idempotency key")
+        replay = self._connection.execute(
+            """SELECT 1 FROM protocol_approval_events
+            WHERE organization_id=? AND idempotency_key=?""",
+            (principal.organization_id, idempotency_key),
+        ).fetchone()
+        if replay is not None:
+            raise ApprovalReplayError("Approval request was already used.")
+        history = self.approval_history(principal, revision_id)
+        current_state = history[-1].action if history else "review_required"
+        allowed_actions = {
+            "review_required": {"approved", "rejected"},
+            "approved": {"revoked"},
+        }.get(current_state, set())
+        if action not in allowed_actions:
+            raise WorkspaceConflictError(
+                "Approval decision is stale or is not allowed from the current state."
+            )
+        comment = _text(comment, "Approval comment", maximum=4000)
         if replacement_revision_id is not None:
             replacement = self.get_revision(principal, replacement_revision_id)
             if replacement.family_id != revision.family_id:
@@ -2656,6 +2986,11 @@ class WorkspaceStore:
                     replacement_revision_id,
                     now,
                 ),
+            )
+            self._connection.execute(
+                """UPDATE source_inbox SET status='resolved'
+                WHERE revision_id=? AND organization_id=?""",
+                (revision_id, principal.organization_id),
             )
             self._connection.commit()
         except sqlite3.IntegrityError as exc:
@@ -2724,7 +3059,7 @@ class WorkspaceStore:
         credential_reference: str,
         allowed_roots: tuple[str, ...],
         webhook_secret_reference: str | None = None,
-        enabled: bool = True,
+        enabled: bool = False,
     ) -> ConnectorConfiguration:
         require_permission(principal, Permission.CONNECTOR_MANAGE)
         self.verify_membership(principal)
@@ -2741,21 +3076,42 @@ class WorkspaceStore:
             raise WorkspaceError("Connector allowed roots are invalid.")
         connector_id = f"connector-{secrets.token_hex(12)}"
         now = _now()
-        self._connection.execute(
-            "INSERT INTO connector_configurations VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                connector_id,
-                principal.organization_id,
-                connector_kind,
-                _text(display_name, "Connector name", maximum=200),
-                credential_reference,
-                webhook_secret_reference,
-                _canonical_json(list(allowed_roots)),
-                int(enabled),
-                now,
-            ),
-        )
-        self._connection.commit()
+        validation_status = "configuration_verified" if enabled else "untested"
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                """INSERT INTO connector_configurations(
+                connector_id,organization_id,connector_kind,display_name,
+                credential_reference,webhook_secret_reference,allowed_roots_json,
+                enabled,created_at,validation_status,last_checked_at,
+                last_failure_code,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    connector_id,
+                    principal.organization_id,
+                    connector_kind,
+                    _text(display_name, "Connector name", maximum=200),
+                    credential_reference,
+                    webhook_secret_reference,
+                    _canonical_json(list(allowed_roots)),
+                    int(enabled),
+                    now,
+                    validation_status,
+                    now if enabled else None,
+                    None,
+                    now,
+                ),
+            )
+            self._record_admin_audit(
+                principal,
+                action="connector.created",
+                target_kind="connector",
+                target_id=connector_id,
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
         return ConnectorConfiguration(
             connector_id,
             principal.organization_id,
@@ -2766,6 +3122,28 @@ class WorkspaceStore:
             allowed_roots,
             enabled,
             now,
+            validation_status,
+            now if enabled else None,
+            None,
+            now,
+        )
+
+    @staticmethod
+    def _connector_from_row(row: sqlite3.Row) -> ConnectorConfiguration:
+        return ConnectorConfiguration(
+            row["connector_id"],
+            row["organization_id"],
+            row["connector_kind"],
+            row["display_name"],
+            row["credential_reference"],
+            row["webhook_secret_reference"],
+            tuple(json.loads(row["allowed_roots_json"])),
+            bool(row["enabled"]),
+            row["created_at"],
+            row["validation_status"],
+            row["last_checked_at"],
+            row["last_failure_code"],
+            row["updated_at"] or row["created_at"],
         )
 
     def get_connector(
@@ -2778,17 +3156,7 @@ class WorkspaceStore:
         ).fetchone()
         if row is None or row["organization_id"] != principal.organization_id:
             raise WorkspaceNotFoundError("Connector is not available.")
-        return ConnectorConfiguration(
-            row["connector_id"],
-            row["organization_id"],
-            row["connector_kind"],
-            row["display_name"],
-            row["credential_reference"],
-            row["webhook_secret_reference"],
-            tuple(json.loads(row["allowed_roots_json"])),
-            bool(row["enabled"]),
-            row["created_at"],
-        )
+        return self._connector_from_row(row)
 
     def connector_for_use(
         self,
@@ -2807,19 +3175,10 @@ class WorkspaceStore:
             or row["organization_id"] != principal.organization_id
             or row["connector_kind"] != expected_kind
             or not row["enabled"]
+            or row["validation_status"] != "configuration_verified"
         ):
             raise WorkspaceNotFoundError("Enabled connector is not available.")
-        return ConnectorConfiguration(
-            row["connector_id"],
-            row["organization_id"],
-            row["connector_kind"],
-            row["display_name"],
-            row["credential_reference"],
-            row["webhook_secret_reference"],
-            tuple(json.loads(row["allowed_roots_json"])),
-            bool(row["enabled"]),
-            row["created_at"],
-        )
+        return self._connector_from_row(row)
 
     def connector_summaries(
         self, principal: Principal
@@ -2827,7 +3186,8 @@ class WorkspaceStore:
         require_permission(principal, Permission.CONNECTOR_READ)
         rows = self._connection.execute(
             """SELECT connector_id,connector_kind,display_name,allowed_roots_json,
-            enabled,created_at FROM connector_configurations
+            enabled,created_at,validation_status,last_checked_at,
+            last_failure_code,updated_at FROM connector_configurations
             WHERE organization_id=? ORDER BY display_name""",
             (principal.organization_id,),
         ).fetchall()
@@ -2840,9 +3200,122 @@ class WorkspaceStore:
                 "enabled": bool(row["enabled"]),
                 "created_at": row["created_at"],
                 "credential_configured": True,
+                "validation_status": row["validation_status"],
+                "last_checked_at": row["last_checked_at"],
+                "last_failure_code": row["last_failure_code"],
+                "updated_at": row["updated_at"] or row["created_at"],
+                "operational_status": (
+                    "enabled"
+                    if row["enabled"]
+                    and row["validation_status"] == "configuration_verified"
+                    else "ready_to_enable"
+                    if row["validation_status"] == "configuration_verified"
+                    else "test_failed"
+                    if row["validation_status"] == "failed"
+                    else "needs_test"
+                ),
             }
             for row in rows
         )
+
+    def record_connector_configuration_test(
+        self,
+        principal: Principal,
+        connector_id: str,
+        *,
+        succeeded: bool,
+        failure_code: str | None = None,
+    ) -> dict[str, object]:
+        require_permission(principal, Permission.CONNECTOR_MANAGE)
+        connector = self.get_connector(principal, connector_id)
+        if succeeded and failure_code is not None:
+            raise WorkspaceError("A successful connector test cannot have a failure code.")
+        if not succeeded and failure_code is None:
+            raise WorkspaceError("A failed connector test requires a failure code.")
+        checked_at = _now()
+        status = "configuration_verified" if succeeded else "failed"
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                """UPDATE connector_configurations SET validation_status=?,
+                last_checked_at=?,last_failure_code=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END,
+                updated_at=? WHERE connector_id=? AND organization_id=?""",
+                (
+                    status,
+                    checked_at,
+                    failure_code,
+                    int(not succeeded),
+                    checked_at,
+                    connector.connector_id,
+                    principal.organization_id,
+                ),
+            )
+            self._record_admin_audit(
+                principal,
+                action="connector.configuration_tested",
+                target_kind="connector",
+                target_id=connector.connector_id,
+                outcome="success" if succeeded else "failure",
+                reason_code=failure_code,
+                created_at=checked_at,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return {
+            "connector_id": connector.connector_id,
+            "validation_status": status,
+            "last_checked_at": checked_at,
+            "last_failure_code": failure_code,
+            "provider_connection_tested": False,
+        }
+
+    def set_connector_enabled(
+        self, principal: Principal, connector_id: str, *, enabled: bool
+    ) -> dict[str, object]:
+        require_permission(principal, Permission.CONNECTOR_MANAGE)
+        connector = self.get_connector(principal, connector_id)
+        if enabled and connector.validation_status != "configuration_verified":
+            raise WorkspaceConflictError(
+                "Connector configuration must pass its check before enablement."
+            )
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self._connection.execute(
+                """UPDATE connector_configurations SET enabled=?,updated_at=?
+                WHERE connector_id=? AND organization_id=?
+                AND (?=0 OR validation_status='configuration_verified')""",
+                (
+                    int(enabled),
+                    now,
+                    connector.connector_id,
+                    principal.organization_id,
+                    int(enabled),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise WorkspaceConflictError(
+                    "Connector configuration must pass its check before enablement."
+                )
+            self._record_admin_audit(
+                principal,
+                action="connector.enabled" if enabled else "connector.disabled",
+                target_kind="connector",
+                target_id=connector.connector_id,
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return {
+            "connector_id": connector.connector_id,
+            "enabled": enabled,
+            "validation_status": connector.validation_status,
+            "updated_at": now,
+        }
 
     def connector_cursor(
         self, principal: Principal, connector_id: str, *, cursor_kind: str
@@ -2898,20 +3371,11 @@ class WorkspaceStore:
             row is None
             or row["connector_kind"] != "github"
             or not row["enabled"]
+            or row["validation_status"] != "configuration_verified"
             or not row["webhook_secret_reference"]
         ):
             raise WorkspaceNotFoundError("Webhook connector is not available.")
-        return row["organization_id"], ConnectorConfiguration(
-            row["connector_id"],
-            row["organization_id"],
-            row["connector_kind"],
-            row["display_name"],
-            row["credential_reference"],
-            row["webhook_secret_reference"],
-            tuple(json.loads(row["allowed_roots_json"])),
-            bool(row["enabled"]),
-            row["created_at"],
-        )
+        return row["organization_id"], self._connector_from_row(row)
 
     def begin_github_webhook_delivery(
         self,
@@ -3465,13 +3929,17 @@ class WorkspaceStore:
     ) -> str:
         require_permission(principal, Permission.ELN_WRITEBACK)
         connector = self._connection.execute(
-            """SELECT connector_kind,enabled FROM connector_configurations
+            """SELECT connector_kind,enabled,validation_status FROM connector_configurations
             WHERE connector_id=? AND organization_id=?""",
             (connector_id, principal.organization_id),
         ).fetchone()
         if connector is None:
             raise WorkspaceNotFoundError("Connector is not available.")
-        if connector["connector_kind"] != "elabftw" or not connector["enabled"]:
+        if (
+            connector["connector_kind"] != "elabftw"
+            or not connector["enabled"]
+            or connector["validation_status"] != "configuration_verified"
+        ):
             raise WorkspaceError("Connector does not support ELN write-back.")
         self._experiment_row(principal, experiment_session_id)
         self.require_resource(principal, "experiment_report", report_id)
@@ -3635,6 +4103,7 @@ class WorkspaceStore:
         return {
             "organization_id": principal.organization_id,
             "metrics": [dict(row) for row in rows],
+            "pilot_metrics": self.pilot_metrics_summary(principal),
             "analytics_retention_days": (
                 int(setting["analytics_retention_days"])
                 if setting is not None
@@ -3645,6 +4114,155 @@ class WorkspaceStore:
                 "transcripts": False,
                 "model_reasoning": False,
                 "secrets": False,
+            },
+        }
+
+    def pilot_metrics_summary(self, principal: Principal) -> dict[str, object]:
+        """Aggregate pilot KPIs from durable, tenant-scoped event metadata."""
+
+        require_permission(principal, Permission.ANALYTICS_READ)
+        session_row = self._connection.execute(
+            """SELECT COUNT(*) AS total,
+            SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed
+            FROM experiment_sessions WHERE organization_id=?""",
+            (principal.organization_id,),
+        ).fetchone()
+        event_rows = self._connection.execute(
+            """SELECT event_type,COUNT(*) AS total
+            FROM experiment_session_events WHERE organization_id=?
+            GROUP BY event_type ORDER BY event_type""",
+            (principal.organization_id,),
+        ).fetchall()
+        analytics_rows = self._connection.execute(
+            """SELECT category,metric_name,COUNT(*) AS samples,
+            SUM(metric_value) AS total,MIN(recorded_at) AS first_recorded_at,
+            MAX(recorded_at) AS last_recorded_at
+            FROM analytics_events WHERE organization_id=?
+            GROUP BY category,metric_name ORDER BY category,metric_name""",
+            (principal.organization_id,),
+        ).fetchall()
+        event_counts = {row["event_type"]: int(row["total"]) for row in event_rows}
+        analytics = {
+            (row["category"], row["metric_name"]): row
+            for row in analytics_rows
+        }
+
+        def samples(category: str, metric_name: str) -> int:
+            row = analytics.get((category, metric_name))
+            return int(row["samples"]) if row is not None else 0
+
+        first = min(
+            (
+                str(row["first_recorded_at"])
+                for row in analytics_rows
+                if row["first_recorded_at"] is not None
+            ),
+            default=None,
+        )
+        last = max(
+            (
+                str(row["last_recorded_at"])
+                for row in analytics_rows
+                if row["last_recorded_at"] is not None
+            ),
+            default=None,
+        )
+        total_sessions = int(session_row["total"] or 0)
+        completed = int(session_row["completed"] or 0)
+        return {
+            "schema_version": 1,
+            "completed_workflows": completed,
+            "failed_commands": samples("voice", "command_failure"),
+            "recovery_events": event_counts.get("session_recovered", 0),
+            "mutation_failures": samples("workflow", "mutation_failure"),
+            "user_actions": samples("workflow", "turn"),
+            "workflow_completion_rate": (
+                round(completed / total_sessions, 4) if total_sessions else None
+            ),
+            "details": {
+                "experiment_sessions": total_sessions,
+                "durable_actions_by_type": event_counts,
+                "observations": event_counts.get("observation_recorded", 0),
+                "evidence_attachments": event_counts.get("evidence_attached", 0),
+                "pause_events": event_counts.get("session_paused", 0),
+                "resume_events": event_counts.get("session_resumed", 0),
+            },
+            "measurement_window": {
+                "analytics_first_recorded_at": first,
+                "analytics_last_recorded_at": last,
+                "durable_session_counts_are_lifetime": True,
+                "failed_command_mutation_and_user_action_counts_follow_analytics_retention": True,
+            },
+            "privacy": {
+                "raw_audio": False,
+                "transcripts": False,
+                "identifiers": False,
+                "free_text": False,
+            },
+        }
+
+    def admin_security_overview(
+        self, principal: Principal, *, event_limit: int = 50
+    ) -> dict[str, object]:
+        """Return tenant-scoped control-plane posture without credential values."""
+
+        require_permission(principal, Permission.MEMBERSHIP_MANAGE)
+        if event_limit < 1 or event_limit > 200:
+            raise WorkspaceError("Administrative activity limit is invalid.")
+        setting = self._connection.execute(
+            """SELECT analytics_retention_days,updated_by_principal_id,updated_at
+            FROM organization_settings WHERE organization_id=?""",
+            (principal.organization_id,),
+        ).fetchone()
+        connector_rows = self._connection.execute(
+            """SELECT validation_status,enabled,last_failure_code
+            FROM connector_configurations WHERE organization_id=?""",
+            (principal.organization_id,),
+        ).fetchall()
+        events = self._connection.execute(
+            """SELECT a.sequence_id,a.action,a.target_kind,a.target_id,a.outcome,
+            a.reason_code,a.created_at,a.actor_principal_id,
+            COALESCE(p.display_name,a.actor_principal_id) AS actor_display_name
+            FROM admin_audit_events a
+            LEFT JOIN principals p ON p.principal_id=a.actor_principal_id
+            WHERE a.organization_id=? ORDER BY a.sequence_id DESC LIMIT ?""",
+            (principal.organization_id, event_limit),
+        ).fetchall()
+        return {
+            "organization_id": principal.organization_id,
+            "retention": {
+                "analytics_retention_days": (
+                    int(setting["analytics_retention_days"])
+                    if setting is not None
+                    else self.default_analytics_retention_days
+                ),
+                "updated_by_principal_id": (
+                    setting["updated_by_principal_id"] if setting is not None else None
+                ),
+                "updated_at": setting["updated_at"] if setting is not None else None,
+                "applies_to": "privacy_safe_analytics_events",
+            },
+            "connections": {
+                "total": len(connector_rows),
+                "enabled": sum(
+                    1
+                    for row in connector_rows
+                    if row["enabled"]
+                    and row["validation_status"] == "configuration_verified"
+                ),
+                "needs_test": sum(
+                    1 for row in connector_rows if row["validation_status"] == "untested"
+                ),
+                "failed": sum(
+                    1 for row in connector_rows if row["validation_status"] == "failed"
+                ),
+            },
+            "activity": [dict(row) for row in events],
+            "privacy": {
+                "credential_values": False,
+                "raw_audio": False,
+                "transcripts": False,
+                "model_reasoning": False,
             },
         }
 
@@ -3668,20 +4286,33 @@ class WorkspaceStore:
         require_permission(principal, Permission.RETENTION_MANAGE)
         if retention_days < 1 or retention_days > 3650:
             raise WorkspaceError("Analytics retention is outside allowed bounds.")
-        self._connection.execute(
-            """INSERT INTO organization_settings VALUES(?,?,?,?)
-            ON CONFLICT(organization_id) DO UPDATE SET
-            analytics_retention_days=excluded.analytics_retention_days,
-            updated_by_principal_id=excluded.updated_by_principal_id,
-            updated_at=excluded.updated_at""",
-            (
-                principal.organization_id,
-                retention_days,
-                principal.principal_id,
-                _now(),
-            ),
-        )
-        self._connection.commit()
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                """INSERT INTO organization_settings VALUES(?,?,?,?)
+                ON CONFLICT(organization_id) DO UPDATE SET
+                analytics_retention_days=excluded.analytics_retention_days,
+                updated_by_principal_id=excluded.updated_by_principal_id,
+                updated_at=excluded.updated_at""",
+                (
+                    principal.organization_id,
+                    retention_days,
+                    principal.principal_id,
+                    now,
+                ),
+            )
+            self._record_admin_audit(
+                principal,
+                action="retention.updated",
+                target_kind="analytics_retention",
+                target_id=f"days:{retention_days}",
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
         deleted = self.enforce_analytics_retention(
             principal, retention_days=retention_days
         )
@@ -3756,6 +4387,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 5
+    if version == 5:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_5_TO_6 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 6
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

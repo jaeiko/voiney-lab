@@ -3396,7 +3396,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             side_effect=immediate,
         ), patch(
             "voice_workflow_agent.server.log.exception",
-        ):
+        ), patch(
+            "voice_workflow_agent.server._record_workspace_metric",
+        ) as metric:
             asyncio.run(run_turn_safely(socket,session,b"\0\0",1,1))
         self.assertEqual(session.curated_protocol_session.current_index,0)
         terminal=[item for item in socket.text
@@ -3407,6 +3409,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(public_error["message"],"voice turn processing failed")
         self.assertNotIn("private synthetic detail",json.dumps(
             socket.text,ensure_ascii=False))
+        metric.assert_any_call(
+            category="voice",metric_name="command_failure",
+            dimensions={
+                "status":"failed","reason_code":"turn_processing_failed",
+            },
+        )
 
     def test_complete_in_process_question_is_deterministic_and_current_step_only(self):
         session, socket, client, stt, tts, llm = self.run_question()
@@ -3439,6 +3447,63 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertFalse(done["critical_warning_present"])
         self.assertEqual(done["tools_used"], [])
         self.assertEqual(session.curated_protocol_session.current_index, 2)
+
+    def test_completion_criteria_without_explicit_result_is_useful_and_read_only(self):
+        session, socket, client, _, tts, llm = self.run_question(
+            transcript="이 단계의 완료 조건은 뭐야?",
+            index=0,
+        )
+        step = self.fixture.steps[0]
+        current_task = self.fixture.localized_fact(step.step_id, "current_step")
+        spoken = tts.call_args.args[0]
+
+        llm.assert_not_called()
+        self.assertEqual(client.chat.completions.calls, [])
+        self.assertEqual(session.curated_protocol_session.current_index, 0)
+        self.assertEqual(session.curated_protocol_session.state()["revision"], 0)
+        self.assertIn(
+            "이 단계에는 별도의 완료 기준이 문서에 명시되어 있지 않습니다.",
+            spoken,
+        )
+        self.assertIn(current_task, spoken)
+        self.assertIn("'현재 단계 완료했어'라고 말해 주세요.", spoken)
+        self.assertNotIn("서버", spoken)
+        self.assertNotIn("검증 경로", spoken)
+        self.assertNotIn("상태를 바꾸", spoken)
+        reply = next(item for item in socket.text if item["type"] == "reply.delta")
+        self.assertEqual(reply["evidence_ids"], ["current_step"])
+        operation = next(
+            item for item in socket.text if item["type"] == "server.operation"
+        )
+        self.assertEqual(operation["operation"], "completion_criteria_read")
+        done = next(item for item in socket.text if item["type"] == "turn.done")
+        self.assertEqual(done["route"], "curated_protocol")
+        self.assertEqual(done["result_kind"], "completion_criteria")
+
+    def test_completion_criteria_quotes_explicit_source_result_without_mutation(self):
+        session, socket, client, _, tts, llm = self.run_question(
+            transcript="이 단계의 완료 조건은 뭐야?",
+            index=6,
+        )
+        step = self.fixture.steps[6]
+        expected = self.fixture.localized_fact(step.step_id, "expected_result_1")
+        spoken = tts.call_args.args[0]
+
+        llm.assert_not_called()
+        self.assertEqual(client.chat.completions.calls, [])
+        self.assertEqual(session.curated_protocol_session.current_index, 6)
+        self.assertEqual(session.curated_protocol_session.state()["revision"], 0)
+        self.assertIn("문서에 명시된 이 단계의 확인 기준", spoken)
+        self.assertIn(expected, spoken)
+        self.assertIn("반복 종료 확인 방식은 아직 검토가 필요합니다", spoken)
+        self.assertNotIn("서버", spoken)
+        self.assertNotIn("상태를 변경", spoken)
+        reply = next(item for item in socket.text if item["type"] == "reply.delta")
+        self.assertEqual(reply["evidence_ids"], ["expected_result_1"])
+        operation = next(
+            item for item in socket.text if item["type"] == "server.operation"
+        )
+        self.assertEqual(operation["operation"], "completion_criteria_read")
 
     def test_unsupported_question_returns_only_bounded_server_response(self):
         client = GroundedClient({
@@ -3539,7 +3604,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ), patch(
                     "voice_workflow_agent.server.asyncio.to_thread",
                     side_effect=immediate,
-                ):
+                ), patch(
+                    "voice_workflow_agent.server._record_workspace_metric",
+                ) as metric:
                     if mode == "failure":
                         with self.assertRaises(RuntimeError):
                             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3548,6 +3615,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.assertEqual(client.chat.completions.calls, [])
                 tts.assert_not_called()
                 self.assertEqual(session.curated_protocol_session.current_index, 2)
+                if mode == "empty":
+                    self.assertTrue(any(
+                        call.kwargs.get("metric_name") == "command_failure"
+                        and call.kwargs.get("dimensions", {}).get("reason_code")
+                        == "empty_transcript"
+                        for call in metric.call_args_list
+                    ))
 
     def test_verified_fact_question_never_constructs_or_calls_an_llm(self):
         client = RecordingClient(error=AssertionError("LLM must not run"))

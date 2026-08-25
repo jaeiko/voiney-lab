@@ -1857,14 +1857,17 @@ class ServerTests(unittest.TestCase):
             "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
             "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
             "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED": "false",
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "false",
         }):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["capabilities"], {
+            "identity_mode": "development",
             "workspace_enabled": True,
             "protocol_catalog_enabled": False,
+            "experiment_reports_enabled": False,
             "moss_enabled": False,
         })
         self.assertNotIn("key", json.dumps(body).lower())
@@ -1884,5 +1887,25 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "not_ready")
+
+    def test_readyz_fails_closed_when_operational_identity_is_incomplete(self):
+        async def call():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get("/readyz")
+        with patch.dict("os.environ", {
+            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "operational",
+            "VOICE_WORKFLOW_AGENT_OIDC_ISSUER": "",
+            "VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE": "",
+            "VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL": "",
+            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "false",
+        }):
+            response = asyncio.run(call())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {
+            "status": "not_ready",
+            "reason": "IdentityConfigurationError",
+        })
 
 if __name__=="__main__": unittest.main()

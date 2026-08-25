@@ -168,6 +168,7 @@ def test_writeback_audit_is_tenant_scoped_append_only_and_idempotent(tmp_path):
             display_name="Pilot eLabFTW",
             credential_reference="secret://tenant-a/elabftw",
             allowed_roots=("https://eln.example.test",),
+            enabled=True,
         )
         store.bind_resource(researcher, "experiment_report", "report-123")
         writeback = store.record_eln_writeback(

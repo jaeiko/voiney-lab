@@ -75,12 +75,20 @@ The main runtime routing boundary is
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
 ELN boundary is in `eln_connectors.py`.
 
-The pre-extension component and authority map is documented in
-[`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md). Implementation and phase
-evidence are tracked in
+The current component, authority, and persistence design is documented in
+[`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md). The older
+[`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md) is a labeled
+pre-extension snapshot. Current capabilities and documentation authority are
+indexed in [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
+Implementation and phase evidence are tracked in
 [`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`](docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md),
 with forward-only storage details in
 [`docs/MIGRATION_NOTES.md`](docs/MIGRATION_NOTES.md).
+
+For operators and pilot participants, start with the
+[`Pilot Deployment Guide`](docs/PILOT_DEPLOYMENT_GUIDE.md),
+[`User Guide`](docs/USER_GUIDE.md), and
+[`Troubleshooting Guide`](docs/TROUBLESHOOTING_GUIDE.md).
 
 ## Persistent experiment sessions
 
@@ -113,14 +121,17 @@ the existing completion gates.
 Images and documents can be attached as opaque evidence. Uploads are streamed,
 capped at 32 MiB, hashed, and stored by content identity. The system records
 metadata with `not_interpreted` status and does not run OCR or image/document
-interpretation in this phase. Internal storage references are not returned by
-the API or timeline UI.
+interpretation. Internal storage references are not returned by JSON APIs or the
+timeline UI. An authorized tenant member can download the original bytes through
+a generated same-origin link; the server rechecks storage containment, regular-
+file type, recorded size, and SHA-256 before returning it with `no-store`.
 
 Timeline endpoints are:
 
 - `GET /api/workspace/experiments/{session_id}/timeline`;
 - `POST /api/workspace/experiments/{session_id}/observations`;
-- `POST /api/workspace/experiments/{session_id}/evidence`; and
+- `POST /api/workspace/experiments/{session_id}/evidence`;
+- `GET /api/workspace/experiments/{session_id}/evidence/{evidence_id}`; and
 - `POST /api/workspace/reviewer/experiments/{session_id}/actions`.
 
 ## Protocol onboarding and lifecycle
@@ -431,8 +442,8 @@ The browser consumes these main groups:
   linked to an exact original and the existing reviewer approval path;
 - `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
   knowledge promotion, and dry-lab review;
-- `/api/workspace/admin/*`: memberships, connector configuration, retention,
-  asset cards, and tenant analytics;
+- `/api/workspace/admin/*`: memberships, connector configuration/check/enable,
+  retention, asset cards, audit posture, tenant analytics, and pilot metrics;
 - `/api/workspace/sources/*`: protocols.io, Drive, GitHub, and dry-lab import;
 - `/api/workspace/webhooks/github/{connector_id}`: signed, replay-protected source
   updates;
@@ -440,12 +451,12 @@ The browser consumes these main groups:
 - `/api/experiment-reports/*`: tenant-scoped report reads/exports.
 
 For deployment probes, `GET /healthz` is a pure liveness check (the process
-can serve a request); `GET /readyz` reports whether required configuration
-parsed successfully, plus non-secret capability booleans
-(`workspace_enabled`, `protocol_catalog_enabled`, `moss_enabled`) - optional
-providers report their configured state rather than blocking readiness, and
-a 503 means configuration failed to parse, not that a live external call
-was attempted.
+can serve a request); `GET /readyz` validates identity, workspace,
+protocol-catalog, and report configuration and returns the non-secret identity
+mode plus capability flags (`workspace_enabled`, `protocol_catalog_enabled`,
+`experiment_reports_enabled`, `moss_enabled`). Optional external providers do
+not block readiness, and a `503` means local configuration failed to parse—not
+that a live external call was attempted.
 
 All sensitive workspace APIs derive the tenant from the authenticated principal.
 Connector list responses never return credential references or resolved secrets.
@@ -514,10 +525,12 @@ behind it. Everything else - the full non-PDF-dependent test suite, the
 Playwright browser suite, and `python scripts/replay_turns.py` - runs
 identically in CI and locally.
 
-Tests are provider-free unless explicitly marked otherwise. Connector and eLabFTW
-contracts use fakes; the real adapters remain in the production code path. The
-Pass 2 report records which external systems were actually live-tested:
-[`docs/CODEX_COMMERCIALIZATION_PASS2_REPORT.md`](docs/CODEX_COMMERCIALIZATION_PASS2_REPORT.md).
+Tests are provider-free unless explicitly marked otherwise. Connector and
+eLabFTW contracts use fakes; the real adapters remain in the production code
+path. The current integration classification and exact historical live-test
+evidence are in
+[`docs/COMMERCIALIZATION_PASS4_REPORT.md`](docs/COMMERCIALIZATION_PASS4_REPORT.md)
+and the current [`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
 
 ## Security and privacy boundaries
 
@@ -535,6 +548,10 @@ Pass 2 report records which external systems were actually live-tested:
 - Approval and write-back idempotency keys are append-only replay fences.
 - Analytics persist allowlisted categories/dimensions only and purge according to
   tenant retention policy.
+- Pilot metrics expose only tenant-scoped counts; durable counts and
+  retention-bounded analytics are labeled separately.
+- Evidence downloads are tenant-authorized and verified against their recorded
+  byte size and SHA-256 before delivery.
 - Audio diagnostics are disabled by default, bounded when enabled, and must stay
   in an ignored runtime directory.
 
@@ -554,5 +571,8 @@ and user-accessibility/noisy-lab studies.
   is executed.
 - No cross-process job queue yet: PDF analysis background tasks are process-local;
   persisted lifecycle state and explicit retry make restarts visible and safe.
-- The development UI is suitable for a controlled pilot, not a substitute for
-  facility operating procedures or emergency systems.
+- SQLite storage and the single-process deployment path are suitable for a
+  controlled pilot, not horizontal scaling or automatic failover.
+- The browser experience is suitable for a controlled pilot, not a substitute
+  for facility operating procedures or emergency systems; noisy-lab and
+  accessibility field validation remain outstanding.

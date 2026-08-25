@@ -402,11 +402,16 @@ voice server into an arbitrary code runner.
 | 14. Independent Repository + CI | GitHub Actions green on both jobs after fixing 2 real CI-only portability gaps (see docs/COMMERCIALIZATION_PASS4_REPORT.md) | 762 passed + 684 subtests locally; CI runs a documented subset (excludes 13 modules needing an uncommittable external PDF) | passed | no schema change | README, this report, docs/COMMERCIALIZATION_PASS4_REPORT.md |
 | 15. Workflow Authority Reconciliation | 1 new regression test proving curated-vs-legacy mutual exclusivity even when both are configured; verified by intentionally breaking the guard and observing the new test fail | 762 passed + 684 subtests | passed | no schema change | this report (below), module docstrings in procedures.py/procedure_store.py/procedure_definitions.py |
 
-## External integration classification (Phase 12)
+## External integration classification (historical Phase 12 snapshot)
 
 Classified from code and test evidence only. **No integration below has
 in-repo evidence of a successful live external call** — this environment
 never made one during Phases 10-12.
+
+This table is retained as its point-in-time Phase 12 evidence. It is superseded
+for current product status by `CAPABILITY_MATRIX.md` and
+`PRODUCTIZATION_PHASE4_REPORT.md`; notably, Commercialization Pass 4 later
+recorded bounded live xAI STT/TTS evidence.
 
 | Integration | Status | Evidence |
 |---|---|---|

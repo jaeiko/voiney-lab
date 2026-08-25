@@ -718,6 +718,69 @@ class ProtocolCatalog:
             for event in self.store.list_events(revision.experiment_id)
         )
 
+    def approval_context(self, protocol_id: str) -> dict[str, object]:
+        """Return the recorded approval actor and time without adding authority.
+
+        This is a read-only researcher-facing projection of the same append-only
+        event that already determines execution availability.  Missing actor
+        metadata remains explicit instead of being inferred from an approval
+        state or service policy.
+        """
+
+        entry = self.get_entry(protocol_id)
+        final_approval = entry.approval_status == "approved"
+        if entry.approval_status not in {"approved", "development_only"}:
+            return {
+                "status": "review_required",
+                "final_approval": False,
+                "actor_principal_id": None,
+                "actor_role": None,
+                "recorded_at": None,
+                "authority": None,
+            }
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            entry.revision_id
+        )
+        matching = tuple(
+            event
+            for event in self.store.list_events(protocol_id)
+            if event.event_type
+            in {
+                _APPROVAL_EVENT,
+                _DEVELOPMENT_FIXTURE_EVENT,
+                _DEVELOPMENT_ACTIVATION_EVENT,
+            }
+            and event.protocol_revision_number == protocol_revision_number
+            and (
+                event.analysis_revision_number is None
+                or event.analysis_revision_number == analysis_revision_number
+            )
+            and isinstance(event.payload, dict)
+            and event.payload.get("decision")
+            in {"approved", "development_activated", "development_only"}
+        )
+        event = matching[-1] if matching else None
+        payload = event.payload if event is not None else {}
+        actor_principal_id = payload.get("actor_principal_id")
+        actor_role = payload.get("actor_role")
+        authority = payload.get("authority")
+        return {
+            "status": "approved" if final_approval else "development_only",
+            "final_approval": final_approval,
+            "actor_principal_id": (
+                actor_principal_id
+                if isinstance(actor_principal_id, str) and actor_principal_id
+                else None
+            ),
+            "actor_role": (
+                actor_role if isinstance(actor_role, str) and actor_role else None
+            ),
+            "recorded_at": event.recorded_at if event is not None else None,
+            "authority": (
+                authority if isinstance(authority, str) and authority else None
+            ),
+        }
+
     def _latest_chunk_events(
         self,
         revision: ProtocolRevisionRecord,

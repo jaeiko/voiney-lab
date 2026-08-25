@@ -52,9 +52,20 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             'id="experiment-workflow-revision"',
             'id="experiment-workflow-link"',
             'id="experiment-workflow-links"',
+            'id="experiment-context-name"',
+            'id="experiment-context-version"',
+            'id="experiment-context-approval"',
+            'id="experiment-context-step"',
+            'id="experiment-context-actions"',
+            'id="experiment-resume-disclosure"',
             "function renderExperimentTimeline",
+            "function renderExperimentContext",
+            "function clearExperimentResumeSelection",
             "function saveManualObservation",
             "function uploadExperimentEvidence",
+            'link.className="experiment-evidence-download"',
+            'link.textContent="원본 증거 다운로드"',
+            "encodeURIComponent(event.evidence.evidence_id)",
             "function linkDryLabWorkflow",
             "function loadDryLabLinks",
             "관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.",
@@ -64,8 +75,18 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             'experimentIsResumable()?"실험 이어하기":"새 실험 시작"',
             'experiment_session_id:currentExperimentSessionId',
             'experiment_session_version:currentExperimentSessionVersion',
+            'pending_confirmations:',
+            'conversation_history:',
+            'active_timers:',
+            'IDLE:"준비"',
+            'LISTENING:"듣는 중"',
+            'THINKING:"요청 이해 중"',
+            'SPEAKING:"안내 중"',
         ):
             self.assertIn(required, html)
+        self.assertIn('<button id="start" type="button" disabled>', html)
+        self.assertNotIn('<div id="state">IDLE</div>', html)
+        self.assertNotIn('<strong id="rail-state">IDLE</strong>', html)
         self.assertLess(
             html.index('class="panel procedure-card"'),
             html.index('id="experiment-session-ledger"'),
@@ -83,11 +104,129 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         )[1].split("async function loadExperimentTimeline", 1)[0]
         self.assertNotIn("innerHTML", render_block)
         self.assertIn("textContent", render_block)
+        self.assertNotIn("original_filename}`", render_block)
         link_block = html.split("async function loadDryLabLinks", 1)[1].split(
             "async function linkDryLabWorkflow", 1
         )[0]
         self.assertNotIn("innerHTML", link_block)
         self.assertIn("workspaceRow", link_block)
+
+    def test_reviewer_packet_is_impact_first_and_decisions_require_confirmation(self):
+        html = (
+            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        for required in (
+            'id="reviewer-protocol"',
+            'id="reviewer-version"',
+            'id="reviewer-requester"',
+            'id="reviewer-reason"',
+            'id="reviewer-change-summary"',
+            'id="reviewer-impact"',
+            'id="reviewer-risk"',
+            'id="reviewer-history"',
+            'id="reviewer-decision-confirmation"',
+            'id="reviewer-decision-confirm"',
+            '>수정 요청</button>',
+            '>향후 사용 중지</button>',
+        ):
+            self.assertIn(required, html)
+        self.assertLess(
+            html.index('id="reviewer-change-summary"'),
+            html.index('id="reviewer-diff"'),
+        )
+        block = "const REVIEW_ACTIONS" + html.split(
+            "const REVIEW_ACTIONS", 1
+        )[1].split("async function importProtocolsIo", 1)[0]
+        self.assertNotIn("innerHTML", block)
+        harness = r"""
+const assert=(ok,message)=>{if(!ok)throw new Error(message)};
+class Element{constructor(){this.children=[];this.textContent="";this.hidden=false;this.disabled=false;this.value="";this.className=""}replaceChildren(...items){this.children=[...items]}appendChild(item){this.children.push(item);return item}append(...items){this.children.push(...items)}addEventListener(){}setAttribute(){}}
+const names=["reviewer-protocol","reviewer-version","reviewer-requester","reviewer-source","reviewer-reason","reviewer-change-summary","reviewer-impact","reviewer-risk","reviewer-history","reviewer-selection","reviewer-action-guidance","reviewer-decision-confirmation","reviewer-confirm-title","reviewer-confirm-consequence","reviewer-approve","reviewer-reject","reviewer-revoke","reviewer-comment","reviewer-status","reviewer-diff","reviewer-resolved-inbox"];
+const ids=Object.fromEntries(names.map(name=>[name,new Element()]));
+const $=id=>ids[id]||null,setText=(id,value)=>{if(ids[id])ids[id].textContent=String(value)};
+const ROLE_LABELS=Object.freeze({researcher:"연구자",reviewer:"검토자",lab_admin:"랩 관리자",organization_admin:"조직 관리자"});
+const document={createElement:()=>new Element()};
+function workspaceRow(title,detail){const row=new Element(),bold=new Element(),small=new Element();bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
+function workspaceFetch(){throw new Error("network must not be used by renderer")}
+let selectedWorkspaceRevision="revision-1",pendingReviewerDecision=null,selectedReviewerAllowedActions=new Set();
+""" + block + r"""
+const packet={review_context:{protocol_title:"ANKOM Fiber Analysis",revision_id:"revision-1",version_label:"v2",requester_display_name:"Reviewer Requester",change_reason:"Clarify the acid warning",source:{connector_kind:"protocols_io",version_identity:"source-v2"}},change_summary:{changed_fields:["steps","warnings"],step_count_before:2,step_count_after:2,warning_count_before:1,warning_count_after:2,structured_adaptation_changes:[]},experimental_impact:{status:"not_assessed"},risk:{level:"not_assessed",source_signal:"hazard_review"},decision_state:{state:"review_required",allowed_actions:["approved","rejected"]},history:[{action:"rejected",affected_version:"v1",actor_display_name:"Reviewer A",actor_role:"reviewer",created_at:"2026-08-24T12:00:00Z",comment:"Clarify exposure controls."}]};
+renderReviewerPacket(packet);
+assert(ids["reviewer-protocol"].textContent==="ANKOM Fiber Analysis","protocol title missing");
+assert(ids["reviewer-version"].textContent.includes("v2")&&ids["reviewer-requester"].textContent==="Reviewer Requester","version or requester missing");
+assert(ids["reviewer-reason"].textContent==="Clarify the acid warning","request reason missing");
+assert(ids["reviewer-change-summary"].children.length===3,"structured change summary missing");
+assert(ids["reviewer-impact"].textContent.includes("평가되지 않음")&&ids["reviewer-risk"].textContent.includes("위험 수준 판정이 아닙니다"),"unknown impact or risk was implied");
+assert(ids["reviewer-history"].children[0].children[1].textContent.includes("Reviewer A"),"reviewer audit identity missing");
+assert(!ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["reviewer-revoke"].disabled,"decision state was not enforced");
+assert(stageReviewerDecision("approved")===false&&ids["reviewer-status"].textContent.includes("근거"),"blank rationale reached confirmation");
+ids["reviewer-comment"].value="Source, warnings, and impact boundary reviewed.";
+assert(stageReviewerDecision("approved")===true&&!ids["reviewer-decision-confirmation"].hidden&&ids["reviewer-confirm-consequence"].textContent.includes("새 운영 실험"),"approval consequence confirmation missing");
+assert(stageReviewerDecision("revoked")===false,"disallowed stale decision reached confirmation");
+"""
+        result = run_node_harness(harness)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_admin_workspace_uses_guided_safe_connection_and_permission_language(self):
+        html = (
+            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        admin_markup = html.split(
+            '<section id="admin-workspace"', 1
+        )[1].split('<!-- New Session Confirmation Modal -->', 1)[0]
+        for required in (
+            "랩 운영 관리",
+            "계정 식별자",
+            "사용자 아이덴티티",
+            "권한 수준",
+            "보안 연결 자격 증명",
+            "연동 선택",
+            "인증 선택",
+            "접근 범위 지정",
+            "구성 검사",
+            "활성화",
+            "접근 제어 활동 기록",
+            "외부 제공자와의 실제 통신 성공을 의미하지 않습니다.",
+            'id="admin-security-summary"',
+            'id="admin-security-activity"',
+        ):
+            self.assertIn(required, admin_markup)
+        for developer_term in (
+            "Principal ID",
+            "OIDC subject",
+            "secret://",
+            "서버 자격 증명 참조",
+        ):
+            self.assertNotIn(developer_term, admin_markup)
+
+        block = "const ADMIN_ROLE_LABELS" + html.split(
+            "const ADMIN_ROLE_LABELS", 1
+        )[1].split("function updateElnWritebackAvailability", 1)[0]
+        self.assertNotIn("innerHTML", block)
+        harness = r"""
+const assert=(ok,message)=>{if(!ok)throw new Error(message)};
+class Element{constructor(){this.children=[];this.textContent="";this.hidden=false;this.disabled=false;this.value="";this.className="";this.placeholder="";this.type=""}replaceChildren(...items){this.children=[...items]}appendChild(item){this.children.push(item);return item}append(...items){this.children.push(...items)}addEventListener(kind,handler){this["on"+kind]=handler}setAttribute(){}}
+const names=["admin-permission-preview","admin-member-role","admin-security-summary","admin-security-activity","admin-retention-days","admin-connector-status","admin-connectors","admin-connector-secret","admin-webhook-secret","admin-connector-kind","admin-connector-scope-help","admin-webhook-credential-field","admin-connector-roots"];
+const ids=Object.fromEntries(names.map(name=>[name,new Element()]));ids["admin-member-role"].value="researcher";ids["admin-connector-kind"].value="google_drive";
+const $=id=>ids[id]||null;
+const document={createElement:()=>new Element()};
+function workspaceRow(title,detail){const row=new Element(),bold=new Element(),small=new Element();bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
+function workspaceFetch(){throw new Error("network must not be used by renderer")}
+""" + block + r"""
+adminPermissionLevels=new Map([["researcher",["protocol.read","protocol.execute"]]]);
+renderAdminPermissionPreview();
+assert(ids["admin-permission-preview"].textContent.includes("프로토콜 보기")&&ids["admin-permission-preview"].textContent.includes("실험 실행"),"friendly permission preview missing");
+renderAdminSecurity({authentication:{production_requirement:"oidc",current_method:"development"},connections:{total:2,enabled:1,needs_test:0,failed:1},retention:{analytics_retention_days:30},activity:[{action:"connector.configuration_tested",outcome:"failure",reason_code:"credential_unavailable",actor_display_name:"Admin A",created_at:"2026-08-24T12:00:00Z",target_kind:"connector"}]});
+assert(ids["admin-security-summary"].children.length===6,"security posture cards missing");
+assert(ids["admin-security-activity"].children[0].children[0].textContent.includes("연결 구성 검사"),"activity action not productized");
+assert(ids["admin-security-activity"].children[0].children[1].textContent.includes("자격 증명")&&!ids["admin-security-activity"].children[0].children[1].textContent.includes("secret://"),"safe failure visibility missing");
+const pending=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"needs_test",allowed_roots:["folder:approved"],last_checked_at:null,last_failure_code:null});
+assert(pending.children[2].children[0].textContent==="구성 검사","test action missing before enable");
+const ready=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"ready_to_enable",allowed_roots:["folder:approved"],last_checked_at:"now",last_failure_code:null});
+assert(ready.children[2].children[0].textContent==="연결 활성화","enable action missing after check");
+"""
+        result = run_node_harness(harness)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (
@@ -149,14 +288,15 @@ globalThis.document={getElementById:id=>ids[id],createElement:()=>new Element()}
 class WS{static OPEN=1;static CLOSING=2;constructor(){this.readyState=1;this.sent=[]}send(x){this.sent.push(x)}close(){this.readyState=3}}
 globalThis.WebSocket=WS; Object.defineProperty(globalThis,"navigator",{value:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[]})}},configurable:true}); globalThis.AudioContext=class{};
 """ + script + r"""
+protocolCatalog.set("candidate-a-curated-development-v1",{protocol_id:"candidate-a-curated-development-v1",title:"Candidate A",revision_id:"fixture-test",available_for_execution:true,development_only:true});
 (async()=>{
-renderState("IDLE");assert(visibleState==="IDLE"&&!ids.start.disabled&&ids.stop.disabled,"initial controls");
+renderState("IDLE");assert(visibleState==="IDLE"&&ids.state.textContent==="준비"&&!ids.start.disabled&&ids.stop.disabled,"initial controls or researcher-facing state label");
 let modulePath=null,sourceTarget=null,workletNode=null,trackStopped=false,requestedConstraints=null;Object.defineProperty(globalThis,"navigator",{value:{mediaDevices:{getSupportedConstraints:()=>({echoCancellation:true,noiseSuppression:true,autoGainControl:true}),getUserMedia:async constraints=>(requestedConstraints=constraints,{getTracks:()=>[{stop(){trackStopped=true}}]})}},configurable:true});globalThis.AudioContext=class{constructor(){this.sampleRate=48000;this.destination={};this.state="running";this.audioWorklet={addModule:async path=>{modulePath=path}}}createMediaStreamSource(){return{connect(node){sourceTarget=node},disconnect(){}}}resume(){return Promise.resolve()}close(){this.state="closed";return Promise.resolve()}};globalThis.AudioWorkletNode=class{constructor(context,name,options){this.context=context;this.name=name;this.options=options;this.disconnected=false;this.port={onmessage:null,postMessage:()=>{}};workletNode=this}disconnect(){this.disconnected=true}};
 sessionActive=true;pipelineMode="cascade";renderState("LISTENING");await ensureAudio(0);assert(requestedConstraints.audio.channelCount===1&&requestedConstraints.audio.echoCancellation===true&&requestedConstraints.audio.noiseSuppression===true&&requestedConstraints.audio.autoGainControl===true,"supported microphone preprocessing not requested");assert(modulePath==="/mic-capture-worklet.js"&&workletNode.name==="voice-workflow-mic-capture"&&workletNode.options.numberOfOutputs===0&&sourceTarget===workletNode,"AudioWorklet graph invalid");const loud=new Float32Array(960);loud.fill(.1);workletNode.port.onmessage({data:loud.buffer});assert(micSignalSeen&&ids.status.textContent.includes("마이크 음성 신호 감지됨"),"browser mic signal not diagnosed");const sentPcm=socket.sent.at(-1);assert(sentPcm instanceof ArrayBuffer&&sentPcm.byteLength===640,"cascade PCM was not resampled to 16 kHz int16");const firstNode=workletNode;await ensureAudio(0);assert(workletNode===firstNode,"duplicate worklet node created");sessionActive=false;await closeAudio();assert(trackStopped&&firstNode.disconnected&&firstNode.port.onmessage===null,"microphone resources not cleaned");socket=new WS();sessionActive=true;pipelineMode="cascade";let fallbackConstraints=null;navigator.mediaDevices.getSupportedConstraints=()=>({});const cascadeTrack={stop(){},getSettings:()=>({echoCancellation:true,noiseSuppression:false,autoGainControl:true})};navigator.mediaDevices.getUserMedia=async constraints=>(fallbackConstraints=constraints,{getTracks:()=>[cascadeTrack],getAudioTracks:()=>[cascadeTrack]});await ensureAudio(0);assert(fallbackConstraints.audio.channelCount===1&&!('echoCancellation' in fallbackConstraints.audio)&&!('noiseSuppression' in fallbackConstraints.audio)&&!('autoGainControl' in fallbackConstraints.audio),"unsupported optional constraints were made mandatory");const constraintEvent=JSON.parse(socket.sent.at(-1));assert(constraintEvent.type==="client.audio_constraints"&&constraintEvent.requested.echoCancellation===false&&constraintEvent.actual.echoCancellation===true&&constraintEvent.actual.noiseSuppression===false&&constraintEvent.actual.autoGainControl===true,"requested/actual audio constraint telemetry missing");const cascadeNode=workletNode,cascadeBlock=new Float32Array(960);cascadeNode.port.onmessage({data:cascadeBlock.buffer});const cascadePcm=socket.sent.at(-1);assert(cascadePcm instanceof ArrayBuffer&&cascadePcm.byteLength===640,"cascade PCM is not a 20 ms 16 kHz mono frame");sessionActive=false;await closeAudio();assert(cascadeNode.disconnected,"repeated microphone stop did not clean worklet");renderState("IDLE");
 const oldSocket=socket;await onMessage({data:JSON.stringify({type:"speech.start",turn_id:1})},0,oldSocket);await onMessage({data:JSON.stringify({type:"transcript",turn_id:1,text:"old question"})},0,oldSocket);await onMessage({data:JSON.stringify({type:"reply.delta",turn_id:1,text:"old answer"})},0,oldSocket);const oldNode=ids.log.children[0];
 await stopSession();assert(visibleState==="IDLE"&&ids.log.children.length===1,"stop state or transcript");socket=new WS();let audioInitializations=0;ensureAudio=async()=>{audioInitializations++};await startSession();assert(visibleState==="CONNECTING"&&ids.start.disabled&&!ids.stop.disabled,"start not connecting");assert(ids.log.children.length===0&&turns.size===0,"start reset incomplete");
 const requestedStart=JSON.parse(socket.sent.at(-1));assert(JSON.stringify(requestedStart)===JSON.stringify({type:"session.start",configuration_id:1,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1"}),"browser start payload shape changed");assert(audioInitializations===0&&!sessionActive,"microphone or session activated before server acknowledgement");
-const newSocket=socket,generation=sessionGeneration;await onMessage({data:JSON.stringify({type:"session.ready",configuration_id:999,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1",revision_id:"fixture-test"})},generation,newSocket);assert(audioInitializations===0&&!sessionActive&&visibleState==="CONNECTING","stale acknowledgement made UI ready");await onMessage({data:JSON.stringify({type:"session.ready",configuration_id:1,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1",revision_id:"fixture-test"})},generation,newSocket);assert(audioInitializations===1&&sessionActive&&visibleState==="LISTENING","accepted configuration did not activate microphone and UI");assert(acceptedSessionConfiguration.protocol_id==="candidate-a-curated-development-v1"&&acceptedSessionConfiguration.revision_id==="fixture-test"&&ids["session-configuration-status"].textContent.includes("서버 확인 완료"),"accepted protocol configuration not rendered");await onMessage({data:JSON.stringify({type:"session.started",state:"IDLE",pipeline:"cascade"})},generation,newSocket);assert(visibleState==="LISTENING","legacy session.started changed readiness");await onMessage({data:JSON.stringify({type:"turn.processing",turn_id:1})},generation,newSocket);assert(visibleState==="THINKING","processing not thinking");
+const newSocket=socket,generation=sessionGeneration;await onMessage({data:JSON.stringify({type:"session.ready",configuration_id:999,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1",revision_id:"fixture-test"})},generation,newSocket);assert(audioInitializations===0&&!sessionActive&&visibleState==="CONNECTING","stale acknowledgement made UI ready");await onMessage({data:JSON.stringify({type:"session.ready",configuration_id:1,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1",revision_id:"fixture-test"})},generation,newSocket);assert(audioInitializations===1&&sessionActive&&visibleState==="LISTENING"&&ids.state.textContent==="듣는 중","accepted configuration did not activate microphone and UI");assert(acceptedSessionConfiguration.protocol_id==="candidate-a-curated-development-v1"&&acceptedSessionConfiguration.revision_id==="fixture-test"&&ids["session-configuration-status"].textContent.includes("서버 확인 완료"),"accepted protocol configuration not rendered");await onMessage({data:JSON.stringify({type:"session.started",state:"IDLE",pipeline:"cascade"})},generation,newSocket);assert(visibleState==="LISTENING","legacy session.started changed readiness");await onMessage({data:JSON.stringify({type:"turn.processing",turn_id:1})},generation,newSocket);assert(visibleState==="THINKING"&&ids.state.textContent==="요청 이해 중","processing state was not researcher-facing");
 const curated0={attached:true,protocol_id:"candidate-a-curated-development-v1",revision_id:"fixture-test",display_name:"In-gel digestion protocol for protein identification",development_only:true,readiness_status:"analysis_required",active:false,current_step_label:null,current_step_id:null,total_steps:25,at_final_step:false,block_reason:null,revision:0,source_page_refs:[],visual_assets:[],visual_status:"unavailable",critical_warning_texts:[],display_summary:null};
 await onMessage({data:JSON.stringify({type:"protocol.fixture.state",configuration_id:1,action:"attached",state:curated0})},generation,newSocket);assert(ids["procedure-title"].textContent===curated0.display_name&&ids["procedure-meta"].textContent.includes("개발용")&&ids["procedure-status"].textContent.includes("대기"),`attached curated fixture not rendered truthfully: ${ids["procedure-title"].textContent}|${ids["procedure-meta"].textContent}|${ids["procedure-status"].textContent}|${curatedStateRevision}|${JSON.stringify(acceptedSessionConfiguration)}|${generation}/${sessionGeneration}|${socket===newSocket}`);
 const curated1={...curated0,active:true,current_step_label:"1",current_step_id:"step-1",revision:1};await onMessage({data:JSON.stringify({type:"protocol.fixture.state",configuration_id:1,action:"start",state:curated1})},generation,newSocket);assert(ids["procedure-progress"].textContent.includes("1/25")&&ids["procedure-status"].textContent.includes("진행 중"),"active curated step not rendered");await onMessage({data:JSON.stringify({type:"procedure.state",state:{attached:false}})},generation,newSocket);assert(ids["procedure-title"].textContent===curated1.display_name&&ids["procedure-progress"].textContent.includes("1/25"),"unattached approved-procedure projection erased active curated state");
@@ -358,7 +498,7 @@ assert(processor.process([ [block] ])===false,"stopped processor remained active
         harness=r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.disabled=false;this.hidden=false;this.removed=false;this.dataset={};this.options=[];this.attributes={}}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[];this.options=this.children}appendChild(n){this.children.push(n);this.options=this.children}remove(){this.removed=true}addEventListener(kind,fn){this["on"+kind]=fn}setAttribute(name,value){this.attributes[name]=value}}
-const names=["start","stop","log","status","state","last-report-id","last-report-state","pending-report","language-status","language-mode","manual-language","pipeline-mode","protocol-id","protocol-pdf","register-protocol","protocol-upload-status","protocol-analysis-progress","protocol-readiness","protocol-revision","protocol-review-panel","protocol-review-status","protocol-review-content","protocol-review-refresh","protocol-ocr-run","protocol-ocr-accept","protocol-ocr-reject","protocol-analysis-retry","protocol-development-activate","session-configuration-status","new-user","language-confirmation","procedure-title","procedure-meta","procedure-status","procedure-progress","procedure-step-title","procedure-primary","procedure-instruction","procedure-warning","procedure-spoken-summary","repeat-step","next-step","voice-command-hint","procedure-visual","source-visual-state","source-filename","source-page-number","source-short-hash","voice-processing","voice-filler-status","voice-primary-status","procedure-source","procedure-timer","procedure-observation","procedure-handoff","procedure-audit"];
+const names=["start","stop","log","status","state","last-report-id","last-report-state","pending-report","language-status","language-mode","manual-language","pipeline-mode","protocol-id","protocol-pdf","register-protocol","protocol-upload-status","protocol-analysis-progress","protocol-readiness","protocol-revision","protocol-review-panel","protocol-review-status","protocol-review-content","protocol-review-refresh","protocol-ocr-run","protocol-ocr-accept","protocol-ocr-reject","protocol-analysis-retry","protocol-development-activate","session-configuration-status","new-user","language-confirmation","procedure-title","procedure-meta","procedure-status","procedure-progress","procedure-step-title","procedure-primary","procedure-instruction","procedure-warning","procedure-spoken-summary","repeat-step","next-step","voice-command-hint","procedure-visual","source-visual-state","source-filename","source-page-number","source-short-hash","voice-processing","voice-filler-status","voice-primary-status","procedure-source","procedure-timer","procedure-observation","procedure-handoff","procedure-audit","experiment-context-name","experiment-context-version","experiment-context-approval","experiment-context-step","experiment-context-actions","experiment-context-readiness","experiment-resume-disclosure","experiment-session-select","experiment-session-status-badge"];
 const ids=Object.fromEntries(names.map(x=>{const element=new Element();element.id=x;return[x,element]}));ids["language-mode"].value="manual";ids["manual-language"].value="ko";ids["pipeline-mode"].value="cascade";ids["protocol-id"].value="protocol-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";for(const stage of ["recognized","routed","protocol","prepared","audio"]){const item=new Element();item.dataset.stage=stage;ids["voice-processing"].appendChild(item);}
 globalThis.document={getElementById:id=>ids[id],createElement:()=>new Element(),querySelector:()=>null};globalThis.location={protocol:"http:",host:"test"};globalThis.addEventListener=()=>{};
 class WS{static OPEN=1;static CLOSING=2;constructor(){this.readyState=1;this.sent=[]}send(v){this.sent.push(v)}close(){this.readyState=3}}
@@ -380,14 +520,14 @@ assert(normalizePresentationText("1mm3 AMBIC 001500 500 µL 37°C")=
 await onMessage({data:JSON.stringify({type:"filler.audio.start",configuration_id,turn_id:1,generation:5,frame_count:1,sample_rate:16000,encoding:"pcm_s16le"})},browserGeneration,current);await onMessage({data:new ArrayBuffer(640)},browserGeneration,current);await onMessage({data:JSON.stringify({type:"filler.audio.end",configuration_id,turn_id:1,generation:5,frame_count:1})},browserGeneration,current);assert(fillerSource!==null,"eligible filler did not enter the playback scheduler");await onMessage({data:JSON.stringify({type:"audio.segment.start",turn_id:1,generation:5,segment_index:0,frame_count:1})},browserGeneration,current);assert(fillerStopped===1&&fillerSource===null&&receiving.segment_index===0,"primary did not atomically stop filler");
 const fillerCard=turnNode(1,browserGeneration);await onMessage({data:JSON.stringify({type:"turn.filler",configuration_id,turn_id:1,generation:5,outcome:"scheduled"})},browserGeneration,current);assert(fillerCard.querySelector(".filler-status").textContent==="","scheduled filler created visible history");await onMessage({data:JSON.stringify({type:"turn.filler",configuration_id,turn_id:1,generation:5,outcome:"played"})},browserGeneration,current);assert(fillerCard.querySelector(".filler-status").textContent==="","filler outcome attached before transcript acceptance");await onMessage({data:JSON.stringify({type:"transcript",configuration_id,turn_id:1,generation:5,text:"현재 단계 알려줘"})},browserGeneration,current);assert(fillerCard.querySelector(".filler-status").textContent==="대기 안내 · 재생됨","played filler did not attach to the matching accepted Turn");await onMessage({data:JSON.stringify({type:"turn.filler",configuration_id,turn_id:1,generation:5,outcome:"skipped"})},browserGeneration,current);assert(fillerCard.querySelector(".filler-status").textContent==="","skipped filler left visible history");await onMessage({data:JSON.stringify({type:"turn.filler",configuration_id,turn_id:1,generation:5,outcome:"cancelled"})},browserGeneration,current);assert(fillerCard.querySelector(".filler-status").textContent==="","cancelled filler left visible history");
 const catalogEntries=[
- {protocol_id:"candidate-a-curated-development-v1",title:"Candidate A",revision_id:"fixture-c2779c24924dbeb3c83d",readiness_status:"analysis_required",approval_status:"development_only_not_final_acceptance",analysis_status:"validated_curated_fixture",available_for_execution:true,development_only:true},
- {protocol_id:"protocol-1",title:"Ready",revision_id:"pdf-1-analysis-1",readiness_status:"guidance_ready",analysis_status:"validated",available_for_execution:true},
+ {protocol_id:"candidate-a-curated-development-v1",title:"Candidate A",revision_id:"fixture-c2779c24924dbeb3c83d",readiness_status:"analysis_required",approval_status:"development_only_not_final_acceptance",analysis_status:"validated_curated_fixture",available_for_execution:true,development_only:true,approval:{status:"development_only",final_approval:false,actor_principal_id:null,actor_role:null,recorded_at:null,authority:"development_fixture"}},
+ {protocol_id:"protocol-1",title:"Ready",revision_id:"pdf-1-analysis-1",readiness_status:"guidance_ready",approval_status:"approved",analysis_status:"validated",available_for_execution:true,approval:{status:"approved",final_approval:true,actor_principal_id:"reviewer-a",actor_role:"reviewer",recorded_at:"2026-08-24T12:00:00Z",authority:"service_policy"}},
  {protocol_id:"protocol-2",title:"Review",revision_id:"pdf-1",readiness_status:"analysis_required",analysis_status:"structured_analysis_ready",available_for_execution:false},
  {protocol_id:"protocol-3",title:"OCR",revision_id:"pdf-1",readiness_status:"analysis_required",analysis_status:"ocr_required",available_for_execution:false},
  {protocol_id:"protocol-4",title:"Failed",revision_id:"pdf-1",readiness_status:"analysis_required",analysis_status:"analysis_failed",available_for_execution:false},
  {protocol_id:"protocol-5",title:"Large",revision_id:"pdf-1",readiness_status:"analysis_required",analysis_status:"chunk_analysis_in_progress",available_for_execution:false,analysis_run:{state:"chunk_analysis_in_progress",total_chunks:3,completed_chunks:1,failed_chunks:0,pending_chunks:2,chunks:[{source_page_start:1,source_page_end:2,status:"completed"},{source_page_start:3,source_page_end:4,status:"in_progress"},{source_page_start:5,source_page_end:6,status:"pending"}]}}
 ];
-fetch=async()=>{assert(ids["protocol-readiness"].textContent.includes("불러오는 중"),"catalog loading state missing");return{ok:true,json:async()=>({protocols:catalogEntries})}};ids["protocol-id"].value="unavailable-old-selection";await loadProtocolCatalog();assert(protocolCatalog.size===6,`catalog size: ${protocolCatalog.size}`);assert([...protocolCatalog.values()].filter(item=>item.protocol_id==="candidate-a-curated-development-v1").length===1,"Candidate A did not appear exactly once after catalog reload");assert(protocolCatalog.get("candidate-a-curated-development-v1").development_only===true&&protocolCatalog.get("candidate-a-curated-development-v1").approval_status==="development_only_not_final_acceptance","Candidate A lost development-only status");assert(ids["protocol-id"].value==="candidate-a-curated-development-v1",`ready selection missing: ${ids["protocol-id"].value}; options=${ids["protocol-id"].options.map(option=>`${option.value}/${option.disabled}`).join(",")}`);assert(ids["protocol-readiness"].textContent.includes("개발용"),`development status missing: ${ids["protocol-readiness"].textContent}`);ids["protocol-id"].value="protocol-5";renderSelectedProtocolContext();assert(ids["protocol-analysis-progress"].textContent.includes("전체 3 / 완료 1 / 실패 0 / 대기 2")&&ids["protocol-analysis-progress"].textContent.includes("p.3-4 in_progress")&&ids["protocol-analysis-progress"].textContent.includes("검토·승인 전 실행 불가"),`chunk progress missing: ${ids["protocol-analysis-progress"].textContent}`);for(const [id,label] of [["protocol-2","구조화 분석"],["protocol-3","OCR 필요"],["protocol-4","분석 실패"],["protocol-5","대형 문서 분석 진행 중"]]){ids["protocol-id"].value=id;renderSelectedProtocolContext();assert(ids["protocol-readiness"].textContent.includes(label),`catalog state missing: ${id}`);}renderState("LISTENING");assert(ids["protocol-id"].disabled&&ids["protocol-id"].attributes["aria-disabled"]==="true","active session did not accessibly lock selector");fetch=async()=>({ok:false,json:async()=>({})});await loadProtocolCatalog();assert(ids["protocol-readiness"].textContent.includes("불러오기 실패")&&ids["protocol-id"].children.length===1&&ids["protocol-analysis-progress"].textContent.includes("상태 없음"),"catalog failure state missing");
+fetch=async()=>{assert(ids["protocol-readiness"].textContent.includes("불러오는 중"),"catalog loading state missing");return{ok:true,json:async()=>({protocols:catalogEntries})}};ids["protocol-id"].value="unavailable-old-selection";await loadProtocolCatalog();assert(protocolCatalog.size===6,`catalog size: ${protocolCatalog.size}`);assert([...protocolCatalog.values()].filter(item=>item.protocol_id==="candidate-a-curated-development-v1").length===1,"Candidate A did not appear exactly once after catalog reload");assert(protocolCatalog.get("candidate-a-curated-development-v1").development_only===true&&protocolCatalog.get("candidate-a-curated-development-v1").approval_status==="development_only_not_final_acceptance","Candidate A lost development-only status");assert(ids["protocol-id"].value==="candidate-a-curated-development-v1",`ready selection missing: ${ids["protocol-id"].value}; options=${ids["protocol-id"].options.map(option=>`${option.value}/${option.disabled}`).join(",")}`);assert(ids["protocol-readiness"].textContent.includes("개발용"),`development status missing: ${ids["protocol-readiness"].textContent}`);assert(ids["experiment-context-name"].textContent==="Candidate A"&&ids["experiment-context-approval"].textContent.includes("최종 승인 없음"),"development protocol context was not explicit");ids["protocol-id"].value="protocol-1";currentExperimentSessionId="experiment-1";currentExperimentSessionVersion=7;currentExperimentSessionStatus="in_progress";currentExperimentProtocolRevision="pdf-1-analysis-1";currentExperimentStepLabel="2";currentExperimentCompletedStepCount=1;currentExperimentRecovery={eligible:true,last_event_type:"session_recovered",restored:{protocol_id:"protocol-1",protocol_revision_id:"pdf-1-analysis-1",current_step_id:"step-2",current_step_label:"2",completed_step_count:1},not_restored:["pending_confirmations","conversation_history","active_timers"],next_action:"resume_voice_session"};renderSelectedProtocolContext();updateStartActionLabel();assert(ids.start.textContent==="실험 이어하기"&&ids["experiment-context-approval"].textContent.includes("검토자")&&ids["experiment-context-approval"].textContent.includes("reviewer-a"),"approval responsibility or resume action missing");assert(ids["experiment-resume-disclosure"].textContent.includes("정확한 버전 pdf-1-analysis-1")&&ids["experiment-resume-disclosure"].textContent.includes("완료 1개 단계")&&ids["experiment-resume-disclosure"].textContent.includes("이전 대화"),"honest resume disclosure missing");clearExperimentResumeSelection();assert(currentExperimentSessionId===null&&ids.start.textContent==="새 실험 시작"&&ids["experiment-resume-disclosure"].hidden,"new experiment did not clear only the resume selection");ids["protocol-id"].value="protocol-5";renderSelectedProtocolContext();assert(ids["protocol-analysis-progress"].textContent.includes("전체 3 / 완료 1 / 실패 0 / 대기 2")&&ids["protocol-analysis-progress"].textContent.includes("p.3-4 in_progress")&&ids["protocol-analysis-progress"].textContent.includes("검토·승인 전 실행 불가"),`chunk progress missing: ${ids["protocol-analysis-progress"].textContent}`);for(const [id,label] of [["protocol-2","구조화 분석"],["protocol-3","OCR 필요"],["protocol-4","분석 실패"],["protocol-5","대형 문서 분석 진행 중"]]){ids["protocol-id"].value=id;renderSelectedProtocolContext();assert(ids["protocol-readiness"].textContent.includes(label),`catalog state missing: ${id}`);}renderState("LISTENING");assert(ids["protocol-id"].disabled&&ids["protocol-id"].attributes["aria-disabled"]==="true","active session did not accessibly lock selector");fetch=async()=>({ok:false,json:async()=>({})});await loadProtocolCatalog();assert(ids["protocol-readiness"].textContent.includes("불러오기 실패")&&ids["protocol-id"].children.length===1&&ids["protocol-analysis-progress"].textContent.includes("상태 없음"),"catalog failure state missing");
 const selectedPdf={name:"selected.pdf",type:"application/pdf"};ids["protocol-pdf"].files=[selectedPdf];const unchangedProgress=ids["protocol-analysis-progress"].textContent;
 const errorCases=[
  ["invalid_pdf","PDF 파일이 손상되었거나 다운로드가 완료되지 않았습니다. 원본 파일을 다시 내려받아 선택해 주세요."],
