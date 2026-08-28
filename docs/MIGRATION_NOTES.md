@@ -157,3 +157,35 @@ metadata-only. A legacy workflow revision that does not contain the fixed
 non-execution metadata is not eligible for a new link and should be re-imported
 from its pinned GitHub commit as a new review-required revision. Revoked workflow
 revisions remain revoked; re-enabling requires a new immutable source revision.
+
+## Human-confirmation checkpoints and reviewer resolutions (no schema change)
+
+Both features reuse existing tables. Nothing needs migrating and no runtime
+configuration has to change to adopt them.
+
+- **Readiness re-evaluation.** A `repeat_until` construct whose source-defined
+  range is a contiguous run of represented steps ending at its own step is now
+  classified as `human_confirmed_repeat_until`, which the conservative
+  capability profile supports. Stored analysis revisions are immutable and keep
+  the readiness they were written with; a protocol that was blocked only by such
+  a construct becomes `guidance_ready` on its next analysis or reviewer
+  resolution. Nothing is rewritten in place.
+- **Reviewer resolutions** append a new row to the existing `analysis_revisions`
+  and `clarifications` tables plus a `protocol_source_ambiguity_resolved` event
+  in `protocol_events`. The source PDF and every earlier analysis revision are
+  untouched.
+- **Execution approval** now projects the *latest* decision in the existing
+  `protocol_revision_approved` event stream instead of "any approval ever", so a
+  revocation actually revokes and a later re-approval is a new ledger entry.
+  Existing single-approval histories project identically.
+- **`experiment_completed_steps`** inserts now use
+  `ON CONFLICT(session_id,step_id) DO NOTHING`, because a source-authorized
+  repeat range legitimately re-executes a completed step. Every repetition is
+  still recorded individually in the append-only
+  `experiment_session_events` ledger, and replay protection remains on
+  `event_key`.
+- **Optional setting.**
+  `VOICE_WORKFLOW_AGENT_REPEAT_CONFIRMATION_REVIEW_THRESHOLD` (default `5`)
+  controls how many confirmed repetitions run before the server asks the
+  researcher whether to continue, pause, or request review. It is an operational
+  guardrail, never a scientific maximum, and leaving it unset is supported.

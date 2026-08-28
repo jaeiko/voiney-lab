@@ -1566,11 +1566,17 @@ class WorkspaceStore:
                     raise WorkspaceError(
                         "Completed progress requires a protocol step."
                     )
+                # A source-defined human-confirmation repeat range legitimately
+                # re-executes a step that is already recorded as completed. The
+                # append-only event ledger keeps every repetition; this table
+                # only answers "was this step ever completed", so the first
+                # record stands and replay protection stays with event_key.
                 self._connection.execute(
                     """INSERT INTO experiment_completed_steps(
                     organization_id,session_id,step_id,step_label,
                     completed_by_principal_id,completed_at,event_id
-                    ) VALUES(?,?,?,?,?,?,?)""",
+                    ) VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(session_id,step_id) DO NOTHING""",
                     (
                         principal.organization_id,
                         session_id,

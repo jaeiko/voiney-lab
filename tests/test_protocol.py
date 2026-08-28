@@ -36,6 +36,47 @@ class ProtocolTests(unittest.TestCase):
                 '{"type":"report.status.get","report_id":"sr-20260722-a1b2c3"}'),
             {"type":"report.status.get","report_id":"SR-20260722-A1B2C3"})
         self.assertEqual(parse_control("{\"type\":\"playback.ended\",\"turn_id\":7}"),{"type":"playback.ended","turn_id":7})
+        # A bench checkpoint action is admitted only with the exact checkpoint
+        # and step it was shown for, and only with a supported decision.
+        self.assertEqual(
+            parse_control(json.dumps({
+                "type":"workflow.human_checkpoint","decision":"not_met",
+                "checkpoint_id":"repeat-2-7","step_id":"step-7",
+                "configuration_id":3,"generation":2,
+            })),
+            {
+                "type":"workflow.human_checkpoint","decision":"not_met",
+                "checkpoint_id":"repeat-2-7","step_id":"step-7",
+                "configuration_id":3,"generation":2,
+            },
+        )
+        self.assertEqual(
+            parse_control(json.dumps({
+                "type":"workflow.complete_current_step",
+                "step_id":"step-6","configuration_id":3,"generation":2,
+            })),
+            {
+                "type":"workflow.complete_current_step",
+                "step_id":"step-6","configuration_id":3,"generation":2,
+            },
+        )
+        for payload in (
+            {"type":"workflow.human_checkpoint","checkpoint_id":"c","step_id":"s"},
+            {"type":"workflow.human_checkpoint","decision":"advance",
+             "checkpoint_id":"c","step_id":"s"},
+            {"type":"workflow.human_checkpoint","decision":"met","step_id":"s"},
+            {"type":"workflow.human_checkpoint","decision":"met","checkpoint_id":"c"},
+            {"type":"workflow.human_checkpoint","decision":"met",
+             "checkpoint_id":"","step_id":"s"},
+            {"type":"workflow.human_checkpoint","decision":"met",
+             "checkpoint_id":"c","step_id":"s","configuration_id":3},
+            {"type":"workflow.complete_current_step","step_id":"step-6",
+             "configuration_id":3},
+            {"type":"workflow.complete_current_step","step_id":"",
+             "configuration_id":3,"generation":2},
+        ):
+            with self.assertRaises(ProtocolError):
+                parse_control(json.dumps(payload))
         for value in (None,0,-1,True,"1"):
             with self.assertRaises(ProtocolError): parse_control(json.dumps({"type":"playback.ended","turn_id":value}))
         constraints={
@@ -50,6 +91,16 @@ class ProtocolTests(unittest.TestCase):
             },
         }
         self.assertEqual(parse_control(json.dumps(constraints)),constraints)
+        # A human confirming which acoustic label belongs to which participant.
+        # The client may only name a participant the server already rostered;
+        # this control never asserts identity by itself.
+        confirm={
+            "type":"session.speaker.confirm",
+            "speaker_label":"speaker_0","participant_id":"researcher-1",
+        }
+        self.assertEqual(parse_control(json.dumps(confirm)),confirm)
+        release={"type":"session.speaker.release","speaker_label":"speaker_0"}
+        self.assertEqual(parse_control(json.dumps(release)),release)
         for payload in (
             {"type":"session.start"},
             {"type":"session.start","pipeline":"direct"},
@@ -79,6 +130,13 @@ class ProtocolTests(unittest.TestCase):
              "scheduled_chunks":1,"audio_context_state":"running"},
             {"type":"report.status.get","report_id":"not-a-report"},
             {"type":"report.status.get","report_id":7},
+            {"type":"session.speaker.confirm","speaker_label":"speaker_0"},
+            {"type":"session.speaker.confirm","speaker_label":"","participant_id":"r"},
+            {"type":"session.speaker.confirm","speaker_label":"s","participant_id":7},
+            {"type":"session.speaker.confirm","speaker_label":"s"*65,
+             "participant_id":"r"},
+            {"type":"session.speaker.release"},
+            {"type":"session.speaker.release","speaker_label":"  "},
             {"type":"client.audio_constraints","requested":{},"actual":{}},
             {"type":"client.audio_constraints","requested":{
                 "echoCancellation":True,"noiseSuppression":True,

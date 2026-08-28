@@ -2,6 +2,21 @@ import { test, expect } from '@playwright/test';
 
 test.describe.configure({ timeout: 45_000 });
 
+/**
+ * The bench page finishes its initial workspace load asynchronously and the last
+ * step of that load re-renders the timeline. Wait for that settled state instead
+ * of `networkidle`, which never settles when optional live-provider features are
+ * enabled, and which would otherwise let an injected render be overwritten.
+ */
+async function benchReady(page) {
+  await page.goto('/');
+  await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
+  await expect(page.locator('#experiment-event-timeline')).toContainText(
+    '진행 중인 실험 없음',
+    { timeout: 20_000 },
+  );
+}
+
 test.describe('Researcher / Bench workspace', () => {
   test('loads with the researcher workspace active and core state visible', async ({ page }) => {
     await page.goto('/');
@@ -23,6 +38,8 @@ test.describe('Researcher / Bench workspace', () => {
 
     // Experiment ledger / timeline empty state before any session exists
     await expect(page.locator('#experiment-session-ledger')).toBeVisible();
+    await expect(page.locator('#experiment-event-timeline')).toBeHidden();
+    await page.locator('#experiment-session-ledger > summary').click();
     await expect(page.locator('#experiment-event-timeline')).toBeVisible();
   });
 
@@ -40,6 +57,7 @@ test.describe('Researcher / Bench workspace', () => {
 
   test('evidence and observation capture controls are present with non-blank guidance text', async ({ page }) => {
     await page.goto('/');
+    await page.locator('#experiment-session-ledger > summary').click();
     await expect(page.locator('#manual-observation-content')).toBeVisible();
     await expect(page.locator('#experiment-evidence-file')).toBeVisible();
     const captureStatus = page.locator('#experiment-capture-status');
@@ -47,9 +65,8 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('recorded evidence exposes a same-origin opaque download action', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
+    await benchReady(page);
+    await page.locator('#experiment-session-ledger > summary').click();
     await page.evaluate(() => renderExperimentTimeline({
       session: {
         session_id: 'experiment-evidence-browser', version: 2,
@@ -77,10 +94,10 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('long conversation stays contained beside the continuous step and timeline workspace', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await benchReady(page);
     await page.locator('#hero-setup').evaluate((node) => node.classList.add('collapsed'));
     await page.evaluate(() => {
+      document.querySelector('#experiment-session-ledger').open = true;
       for (let turnId = 1; turnId <= 18; turnId += 1) {
         const node = turnNode(turnId);
         node.querySelector('.transcript').textContent = `연구자 음성 요청 ${turnId}`;
@@ -139,10 +156,127 @@ test.describe('Researcher / Bench workspace', () => {
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
   });
 
+  test('voice turns distinguish what was heard, understood, and saved', async ({ page }) => {
+    await benchReady(page);
+    await page.evaluate(() => {
+      const configurationId = 71;
+      const turnId = 9;
+      const generation = 17;
+      acceptedSessionConfiguration = {
+        configuration_id: configurationId,
+        mode: 'cascade', language: 'ko', protocol_id: 'candidate-a', revision_id: 'fixture-1',
+      };
+      const card = turnNode(turnId, sessionGeneration);
+      turnServerGenerations.set(turnBrowserKey(turnId, sessionGeneration), generation);
+      card.querySelector('.transcript').textContent = '다음 단계 알려줘';
+      applyRouteDecision({
+        configuration_id: configurationId, turn_id: turnId, generation,
+        intent: 'current_step', runtime_router: 'curated_protocol',
+        action: 'next_information', answer_origin: 'current_protocol', state_mutation: false,
+      }, sessionGeneration);
+    });
+
+    // Locate by the card's own heading rather than by position: the log may
+    // render newest-first, and the two cards below must not be confused.
+    const turn = page.locator('.turn', { hasText: '요청 9' });
+    await expect(turn.locator('.transcript')).toHaveText('다음 단계 알려줘');
+    await expect(turn.locator('.understood')).toHaveText('다음 단계 미리 보기');
+    await expect(turn.locator('.saved')).toHaveText('상태 변경 없음');
+    await expect(turn.locator('.saved')).toHaveAttribute('data-mutated', 'false');
+    // A question changed nothing, so no playback-outcome row appears either.
+    await expect(turn.locator('.playback-outcome')).toBeHidden();
+
+    // A completion is only reported as saved once the server says it persisted.
+    await page.evaluate(() => {
+      const configurationId = 71;
+      const turnId = 10;
+      const generation = 17;
+      const card = turnNode(turnId, sessionGeneration);
+      turnServerGenerations.set(turnBrowserKey(turnId, sessionGeneration), generation);
+      card.querySelector('.transcript').textContent = '완료됐어요';
+      applyRouteDecision({
+        configuration_id: configurationId, turn_id: turnId, generation,
+        intent: 'workflow_control', runtime_router: 'curated_protocol',
+        action: 'advance_step', answer_origin: 'server_workflow_state',
+        state_mutation: true,
+      }, sessionGeneration);
+    });
+    const completion = page.locator('.turn', { hasText: '요청 10' });
+    await expect(completion.locator('.saved')).toHaveText('처리 중…');
+    await page.evaluate(() => applyTurnOutcome({
+      configuration_id: 71, turn_id: 10, generation: 17,
+      workflow_outcome: 'experiment_report_saved', state_changed: true,
+      report_persisted: true, workflow_state_persisted: true,
+    }, sessionGeneration));
+    await expect(completion.locator('.saved')).toHaveText('실험 기록 저장됨');
+
+    // Interrupting playback stops audio and says so, in its own row. The
+    // committed workflow result above it is untouched.
+    await page.evaluate(() => applyPlaybackOutcome(10, sessionGeneration, 'interrupted_by_user'));
+    await expect(completion.locator('.playback-outcome')).toBeVisible();
+    await expect(completion.locator('.playback-outcome')).toContainText('답변 재생만 중단됨');
+    await expect(completion.locator('.saved')).toHaveText('실험 기록 저장됨');
+  });
+
+  test('a human checkpoint is shown as bench work with two explicit answers', async ({ page }) => {
+    await benchReady(page);
+    await expect(page.locator('#human-checkpoint')).toBeHidden();
+
+    await page.evaluate(() => renderHumanCheckpoint({
+      active: true,
+      human_checkpoint: {
+        checkpoint_id: 'candidate-a-repeat-steps-02-07',
+        gate_step_id: 'candidate-a-step-07', gate_step_label: '7',
+        condition_source_text: '7 Repeat steps 2-7 until the gel band is fully destained.',
+        condition_primary_text: '젤 밴드가 완전히 탈색될 때까지 2–7단계를 반복합니다.',
+        source_page: 5,
+        repeated_step_ids: ['candidate-a-step-02', 'candidate-a-step-07'],
+        repeated_step_labels: ['2', '3', '4', '5', '6', '7'],
+        confirmed_repetitions: 1,
+        repetition_review_threshold: 5,
+        awaiting_continuation_decision: false,
+        authority: 'researcher_observation',
+      },
+    }));
+
+    const card = page.locator('#human-checkpoint');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('연구자가 직접 확인');
+    await expect(page.locator('#human-checkpoint-source-text')).toContainText('fully destained');
+    await expect(page.locator('#human-checkpoint-primary')).toContainText('탈색');
+    await expect(page.locator('#human-checkpoint-page')).toContainText('p.5');
+    await expect(page.locator('#human-checkpoint-repeat')).toContainText('2–7단계');
+    await expect(page.locator('#human-checkpoint-not-met')).toHaveText('아직 충족되지 않음');
+    await expect(page.locator('#human-checkpoint-met')).toHaveText('조건 충족 확인');
+    await expect(page.locator('#human-checkpoint-continuation')).toBeHidden();
+    // It is a checkpoint, not an error: no alert styling, no blocker wording.
+    await expect(card).not.toContainText('오류');
+    await expect(card).not.toContainText('unsupported');
+  });
+
+  test('the repetition check-in asks the researcher instead of inventing a maximum', async ({ page }) => {
+    await benchReady(page);
+    await page.evaluate(() => renderHumanCheckpoint({
+      active: true,
+      human_checkpoint: {
+        checkpoint_id: 'candidate-a-repeat-steps-02-07',
+        gate_step_id: 'candidate-a-step-07', gate_step_label: '7',
+        condition_source_text: '7 Repeat steps 2-7 until the gel band is fully destained.',
+        condition_primary_text: null, source_page: 5,
+        repeated_step_ids: ['candidate-a-step-02'], repeated_step_labels: ['2', '7'],
+        confirmed_repetitions: 5, repetition_review_threshold: 5,
+        awaiting_continuation_decision: true, authority: 'researcher_observation',
+      },
+    }));
+    await expect(page.locator('#human-checkpoint-continuation')).toBeVisible();
+    await expect(page.locator('#human-checkpoint-continuation-text')).toContainText('원문에는 최대 반복 횟수가 정해져 있지 않습니다');
+    await expect(page.locator('#human-checkpoint-continue')).toBeVisible();
+    await expect(page.locator('#human-checkpoint-pause')).toBeVisible();
+    await expect(page.locator('#human-checkpoint-review')).toBeVisible();
+  });
+
   test('only explicitly selected open experiments use the resume action', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
+    await benchReady(page);
     await page.evaluate(() => renderExperimentTimeline({
       session: {
         session_id: 'experiment-browser-resume', version: 7,
@@ -194,5 +328,45 @@ test.describe('Researcher / Bench workspace', () => {
     }));
     await expect(page.locator('#start')).toHaveText('새 실험 시작');
     await expect(page.locator('#experiment-resume-disclosure')).toContainText('종료되어');
+  });
+
+  test('reports microphone state and Turn outcomes in bench Korean, not internals', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#researcher-workspace')).toBeVisible();
+
+    // A bench user needs a readable microphone state, and it must not be a
+    // number: raw VAD probabilities belong in the developer detail panel.
+    const microphone = page.locator('#microphone-status');
+    await expect(microphone).toBeVisible();
+    await expect(microphone).not.toHaveText('');
+    expect(await microphone.innerText()).not.toMatch(/\d+(\.\d+)?\s*(rms|dB|%)/i);
+    // Tone is carried by an attribute and a glyph, not by colour alone.
+    await expect(microphone).toHaveAttribute('data-tone', /idle|ok|warn|error/);
+
+    // Korean is the primary vocabulary of the voice history.
+    const timeline = page.locator('.panel.timeline');
+    await expect(timeline).toContainText('들은 말');
+    await expect(timeline).toContainText('이해한 내용');
+    await expect(timeline).toContainText('처리 결과');
+    expect(await timeline.innerText()).not.toContain('HEARD');
+    expect(await timeline.innerText()).not.toContain('SAVED');
+  });
+
+  test('stays within the viewport at a narrow tablet width', async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.goto('/');
+    await expect(page.locator('#researcher-workspace')).toBeVisible();
+    const overflow = await page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    // A horizontal scrollbar on the whole page makes a gloved touch target
+    // drift under the user's finger; wide content must scroll inside its own
+    // container instead.
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    // The primary action stays reachable and comfortably tappable.
+    const start = page.locator('#start');
+    await expect(start).toBeVisible();
+    const box = await start.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(32);
   });
 });

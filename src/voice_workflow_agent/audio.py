@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 import struct
 import wave
 from collections.abc import Iterable
@@ -28,6 +29,21 @@ def pcm16_to_samples(pcm: bytes) -> list[int]:
     if len(pcm) % SAMPLE_WIDTH:
         raise ValueError("PCM16 data must contain an even number of bytes")
     return list(struct.unpack(f"<{len(pcm) // SAMPLE_WIDTH}h", pcm))
+
+
+def pcm16_rms(pcm: bytes) -> float:
+    """Return one frame's RMS level normalised to ``0.0 .. 1.0``.
+
+    Normalising by full scale keeps every level threshold in this repository
+    comparable across capture hardware. This is digital amplitude only: it is
+    never a sound-pressure level and must not be reported in dBA.
+    """
+
+    samples = pcm16_to_samples(pcm)
+    if not samples:
+        return 0.0
+    total = sum(float(sample) * float(sample) for sample in samples)
+    return math.sqrt(total / len(samples)) / 32768.0
 
 
 class FrameBuffer:

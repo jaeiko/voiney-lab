@@ -75,7 +75,7 @@ _WARNING_PATTERNS = (
     r"\b(?:warning|caution|precaution|common\s+mistake|what\s+should\s+i\s+(?:avoid|watch))s?\b",
 )
 _NEXT_PATTERNS = (
-    r"(?:다음\s*(?:단계|작업)|그\s*다음)(?:도|은|에는|으로)?\s*(?:알려|설명|뭐|무엇|보여|하는)",
+    r"(?:다음\s*(?:단계|작업)|그\s*다음)(?:도|은|에는|로|으로)?\s*(?:알려|설명|뭐|무엇|보여|하는)",
     r"(?:다음에는|다음엔)\s*(?:뭐|무엇|어떤\s*작업)",
     r"\b(?:next\s+step|what(?:'s|\s+is)\s+next|what\s+do\s+we\s+do\s+next)\b",
 )
@@ -122,9 +122,10 @@ _AGENT_INFORMATION_PATTERNS = (
 )
 _WORKFLOW_CONTROL_PATTERNS = (
     r"^(?:프로토콜|실험|워크플로)?\s*(?:을|를)?\s*(?:시작|중지|중단|종료|일시\s*정지|재개)(?:해\s*줘|하자|할게|합니다|해)?$",
-    r"(?:현재\s*|이번\s*|\d+\s*)단계(?:를|는)?\s*(?:완료|끝|마쳤|마침|다\s*했)",
+    r"(?:현재\s*|지금\s*|이번\s*|이\s*|\d+\s*)단계(?:를|는)?\s*(?:완료|끝|마쳤|마침|다\s*했)",
     r"^(?:완료|끝났어|다\s*했어|다음\s*단계로\s*(?:가|넘어가|진행))",
-    r"\b(?:start|stop|pause|resume|complete)\s+(?:the\s+)?(?:protocol|workflow|current\s+step)\b",
+    r"\b(?:go|move|proceed|guide\s+me|take\s+me)\s+(?:on\s+to\s+|to\s+)?(?:the\s+)?next\s+step\b",
+    r"\b(?:start|stop|pause|resume|complete|completed|finish|finished)\s+(?:the\s+)?(?:protocol|workflow|current\s+step)\b",
 )
 
 
@@ -201,15 +202,11 @@ def arbitrate_request(text: str) -> RequestArbitration:
             ("image",),
         )
 
-    if _matches(normalized, _CURRENT_STEP_PATTERNS) or next_step:
-        return RequestArbitration(
-            normalized,
-            RequestIntent.CURRENT_STEP,
-            1.0,
-            "next_step_preview" if next_step else "current_step_information",
-            (("next_step_preview",) if next_step else ("current_step",)),
-        )
-
+    # Mutation-shaped wording must reach the curated runtime's stricter
+    # completion/navigation admission.  This check precedes informational
+    # current/next-step projection so phrases such as "I completed the current
+    # step" and "guide me to the next step" cannot be downgraded to a read-only
+    # answer.  A question such as "다음 단계 알려줘" does not match this grammar.
     if _matches(normalized, _WORKFLOW_CONTROL_PATTERNS):
         return RequestArbitration(
             normalized,
@@ -217,6 +214,15 @@ def arbitrate_request(text: str) -> RequestArbitration:
             1.0,
             "workflow_control_candidate",
             mutation_candidate=True,
+        )
+
+    if _matches(normalized, _CURRENT_STEP_PATTERNS) or next_step:
+        return RequestArbitration(
+            normalized,
+            RequestIntent.CURRENT_STEP,
+            1.0,
+            "next_step_preview" if next_step else "current_step_information",
+            (("next_step_preview",) if next_step else ("current_step",)),
         )
 
     question_like = protocol_information or agent_information or bool(

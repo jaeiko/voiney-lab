@@ -210,7 +210,9 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         self.assertIsNotNone(unclear.pending_completion_confirmation)
 
     def test_observation_yes_no_inherits_only_owned_source_predicate(self) -> None:
-        for label in ("7", "9", "20"):
+        """A bare yes/no answers the server's own question and nothing else."""
+
+        for label, repeat_start in (("7", "2"), ("9", "8")):
             with self.subTest(label=label, answer="yes"):
                 session = self.session(label)
                 opening = session.current_index
@@ -221,14 +223,27 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 self.assertEqual(session.current_index, opening + 1)
             with self.subTest(label=label, answer="no"):
                 session = self.session(label)
-                opening = session.current_index
                 session.plan("현재 단계를 완료했어", turn_id=2, language="ko")
                 declined = session.plan("아니요", turn_id=3, language="ko")
                 self.assertTrue(declined.reported_observation)
                 self.assertEqual(declined.observation_predicate, "negative")
-                self.assertEqual(session.current_index, opening)
-                if label == "20":
-                    self.assertIn("미해결", declined.display_text or "")
+                self.assertEqual(
+                    self.fixture.steps[session.current_index].source_label,
+                    repeat_start,
+                )
+        with self.subTest(label="20"):
+            # Step 20 carries an unresolved source ambiguity, not a checkpoint,
+            # so no explicit answer may clear it from the bench.
+            session = self.session("20")
+            opening = session.current_index
+            blocked = session.plan(
+                "현재 단계를 완료했어", turn_id=2, language="ko"
+            )
+            self.assertFalse(blocked.state_changed)
+            self.assertIn("원문 해석 확인", blocked.display_text or "")
+            follow_up = session.plan("네", turn_id=3, language="ko")
+            self.assertFalse(follow_up.state_changed)
+            self.assertEqual(session.current_index, opening)
         unowned = self.session("7").plan("네", turn_id=2, language="ko")
         self.assertFalse(unowned.state_changed)
 

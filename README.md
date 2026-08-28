@@ -36,6 +36,12 @@ authority.
   revision or rebind a running experiment.
 - Parsing, structural readiness, hazard review, human approval, and operational
   authorization are separate gates.
+- A source-defined condition only a researcher can judge (“repeat until the gel
+  band is fully destained”) is a **human-confirmation checkpoint**, not a
+  readiness failure. The server quotes the source condition, waits for an
+  explicit human answer, records it, and then makes a deterministic move. A
+  source sentence whose meaning is genuinely unsettled still blocks execution
+  until a reviewer resolves it into a new revision.
 - Raw audio, unrestricted transcripts, prompts, model reasoning, and connector
   secrets are excluded from persistent pilot analytics.
 
@@ -186,6 +192,70 @@ it is not displayed forever as an unexplained `analysis_required` state.
 Unsupported conditions, ambiguities, critical missing values, conflicts,
 unreviewed/invalid OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
+## Human-confirmation checkpoints
+
+The researcher at the bench is the authority for every observation the source
+protocol defines. The server owns only three things: which step is current, which
+exact step range the source says to replay, and whether an explicit human answer
+has been admitted.
+
+A `repeat_until` construct becomes a checkpoint when the server can already
+answer “which steps do I replay and where do I ask?” without interpreting
+anything - the source-defined range must be a contiguous run of represented steps
+in document order ending at the construct's own step. Those constructs are
+represented as `FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL`, are supported by the
+conservative capability profile, and are therefore compatible with
+`GUIDANCE_READY`. A repeat construct whose range cannot be derived stays
+unsupported and still blocks readiness.
+
+At execution:
+
+```text
+gate step reached
+  → agent quotes the source condition verbatim and asks
+  → researcher answers explicitly (bench buttons or voice)
+       “not met”  → observation recorded → return to the exact source range
+       “met”      → confirmation recorded → leave the loop, advance one step
+       anything else → ask again, nothing changes
+```
+
+Nothing here evaluates an experimental condition and nothing here is reachable
+from model output. Questions, hypotheticals, and unrelated reports are not
+answers. A bare “예”/“yes” counts only while the server's own question is open.
+
+After a configurable number of confirmed repetitions
+(`VOICE_WORKFLOW_AGENT_REPEAT_CONFIRMATION_REVIEW_THRESHOLD`, default 5) the
+server stops and asks whether to continue, pause, or request review. That is an
+operational guardrail, not a scientific maximum: the source protocol does not
+define one and the product never invents one.
+
+## Reviewer resolution of a source ambiguity
+
+An unresolved `SourceAmbiguity` is the reviewer's work, not the researcher's.
+`GET /api/protocols/{id}/review` reports it under `needs_resolution` with the
+exact source excerpt and page, separately from `human_checkpoints`, which are
+informational.
+
+`POST /api/protocols/{id}/resolutions` records the reviewer's reading. It never
+edits the source: it appends a **new analysis revision** in which the named
+ambiguity is marked resolved with the reviewer's own words, plus an append-only
+clarification row and a decision event carrying actor, role, timestamp, base
+revision, and the resolved range. When the ambiguity is a “repeat steps X–Y”
+sentence, the reviewer selects existing steps and the resulting repeat construct
+keeps the **source sentence verbatim** as its condition; a range the server
+cannot execute deterministically is refused rather than guessed.
+
+Readiness is then recalculated. If nothing else blocks,
+`execution_readiness.state` becomes `ready_for_execution_approval` and the
+reviewer can record `approve_for_execution`
+(`POST /api/protocols/{id}/revisions/{revision_id}/approve`). Approval and
+revocation (`.../revoke`) are the latest entry in an append-only ledger; earlier
+decisions and completed experiment records are never rewritten. A reviewer
+approval of a workspace lineage revision that is linked to a catalog protocol
+(`catalog_protocol_id`) performs the execution approval in the same request, and
+is refused up front when readiness gates have not passed - so “approved here,
+unapproved there” cannot occur.
+
 ## Lab adaptations
 
 A local protocol difference is represented as a new immutable child revision, never
@@ -230,6 +300,94 @@ No workflow mutation is executed from that mismatched transcript. Sanitized
 analytics retain only the mismatch classification and timing—not transcript
 text. See the [official xAI STT documentation](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text).
 
+## Noisy-lab interruption handling
+
+A shared wet lab is loud, and WebRTC VAD alone labels glassware, chair scrapes
+and fume hoods as speech. Barge-in is therefore decided by two independent
+things that must agree:
+
+| Question | Answered by |
+| --- | --- |
+| Is this speech-shaped, and for long enough? | `vad.py` endpoint detector |
+| Is it loud enough *for this room*, sustained, and clear of the playback-onset echo window? | `barge_in.py` interruption gate |
+
+Only when both agree does the browser duck the agent's answer — an
+**interruption candidate**. Playback is cancelled only after independent
+evidence: an STT transcript that `language.classify_input_event` admits, or a
+short explicit stop command (`멈춰`, `그만`, `잠깐`, `일시정지`, `stop`,
+`pause`), which is honoured as a fail-safe whoever says it. A candidate that
+turns out to be noise is discarded silently: playback continues, no phantom user
+command enters the voice history, and canonical workflow state is untouched.
+
+The ambient floor is tracked with a minimum-statistics estimator — follow the
+level down quickly, creep up slowly — so the same voice stays detectable in a
+loud room while the room itself never qualifies. Every threshold is bounded,
+validated and environment-overridable; see `.env.example` for each value and the
+reason it exists.
+
+**Stopping audio is not failing a turn.** Playback state, workflow state and
+persistence state are three separate facts. A researcher who interrupts the
+spoken acknowledgement of a completion stops the audio; the committed
+transaction stays committed, and the voice history says so:
+
+```text
+처리 결과   실험 기록 저장됨
+음성 재생 · 답변 재생만 중단됨 · 저장된 결과는 그대로 유지됩니다
+```
+
+Reproduce the acceptance sweep for the interruption state machine:
+
+```bash
+python -B scripts/evaluate_barge_in.py
+```
+
+Every fixture it runs is **synthetic** — constant-amplitude PCM with a scripted
+VAD verdict. It proves the state machine and it is not a real-lab measurement;
+its ratios are digital amplitude ratios, never dBA.
+
+## Speaker diarization and experiment participants
+
+Optional, off by default (`XAI_STT_DIARIZE=0`), and consumed through the
+documented `diarize` field of the batch transcription endpoint this repository
+already calls.
+
+**Diarization is not authentication.** It separates voices; it does not verify
+that a voice belongs to an enrolled person. A diarized label such as `speaker_0`
+is an acoustic label scoped to one session. Application identity still comes
+from login and lab membership, a label is associated with a participant only by
+an explicit human confirmation (`session.speaker.confirm`), and the association
+is discarded when the session ends. No voiceprint is derived or stored and no
+raw audio is retained by default.
+
+With diarization enabled and at least one participant confirmed:
+
+* a confirmed participant drives the experiment through the existing
+  deterministic admission gates — this adds no new authority;
+* an unknown nearby voice may ask questions, but a state-changing command from
+  it never silently mutates the experiment;
+* stop and pause are honoured regardless of attribution;
+* overlapping voices fail closed with `여러 목소리가 겹쳐 정확히 확인하지
+  못했습니다. 한 분씩 다시 말씀해 주세요.`;
+* a provider that drops speaker labels degrades gracefully and never implies the
+  speaker was identified.
+
+## Korean answers from an English approved source
+
+The approved protocol revision is authoritative and is often English. A Korean
+question gets a Korean answer through one boundary — `source_presentation.py` —
+and never by paraphrasing an approved protocol:
+
+1. a reviewer-approved Korean sidecar always wins;
+2. otherwise, with `VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED=1`, a
+   runtime translation may be generated, mechanically checked for preserved
+   numbers, units, concentrations, durations and identifiers, and discarded
+   outright if any changed;
+3. otherwise the exact approved source is the answer, with an honest notice.
+
+A runtime translation is always labelled `자동 번역`, never `검증된 한국어 번역`.
+An unresolved execution gate is safety-critical and never reaches a translator.
+The exact approved text always stays available under `원문 보기`.
+
 ## Workspace identity and authorization
 
 Workspace mode models organizations, principals, roles, memberships, ownership,
@@ -249,9 +407,11 @@ claim mapping remain deployment responsibilities; the application does not add
 provider-specific token shortcuts.
 
 An allowlisted development identity provider is available only outside
-`operational` scope. Operational workspace access requires a complete OIDC
-configuration. Client-supplied tenant IDs are never accepted as an ownership
-override. HTTP and WebSocket access share the same identity boundary.
+`operational` scope. It is labelled 개발 모드 in the product. Operational
+workspace access requires a complete OIDC configuration. Client-supplied tenant
+IDs are never accepted as an ownership override. HTTP and WebSocket access share
+the same identity boundary.
+
 
 ## Protocol Source Hub
 
@@ -394,6 +554,7 @@ python -m voice_workflow_agent.worker
 | `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
+| `VOICE_WORKFLOW_AGENT_REPEAT_CONFIRMATION_REVIEW_THRESHOLD` | Confirmed repetitions before the server asks continue/pause/review; default 5, operational guardrail only |
 
 ### Identity configuration
 
@@ -433,6 +594,10 @@ The browser consumes these main groups:
 
 - `/api/protocols`: local upload, lifecycle, analysis status, evidence review,
   development activation, approval, source pages, and verified assets;
+- `/api/protocols/review-queue`, `/api/protocols/{id}/resolutions`, and
+  `/api/protocols/{id}/revisions/{revision_id}/revoke`: the reviewer's execution
+  lane — one status vocabulary per row, source-ambiguity resolution into a new
+  traceable revision, and withdrawal of execution authorization;
 - `/api/workspace/session` and `/protocol-library`: identity-aware workspace and
   quick protocol access;
 - `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
@@ -495,6 +660,7 @@ python -m pip install -e '.[test]'
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
+python -B scripts/evaluate_barge_in.py
 ```
 
 Browser acceptance coverage for the researcher/reviewer/admin workspaces (desktop
@@ -509,12 +675,21 @@ npx playwright test
 
 GitHub Actions (`.github/workflows/ci.yml`) runs both on every push/PR to
 `main` and `refactor/**`. Its browser job uses `playwright.ci.config.ts` with
-`scripts/run_ci_server.sh`, a credential-free server launcher that runs with
-an empty protocol catalog instead of the full Candidate A demo fixture, since
-that fixture's integrity check requires an externally licensed source PDF
-that is intentionally not committed to the repository. Local development
-still uses `scripts/run_candidate_a.sh` (the default `playwright.config.ts`)
-for full-fidelity manual testing when that PDF is available.
+`scripts/run_ci_server.sh`, a credential-free launcher that writes to its own
+throwaway data directory and enables no live provider. That launcher loads the
+Candidate A fixture only when its externally licensed source PDF is actually
+present; in CI it is absent by design, so the server starts with an empty
+protocol catalog and `tests/e2e/protocol-journey.spec.ts` skips itself with an
+explicit reason. Where the PDF is available the same command runs the full
+reviewer-to-bench journey. Both configs honour `PLAYWRIGHT_APP_PORT`, so a
+browser run never collides with a developer's own server on `8000`:
+
+```bash
+PLAYWRIGHT_APP_PORT=8123 npx playwright test --config=playwright.ci.config.ts
+```
+
+`scripts/run_candidate_a.sh` (the default `playwright.config.ts`) remains the
+full-fidelity manual launcher with the optional live features enabled.
 
 The same externally licensed PDF also backs 13 pytest modules' byte-exact
 source-identity checks and both `scripts/evaluate_candidate_a_*.py`

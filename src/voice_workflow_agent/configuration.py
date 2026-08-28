@@ -69,6 +69,12 @@ def _floating(
     return value
 
 
+#: Public aliases so sibling modules can reuse exactly one bounded, validated
+#: environment parser instead of growing a second, subtly different one.
+bounded_integer = _integer
+bounded_float = _floating
+
+
 def milliseconds_to_frames(milliseconds: int) -> int:
     """Round up to 20 ms frames so a configured duration is never shortened."""
     if milliseconds<=0:
@@ -161,6 +167,11 @@ class CascadeSttSettings:
 
     vad_threshold: float = 0.5
     filler_words: bool = False
+    #: Documented batch field. Off by default; see
+    #: ``speaker_attribution.SpeakerDiarizationSettings`` for why, and note that
+    #: streaming-only capabilities (interim_results, endpointing, smart_turn)
+    #: are NOT available on the batch endpoint this repository calls.
+    diarize: bool = False
 
     @classmethod
     def from_environment(
@@ -174,6 +185,7 @@ class CascadeSttSettings:
             filler_words=_integer(
                 env, "XAI_STT_FILLER_WORDS", 0, 0, 1
             ) == 1,
+            diarize=_integer(env, "XAI_STT_DIARIZE", 0, 0, 1) == 1,
         )
 
 
@@ -181,13 +193,24 @@ class CascadeSttSettings:
 class VoiceVadSettings:
     cascade: CascadeVadSettings
     stt: CascadeSttSettings
+    interruption: "InterruptionGateSettings"
+    diarization: "SpeakerDiarizationSettings"
 
     @classmethod
     def from_environment(
         cls,environment: Mapping[str,str]|None=None
     )->"VoiceVadSettings":
+        # Imported here because both modules read the bounded parsers defined
+        # above; a module-level import would be circular.
+        from voice_workflow_agent.barge_in import InterruptionGateSettings
+        from voice_workflow_agent.speaker_attribution import (
+            SpeakerDiarizationSettings,
+        )
+
         env=os.environ if environment is None else environment
         return cls(
             cascade=CascadeVadSettings.from_environment(env),
             stt=CascadeSttSettings.from_environment(env),
+            interruption=InterruptionGateSettings.from_environment(env),
+            diarization=SpeakerDiarizationSettings.from_environment(env),
         )

@@ -4,6 +4,7 @@ from unittest.mock import patch
 from collections import deque
 import httpx
 from voice_workflow_agent.audio import FRAME_BYTES
+from voice_workflow_agent.barge_in import InterruptionGateSettings
 from voice_workflow_agent.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     BrainResult,
@@ -33,6 +34,20 @@ class Decisions:
     def __call__(self,frame): return self.values.popleft()
 TURN=[False,True,True,True,True,False]+[True]*8+[False]*50
 def frame(n=1): return bytes([n%256])*FRAME_BYTES
+
+
+def fast_gate()->InterruptionGateSettings:
+    """Acoustic gate scaled to match this file's deliberately tiny VadConfigs.
+
+    These turn-identity tests drive onset in three frames with a scripted VAD.
+    The noise-floor gate stays fully enabled - only its durations are scaled to
+    the same miniature timeline, so the acoustic criterion is still exercised
+    rather than switched off. The gate's own production defaults are covered
+    by tests/test_barge_in_gate.py."""
+
+    return InterruptionGateSettings(
+        playback_onset_cooldown_ms=20, minimum_candidate_speech_ms=40,
+        candidate_window_ms=100)
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
@@ -1409,7 +1424,8 @@ class ServerTests(unittest.TestCase):
             maximum_utterance_frames=20,cooldown_ms=0,
         )
         session=ListenerSession(
-            EndpointDetector(config,classifier=lambda _:False))
+            EndpointDetector(config,classifier=lambda _:False),
+            interruption_settings=fast_gate())
         session.start(); old_generation=session.generation
         session.active_turn_id=1; session.turn_generations[1]=old_generation
         session.detector.state=TurnState.AGENT_SPEAKING
@@ -1500,7 +1516,8 @@ class ServerTests(unittest.TestCase):
             playback_onset_window_frames=3,
         )
         session=ListenerSession(EndpointDetector(
-            config,classifier=lambda _:False))
+            config,classifier=lambda _:False),
+            interruption_settings=fast_gate())
         session.start(); opening_generation=session.generation
         session.active_turn_id=1
         session.turn_generations[1]=opening_generation
@@ -1532,7 +1549,8 @@ class ServerTests(unittest.TestCase):
             playback_onset_window_frames=3,
         )
         session=ListenerSession(EndpointDetector(
-            config,classifier=lambda _:False))
+            config,classifier=lambda _:False),
+            interruption_settings=fast_gate())
         session.start(); opening_generation=session.generation
         session.active_turn_id=1
         session.turn_generations[1]=opening_generation

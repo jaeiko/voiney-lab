@@ -96,6 +96,70 @@ def parse_control(raw: str) -> dict[str, Any]:
             "configuration_id": message.get("configuration_id"),
             "generation": message.get("generation"),
         }
+    if message["type"] == "workflow.complete_current_step":
+        step_id = message.get("step_id")
+        configuration_id = message.get("configuration_id")
+        generation = message.get("generation")
+        if not isinstance(step_id, str) or not step_id.strip():
+            raise ProtocolError(
+                "workflow.complete_current_step needs the exact current step id"
+            )
+        if (
+            not isinstance(configuration_id, int)
+            or isinstance(configuration_id, bool)
+            or configuration_id <= 0
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 0
+        ):
+            raise ProtocolError(
+                "workflow.complete_current_step needs the accepted session identity"
+            )
+        return {
+            "type": "workflow.complete_current_step",
+            "step_id": step_id,
+            "configuration_id": configuration_id,
+            "generation": generation,
+        }
+    if message["type"] == "workflow.human_checkpoint":
+        decision = message.get("decision")
+        if decision not in {
+            "met", "not_met", "continue", "pause", "request_review",
+        }:
+            raise ProtocolError(
+                "workflow.human_checkpoint needs an explicit supported decision"
+            )
+        checkpoint_id = message.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id.strip():
+            raise ProtocolError(
+                "workflow.human_checkpoint needs the exact checkpoint id"
+            )
+        step_id = message.get("step_id")
+        if not isinstance(step_id, str) or not step_id.strip():
+            raise ProtocolError(
+                "workflow.human_checkpoint needs the exact current step id"
+            )
+        configuration_id = message.get("configuration_id")
+        generation = message.get("generation")
+        if (
+            not isinstance(configuration_id, int)
+            or isinstance(configuration_id, bool)
+            or configuration_id <= 0
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 0
+        ):
+            raise ProtocolError(
+                "workflow.human_checkpoint needs the accepted session identity"
+            )
+        return {
+            "type": "workflow.human_checkpoint",
+            "decision": decision,
+            "checkpoint_id": checkpoint_id,
+            "step_id": step_id,
+            "configuration_id": configuration_id,
+            "generation": generation,
+        }
     if message["type"]=="report.status.get":
         report_id=message.get("report_id")
         if not isinstance(report_id,str):
@@ -131,6 +195,30 @@ def parse_control(raw: str) -> dict[str, Any]:
             "requested":{name:requested[name] for name in sorted(names)},
             "actual":{name:actual[name] for name in sorted(names)},
         }
+    if message["type"]=="session.speaker.confirm":
+        # An explicit human answer to "이 목소리가 누구인지 확인해 주세요". The
+        # client may only associate an acoustic label with a participant the
+        # server already put on the roster; it can never assert a new one, and
+        # a label is never treated as identity on its own.
+        label=message.get("speaker_label")
+        participant_id=message.get("participant_id")
+        for value,name in ((label,"speaker_label"),
+                           (participant_id,"participant_id")):
+            if (not isinstance(value,str) or not value.strip()
+                    or len(value)>64):
+                raise ProtocolError(
+                    f"session.speaker.confirm needs a bounded {name}")
+        return {
+            "type":"session.speaker.confirm",
+            "speaker_label":label.strip(),
+            "participant_id":participant_id.strip(),
+        }
+    if message["type"]=="session.speaker.release":
+        label=message.get("speaker_label")
+        if not isinstance(label,str) or not label.strip() or len(label)>64:
+            raise ProtocolError(
+                "session.speaker.release needs a bounded speaker_label")
+        return {"type":"session.speaker.release","speaker_label":label.strip()}
     if message["type"]=="client.audio_ready":
         configuration_id=message.get("configuration_id")
         generation=message.get("generation")

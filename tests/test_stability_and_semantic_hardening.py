@@ -170,36 +170,46 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertIn("• 7단계:", plan.display_text)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "2")
 
-    def test_step_7_observation_criterion_survives_intervening_qa(self) -> None:
-        """At Step 7, an assertive observation must satisfy completion even after intervening QA."""
-        # Fast-forward to step 7
+    def test_step_7_human_checkpoint_survives_intervening_qa(self) -> None:
+        """A checkpoint answer stays admissible after unrelated questions.
+
+        Reading and asking never move the workflow. Only the explicit answer
+        does, and a negative answer replays the source-defined range instead of
+        holding the researcher on a step they cannot finish.
+        """
+
         self.session.plan("프로토콜 시작", turn_id=1, language="ko")
         for tid in range(2, 8):
             self.session.plan("현재 단계를 완료했어", turn_id=tid, language="ko")
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
+        self.assertIsNotNone(self.session.active_human_checkpoint())
 
-        # 1. Ask intervening QA
+        # 1. Intervening QA never moves the workflow.
         plan_qa = self.session.plan("AMBIC가 무엇인지 설명해줘", turn_id=20, language="ko")
         self.assertFalse(plan_qa.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
 
-        # 2. Ask question about criterion (guard check: should not advance)
-        self.assertIsNone(_observation_predicate("7", "완전히 투명한가요?"))
+        # 2. A question about the criterion is a question, not an answer.
+        self.assertIsNone(_observation_predicate("완전히 투명한가요?"))
         plan_q = self.session.plan("완전히 투명한가요?", turn_id=21, language="ko")
         self.assertFalse(plan_q.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
 
-        # 3. Negative observation: "아직 색이 남아 있어요"
-        self.assertEqual(_observation_predicate("7", "아직 색이 남아 있어요"), "negative")
+        # 3. "Not yet" replays only the source-defined Steps 2-7 range.
+        self.assertEqual(_observation_predicate("아직 색이 남아 있어요"), "negative")
         plan_neg = self.session.plan("아직 색이 남아 있어요", turn_id=22, language="ko")
-        self.assertFalse(plan_neg.state_changed)
-        self.assertEqual(plan_neg.speech_mode, CuratedProtocolSpeechMode.BLOCKED)
-        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
+        self.assertTrue(plan_neg.state_changed)
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "2")
 
-        # 4. Positive observation: "어, 젤이 이제 완전히 투명해졌어" / "젤이 완전히 탈색되어 투명해요"
-        self.assertEqual(_observation_predicate("7", "어, 젤이 이제 완전히 투명해졌어"), "positive")
-        self.assertEqual(_observation_predicate("7", "젤이 완전히 탈색되어 투명해요"), "positive")
-        plan_pos = self.session.plan("젤이 완전히 탈색되어 투명해요", turn_id=23, language="ko")
+        # 4. Walk the approved range back to the gate and confirm the endpoint.
+        for tid in range(23, 28):
+            self.session.plan("현재 단계를 완료했어", turn_id=tid, language="ko")
+        self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "7")
+        self.assertEqual(_observation_predicate("젤이 완전히 탈색되어 투명해요"), "positive")
+        self.session.plan("현재 단계를 완료했어", turn_id=28, language="ko")
+        plan_pos = self.session.plan(
+            "젤이 완전히 탈색되어 투명해요", turn_id=29, language="ko"
+        )
         self.assertTrue(plan_pos.state_changed)
         self.assertEqual(self.fixture.steps[self.session.current_index].source_label, "8")
 

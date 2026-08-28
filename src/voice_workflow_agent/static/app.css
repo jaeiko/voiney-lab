@@ -24,6 +24,10 @@
       --radius-sm:14px;
       --radius-lg:28px;
       --radius-pill:9999px;
+      --page-max:92rem;
+      --content-max:72rem;
+      --section-gap:1rem;
+      --card-padding:1.15rem;
     }
     *{box-sizing:border-box}
     body{
@@ -37,7 +41,7 @@
       min-height:100vh;
     }
     button,select,input{font:inherit;color:inherit}
-    button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{
+    button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible,a:focus-visible{
       outline:3px solid var(--blurple);
       outline-offset:3px;
     }
@@ -162,7 +166,7 @@
     .btn-modal-cancel:hover{background:var(--surface-onyx)}
 
     .topbar{
-      max-width:92rem;
+      max-width:var(--page-max);
       margin:0 auto;
       padding:1rem 1.5rem .5rem;
       display:flex;
@@ -200,7 +204,7 @@
     .session-dot{width:.55rem;height:.55rem;border-radius:50%;background:#8ea199;box-shadow:0 0 0 4px rgba(142,161,153,.18);transition:background .3s}
     
     .shell{
-      max-width:92rem;
+      max-width:var(--page-max);
       margin:0 auto;
       padding:.75rem 1.5rem 4rem;
       display:grid;
@@ -215,7 +219,7 @@
       border:1px solid var(--border);
       background:var(--surface-raised);
       border-radius:var(--radius-lg);
-      box-shadow:var(--shadow);
+      box-shadow:var(--shadow-subtle);
       backdrop-filter:blur(16px);
       overflow:hidden;
     }
@@ -489,17 +493,17 @@
     .admin-metric{padding:.55rem .65rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
     .admin-metric b{display:block;color:var(--ink);font-size:1rem}
     .admin-privacy{grid-column:1/-1;color:var(--green-cta)}
-    .workspace-bar{max-width:92rem;margin:.2rem auto .35rem;padding:0 1.5rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+    .workspace-bar{max-width:var(--page-max);margin:.2rem auto .35rem;padding:0 1.5rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
     .workspace-bar button{min-height:2.55rem;border:1px solid var(--border);border-radius:var(--radius-pill);background:var(--surface-card);color:var(--subtext);padding:.45rem .9rem;font-weight:800;cursor:pointer}
     .workspace-bar button[aria-current="page"]{background:var(--blurple);border-color:var(--blurple);color:white}
     .workspace-bar select{margin-left:auto;min-height:2.55rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.4rem .7rem}
-    .workspace-page{max-width:92rem;margin:0 auto;padding:.75rem 1.5rem 4rem}
+    .workspace-page{max-width:var(--content-max);margin:0 auto;padding:.75rem 1.5rem 4rem}
     .shell[hidden],.workspace-page[hidden]{display:none}
     .workspace-page-head{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin-bottom:1rem}
     .workspace-page-head h1{max-width:none}
     .workspace-page-head p{color:var(--muted);margin:.25rem 0 0}
-    .workspace-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
-    .workspace-card{padding:1.15rem;align-self:start;min-width:0}
+    .workspace-columns{display:grid;grid-template-columns:1fr;gap:var(--section-gap);align-items:start}
+    .workspace-card{padding:var(--card-padding);align-self:start;min-width:0}
     .workspace-card h2{margin:0 0 .35rem;font-size:1rem}
     .workspace-card p{color:var(--muted);font-size:.82rem}
     .workspace-list{display:grid;gap:.55rem;margin-top:.7rem;align-content:start;min-width:0}
@@ -527,6 +531,12 @@
     .workspace-actions{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.65rem}
     .workspace-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .75rem;font-weight:800;cursor:pointer}
     .admin-connector-overview,.admin-connector-setup,.admin-boundary-card{grid-column:1/-1}
+    .admin-attention{
+      margin:0 0 var(--section-gap);padding:.8rem 1rem;
+      border:1px solid rgba(53,237,126,.3);border-radius:var(--radius-sm);
+      background:rgba(53,237,126,.08);color:#baf5cd;font-size:.84rem;font-weight:750;
+    }
+    .admin-attention.needs-action{border-color:rgba(240,178,50,.42);background:rgba(240,178,50,.09);color:#ffdf91}
     .admin-setup-flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.4rem;list-style:none;counter-reset:admin-flow;margin:.8rem 0;padding:0}
     .admin-setup-flow li{counter-increment:admin-flow;position:relative;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.55rem .45rem .55rem 1.8rem;background:var(--surface-card);color:var(--subtext);font-size:.72rem;font-weight:800}
     .admin-setup-flow li::before{content:counter(admin-flow);position:absolute;left:.5rem;top:.48rem;display:grid;place-items:center;width:1rem;height:1rem;border-radius:50%;background:var(--blurple);color:white;font-size:.62rem}
@@ -549,6 +559,23 @@
     .reviewer-context-grid span{display:block;color:var(--muted);font-size:.68rem;font-weight:800}
     .reviewer-context-grid strong{display:block;margin-top:.08rem;color:var(--ink);font-size:.78rem;overflow-wrap:anywhere}
     .reviewer-summary-block{margin-top:.75rem}
+    /* Progressive disclosure: the admin default view answers "who, what is
+       connected, is it healthy"; setup forms and audit streams open on demand. */
+    .admin-disclosure{margin-top:.7rem;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.5rem .7rem}
+    .admin-disclosure summary{cursor:pointer;font-size:.82rem;font-weight:750;color:var(--subtext)}
+    .admin-disclosure[open]{padding-bottom:.75rem}
+    .admin-disclosure>*+*{margin-top:.5rem}
+    .reviewer-queue-title{margin:.85rem 0 .3rem;font-size:.76rem;color:var(--subtext);letter-spacing:.01em}
+    .reviewer-queue-title:first-of-type{margin-top:.5rem}
+    /* Unresolved work is the only thing that gets a warning colour. */
+    .reviewer-attention{border:1px solid rgba(240,178,50,.35);border-radius:var(--radius-sm);padding:.7rem .8rem;background:rgba(240,178,50,.07)}
+    .reviewer-checkpoint-help{margin:.1rem 0 .45rem;font-size:.76rem;color:var(--muted)}
+    .reviewer-resolution-form{margin-top:.7rem;display:grid;gap:.5rem;padding:.75rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-onyx)}
+    .reviewer-resolution-target{margin:0;font-size:.8rem;font-weight:750;color:var(--ink)}
+    .reviewer-resolution-excerpt{margin:0;padding:.6rem;max-height:8rem;overflow:auto;background:var(--surface-card);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.78rem;color:var(--subtext);white-space:pre-wrap}
+    .reviewer-resolution-note{margin:0;font-size:.72rem;color:var(--muted)}
+    .reviewer-sources-card details.reviewer-source-group{margin-top:.5rem;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.5rem .7rem}
+    .reviewer-sources-card details.reviewer-source-group summary{cursor:pointer;font-size:.82rem;font-weight:750;color:var(--subtext)}
     .reviewer-summary-block h3,.reviewer-assessment-grid h3,.reviewer-decision-confirmation h3{margin:0 0 .25rem;color:var(--subtext);font-size:.78rem}
     .reviewer-summary-block p{margin:.15rem 0}
     .reviewer-assessment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem;margin-top:.75rem}
@@ -565,7 +592,14 @@
     .workspace-field input,.workspace-field select,.workspace-field textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.6rem .7rem;color:var(--ink)}
     .workspace-field textarea{min-height:5.5rem;resize:vertical}
     .workspace-status{font-size:.78rem;color:var(--cyan);min-height:1.2rem}
-    .experiment-ledger{margin:0;padding:1.15rem}
+    .experiment-ledger{margin:0;padding:0}
+    .experiment-ledger-summary{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.15rem;cursor:pointer;list-style-position:inside}
+    .experiment-ledger-summary span{font-size:.92rem;font-weight:850;color:var(--ink)}
+    .experiment-ledger-summary small{color:var(--muted);font-size:.75rem;font-weight:700}
+    .experiment-ledger[open] .experiment-ledger-summary{border-bottom:1px solid var(--border)}
+    .experiment-ledger-content{padding:1.15rem}
+    .experiment-workflow-details{margin-top:.85rem;padding-top:.7rem;border-top:1px solid var(--border)}
+    .experiment-workflow-details summary{cursor:pointer;color:var(--subtext);font-size:.78rem;font-weight:800}
     .experiment-ledger-head{display:flex;justify-content:space-between;align-items:end;gap:1rem;flex-wrap:wrap}
     .experiment-ledger-head h2{margin:0;font-size:1.1rem}
     .experiment-ledger-head p{margin:.25rem 0 0;color:var(--muted);font-size:.82rem}
@@ -667,7 +701,7 @@
     .task-body-split{
       margin-top:1rem;
       display:grid;
-      grid-template-columns:1fr 1fr;
+      grid-template-columns:minmax(0,1.3fr) minmax(16rem,.7fr);
       gap:1.25rem;
       align-items:start;
     }
@@ -706,6 +740,54 @@
     }
     #procedure-handoff{color:var(--red);font-weight:750}
 
+    /* Human-confirmation checkpoint: this is normal bench work, so it reads as
+       an invitation to observe, never as an error state. */
+    .human-checkpoint[hidden],.human-checkpoint-continuation[hidden],
+    .reviewer-resolution-form[hidden]{display:none!important}
+    .human-checkpoint{
+      margin:.85rem 0 0;
+      padding:1rem 1.1rem;
+      border:1px solid rgba(59,165,93,.45);
+      border-left:4px solid var(--green-cta);
+      background:rgba(59,165,93,.10);
+      border-radius:var(--radius-sm);
+      display:grid;
+      gap:.6rem;
+    }
+    .human-checkpoint-head{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+    .human-checkpoint-head h3{margin:0;font-size:.95rem;color:var(--ink)}
+    .human-checkpoint-badge{
+      font-size:.7rem;font-weight:800;letter-spacing:.04em;
+      padding:.15rem .5rem;border-radius:var(--radius-pill);
+      background:rgba(59,165,93,.22);color:#8ee0a8;
+    }
+    .human-checkpoint-question{margin:0;font-size:.88rem;color:var(--ink);font-weight:700}
+    .human-checkpoint-source{
+      padding:.7rem .85rem;border-radius:var(--radius-sm);
+      background:var(--surface-onyx);border:1px solid var(--border);
+    }
+    .human-checkpoint-source p{margin:.25rem 0 0;font-size:.82rem;color:var(--subtext);white-space:pre-wrap}
+    .human-checkpoint-label{font-size:.7rem;font-weight:800;letter-spacing:.04em;color:var(--muted);text-transform:uppercase}
+    .human-checkpoint-translation{color:var(--muted)!important;font-size:.78rem!important}
+    .human-checkpoint-page{display:block;margin-top:.4rem;font-size:.72rem;color:var(--muted)}
+    .human-checkpoint-repeat{margin:0;font-size:.78rem;color:var(--muted)}
+    .human-checkpoint-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+    .human-checkpoint-actions button{
+      padding:.5rem .95rem;border-radius:var(--radius-sm);font-size:.82rem;
+      font-weight:750;cursor:pointer;border:1px solid var(--border);
+      background:var(--surface-card);color:var(--ink);
+    }
+    .human-checkpoint-actions button[disabled]{opacity:.5;cursor:not-allowed}
+    .btn-checkpoint-confirm{background:rgba(59,165,93,.85)!important;border-color:rgba(59,165,93,.9)!important}
+    .btn-checkpoint-repeat{background:var(--surface-onyx-raised)!important}
+    .human-checkpoint-continuation{
+      padding:.7rem .85rem;border-radius:var(--radius-sm);
+      background:rgba(240,178,50,.12);border:1px solid rgba(240,178,50,.3);
+      display:grid;gap:.5rem;
+    }
+    .human-checkpoint-continuation p{margin:0;font-size:.8rem;color:#ffea9f}
+    .human-checkpoint-note{margin:0;font-size:.72rem;color:var(--muted)}
+
     .step-warning{
       margin:.85rem 0 0;
       padding:.85rem 1rem;
@@ -727,6 +809,11 @@
     .spoken-summary b{display:block;font-size:.74rem;color:var(--blurple);margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.04em}
 
     .voice-command-hint{margin:.2rem 0 0;color:var(--muted);font-size:.75rem}
+    .bench-completion-action{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin:.8rem 0 0;padding:.75rem;border-radius:var(--radius-sm);background:rgba(53,237,126,.07);border:1px solid rgba(53,237,126,.25)}
+    .bench-completion-action[hidden]{display:none}
+    .bench-completion-action button{min-height:2.75rem;padding:.65rem 1rem;border:0;border-radius:var(--radius-sm);background:var(--green-cta);color:#06120a;font-weight:850;cursor:pointer}
+    .bench-completion-action button:disabled{opacity:.45;cursor:not-allowed}
+    .bench-completion-action span{flex:1;min-width:12rem;color:var(--subtext);font-size:.76rem;line-height:1.45}
 
     .source-card{padding:1.15rem;border-radius:var(--radius-lg);background:var(--surface-card);border:1px solid var(--border)}
     .source-card h2{margin:0;font-size:1rem;color:var(--ink)}
@@ -749,6 +836,8 @@
       font-size:1rem;
       color:var(--ink);
     }
+    .web-ref-current>summary{cursor:pointer;color:var(--blurple);font-size:.8rem;font-weight:800}
+    .web-ref-current[open]>summary{margin-bottom:.55rem}
     .web-ref-origin{
       font-size:.74rem;
       color:var(--cyan);
@@ -889,6 +978,9 @@
     .turn>b{grid-column:1/-1;color:var(--blurple);font-size:.76rem;letter-spacing:.08em;text-transform:uppercase}
     .turn .label{color:var(--muted);font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
     .turn .transcript{color:#e0e4eb;font-weight:600}
+    .turn .understood,.turn .saved{color:var(--subtext);font-size:.84rem}
+    .turn .saved[data-mutated="true"]{color:#9af0b7;font-weight:750}
+    .turn .saved[data-mutated="false"]{color:var(--muted)}
     .turn .reply{font-weight:500;line-height:1.6;color:var(--ink)}
     .turn .reply-heading{font-size:.9rem;font-weight:750;color:var(--ink);margin:.65rem 0 .3rem;letter-spacing:-.01em}
     .turn .reply-heading-main{font-size:.98rem;font-weight:800;color:var(--ink);margin:.75rem 0 .35rem}
@@ -948,7 +1040,8 @@
       background:rgba(88,101,242,.1);
       border-radius:0 var(--radius-sm) var(--radius-sm) 0;
     }
-    .research-supplement b{display:block;color:var(--blurple);font-size:.76rem;margin-bottom:.25rem;text-transform:uppercase;letter-spacing:.04em}
+    .research-supplement summary{cursor:pointer;color:var(--blurple);font-size:.76rem;font-weight:800;letter-spacing:.02em}
+    .research-supplement .research-supplement-body{display:block;margin-top:.45rem;color:var(--subtext)}
 
     .example-strip{
       grid-column:1/-1;
@@ -978,6 +1071,9 @@
       .experiment-ledger-grid{grid-template-columns:1fr}
       .bounded-record-list,.experiment-event-list{max-height:none;overflow:visible;scrollbar-gutter:auto;padding-right:0}
       .bounded-list-hint{display:none}
+    }
+    @media(prefers-reduced-motion:reduce){
+      *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
     }
     @media(max-width:720px){
       .example-strip{grid-template-columns:minmax(0,1fr)}
@@ -1009,3 +1105,74 @@
       .voice-panel{padding:1.25rem}
       h1{font-size:1.45rem}
     }
+
+/* Bench microphone status.
+   The tone is carried by a text prefix as well as colour so a researcher can
+   read the state in a bright lab, on a poor screen, or with a colour-vision
+   difference. Raw VAD numbers never appear here - they stay in the developer
+   detail panel. */
+.microphone-status {
+  margin-top: .3rem;
+  font-size: .82rem;
+  line-height: 1.35;
+  color: var(--muted, #8ea199);
+  display: flex;
+  align-items: baseline;
+  gap: .35rem;
+}
+.microphone-status::before {
+  content: "○";
+  font-size: .7em;
+  flex: none;
+}
+.microphone-status[data-tone="ok"] { color: #35ed7e; }
+.microphone-status[data-tone="ok"]::before { content: "●"; }
+.microphone-status[data-tone="warn"] { color: #f4c95d; }
+.microphone-status[data-tone="warn"]::before { content: "▲"; }
+.microphone-status[data-tone="error"] { color: #fa777c; }
+.microphone-status[data-tone="error"]::before { content: "■"; }
+
+/* Playback outcome sits directly under 처리 결과 and must read as a separate,
+   lesser fact: audio stopped, the recorded result did not change. */
+.playback-outcome {
+  margin-top: .2rem;
+  font-size: .8rem;
+  line-height: 1.4;
+  color: var(--muted, #8ea199);
+}
+.playback-outcome::before {
+  content: "음성 재생 · ";
+  opacity: .85;
+}
+
+/* One sentence at the top of Reviewer and Admin answering "what do I do here?".
+   Sized between the page title and body copy so it is read before the controls
+   below it, not skipped as a caption. */
+.workspace-purpose {
+  max-width: 62ch;
+  font-size: .95rem;
+  line-height: 1.55;
+  color: var(--text, #e6efe9);
+  opacity: .92;
+}
+
+/* The consequence of approving, stated next to the buttons that cause it.
+   Reviewers should not have to infer what approval releases to researchers. */
+.reviewer-consequence {
+  margin: .9rem 0 .6rem;
+  padding: .7rem .85rem;
+  border-radius: .55rem;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .035);
+}
+.reviewer-consequence h3 {
+  margin: 0 0 .35rem;
+  font-size: .92rem;
+}
+.reviewer-consequence p {
+  margin: 0 0 .3rem;
+  font-size: .86rem;
+  line-height: 1.55;
+  color: var(--muted, #8ea199);
+}
+.reviewer-consequence p:last-child { margin-bottom: 0; }

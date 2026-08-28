@@ -10,6 +10,11 @@ from pathlib import Path
 
 PROTOCOL_ENABLED_ENV = "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED"
 PROTOCOL_DATA_DIR_ENV = "VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR"
+REPEAT_REVIEW_THRESHOLD_ENV = (
+    "VOICE_WORKFLOW_AGENT_REPEAT_CONFIRMATION_REVIEW_THRESHOLD"
+)
+DEFAULT_REPEAT_REVIEW_THRESHOLD = 5
+_MAX_REPEAT_REVIEW_THRESHOLD = 100
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off", ""})
 
@@ -58,3 +63,32 @@ class ProtocolPersistenceSettings:
                 f"{PROTOCOL_DATA_DIR_ENV} must be an absolute path"
             )
         return cls(enabled=enabled, data_dir=data_dir)
+
+
+def repeat_confirmation_review_threshold(
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Return how many human-confirmed repetitions run before a check-in.
+
+    This is an operational guardrail, not a scientific limit. The source
+    protocol does not define a maximum iteration count and this value must never
+    be presented as one: reaching it only makes the server stop and ask the
+    researcher whether to continue, pause, or request review.
+    """
+
+    env = os.environ if environment is None else environment
+    raw = env.get(REPEAT_REVIEW_THRESHOLD_ENV, "").strip()
+    if not raw:
+        return DEFAULT_REPEAT_REVIEW_THRESHOLD
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ProtocolConfigurationError(
+            f"{REPEAT_REVIEW_THRESHOLD_ENV} must be a positive integer"
+        ) from exc
+    if not 1 <= value <= _MAX_REPEAT_REVIEW_THRESHOLD:
+        raise ProtocolConfigurationError(
+            f"{REPEAT_REVIEW_THRESHOLD_ENV} must be between 1 and "
+            f"{_MAX_REPEAT_REVIEW_THRESHOLD}"
+        )
+    return value

@@ -3,6 +3,18 @@
 This module represents workflow semantics supplied by a later structured
 extraction stage. It does not infer structure from PDF text. Protocol checksum
 values retain the byte-identity-only meaning defined by Slice 1.
+
+Readiness distinguishes two very different situations that used to be collapsed
+into one blocker:
+
+* a **human-observable execution condition** ("repeat until the gel band is
+  fully destained") is not a defect. The researcher is already at the bench and
+  is the authority for that judgement, so the construct becomes an explicit
+  human-confirmation checkpoint and stays compatible with GUIDANCE_READY.
+* a **true source ambiguity** (an unclear repeat range, a missing referenced
+  step, conflicting quantities) still blocks execution, because resolving it
+  would mean inventing intent. It must be resolved by a human reviewer, which
+  produces a new traceable analysis revision.
 """
 
 from __future__ import annotations
@@ -66,6 +78,7 @@ class FeatureCode(str, Enum):
     CONDITIONAL_BRANCH = "conditional_branch"
     FIXED_RANGE_REPETITION = "fixed_range_repetition"
     REPEAT_UNTIL = "repeat_until"
+    HUMAN_CONFIRMED_REPEAT_UNTIL = "human_confirmed_repeat_until"
     PARALLEL_BACKGROUND_WORK = "parallel_background_work"
     RECURRING_REMINDER = "recurring_reminder"
     RECURRING_ACTION = "recurring_action"
@@ -83,6 +96,9 @@ class ReadinessReasonCode(str, Enum):
     UNSUPPORTED_CONDITIONAL_BRANCH = "unsupported_conditional_branch"
     UNSUPPORTED_FIXED_RANGE_REPETITION = "unsupported_fixed_range_repetition"
     UNSUPPORTED_REPEAT_UNTIL = "unsupported_repeat_until"
+    UNSUPPORTED_HUMAN_CONFIRMED_REPEAT_UNTIL = (
+        "unsupported_human_confirmed_repeat_until"
+    )
     UNSUPPORTED_PARALLEL_BACKGROUND_WORK = (
         "unsupported_parallel_background_work"
     )
@@ -425,6 +441,29 @@ class DetectedFeature:
 
 
 @dataclass(frozen=True)
+class HumanConfirmationCheckpoint:
+    """One source-defined endpoint that only the researcher can confirm.
+
+    Every field is copied verbatim from the represented source: the condition
+    text is the exact source sentence, and ``repeated_step_ids`` is the exact
+    source-defined range. Nothing here claims that software can evaluate the
+    condition; it records where the server must stop and ask a human.
+    """
+
+    checkpoint_id: str
+    condition_source_text: str
+    gate_step_id: str
+    repeated_step_ids: tuple[str, ...]
+    evidence: SourceEvidence
+    section_id: str | None = None
+    action_id: str | None = None
+
+    @property
+    def repeat_start_step_id(self) -> str:
+        return self.repeated_step_ids[0]
+
+
+@dataclass(frozen=True)
 class CapabilityPolicy:
     profile_id: str
     supported_features: frozenset[FeatureCode]
@@ -435,6 +474,7 @@ P1_CAPABILITY_POLICY = CapabilityPolicy(
     supported_features=frozenset(
         {
             FeatureCode.FIXED_RANGE_REPETITION,
+            FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL,
             FeatureCode.INFORMATIONAL_DIFFERENCE,
         }
     ),
@@ -1247,6 +1287,7 @@ _FEATURE_ORDER = {
             FeatureCode.CONDITIONAL_BRANCH,
             FeatureCode.FIXED_RANGE_REPETITION,
             FeatureCode.REPEAT_UNTIL,
+            FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL,
             FeatureCode.PARALLEL_BACKGROUND_WORK,
             FeatureCode.RECURRING_REMINDER,
             FeatureCode.RECURRING_ACTION,
@@ -1277,6 +1318,91 @@ def _feature(
         section_id=section_id,
         step_id=step_id,
         action_id=action_id,
+    )
+
+
+def _ordered_step_ids(protocol: ExperimentProtocol) -> tuple[str, ...]:
+    return tuple(
+        step.step_id
+        for section in protocol.sections
+        for step in section.steps
+    )
+
+
+def _human_confirmation_checkpoint(
+    protocol: ExperimentProtocol,
+    construct: RepeatUntil,
+    ordered_step_ids: tuple[str, ...] | None = None,
+) -> HumanConfirmationCheckpoint | None:
+    """Return a deterministic human-confirmation gate, or None.
+
+    A repeat-until construct becomes a human-confirmation gate only when the
+    server can already answer, without interpreting anything, "which steps do I
+    replay and where do I ask?". That requires the source-defined repeated range
+    to be a contiguous run of represented steps in document order whose last
+    member is the construct's own gate step. Anything else stays an unsupported
+    construct: the server would have to invent the intended range.
+    """
+
+    if not construct.condition_source_text.strip():
+        return None
+    gate_step_id = construct.step_id
+    if gate_step_id is None:
+        return None
+    order = (
+        _ordered_step_ids(protocol)
+        if ordered_step_ids is None
+        else ordered_step_ids
+    )
+    positions = {step_id: index for index, step_id in enumerate(order)}
+    repeated = construct.repeated_step_ids
+    if len(set(repeated)) != len(repeated):
+        return None
+    if any(step_id not in positions for step_id in repeated):
+        return None
+    if gate_step_id not in positions or repeated[-1] != gate_step_id:
+        return None
+    indexes = [positions[step_id] for step_id in repeated]
+    if indexes != list(range(indexes[0], indexes[0] + len(indexes))):
+        return None
+    return HumanConfirmationCheckpoint(
+        checkpoint_id=construct.repetition_id,
+        condition_source_text=construct.condition_source_text,
+        gate_step_id=gate_step_id,
+        repeated_step_ids=repeated,
+        evidence=construct.evidence,
+        section_id=construct.section_id,
+        action_id=construct.action_id,
+    )
+
+
+def human_confirmation_checkpoints(
+    protocol: ExperimentProtocol,
+) -> tuple[HumanConfirmationCheckpoint, ...]:
+    """Return every source-defined endpoint the researcher must confirm.
+
+    These are not readiness failures. They are the places where hands-free
+    guidance stops, quotes the source condition, and waits for an explicit human
+    answer before the server makes a deterministic transition.
+    """
+
+    validate_protocol(protocol)
+    order = _ordered_step_ids(protocol)
+    checkpoints = []
+    for construct in protocol.constructs:
+        if not isinstance(construct, RepeatUntil):
+            continue
+        checkpoint = _human_confirmation_checkpoint(protocol, construct, order)
+        if checkpoint is not None:
+            checkpoints.append(checkpoint)
+    return tuple(
+        sorted(
+            checkpoints,
+            key=lambda item: (
+                order.index(item.gate_step_id),
+                item.checkpoint_id,
+            ),
+        )
     )
 
 
@@ -1346,6 +1472,7 @@ def _detect_features(protocol: ExperimentProtocol) -> tuple[DetectedFeature, ...
                         )
                     )
 
+    ordered_step_ids = _ordered_step_ids(protocol)
     for construct in protocol.constructs:
         construct_id = _construct_identity(construct)
         section_id, step_id, action_id = _construct_location(construct)
@@ -1354,7 +1481,14 @@ def _detect_features(protocol: ExperimentProtocol) -> tuple[DetectedFeature, ...
         elif isinstance(construct, FixedRangeRepetition):
             code = FeatureCode.FIXED_RANGE_REPETITION
         elif isinstance(construct, RepeatUntil):
-            code = FeatureCode.REPEAT_UNTIL
+            code = (
+                FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL
+                if _human_confirmation_checkpoint(
+                    protocol, construct, ordered_step_ids
+                )
+                is not None
+                else FeatureCode.REPEAT_UNTIL
+            )
         elif isinstance(construct, ParallelWork):
             code = FeatureCode.PARALLEL_BACKGROUND_WORK
         elif isinstance(construct, RecurringAction):
@@ -1436,7 +1570,13 @@ _UNSUPPORTED_REASONS = {
     ),
     FeatureCode.REPEAT_UNTIL: (
         ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
-        "Repeat-until execution is not supported by this capability profile.",
+        "The source-defined repeat range cannot be resolved from the represented "
+        "structure, so repeat execution is not supported.",
+    ),
+    FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL: (
+        ReadinessReasonCode.UNSUPPORTED_HUMAN_CONFIRMED_REPEAT_UNTIL,
+        "Human-confirmed repeat execution is not supported by this capability "
+        "profile.",
     ),
     FeatureCode.PARALLEL_BACKGROUND_WORK: (
         ReadinessReasonCode.UNSUPPORTED_PARALLEL_BACKGROUND_WORK,
@@ -1468,6 +1608,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
+            ReadinessReasonCode.UNSUPPORTED_HUMAN_CONFIRMED_REPEAT_UNTIL,
             ReadinessReasonCode.UNSUPPORTED_PARALLEL_BACKGROUND_WORK,
             ReadinessReasonCode.UNSUPPORTED_RECURRING_REMINDER,
             ReadinessReasonCode.UNSUPPORTED_RECURRING_ACTION,
@@ -1482,7 +1623,18 @@ def assess_readiness(
     *,
     capability_policy: CapabilityPolicy = P1_CAPABILITY_POLICY,
 ) -> ReadinessAssessment:
-    """Fail closed with two public outcomes and stable, sanitized reasons."""
+    """Fail closed with two public outcomes and stable, sanitized reasons.
+
+    GUIDANCE_READY means "the server can guide this protocol without inventing
+    scientific meaning". It does not mean every endpoint is machine-evaluable: a
+    source-defined endpoint that only a researcher at the bench can judge is
+    represented as a human-confirmation checkpoint (see
+    ``human_confirmation_checkpoints``) and is compatible with GUIDANCE_READY.
+    What still blocks readiness is anything that would force the server to guess:
+    an unresolved source ambiguity, an unresolved conflict, a missing
+    execution-critical value, or a construct whose execution shape cannot be
+    derived from the represented structure.
+    """
 
     try:
         validate_protocol(protocol)

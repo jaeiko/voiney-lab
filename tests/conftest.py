@@ -16,6 +16,8 @@ require it, with an explicit, honest reason, whenever it is not present.
 import os
 from pathlib import Path
 
+import pytest
+
 CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
@@ -35,11 +37,21 @@ MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
 }
 
 
+@pytest.fixture(autouse=True)
+def isolate_local_workspace_activation(monkeypatch):
+    """Keep a developer's local .env from changing deterministic test scope.
+
+    Tests that exercise the commercial workspace explicitly enable it in their
+    own fixture.  All other tests retain the product's default disabled boundary
+    even when the repository is run beside an operational local .env.
+    """
+
+    monkeypatch.delenv("VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED", raising=False)
+
+
 def pytest_collection_modifyitems(config, items):
     if CANDIDATE_A_SOURCE_PDF.is_file():
         return
-    import pytest
-
     skip = pytest.mark.skip(
         reason=(
             f"requires the externally licensed Candidate A source PDF at "

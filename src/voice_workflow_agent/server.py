@@ -15,7 +15,16 @@ from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocke
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
-from voice_workflow_agent.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
+from voice_workflow_agent.audio import (
+    FRAME_BYTES, FrameBuffer, clean_path, pcm16_rms, pcm_to_wav)
+from voice_workflow_agent.barge_in import (
+    InterruptionGate, InterruptionGateSettings, is_priority_stop_command)
+from voice_workflow_agent.source_presentation import (
+    TranslationSettings, build_presentation_translator)
+from voice_workflow_agent.speaker_attribution import (
+    Participant, SessionParticipants, SpeakerDiarizationSettings,
+    UNKNOWN_SPEAKER_MESSAGE, diarization_diagnostics, evaluate_speaker_policy,
+    transcript_segments)
 from voice_workflow_agent.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
@@ -110,6 +119,7 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolResolutionError,
     SharedSecretApprovalPolicy,
 )
 from voice_workflow_agent.protocol_ocr import (
@@ -661,6 +671,15 @@ def _transition_workspace_experiment(
         store.close()
 
 
+_HUMAN_CHECKPOINT_OBSERVATIONS={
+    "repeat_scheduled":"연구자 확인 · 원문 조건 아직 충족되지 않음",
+    "advanced":"연구자 확인 · 원문 조건 충족",
+    "continuation_confirmation_required":"연구자 확인 · 원문 조건 아직 충족되지 않음",
+    "review_requested":"연구자 요청 · 반복 단계 검토 요청",
+    "paused":"연구자 요청 · 반복 단계에서 일시 중지",
+}
+
+
 def _record_workspace_experiment_progress(
     session:ListenerSession,
     curated:CuratedProtocolSession,
@@ -709,7 +728,13 @@ def _record_workspace_experiment_progress(
             expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
-                "protocol_started"
+                # A human-confirmation checkpoint is its own kind of event so an
+                # experiment record shows a source-authorized replay as a replay,
+                # not as a plain forward step.
+                plan.intent_kind
+                if isinstance(plan.intent_kind,str)
+                and plan.intent_kind.startswith("human_checkpoint_")
+                else "protocol_started"
                 if plan.action is CuratedProtocolAction.START else
                 "step_completed" if plan.reported_completion else "step_advanced"
             ),
@@ -743,6 +768,126 @@ def _record_workspace_experiment_progress(
             reason="all_protocol_steps_completed",
         )
     return state
+
+
+async def _record_human_checkpoint_decision(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    outcome,
+    *,
+    pre_transition_index:int,
+)->None:
+    """Persist the researcher's own words and the resulting deterministic move.
+
+    The observation is stored as the researcher's report - it never becomes
+    approved protocol knowledge - and the step transition is stored separately as
+    a workflow event, so an experiment record shows both what a human said and
+    what the server then did.
+    """
+
+    settings=_workspace_settings()
+    if not settings.enabled or session.experiment_state_version is None:
+        return
+    if outcome.status=="not_at_checkpoint":
+        return
+    step=curated.fixture.steps[pre_transition_index]
+    current=(
+        curated.fixture.steps[curated.current_index]
+        if curated.active else None
+    )
+    label=_HUMAN_CHECKPOINT_OBSERVATIONS.get(outcome.status)
+    def persist()->int:
+        principal,store=_commercial_workspace()
+        try:
+            if label is not None:
+                store.record_observation(
+                principal,session.session_id,
+                event_key=(
+                    f"checkpoint-{session.voice_connection_id}-"
+                    f"{outcome.checkpoint_id}-{outcome.iteration}-{outcome.status}"
+                ),
+                content=(
+                    f"{label} · 원문 기준: "
+                    f"{(outcome.condition_source_text or '')[:600]}"
+                ),
+                category="appearance",
+                capture_source="manual",
+                protocol_step_id=step.step_id,
+                )
+            if outcome.state_changed:
+                state=store.record_experiment_progress(
+                principal,session.session_id,
+                expected_version=session.experiment_state_version,
+                expected_voice_connection_id=session.voice_connection_id,
+                event_key=(
+                    f"checkpoint-{session.voice_connection_id}-"
+                    f"{outcome.checkpoint_id}-{outcome.iteration}-"
+                    f"{outcome.status}-progress"
+                ),
+                event_type=(
+                    "human_checkpoint_confirmed"
+                    if outcome.status=="advanced"
+                    else "human_checkpoint_repeat_scheduled"
+                    if outcome.status=="repeat_scheduled"
+                    else f"human_checkpoint_{outcome.status}"
+                ),
+                step_id=step.step_id,
+                step_label=step.source_label,
+                next_step_id=current.step_id if current else None,
+                next_step_label=current.source_label if current else None,
+                mark_completed=outcome.status=="advanced",
+                payload={
+                    "authority":"researcher_confirmation",
+                    "checkpoint_id":outcome.checkpoint_id,
+                    "condition_source_text":(
+                        outcome.condition_source_text or "")[:1000],
+                    "repeated_step_ids":list(outcome.repeated_step_ids),
+                    "confirmed_repetitions":outcome.iteration,
+                    "configuration_id":session.accepted_configuration_id,
+                },
+                )
+            else:
+                state=store.get_experiment(principal,session.session_id)
+            if outcome.workflow_completed:
+                store.transition_experiment(
+                principal,session.session_id,action="complete",
+                expected_version=int(state["version"]),
+                event_key=(
+                    f"checkpoint-{session.voice_connection_id}-"
+                    f"{outcome.checkpoint_id}-completed"
+                ),
+                reason="all_protocol_steps_completed",
+                )
+                state=store.get_experiment(principal,session.session_id)
+            return int(state["version"])
+        finally:
+            store.close()
+
+    # Workspace persistence is synchronous SQLite work. Keep it ordered as one
+    # unit, but do not block the WebSocket event loop while it runs.
+    session.experiment_state_version=await asyncio.to_thread(persist)
+
+
+async def _confirm_and_persist_human_checkpoint(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    decision:str,
+    *,
+    pre_transition_index:int,
+):
+    """Apply one admitted checkpoint answer, rolling back on persistence failure."""
+
+    restore_point=curated._checkpoint()
+    outcome=curated.confirm_human_checkpoint(decision)
+    try:
+        await _record_human_checkpoint_decision(
+            session,curated,outcome,
+            pre_transition_index=pre_transition_index,
+        )
+    except Exception:
+        curated._restore(restore_point)
+        raise
+    return outcome
 
 
 def _record_workspace_observation(
@@ -1023,10 +1168,15 @@ class CascadeTranscriptionContext:
     audio_origin:str
     vad_threshold:float=0.5
     filler_words:bool=False
+    #: Documented batch field. When true the provider returns per-word speaker
+    #: labels, which `speaker_attribution` turns into provider-neutral segments.
+    diarize:bool=False
 
     def __post_init__(self)->None:
         if self.audio_origin not in {"ordinary","barge_in"}:
             raise ValueError("STT audio origin is invalid")
+        if not isinstance(self.diarize,bool):
+            raise ValueError("STT diarize is invalid")
         if not isinstance(self.vad_threshold,(int,float)) or isinstance(self.vad_threshold,bool):
             raise ValueError("STT vad_threshold is invalid")
         if not 0.0 <= float(self.vad_threshold) <= 1.0:
@@ -1040,6 +1190,8 @@ class CascadeTranscriptionContext:
             fields.append("language")
         fields.append("vad_threshold")
         fields.append("filler_words")
+        if self.diarize:
+            fields.append("diarize")
         fields.extend("keyterm" for _ in self.keyterms)
         fields.append("file")
         return {
@@ -1047,6 +1199,7 @@ class CascadeTranscriptionContext:
             "keyterms":list(self.keyterms),
             "vad_threshold":float(self.vad_threshold),
             "filler_words":bool(self.filler_words),
+            "diarize":bool(self.diarize),
             "request_field_order":fields,
             "pending_frame":self.pending_frame,
             "audio_origin":self.audio_origin,
@@ -1055,7 +1208,7 @@ class CascadeTranscriptionContext:
 
 def _stt_multipart(
     pcm:bytes,*,language:str|None,keyterms:tuple[str,...],
-    vad_threshold:float=0.5,filler_words:bool=False,
+    vad_threshold:float=0.5,filler_words:bool=False,diarize:bool=False,
 )->tuple[list[tuple[str,tuple]],bytes,tuple[str,...]]:
     """Build the documented xAI multipart order with the file last."""
 
@@ -1065,6 +1218,8 @@ def _stt_multipart(
         raise ValueError("STT vad_threshold is invalid")
     if not isinstance(filler_words,bool):
         raise ValueError("STT filler_words is invalid")
+    if not isinstance(diarize,bool):
+        raise ValueError("STT diarize is invalid")
     threshold=float(vad_threshold)
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("STT vad_threshold is outside bounds")
@@ -1078,6 +1233,10 @@ def _stt_multipart(
         multipart.append(("language",(None,language)))
     multipart.append(("vad_threshold",(None,f"{threshold:g}")))
     multipart.append(("filler_words",(None,"true" if filler_words else "false")))
+    # Only sent when enabled, so a default deployment's request body stays
+    # byte-identical to the contract the previous pass validated.
+    if diarize:
+        multipart.append(("diarize",(None,"true")))
     multipart.extend(("keyterm",(None,value)) for value in bounded)
     multipart.append(("file",("utterance.wav",wav,"audio/wav")))
     return multipart,wav,bounded
@@ -1112,6 +1271,9 @@ def persist_stt_diagnostic(
             "correction_class","clarification_required","intent_kind",
             "action","mutation_authorized","browser_audio_constraints",
             "audio_origin","pending_frame",
+            "diarization_enabled","diarization_available","segment_count",
+            "speaker_label_count","speaker_policy_outcome",
+            "speaker_policy_reason","speaker_identity_verified",
         }
     }
     safe["wav_sha256"]=hashlib.sha256(wav).hexdigest()
@@ -1137,12 +1299,13 @@ def transcribe(
     keyterms:tuple[str,...]=(),
     vad_threshold:float=0.5,
     filler_words:bool=False,
+    diarize:bool=False,
 )->Transcription:
     """Call documented batch STT fields while retaining optional extensions."""
 
     multipart,_,_= _stt_multipart(
         pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
-        filler_words=filler_words)
+        filler_words=filler_words,diarize=diarize)
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
         files=multipart,timeout=120)
     response.raise_for_status()
@@ -1156,7 +1319,7 @@ def transcribe(
     words=tuple(
         {
             key:value for key,value in item.items()
-            if key in {"word","start","end","speaker"}
+            if key in {"word","text","start","end","speaker"}
         }
         for item in raw_words[:500]
         if isinstance(item,dict)
@@ -1267,20 +1430,30 @@ def _public_protocol_catalog_entries(
     candidate=_configured_candidate_fixture(config)
     candidate_protocol_id=candidate.protocol_id if candidate is not None else None
     entries=[]
-    if candidate is not None:
-        entries.append(_candidate_catalog_dict(candidate))
     settings=_protocol_store_settings()
     if not settings.enabled:
+        if candidate is not None:
+            entries.append(_candidate_catalog_dict(candidate))
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
+        candidate_superseded=(
+            candidate is not None
+            and catalog.development_fixture_is_superseded(candidate)
+        )
+        if candidate is not None and not candidate_superseded:
+            entries.append(_candidate_catalog_dict(candidate))
         for item in catalog.list_entries():
             if candidate is not None and item.protocol_id==candidate.protocol_id:
-                if catalog.development_fixture_is_materialized(candidate):
+                if not catalog.development_fixture_is_materialized(candidate):
+                    raise ProtocolCatalogUnavailableError(
+                        "Configured development fixture conflicts with catalog state."
+                    )
+                # Once a reviewer has resolved or authorized this protocol, the
+                # catalog record supersedes the in-memory development fixture,
+                # so the researcher sees the reviewed revision instead.
+                if not candidate_superseded:
                     continue
-                raise ProtocolCatalogUnavailableError(
-                    "Configured development fixture conflicts with catalog state."
-                )
             public=_catalog_entry_projection(catalog,item)
             public["analysis_run"]=catalog.analysis_run_status(
                 item.protocol_id).public_dict()
@@ -1351,6 +1524,8 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
     if isinstance(exc,ProtocolApprovalError):
         return HTTPException(status_code=403,detail=exc.code)
+    if isinstance(exc,ProtocolResolutionError):
+        return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
     return HTTPException(
@@ -1978,32 +2153,134 @@ def get_workspace_revision_diff(revision_id:str)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+def _catalog_execution_readiness(protocol_id:str)->dict[str,object]|None:
+    """Read one protocol's execution-readiness projection without changing it."""
+
+    if not _protocol_store_settings().enabled:
+        return None
+    catalog,store=_open_protocol_catalog()
+    try:
+        try:
+            return catalog.review(protocol_id).get("execution_readiness")
+        except ProtocolCatalogError:
+            return None
+    finally:
+        store.close()
+
+
+def _linked_catalog_protocol_id(store,principal,revision_id:str)->str|None:
+    """Resolve the executable catalog protocol behind a workspace revision."""
+
+    try:
+        source=store.source_for_revision(principal,revision_id)
+    except Exception:
+        return None
+    linked=source.metadata.get("catalog_protocol_id")
+    return linked if isinstance(linked,str) and linked else None
+
+
+def _apply_catalog_execution_decision(
+    principal,protocol_id:str,action:str,comment:str,
+)->dict[str,object]|None:
+    """Carry one reviewer decision through to execution availability.
+
+    A reviewer should not have to know that governance review and the executable
+    catalog are separate stores. When the reviewed revision is linked to a
+    catalog protocol, approving it here also authorizes bench execution - and
+    only if every readiness gate already passes. Nothing bypasses those gates.
+    """
+
+    if not _protocol_store_settings().enabled:
+        return None
+    role=next(
+        (item.value for item in principal.roles
+         if item.value in {"reviewer","lab_admin","organization_admin"}),
+        None,
+    )
+    catalog,store=_open_protocol_catalog()
+    try:
+        try:
+            entry=catalog.get_entry(protocol_id)
+        except ProtocolCatalogNotFoundError:
+            return None
+        policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
+        if action=="approved":
+            if entry.approval_status=="approved":
+                return catalog.review(protocol_id)
+            entry=catalog.approve(
+                protocol_id,entry.revision_id,
+                policy=policy,presented_secret="tenant-rbac-authorized",
+                actor_principal_id=principal.principal_id,actor_role=role,
+                comment=comment or None,
+            )
+        elif action=="revoked" and entry.approval_status=="approved":
+            entry=catalog.revoke(
+                protocol_id,entry.revision_id,
+                policy=policy,presented_secret="tenant-rbac-authorized",
+                actor_principal_id=principal.principal_id,actor_role=role,
+                comment=comment or None,
+            )
+        else:
+            return catalog.review(protocol_id)
+        return catalog.review(protocol_id)
+    finally:
+        store.close()
+
+
 @app.post("/api/workspace/reviewer/revisions/{revision_id}/decision")
 async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,object]:
     payload=await _json_object(request)
+    action=str(payload.get("action", ""))
+    comment=str(payload.get("comment", ""))
     try:
         principal,store=_commercial_workspace()
         try:
+            linked=_linked_catalog_protocol_id(store,principal,revision_id)
+            if action=="approved" and linked is not None:
+                # Refuse before recording anything, so a reviewer never ends up
+                # with "approved" in one store and "unapproved" in the other.
+                review=_catalog_execution_readiness(linked)
+                if review is not None and not review.get(
+                    "can_approve_for_execution"
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="protocol_not_ready_for_execution_approval",
+                    )
             event=store.record_approval(
                 principal,
                 revision_id=revision_id,
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
+                action=action,
+                comment=comment,
                 idempotency_key=str(payload.get("idempotency_key", "")),
                 replacement_revision_id=(
                     str(payload["replacement_revision_id"])
                     if payload.get("replacement_revision_id") else None
                 ),
             )
+            catalog_review=None
+            if linked is not None:
+                catalog_review=_apply_catalog_execution_decision(
+                    principal,linked,action,comment,
+                )
             store.record_analytics(
                 principal,
                 category="protocol",
                 metric_name="review_decision",
                 dimensions={"status":event.action,"event_kind":"approval"},
             )
-            return {"event":event.__dict__,"state":store.revision_operational_state(principal,revision_id)}
+            return {
+                "event":event.__dict__,
+                "state":store.revision_operational_state(principal,revision_id),
+                "execution":(
+                    catalog_review.get("execution_readiness")
+                    if isinstance(catalog_review,dict) else None
+                ),
+            }
         finally:
             store.close()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
 
@@ -2949,16 +3226,83 @@ def list_protocol_catalog()->dict[str,object]:
     return {"protocols":entries}
 
 
+@app.get("/api/protocols/review-queue")
+def get_protocol_review_queue()->dict[str,object]:
+    """List protocols a reviewer can act on, with one status vocabulary.
+
+    Each row already says what the next action is, so the reviewer never has to
+    guess whether an "Approve" button will actually make the protocol runnable.
+    """
+
+    try:
+        principal=_REQUEST_PRINCIPAL.get()
+        if _workspace_settings().enabled:
+            if principal is None:
+                raise AuthenticationRequiredError("Authentication is required.")
+            require_permission(principal,Permission.PROTOCOL_REVIEW)
+        entries,settings,candidate_protocol_id=_public_protocol_catalog_entries()
+        if not settings.enabled:
+            return {"protocols":[]}
+        visible=_visible_catalog_resource_ids()
+        catalog,store=_open_protocol_catalog()
+        try:
+            rows=[]
+            for item in entries:
+                protocol_id=item.get("protocol_id")
+                if not isinstance(protocol_id,str):
+                    continue
+                if (
+                    visible is not None
+                    and protocol_id not in visible
+                    and protocol_id!=candidate_protocol_id
+                ):
+                    continue
+                try:
+                    review=catalog.review(protocol_id)
+                except ProtocolCatalogError:
+                    continue
+                readiness=review.get("execution_readiness") or {}
+                rows.append({
+                    "protocol_id":protocol_id,
+                    "title":review.get("title"),
+                    "revision_id":review.get("revision_id"),
+                    "source_filename":review.get("source_filename"),
+                    "step_count":review.get("step_count"),
+                    "analysis_available":review.get("analysis_available"),
+                    "execution_readiness":readiness,
+                    "display_labels":review.get("display_labels"),
+                    "human_checkpoint_count":len(
+                        review.get("human_checkpoints") or []),
+                    "needs_resolution_count":len(
+                        review.get("needs_resolution") or []),
+                })
+        finally:
+            store.close()
+        return {"protocols":rows}
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.get("/api/protocols/{protocol_id}")
 def get_protocol_catalog_entry(protocol_id:str)->dict[str,object]:
     try:
         _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
-        if candidate is not None and candidate.protocol_id==protocol_id:
+        if (
+            candidate is not None
+            and candidate.protocol_id==protocol_id
+            and not _protocol_store_settings().enabled
+        ):
             return _candidate_catalog_dict(candidate)
         catalog,store=_open_protocol_catalog()
         try:
+            if (
+                candidate is not None
+                and candidate.protocol_id==protocol_id
+                and not catalog.development_fixture_is_superseded(candidate)
+            ):
+                return _candidate_catalog_dict(candidate)
             public=_catalog_entry_projection(
                 catalog,catalog.get_entry(protocol_id)
             )
@@ -3395,6 +3739,121 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
         raise _catalog_http_error(exc) from exc
 
 
+def _protocol_decision_authorization()->tuple[object|None,str|None,object,str|None]:
+    """Resolve one reviewer identity and approval policy for catalog decisions."""
+
+    if _workspace_settings().enabled:
+        actor=_REQUEST_PRINCIPAL.get()
+        if actor is None:
+            raise AuthenticationRequiredError("Authentication is required.")
+        require_permission(actor,Permission.PROTOCOL_APPROVE)
+        role=next(
+            item.value for item in actor.roles
+            if item.value in {"reviewer","lab_admin","organization_admin"}
+        )
+        return (
+            actor,role,
+            SharedSecretApprovalPolicy("tenant-rbac-authorized"),
+            "tenant-rbac-authorized",
+        )
+    return (
+        None,None,
+        SharedSecretApprovalPolicy(
+            os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN")),
+        None,
+    )
+
+
+@app.post("/api/protocols/{protocol_id}/resolutions",status_code=201)
+async def resolve_protocol_source_ambiguity(
+    protocol_id:str,request:Request
+)->dict[str,object]:
+    """Record a reviewer's explicit reading of an ambiguous source sentence.
+
+    The original source and every earlier analysis revision stay exactly as they
+    were; this appends a new reviewed revision that carries the reviewer's own
+    words, actor, role, and time.
+    """
+
+    payload=await _json_object(request)
+    raw_steps=payload.get("repeated_step_ids") or []
+    if not isinstance(raw_steps,list) or any(
+        not isinstance(item,str) for item in raw_steps
+    ):
+        raise HTTPException(status_code=400,detail="invalid_repeat_range")
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor=_REQUEST_PRINCIPAL.get()
+        if _workspace_settings().enabled:
+            if actor is None:
+                raise AuthenticationRequiredError("Authentication is required.")
+            require_permission(actor,Permission.PROTOCOL_REVIEW)
+            actor_principal_id=actor.principal_id
+            actor_role=next(
+                item.value for item in actor.roles
+                if item.value in {"reviewer","lab_admin","organization_admin"}
+            )
+        else:
+            actor_principal_id=str(payload.get("actor_principal_id") or "").strip()
+            actor_role=str(payload.get("actor_role") or "reviewer").strip()
+            if not actor_principal_id:
+                raise HTTPException(status_code=400,detail="actor_required")
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.resolve_source_ambiguity(
+                protocol_id,
+                ambiguity_id=str(payload.get("issue_id") or ""),
+                interpretation=str(payload.get("interpretation") or ""),
+                rationale=str(payload.get("rationale") or ""),
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                repeated_step_ids=tuple(raw_steps),
+            )
+            _record_workspace_metric(
+                category="protocol",metric_name="source_resolution",
+                dimensions={"status":entry.readiness_status,
+                            "event_kind":"reviewer_resolution"},
+            )
+            return catalog.review(protocol_id)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/revoke")
+async def revoke_protocol_execution_approval(
+    protocol_id:str,revision_id:str,request:Request,
+    x_protocol_approval_token:str|None=Header(default=None),
+)->dict[str,object]:
+    """Withdraw execution authorization while preserving the decision history."""
+
+    payload=await _json_object(request)
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor,role,policy,presented=_protocol_decision_authorization()
+        if presented is None:
+            presented=x_protocol_approval_token
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.revoke(
+                protocol_id,revision_id,
+                policy=policy,presented_secret=presented,
+                actor_principal_id=actor.principal_id if actor else None,
+                actor_role=role,
+                comment=str(payload.get("comment") or "") or None,
+            )
+            return _catalog_entry_projection(catalog,entry)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
 @app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
 def approve_protocol_revision(
     protocol_id:str,
@@ -3476,9 +3935,11 @@ def get_protocol_visual_asset(
         _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
-        if candidate is not None and candidate.protocol_id==protocol_id:
-            if candidate.revision_id!=revision_id:
-                raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        if (
+            candidate is not None
+            and candidate.protocol_id==protocol_id
+            and candidate.revision_id==revision_id
+        ):
             matches=tuple(
                 (index,asset) for index in range(len(candidate.steps))
                 if (asset:=candidate.visual_for_step(index)) is not None
@@ -3769,7 +4230,11 @@ def get_protocol_source_page(
         _scope_catalog_resource(protocol_id)
         config=server_config()
         candidate=_configured_candidate_fixture(config)
-        if candidate is not None and candidate.protocol_id==protocol_id:
+        if (
+            candidate is not None
+            and candidate.protocol_id==protocol_id
+            and candidate.revision_id==revision_id
+        ):
             fixture=candidate
         else:
             catalog,store=_open_protocol_catalog()
@@ -3870,6 +4335,62 @@ class TurnProgress:
     route:str|None=None
     terminal_outcome:str="complete"
 
+def _seed_experiment_participants(session:ListenerSession)->int:
+    """Put the authenticated researcher on this session's participant roster.
+
+    The roster is built from application identity - who actually signed in -
+    never from anything the browser asserts and never from the audio. A voice is
+    only ever *associated* with one of these people by an explicit human
+    confirmation, and that association lives and dies with the session.
+
+    Returns how many participants were seeded, which is zero in development
+    mode with no resolved principal. An empty roster deliberately means "no
+    confirmed participants", which the speaker policy reads as "make no claim
+    about who is speaking" rather than "refuse everyone".
+    """
+
+    session.participants.reset()
+    principal=_REQUEST_PRINCIPAL.get()
+    if principal is None:
+        return 0
+    identifier=getattr(principal,"principal_id",None) or getattr(
+        principal,"subject",None)
+    display=(
+        getattr(principal,"display_name",None)
+        or getattr(principal,"name",None)
+        or "연구자")
+    role=getattr(getattr(principal,"role",None),"value",None) or "researcher"
+    if not isinstance(identifier,str) or not identifier.strip():
+        return 0
+    try:
+        session.participants.enrol(
+            Participant(identifier.strip(),str(display)[:120],role))
+    except ValueError:
+        log.warning("participant roster seed rejected an invalid principal id")
+        return 0
+    return 1
+
+
+def _presentation_translation_client(settings:TranslationSettings):
+    """Build the model client for presentation translation, or nothing.
+
+    Returns ``None`` whenever the feature is off or no credential is present, so
+    a deployment without the flag never constructs a client and a deployment
+    with the flag but no key degrades to showing the approved source instead of
+    raising on the voice path.
+    """
+
+    if not settings.enabled or not os.environ.get("XAI_API_KEY"):
+        return None
+    try:
+        return OpenAI(
+            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+            max_retries=0,timeout=float(settings.timeout_seconds))
+    except Exception:
+        log.warning("presentation translation client unavailable")
+        return None
+
+
 class ListenerSession:
     def __init__(self,detector:EndpointDetector|None=None,clock:Callable[[],float]=time.perf_counter,
                  tool_context:ToolContext|None=None,
@@ -3879,7 +4400,12 @@ class ListenerSession:
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  web_visual_settings:WebVisualSettings|None=None,
                  generated_visual_settings:GeneratedVisualSettings|None=None,
-                 multi_brain_settings:MultiBrainSettings|None=None)->None:
+                 multi_brain_settings:MultiBrainSettings|None=None,
+                 interruption_settings:InterruptionGateSettings|None=None,
+                 diarization_settings:SpeakerDiarizationSettings|None=None,
+                 translation_settings:TranslationSettings|None=None,
+                 presentation_translator:Callable[[str],str]|None=None,
+                 )->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -3929,6 +4455,28 @@ class ListenerSession:
         self.greeting_audio_ready=False
         self.client_audio_constraints:dict[str,object]={}
         self.stt_settings=CascadeSttSettings.from_environment()
+        # Noise-aware interruption gate. It never decides what a workflow does;
+        # it decides whether a sound is worth ducking the agent for.
+        self.interruption_settings=(
+            interruption_settings or InterruptionGateSettings.from_environment())
+        self._interruption_gate=InterruptionGate(self.interruption_settings)
+        self._interrupt_candidate_announced=False
+        self._interrupt_gate_reason:str|None=None
+        # Session-scoped acoustic labels only. Never a voiceprint, never durable,
+        # never an identity claim - see speaker_attribution's module docstring.
+        self.diarization_settings=(
+            diarization_settings or SpeakerDiarizationSettings.from_environment())
+        self.participants=SessionParticipants()
+        # Presentation-only translation. Off unless explicitly enabled, and the
+        # translator never reaches the mutation path - see source_presentation.
+        self.translation_settings=(
+            translation_settings or TranslationSettings.from_environment())
+        self.presentation_translator=(
+            presentation_translator
+            if presentation_translator is not None
+            else build_presentation_translator(
+                _presentation_translation_client(self.translation_settings),
+                self.translation_settings))
     @property
     def state(self): return self.detector.state
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
@@ -3957,6 +4505,14 @@ class ListenerSession:
         self._interrupt_candidate_started_at=None
         self._interrupt_candidate_endpoint_at=None
         self._interrupt_candidate_diagnostics={}
+        self._interrupt_candidate_announced=False
+        self._interrupt_gate_reason=None
+        if playback:
+            # Re-arm the acoustic gate for a fresh playback window, including
+            # its onset cooldown. The measured noise floor survives on purpose.
+            self._interruption_gate.playback_started()
+        else:
+            self._interruption_gate.playback_ended()
     def _reset_turn_identity(self)->None:
         for task in tuple(self.visual_tasks):
             task.cancel()
@@ -4044,7 +4600,11 @@ class ListenerSession:
         self,fixture:CuratedProtocolFixture|None,
     )->None:
         self.curated_protocol_session=(
-            CuratedProtocolSession(fixture) if fixture is not None else None)
+            CuratedProtocolSession(
+                fixture,
+                translation_settings=self.translation_settings,
+                presentation_translator=self.presentation_translator,
+            ) if fixture is not None else None)
         self.reset_sensitive_state()
     def set_tool_context(self,context:ToolContext)->None:
         """Change trusted language and clear all language-sensitive session state."""
@@ -4175,10 +4735,24 @@ class ListenerSession:
             if self.state not in (TurnState.IDLE,TurnState.USER_SPEAKING): break
         return output
     def _accept_interrupt_chunk(self,chunk:bytes)->list[ListenerEvent]:
+        """Turn playback-time audio into at most one announced interruption.
+
+        Two independent things must agree before the researcher's answer is
+        ducked. The endpoint detector decides whether frames are speech-shaped;
+        `self._interruption_gate` decides whether they are loud enough for this
+        room, sustained long enough, and clear of the echo window right after
+        playback started. A detector onset that the gate never seconds is
+        captured silently and discarded as noise: no `barge_in_candidate`
+        reaches the browser, playback never ducks, no phantom command enters the
+        voice history, and canonical workflow state is untouched.
+        """
+
         output=[]
         detector=self._interrupt_detector
         framer=self._interrupt_framer
+        gate=self._interruption_gate
         for frame in framer.push(chunk):
+            assessment=gate.observe_frame(rms=pcm16_rms(frame))
             result=detector.process(frame)
             if result.speech_started:
                 interrupted_turn_id=self.active_turn_id
@@ -4192,6 +4766,7 @@ class ListenerSession:
                     continue
                 self._interrupt_candidate_identity=identity
                 self._interrupt_candidate_started_at=self.clock()
+                self._interrupt_candidate_announced=False
                 self._interrupt_candidate_diagnostics={
                     "microphone_chunk_sequence":self._microphone_chunk_sequence,
                     "candidate_onset_monotonic_ms":round(
@@ -4204,31 +4779,69 @@ class ListenerSession:
                     "playback_onset_window_frames":(
                         detector.config.onset_window_frames),
                     "playback_active":self.state==TurnState.AGENT_SPEAKING,
+                    **gate.diagnostics(),
                 }
-                output.append(ListenerEvent(
-                    "barge_in_candidate",interrupted_turn_id,result,
-                    interrupted_generation,
-                    diagnostics=dict(self._interrupt_candidate_diagnostics)))
+            # The gate may second a detector onset a frame or two late, so the
+            # announcement is retried until the utterance ends rather than being
+            # decided on the onset frame alone.
+            if (self._interrupt_candidate_identity is not None
+                    and not self._interrupt_candidate_announced):
+                if assessment.ready:
+                    gate.mark_candidate()
+                    self._interrupt_candidate_announced=True
+                    self._interrupt_gate_reason=None
+                    self._interrupt_candidate_diagnostics.update(
+                        gate.diagnostics())
+                    output.append(ListenerEvent(
+                        "barge_in_candidate",
+                        self._interrupt_candidate_identity[0],result,
+                        self._interrupt_candidate_identity[1],
+                        diagnostics=dict(
+                            self._interrupt_candidate_diagnostics)))
+                else:
+                    self._interrupt_gate_reason=assessment.reason
             if result.rejected:
                 candidate=self._interrupt_candidate_identity
+                announced=self._interrupt_candidate_announced
                 latency=(
                     max(0,round((self.clock()-
                                  self._interrupt_candidate_started_at)*1000))
                     if self._interrupt_candidate_started_at is not None
                     else None)
-                output.append(ListenerEvent(
-                    "barge_in_rejected",
-                    candidate[0] if candidate else self.active_turn_id or 0,
-                    result,
-                    candidate[1] if candidate else self.generation,
-                    reason=result.rejection_reason,latency_ms=latency,
-                    diagnostics=dict(self._interrupt_candidate_diagnostics)))
+                reason=(
+                    result.rejection_reason if announced
+                    else self._interrupt_gate_reason or result.rejection_reason)
+                diagnostics={
+                    **self._interrupt_candidate_diagnostics,**gate.diagnostics()}
                 self._reset_interrupt_input(
                     playback=self.state==TurnState.AGENT_SPEAKING)
+                if announced:
+                    output.append(ListenerEvent(
+                        "barge_in_rejected",
+                        candidate[0] if candidate else self.active_turn_id or 0,
+                        result,
+                        candidate[1] if candidate else self.generation,
+                        reason=reason,latency_ms=latency,
+                        diagnostics=diagnostics))
                 break
             elif result.utterance is not None:
                 candidate=self._interrupt_candidate_identity
                 if candidate is None:
+                    self._reset_interrupt_input(
+                        playback=self.state==TurnState.AGENT_SPEAKING)
+                    continue
+                if not self._interrupt_candidate_announced:
+                    # Speech-shaped but never loud or sustained enough for this
+                    # room. Discard it without spending an STT call on noise and
+                    # without ever telling the browser an interruption happened.
+                    reason=(
+                        self._interrupt_gate_reason
+                        or "below_adaptive_noise_floor")
+                    log.info(
+                        "barge_in.ignored reason=%s voiced_frames=%d "
+                        "total_frames=%d noise_floor_rms=%.5f",
+                        reason,result.voiced_frames,result.total_frames,
+                        gate.noise_floor_rms)
                     self._reset_interrupt_input(
                         playback=self.state==TurnState.AGENT_SPEAKING)
                     continue
@@ -4239,6 +4852,7 @@ class ListenerSession:
                 self._interrupt_candidate_diagnostics[
                     "captured_utterance_frames"
                 ]=result.total_frames
+                self._interrupt_candidate_diagnostics.update(gate.diagnostics())
                 latency=(
                     max(0,round((self._interrupt_candidate_endpoint_at-
                                  self._interrupt_candidate_started_at)*1000))
@@ -4251,6 +4865,7 @@ class ListenerSession:
             if detector.state not in (TurnState.IDLE,TurnState.USER_SPEAKING):
                 break
         return output
+
     def reject_interrupt_candidate(
         self,event:ListenerEvent,reason:str,
     )->ListenerEvent|None:
@@ -4261,6 +4876,10 @@ class ListenerSession:
         rejected=replace(
             event.result,utterance=None,rejected=True,
             rejection_reason=reason)
+        # The candidate was noise after all: playback resumes, the workflow
+        # transaction that produced this answer is untouched, and the gate
+        # re-applies its cooldown so the same burst cannot immediately retry.
+        self._interruption_gate.dismiss()
         self._reset_interrupt_input(
             playback=self.state==TurnState.AGENT_SPEAKING)
         return ListenerEvent(
@@ -4277,8 +4896,10 @@ class ListenerSession:
                 self.active_turn_id!=event.turn_id or
                 self.turn_generations.get(event.turn_id)!=event.generation or
                 self.state not in (TurnState.PROCESSING,TurnState.AGENT_SPEAKING)
-                or identity in self._interrupted_generations):
+                or identity in self._interrupted_generations
+                or not self._interrupt_candidate_announced):
             return []
+        self._interruption_gate.confirm()
         self._interrupted_generations.add(identity)
         candidate_endpoint_at=self._interrupt_candidate_endpoint_at
         self.generation+=1
@@ -4322,7 +4943,13 @@ class ListenerSession:
     def playback_ended(self,turn_id:int)->bool:
         if self.state!=TurnState.AGENT_SPEAKING or turn_id!=self.active_turn_id:return False
         turn_gen=self.turn_generations.get(turn_id,self.generation)
-        if (turn_id,turn_gen) in self._interrupted_generations or self._interrupt_candidate_identity is not None:
+        # Only an *announced* candidate defers the end of playback. An
+        # unannounced one is ambient noise the gate already refused, and letting
+        # it hold the session in AGENT_SPEAKING was how sustained equipment hum
+        # could strand a turn that had already finished speaking.
+        if ((turn_id,turn_gen) in self._interrupted_generations
+                or (self._interrupt_candidate_identity is not None
+                    and self._interrupt_candidate_announced)):
             return False
         received_at=self.clock()
         committed_at=self.turn_committed_at.get(turn_id)
@@ -4399,6 +5026,8 @@ def cascade_transcription_context(
             getattr(session,"stt_settings",None),"filler_words",False)),
         vad_threshold=getattr(
             getattr(session,"stt_settings",None),"vad_threshold",0.5),
+        diarize=bool(getattr(
+            getattr(session,"stt_settings",None),"diarize",False)),
     )
 
 
@@ -4414,6 +5043,7 @@ def transcribe_cascade_audio(
         keyterms=context.keyterms,
         vad_threshold=getattr(context, "vad_threshold", 0.5),
         filler_words=bool(getattr(context, "filler_words", False)),
+        diarize=bool(getattr(context, "diarize", False)),
     )
 
 class LockedSender:
@@ -5423,23 +6053,32 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
         and plan.state_changed
         and plan.reported_completion
     ):
-        acknowledgment=(
-            (
-                "말씀한 관찰 결과와 현재 단계 완료를 실험 기록에 반영했습니다."
+        if language=="ko":
+            record_phrase=(
+                "단계를 완료하고 관찰 결과와 함께 실험 기록에 반영했습니다."
                 if plan.reported_observation else
-                "현재 단계 완료를 실험 기록에 반영했습니다."
+                "단계를 완료하고 실험 기록에 반영했습니다."
             )
-            if language=="ko" else
-            (
+            persisted_speech=plan.speech_text.replace(
+                "단계를 완료로 저장했습니다.",record_phrase,1,
+            )
+            persisted_display=plan.display_text.replace(
+                "단계를 완료로 저장했습니다.",record_phrase,1,
+            )
+            if persisted_display==plan.display_text:
+                persisted_display=f"{persisted_speech}\n\n{plan.display_text}"
+        else:
+            acknowledgment=(
                 "I added the reported observation and current-step completion to the experiment record."
                 if plan.reported_observation else
                 "I added the current-step completion to the experiment record."
             )
-        )
+            persisted_speech=f"{acknowledgment} {plan.speech_text}"
+            persisted_display=f"{acknowledgment}\n\n{plan.display_text}"
         return replace(
             plan,
-            display_text=f"{acknowledgment}\n\n{plan.display_text}",
-            speech_text=f"{acknowledgment} {plan.speech_text}",
+            display_text=persisted_display,
+            speech_text=persisted_speech,
         )
     if (
         plan.action is CuratedProtocolAction.NEXT
@@ -5816,6 +6455,44 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 cooldown_ms=session.detector.config.cooldown_ms,
             )
         return
+    # Participant-aware admission. Provider audio intelligence feeds the
+    # deterministic layer that already exists; it never becomes a second router
+    # and it never gains mutation authority of its own. When diarization is off
+    # this is a no-op that makes no claim about who spoke.
+    priority_stop=is_priority_stop_command(transcript)
+    transcript_speaker_segments=transcript_segments(
+        transcription.words,fallback_text=transcript)
+    speaker_decision=evaluate_speaker_policy(
+        transcript_speaker_segments,session.participants,
+        diarization_enabled=bool(session.diarization_settings.enabled),
+        mutating=arbitrate_request(transcript).mutation_candidate,
+        priority_stop=priority_stop,
+        settings=session.diarization_settings,
+    )
+    speaker_diagnostics=diarization_diagnostics(
+        transcript_speaker_segments,speaker_decision,
+        diarization_enabled=bool(session.diarization_settings.enabled),
+    )
+    await current_text(
+        "voice.speaker_policy",turn_id=turn_id,generation=generation,
+        mutation_authorized=speaker_decision.mutation_allowed,
+        **speaker_diagnostics,
+    )
+    if not speaker_decision.mutation_allowed:
+        _record_workspace_metric(
+            category="voice",metric_name="command_failure",
+            dimensions={
+                "status":"blocked",
+                "reason_code":speaker_decision.reason[:100],
+            },
+        )
+        if not await current_text("transcript",turn_id=turn_id,text=transcript):
+            return
+        await finish_blocked_voice(
+            speaker_decision.message or UNKNOWN_SPEAKER_MESSAGE,
+            "speaker_attribution_clarification",
+        )
+        return
     admission = classify_transcription_language(
         transcription,session.accepted_input_language
     )
@@ -5849,6 +6526,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "normalized_transcript":" ".join(transcript.strip().split()),
         "correction_class":admission.correction_class,"clarification_required":admission.clarification_required,
         "intent_kind":None,"action":None,"mutation_authorized":False,
+        **speaker_diagnostics,
         "browser_audio_constraints":dict(session.client_audio_constraints),
         "wav_sha256":hashlib.sha256(diagnostic_wav).hexdigest(),
         "wav_byte_count":len(diagnostic_wav),
@@ -6714,6 +7392,25 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # persistence is the reporting-acknowledgement gate. Re-read the
             # possibly replaced plan only after both so neither display nor
             # TTS can use pre-persistence success language.
+            #
+            # Publish the semantic and persistence outcomes as two separate
+            # facts, both settled. Playback is a third, independent fact that
+            # arrives later: a researcher who interrupts the spoken
+            # acknowledgement stops audio, and stopping audio must never relabel
+            # a transaction the server already committed.
+            await current_text(
+                "turn.outcome",turn_id=turn_id,generation=generation,
+                workflow_outcome=(
+                    "experiment_report_saved"
+                    if plan.state_changed and report_prepared
+                    else "workflow_state_saved" if plan.state_changed
+                    else "clarification_required"
+                    if plan.speech_mode.value=="blocked"
+                    else "no_change"),
+                state_changed=bool(plan.state_changed),
+                report_persisted=bool(report_prepared),
+                workflow_state_persisted=bool(workflow_mutation_committed),
+            )
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -7648,18 +8345,27 @@ async def voice_socket(websocket:WebSocket):
                         if rejected is not None:
                             listener_events.append(rejected)
                         continue
+                    # Fail-safe: a short, explicit stop or pause is honoured
+                    # before any other admission test. Refusing to stop is the
+                    # more dangerous failure at a bench, so this path is
+                    # deliberately reachable even for an unattributed voice.
+                    priority_stop=is_priority_stop_command(transcription.text)
                     input_decision=classify_input_event(
                         transcription,
                         keyterms=stt_context.keyterms,
                         duration_seconds=transcription.duration_seconds,
                     )
-                    if not input_decision.accepted:
+                    if not input_decision.accepted and not priority_stop:
                         rejected=session.reject_interrupt_candidate(
                             item,input_decision.reason or "non_speech")
                         if rejected is not None:
                             listener_events.append(rejected)
                         continue
-                    committed=session.commit_interrupt_candidate(item,stt_ms=stt_ms)
+                    committed=session.commit_interrupt_candidate(
+                        item,stt_ms=stt_ms,
+                        reason=(
+                            "priority_stop" if priority_stop
+                            else "confirmed_speech"))
                     if not committed:
                         rejected=session.reject_interrupt_candidate(
                             item,"stale_candidate")
@@ -7783,10 +8489,26 @@ async def voice_socket(websocket:WebSocket):
                                     trusted_config.curated_protocol_source_pdf_path,
                                 )
                                 if curated_fixture.protocol_id==requested_protocol_id:
-                                    selected_curated_fixture=curated_fixture
-                                    selected_revision_id=getattr(
-                                        curated_fixture,"revision_id",
-                                        f"fixture-{requested_protocol_id}")
+                                    # A reviewed, execution-approved catalog
+                                    # revision of the same protocol supersedes
+                                    # the development fixture, so a reviewer
+                                    # decision actually changes what runs.
+                                    superseded=False
+                                    if _protocol_store_settings().enabled:
+                                        catalog,protocol_store=_open_protocol_catalog()
+                                        try:
+                                            superseded=(
+                                                catalog
+                                                .development_fixture_is_superseded(
+                                                    curated_fixture)
+                                            )
+                                        finally:
+                                            protocol_store.close()
+                                    if not superseded:
+                                        selected_curated_fixture=curated_fixture
+                                        selected_revision_id=getattr(
+                                            curated_fixture,"revision_id",
+                                            f"fixture-{requested_protocol_id}")
                             if selected_curated_fixture is None:
                                 # The shared curated development fixture is not
                                 # tenant-owned and is exempt above; every other
@@ -7879,6 +8601,7 @@ async def voice_socket(websocket:WebSocket):
                         str(recovery_session_id)
                         if recovery_session_id is not None else None
                     )
+                    _seed_experiment_participants(session)
                     if session.curated_protocol_session is not None and selected_curated_fixture is not None:
                         try:
                             log.info(
@@ -8201,6 +8924,231 @@ async def voice_socket(websocket:WebSocket):
                         action="resume",
                         state=fixture_state,
                     ))
+            elif control["type"]=="workflow.complete_current_step":
+                curated=session.curated_protocol_session
+                current_step=(
+                    curated.fixture.steps[curated.current_index]
+                    if session.active and curated is not None and curated.active
+                    else None
+                )
+                control_identity_valid=bool(
+                    session.active
+                    and curated is not None
+                    and current_step is not None
+                    and control["configuration_id"]
+                    ==session.accepted_configuration_id
+                    and control["generation"]==session.generation
+                    and control["step_id"]==current_step.step_id
+                )
+                checkpoint=(
+                    curated.active_human_checkpoint()
+                    if control_identity_valid and curated is not None else None
+                )
+                if not control_identity_valid or checkpoint is not None:
+                    message=(
+                        "현재 단계는 연구자 확인 지점입니다. 화면의 조건 충족 여부를 직접 선택해 주세요. 실험 상태는 변경하지 않았습니다."
+                        if checkpoint is not None else
+                        "현재 단계가 바뀌었거나 세션을 확인할 수 없습니다. 화면을 새로 확인해 주세요. 실험 상태는 변경하지 않았습니다."
+                    )
+                    await websocket.send_text(event(
+                        "workflow.action.result",
+                        action="complete_current_step",
+                        configuration_id=session.accepted_configuration_id,
+                        generation=session.generation,
+                        step_id=(current_step.step_id if current_step else None),
+                        state_mutation=False,
+                        message=message,
+                    ))
+                    continue
+                assert curated is not None and current_step is not None
+                restore_point=curated._checkpoint()
+                pre_transition_index=curated.current_index
+                control_turn_id=1_000_000_000+curated._revision
+                plan=curated.plan(
+                    "현재 단계 완료",
+                    turn_id=control_turn_id,
+                    language=session.accepted_language or "ko",
+                    configuration_id=session.accepted_configuration_id,
+                    generation=session.generation,
+                )
+                experiment_state=None
+                if plan.state_changed:
+                    try:
+                        experiment_state=await asyncio.to_thread(
+                            _record_workspace_experiment_progress,
+                            session,curated,plan,
+                            turn_id=control_turn_id,
+                            generation=session.generation,
+                            pre_transition_index=pre_transition_index,
+                        )
+                        if experiment_state is None:
+                            raise WorkspaceError(
+                                "Experiment progress persistence is unavailable."
+                            )
+                    except Exception as exc:
+                        curated._restore(restore_point)
+                        _record_workspace_metric(
+                            category="workflow",metric_name="mutation_failure",
+                            dimensions={
+                                "status":"rolled_back",
+                                "reason_code":str(
+                                    getattr(exc,"code","workspace_error"))[:100],
+                                "event_kind":"complete_current_step",
+                            },
+                        )
+                        await websocket.send_text(event(
+                            "experiment.session.error",
+                            code=getattr(exc,"code","workspace_error"),
+                        ))
+                        await websocket.send_text(event(
+                            "protocol.fixture.state",
+                            configuration_id=session.accepted_configuration_id,
+                            action="complete_current_step",
+                            state=curated.state(),
+                        ))
+                        await websocket.send_text(event(
+                            "workflow.action.result",
+                            action="complete_current_step",
+                            configuration_id=session.accepted_configuration_id,
+                            generation=session.generation,
+                            step_id=current_step.step_id,
+                            state_mutation=False,
+                            message=(
+                                "실험 세션을 저장하지 못해 단계를 완료로 확정하지 않았습니다. 현재 단계는 그대로입니다."
+                            ),
+                        ))
+                        continue
+                    if session.experiment_report_store is not None:
+                        try:
+                            report=await asyncio.to_thread(
+                                _record_experiment_report_plan,
+                                session,curated,plan,
+                                turn_id=control_turn_id,
+                                generation=session.generation,
+                                pre_transition_index=pre_transition_index,
+                            )
+                        except Exception:
+                            await websocket.send_text(event(
+                                "experiment.report.error",
+                                code="report_persistence_failed",
+                            ))
+                        else:
+                            await websocket.send_text(event(
+                                "experiment.report.state",report=report,
+                                configuration_id=session.accepted_configuration_id,
+                                generation=session.generation,
+                            ))
+                if experiment_state is not None:
+                    await websocket.send_text(event(
+                        "experiment.session.state",state=experiment_state,
+                    ))
+                await websocket.send_text(event(
+                    "protocol.fixture.state",
+                    configuration_id=session.accepted_configuration_id,
+                    action="complete_current_step",
+                    state=curated.state(spoken_summary=plan.spoken_summary),
+                ))
+                await websocket.send_text(event(
+                    "workflow.action.result",
+                    action="complete_current_step",
+                    configuration_id=session.accepted_configuration_id,
+                    generation=session.generation,
+                    step_id=current_step.step_id,
+                    state_mutation=bool(plan.state_changed),
+                    message=plan.display_text,
+                ))
+            elif control["type"]=="workflow.human_checkpoint":
+                curated=session.curated_protocol_session
+                checkpoint=(
+                    curated.active_human_checkpoint()
+                    if session.active and curated is not None else None
+                )
+                # The explicit bench action is admitted only for the checkpoint
+                # and step the researcher is actually looking at, so a stale
+                # screen can never move a live workflow.
+                if (
+                    checkpoint is None
+                    or control["configuration_id"]
+                    !=session.accepted_configuration_id
+                    or control["generation"]!=session.generation
+                    or checkpoint.checkpoint_id!=control["checkpoint_id"]
+                    or curated.fixture.steps[curated.current_index].step_id
+                    !=control["step_id"]
+                ):
+                    await websocket.send_text(event(
+                        "error",message="human_checkpoint_not_active"))
+                    continue
+                pre_transition_index=curated.current_index
+                # Same discipline as every other mutation path: take a restore
+                # point, mutate, and roll the in-memory session back to its
+                # exact pre-mutation state if the durable record cannot be
+                # written. Canonical state never runs ahead of the ledger.
+                try:
+                    outcome=await _confirm_and_persist_human_checkpoint(
+                        session,curated,control["decision"],
+                        pre_transition_index=pre_transition_index,
+                    )
+                except Exception as exc:
+                    _record_workspace_metric(
+                        category="workflow",metric_name="mutation_failure",
+                        dimensions={
+                            "status":"rolled_back",
+                            "reason_code":str(
+                                getattr(exc,"code","workspace_error"))[:100],
+                            "event_kind":"human_checkpoint",
+                        },
+                    )
+                    log.warning(
+                        "human checkpoint update failed decision=%s error=%s",
+                        control["decision"],type(exc).__name__,
+                    )
+                    await websocket.send_text(event(
+                        "error",message=getattr(exc,"code","workspace_error")))
+                    await websocket.send_text(event(
+                        "protocol.fixture.state",
+                        configuration_id=session.accepted_configuration_id,
+                        action="human_checkpoint",
+                        decision=control["decision"],
+                        outcome="persistence_failed",
+                        state=curated.state(),
+                    ))
+                    continue
+                fixture_state=curated.state()
+                await websocket.send_text(event(
+                    "protocol.fixture.state",
+                    configuration_id=session.accepted_configuration_id,
+                    action="human_checkpoint",
+                    decision=control["decision"],
+                    outcome=outcome.status,
+                    state=fixture_state,
+                ))
+            elif control["type"]=="session.speaker.confirm":
+                # Diarization labels are acoustic, session-scoped and not
+                # identity. Only a human confirmation maps one to a participant
+                # the server already knows, and the mapping dies with the
+                # session - nothing biometric is derived or stored.
+                confirmed=session.participants.confirm_label(
+                    control["speaker_label"],control["participant_id"])
+                await websocket.send_text(event(
+                    "session.speaker.state",
+                    speaker_label=control["speaker_label"],
+                    confirmed=confirmed,
+                    speaker_identity_verified=False,
+                    reason=(
+                        "confirmed_by_participant" if confirmed
+                        else "participant_not_on_roster"),
+                    confirmed_labels=len(session.participants.confirmed_labels),
+                ))
+            elif control["type"]=="session.speaker.release":
+                released=session.participants.release_label(
+                    control["speaker_label"])
+                await websocket.send_text(event(
+                    "session.speaker.state",
+                    speaker_label=control["speaker_label"],
+                    confirmed=False,speaker_identity_verified=False,
+                    reason="released" if released else "unknown_label",
+                    confirmed_labels=len(session.participants.confirmed_labels),
+                ))
             elif control["type"]=="client.audio_constraints":
                 requested=control["requested"]
                 actual=control["actual"]

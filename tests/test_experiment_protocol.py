@@ -30,6 +30,7 @@ from voice_workflow_agent.experiment_protocol import (
     ProtocolMetadata,
     ProtocolSection,
     ProtocolSourceStep,
+    human_confirmation_checkpoints,
     ProtocolSubAction,
     ProtocolValidationCode,
     ProtocolValidationError,
@@ -618,7 +619,9 @@ class ExperimentProtocolTests(unittest.TestCase):
             ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE,
         )
 
-    def test_repeat_until_remains_explicit_and_policy_can_evolve(self):
+    def test_human_observable_repeat_until_is_guidance_ready(self):
+        """A qualitative endpoint a researcher can confirm is not a blocker."""
+
         construct = RepeatUntil(
             "neutral-ph",
             "Repeat until the pH is neutral.",
@@ -629,23 +632,101 @@ class ExperimentProtocolTests(unittest.TestCase):
         protocol = replace(minimal_protocol(), constructs=(construct,))
 
         features = detect_features(protocol)
-        self.assertEqual(features[0].code, FeatureCode.REPEAT_UNTIL)
+        self.assertEqual(
+            features[0].code, FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL
+        )
+        assessment = assess_readiness(protocol)
+        self.assertEqual(assessment.status, ReadinessStatus.GUIDANCE_READY)
+        self.assertEqual(assessment.reasons, ())
+
+        checkpoints = human_confirmation_checkpoints(protocol)
+        self.assertEqual(len(checkpoints), 1)
+        checkpoint = checkpoints[0]
+        # Condition and range are copied from the source, not derived.
+        self.assertEqual(
+            checkpoint.condition_source_text, "Repeat until the pH is neutral."
+        )
+        self.assertEqual(checkpoint.repeated_step_ids, ("step-1",))
+        self.assertEqual(checkpoint.gate_step_id, "step-1")
+        self.assertEqual(checkpoint.repeat_start_step_id, "step-1")
+
+        conservative = CapabilityPolicy(
+            "no-human-confirmation",
+            P1_CAPABILITY_POLICY.supported_features
+            - {FeatureCode.HUMAN_CONFIRMED_REPEAT_UNTIL},
+        )
+        restricted = assess_readiness(protocol, capability_policy=conservative)
+        self.assertEqual(restricted.status, ReadinessStatus.ANALYSIS_REQUIRED)
+        self.assertEqual(
+            restricted.reason_codes,
+            (
+                ReadinessReasonCode.UNSUPPORTED_HUMAN_CONFIRMED_REPEAT_UNTIL
+                .value,
+            ),
+        )
+
+    def test_repeat_until_without_a_derivable_range_still_blocks(self):
+        """If the server would have to guess the range, it refuses instead."""
+
+        base = minimal_protocol()
+        steps = base.sections[0].steps
+        extended = replace(
+            base,
+            sections=(
+                replace(
+                    base.sections[0],
+                    steps=(
+                        *steps,
+                        ProtocolSourceStep(
+                            "step-2",
+                            "2",
+                            "Record the result.",
+                            evidence("Record the result.", 2),
+                        ),
+                        ProtocolSourceStep(
+                            "step-3",
+                            "3",
+                            "Store the sample.",
+                            evidence("Store the sample.", 2),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        # The repeated range skips step-2, so "which steps do I replay?" has no
+        # answer that does not involve inventing intent.
+        construct = RepeatUntil(
+            "gapped-range",
+            "Repeat until the pH is neutral.",
+            ("step-1", "step-3"),
+            evidence("Repeat until the pH is neutral."),
+            step_id="step-3",
+        )
+        protocol = replace(extended, constructs=(construct,))
+
+        self.assertEqual(
+            detect_features(protocol)[0].code, FeatureCode.REPEAT_UNTIL
+        )
+        self.assertEqual(human_confirmation_checkpoints(protocol), ())
         self.assert_analysis_required(
             protocol,
             ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
         )
 
-        future_policy = CapabilityPolicy(
-            "repeat-until-capable",
-            P1_CAPABILITY_POLICY.supported_features
-            | {FeatureCode.REPEAT_UNTIL},
+    def test_repeat_until_not_anchored_to_its_last_step_blocks(self):
+        """The gate must be the step the researcher is standing on."""
+
+        construct = RepeatUntil(
+            "unanchored",
+            "Repeat until the pH is neutral.",
+            ("step-1",),
+            evidence("Repeat until the pH is neutral."),
         )
-        self.assertEqual(
-            assess_readiness(
-                protocol,
-                capability_policy=future_policy,
-            ).status,
-            ReadinessStatus.GUIDANCE_READY,
+        protocol = replace(minimal_protocol(), constructs=(construct,))
+        self.assertEqual(human_confirmation_checkpoints(protocol), ())
+        self.assert_analysis_required(
+            protocol,
+            ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
         )
 
     def test_fixed_range_is_represented_but_ambiguity_still_blocks(self):

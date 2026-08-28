@@ -177,13 +177,19 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
         self.assertIn("Thermomixer", plan.display_text)
         self.assertEqual(session.state(), opening)
 
-    def test_source_observation_gates_steps_7_9_and_20(self) -> None:
+    def test_human_checkpoints_loop_and_advance_on_explicit_answers(self) -> None:
+        """Steps 7 and 9 end on a condition only the researcher can judge.
+
+        Answering "not yet" must return to the exact source-defined repeat range
+        rather than inventing a step, and answering "confirmed" must leave the
+        loop. Both answers are explicit; the server never decides either one.
+        """
+
         cases = (
-            ("7", "젤이 완전히 탈색되어 투명해요", "아직 색이 남아 있어요"),
-            ("9", "젤이 흰색으로 변했고 탈수됐어요", "아직 투명해요"),
-            ("20", "젤이 흰색으로 변했고 탈수됐어요", "아직 투명해요"),
+            ("7", "2", ("2", "3", "4", "5", "6", "7")),
+            ("9", "8", ("8", "9")),
         )
-        for label, positive, negative in cases:
+        for label, repeat_start, repeated in cases:
             with self.subTest(step=label, observation="positive"):
                 session = self.session(label)
                 opening_index = session.current_index
@@ -194,9 +200,10 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
                 self.assertEqual(
                     ask.action, CuratedProtocolAction.CLARIFY_COMPLETION
                 )
+                self.assertFalse(ask.state_changed)
                 self.assertIsNotNone(session.pending_observation_confirmation)
                 accepted = session.plan(
-                    positive, turn_id=2, language="ko",
+                    "네, 조건이 충족됐어요", turn_id=2, language="ko",
                     configuration_id=7, generation=11,
                 )
                 self.assertTrue(accepted.state_changed)
@@ -205,26 +212,56 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
                 self.assertEqual(session.current_index, opening_index + 1)
             with self.subTest(step=label, observation="negative"):
                 session = self.session(label)
-                opening_index = session.current_index
+                total_steps = len(self.fixture.steps)
                 session.plan(
                     "현재 단계를 완료했어요", turn_id=1, language="ko",
                     configuration_id=7, generation=11,
                 )
                 rejected = session.plan(
-                    negative, turn_id=2, language="ko",
+                    "아직 아니에요", turn_id=2, language="ko",
                     configuration_id=7, generation=11,
                 )
-                self.assertFalse(rejected.state_changed)
+                self.assertTrue(rejected.state_changed)
                 self.assertTrue(rejected.reported_observation)
                 self.assertEqual(rejected.observation_predicate, "negative")
-                self.assertEqual(session.current_index, opening_index)
-                if label == "7":
-                    self.assertIn("2–7단계 반복", rejected.display_text)
-                elif label == "9":
-                    self.assertIn("8–9단계 반복", rejected.display_text)
-                else:
-                    self.assertIn("17–18단계 반복", rejected.display_text)
-                    self.assertIn("미해결", rejected.display_text)
+                self.assertEqual(
+                    self.fixture.steps[session.current_index].source_label,
+                    repeat_start,
+                )
+                self.assertIn("반복", rejected.display_text)
+                # No step was created and no source value was rewritten.
+                self.assertEqual(len(self.fixture.steps), total_steps)
+                checkpoint = self.fixture.human_checkpoints[
+                    self.fixture.steps[
+                        next(
+                            index
+                            for index, step in enumerate(self.fixture.steps)
+                            if step.source_label == label
+                        )
+                    ].step_id
+                ]
+                self.assertEqual(
+                    tuple(
+                        step.source_label
+                        for step in self.fixture.steps
+                        if step.step_id in checkpoint.repeated_step_ids
+                    ),
+                    repeated,
+                )
+
+    def test_unresolved_source_ambiguity_is_not_a_human_checkpoint(self) -> None:
+        """Step 20's unclear repeat range is review work, not bench work."""
+
+        session = self.session("20")
+        self.assertIsNone(session.active_human_checkpoint())
+        opening = session.current_index
+        blocked = session.plan(
+            "현재 단계를 완료했어요", turn_id=1, language="ko",
+            configuration_id=7, generation=11,
+        )
+        self.assertFalse(blocked.state_changed)
+        self.assertEqual(session.current_index, opening)
+        self.assertIn("원문 해석 확인", blocked.display_text)
 
     def test_pending_completion_accepts_progression_only_while_owned(self) -> None:
         replies = (

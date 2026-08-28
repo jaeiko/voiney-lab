@@ -648,7 +648,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 plan = session.plan(phrase, turn_id=turn_id, language="ko")
                 self.assertEqual(plan.action, CuratedProtocolAction.OFF_TOPIC)
                 self.assertFalse(plan.state_changed)
-                self.assertIn("진행 중인 실험 절차", plan.display_text)
+                self.assertIn("상태는 변경하지 않았습니다", plan.display_text)
                 self.assertNotIn("픽스처", plan.display_text)
                 self.assertEqual(session.current_index, 1)
                 self.assertTrue(session.active)
@@ -1135,12 +1135,14 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(inactive.state()["current_step_label"], "1")
         self.assertIn(inactive.state()["workflow_status"], {"preview", "ready"})
 
-    def test_readiness_blockers_prevent_server_owned_advance(self):
+    def test_human_checkpoints_ask_before_any_advance(self):
+        """An advance request at a checkpoint asks; it never advances by itself."""
+
         by_label = {
             step.source_label: index
             for index, step in enumerate(self.fixture.steps)
         }
-        for turn_id, label in enumerate(("7", "9", "20"), 1):
+        for turn_id, label in enumerate(("7", "9"), 1):
             with self.subTest(label=label):
                 session = CuratedProtocolSession(self.fixture)
                 session.active = True
@@ -1160,9 +1162,41 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 self.assertEqual(
                     blocked.action, CuratedProtocolAction.CLARIFY_COMPLETION
                 )
-                self.assertIn("I will not record completion", blocked.response_text)
+                # The question quotes the source condition rather than
+                # restating it in the agent's own words.
+                checkpoint = session.active_human_checkpoint()
+                self.assertIsNotNone(checkpoint)
+                self.assertIn(
+                    checkpoint.condition_source_text.strip(),
+                    blocked.response_text,
+                )
                 self.assertIsNotNone(session.pending_observation_confirmation)
                 self.assertIsNone(session.state()["block_reason"])
+
+    def test_unresolved_ambiguity_still_blocks_server_owned_advance(self):
+        """Genuine source ambiguity is review work and stays a hard blocker."""
+
+        by_label = {
+            step.source_label: index
+            for index, step in enumerate(self.fixture.steps)
+        }
+        session = CuratedProtocolSession(self.fixture)
+        session.active = True
+        session.current_index = by_label["20"]
+        self.assertIsNone(session.active_human_checkpoint())
+
+        blocked = session.plan(
+            "I completed this step. Guide me to the next step.",
+            turn_id=1,
+            language="en",
+        )
+
+        self.assertEqual(session.state()["current_step_label"], "20")
+        self.assertFalse(blocked.state_changed)
+        self.assertIn("reviewer", blocked.response_text)
+        self.assertEqual(
+            session.state()["block_reason"], "unresolved_ambiguity"
+        )
 
     def test_supported_question_has_only_current_context_and_unsupported_is_bounded(self):
         session = CuratedProtocolSession(self.fixture)
@@ -1188,7 +1222,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertNotIn(unrelated, "\n".join(fact.text for fact in supported.facts))
         unsupported = session.plan("달의 질량은?", turn_id=2, language="ko")
         self.assertEqual(unsupported.action, CuratedProtocolAction.OFF_TOPIC)
-        self.assertIn("관련 실험실 자료", unsupported.response_text)
+        self.assertIn("상태는 변경하지 않았습니다", unsupported.response_text)
         self.assertNotIn("픽스처", unsupported.response_text)
         self.assertEqual(unsupported.display_text, unsupported.speech_text)
         self.assertEqual(
@@ -1365,7 +1399,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         )
         self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
         self.assertEqual(ambiguous.state(), opening)
-        for turn_id, index in enumerate((6, 8, 19), 921):
+        for turn_id, index in enumerate((6, 8), 921):
             with self.subTest(step=index + 1):
                 session = CuratedProtocolSession(self.fixture)
                 session.active = True
@@ -1379,6 +1413,15 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 self.assertEqual(plan.intent_kind, "observation_confirmation_required")
                 self.assertIsNotNone(session.pending_observation_confirmation)
                 self.assertEqual(session.current_index, index)
+        blocked_session = CuratedProtocolSession(self.fixture)
+        blocked_session.active = True
+        blocked_session.current_index = 19
+        blocked = blocked_session.plan(
+            "현재 단계를 완료했어요.", turn_id=930, language="ko"
+        )
+        self.assertFalse(blocked.state_changed)
+        self.assertIsNone(blocked_session.pending_observation_confirmation)
+        self.assertEqual(blocked_session.current_index, 19)
 
     def test_detail_planner_uses_admitted_facts_without_invented_method(self):
         session = CuratedProtocolSession(self.fixture)
@@ -1682,6 +1725,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(diagnostic["response_status"], 200)
         self.assertEqual(diagnostic["word_count"], 1)
 
+    #: Speech-level PCM for barge-in fixtures.
+    #:
+    #: These fixtures script the VAD verdict and previously paired it with
+    #: digital silence, which was harmless while onset was decided by frame
+    #: voting alone. The noise-floor gate now also measures level, and digital
+    #: silence is exactly what it is built to refuse, so the fixture carries the
+    #: amplitude it always claimed to represent. This makes the stand-in
+    #: consistent with what it stands in for; it does not relax any assertion.
+    AUDIBLE_FRAME = bytes([0x20]) * FRAME_BYTES
+
     def accept_barge_in(self, session: ListenerSession):
         decisions = iter(
             [False, True, True, True, True, False]
@@ -1693,7 +1746,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             classifier=lambda _: next(decisions),
         )
         frame_count = 14 + session.detector.config.endpoint_silence_frames
-        candidates=session.accept_chunk(b"\0" * FRAME_BYTES * frame_count)
+        candidates=session.accept_chunk(self.AUDIBLE_FRAME * frame_count)
         ready=next(
             item for item in candidates
             if item.kind=="barge_in_audio_ready")
@@ -2116,11 +2169,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 event["event_type"] for event in report["events"]
             ])
 
-    def test_source_observation_persists_once_before_steps_7_9_20_advance(self):
+    def test_source_observation_persists_once_before_checkpoint_advance(self):
         cases = (
             (6, "젤이 완전히 탈색되어 투명해요"),
-            (8, "젤이 흰색으로 변했고 탈수됐어요"),
-            (19, "젤이 흰색으로 변했고 탈수됐어요"),
+            (8, "조건이 충족됐어요"),
         )
         for index, observation in cases:
             with self.subTest(step=self.fixture.steps[index].source_label), tempfile.TemporaryDirectory() as directory:
@@ -2154,14 +2206,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 )
                 self.assertEqual(curated.current_index, index + 1)
 
-    def test_observation_persistence_failure_restores_steps_7_9_20(self):
+    def test_observation_persistence_failure_restores_checkpoint_steps(self):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
 
         cases = (
             (6, "젤이 완전히 탈색되어 투명해요"),
-            (8, "젤이 흰색으로 변했고 탈수됐어요"),
-            (19, "젤이 흰색으로 변했고 탈수됐어요"),
+            (8, "조건이 충족됐어요"),
         )
         for index, observation in cases:
             with self.subTest(step=self.fixture.steps[index].source_label), tempfile.TemporaryDirectory() as directory:
@@ -3180,7 +3231,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn(self.fixture.steps[1].instruction_source_text, next_reply)
         self.assertEqual(
             next_tts.call_args.args[0],
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
         )
         self.assertEqual(next_client.chat.completions.calls, [])
         self.assertTrue(next_session.playback_ended(1))
@@ -3226,7 +3277,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertTrue(off_session.curated_protocol_session.active)
         self.assertEqual(off_session.curated_protocol_session.current_index, 1)
-        self.assertIn("관련 실험실 자료", off_reply)
+        self.assertIn("상태는 변경하지 않았습니다", off_reply)
         self.assertNotIn("픽스처", off_reply)
         self.assertEqual(off_operation["operation"], "scope_reminder")
         self.assertEqual(off_client.chat.completions.calls, [])
@@ -3316,7 +3367,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             playback_config, classifier=lambda _: next(decisions)
         )
 
-        events = session.accept_chunk(b"\0" * FRAME_BYTES * 15)
+        # Speech-level audio with a sub-threshold VAD pattern: the point of this
+        # regression is that the *endpoint detector* refuses the onset, so the
+        # audio must be loud enough for the acoustic gate not to be the reason.
+        events = session.accept_chunk(self.AUDIBLE_FRAME * 15)
 
         self.assertEqual(events, [])
         self.assertEqual(workflow.state(), opening_state)
@@ -3495,7 +3549,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.state()["revision"], 0)
         self.assertIn("문서에 명시된 이 단계의 확인 기준", spoken)
         self.assertIn(expected, spoken)
-        self.assertIn("반복 종료 확인 방식은 아직 검토가 필요합니다", spoken)
+        # Step 7's endpoint is bench work, not review work: the answer explains
+        # who confirms it instead of warning about an unresolved gate.
+        self.assertIn("연구자가 직접 확인해야 하는 관찰", spoken)
+        self.assertNotIn("검토가 필요합니다", spoken)
         self.assertNotIn("서버", spoken)
         self.assertNotIn("상태를 변경", spoken)
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
@@ -3520,7 +3577,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         spoken = tts.call_args.args[0]
         llm.assert_not_called()
         self.assertEqual(len(client.chat.completions.calls), 0)
-        self.assertIn("관련 실험실 자료", spoken)
+        self.assertIn("상태는 변경하지 않았습니다", spoken)
         self.assertNotIn("픽스처", spoken)
         self.assertNotIn(self.fixture.steps[2].instruction_source_text, spoken)
         done = next(item for item in socket.text if item["type"] == "turn.done")
@@ -3775,7 +3832,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             self.assertEqual(session.curated_protocol_session.current_index, 1)
             self.assertEqual(
                 tts.call_args_list[0].args[0],
-                "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+                "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
             )
             self.assertIn(
                 self.fixture.steps[1].instruction_source_text,
@@ -3960,10 +4017,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 1)
         self.assertEqual(
             tts.call_args.args[0],
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
         )
         closing_state = session.curated_protocol_session.state(
-            spoken_summary="2단계로 이동했습니다. 안내를 화면에 표시했습니다."
+            spoken_summary="1단계를 완료로 저장했습니다. 현재는 2단계입니다."
         )
         state_events = [
             item for item in socket.text
@@ -4252,7 +4309,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
-            "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
             self.fixture.localized_fact(
                 self.fixture.steps[1].step_id, "current_step"
             ),
@@ -4427,7 +4484,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(len(ready), 1)
         self.assertEqual(ready[0]["protocol_id"], self.fixture.protocol_id)
 
-    def test_readiness_blocked_next_is_spoken_without_llm_or_state_change(self):
+    def test_human_checkpoint_question_is_spoken_without_llm_or_state_change(self):
         session = self.make_session(index=6)
         socket = Socket()
         client = RecordingClient(error=AssertionError("LLM must not run"))
@@ -4451,7 +4508,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
         self.assertEqual(client.chat.completions.calls, [])
         self.assertEqual(session.curated_protocol_session.current_index, 6)
-        self.assertIn("관찰 결과", tts.call_args.args[0])
+        spoken = tts.call_args.args[0]
+        self.assertIn("연구자가 직접 확인", spoken)
+        self.assertIn("원문 기준", spoken)
+        self.assertIn("아직 아무 것도 변경하지 않았습니다", spoken)
         state_events = [
             item for item in socket.text
             if item["type"] == "protocol.fixture.state"

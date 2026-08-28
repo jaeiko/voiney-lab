@@ -56,6 +56,16 @@ _POSITIVE_COMPLETION_PATTERNS = (
     # step is active. Question, negation, hypothetical, and future forms are
     # rejected by the guards above before this grammar is evaluated.
     re.compile(r"^(?:다|모두)\s*(?:했어|했어요|했습니다)$"),
+    # Exact past/result reports used naturally at the bench. Questions,
+    # uncertainty, negation and future intent are rejected by the guards above.
+    re.compile(
+        r"^(?:완료(?:했어|했어요|했습니다|됐어|됐어요|되었습니다)|"
+        r"끝(?:났어|났어요|났습니다)|마쳤어|마쳤어요|마쳤습니다)$"
+    ),
+    re.compile(
+        r"^(?:이거|이것|이\s*작업)\s*"
+        r"(?:끝났어|끝났어요|끝냈어|끝냈어요|완료됐어|완료됐어요)$"
+    ),
     # Standard prefix + optional adverbs + completion verb:
     # "현재/지금/이번/이 단계/작업 [도/를/은/는/이/가/로] [미리/이미/벌써/방금/아까/다/완전히/모두] 완료했어/끝냈어/마쳤어/다 했어"
     re.compile(
@@ -67,7 +77,7 @@ _POSITIVE_COMPLETION_PATTERNS = (
         r"마쳤(?:어|어요|습니다))$"
     ),
     # Exact noun shorthand: "현재 단계 완료", "이번 단계 완료", "이 단계 완료"
-    re.compile(r"^(?:현재|지금|이번|이)\s*(?:단계|작업)\s*완료$"),
+    re.compile(r"^(?:현재|지금|이번|이)\s*(?:단계|작업)\s*(?:완료|끝)$"),
     # Natural completion with "여기까지", "방금", "벌써", "이미", "미리":
     re.compile(r"^(?:여기까지|방금\s*(?:작업|단계)?|벌써|이미|미리)\s*(?:다\s*했어|다\s*했어요|마쳤어|마쳤어요|끝났어|끝났어요|끝냈어|끝냈어요|완료했어|완료했어요|완료했습니다)$"),
     # Compound completion + proceed:

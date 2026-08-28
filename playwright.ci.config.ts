@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const PORT = process.env.PLAYWRIGHT_APP_PORT || '8000';
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
@@ -8,9 +11,13 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:8000',
+    baseURL: BASE_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    permissions: ['microphone'],
+    launchOptions: {
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    },
   },
   projects: [
     { name: 'Desktop Chrome', use: { ...devices['Desktop Chrome'] } },
@@ -18,7 +25,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'bash scripts/run_ci_server.sh',
-    url: 'http://127.0.0.1:8000',
+    url: BASE_URL,
     reuseExistingServer: false,
     timeout: 60_000,
   },

@@ -14,6 +14,7 @@ import re
 import struct
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -29,7 +30,13 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisDraft,
     parse_protocol_analysis_response,
 )
+from voice_workflow_agent.experiment_protocol_config import (
+    repeat_confirmation_review_threshold,
+)
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
+from voice_workflow_agent.source_presentation import (
+    SOURCE_DISCLOSURE_LABEL, SourcePresentation, SourcePresentationStatus,
+    TranslationSettings, present_source)
 from voice_workflow_agent.completion_intent import (
     CompletionIntentDecision,
     classify_korean_completion_command,
@@ -266,6 +273,36 @@ class CuratedProtocolFixture:
             for section in self.draft.protocol.sections
             for step in section.steps
         )
+
+    @property
+    def human_checkpoints(
+        self,
+    ) -> dict[str, domain.HumanConfirmationCheckpoint]:
+        """Return the source-defined human-confirmation gates, keyed by step id.
+
+        This is derived from the validated analysis, never from prose: each entry
+        carries the protocol's own condition sentence and its own repeated step
+        range, so the server can ask and then move deterministically.
+        """
+
+        cached = getattr(self, "_human_checkpoint_map", None)
+        if cached is None:
+            cached = {
+                checkpoint.gate_step_id: checkpoint
+                for checkpoint in domain.human_confirmation_checkpoints(
+                    self.draft.protocol
+                )
+            }
+            object.__setattr__(self, "_human_checkpoint_map", cached)
+        return cached
+
+    def human_checkpoint_for_step(
+        self, index: int
+    ) -> domain.HumanConfirmationCheckpoint | None:
+        steps = self.steps
+        if not 0 <= index < len(steps):
+            return None
+        return self.human_checkpoints.get(steps[index].step_id)
 
     def facts_for_step(self, index: int) -> tuple[CuratedProtocolFact, ...]:
         step = self.steps[index]
@@ -1317,6 +1354,32 @@ class PendingObservationConfirmation:
 
 
 @dataclass(frozen=True)
+class HumanCheckpointDecision:
+    """One deterministic outcome of an explicit human checkpoint answer."""
+
+    status: Literal[
+        "advanced",
+        "repeat_scheduled",
+        "continuation_confirmation_required",
+        "review_requested",
+        "paused",
+        "clarification_required",
+        "not_at_checkpoint",
+    ]
+    checkpoint_id: str | None = None
+    condition_source_text: str | None = None
+    repeated_step_ids: tuple[str, ...] = ()
+    from_step_id: str | None = None
+    from_step_label: str | None = None
+    to_step_id: str | None = None
+    to_step_label: str | None = None
+    iteration: int = 0
+    repetition_limit_reached: bool = False
+    state_changed: bool = False
+    workflow_completed: bool = False
+
+
+@dataclass(frozen=True)
 class PendingTranscriptConfirmation:
     """One step/version-bound confirmation for a mutation-sensitive repaired transcript."""
 
@@ -1564,59 +1627,125 @@ _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
 )
 
 
-def _observation_predicate(step_label: str, transcript: str) -> str | None:
-    """Classify only explicit source-defined endpoint observations.
+_CHECKPOINT_INTERROGATIVE = re.compile(
+    r"(?:의미|무슨\s*뜻|무슨\s*의미|왜|어떻게|설명|알려|기준이?\s*뭐|"
+    r"인가요|한가요|나요|건가요|맞나요|일까|해야\s*하나요|"
+    r"what\s+does|what\s+is|why|how\s+do|explain|should\s+it|is\s+it|"
+    r"does\s+it)"
+)
+_CHECKPOINT_HYPOTHETICAL = re.compile(
+    r"(?:라고\s*(?:말|하)|했다고\s*치|가정|하면\s*(?:어떻게|무슨)|"
+    r"if\s+(?:i|it|the)|assuming|suppose)"
+)
+#: An explicit statement that the quoted source condition is NOT satisfied.
+_CHECKPOINT_NOT_MET_STATEMENT = re.compile(
+    r"(?:아직|여전히|(?:^|\s)덜(?=\s)|"
+    r"(?:안|못)\s*(?:됐|되었|됨|끝|했)|"
+    r"(?:되지|하지|끝나지|충족되지)\s*않|"
+    r"not\s+yet|still\s+not|not\s+(?:fully|completely|done|met))"
+)
+#: A short denial usable only as an answer to a server-asked question.
+_CHECKPOINT_NOT_MET_REPLY = re.compile(
+    r"^(?:아니|아니요|아니에요|아닙니다|nope|no)"
+)
+#: An explicit statement that the quoted source condition IS satisfied. A degree
+#: adverb is required so an unrelated past-tense report ("타이머 시작했어요")
+#: can never be mistaken for an endpoint confirmation.
+_CHECKPOINT_MET_STATEMENT = re.compile(
+    r"(?:(?:^|\s)(?:완전히|전부|모두|다|이제)(?=\s).{0,24}?"
+    r"(?:됐|되었|되어|돼|됨|했|해요|합니다|해졌|졌|끝났|끝냈)|"
+    r"충족(?:됐|되었|됨|했|합니다|했어|했어요)|"
+    r"확인(?:됐|했|함|됨|했어|했어요|했습니다)|"
+    r"완료(?:됐어|됐어요|되었습니다)|"
+    r"fully\s+\w+|completely\s+\w+|condition\s+is\s+met)"
+)
+#: A short affirmation usable only as an answer to a server-asked question.
+_CHECKPOINT_MET_REPLY = re.compile(
+    r"^(?:네|예|응|그래|맞아|맞아요|맞습니다|물론|"
+    r"완료(?:됐어|됐어요|되었습니다)|끝났어|끝났어요|"
+    r"yes|yeah|confirmed|done|correct)"
+)
+_CHECKPOINT_CONTINUE = re.compile(
+    r"^(?:네,?\s*)?(?:계속(?:\s*(?:진행|할게|하자|해|해줘|합니다))?|"
+    r"continue|keep\s+going|carry\s+on)\b"
+)
+_CHECKPOINT_PAUSE_REPLY = re.compile(
+    r"^(?:잠깐|잠시)?\s*(?:일시\s*(?:정지|중지)|멈춰|멈출게|중지|"
+    r"pause|hold\s+on|stop\s+for\s+now)\b"
+)
+_CHECKPOINT_REVIEW_REQUEST = re.compile(
+    r"(?:검토(?:\s*(?:요청|받|해))|리뷰\s*요청|담당자.*확인|"
+    r"request\s+(?:a\s+)?review|escalate)"
+)
 
-    The phrases below do not invent a vision result: they preserve a user's
-    report and bind it to the source endpoint for the current step. Negative
-    patterns and question guards run first so phrases such as "not transparent"
-    or questions like "투명한가요?" never become a positive result by substring overlap.
-    """
+
+def classify_checkpoint_continuation_reply(transcript: str) -> str | None:
+    """Interpret only an answer to the operational repetition check-in."""
+
     key = _semantic_utterance_key(transcript)
-    if step_label in {"7"}:
-        if re.search(
-            r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
-            r"투명해지면\s*어떻게|is\s+it\s+transparent|should\s+it\s+be\s+transparent|"
-            r"투명해졌다고\s*말하면|탈색된\s*건가요|탈색된다는\s*(?:게|건)|"
-            r"의미|뜻|무슨|왜|알려|설명|meaning|what\s+does|explain)\??",
-            key,
-        ):
-            return None
-        if re.search(
-            r"(?:아직.*(?:색|색깔|염색|탈색).*(?:남아|안|있어|덜|남았)|"
-            r"투명하지\s*않|완전히\s*탈색되지\s*않|완전히\s*탈색된\s*건\s*아닌|"
-            r"still.*(?:stain|color)|not\s+(?:fully\s+)?(?:destained|transparent))",
-            key,
-        ):
-            return "negative"
-        if re.search(
-            r"(?:완전히\s*탈색(?:됐|되었|되어|됐어|됐습니다|된|돼서)?|"
-            r"젤(?:이|은|이\s*(?:이제\s*)?)?\s*(?:이제\s*)?(?:완전히\s*)?투명(?:해|합니다|해졌어|해요|해졌습니다)|"
-            r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
-            r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
-            key,
-        ):
-            return "positive"
-    if step_label in {"9", "20"}:
-        if re.search(
-            r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
-            key,
-        ):
-            return None
-        if re.search(
-            r"(?:아직.*(?:투명|젖어|수분|건조)|흰색이\s*아니|"
-            r"not\s+(?:white|whitish|dehydrated|dry)|still\s+(?:clear|wet))",
-            key,
-        ):
-            return "negative"
-        if re.search(
-            r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
-            r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
-            r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
-            key,
-        ):
-            return "positive"
+    if not key:
+        return None
+    if _CHECKPOINT_REVIEW_REQUEST.search(key):
+        return "request_review"
+    if _CHECKPOINT_PAUSE_REPLY.search(key):
+        return "pause"
+    if _CHECKPOINT_CONTINUE.search(key):
+        return "continue"
     return None
+
+
+def classify_human_checkpoint_reply(
+    transcript: str, *, solicited: bool = True
+) -> str | None:
+    """Interpret only an explicit human answer about a quoted source condition.
+
+    The scientific criterion is never derived here. The server quotes the
+    protocol's own condition sentence, and this function decides nothing except
+    whether the researcher stated that the condition is met, stated that it is
+    not, or said something that is not an answer. A question, a hypothetical, or
+    an unrecognized utterance returns ``None`` so the caller re-asks and mutates
+    nothing.
+
+    ``solicited`` is True only while the server's own confirmation question is
+    open. A bare "네" is an answer then, and nothing at all otherwise; an
+    unsolicited report has to state the outcome explicitly.
+    """
+
+    key = _semantic_utterance_key(transcript)
+    if not key:
+        return None
+    if _CHECKPOINT_INTERROGATIVE.search(key) or _CHECKPOINT_HYPOTHETICAL.search(key):
+        return None
+    if _CHECKPOINT_NOT_MET_STATEMENT.search(key):
+        return "not_met"
+    if solicited and _CHECKPOINT_NOT_MET_REPLY.match(key):
+        return "not_met"
+    if _CHECKPOINT_MET_STATEMENT.search(key):
+        return "met"
+    if solicited and _CHECKPOINT_MET_REPLY.match(key):
+        return "met"
+    if solicited:
+        binary = _binary_frame_reply(transcript)
+        if binary == "affirmative":
+            return "met"
+        if binary == "negative":
+            return "not_met"
+    return None
+
+
+def _observation_predicate(
+    transcript: str, *, solicited: bool = True
+) -> str | None:
+    """Map an admitted human checkpoint answer onto the observation predicate."""
+
+    decision = classify_human_checkpoint_reply(transcript, solicited=solicited)
+    if decision == "met":
+        return "positive"
+    if decision == "not_met":
+        return "negative"
+    return None
+
+
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
         r"(?:완료|끝)(?:\s*조건|하려면|이라는\s*건)|"
@@ -1663,8 +1792,14 @@ _STEP_ELABORATION_PATTERNS = (
     re.compile(r"(?:답변|내용).*(?:너무\s*짧|조금\s*더|더\s*)(?:자세|구체)"),
 )
 _AMBIGUOUS_COMPLETION_PATTERNS = (
-    re.compile(r"(?:완료|끝난|다\s*한).*(?:것\s*같|맞나|할까|해도\s*될까|인가)"),
+    re.compile(r"(?:완료|끝난|다\s*한|된).*(?:것\s*같|같기도|맞나|할까|해도\s*될까|인가)"),
+    re.compile(r"^(?:그런|된|끝난|완료된)\s*(?:것|거)\s*같"),
     re.compile(r"(?:maybe|i\s+think|not\s+sure).*(?:done|complete|next)"),
+)
+_OFF_CHECKPOINT_NOT_COMPLETE = re.compile(
+    r"^(?:아직(?:이에요|이야|입니다)?|"
+    r"아직\s*안\s*(?:됐어|됐어요|끝났어|끝났어요|했어|했어요)|"
+    r"아직\s*(?:완료|끝)(?:되지|나지)\s*않(?:았어|았어요|았습니다)?)$"
 )
 _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:이|현재)?\s*단계.*(?:그림|삽화|일러스트).*(?:설명|보여|그려)"),
@@ -2781,6 +2916,20 @@ def classify_curated_control_intent(
     decision = resolve_korean_completion_decision(transcript, language=language)
     completion_claimed = bool(_COMPLETION_CLAIM.search(key)) or decision.is_completion
     next_requested = bool(_NEXT_STEP_REQUEST.search(key))
+    # A concrete anomaly assertion wins over uncertainty-shaped wording such
+    # as "색깔이 변경된 것 같아".  The anomaly path is still non-mutating and
+    # persistence-gated; this only prevents the generic completion ambiguity
+    # grammar from shadowing high-recall bench triage.
+    for anomaly_pattern, anomaly_category in _ANOMALY_PATTERNS:
+        if anomaly_pattern.search(key) and not _ANOMALY_NON_ASSERTION.search(key):
+            return CuratedControlIntent(
+                intent_kind="record_anomaly",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=anomaly_category,
+            )
     if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
         return CuratedControlIntent(
             intent_kind="ambiguous_completion",
@@ -2822,6 +2971,14 @@ def classify_curated_control_intent(
             target_step=target_step,
             language=language,
             allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    if _OFF_CHECKPOINT_NOT_COMPLETE.fullmatch(key):
+        return CuratedControlIntent(
+            intent_kind="off_checkpoint_not_complete",
+            action=CuratedProtocolAction.OFF_TOPIC,
+            target_step="authoritative_current_step",
+            language=language,
             normalized_transcript=key,
         )
     if completion_context and re.fullmatch(
@@ -2989,16 +3146,6 @@ def classify_curated_control_intent(
             question_dimensions=("operational_deviation", "rationale"),
             protocol_scope="UNSUPPORTED_OPERATIONAL",
         )
-    for pattern, category in _ANOMALY_PATTERNS:
-        if pattern.search(key) and not _ANOMALY_NON_ASSERTION.search(key):
-            return CuratedControlIntent(
-                intent_kind="record_anomaly",
-                action=CuratedProtocolAction.REPORT_ANOMALY,
-                question_kind="anomaly",
-                language=language,
-                reported_anomaly=True,
-                anomaly_category=category,
-            )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
             intent_kind="show_sources",
@@ -3243,6 +3390,28 @@ def curated_intent_from_arbitration(
             requested_followup="state_evidence_needed",
             target_step="authoritative_current_step",
             question_kind="uncertainty",
+            **common,
+        )
+    if decision.intent is RequestIntent.CURRENT_STEP:
+        next_preview = decision.reason_code == "next_step_preview"
+        return CuratedControlIntent(
+            intent_kind=(
+                "next_step_information" if next_preview
+                else "current_step_information"
+            ),
+            action=(
+                CuratedProtocolAction.NEXT_INFORMATION if next_preview
+                else CuratedProtocolAction.CURRENT
+            ),
+            requested_followup=(
+                "preview_next_step" if next_preview
+                else "describe_current_step"
+            ),
+            target_step=(
+                "authoritative_next_step" if next_preview
+                else "authoritative_current_step"
+            ),
+            question_kind="navigation_information",
             **common,
         )
     return None
@@ -4029,8 +4198,19 @@ _CONCISE_SUMMARIES_KO = {
 class CuratedProtocolSession:
     """Server-owned in-memory state for one validated structured fixture."""
 
-    def __init__(self, fixture: CuratedProtocolFixture) -> None:
+    def __init__(
+        self,
+        fixture: CuratedProtocolFixture,
+        *,
+        translation_settings: TranslationSettings | None = None,
+        presentation_translator: Callable[[str], str] | None = None,
+    ) -> None:
         self.fixture = fixture
+        # Presentation only. This translator sees one string of already-approved
+        # source text and returns one string; it can never reach workflow state,
+        # and every result is mechanically checked before a researcher sees it.
+        self.translation_settings = translation_settings or TranslationSettings()
+        self.presentation_translator = presentation_translator
         self.active = False
         self.current_index = 0
         self._revision = 0
@@ -4057,6 +4237,14 @@ class CuratedProtocolSession:
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
         self._pending_handoff_confirmation: dict[str, Any] | None = None
+        # Human-confirmation checkpoints: how many source-authorized repetitions
+        # the researcher has explicitly requested, and the operational baseline
+        # used for the "you have repeated this several times" check-in. Neither
+        # value is a scientific limit.
+        self._checkpoint_iterations: dict[str, int] = {}
+        self._checkpoint_review_baseline: dict[str, int] = {}
+        self._pending_checkpoint_continuation: str | None = None
+        self._repetition_review_threshold = repeat_confirmation_review_threshold()
         self.safety_pack: Any = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
@@ -4846,6 +5034,35 @@ class CuratedProtocolSession:
         value = lookup(step_id, fact_id)
         return value if isinstance(value, str) and value.strip() else None
 
+    def _present_step_source(
+        self,
+        step: Any,
+        verified_translation: str | None,
+        *,
+        safety_critical: bool = False,
+    ) -> SourcePresentation:
+        """Route one step's approved source text through the single boundary.
+
+        The reviewer-approved Korean sidecar wins whenever it exists, so the
+        common path generates nothing. Only a step with no approved translation
+        can reach the runtime translator, and only when that is explicitly
+        enabled - otherwise the exact approved English is the answer.
+        """
+
+        source = step.instruction_source_text
+        localized = verified_translation
+        if localized:
+            localized = re.sub(
+                rf"^{re.escape(step.source_label)}단계:\s*", "", localized)
+        return present_source(
+            language="ko",
+            source_text=source,
+            verified_translation=localized,
+            translator=self.presentation_translator,
+            settings=self.translation_settings,
+            safety_critical=safety_critical,
+        )
+
     def _step_learning_presentation(
         self,
         *,
@@ -5070,6 +5287,9 @@ class CuratedProtocolSession:
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
         self._pending_handoff_confirmation = None
+        self._checkpoint_iterations.clear()
+        self._checkpoint_review_baseline.clear()
+        self._pending_checkpoint_continuation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -5087,6 +5307,11 @@ class CuratedProtocolSession:
         are intentionally not restored.  The durable session may select the
         current authoritative step, but it cannot bypass an incomplete earlier
         step or alter any protocol instruction.
+
+        A human-confirmation repeat range legitimately re-enters steps that are
+        already recorded as completed, so the invariant is "every earlier step
+        has been completed at least once", not "the completed list is exactly the
+        prefix". That still refuses to skip an incomplete step.
         """
 
         indexes = {
@@ -5102,10 +5327,11 @@ class CuratedProtocolSession:
             raise CuratedProtocolFixtureError(
                 "Experiment recovery contains an unknown completed step."
             )
-        expected = tuple(
-            step.step_id for step in self.fixture.steps[:current_index]
-        )
-        if completed != expected:
+        completed_set = set(completed)
+        if any(
+            step.step_id not in completed_set
+            for step in self.fixture.steps[:current_index]
+        ):
             raise CuratedProtocolFixtureError(
                 "Experiment recovery cannot bypass an incomplete protocol step."
             )
@@ -5143,6 +5369,9 @@ class CuratedProtocolSession:
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
         self._pending_handoff_confirmation = None
+        self._checkpoint_iterations.clear()
+        self._checkpoint_review_baseline.clear()
+        self._pending_checkpoint_continuation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -5240,6 +5469,9 @@ class CuratedProtocolSession:
             self._experiment_ended_at,
             self._pending_anomaly,
             self._pending_note_capture,
+            dict(self._checkpoint_iterations),
+            dict(self._checkpoint_review_baseline),
+            self._pending_checkpoint_continuation,
         )
 
     def _restore(
@@ -5276,6 +5508,10 @@ class CuratedProtocolSession:
             self._experiment_ended_at = None
             self._pending_anomaly = None
             self._pending_note_capture = None
+        if len(checkpoint) >= 23:
+            self._checkpoint_iterations = dict(checkpoint[20])
+            self._checkpoint_review_baseline = dict(checkpoint[21])
+            self._pending_checkpoint_continuation = checkpoint[22]
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -5777,6 +6013,9 @@ class CuratedProtocolSession:
             # Warning severity is not represented in the canonical domain.
             # Keep ordinary warnings visible without inventing a critical cue.
             "workflow_status": self.workflow_status,
+            "human_checkpoint": (
+                self.human_checkpoint_projection() if show_step else None
+            ),
             "step_safety_guidance": (
                 self.safety_pack.guidance_for_step(current_step, self.current_index).public_dict()
                 if self.safety_pack is not None and current_step is not None
@@ -5790,16 +6029,401 @@ class CuratedProtocolSession:
             },
         }
 
+    # ------------------------------------------------------------------
+    # Human-confirmation checkpoints
+    #
+    # The researcher at the bench is the authority for every observation the
+    # source protocol defines. The server owns only three things: which step is
+    # current, which exact step range the source says to replay, and whether an
+    # explicit human answer has been admitted. Nothing below evaluates an
+    # experimental condition, and nothing below is reachable from model output.
+    # ------------------------------------------------------------------
+
+    def active_human_checkpoint(
+        self,
+    ) -> domain.HumanConfirmationCheckpoint | None:
+        """Return the checkpoint gating the current step, if any."""
+
+        if not self.active:
+            return None
+        return self.fixture.human_checkpoint_for_step(self.current_index)
+
+    def checkpoint_iteration(self, checkpoint_id: str) -> int:
+        return self._checkpoint_iterations.get(checkpoint_id, 0)
+
+    @property
+    def pending_checkpoint_continuation(self) -> str | None:
+        return self._pending_checkpoint_continuation
+
+    @property
+    def repetition_review_threshold(self) -> int:
+        return self._repetition_review_threshold
+
+    def human_checkpoint_projection(self) -> dict[str, Any] | None:
+        """Project the active checkpoint for the bench UI, source text included."""
+
+        checkpoint = self.active_human_checkpoint()
+        if checkpoint is None:
+            return None
+        steps = self.fixture.steps
+        labels = {step.step_id: step.source_label for step in steps}
+        iteration = self.checkpoint_iteration(checkpoint.checkpoint_id)
+        localized = self._localized_fact(checkpoint.gate_step_id, "expected_result_1")
+        return {
+            "checkpoint_id": checkpoint.checkpoint_id,
+            "gate_step_id": checkpoint.gate_step_id,
+            "gate_step_label": labels.get(checkpoint.gate_step_id),
+            "condition_source_text": checkpoint.condition_source_text,
+            "condition_primary_text": localized,
+            "source_page": checkpoint.evidence.source_page_number,
+            "repeated_step_ids": list(checkpoint.repeated_step_ids),
+            "repeated_step_labels": [
+                labels.get(step_id) for step_id in checkpoint.repeated_step_ids
+            ],
+            "confirmed_repetitions": iteration,
+            "repetition_review_threshold": self._repetition_review_threshold,
+            "awaiting_continuation_decision": (
+                self._pending_checkpoint_continuation == checkpoint.checkpoint_id
+            ),
+            "authority": "researcher_observation",
+        }
+
+    def _step_index_for_id(self, step_id: str) -> int | None:
+        for index, step in enumerate(self.fixture.steps):
+            if step.step_id == step_id:
+                return index
+        return None
+
+    def _repetition_check_in_due(self, checkpoint_id: str, iteration: int) -> bool:
+        baseline = self._checkpoint_review_baseline.get(checkpoint_id, 0)
+        return iteration - baseline >= self._repetition_review_threshold
+
+    def confirm_human_checkpoint(
+        self, decision: str, *, now: float | None = None
+    ) -> HumanCheckpointDecision:
+        """Apply one explicit human answer to the active checkpoint.
+
+        ``decision`` is an admitted user action, never model output:
+
+        * ``met`` - the researcher states the source condition is satisfied, so
+          the workflow leaves the loop and advances one step.
+        * ``not_met`` - the researcher states it is not satisfied, so the
+          workflow returns to the first step of the exact source-defined range.
+          No step is created and no source parameter is changed.
+        * ``continue`` / ``pause`` / ``request_review`` - answers to the
+          operational repetition check-in.
+
+        Anything else, or an answer given away from a checkpoint, mutates
+        nothing.
+        """
+
+        checkpoint = self.active_human_checkpoint()
+        if checkpoint is None:
+            return HumanCheckpointDecision(status="not_at_checkpoint")
+        steps = self.fixture.steps
+        gate_step = steps[self.current_index]
+        labels = {step.step_id: step.source_label for step in steps}
+        iteration = self.checkpoint_iteration(checkpoint.checkpoint_id)
+        base = {
+            "checkpoint_id": checkpoint.checkpoint_id,
+            "condition_source_text": checkpoint.condition_source_text,
+            "repeated_step_ids": checkpoint.repeated_step_ids,
+            "from_step_id": gate_step.step_id,
+            "from_step_label": gate_step.source_label,
+        }
+
+        if decision == "pause":
+            self._pending_checkpoint_continuation = None
+            changed = self.pause_workflow(now=now)
+            if changed:
+                self._revision += 1
+            return HumanCheckpointDecision(
+                status="paused", iteration=iteration, state_changed=changed, **base
+            )
+
+        if decision == "request_review":
+            self._pending_checkpoint_continuation = None
+            self._block_reason = "human_checkpoint_review_requested"
+            self._revision += 1
+            return HumanCheckpointDecision(
+                status="review_requested",
+                iteration=iteration,
+                repetition_limit_reached=True,
+                state_changed=True,
+                **base,
+            )
+
+        if decision == "continue":
+            if self._pending_checkpoint_continuation != checkpoint.checkpoint_id:
+                return HumanCheckpointDecision(
+                    status="clarification_required", iteration=iteration, **base
+                )
+            self._pending_checkpoint_continuation = None
+            self._checkpoint_review_baseline[checkpoint.checkpoint_id] = iteration
+            return self._schedule_source_repeat(checkpoint, iteration, base)
+
+        if decision == "met":
+            self._pending_checkpoint_continuation = None
+            self._checkpoint_iterations.pop(checkpoint.checkpoint_id, None)
+            self._checkpoint_review_baseline.pop(checkpoint.checkpoint_id, None)
+            self._block_reason = None
+            self._clear_step_timer()
+            if self.current_index < len(steps) - 1:
+                self.current_index += 1
+                self._revision += 1
+                target = steps[self.current_index]
+                return HumanCheckpointDecision(
+                    status="advanced",
+                    to_step_id=target.step_id,
+                    to_step_label=target.source_label,
+                    iteration=iteration,
+                    state_changed=True,
+                    **base,
+                )
+            self._stop_experiment_clock(now=now)
+            self.active = False
+            self._workflow_status = "completed"
+            self._block_reason = "final_step_boundary"
+            self._revision += 1
+            return HumanCheckpointDecision(
+                status="advanced",
+                to_step_id=None,
+                to_step_label=None,
+                iteration=iteration,
+                state_changed=True,
+                workflow_completed=True,
+                **base,
+            )
+
+        if decision == "not_met":
+            iteration += 1
+            self._checkpoint_iterations[checkpoint.checkpoint_id] = iteration
+            if self._repetition_check_in_due(checkpoint.checkpoint_id, iteration):
+                self._pending_checkpoint_continuation = checkpoint.checkpoint_id
+                self._revision += 1
+                return HumanCheckpointDecision(
+                    status="continuation_confirmation_required",
+                    iteration=iteration,
+                    repetition_limit_reached=True,
+                    state_changed=False,
+                    **base,
+                )
+            self._pending_checkpoint_continuation = None
+            return self._schedule_source_repeat(checkpoint, iteration, base)
+
+        return HumanCheckpointDecision(
+            status="clarification_required", iteration=iteration, **base
+        )
+
+    def _schedule_source_repeat(
+        self,
+        checkpoint: domain.HumanConfirmationCheckpoint,
+        iteration: int,
+        base: dict[str, Any],
+    ) -> HumanCheckpointDecision:
+        """Return to the first step of the exact source-defined repeat range."""
+
+        target_index = self._step_index_for_id(checkpoint.repeat_start_step_id)
+        if target_index is None:
+            # The range was validated when the checkpoint was derived; refuse to
+            # guess if the revision ever stops matching.
+            return HumanCheckpointDecision(
+                status="clarification_required", iteration=iteration, **base
+            )
+        self._clear_step_timer()
+        self._block_reason = None
+        self.current_index = target_index
+        self._revision += 1
+        target = self.fixture.steps[target_index]
+        return HumanCheckpointDecision(
+            status="repeat_scheduled",
+            to_step_id=target.step_id,
+            to_step_label=target.source_label,
+            iteration=iteration,
+            state_changed=True,
+            **base,
+        )
+
+    def _human_checkpoint_question(self, language: str) -> str:
+        """Ask the source-defined condition verbatim, with no interpretation."""
+
+        checkpoint = self.active_human_checkpoint()
+        if checkpoint is None:
+            return (
+                "Please confirm the documented observation for the current step."
+                if language == "en"
+                else "현재 단계의 원문 관찰 조건을 확인해 주세요."
+            )
+        step = self.fixture.steps[self.current_index]
+        primary = self._localized_fact(step.step_id, "expected_result_1")
+        source = checkpoint.condition_source_text.strip()
+        if language == "en":
+            return (
+                f"Step {step.source_label} ends on an observation only you can "
+                f"make. Source condition: \u201c{source}\u201d Is that condition "
+                "met now? Nothing has changed yet."
+            )
+        if language == "vi":
+            return (
+                f"Bước {step.source_label} kết thúc bằng một quan sát chỉ bạn có "
+                f"thể xác nhận. Nguyên văn: \u201c{source}\u201d Điều kiện đó đã "
+                "đạt chưa? Trạng thái chưa thay đổi."
+            )
+        translated = f"\n기준 · 한국어 참고 번역\n{primary}" if primary else ""
+        return (
+            f"{step.source_label}단계는 연구자가 직접 확인해야 하는 관찰로 끝납니다.\n"
+            f"원문 기준\n{source}{translated}\n"
+            "지금 이 조건이 충족됐습니까? 아직 아무 것도 변경하지 않았습니다."
+        )
+
+    def _human_checkpoint_plan(
+        self,
+        outcome: HumanCheckpointDecision,
+        intent: "CuratedControlIntent | None",
+        language: str,
+        checkpoint: domain.HumanConfirmationCheckpoint,
+    ) -> CuratedProtocolTurnPlan:
+        """Render one committed human-checkpoint transition as a turn plan."""
+
+        steps = self.fixture.steps
+        labels = [
+            label
+            for step_id in checkpoint.repeated_step_ids
+            if (label := next(
+                (item.source_label for item in steps if item.step_id == step_id),
+                None,
+            )) is not None
+        ]
+        span = (
+            f"{labels[0]}\u2013{labels[-1]}"
+            if len(labels) > 1 else (labels[0] if labels else "")
+        )
+        gate_label = outcome.from_step_label or ""
+        if outcome.status == "repeat_scheduled":
+            if language == "en":
+                response = (
+                    f"Recorded: you reported the source condition for step "
+                    f"{gate_label} is not met yet. Returning to the source-defined "
+                    f"repeat range, steps {span}. No step was added and no source "
+                    f"value was changed. Repetition {outcome.iteration}."
+                )
+            else:
+                response = (
+                    f"{gate_label}단계의 원문 조건이 아직 충족되지 않았다고 기록했습니다. "
+                    f"원문이 정한 반복 구간인 {span}단계로 돌아갑니다. "
+                    f"단계를 새로 만들지 않았고 원문 값도 바꾸지 않았습니다. "
+                    f"반복 {outcome.iteration}회."
+                )
+        elif outcome.status == "advanced" and outcome.workflow_completed:
+            response = (
+                f"Recorded your confirmation for step {gate_label}. That was the "
+                "final step, so the experiment is recorded as completed."
+                if language == "en" else
+                f"{gate_label}단계 확인을 기록했습니다. 마지막 단계여서 실험을 완료로 기록했습니다."
+            )
+        elif outcome.status == "advanced":
+            if language == "en":
+                response = (
+                    f"Recorded your confirmation that the source condition for "
+                    f"step {gate_label} is met. Leaving the repeat range and "
+                    f"moving to step {outcome.to_step_label}."
+                )
+            else:
+                response = (
+                    f"{gate_label}단계의 원문 조건이 충족됐다는 확인을 기록했습니다. "
+                    f"반복 구간을 벗어나 {outcome.to_step_label}단계로 이동합니다."
+                )
+        elif outcome.status == "continuation_confirmation_required":
+            if language == "en":
+                response = (
+                    f"Recorded that the condition is still not met. This step has "
+                    f"been repeated {outcome.iteration} times. The source protocol "
+                    "does not define a maximum, so please confirm whether you want "
+                    "to continue, pause, or request review. Nothing has changed."
+                )
+            else:
+                response = (
+                    f"조건이 아직 충족되지 않았다고 기록했습니다. 이 단계를 "
+                    f"{outcome.iteration}회 반복했습니다. 원문에는 최대 반복 횟수가 정해져 "
+                    "있지 않으니, 계속 진행할지 · 잠시 멈출지 · 검토를 요청할지 알려 주세요. "
+                    "지금은 아무 것도 변경하지 않았습니다."
+                )
+        elif outcome.status == "review_requested":
+            response = (
+                "Recorded a review request for this repeat step. The workflow "
+                "stays on the current step until a reviewer responds."
+                if language == "en" else
+                "이 반복 단계에 대한 검토 요청을 기록했습니다. 검토 결과가 나올 때까지 "
+                "현재 단계를 유지합니다."
+            )
+        elif outcome.status == "paused":
+            response = (
+                "Paused at this repeat step. The current step is unchanged."
+                if language == "en" else
+                "이 반복 단계에서 실험을 일시 중지했습니다. 현재 단계는 그대로입니다."
+            )
+        else:
+            response = self._human_checkpoint_question(language)
+
+        index = (
+            self.current_index
+            if 0 <= self.current_index < len(steps) else 0
+        )
+        facts = self.fixture.facts_for_step(index)
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.NEXT,
+            display_text=response,
+            speech_text=response,
+            speech_mode=(
+                CuratedProtocolSpeechMode.CONTROL
+                if outcome.state_changed
+                else CuratedProtocolSpeechMode.BLOCKED
+            ),
+            facts=facts,
+            step_label=steps[index].source_label,
+            final_step=index == len(steps) - 1,
+            state_changed=outcome.state_changed,
+            primary_text=response,
+            source_texts=tuple(fact.text for fact in facts[:4]),
+            source_pages=tuple(fact.source_page for fact in facts[:4]),
+            evidence_ids=tuple(fact.fact_id for fact in facts[:4]),
+            intent_kind=(
+                "human_checkpoint_confirmed"
+                if outcome.status == "advanced"
+                else "human_checkpoint_repeat_scheduled"
+                if outcome.status == "repeat_scheduled"
+                else f"human_checkpoint_{outcome.status}"
+            ),
+            reported_completion=outcome.status == "advanced",
+            reported_observation=True,
+            observation_predicate=(
+                "positive" if outcome.status == "advanced" else "negative"
+            ),
+            observation_outcome=getattr(intent, "observation_outcome", None),
+            requested_transition=("next" if outcome.status == "advanced" else None),
+            target_step=outcome.to_step_label,
+        )
+
     def _current_step_readiness_blocker(
         self,
         observation_predicate: str | None = None,
     ) -> domain.ReadinessReasonCode | None:
+        """Return an unresolved readiness gate attached to the current step.
+
+        A source-defined endpoint a researcher can confirm is no longer a gate:
+        the analysis represents it as a human-confirmation checkpoint, so it
+        produces no readiness reason at all. What remains here is genuine source
+        trouble - an unresolved ambiguity, or a repeat range the represented
+        structure cannot pin down - and no explicit user answer may clear it.
+        Only a reviewer resolution that produces a new analysis revision can.
+        """
+
         step_id = self.fixture.steps[self.current_index].step_id
         blocking_codes = {
             domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY,
             domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
         }
-        blocker = next(
+        return next(
             (
                 reason.code
                 for reason in self.fixture.draft.readiness.reasons
@@ -5807,18 +6431,6 @@ class CuratedProtocolSession:
             ),
             None,
         )
-        step_label = self.fixture.steps[self.current_index].source_label
-        if observation_predicate == "positive" and (
-            step_label in {"7", "9"}
-            and blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL
-            or step_label == "20"
-            and blocker is domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY
-        ):
-            # This is a user-reported, source-defined observation. It does not
-            # claim machine vision or model approval; the normal transactional
-            # completion/report path still owns the single mutation.
-            return None
-        return blocker
 
     def plan(
         self,
@@ -5833,6 +6445,21 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        continuation_checkpoint = self.active_human_checkpoint()
+        if (
+            self._pending_checkpoint_continuation is not None
+            and continuation_checkpoint is not None
+            and continuation_checkpoint.checkpoint_id
+            == self._pending_checkpoint_continuation
+        ):
+            continuation_reply = classify_checkpoint_continuation_reply(transcript)
+            if continuation_reply is not None:
+                outcome = self.confirm_human_checkpoint(continuation_reply)
+                plan = self._human_checkpoint_plan(
+                    outcome, None, language, continuation_checkpoint
+                )
+                self._replay[turn_id] = plan
+                return plan
         command_key = _utterance_key(transcript)
         pending = self._pending_completion_confirmation
         observation_pending = self._pending_observation_confirmation
@@ -6015,9 +6642,7 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif observation_pending_valid and (
-            observed := _observation_predicate(
-                observation_pending.step_label, transcript
-            )
+            observed := _observation_predicate(transcript)
         ) is not None:
             self._pending_observation_confirmation = None
             intent = CuratedControlIntent(
@@ -6211,13 +6836,11 @@ class CuratedProtocolSession:
                 )
         if (
             self.active
-            and self.fixture.steps[self.current_index].source_label in {"7", "9", "20"}
+            and self.active_human_checkpoint() is not None
             and not intent.reported_observation
             and not stale_observation_reply
         ):
-            observed = _observation_predicate(
-                self.fixture.steps[self.current_index].source_label, transcript
-            )
+            observed = _observation_predicate(transcript, solicited=False)
             if observed is not None:
                 intent = replace(
                     intent,
@@ -6235,7 +6858,10 @@ class CuratedProtocolSession:
                         else "direct_negative_observation"
                     ),
                 )
-            elif intent.action is CuratedProtocolAction.NEXT and intent.reported_completion:
+            elif intent.action is CuratedProtocolAction.NEXT:
+                # The current step ends on a condition only the researcher can
+                # judge. An advance request therefore asks the source-quoted
+                # question first; it never advances on its own.
                 intent = replace(
                     intent,
                     intent_kind="observation_confirmation_required",
@@ -7050,11 +7676,14 @@ class CuratedProtocolSession:
                 )
                 facts: tuple[CuratedProtocolFact, ...] = ()
                 next_label = current.source_label
+                display_response = response
+                preview_status = (
+                    "source_language" if language == "en"
+                    else "deterministic_protocol_structure")
             else:
                 next_index = self.current_index + 1
                 next_step = steps[next_index]
                 localized = self._localized_fact(next_step.step_id, "current_step")
-                instruction = localized if language == "ko" and localized else next_step.instruction_source_text
                 blocker = self._current_step_readiness_blocker()
                 blocker_text = (
                     " The current step has an unresolved execution gate, so this preview does not authorize entry."
@@ -7062,18 +7691,35 @@ class CuratedProtocolSession:
                     " 현재 단계의 실행 제어가 미해결이므로 이 미리보기는 진입 승인이 아닙니다."
                     if blocker is not None else ""
                 )
-                response = (
-                    f"Preview only — Step {next_step.source_label}: {instruction} "
-                    f"The workflow remains at step {current.source_label}.{blocker_text}"
-                    if language == "en" else
-                    f"다음 단계 미리보기 · {next_step.source_label}단계: {instruction} "
-                    f"워크플로는 현재 {current.source_label}단계에 그대로 있습니다.{blocker_text}"
-                )
                 facts = self.fixture.facts_for_step(next_index)
                 next_label = next_step.source_label
+                if language == "en":
+                    response = (
+                        f"Preview only — Step {next_step.source_label}: "
+                        f"{next_step.instruction_source_text} "
+                        f"The workflow remains at step {current.source_label}."
+                        f"{blocker_text}")
+                    display_response = response
+                    preview_status = "source_language"
+                else:
+                    # A Korean question gets a Korean answer, with the approved
+                    # English kept verbatim under 원문 보기. An unresolved
+                    # execution gate is exactly the case where a smoother Korean
+                    # sentence would be a lie, so it fails closed to the source.
+                    presentation = self._present_step_source(
+                        next_step, localized,
+                        safety_critical=blocker is not None)
+                    lead = f"다음 단계는 {next_step.source_label}단계입니다."
+                    tail = (
+                        f"현재 단계는 {current.source_label}단계이며 "
+                        f"실험 상태는 변경하지 않았습니다.{blocker_text}")
+                    response = f"{lead} {presentation.speech_text(tail)}"
+                    display_response = (
+                        f"{lead}\n{presentation.display_text(tail)}")
+                    preview_status = presentation.status.value
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.NEXT_INFORMATION,
-                display_text=response,
+                display_text=display_response,
                 speech_text=response,
                 speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
                 facts=facts,
@@ -7084,7 +7730,7 @@ class CuratedProtocolSession:
                 source_texts=tuple(fact.text for fact in facts[:4]),
                 source_pages=tuple(fact.source_page for fact in facts[:4]),
                 evidence_ids=tuple(fact.fact_id for fact in facts[:4]),
-                translation_status=("verified_sidecar" if language == "ko" else "source_language"),
+                translation_status=preview_status,
                 intent_kind=intent.intent_kind,
                 requested_followup=intent.requested_followup,
                 target_step=next_label,
@@ -7137,12 +7783,28 @@ class CuratedProtocolSession:
                         "검토가 끝날 때까지 이 단계를 완료 처리하지 마세요."
                     )
             elif expected:
+                # At a human-confirmation checkpoint the criterion is not
+                # something the researcher reports "done" against; it is a
+                # condition they will be asked about directly.
+                checkpoint_note = (
+                    (
+                        " Because this step ends on an observation only you can "
+                        "make, I will ask you about that exact condition before "
+                        "anything moves."
+                        if language == "en" else
+                        " 이 단계는 연구자가 직접 확인해야 하는 관찰로 끝나므로, "
+                        "이동 전에 이 조건을 그대로 여쭤봅니다."
+                    )
+                    if self.active_human_checkpoint() is not None else ""
+                )
                 response = (
                     f"The documented check for this step is: {expected_text} "
-                    "After confirming it and finishing the current task, say, 'I completed the current step.'"
+                    "After confirming it and finishing the current task, say, "
+                    f"'I completed the current step.'{checkpoint_note}"
                     if language == "en" else
                     f"문서에 명시된 이 단계의 확인 기준은 다음과 같습니다: {expected_text} "
-                    "이 기준을 확인하고 현재 작업을 마쳤다면 '현재 단계 완료했어'라고 말해 주세요."
+                    "이 기준을 확인하고 현재 작업을 마쳤다면 '현재 단계 완료했어'라고 "
+                    f"말해 주세요.{checkpoint_note}"
                 )
             else:
                 response = (
@@ -7284,77 +7946,66 @@ class CuratedProtocolSession:
             blocker = self._current_step_readiness_blocker(
                 intent.observation_predicate
             )
+            checkpoint = self.active_human_checkpoint()
             if (
-                intent.reported_observation
-                and intent.observation_predicate == "negative"
+                checkpoint is not None
+                and blocker is None
+                and intent.reported_observation
+                and intent.observation_predicate in {"negative", "positive"}
             ):
-                step = steps[self.current_index]
-                endpoint = (
-                    "fully destained and transparent"
-                    if step.source_label == "7" else
-                    "white/whitish and dehydrated"
+                # An explicit human answer to a source-quoted condition. The
+                # server records it and then moves deterministically: back to the
+                # exact source-defined range, or forward out of the loop.
+                outcome = self.confirm_human_checkpoint(
+                    "not_met"
+                    if intent.observation_predicate == "negative"
+                    else "met"
                 )
-                if step.source_label == "7":
-                    followup_en = "Continue the source-authorized Steps 2–7 repeat cycle, then report the visible endpoint again."
-                    followup_ko = "원문이 지시한 2–7단계 반복 주기를 계속한 뒤 관찰 결과를 다시 말씀해 주세요."
-                elif step.source_label == "9":
-                    followup_en = "Continue the source-authorized Steps 8–9 repeat cycle, then report the visible endpoint again."
-                    followup_ko = "원문이 지시한 8–9단계 반복 주기를 계속한 뒤 관찰 결과를 다시 말씀해 주세요."
-                else:
-                    followup_en = "The source mentions repeating Steps 17–18, but that sequence remains unresolved in Candidate A; no loop transition was executed."
-                    followup_ko = "원문에는 17–18단계 반복이 적혀 있지만 Candidate A에서는 그 순서가 미해결이므로 반복 이동을 실행하지 않습니다."
-                response = (
-                    f"Your report means the source-defined endpoint ({endpoint}) is not yet satisfied for Step {step.source_label}. "
-                    f"The step remains current and no transition was made. {followup_en}"
-                    if language == "en" else
-                    f"말씀한 결과는 {step.source_label}단계의 원문 관찰 기준이 아직 충족되지 않았다는 뜻입니다. "
-                    f"현재 단계를 유지하며 다음 단계로 이동하지 않습니다. {followup_ko}"
+                plan = self._human_checkpoint_plan(
+                    outcome,
+                    intent,
+                    language,
+                    checkpoint,
                 )
-                plan = CuratedProtocolTurnPlan(
-                    action=CuratedProtocolAction.NEXT,
-                    display_text=response,
-                    speech_text=response,
-                    speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-                    facts=self.fixture.facts_for_step(self.current_index),
-                    step_label=step.source_label,
-                    final_step=self.current_index == len(steps) - 1,
-                    state_changed=False,
-                    intent_kind=intent.intent_kind,
-                    reported_observation=True,
-                    observation_predicate="negative",
-                    observation_outcome=intent.observation_outcome,
-                    requested_transition=None,
-                    target_step=intent.target_step,
-                )
+                self._replay[turn_id] = plan
+                return plan
             elif blocker is not None:
                 self._block_reason = blocker.value
                 step = steps[self.current_index]
+                # Neither message can be cleared from the bench: the reading of
+                # the source itself is unsettled, and only a reviewer resolution
+                # that produces a new revision can settle it.
                 if blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL:
                     response = {
                         "en": (
-                            f"Step {step.source_label} is a repeat-until step, but its observed endpoint is not connected to a supported server completion signal. "
-                            "You cannot satisfy that gate through the current Candidate A development session. The step has not been marked complete, and no transition was made."
+                            f"Step {step.source_label} says to repeat a range of steps, but which steps it means cannot be "
+                            "determined from the source. A reviewer has to confirm the intended range first. "
+                            "Nothing was completed and no step was changed."
                         ),
                         "vi": (
-                            f"Bước {step.source_label} yêu cầu lặp lại đến khi đạt điểm kết thúc quan sát, nhưng tín hiệu hoàn thành đó chưa được máy chủ hỗ trợ. Bước vẫn chưa hoàn thành."
+                            f"Bước {step.source_label} yêu cầu lặp lại một dải bước, nhưng nguồn không xác định rõ dải đó. "
+                            "Người đánh giá phải xác nhận trước. Chưa có gì thay đổi."
                         ),
                         "ko": (
-                            f"{step.source_label}단계는 관찰 결과가 충족될 때까지 반복해야 하지만, 그 관찰 종점이 지원되는 서버 완료 신호에 연결되어 있지 않습니다. "
-                            "현재 Candidate A 개발 세션에서는 사용자가 이 게이트를 충족할 수 없습니다. 완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
+                            f"{step.source_label}단계는 여러 단계를 반복하라고 하지만, 어떤 단계를 뜻하는지 원문에서 확정할 수 없습니다. "
+                            "원문 해석 확인이 끝나야 진행할 수 있습니다. 완료 처리도, 단계 이동도 하지 않았습니다."
                         ),
-                    }.get(language, "관찰 기반 반복 종료 신호가 지원되지 않아 진행할 수 없습니다.")
+                    }.get(language, "반복 구간을 원문에서 확정할 수 없어 진행할 수 없습니다.")
                 else:
                     response = {
                         "en": (
-                            f"Step {step.source_label} contains an unresolved source ambiguity, so Candidate A development mode cannot validate completion. "
-                            "The step has not been marked complete, and no transition was made."
+                            f"Step {step.source_label} rests on a source sentence that can be read more than one way, so completion "
+                            "cannot be confirmed here. A reviewer has to settle the reading first. "
+                            "Nothing was completed and no step was changed."
                         ),
-                        "vi": f"Bước {step.source_label} còn mơ hồ trong nguồn nên chưa thể xác nhận hoàn thành.",
+                        "vi": (
+                            f"Bước {step.source_label} dựa trên một câu nguồn có thể hiểu theo nhiều cách nên chưa thể xác nhận hoàn thành."
+                        ),
                         "ko": (
-                            f"{step.source_label}단계는 원문의 실행 의미가 미해결 상태여서 Candidate A 개발 모드에서 완료를 검증할 수 없습니다. "
-                            "완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
+                            f"{step.source_label}단계는 원문 문장이 한 가지로 읽히지 않아 여기서 완료를 확인할 수 없습니다. "
+                            "원문 해석 확인이 끝나야 진행할 수 있습니다. 완료 처리도, 단계 이동도 하지 않았습니다."
                         ),
-                    }.get(language, "원문의 실행 의미가 미해결 상태여서 진행할 수 없습니다.")
+                    }.get(language, "원문 해석 확인이 필요해 진행할 수 없습니다.")
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
                     display_text=response,
@@ -7374,6 +8025,7 @@ class CuratedProtocolSession:
                     observation_outcome=intent.observation_outcome,
                 )
             elif self.current_index < len(steps) - 1:
+                completed_step = steps[self.current_index]
                 early_exit = self._record_early_step_timer_exit()
                 self._clear_step_timer()
                 self.current_index += 1
@@ -7389,6 +8041,11 @@ class CuratedProtocolSession:
                     step_index=self.current_index,
                     timer_active=False,
                 )
+                if language == "ko":
+                    control_text = (
+                        f"{completed_step.source_label}단계를 완료로 저장했습니다. "
+                        f"현재는 {step.source_label}단계입니다."
+                    )
                 response, primary, sources, pages, evidence_ids, translation_status = (
                     _step_presentation(
                         self.fixture,
@@ -7834,18 +8491,10 @@ class CuratedProtocolSession:
                     question_dimensions=intent.question_dimensions,
                 )
             elif intent.intent_kind == "observation_confirmation_required":
-                if step.source_label == "7":
-                    response = (
-                        "Is the gel fully destained and transparent? I will not record completion until you report that observation."
-                        if language == "en" else
-                        "젤이 완전히 탈색되어 투명한가요? 그 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
-                    )
-                else:
-                    response = (
-                        "Has the gel turned white or whitish and reached the dehydrated endpoint? I will not record completion until you report that observation."
-                        if language == "en" else
-                        "젤이 흰색 또는 흰빛으로 변하고 탈수 종점에 도달했나요? 그 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
-                    )
+                # Quote the source condition instead of restating it. The
+                # criterion belongs to the protocol; only the answer is ours to
+                # collect, and until it arrives nothing changes.
+                response = self._human_checkpoint_question(language)
             else:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
@@ -8142,20 +8791,31 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.OFF_TOPIC:
             step = steps[self.current_index]
-            response = {
-                "en": (
-                    "I can help with the active laboratory procedure and related "
-                    f"laboratory references. The procedure remains at step {step.source_label}."
-                ),
-                "vi": (
-                    "Tôi có thể hỗ trợ quy trình phòng thí nghiệm đang hoạt động "
-                    f"và tài liệu liên quan. Quy trình vẫn ở bước {step.source_label}."
-                ),
-                "ko": (
-                    "현재 진행 중인 실험 절차와 관련 실험실 "
-                    f"자료에 대한 질문을 도와드릴 수 있어요. 현재 {step.source_label}단계를 유지합니다."
-                ),
-            }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
+            if intent.intent_kind == "off_checkpoint_not_complete":
+                response = (
+                    "이 단계는 별도의 완료 조건을 확인하는 단계가 아닙니다. "
+                    "작업이 끝났다면 ‘이 단계 완료’라고 말씀해 주세요. "
+                    f"현재 단계는 {step.source_label}단계 그대로입니다."
+                    if language == "ko" else
+                    f"Step {step.source_label} is not a condition checkpoint. "
+                    "Say 'complete this step' when the current work is finished. "
+                    "The experiment state was not changed."
+                )
+            else:
+                response = {
+                    "en": (
+                        "I can help with the active laboratory procedure and related "
+                        f"laboratory references. The procedure remains at step {step.source_label}."
+                    ),
+                    "vi": (
+                        "Tôi có thể hỗ trợ quy trình phòng thí nghiệm đang hoạt động "
+                        f"và tài liệu liên quan. Quy trình vẫn ở bước {step.source_label}."
+                    ),
+                    "ko": (
+                        "요청을 현재 프로토콜의 질문이나 작업으로 확인하지 못했습니다. "
+                        f"현재 {step.source_label}단계이며 상태는 변경하지 않았습니다."
+                    ),
+                }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.OFF_TOPIC,
                 display_text=response,

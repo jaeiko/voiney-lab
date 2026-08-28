@@ -35,7 +35,19 @@ source-linked protocol evidence.
 - `curated_protocol.py`: source-bounded plan and checkpoint state machine.
 - `protocol_catalog.py`: immutable PDF/catalog lifecycle and source-linked review.
 - `experiment_protocol*.py`: structured analysis model, validation, readiness,
-  persistence, and fail-closed advanced constructs.
+  persistence, and fail-closed advanced constructs. A source-defined condition
+  only a researcher can judge is a human-confirmation checkpoint, not a
+  readiness failure; a genuinely unsettled source sentence still blocks.
+- `product_labels.py`: the single Korean label table for internal status codes.
+- `barge_in.py` / `barge_in_evaluation.py`: noise-aware interruption gate and its
+  synthetic acceptance sweep. The gate decides whether a sound is worth ducking
+  the agent for; it never decides what a workflow does.
+- `speaker_attribution.py`: provider-neutral diarization segments and the
+  participant-aware mutation policy. Diarization is not authentication; a
+  speaker label is never identity.
+- `source_presentation.py`: the single boundary where approved source text
+  becomes a Korean answer. Translation lives only here, is mechanically checked
+  for preserved numbers/units/identifiers, and fails closed to the exact source.
 - `web_visuals.py` / `external_references.py`: feature-gated current xAI/public
   research adapters and same-origin visual proxy.
 - `experiment_reports.py`: append-only workflow event ledger and exports.

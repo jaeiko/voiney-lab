@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
-# CI-safe server launcher for browser acceptance tests (Playwright).
+# Credential-free server launcher for browser acceptance tests (Playwright).
 #
-# Unlike scripts/run_candidate_a.sh, this does not load the curated "Candidate
-# A" fixture: that fixture's integrity model requires the exact, externally
-# licensed source PDF (byte size, SHA-256, and page count all checked against
-# recorded provenance) which is not and should not be committed to the repo.
-# CI instead runs with an empty protocol catalog, which is a legitimate,
-# already-supported server configuration - exactly the empty/loading state
-# tests/e2e/empty-states.spec.ts exercises. No xAI-dependent optional feature
-# is enabled, so CI never depends on live credentials.
+# No xAI-dependent optional feature is enabled here, so this launcher never
+# depends on live credentials and never leaves a browser run waiting on a
+# long-lived provider request.
+#
+# The curated "Candidate A" fixture is loaded ONLY when its externally licensed
+# source PDF is actually present. That fixture's integrity model checks byte
+# size, SHA-256, and page count against recorded provenance, and the PDF is not
+# and should not be committed to the repo. In CI it is absent by design, so the
+# server creates a source-grounded, explicitly FICTIONAL NON-OPERATIONAL browser
+# fixture in the throwaway directory. This lets the real reviewer and checkpoint
+# paths run without proprietary material, live providers, or safety claims.
+#
+# Either way this writes to its own throwaway data directory, so a developer's
+# own pilot state is never touched by a browser run.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROTOCOL_DATA_DIR="$ROOT/data/runtime/ci-e2e"
+# Allow a non-default port so a browser run never collides with a developer's
+# own long-running server on 8000.
+APP_PORT="${PLAYWRIGHT_APP_PORT:-8000}"
 
 # In GitHub Actions, actions/setup-python already puts a suitable `python` on
 # PATH. Locally, activate the project venv if one exists and the caller
@@ -37,8 +46,26 @@ export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
 export WEB_VISUAL_SEARCH_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
 
-echo "=== Starting Voice Workflow Agent (CI, empty protocol catalog) ==="
+FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"
+SOURCE_PDF="${CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
+CATALOG_STATE="empty protocol catalog"
+
+if [[ -f "$FIXTURE" && -f "$PROVENANCE" && -f "$SOURCE_PDF" ]]; then
+  export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
+  export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
+  export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
+  echo "=== Loading curated fixture into the throwaway browser-test catalog ==="
+  python -B "$ROOT/scripts/bootstrap_browser_test_catalog.py"
+  CATALOG_STATE="curated development fixture"
+else
+  echo "=== Candidate A source PDF absent; loading fictional non-operational browser fixture ==="
+  python -B "$ROOT/scripts/bootstrap_browser_test_catalog.py"
+  CATALOG_STATE="fictional non-operational browser fixture"
+fi
+
+echo "=== Starting Voice Workflow Agent ($CATALOG_STATE) on port $APP_PORT ==="
 exec python -B -m uvicorn \
   voice_workflow_agent.server:app \
   --host 127.0.0.1 \
-  --port 8000
+  --port "$APP_PORT"

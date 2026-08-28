@@ -12,22 +12,54 @@ async function openAdminWorkspace(page) {
 }
 
 test.describe('Lab Admin workspace', () => {
-  test('shows users, permissions, guided connections, security, and retention', async ({ page }) => {
+  test('answers the four admin jobs up front and keeps setup and audit behind disclosure', async ({ page }) => {
     await openAdminWorkspace(page);
     await expect(page.locator('#admin-connectors')).not.toHaveText('', { timeout: 15_000 });
     await expect(page.locator('#admin-memberships')).not.toHaveText('', { timeout: 15_000 });
-    await expect(page.locator('#admin-connectors')).toBeVisible();
+
+    // Default view: who, what is connected, security posture, operational state.
     await expect(page.locator('#admin-memberships')).toBeVisible();
-    await expect(page.locator('#admin-metrics')).toBeVisible();
-    await expect(page.locator('#admin-retention-days')).toBeVisible();
-    await expect(page.locator('#admin-permission-preview')).toContainText('허용 작업');
-    await expect(page.locator('.admin-setup-flow li')).toHaveCount(5);
+    await expect(page.locator('#admin-connectors')).toBeVisible();
     await expect(page.locator('#admin-security-summary')).not.toHaveText('', { timeout: 15_000 });
+    await expect(page.locator('#admin-attention')).toBeVisible();
+    await expect(page.locator('#admin-attention')).not.toHaveText('', { timeout: 15_000 });
+    await expect(page.locator('#admin-retention-days')).toBeVisible();
+    await expect(page.locator('#admin-metrics')).toBeVisible();
+    expect(await page.locator('#admin-workspace').innerText()).not.toContain('dev-local-admin');
+
+    // Setup forms and audit streams are one click away, not always on screen.
+    await expect(page.locator('#admin-member-id')).toBeHidden();
+    await expect(page.locator('#admin-connector-create')).toBeHidden();
+    await expect(page.locator('#admin-security-activity')).toBeHidden();
+  });
+
+  test('every critical admin capability is still reachable after the cleanup', async ({ page }) => {
+    await openAdminWorkspace(page);
+    await expect(page.locator('#admin-memberships')).not.toHaveText('', { timeout: 15_000 });
+    await page.locator('#admin-workspace details.admin-disclosure', { hasText: '구성원 추가' }).click();
+    await expect(page.locator('#admin-member-id')).toBeVisible();
+    await expect(page.locator('#admin-member-role')).toBeVisible();
+    await expect(page.locator('#admin-member-save')).toBeVisible();
+    await expect(page.locator('#admin-permission-preview')).toContainText('허용 작업');
+
+    await page.locator('#admin-workspace details.admin-disclosure', { hasText: '새 연결 설정' }).click();
+    await expect(page.locator('.admin-setup-flow li')).toHaveCount(5);
+    await expect(page.locator('#admin-connector-kind')).toBeVisible();
+    await expect(page.locator('#admin-connector-secret')).toBeVisible();
+    await expect(page.locator('#admin-connector-create')).toBeVisible();
+
+    await page.locator('#admin-workspace details.admin-disclosure', { hasText: '로그인·권한 변경 기록' }).click();
     await expect(page.locator('#admin-security-activity')).toBeVisible();
+
+    await expect(page.locator('#admin-retention-save')).toBeVisible();
+    await expect(page.locator('#admin-metrics-load')).toBeVisible();
   });
 
   test('uses product language and does not expose references or claim a provider test', async ({ page }) => {
     await openAdminWorkspace(page);
+    for (const section of await page.locator('#admin-workspace details').all()) {
+      await section.evaluate((node) => { node.open = true; });
+    }
     const body = await page.locator('#admin-workspace').innerText();
     expect(body).not.toContain('실시간 테스트 완료');
     expect(body).not.toContain('secret://');
@@ -39,6 +71,7 @@ test.describe('Lab Admin workspace', () => {
 
   test('dev identity vs OIDC operational auth boundary is stated', async ({ page }) => {
     await openAdminWorkspace(page);
+    await page.locator('#admin-workspace details.admin-disclosure', { hasText: '로그인 방식 상세' }).click();
     await expect(page.locator('#admin-workspace')).toContainText('운영 범위는 OIDC가 필수입니다');
   });
 
@@ -74,8 +107,7 @@ test.describe('Lab Admin workspace', () => {
     });
 
     await openAdminWorkspace(page);
-    await page.waitForLoadState('networkidle');
-    await expect(page.locator('#admin-connectors')).toContainText('구성 검사 필요');
+    await expect(page.locator('#admin-connectors')).toContainText('구성 검사 필요', { timeout: 15_000 });
     await expect(page.getByRole('button', { name: '연결 활성화' })).toHaveCount(0);
     await page.getByRole('button', { name: '구성 검사' }).click();
     await expect(page.locator('#admin-connector-status')).toContainText('외부 제공자 통신은 아직 검증하지 않았습니다');
@@ -105,16 +137,12 @@ test.describe('Lab Admin workspace', () => {
       });
     });
 
+    await page.locator('#admin-workspace details.admin-disclosure', { hasText: '로그인·권한 변경 기록' }).click();
     const layout = await page.evaluate(() => {
-      const cards = document.querySelectorAll('#admin-workspace .workspace-columns > .workspace-card');
-      const membershipCard = cards[0].getBoundingClientRect();
-      const formCard = cards[1].getBoundingClientRect();
       const activity = document.querySelector('#admin-security-activity');
       const hint = document.querySelector('#admin-security-activity + .bounded-list-hint');
       return {
         viewportWidth: window.innerWidth,
-        membershipCardHeight: membershipCard.height,
-        formCardHeight: formCard.height,
         activityClientHeight: activity.clientHeight,
         activityScrollHeight: activity.scrollHeight,
         hintDisplay: getComputedStyle(hint).display,
@@ -122,7 +150,6 @@ test.describe('Lab Admin workspace', () => {
       };
     });
     if (layout.viewportWidth > 980) {
-      expect(layout.membershipCardHeight + 80).toBeLessThan(layout.formCardHeight);
       expect(layout.activityScrollHeight).toBeGreaterThan(layout.activityClientHeight);
       expect(layout.hintDisplay).not.toBe('none');
     } else {
@@ -132,5 +159,25 @@ test.describe('Lab Admin workspace', () => {
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
     await expect(page.locator('#admin-connectors')).not.toHaveText('');
     await expect(page.locator('#admin-security-activity')).toContainText('Local Lab Admin');
+  });
+
+  test('a first-time lab admin can say what the page is for from the header', async ({ page }) => {
+    await openAdminWorkspace(page);
+    await expect(page.locator('#admin-workspace .workspace-purpose')).toContainText(
+      '연구실 구성원, 로그인, 연결 서비스, 데이터 보관과 서비스 상태를 관리하는 곳입니다.');
+
+    // Sections are named after the job they do, not after the storage model.
+    for (const heading of ['구성원과 역할', '연결 서비스', '로그인과 데이터 보관', '서비스 상태']) {
+      await expect(page.locator('#admin-workspace h2', { hasText: heading })).toBeVisible();
+    }
+
+    // Internal identity and storage vocabulary never appears in primary copy.
+    for (const section of await page.locator('#admin-workspace details').all()) {
+      await section.evaluate((node) => { node.open = true; });
+    }
+    const body = await page.locator('#admin-workspace').innerText();
+    for (const internal of ['테넌트', '비식별 운영 지표', '접근 제어 활동', '인증 경계']) {
+      expect(body).not.toContain(internal);
+    }
   });
 });

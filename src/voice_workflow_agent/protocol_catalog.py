@@ -49,6 +49,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
+from voice_workflow_agent import product_labels
 from voice_workflow_agent.protocol_ocr import (
     OcrResult,
     ProtocolOcrProvider,
@@ -61,6 +62,7 @@ _SAFE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.pdf$", re.IGNORECASE)
 _STABLE_PROTOCOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+))?$")
 _APPROVAL_EVENT = "protocol_revision_approved"
+_RESOLUTION_EVENT = "protocol_source_ambiguity_resolved"
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
 _ANALYSIS_READY_EVENT = "protocol_analysis_ready"
@@ -101,6 +103,10 @@ class ProtocolCatalogUnavailableError(ProtocolCatalogError):
 
 class ProtocolAnalysisUnavailableError(ProtocolCatalogError):
     code = "protocol_analysis_not_configured"
+
+
+class ProtocolResolutionError(ProtocolCatalogError):
+    code = "protocol_resolution_error"
 
 
 class ProtocolApprovalError(ProtocolCatalogError):
@@ -699,24 +705,56 @@ class ProtocolCatalog:
         )
         return self.ocr_status(protocol_id)
 
+    _DECISION_VALUES = (
+        "approved",
+        "development_activated",
+        "development_only",
+        "revoked",
+    )
+
+    def _approval_decisions(
+        self,
+        revision: ProtocolRevisionRecord,
+        analysis: AnalysisRevisionRecord | None,
+    ) -> tuple[object, ...]:
+        """Return the append-only decisions that bind this exact revision pair."""
+
+        if analysis is None:
+            return ()
+        return tuple(
+            event
+            for event in self.store.list_events(revision.experiment_id)
+            if event.event_type
+            in (
+                _APPROVAL_EVENT,
+                _DEVELOPMENT_FIXTURE_EVENT,
+                _DEVELOPMENT_ACTIVATION_EVENT,
+            )
+            and event.protocol_revision_number == revision.revision_number
+            and (
+                event.analysis_revision_number is None
+                or event.analysis_revision_number
+                == analysis.analysis_revision_number
+            )
+            and isinstance(event.payload, dict)
+            and event.payload.get("decision") in self._DECISION_VALUES
+        )
+
     def _is_approved(
         self,
         revision: ProtocolRevisionRecord,
         analysis: AnalysisRevisionRecord | None,
     ) -> bool:
-        if analysis is None:
+        """Project the latest human decision, so a revocation actually revokes.
+
+        History is never rewritten: the ledger keeps every approval and every
+        revocation. Execution availability follows the most recent one.
+        """
+
+        decisions = self._approval_decisions(revision, analysis)
+        if not decisions:
             return False
-        return any(
-            event.event_type in (_APPROVAL_EVENT, _DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
-            and event.protocol_revision_number == revision.revision_number
-            and (
-                event.analysis_revision_number is None
-                or event.analysis_revision_number == analysis.analysis_revision_number
-            )
-            and isinstance(event.payload, dict)
-            and event.payload.get("decision") in ("approved", "development_activated", "development_only")
-            for event in self.store.list_events(revision.experiment_id)
-        )
+        return decisions[-1].payload.get("decision") != "revoked"
 
     def approval_context(self, protocol_id: str) -> dict[str, object]:
         """Return the recorded approval actor and time without adding authority.
@@ -729,15 +767,6 @@ class ProtocolCatalog:
 
         entry = self.get_entry(protocol_id)
         final_approval = entry.approval_status == "approved"
-        if entry.approval_status not in {"approved", "development_only"}:
-            return {
-                "status": "review_required",
-                "final_approval": False,
-                "actor_principal_id": None,
-                "actor_role": None,
-                "recorded_at": None,
-                "authority": None,
-            }
         protocol_revision_number, analysis_revision_number = _parse_revision_id(
             entry.revision_id
         )
@@ -756,10 +785,29 @@ class ProtocolCatalog:
                 or event.analysis_revision_number == analysis_revision_number
             )
             and isinstance(event.payload, dict)
-            and event.payload.get("decision")
-            in {"approved", "development_activated", "development_only"}
+            and event.payload.get("decision") in set(self._DECISION_VALUES)
         )
-        event = matching[-1] if matching else None
+        latest = matching[-1] if matching else None
+        if entry.approval_status not in {"approved", "development_only"}:
+            revoked = (
+                latest is not None
+                and latest.payload.get("decision") == "revoked"
+            )
+            return {
+                "status": "revoked" if revoked else "review_required",
+                "final_approval": False,
+                "actor_principal_id": (
+                    latest.payload.get("actor_principal_id") if revoked else None
+                ),
+                "actor_role": (
+                    latest.payload.get("actor_role") if revoked else None
+                ),
+                "recorded_at": latest.recorded_at if revoked else None,
+                "authority": (
+                    latest.payload.get("authority") if revoked else None
+                ),
+            }
+        event = latest
         payload = event.payload if event is not None else {}
         actor_principal_id = payload.get("actor_principal_id")
         actor_role = payload.get("actor_role")
@@ -1047,10 +1095,17 @@ class ProtocolCatalog:
                 lifecycle_state = "blocked"
         approved = self._is_approved(revision, analysis)
         if approved:
-            is_dev_only = any(
-                event.event_type in (_DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
-                and event.protocol_revision_number == revision.revision_number
-                for event in self.store.list_events(revision.experiment_id)
+            # The latest human decision decides what this is. A development
+            # bootstrap marker must not downgrade an explicit reviewer approval
+            # of the same revision - that mismatch is exactly what made
+            # "approved" and "unapproved" appear at the same time.
+            latest = self._approval_decisions(revision, analysis)[-1]
+            is_dev_only = latest.event_type in (
+                _DEVELOPMENT_FIXTURE_EVENT,
+                _DEVELOPMENT_ACTIVATION_EVENT,
+            ) or latest.payload.get("decision") in (
+                "development_activated",
+                "development_only",
             )
             analysis_status = "active_development" if is_dev_only else "approved"
             approval_status = "development_only" if is_dev_only else "approved"
@@ -1174,7 +1229,12 @@ class ProtocolCatalog:
         self,
         fixture: CuratedProtocolFixture,
     ) -> bool:
-        """Verify the exact development-only provenance marker in the store."""
+        """Verify the exact development-only provenance marker in the store.
+
+        A reviewer resolution appends a further analysis revision on purpose, so
+        this checks that the fixture's own analysis is present as the first
+        revision - it does not require that it is the only one.
+        """
 
         if not fixture.development_only:
             return False
@@ -1188,7 +1248,7 @@ class ProtocolCatalog:
             fixture.protocol_id,
             revision.revision_number,
         )
-        if len(analyses) != 1:
+        if not analyses:
             return False
         analysis = analyses[0]
         if (
@@ -1208,10 +1268,169 @@ class ProtocolCatalog:
             for event in self.store.list_events(fixture.protocol_id)
         )
 
+    def development_fixture_is_superseded(
+        self,
+        fixture: CuratedProtocolFixture,
+    ) -> bool:
+        """True when the catalog holds a reviewed revision of this fixture.
+
+        Once a reviewer has resolved something or authorized execution, the
+        catalog record - not the in-memory development fixture - is what the
+        product should show and run.
+        """
+
+        try:
+            revision = self._latest_protocol_revision(fixture.protocol_id)
+        except ProtocolCatalogNotFoundError:
+            return False
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            return False
+        if analysis.analysis_revision_number > 1:
+            return True
+        return self._entry_for_revision(revision).available_for_execution
+
     def get_entry(self, protocol_id: str) -> ProtocolCatalogEntry:
         return self._entry_for_revision(
             self._latest_protocol_revision(protocol_id)
         )
+
+    def _execution_readiness(
+        self,
+        entry: ProtocolCatalogEntry,
+        analysis: AnalysisRevisionRecord | None,
+    ) -> dict[str, object]:
+        """Say plainly what a reviewer's next action is, in one vocabulary.
+
+        This exists so the reviewer never sees a generic "Approve" that would not
+        make the protocol executable. It reports one state and, when the state is
+        "needs clarification", exactly which unresolved items are in the way.
+        """
+
+        decisions = self._approval_decisions(
+            self._latest_protocol_revision(entry.protocol_id), analysis
+        )
+        approval_revoked = bool(
+            decisions and decisions[-1].payload.get("decision") == "revoked"
+        )
+        blockers: list[dict[str, object]] = []
+        if analysis is not None:
+            for reason in analysis.readiness.reasons:
+                code = reason.code.value
+                blockers.append(
+                    {
+                        "code": code,
+                        "display_label": product_labels.readiness_reason_label(code),
+                        "display_detail": product_labels.readiness_reason_detail(
+                            code
+                        ),
+                        "reviewer_resolvable": (
+                            product_labels.reason_is_reviewer_resolvable(code)
+                        ),
+                        "step_id": reason.step_id,
+                        "source_page_number": (
+                            reason.evidence.source_page_number
+                            if reason.evidence is not None
+                            else None
+                        ),
+                    }
+                )
+        if analysis is None:
+            state = "analysis_pending"
+        elif entry.approval_status == "approved" and entry.available_for_execution:
+            state = "approved_for_execution"
+        elif entry.approval_status == "development_only":
+            state = "development_only"
+        elif blockers:
+            state = "needs_clarification"
+        elif approval_revoked:
+            state = "approval_revoked"
+        else:
+            state = "ready_for_execution_approval"
+        return {
+            "state": state,
+            "display_label": product_labels.execution_readiness_label(state),
+            "display_detail": product_labels.execution_readiness_detail(state),
+            "can_approve_for_execution": state
+            in {"ready_for_execution_approval", "approval_revoked"},
+            "can_revoke_execution_approval": state == "approved_for_execution",
+            "blockers": blockers,
+        }
+
+    def _human_checkpoint_projection(
+        self, analysis: AnalysisRevisionRecord
+    ) -> list[dict[str, object]]:
+        labels = {
+            step.step_id: step.source_label
+            for section in analysis.protocol.sections
+            for step in section.steps
+        }
+        return [
+            {
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "gate_step_id": checkpoint.gate_step_id,
+                "gate_step_label": labels.get(checkpoint.gate_step_id),
+                "condition_source_text": checkpoint.condition_source_text,
+                "source_page_number": checkpoint.evidence.source_page_number,
+                "repeated_step_ids": list(checkpoint.repeated_step_ids),
+                "repeated_step_labels": [
+                    labels.get(step_id)
+                    for step_id in checkpoint.repeated_step_ids
+                ],
+                "display_label": product_labels.HUMAN_CHECKPOINT_LABEL,
+                "display_detail": (
+                    product_labels.HUMAN_CHECKPOINT_REVIEWER_DETAIL
+                ),
+                "blocks_execution": False,
+                "authority": "researcher_observation",
+            }
+            for checkpoint in domain.human_confirmation_checkpoints(
+                analysis.protocol
+            )
+        ]
+
+    def _resolution_projection(
+        self, protocol_id: str, analysis: AnalysisRevisionRecord
+    ) -> list[dict[str, object]]:
+        """List only unresolved source items a reviewer can actually resolve."""
+
+        labels = {
+            step.step_id: step.source_label
+            for section in analysis.protocol.sections
+            for step in section.steps
+        }
+        ordered_steps = [
+            {"step_id": step.step_id, "source_label": step.source_label}
+            for section in analysis.protocol.sections
+            for step in section.steps
+        ]
+        items: list[dict[str, object]] = []
+        for construct in analysis.protocol.constructs:
+            if (
+                not isinstance(construct, domain.SourceAmbiguity)
+                or construct.resolved
+            ):
+                continue
+            items.append(
+                {
+                    "issue_id": construct.ambiguity_id,
+                    "kind": "source_ambiguity",
+                    "display_label": product_labels.readiness_reason_label(
+                        "unresolved_ambiguity"
+                    ),
+                    "display_detail": product_labels.readiness_reason_detail(
+                        "unresolved_ambiguity"
+                    ),
+                    "source_excerpt": construct.evidence.source_excerpt,
+                    "source_text": construct.source_text,
+                    "source_page_number": construct.evidence.source_page_number,
+                    "step_id": construct.step_id,
+                    "step_label": labels.get(construct.step_id or ""),
+                    "accepts_repeat_range": construct.step_id is not None,
+                    "selectable_steps": ordered_steps,
+                }
+            )
+        return items
 
     def review(self, protocol_id: str) -> dict[str, object]:
         """Return a source-linked, read-only view of the latest analysis draft."""
@@ -1298,6 +1517,23 @@ class ProtocolCatalog:
                 "operational_authorization": "blocked",
             },
             "reviewer_actions": ["retry_analysis"],
+            "human_checkpoints": [],
+            "needs_resolution": [],
+            "execution_readiness": self._execution_readiness(entry, None),
+            "display_labels": {
+                "readiness_status": product_labels.readiness_status_label(
+                    domain.ReadinessStatus.ANALYSIS_REQUIRED.value
+                ),
+                "approval_status": product_labels.approval_status_label(
+                    entry.approval_status
+                ),
+                "analysis_status": product_labels.analysis_status_label(
+                    entry.analysis_status
+                ),
+                "lifecycle_state": product_labels.lifecycle_state_label(
+                    entry.lifecycle_state
+                ),
+            },
         }
         if analysis is None:
             return base
@@ -1368,11 +1604,55 @@ class ProtocolCatalog:
                         else "blocked"
                     ),
                 },
-                "reviewer_actions": (
-                    ["review_hazards", "approve", "reject"]
-                    if hazard_review_required
-                    else ["approve", "reject"]
-                ),
+            }
+        )
+        readiness_status_code = (
+            analysis.readiness_status
+            if analysis is not None
+            else domain.ReadinessStatus.ANALYSIS_REQUIRED.value
+        )
+        execution_readiness = self._execution_readiness(entry, analysis)
+        resolution_projection = self._resolution_projection(protocol_id, analysis)
+        base.update(
+            {
+                "human_checkpoints": self._human_checkpoint_projection(analysis),
+                "needs_resolution": resolution_projection,
+                "execution_readiness": execution_readiness,
+                "display_labels": {
+                    "readiness_status": (
+                        product_labels.readiness_status_label(
+                            readiness_status_code
+                        )
+                    ),
+                    "approval_status": product_labels.approval_status_label(
+                        entry.approval_status
+                    ),
+                    "analysis_status": product_labels.analysis_status_label(
+                        entry.analysis_status
+                    ),
+                    "lifecycle_state": product_labels.lifecycle_state_label(
+                        entry.lifecycle_state
+                    ),
+                },
+                "reviewer_actions": [
+                    *(["review_hazards"] if hazard_review_required else []),
+                    *(
+                        ["resolve_source_interpretation"]
+                        if resolution_projection
+                        else []
+                    ),
+                    *(
+                        ["approve_for_execution"]
+                        if execution_readiness["can_approve_for_execution"]
+                        else []
+                    ),
+                    *(
+                        ["revoke_execution_approval"]
+                        if execution_readiness["can_revoke_execution_approval"]
+                        else []
+                    ),
+                    "request_changes",
+                ],
             }
         )
         return base
@@ -1926,16 +2206,259 @@ class ProtocolCatalog:
                 "actor_role":actor_role,
                 "comment":(comment or "Tenant RBAC approval.")[:4000],
             })
+        # Include the decision count so a re-approval after a revocation is a
+        # new ledger entry rather than an idempotent replay of the first one.
+        decision_index = len(self._approval_decisions(revision, analysis))
         self.store.append_event(
             (
                 f"approved-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}"
+                f"{analysis_revision_number}-{decision_index}"
             ),
             protocol_id,
             protocol_revision_number,
             _APPROVAL_EVENT,
             payload,
             analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    _APPROVAL_ACTOR = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}")
+    _APPROVAL_ROLES = frozenset(
+        {"reviewer", "lab_admin", "organization_admin"}
+    )
+
+    def _validated_actor(
+        self,
+        actor_principal_id: str | None,
+        actor_role: str | None,
+        error: type[ProtocolCatalogError],
+    ) -> dict[str, str]:
+        if actor_principal_id is None:
+            return {}
+        if not self._APPROVAL_ACTOR.fullmatch(actor_principal_id):
+            raise error("Protocol decision actor is invalid.")
+        if actor_role not in self._APPROVAL_ROLES:
+            raise error("Protocol decision role is invalid.")
+        return {
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+        }
+
+    def revoke(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        policy: ApprovalPolicy,
+        presented_secret: str | None,
+        actor_principal_id: str | None = None,
+        actor_role: str | None = None,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Withdraw execution authorization without deleting any history.
+
+        The approval event stays in the ledger. This appends the opposite human
+        decision, so new experiment sessions can no longer select the revision
+        while every completed experiment record remains exactly as it was.
+        """
+
+        if not policy.permits(presented_secret):
+            raise ProtocolApprovalError("Protocol approval authorization failed.")
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            raise ProtocolApprovalError(
+                "A validated analysis revision is required for revocation."
+            )
+        revision = self.store.get_protocol_revision(
+            protocol_id, protocol_revision_number
+        )
+        if revision is None:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        analysis = self._latest_analysis(revision)
+        if (
+            analysis is None
+            or analysis.analysis_revision_number != analysis_revision_number
+        ):
+            raise ProtocolApprovalError(
+                "Protocol revision is not the current analysis revision."
+            )
+        if not self._is_approved(revision, analysis):
+            raise ProtocolApprovalError(
+                "Protocol revision is not currently approved for execution."
+            )
+        payload = {
+            "decision": "revoked",
+            "authority": "service_policy",
+            **self._validated_actor(
+                actor_principal_id, actor_role, ProtocolApprovalError
+            ),
+        }
+        if actor_principal_id is not None:
+            payload["comment"] = (comment or "Execution approval revoked.")[:4000]
+        self.store.append_event(
+            (
+                f"revoked-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}-{len(self._approval_decisions(revision, analysis))}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _APPROVAL_EVENT,
+            payload,
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def resolve_source_ambiguity(
+        self,
+        protocol_id: str,
+        *,
+        ambiguity_id: str,
+        interpretation: str,
+        rationale: str,
+        actor_principal_id: str,
+        actor_role: str,
+        repeated_step_ids: tuple[str, ...] = (),
+    ) -> ProtocolCatalogEntry:
+        """Record a reviewer's explicit reading of an ambiguous source sentence.
+
+        The original PDF and every earlier analysis revision are untouched. This
+        appends a NEW analysis revision in which the named ambiguity is marked
+        resolved with the reviewer's own words, plus an append-only clarification
+        row and decision event carrying actor, role, time, and the base revision.
+
+        ``repeated_step_ids`` lets a reviewer state which existing steps a
+        "repeat steps X-Y" sentence meant. The condition text of the resulting
+        repeat construct is the source sentence verbatim - the reviewer chooses
+        only the range, and the server refuses any range it cannot execute
+        deterministically. Nothing here is derived from a model.
+        """
+
+        actor = self._validated_actor(
+            actor_principal_id, actor_role, ProtocolResolutionError
+        )
+        if not actor:
+            raise ProtocolResolutionError("Protocol resolution actor is required.")
+        interpretation = (interpretation or "").strip()
+        rationale = (rationale or "").strip()
+        if not interpretation or len(interpretation) > 2000:
+            raise ProtocolResolutionError(
+                "Resolution interpretation is required."
+            )
+        if not rationale or len(rationale) > 2000:
+            raise ProtocolResolutionError("Resolution rationale is required.")
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            raise ProtocolAnalysisUnavailableError(
+                "Structured analysis is required before resolution."
+            )
+        protocol = analysis.protocol
+        target = next(
+            (
+                construct
+                for construct in protocol.constructs
+                if isinstance(construct, domain.SourceAmbiguity)
+                and construct.ambiguity_id == ambiguity_id
+            ),
+            None,
+        )
+        if target is None:
+            raise ProtocolCatalogNotFoundError(
+                "Source ambiguity is not part of this analysis revision."
+            )
+        if target.resolved:
+            raise ProtocolResolutionError(
+                "Source ambiguity is already resolved."
+            )
+        constructs: list[domain.WorkflowConstruct] = [
+            replace(
+                construct,
+                resolved=True,
+                resolution_source_text=interpretation,
+            )
+            if construct is target
+            else construct
+            for construct in protocol.constructs
+        ]
+        if repeated_step_ids:
+            if target.step_id is None:
+                raise ProtocolResolutionError(
+                    "A repeat range needs an ambiguity anchored to a step."
+                )
+            constructs.append(
+                domain.RepeatUntil(
+                    repetition_id=f"{target.ambiguity_id}-resolved-repeat",
+                    condition_source_text=target.source_text,
+                    repeated_step_ids=tuple(repeated_step_ids),
+                    evidence=target.evidence,
+                    section_id=target.section_id,
+                    step_id=target.step_id,
+                    action_id=target.action_id,
+                )
+            )
+        resolved_protocol = replace(protocol, constructs=tuple(constructs))
+        try:
+            domain.validate_protocol(resolved_protocol)
+        except domain.ProtocolValidationError as exc:
+            raise ProtocolResolutionError(
+                "The selected interpretation does not produce a valid protocol."
+            ) from exc
+        if repeated_step_ids:
+            checkpoints = {
+                item.checkpoint_id
+                for item in domain.human_confirmation_checkpoints(
+                    resolved_protocol
+                )
+            }
+            if f"{target.ambiguity_id}-resolved-repeat" not in checkpoints:
+                raise ProtocolResolutionError(
+                    "The selected repeat range is not a contiguous existing "
+                    "step range ending at the referenced step."
+                )
+        readiness = domain.assess_readiness(resolved_protocol)
+        appended = self.store.append_analysis_revision(
+            protocol_id,
+            revision.revision_number,
+            f"resolution-{ambiguity_id[:48]}-{analysis.analysis_revision_number}",
+            resolved_protocol,
+            readiness,
+            analysis.capability_policy_id,
+        )
+        self.store.append_clarification(
+            f"clarify-{ambiguity_id[:40]}-{appended.analysis_revision_number}",
+            protocol_id,
+            revision.revision_number,
+            appended.analysis_revision_number,
+            ambiguity_source_text=target.source_text,
+            interpretation=interpretation,
+            researcher=actor_principal_id,
+            reason=rationale,
+            related_step_id=target.step_id,
+        )
+        self.store.append_event(
+            (
+                f"resolved-{protocol_id[-16:]}-{revision.revision_number}-"
+                f"{appended.analysis_revision_number}"
+            ),
+            protocol_id,
+            revision.revision_number,
+            _RESOLUTION_EVENT,
+            {
+                "decision": "source_ambiguity_resolved",
+                "authority": "reviewer_resolution",
+                "ambiguity_id": ambiguity_id,
+                "base_analysis_revision_number": (
+                    analysis.analysis_revision_number
+                ),
+                "source_page_number": target.evidence.source_page_number,
+                "repeated_step_ids": list(repeated_step_ids),
+                "readiness": readiness.status.value,
+                "comment": rationale[:4000],
+                **actor,
+            },
+            analysis_revision_number=appended.analysis_revision_number,
         )
         return self.get_entry(protocol_id)
 

@@ -876,7 +876,12 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn('export WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
         self.assertIn('export CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
         self.assertIn("Non-secret capability check", launcher)
-        self.assertIn("bootstrap_development_fixture(fixture)", launcher)
+        self.assertIn('scripts/bootstrap_browser_test_catalog.py', launcher)
+        bootstrap = (
+            repository / "scripts" / "bootstrap_browser_test_catalog.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("bootstrap_development_fixture(fixture)", bootstrap)
+        self.assertIn('"protocol_catalog", fixture.protocol_id', bootstrap)
         self.assertIn("--host 0.0.0.0", launcher)
         self.assertNotIn("--reload", launcher)
 

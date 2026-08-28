@@ -153,36 +153,7 @@ echo "REPORT_DB  = $VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB"
 echo
 echo "=== Loading curated fixture ==="
 
-python -B - <<'PY'
-import os
-from pathlib import Path
-
-from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-from voice_workflow_agent.experiment_protocol_config import ProtocolPersistenceSettings
-from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
-
-fixture = load_curated_protocol_fixture(
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE"]),
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE"]),
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF"]),
-)
-
-settings = ProtocolPersistenceSettings.from_environment()
-store = initialize_protocol_store(settings)
-try:
-    bootstrap = ProtocolCatalog(store).bootstrap_development_fixture(fixture)
-finally:
-    store.close()
-
-print("[OK] LOAD_OK")
-print("protocol_id:", fixture.protocol_id)
-print("revision_id:", fixture.revision_id)
-print("title:", fixture.title)
-print("steps:", len(fixture.steps))
-print("status:", fixture.status)
-print("materialized:", "existing" if bootstrap.deduplicated else "created")
-PY
+python -B "$ROOT/scripts/bootstrap_browser_test_catalog.py"
 
 if [[ "$BOOTSTRAP_ONLY" == "true" ]]; then
   echo "[OK] Candidate A bootstrap complete; server not started"

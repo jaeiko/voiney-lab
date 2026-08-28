@@ -12,22 +12,135 @@ async function openReviewerWorkspace(page) {
 }
 
 test.describe('Reviewer workspace', () => {
-  test('shows the inbox, impact-first summary, audit, and decision panels', async ({ page }) => {
+  test('clicking 검토하기 loads the selected reviewer packet', async ({ page }) => {
+    await page.route('**/api/protocols/review-queue', async route => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ protocols: [{
+        protocol_id: 'click-review-protocol', title: 'Click Review Protocol',
+        source_filename: 'click-review.pdf', step_count: 3,
+        needs_resolution_count: 0, human_checkpoint_count: 1,
+        execution_readiness: { display_label: '실행 승인 가능' },
+      }] }),
+    }));
+    await page.route('**/api/protocols/click-review-protocol/review', async route => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({
+        protocol_id: 'click-review-protocol', title: 'Click Review Protocol',
+        revision_id: 'pdf-1-analysis-1', step_count: 3,
+        source: { filename: 'click-review.pdf', page_count: 2 }, sections: [],
+        needs_resolution: [], human_checkpoints: [{
+          checkpoint_id: 'checkpoint-click', gate_step_label: '3',
+          condition_source_text: 'Repeat until visibly clear.',
+          source_page_number: 2, repeated_step_labels: ['2', '3'],
+        }],
+        execution_readiness: {
+          state: 'ready_for_execution_approval', display_label: '실행 승인 가능',
+          display_detail: '실행을 막는 항목이 없습니다.',
+          can_approve_for_execution: true, can_revoke_execution_approval: false,
+          blockers: [],
+        },
+      }),
+    }));
     await openReviewerWorkspace(page);
+    await page.locator('#reviewer-protocol-queue button', { hasText: '검토하기' }).click();
+    await expect(page.locator('#reviewer-selection')).toContainText('Click Review Protocol');
+    await expect(page.locator('#reviewer-checkpoints')).toContainText('Repeat until visibly clear');
+    await expect(page.locator('#reviewer-readiness')).toContainText('실행 승인 가능');
+  });
+
+  for (const statusCode of [403, 500]) {
+    test(`review queue HTTP ${statusCode} is visibly an error, never an empty queue`, async ({ page }) => {
+      await page.route('**/api/protocols/review-queue', async route => route.fulfill({
+        status: statusCode, contentType: 'application/json', body: '{}',
+      }));
+      await openReviewerWorkspace(page);
+      await expect(page.locator('#reviewer-protocol-queue')).toContainText('목록을 확인하지 못했으며');
+      await expect(page.locator('#reviewer-protocol-queue')).not.toContainText('필요한 프로토콜이 없습니다');
+    });
+  }
+
+  test('leads with the queue, unresolved items, and a decision that says what it does', async ({ page }) => {
+    await openReviewerWorkspace(page);
+    await expect(page.locator('#reviewer-protocol-queue')).toBeVisible();
     await expect(page.locator('#reviewer-inbox')).toBeVisible();
-    await expect(page.locator('#reviewer-change-summary')).toBeVisible();
-    await expect(page.locator('#reviewer-impact')).toContainText('평가되지 않음');
-    await expect(page.locator('#reviewer-risk')).toContainText('평가되지 않음');
-    await expect(page.locator('#reviewer-history')).toBeVisible();
+
+    // Unresolved work and researcher checkpoints are the default view.
+    await expect(page.locator('#reviewer-attention')).toBeVisible();
+    await expect(page.locator('#reviewer-checkpoints')).toBeVisible();
+    await expect(page.locator('#reviewer-workspace')).toContainText(
+      '실험 중 연구자가 직접 확인하는 조건입니다',
+    );
+
+    // Source evidence, change detail and history stay behind disclosure.
+    await expect(page.locator('#reviewer-change-summary')).toBeHidden();
     await expect(page.locator('#reviewer-diff')).toBeHidden();
+    await page.locator('#reviewer-evidence-details').click();
+    await expect(page.locator('#reviewer-change-summary')).toBeVisible();
     await page.locator('#reviewer-technical-details').click();
     await expect(page.locator('#reviewer-diff')).toBeVisible();
-    await expect(page.locator('#reviewer-approve')).toBeVisible();
-    await expect(page.locator('#reviewer-approve')).toHaveText('승인');
-    await expect(page.locator('#reviewer-reject')).toBeVisible();
+    await expect(page.locator('#reviewer-history')).toBeVisible();
+
+    await expect(page.locator('#reviewer-approve')).toHaveText('연구자 사용 승인');
     await expect(page.locator('#reviewer-reject')).toHaveText('수정 요청');
-    await expect(page.locator('#reviewer-revoke')).toBeVisible();
-    await expect(page.locator('#reviewer-revoke')).toHaveText('향후 사용 중지');
+    await expect(page.locator('#reviewer-revoke')).toHaveText('사용 중지');
+    // A first-time reviewer must be told what the page is for and what
+    // approving actually releases, without opening any disclosure.
+    await expect(page.locator('#reviewer-workspace .workspace-purpose')).toContainText('연구자가 사용하기 전에');
+    await expect(page.locator('#reviewer-consequence-title')).toHaveText('승인하면 어떻게 되나요?');
+  });
+
+  test('renders a human checkpoint as informational and a true ambiguity as actionable', async ({ page }) => {
+    await openReviewerWorkspace(page);
+    await page.evaluate(() => {
+      renderProtocolReviewPacket({
+        title: 'In-gel digestion', revision_id: 'pdf-1-analysis-1', step_count: 25,
+        source: { filename: 'in-gel-digestion.pdf', page_count: 12 },
+        execution_readiness: {
+          state: 'needs_clarification', display_label: '원문 해석 확인 필요',
+          display_detail: '검토자가 원문의 의미를 확정해야 합니다.',
+          can_approve_for_execution: false, can_revoke_execution_approval: false,
+          blockers: [{ code: 'unresolved_ambiguity', display_label: '원문 해석 확인 필요', display_detail: '의도가 한 가지로 읽히지 않습니다.', reviewer_resolvable: true }],
+        },
+        human_checkpoints: [{
+          checkpoint_id: 'repeat-2-7', gate_step_label: '7', source_page_number: 5,
+          condition_source_text: 'Repeat steps 2-7 until the gel band is fully destained.',
+          repeated_step_labels: ['2', '3', '4', '5', '6', '7'], blocks_execution: false,
+        }],
+        needs_resolution: [{
+          issue_id: 'step-20-range', display_label: '원문 해석 확인 필요',
+          source_excerpt: 'repeat steps 1718 until fully dehydrated',
+          source_page_number: 8, step_label: '20', accepts_repeat_range: true,
+          selectable_steps: [{ step_id: 's17', source_label: '17' }, { step_id: 's18', source_label: '18' }],
+        }],
+        sections: [],
+      });
+    });
+
+    await expect(page.locator('#reviewer-checkpoints')).toContainText('연구자 확인');
+    await expect(page.locator('#reviewer-checkpoints')).toContainText('fully destained');
+    await expect(page.locator('#reviewer-attention')).toContainText('원문 해석 확인 필요');
+    await expect(page.locator('#reviewer-attention')).toContainText('p.8');
+    await expect(page.locator('#reviewer-approve')).toBeDisabled();
+    await expect(page.locator('#reviewer-action-guidance')).toContainText('확인이 필요한 항목');
+
+    await page.locator('#reviewer-attention button', { hasText: '해석 확인하기' }).click();
+    await expect(page.locator('#reviewer-resolution-form')).toBeVisible();
+    await expect(page.locator('#reviewer-resolution-excerpt')).toContainText('1718');
+    await expect(page.locator('#reviewer-resolution-range option')).toHaveCount(2);
+
+    await page.evaluate(() => {
+      renderProtocolReviewPacket({
+        title: 'In-gel digestion', revision_id: 'pdf-1-analysis-2', step_count: 25,
+        source: { filename: 'in-gel-digestion.pdf', page_count: 12 },
+        execution_readiness: {
+          state: 'ready_for_execution_approval', display_label: '실행 승인 가능',
+          display_detail: '실행을 막는 항목이 없습니다.',
+          can_approve_for_execution: true, can_revoke_execution_approval: false, blockers: [],
+        },
+        human_checkpoints: [], needs_resolution: [], sections: [],
+      });
+    });
+    await expect(page.locator('#reviewer-readiness')).toContainText('실행 승인 가능');
+    await expect(page.locator('#reviewer-approve')).toBeEnabled();
+    await expect(page.locator('#reviewer-attention')).toContainText('확인이 필요한 항목이 없습니다');
   });
 
   test('stages an allowed decision with explicit consequences and does not imply unknown risk', async ({ page }) => {
@@ -61,10 +174,10 @@ test.describe('Reviewer workspace', () => {
     await page.locator('#reviewer-comment').fill('Source and warning changes reviewed.');
     await page.locator('#reviewer-approve').click();
     await expect(page.locator('#reviewer-decision-confirmation')).toBeVisible();
-    await expect(page.locator('#reviewer-confirm-consequence')).toContainText('새 운영 실험');
+    await expect(page.locator('#reviewer-confirm-consequence')).toContainText('새 실험');
     await page.locator('#reviewer-decision-cancel').click();
     await expect(page.locator('#reviewer-decision-confirmation')).toBeHidden();
-    await expect(page.locator('#reviewer-status')).toContainText('프로토콜 상태는 변경되지 않았습니다');
+    await expect(page.locator('#reviewer-status')).toContainText('프로토콜은 그대로입니다');
   });
 
   test('the approve action is visually distinct from OCR acceptance so the two can never be confused', async ({ page }) => {
@@ -81,13 +194,15 @@ test.describe('Reviewer workspace', () => {
 
   test('source connector panels (protocols.io, Drive, GitHub) are present and read-only-labelled', async ({ page }) => {
     await openReviewerWorkspace(page);
+    // Import panels are available but no longer compete with the review work.
+    await expect(page.locator('#protocols-io-import')).toBeHidden();
+    await page.locator('#reviewer-workspace details.reviewer-source-group').first().click();
     await expect(page.locator('#protocols-io-import')).toBeVisible();
-    await expect(page.locator('#drive-sync')).toBeVisible();
-    await expect(page.locator('#github-import')).toBeVisible();
+    await expect(page.locator('#drive-sync')).toBeHidden();
     await expect(page.locator('#github-status')).toContainText('실행하지 않습니다');
   });
 
-  test('a short inbox stays compact beside a long readable decision record', async ({ page }) => {
+  test('a short queue leads into one aligned readable decision column', async ({ page }) => {
     await openReviewerWorkspace(page);
     await page.evaluate(() => {
       const inbox = document.querySelector('#reviewer-inbox');
@@ -126,6 +241,7 @@ test.describe('Reviewer workspace', () => {
         { length: 90 },
         (_, index) => `Line ${index + 1}: exact scientific change remains source-linked and readable.`,
       ).join('\n');
+      document.querySelector('#reviewer-evidence-details').open = true;
       document.querySelector('#reviewer-technical-details').open = true;
     });
 
@@ -141,6 +257,10 @@ test.describe('Reviewer workspace', () => {
         viewportWidth: window.innerWidth,
         inboxCardHeight: inboxCard.height,
         decisionCardHeight: decisionCard.height,
+        inboxCardWidth: inboxCard.width,
+        decisionCardWidth: decisionCard.width,
+        inboxCardBottom: inboxCard.bottom,
+        decisionCardTop: decisionCard.top,
         changeClientHeight: change.clientHeight,
         changeScrollHeight: change.scrollHeight,
         historyClientHeight: history.clientHeight,
@@ -151,8 +271,9 @@ test.describe('Reviewer workspace', () => {
         horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       };
     });
+    expect(Math.abs(layout.inboxCardWidth - layout.decisionCardWidth)).toBeLessThanOrEqual(1);
+    expect(layout.decisionCardTop).toBeGreaterThanOrEqual(layout.inboxCardBottom - 1);
     if (layout.viewportWidth > 980) {
-      expect(layout.inboxCardHeight + 100).toBeLessThan(layout.decisionCardHeight);
       expect(layout.changeScrollHeight).toBeGreaterThan(layout.changeClientHeight);
       expect(layout.historyScrollHeight).toBeGreaterThan(layout.historyClientHeight);
       expect(layout.hintDisplay).not.toBe('none');
