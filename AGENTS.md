@@ -48,6 +48,8 @@ source-linked protocol evidence.
 - `source_presentation.py`: the single boundary where approved source text
   becomes a Korean answer. Translation lives only here, is mechanically checked
   for preserved numbers/units/identifiers, and fails closed to the exact source.
+- `google_login.py`: interactive Google OIDC and invitation-controlled lab
+  membership. Scaffolded and contract-tested; not live-validated.
 - `web_visuals.py` / `external_references.py`: feature-gated current xAI/public
   research adapters and same-origin visual proxy.
 - `experiment_reports.py`: append-only workflow event ledger and exports.

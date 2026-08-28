@@ -412,6 +412,26 @@ workspace access requires a complete OIDC configuration. Client-supplied tenant
 IDs are never accepted as an ownership override. HTTP and WebSocket access share
 the same identity boundary.
 
+### Interactive Google sign-in — scaffolded, not live-validated
+
+`google_login.py` supplies the half the bearer-token boundary above does not
+cover: an interactive browser sign-in. It builds the authorization URL with
+`state`, `nonce` and PKCE `S256`, validates the callback server-side (state,
+expiry, nonce, issuer, audience, verified email, optional Workspace domain),
+exchanges the code with an injected transport, and describes an `HttpOnly`,
+`SameSite=Lax`, `Secure` session cookie carrying an opaque server session id —
+never a provider token, and never anything in `localStorage`.
+
+**No request in this repository has ever reached Google.** The transport and the
+ID-token verifier are both injected and the tests drive them with fakes, so this
+is contract-tested, not live-validated, and no HTTP route is wired up yet.
+
+Membership is invitation-controlled: signing in proves who someone is, it does
+not create or join a lab. A verified identity with no invitation gets
+`로그인은 확인됐지만 아직 참여 중인 연구실이 없습니다. 연구실 관리자에게 초대를
+요청해 주세요.` Roles reuse `identity.py`'s existing `researcher` / `reviewer` /
+`lab_admin` model rather than introducing a second authorization system.
+Required environment variables are listed in `.env.example`.
 
 ## Protocol Source Hub
 
