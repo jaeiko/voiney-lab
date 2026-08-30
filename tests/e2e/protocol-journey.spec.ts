@@ -107,6 +107,9 @@ test.describe('Reviewer → researcher protocol journey', () => {
     await expect(page.locator('#start')).toHaveText('실험 이어하기');
     await page.locator('#start').click();
     await expect(page.locator('#procedure-progress')).toContainText('현재 6/', { timeout: 30_000 });
+    await expect(page.locator('#switch-to-manual')).toBeVisible();
+    await page.locator('#switch-to-manual').click();
+    await expect(page.locator('#state')).toHaveText('수동 실행');
     await expect(page.locator('#complete-current-step')).toBeEnabled();
     await page.locator('#complete-current-step').click();
     await expect(page.locator('#human-checkpoint')).toBeVisible();
@@ -163,5 +166,33 @@ test.describe('Reviewer → researcher protocol journey', () => {
     expect(repeatEvent.payload.repeated_step_ids).toEqual(checkpoint.repeated_step_ids);
     expect(metEvent.payload.checkpoint_id).toBe(checkpoint.checkpoint_id);
     expect(timeline.session.current_step_label).toBe('8');
+
+    // A denied microphone must not tear down the accepted experiment. The
+    // researcher can start and advance the exact approved protocol through
+    // revision-fenced bench actions while voice remains unavailable.
+    await page.locator('#rail-new-session').click();
+    await expect(page.locator('#new-session-modal')).toBeVisible();
+    await page.locator('#modal-confirm-btn').click();
+    await page.evaluate(() => {
+      Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+        configurable: true,
+        value: async () => {
+          throw new DOMException('microphone permission denied', 'NotAllowedError');
+        },
+      });
+    });
+    await expect(page.locator('#start')).toBeEnabled();
+    await page.locator('#start').click();
+    await expect(page.locator('#state')).toHaveText('수동 실행', { timeout: 30_000 });
+    await expect(page.locator('#microphone-status')).toContainText('마이크를 사용할 수 없습니다');
+    await expect(page.locator('#procedure-progress')).toContainText('현재 1/');
+    await expect(page.locator('#manual-fallback-action')).toBeVisible();
+    await expect(page.locator('#manual-start-protocol')).toBeEnabled();
+    await page.locator('#manual-start-protocol').click();
+    await expect(page.locator('#manual-fallback-status')).toContainText('프로토콜 시작을 저장');
+    await expect(page.locator('#complete-current-step')).toBeEnabled();
+    await page.locator('#complete-current-step').click();
+    await expect(page.locator('#procedure-progress')).toContainText('현재 2/');
+    await expect(page.locator('#state')).toHaveText('수동 실행');
   });
 });

@@ -2,29 +2,32 @@
 
 ## P0 — controlled pilot readiness
 
-- Finish actual-browser upload/review/session/error recovery checks in CI.
-- Add OIDC/SSO, tenant-scoped RBAC, admin roles, CSRF policy, rate limits, and
-  centralized secret management; replace the shared admin token.
-- Define encryption, backup, retention, deletion, incident response, DPA, and
-  provider data-handling policy.
-- Add one production-grade ELN write-back connector with idempotency and human
-  review; keep the app out of the system-of-record role.
+- Run the first supervised, one-lab/one-low-risk-protocol field pilot against the
+  current actual-browser approval, execution, degraded-voice, and recovery gates.
+- Live-validate operational OIDC/SSO, the selected provider accounts, and the
+  deployment secret manager; development identity remains prohibited in
+  operational scope.
+- Approve deployment-specific encryption, durable-record deletion/legal-hold,
+  backup retention, incident response, DPA, and provider data-handling policy.
+- Live-validate the eLabFTW connector or use the existing reviewed CSV/export
+  fallback; keep the app out of the system-of-record role.
 - Run noisy-lab/accent evaluations with real target users and publish correction,
   task-completion, interruption, and latency distributions.
-- Establish protocol approval roles, revision diff/revocation, and audit export.
+- Perform a real stopped-process backup/restore drill on the pilot deployment.
 
 ## P1 — repeatable commercial product
 
-- Protocol review workspace with assigned reviewers, inline source diffs,
-  clarification resolution, and approval signatures.
-- Durable monitoring/export for route, tool, latency, onboarding funnel, provider
-  spend, correction, abandonment, and blocked-step metrics.
+- Add assigned reviewers/approval signatures to the current diff, clarification,
+  immutable decision, and withdrawal workspace.
+- Extend the current tenant KPI/event metrics with persistent multi-process
+  timing, onboarding funnel, provider spend, abandonment, and support export.
 - ELN/LIMS/instrument connector SDK and customer-specific data maps.
-- Organization/tenant isolation, regional deployment, SCIM, audit API, and support
-  tooling.
-- Offline/degraded mode and lab-device/headset qualification.
-- Accessibility/usability validation for gloves, PPE, mobility, vision, and noisy
-  environments.
+- Multi-lab membership selection, regional deployment, SCIM, audit API, and
+  privacy-safe support tooling on top of current single-workspace tenant RBAC.
+- Guided Lab Adaptation authoring, lab-owned terminology packs, and
+  lab-device/headset qualification.
+- Accessibility/usability field validation for gloves, PPE, mobility, vision,
+  and noisy environments; the current software P0 controls are not certification.
 
 ## P2 — advanced workflows
 

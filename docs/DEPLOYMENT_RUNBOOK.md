@@ -123,17 +123,22 @@ development identity.
 
 `runtime_metrics.py` records bounded, content-free route/tool/latency
 aggregates. The tenant admin analytics page and
-`GET /api/workspace/admin/pilot-metrics` add completed-workflow, failed-command,
-recovery-event, mutation-failure, user-action, and completion-rate counters.
-Durable session counts are lifetime values; voice/action/failure counters obey
-the configured analytics-retention window. Neither includes raw audio,
-transcripts, identities, free text, credential values, or model reasoning.
+`GET /api/workspace/admin/pilot-metrics` add voice/success, clarification,
+repeat, STT failure, blocked mutation, interruption, speaker ambiguity,
+completed-step/workflow, duration, manual fallback, observation/evidence,
+persistence failure, recovery/resume, and completion-rate counters. Durable
+session/event counts are lifetime values; voice/failure counters obey the
+configured analytics-retention window. Neither includes raw audio, transcripts,
+identities, free text, credential values, biometric voiceprints, or model
+reasoning.
 
 Monitor at minimum:
 
 - `/healthz` availability and `/readyz` non-200 responses;
-- increases in failed commands or mutation failures;
+- increases in STT/clarification/blocked-mutation/persistence-failure counts;
+- ignored versus confirmed barge-in and speaker ambiguity events;
 - recovery events and completion rate per controlled pilot window;
+- manual fallback usage and observation/evidence capture;
 - service restart frequency, disk capacity, and backup verification failures.
 
 On a mutation failure, leave the workflow at its last server-confirmed state,

@@ -29,6 +29,7 @@ from voice_workflow_agent.server import (
 )
 import voice_workflow_agent.server as server_module
 from voice_workflow_agent.identity import Principal, Role
+from voice_workflow_agent.source_presentation import TranslationSettings
 from voice_workflow_agent.workspace_store import (
     WorkspaceConflictError,
     WorkspaceSettings,
@@ -224,12 +225,13 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         )
 
         class Socket:
-            def __init__(self, start_payload):
+            def __init__(self, start_payload, controls=()):
                 self.sent = []
                 self.headers = {"x-voice-dev-profile": "researcher-a"}
                 self.query_params = {}
                 self.messages = iter((
                     {"text": json.dumps(start_payload)},
+                    *({"text": json.dumps(control)} for control in controls),
                     {"type": "websocket.disconnect", "code": 1000},
                 ))
 
@@ -308,7 +310,18 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "experiment_session_id": session_id,
                 "experiment_session_version": version,
             }
-            second = Socket(recovery)
+            second = Socket(recovery, controls=(
+                {
+                    "type": "workflow.start_protocol",
+                    "configuration_id": 2,
+                    "generation": 99,
+                },
+                {
+                    "type": "workflow.start_protocol",
+                    "configuration_id": 2,
+                    "generation": 3,
+                },
+            ))
             with patch.dict("os.environ", environment, clear=False), patch(
                 "voice_workflow_agent.server.server_config", return_value=config
             ), patch(
@@ -330,6 +343,32 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             )
             self.assertFalse(fixture_state["active"])
             self.assertEqual(fixture_state["workflow_status"], "ready")
+            start_results = [
+                item for item in second.sent
+                if item["type"] == "workflow.action.result"
+                and item["action"] == "start_protocol"
+            ]
+            self.assertEqual(
+                [item["state_mutation"] for item in start_results],
+                [False, True],
+                start_results,
+            )
+            started_state = next(
+                item["state"] for item in second.sent
+                if item["type"] == "protocol.fixture.state"
+                and item.get("action") == "start_protocol"
+                and item["state"]["active"]
+            )
+            self.assertEqual(started_state["current_step_label"], "1")
+            persisted_state = [
+                item["state"] for item in second.sent
+                if item["type"] == "experiment.session.state"
+            ][-1]
+            self.assertEqual(persisted_state["status"], "in_progress")
+            self.assertEqual(
+                persisted_state["version"],
+                recovered["experiment_session_version"] + 1,
+            )
 
     def test_candidate_a_session_starts_without_tenant_resource_binding(self) -> None:
         """Regression: bootstrap_development_fixture() never calls
@@ -700,6 +739,61 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         return ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
             None, None, placeholder, placeholder, placeholder,
+        )
+
+    def test_production_turn_emits_korean_preview_with_collapsed_exact_source(
+        self,
+    ) -> None:
+        curated = CuratedProtocolSession(
+            self.fixture,
+            translation_settings=TranslationSettings(enabled=True),
+        )
+        target = self.fixture.steps[1]
+        automatic = self.fixture.localized_fact(target.step_id, "current_step")
+        self.assertIsNotNone(automatic)
+        curated._localized_fact = lambda *_args, **_kwargs: None
+        curated.presentation_translator = lambda _source: automatic
+
+        listener = ListenerSession(curated_protocol_session=curated)
+        listener.start()
+        listener.accept_configuration(
+            1,
+            "cascade",
+            "ko",
+            "candidate-a-curated-development-v1",
+            self.fixture.revision_id,
+        )
+        curated.active = True
+        curated._workflow_status = "active"
+        curated.current_index = 0
+        socket = _ScriptedSocket([])
+        before = curated.execution_fingerprint(configuration_id=1)
+        self._run_curated_turn(
+            listener, socket, "다음 단계 알려줘", turn_id=1,
+        )
+
+        reply = next(
+            item for item in socket.sent
+            if item["type"] == "reply.complete" and item["turn_id"] == 1
+        )
+        decision = next(
+            item for item in socket.sent
+            if item["type"] == "turn.route_decision" and item["turn_id"] == 1
+        )
+        self.assertEqual(reply["translation_status"], "automatic_translation")
+        self.assertIn("자동 번역", reply["text"])
+        self.assertIn("다음 단계는 2단계입니다", reply["speech_text"])
+        self.assertNotIn(target.instruction_source_text, reply["speech_text"])
+        self.assertEqual(reply["source_texts"][0], target.instruction_source_text)
+        source_section = next(
+            section for section in reply["display_document"]["sections"]
+            if section["kind"] == "source"
+        )
+        self.assertEqual(source_section["heading"], "원문 보기")
+        self.assertEqual(source_section["text"], target.instruction_source_text)
+        self.assertFalse(decision["state_mutation"])
+        self.assertEqual(
+            curated.execution_fingerprint(configuration_id=1), before,
         )
 
     def test_reload_reselect_recovers_same_experiment_session_id(self) -> None:

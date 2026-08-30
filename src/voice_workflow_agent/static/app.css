@@ -68,12 +68,12 @@
     .rail-timer{font-size:.78rem;font-weight:800;color:var(--cyan);white-space:nowrap}
     .rail-safety{font-size:.76rem;font-weight:750;color:var(--amber);background:rgba(240,178,50,.12);border:1px solid rgba(240,178,50,.28);padding:.2rem .55rem;border-radius:var(--radius-pill);white-space:nowrap}
     .rail-right{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
-    .btn-rail-secondary{background:var(--surface-card);border:1px solid var(--border);color:var(--ink);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s}
+    .btn-rail-secondary{background:var(--surface-card);border:1px solid var(--border);color:var(--ink);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s;min-height:2.75rem}
     .btn-rail-secondary:hover{border-color:var(--blurple);background:var(--surface-onyx)}
-    .btn-rail-danger{background:rgba(250,119,124,.18);border:1px solid rgba(250,119,124,.4);color:var(--red);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s}
+    .btn-rail-danger{background:rgba(250,119,124,.18);border:1px solid rgba(250,119,124,.4);color:var(--red);padding:.35rem .75rem;border-radius:var(--radius-sm);font-size:.78rem;font-weight:750;cursor:pointer;transition:all .15s;min-height:2.75rem}
     .btn-rail-danger:hover:not(:disabled){background:var(--red);color:#000000}
     .btn-rail-danger:disabled{opacity:.35;cursor:not-allowed}
-    .btn-rail-ghost{background:transparent;border:1px solid var(--border);color:var(--muted);padding:.35rem .65rem;border-radius:var(--radius-sm);font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s}
+    .btn-rail-ghost{background:transparent;border:1px solid var(--border);color:var(--muted);padding:.35rem .65rem;border-radius:var(--radius-sm);font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s;min-height:2.75rem}
     .btn-rail-ghost:hover{color:var(--ink);border-color:var(--muted)}
 
     .safety-guidance-box{
@@ -529,7 +529,7 @@
     .workspace-row b{display:block;color:var(--ink)}
     .workspace-row small{color:var(--muted)}
     .workspace-actions{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.65rem}
-    .workspace-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .75rem;font-weight:800;cursor:pointer}
+    .workspace-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .75rem;font-weight:800;cursor:pointer;min-height:2.75rem}
     .admin-connector-overview,.admin-connector-setup,.admin-boundary-card{grid-column:1/-1}
     .admin-attention{
       margin:0 0 var(--section-gap);padding:.8rem 1rem;
@@ -664,6 +664,11 @@
     @keyframes pulseGlow{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.78;transform:scale(0.995)}}
     .turn .filler-status{
       grid-column:2;
+      align-self:start;
+      justify-self:start;
+      width:fit-content;
+      max-width:100%;
+      height:fit-content;
       display:inline-flex;
       align-items:center;
       gap:.45rem;
@@ -775,7 +780,7 @@
     .human-checkpoint-actions button{
       padding:.5rem .95rem;border-radius:var(--radius-sm);font-size:.82rem;
       font-weight:750;cursor:pointer;border:1px solid var(--border);
-      background:var(--surface-card);color:var(--ink);
+      background:var(--surface-card);color:var(--ink);min-height:2.75rem;
     }
     .human-checkpoint-actions button[disabled]{opacity:.5;cursor:not-allowed}
     .btn-checkpoint-confirm{background:rgba(59,165,93,.85)!important;border-color:rgba(59,165,93,.9)!important}
@@ -1086,7 +1091,7 @@
       .experiment-context-actions{grid-column:1}
       .protocol-register{grid-template-columns:1fr}
       .turn{grid-template-columns:1fr}
-      .turn .turn-status,.turn .tools,.turn .server-operation,.turn .stats,.turn .error,.turn .filler-status,.turn .replay-status,.turn .turn-visual,.turn-diagnostics{grid-column:1}
+      .turn .turn-status,.turn .tools,.turn .server-operation,.turn .stats,.turn .error,.turn .filler-status,.turn .playback-outcome,.turn .replay-status,.turn .turn-visual,.turn-diagnostics{grid-column:1}
       .turn .label{margin-top:.35rem}
       .step-visual img{max-height:18rem}
       .btn-rail-secondary,.btn-rail-danger,.btn-rail-ghost{min-height:2.75rem;padding:.6rem 1rem;font-size:.85rem}
@@ -1135,6 +1140,12 @@
 /* Playback outcome sits directly under 처리 결과 and must read as a separate,
    lesser fact: audio stopped, the recorded result did not change. */
 .playback-outcome {
+  grid-column: 2;
+  align-self: start;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  height: fit-content;
   margin-top: .2rem;
   font-size: .8rem;
   line-height: 1.4;

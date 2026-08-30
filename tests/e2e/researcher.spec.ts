@@ -218,6 +218,91 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(completion.locator('.saved')).toHaveText('실험 기록 저장됨');
   });
 
+  test('Korean next-step presentation keeps the exact English source collapsed', async ({ page }) => {
+    await benchReady(page);
+    await page.evaluate(() => {
+      const card = turnNode(22, sessionGeneration);
+      card.querySelector('.transcript').textContent = '다음 단계 알려줘';
+      card.querySelector('.understood').textContent = '다음 단계 미리 보기';
+      card.querySelector('.saved').textContent = '상태 변경 없음';
+      renderStructuredReply(card, {
+        type: 'reply.complete',
+        translation_status: 'automatic_translation',
+        primary_text: '세척 용액 두 가지를 준비합니다. Solution A는 25 mM AMBIC입니다.',
+        source_texts: ['Prepare two wash solutions. Solution A is 25 mM AMBIC.'],
+        display_document: {
+          title: '다음 2단계',
+          sections: [
+            { kind: 'lead', heading: '', text: '다음 단계는 2단계입니다.' },
+            {
+              kind: 'section', heading: '답변 · 자동 번역',
+              text: '세척 용액 두 가지를 준비합니다. Solution A는 25 mM AMBIC입니다.',
+            },
+            {
+              kind: 'source', heading: '원문 보기',
+              text: 'Prepare two wash solutions. Solution A is 25 mM AMBIC.',
+            },
+            {
+              kind: 'section', heading: '상태 확인',
+              text: '현재 단계는 1단계이며 실험 상태는 변경하지 않았습니다.',
+            },
+          ],
+        },
+      });
+    });
+
+    const turn = page.locator('.turn', { hasText: '요청 22' });
+    await expect(turn).toContainText('답변 · 자동 번역');
+    await expect(turn).toContainText('세척 용액 두 가지를 준비합니다');
+    await expect(turn.locator('.saved')).toHaveText('상태 변경 없음');
+    const original = turn.locator('details.reference-details', { hasText: '원문 보기' });
+    await expect(original).not.toHaveAttribute('open', '');
+    await expect(original.locator('summary')).toHaveText('원문 보기');
+    await expect(original.locator('.evidence-detail-body')).toBeHidden();
+  });
+
+  test('long-answer barge-in outcomes keep voice status rows compact', async ({ page }) => {
+    await benchReady(page);
+    await page.evaluate(() => {
+      const turnId = 23;
+      const card = turnNode(turnId, sessionGeneration);
+      card.querySelector('.transcript').textContent = '다음 단계 알려줘';
+      card.querySelector('.understood').textContent = '다음 단계 미리 보기';
+      card.querySelector('.saved').textContent = '상태 변경 없음';
+      card.querySelector('.reply').textContent = Array.from(
+        { length: 18 },
+        (_, index) => `자동 번역된 다음 단계 안내 ${index + 1}: 25 mM 조건을 원문과 함께 확인합니다.`,
+      ).join(' ');
+      const filler = card.querySelector('.filler-status');
+      filler.textContent = '음성 안내 · 재생됨';
+      filler.hidden = false;
+      applyPlaybackOutcome(turnId, sessionGeneration, 'interrupted_by_user');
+    });
+
+    const turn = page.locator('.turn', { hasText: '요청 23' });
+    const filler = turn.locator('.filler-status');
+    const playback = turn.locator('.playback-outcome');
+    await expect(filler).toHaveText('음성 안내 · 재생됨');
+    await expect(playback).toContainText('답변 재생만 중단됨');
+
+    const layout = await turn.evaluate((node) => {
+      const reply = node.querySelector('.reply').getBoundingClientRect();
+      const fillerStatus = node.querySelector('.filler-status').getBoundingClientRect();
+      const playbackStatus = node.querySelector('.playback-outcome').getBoundingClientRect();
+      return {
+        replyHeight: reply.height,
+        fillerHeight: fillerStatus.height,
+        playbackHeight: playbackStatus.height,
+        horizontalOverflow: node.scrollWidth - node.clientWidth,
+      };
+    });
+    expect(layout.replyHeight).toBeGreaterThan(80);
+    expect(layout.fillerHeight).toBeLessThan(layout.replyHeight / 2);
+    expect(layout.fillerHeight).toBeLessThanOrEqual(56);
+    expect(layout.playbackHeight).toBeLessThanOrEqual(56);
+    expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
+  });
+
   test('a human checkpoint is shown as bench work with two explicit answers', async ({ page }) => {
     await benchReady(page);
     await expect(page.locator('#human-checkpoint')).toBeHidden();
@@ -352,6 +437,40 @@ test.describe('Researcher / Bench workspace', () => {
     expect(await timeline.innerText()).not.toContain('SAVED');
   });
 
+  test('supports reduced motion, visible keyboard focus, modal focus return, and assistive announcements', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    const motion = await page.locator('.pulse').evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { animation: style.animationDuration, transition: style.transitionDuration };
+    });
+    expect(parseFloat(motion.animation)).toBeLessThanOrEqual(0.00001);
+    expect(parseFloat(motion.transition)).toBeLessThanOrEqual(0.00001);
+
+    const newSession = page.locator('#rail-new-session');
+    await newSession.focus();
+    const focus = await newSession.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { style: style.outlineStyle, width: style.outlineWidth };
+    });
+    expect(focus.style).not.toBe('none');
+    expect(parseFloat(focus.width)).toBeGreaterThanOrEqual(2);
+
+    await page.evaluate(() => { sessionActive = true; });
+    await newSession.click();
+    await expect(page.locator('#new-session-modal')).toBeVisible();
+    await expect(page.locator('#modal-cancel-btn')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#new-session-modal')).toBeHidden();
+    await expect(newSession).toBeFocused();
+
+    const announcer = page.locator('#screen-reader-announcer');
+    await page.evaluate(() => announceMilestone('상태 변경이 차단되었습니다.'));
+    await expect(announcer).toHaveText('상태 변경이 차단되었습니다.');
+    await page.evaluate(() => announceMilestone('현재 단계 완료를 저장했습니다.'));
+    await expect(announcer).toHaveText('현재 단계 완료를 저장했습니다.');
+  });
+
   test('stays within the viewport at a narrow tablet width', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 1024 });
     await page.goto('/');
@@ -368,5 +487,23 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(start).toBeVisible();
     const box = await start.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(32);
+
+    await page.evaluate(() => {
+      const card = turnNode(24, sessionGeneration);
+      card.querySelector('.reply').textContent = '긴 다음 단계 안내 '.repeat(120);
+      const filler = card.querySelector('.filler-status');
+      filler.textContent = '음성 안내 · 재생됨';
+      filler.hidden = false;
+      applyPlaybackOutcome(24, sessionGeneration, 'interrupted_by_user');
+    });
+    const statusTurn = page.locator('.turn', { hasText: '요청 24' });
+    const statusLayout = await statusTurn.evaluate((node) => ({
+      filler: node.querySelector('.filler-status').getBoundingClientRect().height,
+      playback: node.querySelector('.playback-outcome').getBoundingClientRect().height,
+      overflow: node.scrollWidth - node.clientWidth,
+    }));
+    expect(statusLayout.filler).toBeLessThanOrEqual(56);
+    expect(statusLayout.playback).toBeLessThanOrEqual(56);
+    expect(statusLayout.overflow).toBeLessThanOrEqual(1);
   });
 });

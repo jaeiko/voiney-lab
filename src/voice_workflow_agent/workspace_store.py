@@ -4147,6 +4147,35 @@ class WorkspaceStore:
             GROUP BY category,metric_name ORDER BY category,metric_name""",
             (principal.organization_id,),
         ).fetchall()
+        duration_row = self._connection.execute(
+            """SELECT COUNT(*) AS samples,
+            AVG((julianday(ended_at)-julianday(started_at))*86400.0) AS average,
+            MAX((julianday(ended_at)-julianday(started_at))*86400.0) AS maximum
+            FROM experiment_sessions WHERE organization_id=?
+            AND status='completed' AND ended_at IS NOT NULL""",
+            (principal.organization_id,),
+        ).fetchone()
+        manual_observation_row = self._connection.execute(
+            """SELECT COUNT(*) AS total FROM experiment_observations
+            WHERE organization_id=? AND capture_source='manual'""",
+            (principal.organization_id,),
+        ).fetchone()
+        evidence_row = self._connection.execute(
+            """SELECT COUNT(*) AS total FROM experiment_evidence
+            WHERE organization_id=?""",
+            (principal.organization_id,),
+        ).fetchone()
+        manual_workflow_row = self._connection.execute(
+            """SELECT COUNT(*) AS total FROM experiment_session_events
+            WHERE organization_id=? AND (
+              (event_type IN ('protocol_started','step_completed')
+               AND json_extract(payload_json,'$.capture_source')='manual')
+              OR (event_type IN ('session_paused','session_resumed','session_stopped')
+                  AND json_extract(payload_json,'$.reason') IN
+                      ('bench_control','explicit_session_stop'))
+            )""",
+            (principal.organization_id,),
+        ).fetchone()
         event_counts = {row["event_type"]: int(row["total"]) for row in event_rows}
         analytics = {
             (row["category"], row["metric_name"]): row
@@ -4175,16 +4204,69 @@ class WorkspaceStore:
         )
         total_sessions = int(session_row["total"] or 0)
         completed = int(session_row["completed"] or 0)
+        voice_turns = samples("voice", "voice_turn")
+        successful_turns = samples("voice", "successful_turn")
+        manual_fallback_actions = (
+            int(manual_observation_row["total"] or 0)
+            + int(evidence_row["total"] or 0)
+            + int(manual_workflow_row["total"] or 0)
+        )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "voice_turns": voice_turns,
+            "successful_voice_turns": successful_turns,
+            "voice_turn_success_rate": (
+                round(successful_turns / voice_turns, 4) if voice_turns else None
+            ),
+            "clarification_requests": samples("voice", "clarification_request"),
+            "repeat_requests": samples("voice", "repeat_request"),
+            "repeated_utterances": samples("voice", "repeated_utterance"),
+            "stt_failures": samples("voice", "stt_failure"),
+            "ambiguous_state_changing_commands": samples(
+                "workflow", "ambiguous_mutation_command"
+            ),
+            "blocked_mutation_attempts": samples(
+                "workflow", "blocked_mutation"
+            ),
+            "ignored_barge_in_candidates": samples(
+                "voice", "barge_in_ignored"
+            ),
+            "confirmed_barge_ins": samples("voice", "barge_in_confirmed"),
+            "playback_only_interruptions": samples(
+                "voice", "playback_interruption"
+            ),
+            "unknown_speaker_mutation_rejections": samples(
+                "voice", "unknown_speaker_mutation_rejection"
+            ),
+            "overlapping_speaker_ambiguity_events": samples(
+                "voice", "overlapping_speaker_ambiguity"
+            ),
+            "completed_workflow_steps": event_counts.get("step_completed", 0),
             "completed_workflows": completed,
             "failed_commands": samples("voice", "command_failure"),
             "recovery_events": event_counts.get("session_recovered", 0),
+            "resume_events": event_counts.get("session_resumed", 0),
             "mutation_failures": samples("workflow", "mutation_failure"),
+            "persistence_failures": samples("workflow", "mutation_failure"),
             "user_actions": samples("workflow", "turn"),
+            "manual_fallback_actions": manual_fallback_actions,
+            "observation_captures": event_counts.get("observation_recorded", 0),
+            "evidence_captures": event_counts.get("evidence_attached", 0),
             "workflow_completion_rate": (
                 round(completed / total_sessions, 4) if total_sessions else None
             ),
+            "completed_session_duration_seconds": {
+                "samples": int(duration_row["samples"] or 0),
+                "average": (
+                    round(float(duration_row["average"]), 2)
+                    if duration_row["average"] is not None else None
+                ),
+                "maximum": (
+                    round(float(duration_row["maximum"]), 2)
+                    if duration_row["maximum"] is not None else None
+                ),
+                "definition": "wall_clock_started_to_completed",
+            },
             "details": {
                 "experiment_sessions": total_sessions,
                 "durable_actions_by_type": event_counts,
@@ -4204,6 +4286,7 @@ class WorkspaceStore:
                 "transcripts": False,
                 "identifiers": False,
                 "free_text": False,
+                "biometric_voiceprints": False,
             },
         }
 

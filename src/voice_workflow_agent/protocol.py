@@ -96,6 +96,25 @@ def parse_control(raw: str) -> dict[str, Any]:
             "configuration_id": message.get("configuration_id"),
             "generation": message.get("generation"),
         }
+    if message["type"] == "workflow.start_protocol":
+        configuration_id = message.get("configuration_id")
+        generation = message.get("generation")
+        if (
+            not isinstance(configuration_id, int)
+            or isinstance(configuration_id, bool)
+            or configuration_id <= 0
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 0
+        ):
+            raise ProtocolError(
+                "workflow.start_protocol needs the accepted session identity"
+            )
+        return {
+            "type": "workflow.start_protocol",
+            "configuration_id": configuration_id,
+            "generation": generation,
+        }
     if message["type"] == "workflow.complete_current_step":
         step_id = message.get("step_id")
         configuration_id = message.get("configuration_id")

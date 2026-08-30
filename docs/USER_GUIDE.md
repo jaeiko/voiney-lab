@@ -1,6 +1,6 @@
 # User Guide — Controlled Pilot
 
-Date: 2026-08-24
+Date: 2026-08-30
 
 This guide covers the researcher, reviewer, and laboratory administrator
 workspaces. It does not replace a laboratory SOP, safety training, or emergency
@@ -44,6 +44,22 @@ If recognition is empty, non-speech, language-inconsistent, or ambiguous, the
 system keeps the current step and asks for another request. Check the current
 step before retrying any state-changing command.
 
+### Continue safely without voice
+
+If microphone permission is denied or the audio device cannot start after the
+server accepts the experiment, the state reads **수동 실행**. The configured
+experiment is not discarded. Verify the exact protocol version and approved
+current step on screen. For a new ready experiment, use **프로토콜 시작**; then
+use current-step completion, pause, stop, observation, and evidence controls.
+After repeated STT failure, excessive noise, or unavailable TTS, press **음성
+없이 계속** to choose the same manual path. Completion still goes through the
+server's exact step/generation and persistence gates.
+
+The app does not queue mutations while the network/server is unavailable. If
+the approved step/source is no longer visible, stop using the agent, continue
+from the facility-approved source protocol, and recover the saved session only
+after the service is healthy.
+
 ### Record observations and evidence
 
 - Add a voice or manual observation to the current step. It is labeled
@@ -78,6 +94,14 @@ step before retrying any state-changing command.
 5. For OCR material, remember that accepting extracted page text is not protocol
    approval. Structured review and approval remain separate.
 
+The reviewer is responsible for checking source ambiguity, represented
+structure, changed steps, material/concentration/time/equipment changes,
+warnings, source-defined human checkpoints, and whether the exact represented
+revision is fit for execution. This role does not make the reviewer an
+experiment safety guarantor, regulatory certifier, or autonomous scientific
+authority; facility governance and the researcher at a physical checkpoint
+retain those responsibilities.
+
 ### Decide
 
 - **Approve** makes the exact revision available according to its operational
@@ -85,6 +109,11 @@ step before retrying any state-changing command.
 - **Request revision** rejects this immutable revision and requires a new one.
 - **Disable future use** revokes the revision for new sessions while preserving
   existing experiment history.
+
+These differ from OCR/source acceptance: OCR acceptance confirms only that the
+extracted pages may enter later analysis. Execution approval authorizes one
+exact revision. Disable future use/withdrawal blocks new sessions without
+rewriting past experiments.
 
 Select only an action offered by the server, enter a meaningful comment, review
 the consequence panel, and confirm once. If another reviewer acted first, the
@@ -126,8 +155,10 @@ checked.
 
 ### Monitor a pilot
 
-- Review completed workflows, failed commands, recovery events, state-change
-  failures, user actions, and completion rate.
+- Review voice/success turns, clarification/repeat/STT failures, interruption
+  outcomes, blocked mutations, completed steps/workflows, duration, manual
+  fallback actions, observation/evidence capture, persistence failures,
+  recovery/resume events, and completion rate.
 - Record the analytics-retention duration with every metric snapshot. Durable
   session counts and retention-bounded action/failure counts have different
   windows.

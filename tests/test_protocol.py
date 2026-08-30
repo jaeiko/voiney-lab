@@ -52,6 +52,16 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             parse_control(json.dumps({
+                "type":"workflow.start_protocol",
+                "configuration_id":3,"generation":2,
+            })),
+            {
+                "type":"workflow.start_protocol",
+                "configuration_id":3,"generation":2,
+            },
+        )
+        self.assertEqual(
+            parse_control(json.dumps({
                 "type":"workflow.complete_current_step",
                 "step_id":"step-6","configuration_id":3,"generation":2,
             })),
@@ -74,6 +84,9 @@ class ProtocolTests(unittest.TestCase):
              "configuration_id":3},
             {"type":"workflow.complete_current_step","step_id":"",
              "configuration_id":3,"generation":2},
+            {"type":"workflow.start_protocol","configuration_id":3},
+            {"type":"workflow.start_protocol","configuration_id":3,
+             "generation":-1},
         ):
             with self.assertRaises(ProtocolError):
                 parse_control(json.dumps(payload))

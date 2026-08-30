@@ -1006,7 +1006,7 @@ def test_reviewer_diff_approval_analytics_and_cross_tenant_idor(monkeypatch, tmp
     )
     assert analytics.status_code == 200
     assert analytics.json()["metrics"][0]["metric_name"] == "review_decision"
-    assert analytics.json()["pilot_metrics"]["schema_version"] == 1
+    assert analytics.json()["pilot_metrics"]["schema_version"] == 2
     pilot = asyncio.run(
         _request("GET", "/api/workspace/admin/pilot-metrics", profile="admin-a")
     )
