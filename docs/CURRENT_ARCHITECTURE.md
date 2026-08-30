@@ -39,6 +39,7 @@ canonical browser events          append-only session/report events
 |---|---|---|
 | Request classification | `intent_arbitration.py` (`RequestArbitration`) | All learning, audit, history, uncertainty, combined, visual, current-step, and state-control requests share this boundary |
 | Runtime routing | `runtime_routing.py` | Selects the curated protocol/read-only path; it does not mutate state |
+| Semantic intent fallback | `semantic_intent.py` plus `runtime_routing.py` | Optional, disabled by default; proposes one existing bounded action when deterministic routing returns a catch-all, and never mutates state - server policy re-validates every proposal and downgrades a completion proposal to an explicit researcher confirmation |
 | Protocol execution | `curated_protocol.py` | Owns current step, explicit start, completion confirmation, pause/resume, timers, and protocol-derived guidance |
 | Durable experiment | `workspace_store.py` | Tenant-owned `ExperimentSession`, optimistic version, lifecycle, observations, evidence metadata, recovery, and append-only timeline |
 | Protocol lifecycle | `protocol_catalog.py` plus `experiment_protocol*` | Immutable PDF/source identity, extraction/analysis/OCR lifecycle, readiness, approval, and revocation |

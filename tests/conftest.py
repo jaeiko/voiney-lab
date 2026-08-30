@@ -30,6 +30,7 @@ MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
     "test_protocol_catalog.py",
     "test_runtime_intent_routing.py",
     "test_safety_pack.py",
+    "test_semantic_intent_fallback.py",
     "test_stability_and_semantic_hardening.py",
     "test_transcript_admission.py",
 }

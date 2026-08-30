@@ -32,6 +32,9 @@ source-linked protocol evidence.
   protocol APIs, external visual jobs, admin boundary.
 - `intent_arbitration.py`: shared deterministic request classifier.
 - `runtime_routing.py`: production curated-protocol routing boundary.
+- `semantic_intent.py`: bounded read-only semantic intent fallback vocabulary
+  and server-owned proposal policy; it holds no mutation authority and is
+  consulted only when deterministic routing returns a catch-all.
 - `curated_protocol.py`: source-bounded plan and checkpoint state machine.
 - `protocol_catalog.py`: immutable PDF/catalog lifecycle and source-linked review.
 - `experiment_protocol*.py`: structured analysis model, validation, readiness,

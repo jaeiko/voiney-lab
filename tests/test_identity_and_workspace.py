@@ -386,6 +386,29 @@ def test_privacy_safe_analytics_are_tenant_scoped_and_reject_free_text(workspace
         )
 
 
+def test_semantic_fallback_metric_uses_the_workspace_privacy_contract(workspace):
+    admin = _principal("semantic-admin", "tenant-a", Role.LAB_ADMIN)
+    workspace.bootstrap_principal(admin)
+    workspace.record_analytics(
+        admin,
+        category="agent",
+        metric_name="semantic_intent_fallback",
+        dimensions={
+            "route": "semantic_intent_fallback",
+            "status": "accepted",
+            "reason_code": "semantic_timer_status",
+            "intent": "timer_status",
+            "event_kind": "timer_status",
+        },
+    )
+    summary = workspace.analytics_summary(admin)
+    metric = next(
+        item for item in summary["metrics"]
+        if item["metric_name"] == "semantic_intent_fallback"
+    )
+    assert metric["samples"] == 1
+
+
 def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(workspace):
     admin = _principal("pilot-admin", "tenant-a", Role.LAB_ADMIN)
     outsider = _principal("other-admin", "tenant-b", Role.LAB_ADMIN)

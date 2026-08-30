@@ -40,6 +40,16 @@ from voice_workflow_agent.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
 )
+from voice_workflow_agent.semantic_intent import (
+    SemanticIntent,
+    SemanticIntentContext,
+    SemanticIntentDecision,
+    SemanticIntentProposal,
+    SemanticIntentSettings,
+    evaluate_semantic_proposal,
+    normalize_semantic_utterance,
+    semantic_fallback_reason,
+)
 
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
@@ -3250,6 +3260,101 @@ def curated_intent_from_arbitration(
     return None
 
 
+#: The complete allowlist of curated actions a semantic proposal may reach.
+#: A meaning absent from this table cannot be projected at all, so the resolver
+#: can never introduce a workflow action.  Read-only meanings map to the
+#: existing read-only actions; bounded control maps to the existing bounded
+#: control action; ``COMPLETE_CURRENT_STEP`` deliberately maps to the explicit
+#: completion confirmation rather than to a transition, so the semantic path
+#: holds no mutation authority of its own.  ``STOP`` has no entry on purpose.
+_SEMANTIC_INTENT_PROJECTION: dict[SemanticIntent, dict[str, Any]] = {
+    SemanticIntent.CURRENT_STEP: {
+        "intent_kind": "semantic_current_step",
+        "action": CuratedProtocolAction.CURRENT,
+        "target_step": "authoritative_current_step",
+    },
+    SemanticIntent.NEXT_STEP_INFORMATION: {
+        "intent_kind": "semantic_next_step_information",
+        "action": CuratedProtocolAction.NEXT_INFORMATION,
+        "requested_followup": "describe_next_step_without_transition",
+        "target_step": "authoritative_current_step",
+    },
+    SemanticIntent.REPEAT: {
+        "intent_kind": "semantic_repeat",
+        "action": CuratedProtocolAction.REPEAT,
+        "target_step": "authoritative_current_step",
+    },
+    SemanticIntent.TIMER_STATUS: {
+        "intent_kind": "semantic_step_timer_status",
+        "action": CuratedProtocolAction.TIMER_STATUS,
+    },
+    SemanticIntent.TIMER_INFORMATION: {
+        "intent_kind": "semantic_step_timer_information",
+        "action": CuratedProtocolAction.TIMER_STATUS,
+    },
+    SemanticIntent.START_TIMER: {
+        "intent_kind": "semantic_start_step_timer",
+        "action": CuratedProtocolAction.START_TIMER,
+    },
+    SemanticIntent.PAUSE: {
+        "intent_kind": "semantic_pause_workflow",
+        "action": CuratedProtocolAction.PAUSE,
+    },
+    SemanticIntent.RESUME: {
+        "intent_kind": "semantic_resume_workflow",
+        "action": CuratedProtocolAction.RESUME,
+        "allows_state_mutation": True,
+    },
+    SemanticIntent.NOT_DONE: {
+        "intent_kind": "semantic_not_done",
+        "action": CuratedProtocolAction.DECLINE_COMPLETION,
+        "target_step": "authoritative_current_step",
+    },
+    SemanticIntent.RELATED_QUESTION: {
+        "intent_kind": "semantic_related_question",
+        "action": CuratedProtocolAction.RELATED_QUESTION,
+        "target_step": "authoritative_current_step",
+        "question_kind": "related_knowledge",
+    },
+    SemanticIntent.COMPLETE_CURRENT_STEP: {
+        "intent_kind": "semantic_completion_confirmation_required",
+        "action": CuratedProtocolAction.CLARIFY_COMPLETION,
+        "requested_transition": "next",
+        "requested_followup": "confirm_current_step_completion",
+        "target_step": "authoritative_current_step",
+        "requires_confirmation": True,
+        "allows_state_mutation": False,
+    },
+}
+
+
+def curated_intent_from_semantic_decision(
+    decision: SemanticIntentDecision,
+    *,
+    language: str,
+    normalized_transcript: str,
+) -> CuratedControlIntent | None:
+    """Project one *accepted* semantic proposal into the curated contract.
+
+    A refused decision, or an accepted one whose meaning has no entry in
+    ``_SEMANTIC_INTENT_PROJECTION``, returns ``None`` so the deterministic
+    outcome stands unchanged.
+    """
+
+    if not decision.accepted or decision.intent is None:
+        return None
+    projection = _SEMANTIC_INTENT_PROJECTION.get(decision.intent)
+    if projection is None:
+        return None
+    return CuratedControlIntent(
+        language=language,
+        normalized_transcript=normalized_transcript,
+        confidence=decision.confidence,
+        confidence_source="semantic_intent_fallback",
+        **projection,
+    )
+
+
 _WORKFLOW_COMMANDS = {
     "시작": CuratedProtocolAction.START,
     "시작해": CuratedProtocolAction.START,
@@ -4047,6 +4152,7 @@ class CuratedProtocolSession:
         self._pending_observation_confirmation: PendingObservationConfirmation | None = None
         self._pending_transcript_confirmation: PendingTranscriptConfirmation | None = None
         self._workflow_status: str = "preview"
+        self._last_semantic_decision: SemanticIntentDecision | None = None
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
@@ -4081,6 +4187,18 @@ class CuratedProtocolSession:
         if not self.active:
             return self._workflow_status or "preview"
         return self._workflow_status or "active"
+
+    @property
+    def awaiting_server_confirmation(self) -> bool:
+        """True while a server-owned gate already owns this turn's meaning."""
+
+        return any((
+            self._pending_completion_confirmation is not None,
+            self._pending_observation_confirmation is not None,
+            self._pending_transcript_confirmation is not None,
+            bool(self._pending_note_capture),
+            bool(self._pending_anomaly),
+        ))
 
     def start_timer(self, step_index: int | None = None, now: float | None = None) -> tuple[bool, int, str]:
         idx = self.current_index if step_index is None else step_index
@@ -5151,6 +5269,146 @@ class CuratedProtocolSession:
     def configure_ready(self) -> None:
         self.reset()
 
+    def deterministic_control_intent(
+        self,
+        transcript: str,
+        *,
+        language: str,
+        arbitration: RequestArbitration | None = None,
+    ) -> CuratedControlIntent:
+        """Read-only preview of the classification ``plan`` will use this turn.
+
+        ``plan`` calls this too, so the semantic fallback probe can never drift
+        away from the routing decision it is deciding about.  Nothing here
+        touches session state.
+        """
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps)
+            else None
+        )
+        discourse = (
+            self._discourse_context
+            if step is not None
+            and self._discourse_context.step_id == step.step_id
+            and self._discourse_context.workflow_revision == self._revision
+            else None
+        )
+        shared_decision = arbitration or arbitrate_request(transcript)
+        return curated_intent_from_arbitration(
+            shared_decision,
+            language=language,
+        ) or classify_curated_control_intent(
+            transcript,
+            language=language,
+            entity_inventory=self._entity_inventory(),
+            recent_related_query=self._last_related_query,
+            recent_related_entities=self._last_related_entities,
+            discourse_context=discourse,
+            completion_context=self.active,
+            current_step=self.current_index + 1,
+            max_steps=len(self.fixture.steps),
+        )
+
+    def semantic_intent_context(
+        self,
+        transcript: str,
+        *,
+        language: str,
+        deterministic_reason: str,
+        now: float | None = None,
+    ) -> SemanticIntentContext:
+        """Build the server-owned context one semantic proposal may reason over.
+
+        Only workflow milestones travel here - never protocol prose, quantities,
+        or safety text - so a proposal can never be grounded in fabricated
+        scientific content.
+        """
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps)
+            else None
+        )
+        timer = self.timer_status(now=now)
+        timer_state = str(timer.get("state") or "unavailable")
+        duration = int(timer.get("duration_seconds") or 0)
+        remaining = timer.get("remaining_seconds")
+        capsule_pending = None
+        if not self.active:
+            capsule_pending = "greeting_pending"
+        elif self._pending_completion_confirmation is not None:
+            capsule_pending = "completion_gate"
+        elif self._pending_observation_confirmation is not None:
+            capsule_pending = "observation_gate"
+        elif self._pending_transcript_confirmation is not None:
+            capsule_pending = "transcript_gate"
+        elif self._pending_note_capture:
+            capsule_pending = "observation_note"
+        return SemanticIntentContext(
+            utterance=normalize_semantic_utterance(transcript),
+            normalized_utterance=_utterance_key(transcript),
+            language=language,
+            session_phase=self.workflow_status,
+            workflow_active=bool(self.active),
+            current_step_label=step.source_label if step is not None else None,
+            step_timer_state=timer_state,
+            step_timer_configured=duration > 0,
+            step_timer_remaining_seconds=(
+                int(remaining) if isinstance(remaining, (int, float)) else None
+            ),
+            pending_interaction=capsule_pending,
+            deterministic_reason=deterministic_reason,
+        )
+
+    @property
+    def last_semantic_decision(self) -> SemanticIntentDecision | None:
+        """The most recent semantic policy ruling, for turn telemetry only."""
+
+        return self._last_semantic_decision
+
+    def _apply_semantic_intent_fallback(
+        self,
+        intent: CuratedControlIntent,
+        proposal: SemanticIntentProposal | None,
+        *,
+        transcript: str,
+        language: str,
+        arbitration_intent: str | None,
+        settings: SemanticIntentSettings,
+    ) -> CuratedControlIntent:
+        """Validate one proposal against server context and project it, or not.
+
+        The eligibility gate is re-evaluated here rather than trusted from the
+        caller: a proposal that arrives for an utterance the deterministic path
+        actually resolved is discarded, not applied.
+        """
+
+        if proposal is None:
+            return intent
+        reason = semantic_fallback_reason(
+            deterministic_action=intent.action.value,
+            deterministic_intent_kind=intent.intent_kind,
+            arbitration_intent=arbitration_intent,
+        )
+        if reason is None:
+            self._last_semantic_decision = SemanticIntentDecision(
+                False, "deterministic_route_owns_turn"
+            )
+            return intent
+        context = self.semantic_intent_context(
+            transcript, language=language, deterministic_reason=reason
+        )
+        decision = evaluate_semantic_proposal(proposal, context, settings)
+        self._last_semantic_decision = decision
+        projected = curated_intent_from_semantic_decision(
+            decision, language=language, normalized_transcript=context.normalized_utterance
+        )
+        if projected is None:
+            return intent
+        return projected
+
     def context_capsule(self) -> WorkflowContextCapsule:
         step = self.fixture.steps[self.current_index] if 0 <= self.current_index < len(self.fixture.steps) else None
         timer_state = None
@@ -5832,9 +6090,12 @@ class CuratedProtocolSession:
         configuration_id: int | None = None,
         generation: int | None = None,
         arbitration: RequestArbitration | None = None,
+        semantic_proposal: SemanticIntentProposal | None = None,
+        semantic_settings: SemanticIntentSettings | None = None,
     ) -> CuratedProtocolTurnPlan:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        self._last_semantic_decision = None
         command_key = _utterance_key(transcript)
         pending = self._pending_completion_confirmation
         observation_pending = self._pending_observation_confirmation
@@ -6152,26 +6413,26 @@ class CuratedProtocolSession:
                         return plan
 
                 shared_decision = arbitration or arbitrate_request(transcript)
-                intent = curated_intent_from_arbitration(
-                    shared_decision,
-                    language=language,
-                ) or classify_curated_control_intent(
+                intent = self.deterministic_control_intent(
                     transcript,
                     language=language,
-                    entity_inventory=self._entity_inventory(),
-                    recent_related_query=self._last_related_query,
-                    recent_related_entities=self._last_related_entities,
-                    discourse_context=(
-                        self._discourse_context
-                        if self._discourse_context.step_id
-                        == self.fixture.steps[self.current_index].step_id
-                        and self._discourse_context.workflow_revision == self._revision
-                        else None
-                    ),
-                    completion_context=self.active,
-                    current_step=self.current_index + 1,
-                    max_steps=len(self.fixture.steps),
+                    arbitration=shared_decision,
                 )
+                # The deterministic result above is the fast path and the
+                # default.  A semantic proposal only ever gets to replace a
+                # catch-all outcome, and only after server-owned policy accepts
+                # it; every gate below still runs on whatever survives.
+                if semantic_proposal is not None:
+                    intent = self._apply_semantic_intent_fallback(
+                        intent,
+                        semantic_proposal,
+                        transcript=transcript,
+                        language=language,
+                        arbitration_intent=shared_decision.intent.value,
+                        settings=(
+                            semantic_settings or SemanticIntentSettings()
+                        ),
+                    )
         if self.active:
             plausibility = assess_transcript_plausibility(
                 transcript, self.current_step_semantic_frame()
@@ -6642,7 +6903,29 @@ class CuratedProtocolSession:
             rem = timer_info.get("remaining_seconds", 0)
             minutes = rem // 60
             seconds = rem % 60
-            if state == "running":
+            if intent.intent_kind == "semantic_step_timer_information":
+                if state == "running":
+                    time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
+                    time_str_en = f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
+                    response = (
+                        f"현재 {step.source_label}단계 타이머가 이미 진행 중이라 다시 시작하거나 초기화하지 않습니다. 남은 시간은 약 {time_str}입니다. 이 질문으로 상태는 변경되지 않았습니다."
+                        if language == "ko" else
+                        f"The Step {step.source_label} timer is already running, so it will not be restarted or reset. Approximately {time_str_en} remains. This question did not change state."
+                    )
+                elif int(timer_info.get("duration_seconds", 0)) > 0:
+                    duration = int(timer_info["duration_seconds"])
+                    response = (
+                        f"명확히 타이머 시작을 요청하면 현재 {step.source_label}단계에 정의된 {duration // 60}분 타이머를 시작합니다. 이 질문만으로는 타이머를 시작하지 않았습니다."
+                        if language == "ko" else
+                        f"An explicit start request would start the protocol-defined {duration // 60}-minute timer for Step {step.source_label}. This question did not start it."
+                    )
+                else:
+                    response = (
+                        f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 이 질문으로 타이머를 만들거나 상태를 변경하지 않았습니다."
+                        if language == "ko" else
+                        f"Step {step.source_label} has no protocol-defined timer. This question did not create a timer or change state."
+                    )
+            elif state == "running":
                 time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
                 time_str_en = f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
                 response = (
@@ -8177,7 +8460,16 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.OFF_TOPIC:
             step = steps[self.current_index]
-            response = {
+            if intent.intent_kind in {
+                "hypothetical_completion", "quoted_completion"
+            }:
+                response = (
+                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 확인 조건과 관찰 게이트를 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
+                    if language == "ko" else
+                    "If you explicitly report the current step complete, the server first checks its approved completion and observation gates. It records completion and advances only when those gates pass. This question did not change state."
+                )
+            else:
+                response = {
                 "en": (
                     "I can help with the active laboratory procedure and related "
                     f"laboratory references. The procedure remains at step {step.source_label}."
@@ -8190,7 +8482,7 @@ class CuratedProtocolSession:
                     "현재 진행 중인 실험 절차와 관련 실험실 "
                     f"자료에 대한 질문을 도와드릴 수 있어요. 현재 {step.source_label}단계를 유지합니다."
                 ),
-            }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
+                }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.OFF_TOPIC,
                 display_text=response,
@@ -8302,6 +8594,9 @@ class CuratedProtocolSession:
             and plan.intent_kind in {
                 "next_step_confirmation_required",
                 "learning_and_next_preview",
+                # A semantic proposal can only ever reach this gate; the
+                # researcher's explicit answer, not the model, commits the step.
+                "semantic_completion_confirmation_required",
             }
         ):
             step = self.fixture.steps[self.current_index]

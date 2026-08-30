@@ -281,7 +281,7 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             "voice_workflow_agent.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.route_curated_runtime_turn",
+            "voice_workflow_agent.server.route_curated_runtime_turn_with_semantics",
             side_effect=AssertionError("language mismatch must stop before routing"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))

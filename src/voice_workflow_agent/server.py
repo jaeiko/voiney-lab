@@ -1,7 +1,7 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -168,7 +168,15 @@ from voice_workflow_agent.procedures import (
     unattached_procedure_state,
 )
 from voice_workflow_agent.protocol import ProtocolError, audio_segment_start, event, parse_control
-from voice_workflow_agent.runtime_routing import route_curated_runtime_turn
+from voice_workflow_agent.runtime_routing import (
+    route_curated_runtime_turn_with_semantics,
+)
+from voice_workflow_agent.semantic_intent import (
+    SemanticIntentContext,
+    SemanticIntentProposal,
+    SemanticIntentSettings,
+    propose_semantic_intent,
+)
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from voice_workflow_agent.identity import (
     AuthenticationRequiredError,
@@ -999,6 +1007,29 @@ def require_env(name:str)->str:
     return value
 def api_url(path:str)->str:
     return os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/" + path.lstrip("/")
+
+
+def semantic_intent_resolver(
+    settings:SemanticIntentSettings,
+)->Callable[[SemanticIntentContext],Awaitable[SemanticIntentProposal|None]]|None:
+    """Bind the existing xAI chat boundary as a read-only intent proposer.
+
+    Returns ``None`` when the fallback is disabled, and the client is built
+    lazily inside the coroutine so a turn the deterministic path resolves never
+    constructs a provider client at all.
+    """
+
+    if not settings.enabled:
+        return None
+
+    async def resolve(context:SemanticIntentContext)->SemanticIntentProposal|None:
+        client=AsyncOpenAI(
+            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+            max_retries=0)
+        client.model=settings.model
+        return await propose_semantic_intent(client,context,settings=settings)
+
+    return resolve
 
 
 @dataclass(frozen=True)
@@ -3901,7 +3932,8 @@ class ListenerSession:
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
                  web_visual_settings:WebVisualSettings|None=None,
                  generated_visual_settings:GeneratedVisualSettings|None=None,
-                 multi_brain_settings:MultiBrainSettings|None=None)->None:
+                 multi_brain_settings:MultiBrainSettings|None=None,
+                 semantic_intent_settings:SemanticIntentSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -3922,6 +3954,8 @@ class ListenerSession:
         self.generated_visual_settings=(
             generated_visual_settings or GeneratedVisualSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
+        self.semantic_intent_settings=(
+            semantic_intent_settings or SemanticIntentSettings())
         self.experiment_report_id:str|None=None
         self.session_id=new_session_id()
         self.voice_connection_id="voice-"+secrets.token_hex(16)
@@ -6072,14 +6106,20 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             pre_transition_index=curated.current_index
-            routed_turn=route_curated_runtime_turn(
+            routed_turn=await route_curated_runtime_turn_with_semantics(
                 curated,
                 transcript,turn_id=turn_id,language=turn_language,
                 transcript_quality=transcription_quality_issue(transcription),
                 configuration_id=session.accepted_configuration_id,
                 generation=generation,
-                arbitration=request_arbitration)
+                arbitration=request_arbitration,
+                resolver=semantic_intent_resolver(
+                    session.semantic_intent_settings),
+                semantic_settings=session.semantic_intent_settings)
             plan=routed_turn.plan
+            semantic_outcome=(
+                routed_turn.semantic.public_payload()
+                if routed_turn.semantic is not None else None)
             await current_text(
                 "turn.route_decision",turn_id=turn_id,
                 normalized_text=routed_turn.arbitration.normalized_text,
@@ -6100,11 +6140,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     }
                     else None
                 ),
+                semantic_fallback=semantic_outcome,
             )
             log.info(
                 "turn.route_decision turn_id=%s generation=%s text_sha256=%s "
                 "intent=%s runtime_router=%s action=%s state_mutation=%s "
-                "answer_origin=%s fallback_reason=%s",
+                "answer_origin=%s fallback_reason=%s semantic_status=%s "
+                "semantic_reason=%s semantic_intent=%s",
                 turn_id,generation,
                 hashlib.sha256(
                     routed_turn.arbitration.normalized_text.encode("utf-8")
@@ -6116,6 +6158,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     None if plan.answer_origin not in {"unsupported","current_protocol"}
                     else "local_specialized_answer_unavailable"
                 ),
+                (semantic_outcome or {}).get("status"),
+                (semantic_outcome or {}).get("reason_code"),
+                (semantic_outcome or {}).get("proposed_intent"),
             )
             _record_workspace_metric(
                 category="agent",metric_name="turn_route",
@@ -6127,6 +6172,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "status":"mutated" if plan.state_changed else "read_only",
                 },
             )
+            if semantic_outcome is not None:
+                _record_workspace_metric(
+                    category="agent",metric_name="semantic_intent_fallback",
+                    dimensions={
+                        "route":"semantic_intent_fallback",
+                        "status":str(semantic_outcome["status"]),
+                        "reason_code":str(semantic_outcome["reason_code"]),
+                        "intent":str(
+                            semantic_outcome["proposed_intent"] or "none"),
+                        "event_kind":plan.action.value,
+                    },
+                )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
                     plan.normalized_transcript
@@ -7580,6 +7637,7 @@ async def voice_socket(websocket:WebSocket):
         external_settings=ExternalReferenceSettings.from_environment()
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
+        semantic_intent_settings=SemanticIntentSettings.from_environment()
         web_visual_settings=WebVisualSettings.from_environment(external_settings)
         generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
@@ -7601,6 +7659,7 @@ async def voice_socket(websocket:WebSocket):
                 if generated_visual_settings.enabled else None),
         },
         "multi_brain":multi_brain_settings.public_capability(),
+        "semantic_intent_fallback":semantic_intent_settings.public_capability(),
     }
     report_store=(
         ExperimentReportStore(report_settings.database_path)
@@ -7615,6 +7674,7 @@ async def voice_socket(websocket:WebSocket):
         web_visual_settings=web_visual_settings,
         generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
+        semantic_intent_settings=semantic_intent_settings,
     ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
     sender=LockedSender(websocket); pipeline="cascade"

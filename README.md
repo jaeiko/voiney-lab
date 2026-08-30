@@ -70,7 +70,12 @@ Canonical workflow events
 ```
 
 The main runtime routing boundary is
-`src/voice_workflow_agent/runtime_routing.py`. Tenant/RBAC logic is in
+`src/voice_workflow_agent/runtime_routing.py`. An optional, disabled-by-default
+semantic intent fallback (`semantic_intent.py`) sits behind it: when
+deterministic routing returns a catch-all, it may *propose* one of the existing
+bounded workflow actions, and server-owned policy in the same boundary decides
+whether that proposal is used. It never mutates workflow state - see
+[Semantic intent fallback](#semantic-intent-fallback). Tenant/RBAC logic is in
 `identity.py` and `workspace_store.py`. Protocol source adapters are in
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
 ELN boundary is in `eln_connectors.py`.
@@ -229,6 +234,79 @@ preference, transcript admission emits the fixed clarification:
 No workflow mutation is executed from that mismatched transcript. Sanitized
 analytics retain only the mismatch classification and timing—not transcript
 text. See the [official xAI STT documentation](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text).
+
+## Semantic intent fallback
+
+Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
+`타임 얼마나 남았어?` are recognized deterministically, but `Time 얼마나 남았어?`
+is the same question in a form no regex table anticipated. The semantic intent
+fallback answers that class of utterance without giving a model any authority.
+
+```text
+STT
+ → deterministic intent fast path            (unchanged, still the fast path)
+ → semantic intent proposal                  (only when the fast path returns a catch-all)
+ → server-owned policy validation            (evidence, context, and tier gates)
+ → deterministic workflow state machine      (the only thing that transitions)
+ → persistence
+ → acknowledgement
+```
+
+The resolver may propose only an intent that already exists in the curated
+action contract - current step, next-step information, complete current step,
+not done, start timer, timer status, timer-operation information, pause, resume,
+stop, repeat, related question, or `unknown` - and returns structured data (`intent`, `target`,
+`mutation_requested`, `confidence`, `explicit_action_evidence`, `reason`), never
+free-form instructions. It uses the same xAI chat boundary as the rest of the
+product; no second provider is introduced.
+
+Mutation safety is structural, not advisory:
+
+- **Read-only intents** need only the read-only confidence floor. A timer
+  question is answered from the server's own timer, so it can report "the timer
+  is not started yet" but can never invent a timer the approved step does not
+  define.
+- **Bounded control** (start timer, pause, resume) additionally requires
+  `mutation_requested`, a verbatim action span copied from the utterance, a
+  actual action request rather than an informational or hypothetical question,
+  an active workflow, no open confirmation gate, and the higher mutation
+  confidence floor. A polite request may end in question punctuation; it still
+  passes the same verbatim-evidence and server-state gates.
+- **Checkpoint intents** never execute. A completion proposal is downgraded to
+  the existing explicit completion confirmation, so the researcher's own answer
+  commits the step. A stop proposal is refused outright: ending a run stays a
+  deterministically worded command.
+- Source-defined observation checkpoints, transcript-quality blocks, pending
+  confirmation gates, and the deterministic non-mutating completion guards
+  (hypothetical, quoted, negated, future completion) are all evaluated
+  independently of the proposal and continue to win.
+
+Failure is always closed. If the fallback is disabled, the resolver is
+unreachable, the call times out, the structured output is malformed, the
+proposed intent is unsupported, or confidence is below the floor, the turn keeps
+exactly the outcome the deterministic path already produced. A turn the
+deterministic path resolves never constructs a provider client at all, so voice
+interaction never depends on the model being available.
+
+Enable it per deployment (see `.env.example`):
+
+```bash
+VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true
+VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MODEL=grok-4.20-0309-non-reasoning
+VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_TIMEOUT_SECONDS=2.5
+VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MIN_CONFIDENCE=0.6
+VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE=0.85
+```
+
+The dedicated non-reasoning model keeps this small typed classification off the
+slower general reasoning path. The 2.5-second value is a hard provider boundary,
+not permission to retry; the request uses no tools and caps its output at 160
+tokens.
+
+Every turn publishes a privacy-safe ruling on `turn.route_decision` under
+`semantic_fallback` (`status`, `reason_code`, `proposed_intent`, `accepted`,
+`confidence`, `latency_ms`) - reason codes and enum values only, never
+utterance text or model prose.
 
 ## Workspace identity and authorization
 
@@ -516,7 +594,7 @@ that is intentionally not committed to the repository. Local development
 still uses `scripts/run_candidate_a.sh` (the default `playwright.config.ts`)
 for full-fidelity manual testing when that PDF is available.
 
-The same externally licensed PDF also backs 13 pytest modules' byte-exact
+The same externally licensed PDF also backs 14 pytest modules' byte-exact
 source-identity checks and both `scripts/evaluate_candidate_a_*.py`
 evaluators. `tests/conftest.py` skips those modules (with an explicit reason)
 whenever the PDF is absent, and the CI workflow does the same for the
