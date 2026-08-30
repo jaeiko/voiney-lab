@@ -934,6 +934,16 @@ def test_reviewer_diff_approval_analytics_and_cross_tenant_idor(monkeypatch, tmp
     assert approved_packet["history"][0]["actor_display_name"] == "Reviewer A"
     assert approved_packet["history"][0]["action"] == "approved"
     assert approved_packet["history"][0]["affected_version"] == "v1"
+    researcher_library = asyncio.run(
+        _request("GET", "/api/workspace/protocol-library", profile="researcher-a")
+    )
+    assert researcher_library.status_code == 200
+    researcher_item = next(
+        item
+        for item in researcher_library.json()["protocols"]
+        if item["revision_id"] == revision.revision_id
+    )
+    assert researcher_item["approval_state"] == "approved"
     resolved_inbox = asyncio.run(
         _request("GET", "/api/workspace/reviewer/inbox", profile="reviewer-a")
     ).json()["items"]

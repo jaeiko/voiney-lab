@@ -565,6 +565,119 @@
     .workspace-field input,.workspace-field select,.workspace-field textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.6rem .7rem;color:var(--ink)}
     .workspace-field textarea{min-height:5.5rem;resize:vertical}
     .workspace-status{font-size:.78rem;color:var(--cyan);min-height:1.2rem}
+
+    /* Reviewer and Admin are task workspaces, so their reading width and
+       progressive disclosure are scoped here without changing the bench UI. */
+    #reviewer-workspace .workspace-page-head,
+    #reviewer-workspace .workspace-columns,
+    #admin-workspace .workspace-page-head,
+    #admin-workspace .workspace-columns,
+    #admin-workspace .admin-attention{
+      width:min(100%,70rem);
+      margin-left:auto;
+      margin-right:auto;
+    }
+    #reviewer-workspace .workspace-columns,
+    #admin-workspace .workspace-columns{
+      grid-template-columns:minmax(0,1fr);
+      gap:1rem;
+    }
+    #reviewer-workspace .workspace-purpose,
+    #admin-workspace .workspace-purpose{
+      max-width:62ch;
+      color:var(--subtext);
+      font-size:.92rem;
+      line-height:1.55;
+    }
+    #reviewer-workspace .workspace-card,
+    #admin-workspace .workspace-card{padding:1.25rem}
+    #reviewer-workspace .reviewer-queue-card{border-color:rgba(88,101,242,.3)}
+    #reviewer-workspace .reviewer-decision-card{padding:clamp(1.15rem,2.4vw,1.75rem)}
+    #reviewer-workspace .reviewer-primary-context{margin-bottom:1rem}
+    #reviewer-workspace .reviewer-reason-block{
+      padding:.75rem .85rem;
+      border-left:3px solid var(--blurple);
+      border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+      background:rgba(88,101,242,.08);
+    }
+    #reviewer-workspace .reviewer-blockers{
+      padding:.75rem .85rem;
+      border:1px solid rgba(240,178,50,.34);
+      border-radius:var(--radius-sm);
+      background:rgba(240,178,50,.06);
+    }
+    #reviewer-workspace .reviewer-blockers .reviewer-assessment-grid{margin-top:.45rem}
+    #reviewer-workspace .reviewer-consequence{
+      margin:.9rem 0 .6rem;
+      padding:.75rem .85rem;
+      border:1px solid var(--border);
+      border-radius:var(--radius-sm);
+      background:rgba(255,255,255,.035);
+    }
+    #reviewer-workspace .reviewer-consequence h3{margin:0 0 .35rem;font-size:.86rem}
+    #reviewer-workspace .reviewer-consequence p{margin:.2rem 0;color:var(--subtext);line-height:1.55}
+    #reviewer-workspace .reviewer-technical-details,
+    #reviewer-workspace .reviewer-source-tools,
+    #reviewer-workspace .reviewer-source-group,
+    #admin-workspace .admin-disclosure,
+    #admin-workspace .admin-row-details{
+      margin-top:.75rem;
+      padding:.6rem .75rem;
+      border:1px solid var(--border);
+      border-radius:var(--radius-sm);
+      background:rgba(255,255,255,.025);
+    }
+    #reviewer-workspace .reviewer-technical-details>summary,
+    #reviewer-workspace .reviewer-source-tools>summary,
+    #reviewer-workspace .reviewer-source-group>summary,
+    #admin-workspace .admin-disclosure>summary,
+    #admin-workspace .admin-row-details>summary{
+      cursor:pointer;
+      color:var(--subtext);
+      font-size:.82rem;
+      font-weight:800;
+    }
+    #reviewer-workspace .reviewer-source-tools{margin-top:0}
+    #reviewer-workspace .reviewer-source-group{background:var(--surface-card)}
+    #reviewer-workspace .reviewer-principle{margin:.8rem 0 0;padding-top:.7rem;border-top:1px solid var(--border)}
+    #reviewer-workspace details[open]>summary,
+    #admin-workspace details[open]>summary{color:var(--ink)}
+    #reviewer-workspace textarea:focus-visible,
+    #admin-workspace textarea:focus-visible,
+    #reviewer-workspace summary:focus-visible,
+    #admin-workspace summary:focus-visible{
+      outline:3px solid var(--border-focus);
+      outline-offset:3px;
+      border-radius:.2rem;
+    }
+    #reviewer-workspace pre,
+    #admin-workspace pre{max-width:100%;overflow:auto}
+    #admin-workspace .admin-attention{
+      margin-top:0;
+      margin-bottom:1rem;
+      padding:.8rem 1rem;
+      border:1px solid rgba(53,237,126,.3);
+      border-radius:var(--radius-sm);
+      background:rgba(53,237,126,.08);
+      color:#baf5cd;
+      font-size:.84rem;
+      font-weight:750;
+    }
+    #admin-workspace .admin-attention.needs-action{
+      border-color:rgba(240,178,50,.42);
+      background:rgba(240,178,50,.09);
+      color:#ffdf91;
+    }
+    #admin-workspace .admin-disclosure[open]{padding-bottom:.8rem}
+    #admin-workspace .admin-disclosure>*+*{margin-top:.55rem}
+    #admin-workspace .admin-security-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+    #admin-workspace .admin-technical-boundary p{margin-bottom:0}
+    #admin-workspace .admin-row-details{padding:.45rem .6rem;background:transparent}
+    #admin-workspace .admin-row-details small{display:block;margin-top:.45rem;overflow-wrap:anywhere}
+    #reviewer-workspace .workspace-actions button,
+    #admin-workspace .workspace-actions button{min-height:2.65rem}
+    #reviewer-workspace .workspace-actions button:disabled,
+    #admin-workspace .workspace-actions button:disabled{opacity:.45;cursor:not-allowed}
     .experiment-ledger{margin:0;padding:1.15rem}
     .experiment-ledger-head{display:flex;justify-content:space-between;align-items:end;gap:1rem;flex-wrap:wrap}
     .experiment-ledger-head h2{margin:0;font-size:1.1rem}
@@ -1002,6 +1115,15 @@
       .rail-left{flex-wrap:wrap}
       .rail-right{width:100%;justify-content:stretch}
       .rail-right button{flex:1;min-width:0}
+      #reviewer-workspace,
+      #admin-workspace{padding-left:1rem;padding-right:1rem}
+      #reviewer-workspace .workspace-page-head,
+      #admin-workspace .workspace-page-head{align-items:stretch;flex-direction:column}
+      #reviewer-workspace .workspace-page-head button,
+      #admin-workspace .workspace-page-head button{width:100%;min-height:2.75rem}
+      #reviewer-workspace .workspace-card,
+      #admin-workspace .workspace-card{padding:1rem}
+      #admin-workspace .admin-security-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
     }
     @media(max-width:520px){
       .topbar,.shell{padding-left:1rem;padding-right:1rem}

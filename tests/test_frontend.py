@@ -111,7 +111,7 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
         self.assertNotIn("innerHTML", link_block)
         self.assertIn("workspaceRow", link_block)
 
-    def test_reviewer_packet_is_impact_first_and_decisions_require_confirmation(self):
+    def test_reviewer_packet_is_decision_first_and_decisions_require_confirmation(self):
         html = (
             ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
         ).read_text(encoding="utf-8")
@@ -127,13 +127,27 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
             'id="reviewer-decision-confirmation"',
             'id="reviewer-decision-confirm"',
             '>수정 요청</button>',
-            '>향후 사용 중지</button>',
+            '>사용 중지</button>',
         ):
             self.assertIn(required, html)
-        self.assertLess(
-            html.index('id="reviewer-change-summary"'),
-            html.index('id="reviewer-diff"'),
+        reviewer_markup = html.split(
+            '<section id="reviewer-workspace"', 1
+        )[1].split('<section id="admin-workspace"', 1)[0]
+        ordered_ids = (
+            'id="reviewer-inbox"',
+            'id="reviewer-protocol"',
+            'id="reviewer-reason"',
+            'id="reviewer-change-summary"',
+            'id="reviewer-risk"',
+            'id="reviewer-consequence-title"',
+            'id="reviewer-approve"',
+            'id="reviewer-technical-details"',
+            'id="reviewer-diff"',
         )
+        positions = [reviewer_markup.index(item) for item in ordered_ids]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(html.count("async function loadReviewerWorkspace"), 1)
+        self.assertEqual(html.count("async function loadReviewerDiff"), 1)
         block = "const REVIEW_ACTIONS" + html.split(
             "const REVIEW_ACTIONS", 1
         )[1].split("async function importProtocolsIo", 1)[0]
@@ -156,12 +170,12 @@ assert(ids["reviewer-protocol"].textContent==="ANKOM Fiber Analysis","protocol t
 assert(ids["reviewer-version"].textContent.includes("v2")&&ids["reviewer-requester"].textContent==="Reviewer Requester","version or requester missing");
 assert(ids["reviewer-reason"].textContent==="Clarify the acid warning","request reason missing");
 assert(ids["reviewer-change-summary"].children.length===3,"structured change summary missing");
-assert(ids["reviewer-impact"].textContent.includes("평가되지 않음")&&ids["reviewer-risk"].textContent.includes("위험 수준 판정이 아닙니다"),"unknown impact or risk was implied");
+assert(ids["reviewer-impact"].textContent.includes("평가 정보 없음")&&ids["reviewer-risk"].textContent.includes("위험 수준 판정이 아닙니다"),"unknown impact or risk was implied");
 assert(ids["reviewer-history"].children[0].children[1].textContent.includes("Reviewer A"),"reviewer audit identity missing");
 assert(!ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["reviewer-revoke"].disabled,"decision state was not enforced");
 assert(stageReviewerDecision("approved")===false&&ids["reviewer-status"].textContent.includes("근거"),"blank rationale reached confirmation");
 ids["reviewer-comment"].value="Source, warnings, and impact boundary reviewed.";
-assert(stageReviewerDecision("approved")===true&&!ids["reviewer-decision-confirmation"].hidden&&ids["reviewer-confirm-consequence"].textContent.includes("새 운영 실험"),"approval consequence confirmation missing");
+assert(stageReviewerDecision("approved")===true&&!ids["reviewer-decision-confirmation"].hidden&&ids["reviewer-confirm-consequence"].textContent.includes("새 실험"),"approval consequence confirmation missing");
 assert(stageReviewerDecision("revoked")===false,"disallowed stale decision reached confirmation");
 """
         result = run_node_harness(harness)
@@ -175,18 +189,23 @@ assert(stageReviewerDecision("revoked")===false,"disallowed stale decision reach
             '<section id="admin-workspace"', 1
         )[1].split('<!-- New Session Confirmation Modal -->', 1)[0]
         for required in (
-            "랩 운영 관리",
-            "계정 식별자",
-            "사용자 아이덴티티",
-            "권한 수준",
-            "보안 연결 자격 증명",
-            "연동 선택",
-            "인증 선택",
+            "랩 관리",
+            "구성원과 역할",
+            "연결 서비스",
+            "로그인 및 보안",
+            "데이터 및 보관",
+            "서비스 상태 · 운영",
+            "내부 계정 키",
+            "로그인 연결 키",
+            "서버에 준비된 로그인 정보",
+            "서비스 선택",
+            "로그인 정보 선택",
             "접근 범위 지정",
             "구성 검사",
             "활성화",
-            "접근 제어 활동 기록",
-            "외부 제공자와의 실제 통신 성공을 의미하지 않습니다.",
+            "로그인 · 권한 변경 기록",
+            "외부 서비스와 실제로 통신했다는 뜻은 아닙니다.",
+            'id="admin-attention"',
             'id="admin-security-summary"',
             'id="admin-security-activity"',
         ):
@@ -219,9 +238,10 @@ assert(ids["admin-permission-preview"].textContent.includes("프로토콜 보기
 renderAdminSecurity({authentication:{production_requirement:"oidc",current_method:"development"},connections:{total:2,enabled:1,needs_test:0,failed:1},retention:{analytics_retention_days:30},activity:[{action:"connector.configuration_tested",outcome:"failure",reason_code:"credential_unavailable",actor_display_name:"Admin A",created_at:"2026-08-24T12:00:00Z",target_kind:"connector"}]});
 assert(ids["admin-security-summary"].children.length===6,"security posture cards missing");
 assert(ids["admin-security-activity"].children[0].children[0].textContent.includes("연결 구성 검사"),"activity action not productized");
-assert(ids["admin-security-activity"].children[0].children[1].textContent.includes("자격 증명")&&!ids["admin-security-activity"].children[0].children[1].textContent.includes("secret://"),"safe failure visibility missing");
+assert(ids["admin-security-activity"].children[0].children[1].textContent.includes("로그인 정보")&&!ids["admin-security-activity"].children[0].children[1].textContent.includes("secret://"),"safe failure visibility missing");
 const pending=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"needs_test",allowed_roots:["folder:approved"],last_checked_at:null,last_failure_code:null});
 assert(pending.children[2].children[0].textContent==="구성 검사","test action missing before enable");
+assert(!pending.children[1].textContent.includes("folder:approved")&&pending.children[3].children[1].textContent.includes("folder:approved"),"connector internals were not progressively disclosed");
 const ready=connectorRow({connector_id:"connector-1",display_name:"Drive",connector_kind:"google_drive",operational_status:"ready_to_enable",allowed_roots:["folder:approved"],last_checked_at:"now",last_failure_code:null});
 assert(ready.children[2].children[0].textContent==="연결 활성화","enable action missing after check");
 """

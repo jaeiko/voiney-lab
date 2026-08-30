@@ -302,14 +302,14 @@
 
   <section id="reviewer-workspace" class="workspace-page" hidden aria-labelledby="reviewer-title">
     <div class="workspace-page-head">
-      <div><p class="eyebrow">Review request → Impact → Decision</p><h1 id="reviewer-title">프로토콜 검토</h1><p>요청 이유, 변경 범위, 알려진 영향과 위험을 확인한 뒤 책임 있는 결정을 기록합니다.</p></div>
-      <button id="reviewer-refresh" class="btn-rail-secondary" type="button">검토 요청 새로고침</button>
+      <div><p class="eyebrow">검토 필요 · 확인 · 결정</p><h1 id="reviewer-title">프로토콜 검토</h1><p class="workspace-purpose">확인이 필요한 변경과 남은 위험을 살펴보고, 연구자가 이 버전을 사용할 수 있는지 결정합니다.</p></div>
+      <button id="reviewer-refresh" class="btn-rail-secondary" type="button">검토 목록 새로고침</button>
     </div>
-    <div class="workspace-columns">
-      <article class="panel workspace-card">
-        <h2>검토 요청</h2>
-        <p>프로토콜, 요청자, 변경 이유와 정확한 버전을 먼저 확인하세요.</p>
-        <div id="reviewer-inbox" class="workspace-list bounded-record-list" tabindex="0" aria-live="polite" aria-label="대기 중인 검토 요청 · 항목이 많으면 내부 스크롤"></div>
+    <div class="workspace-columns reviewer-workflow">
+      <article class="panel workspace-card reviewer-queue-card">
+        <h2>검토 필요</h2>
+        <p>지금 결정을 기다리는 항목입니다. 검토할 프로토콜을 선택하세요.</p>
+        <div id="reviewer-inbox" class="workspace-list bounded-record-list" tabindex="0" aria-live="polite" aria-label="검토가 필요한 요청 · 항목이 많으면 내부 스크롤"></div>
         <p class="bounded-list-hint">요청이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
         <details class="reviewer-history-overview">
           <summary>처리된 요청</summary>
@@ -317,45 +317,42 @@
         </details>
       </article>
       <article class="panel workspace-card reviewer-decision-card">
-        <h2>변경 요약과 결정</h2>
-        <p id="reviewer-selection">검토 요청을 선택하세요.</p>
-        <div class="reviewer-context-grid" aria-label="선택한 검토 요청 정보">
+        <h2>선택한 프로토콜 검토</h2>
+        <p id="reviewer-selection">검토할 항목을 선택하세요.</p>
+        <div class="reviewer-context-grid reviewer-primary-context" aria-label="선택한 검토 요청의 프로토콜과 정확한 버전">
           <div><span>프로토콜</span><strong id="reviewer-protocol">—</strong></div>
-          <div><span>버전</span><strong id="reviewer-version">—</strong></div>
-          <div><span>요청자</span><strong id="reviewer-requester">—</strong></div>
-          <div><span>원본</span><strong id="reviewer-source">—</strong></div>
+          <div><span>승인 대상 버전</span><strong id="reviewer-version">—</strong></div>
         </div>
-        <section class="reviewer-summary-block" aria-labelledby="reviewer-reason-title">
-          <h3 id="reviewer-reason-title">왜 변경했나요?</h3>
+        <section class="reviewer-summary-block reviewer-reason-block" aria-labelledby="reviewer-reason-title">
+          <h3 id="reviewer-reason-title">왜 검토가 필요한가요?</h3>
           <p id="reviewer-reason">기록된 변경 이유 없음</p>
         </section>
         <section class="reviewer-summary-block" aria-labelledby="reviewer-change-title">
-          <h3 id="reviewer-change-title">무엇이 변경됐나요?</h3>
+          <h3 id="reviewer-change-title">확인할 내용</h3>
           <div id="reviewer-change-summary" class="workspace-list bounded-record-list" tabindex="0" aria-label="변경 요약 · 항목이 많으면 내부 스크롤">변경 요약을 불러오지 않았습니다.</div>
           <p class="bounded-list-hint">변경 항목이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
         </section>
-        <div class="reviewer-assessment-grid">
-          <section><h3>실험 영향</h3><p id="reviewer-impact">평가되지 않음</p></section>
-          <section><h3>위험 수준</h3><p id="reviewer-risk">평가되지 않음</p></section>
-        </div>
-        <details id="reviewer-technical-details" class="reviewer-technical-details">
-          <summary>기술 차이 보기</summary>
-          <pre id="reviewer-diff" class="workspace-row" tabindex="0">선택된 차이 없음</pre>
-        </details>
-        <section class="reviewer-summary-block" aria-labelledby="reviewer-history-title">
-          <h3 id="reviewer-history-title">결정 기록</h3>
-          <div id="reviewer-history" class="workspace-list bounded-record-list" tabindex="0" aria-label="검토 결정 기록 · 항목이 많으면 내부 스크롤">기록된 결정 없음</div>
-          <p class="bounded-list-hint">기록이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
+        <section class="reviewer-summary-block reviewer-blockers" aria-labelledby="reviewer-blockers-title">
+          <h3 id="reviewer-blockers-title">아직 해결되지 않은 위험</h3>
+          <div class="reviewer-assessment-grid">
+            <section><h3>실험 영향</h3><p id="reviewer-impact">평가되지 않음</p></section>
+            <section><h3>안전 및 실행 위험</h3><p id="reviewer-risk">평가되지 않음</p></section>
+          </div>
         </section>
-        <label class="workspace-field"><span>결정 근거 / 요청할 수정 내용</span><textarea id="reviewer-comment" placeholder="확인한 출처, 변경 영향, 위험 검토와 결정 근거를 기록하세요."></textarea></label>
+        <section class="reviewer-consequence" aria-labelledby="reviewer-consequence-title">
+          <h3 id="reviewer-consequence-title">결정하면 무엇이 달라지나요?</h3>
+          <p>승인하면 연구자가 이 정확한 버전을 새 실험에서 사용할 수 있습니다.</p>
+          <p>수정 요청이나 사용 중지를 선택하면 이 버전으로 새 실험을 시작할 수 없습니다. 원본과 결정 기록은 보존됩니다.</p>
+        </section>
+        <label class="workspace-field"><span>결정 근거 · 요청할 수정 내용</span><textarea id="reviewer-comment" placeholder="확인한 내용과 결정 이유를 간단히 기록하세요."></textarea></label>
         <div class="workspace-actions">
           <button id="reviewer-approve" type="button" class="btn-reviewer-approve" disabled>승인</button>
           <button id="reviewer-reject" type="button" disabled>수정 요청</button>
-          <button id="reviewer-revoke" type="button" class="btn-reviewer-disable" disabled>향후 사용 중지</button>
+          <button id="reviewer-revoke" type="button" class="btn-reviewer-disable" disabled>사용 중지</button>
         </div>
-        <p id="reviewer-action-guidance" class="reviewer-action-guidance">승인은 새 운영 세션에서 이 버전을 사용할 수 있게 합니다. 수정 요청과 사용 중지는 실행을 허용하지 않습니다.</p>
+        <p id="reviewer-action-guidance" class="reviewer-action-guidance">승인하면 연구자가 이 버전을 새 실험에서 사용할 수 있습니다. 수정 요청과 사용 중지는 실행을 허용하지 않습니다.</p>
         <section id="reviewer-decision-confirmation" class="reviewer-decision-confirmation" aria-labelledby="reviewer-confirm-title" hidden>
-          <h3 id="reviewer-confirm-title">결정 결과 확인</h3>
+          <h3 id="reviewer-confirm-title">이 결정으로 기록할까요?</h3>
           <p id="reviewer-confirm-consequence"></p>
           <div class="workspace-actions">
             <button id="reviewer-decision-confirm" type="button">이 결과로 기록</button>
@@ -363,108 +360,131 @@
           </div>
         </section>
         <div id="reviewer-status" class="workspace-status" role="status"></div>
+        <details id="reviewer-technical-details" class="reviewer-technical-details">
+          <summary>원본 · 정확한 버전 · 결정 기록</summary>
+          <div class="reviewer-context-grid" aria-label="선택한 검토 요청의 기술 및 출처 정보">
+            <div><span>요청자</span><strong id="reviewer-requester">—</strong></div>
+            <div><span>원본 출처</span><strong id="reviewer-source">—</strong></div>
+          </div>
+          <pre id="reviewer-diff" class="workspace-row" tabindex="0">선택된 차이 없음</pre>
+          <section class="reviewer-summary-block" aria-labelledby="reviewer-history-title">
+            <h3 id="reviewer-history-title">결정 기록</h3>
+            <div id="reviewer-history" class="workspace-list bounded-record-list" tabindex="0" aria-label="검토 결정 기록 · 항목이 많으면 내부 스크롤">기록된 결정 없음</div>
+            <p class="bounded-list-hint">기록이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
+          </section>
+        </details>
       </article>
-      <article class="panel workspace-card">
-        <h2>protocols.io 구조화 가져오기</h2>
-        <label class="workspace-field"><span>연결</span><select id="protocols-io-connector"><option value="">구성된 연결 없음</option></select></label>
-        <label class="workspace-field"><span>DOI · URL · 프로토콜 URI</span><input id="protocols-io-identifier" placeholder="10.17504/protocols.io…"></label>
-        <div class="workspace-actions"><button id="protocols-io-import" type="button">검토 초안으로 가져오기</button></div>
-        <div id="protocols-io-status" class="workspace-status" role="status"></div>
-      </article>
-      <article class="panel workspace-card">
-        <h2>Google Drive / Shared Drive 동기화</h2>
-        <label class="workspace-field"><span>연결</span><select id="drive-connector"><option value="">구성된 연결 없음</option></select></label>
-        <label class="workspace-field"><span>허용 폴더 ID</span><input id="drive-folder" placeholder="Drive folder ID"></label>
-        <div class="workspace-actions"><button id="drive-sync" type="button">변경 로그 동기화</button></div>
-        <div id="drive-status" class="workspace-status" role="status"></div>
-      </article>
-      <article class="panel workspace-card">
-        <h2>GitHub Source Hub / Dry-Lab</h2>
-        <label class="workspace-field"><span>연결</span><select id="github-connector"><option value="">구성된 연결 없음</option></select></label>
-        <label class="workspace-field"><span>저장소</span><input id="github-repository" placeholder="owner/repository"></label>
-        <label class="workspace-field"><span>브랜치/태그</span><input id="github-ref" value="main"></label>
-        <label class="workspace-field"><span>경로</span><input id="github-path" placeholder="protocols/example.md 또는 workflow/Snakefile"></label>
-        <label class="workspace-field"><span>종류</span><select id="github-import-kind"><option value="protocol">프로토콜/문서</option><option value="snakemake">Snakemake 메타데이터</option><option value="nextflow">Nextflow 메타데이터</option></select></label>
-        <div class="workspace-actions"><button id="github-import" type="button">검토 초안으로 가져오기</button></div>
-        <div id="github-status" class="workspace-status" role="status">가져온 코드는 실행하지 않습니다.</div>
-      </article>
-      <article class="panel workspace-card">
-        <h2>계산 워크플로 검토</h2>
-        <p>정확한 커밋과 엔트리 포인트만 등록합니다. 실행은 지원하지 않습니다.</p>
-        <div id="drylab-workflows" class="workspace-list bounded-record-list" tabindex="0" aria-label="계산 워크플로 검토 목록 · 항목이 많으면 내부 스크롤"></div>
-      </article>
-      <article class="panel workspace-card">
-        <h2>검토 원칙</h2>
-        <p>파싱 성공, 구조적 준비, 위험 검토, 사람 승인, 운영 권한은 서로 다른 게이트입니다. “In development” 원본은 자동 승인할 수 없습니다.</p>
+      <article class="panel workspace-card reviewer-sources-card">
+        <details class="reviewer-source-tools">
+          <summary>원본 가져오기 · 계산 워크플로 · 검토 원칙</summary>
+          <p>새 원본과 계산 워크플로 도구입니다. 가져온 자료는 검토를 마치기 전까지 연구자가 사용할 수 없습니다.</p>
+          <details class="reviewer-source-group">
+            <summary>protocols.io</summary>
+            <label class="workspace-field"><span>연결</span><select id="protocols-io-connector"><option value="">구성된 연결 없음</option></select></label>
+            <label class="workspace-field"><span>DOI · URL · 프로토콜 URI</span><input id="protocols-io-identifier" placeholder="10.17504/protocols.io…"></label>
+            <div class="workspace-actions"><button id="protocols-io-import" type="button">검토 초안으로 가져오기</button></div>
+            <div id="protocols-io-status" class="workspace-status" role="status"></div>
+          </details>
+          <details class="reviewer-source-group">
+            <summary>Google Drive</summary>
+            <label class="workspace-field"><span>연결</span><select id="drive-connector"><option value="">구성된 연결 없음</option></select></label>
+            <label class="workspace-field"><span>허용 폴더 ID</span><input id="drive-folder" placeholder="Drive folder ID"></label>
+            <div class="workspace-actions"><button id="drive-sync" type="button">변경 로그 동기화</button></div>
+            <div id="drive-status" class="workspace-status" role="status"></div>
+          </details>
+          <details class="reviewer-source-group">
+            <summary>GitHub · 계산 워크플로</summary>
+            <label class="workspace-field"><span>연결</span><select id="github-connector"><option value="">구성된 연결 없음</option></select></label>
+            <label class="workspace-field"><span>저장소</span><input id="github-repository" placeholder="owner/repository"></label>
+            <label class="workspace-field"><span>브랜치 또는 태그</span><input id="github-ref" value="main"></label>
+            <label class="workspace-field"><span>경로</span><input id="github-path" placeholder="protocols/example.md 또는 workflow/Snakefile"></label>
+            <label class="workspace-field"><span>종류</span><select id="github-import-kind"><option value="protocol">프로토콜 문서</option><option value="snakemake">Snakemake 메타데이터</option><option value="nextflow">Nextflow 메타데이터</option></select></label>
+            <div class="workspace-actions"><button id="github-import" type="button">검토 초안으로 가져오기</button></div>
+            <div id="github-status" class="workspace-status" role="status">가져온 코드는 실행하지 않습니다.</div>
+            <h3>계산 워크플로 검토</h3>
+            <p>정확한 커밋과 시작 파일 정보만 등록합니다. 실행은 지원하지 않습니다.</p>
+            <div id="drylab-workflows" class="workspace-list bounded-record-list" tabindex="0" aria-label="계산 워크플로 검토 목록 · 항목이 많으면 내부 스크롤"></div>
+          </details>
+          <p class="reviewer-principle">문서 분석, 실행 준비, 안전 검토, 사람 승인과 운영 권한은 서로 다른 확인 단계입니다. 작성 중인 원본은 자동으로 승인되지 않습니다.</p>
+        </details>
       </article>
     </div>
   </section>
 
   <section id="admin-workspace" class="workspace-page" hidden aria-labelledby="admin-title">
     <div class="workspace-page-head">
-      <div><p class="eyebrow">Users · Connections · Security</p><h1 id="admin-title">랩 운영 관리</h1><p>사용자 권한, 외부 연결, 데이터 보존과 보안 활동을 관리합니다.</p></div>
-      <button id="admin-metrics-load" class="btn-rail-secondary" type="button">운영 상태 새로고침</button>
+      <div><h1 id="admin-title">랩 관리</h1><p class="workspace-purpose">구성원, 연결 서비스, 로그인, 데이터 보관과 서비스 상태를 관리합니다.</p></div>
+      <button id="admin-metrics-load" class="btn-rail-secondary" type="button">서비스 상태 새로고침</button>
     </div>
-    <div class="workspace-columns">
+    <section id="admin-attention" class="admin-attention" role="status" aria-live="polite">서비스 상태를 확인하는 중…</section>
+    <div class="workspace-columns admin-operations">
       <article class="panel workspace-card">
-        <h2>사용자와 권한</h2>
-        <p>각 사용자의 활성 권한 수준과 실제 허용 작업을 확인합니다.</p>
-        <div id="admin-memberships" class="workspace-list bounded-record-list" tabindex="0" aria-label="사용자 권한 목록 · 항목이 많으면 내부 스크롤"></div>
-        <p class="bounded-list-hint">사용자가 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
-      </article>
-      <article class="panel workspace-card">
-        <h2>사용자 추가 또는 권한 변경</h2>
-        <label class="workspace-field"><span>계정 식별자</span><input id="admin-member-id" placeholder="조직에서 사용하는 고유 계정 ID"></label>
-        <label class="workspace-field"><span>사용자 아이덴티티</span><input id="admin-member-subject" placeholder="인증 서비스에서 확인된 사용자 ID"></label>
-        <label class="workspace-field"><span>표시 이름</span><input id="admin-member-name" placeholder="예: 김연구"></label>
-        <label class="workspace-field"><span>권한 수준</span><select id="admin-member-role"><option value="researcher">연구자</option><option value="reviewer">검토자</option><option value="lab_admin">랩 관리자</option><option value="organization_admin">조직 관리자</option></select></label>
-        <div id="admin-permission-preview" class="admin-permission-preview"></div>
-        <label class="admin-active-toggle"><input id="admin-member-active" type="checkbox" checked> 이 권한을 활성화</label>
-        <div class="workspace-actions"><button id="admin-member-save" type="button">사용자 권한 저장</button></div>
-        <div id="admin-member-status" class="workspace-status" role="status"></div>
+        <h2>구성원과 역할</h2>
+        <p>누가 이 랩을 사용할 수 있고 어떤 작업을 맡는지 확인합니다.</p>
+        <div id="admin-memberships" class="workspace-list bounded-record-list" tabindex="0" aria-label="구성원과 역할 목록 · 항목이 많으면 내부 스크롤"></div>
+        <p class="bounded-list-hint">구성원이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
+        <details class="admin-disclosure">
+          <summary>구성원 추가 · 역할 변경</summary>
+          <p>로그인 서비스와 연결된 계정 정보가 필요합니다.</p>
+          <label class="workspace-field"><span>내부 계정 키</span><input id="admin-member-id" placeholder="조직에서 사용하는 고유 계정 ID"></label>
+          <label class="workspace-field"><span>로그인 연결 키</span><input id="admin-member-subject" placeholder="로그인 서비스에서 확인된 사용자 ID"></label>
+          <label class="workspace-field"><span>표시 이름</span><input id="admin-member-name" placeholder="예: 김연구"></label>
+          <label class="workspace-field"><span>역할</span><select id="admin-member-role"><option value="researcher">연구자</option><option value="reviewer">검토자</option><option value="lab_admin">랩 관리자</option><option value="organization_admin">조직 관리자</option></select></label>
+          <div id="admin-permission-preview" class="admin-permission-preview"></div>
+          <label class="admin-active-toggle"><input id="admin-member-active" type="checkbox" checked> 이 역할을 사용함</label>
+          <div class="workspace-actions"><button id="admin-member-save" type="button">구성원 역할 저장</button></div>
+          <div id="admin-member-status" class="workspace-status" role="status"></div>
+        </details>
       </article>
       <article class="panel workspace-card admin-connector-overview">
-        <h2>외부 연결 상태</h2>
-        <p>자격 증명 값은 브라우저에 표시되지 않습니다. 구성 검사와 활성화는 별도 단계입니다.</p>
-        <div id="admin-connectors" class="workspace-list bounded-record-list" tabindex="0" aria-label="외부 연결 목록 · 항목이 많으면 내부 스크롤"></div>
+        <h2>연결 서비스</h2>
+        <p>랩에서 사용하는 외부 서비스와 조치가 필요한 연결을 확인합니다.</p>
+        <div id="admin-connectors" class="workspace-list bounded-record-list" tabindex="0" aria-label="연결 서비스 목록 · 항목이 많으면 내부 스크롤"></div>
         <p class="bounded-list-hint">연결이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
-      </article>
-      <article class="panel workspace-card admin-connector-setup">
-        <h2>새 연결 설정</h2>
-        <ol class="admin-setup-flow" aria-label="연결 설정 단계">
-          <li>연동 선택</li><li>인증 선택</li><li>접근 범위 지정</li><li>구성 검사</li><li>활성화</li>
-        </ol>
-        <label class="workspace-field"><span>연동 서비스</span><select id="admin-connector-kind"><option value="google_drive">Google Drive</option><option value="protocols_io">protocols.io</option><option value="github">GitHub App</option><option value="elabftw">eLabFTW</option></select></label>
-        <label class="workspace-field"><span>연결 이름</span><input id="admin-connector-name" placeholder="예: 승인 프로토콜 폴더"></label>
-        <label class="workspace-field"><span>보안 연결 자격 증명</span><select id="admin-connector-secret"><option value="">서버에 준비된 자격 증명 없음</option></select></label>
-        <label id="admin-webhook-credential-field" class="workspace-field" hidden><span>웹훅 보안 자격 증명 · 선택</span><select id="admin-webhook-secret"><option value="">선택 안 함</option></select></label>
-        <label class="workspace-field"><span>허용할 접근 범위 · 한 줄에 하나</span><textarea id="admin-connector-roots" placeholder="folder:folder_id"></textarea></label>
-        <p id="admin-connector-scope-help" class="admin-field-help">Google Drive 폴더는 folder:ID, 공유 드라이브는 shared-drive:ID 형식으로 제한합니다.</p>
-        <div class="workspace-actions"><button id="admin-connector-create" type="button">비활성 구성으로 저장</button></div>
-        <div id="admin-connector-status" class="workspace-status" role="status"></div>
-        <p class="admin-test-boundary">구성 검사는 서버에 자격 증명이 준비됐는지와 접근 범위 형식을 확인합니다. 외부 제공자와의 실제 통신 성공을 의미하지 않습니다.</p>
-      </article>
-      <article class="panel workspace-card">
-        <h2>운영 지표와 보존 정책</h2>
-        <p id="admin-metrics-status" role="status">원음, 대화문, 모델 추론, 비밀 값은 저장하지 않습니다.</p>
-        <div id="admin-metrics" class="admin-metrics"></div>
-        <label class="workspace-field"><span>비식별 운영 이벤트 보존 기간 · 1–3650일</span><input id="admin-retention-days" type="number" min="1" max="3650" value="90"></label>
-        <div class="workspace-actions"><button id="admin-retention-save" type="button">보존 정책 저장·적용</button></div>
-        <div id="admin-retention-status" class="workspace-status" role="status"></div>
-        <p>이 정책은 비식별 운영 지표에만 적용됩니다. 아래 접근 제어 활동은 별도의 추가 전용 감사 이력입니다.</p>
+        <details class="admin-disclosure admin-connector-setup">
+          <summary>새 연결 설정</summary>
+          <ol class="admin-setup-flow" aria-label="연결 설정 단계">
+            <li>서비스 선택</li><li>로그인 정보 선택</li><li>접근 범위 지정</li><li>구성 검사</li><li>활성화</li>
+          </ol>
+          <label class="workspace-field"><span>연결 서비스</span><select id="admin-connector-kind"><option value="google_drive">Google Drive</option><option value="protocols_io">protocols.io</option><option value="github">GitHub App</option><option value="elabftw">eLabFTW</option></select></label>
+          <label class="workspace-field"><span>연결 이름</span><input id="admin-connector-name" placeholder="예: 승인 프로토콜 폴더"></label>
+          <label class="workspace-field"><span>서버에 준비된 로그인 정보</span><select id="admin-connector-secret"><option value="">사용할 수 있는 로그인 정보 없음</option></select></label>
+          <label id="admin-webhook-credential-field" class="workspace-field" hidden><span>웹훅 로그인 정보 · 선택</span><select id="admin-webhook-secret"><option value="">선택 안 함</option></select></label>
+          <label class="workspace-field"><span>허용할 접근 범위 · 한 줄에 하나</span><textarea id="admin-connector-roots" placeholder="folder:folder_id"></textarea></label>
+          <p id="admin-connector-scope-help" class="admin-field-help">Google Drive 폴더는 folder:ID, 공유 드라이브는 shared-drive:ID 형식으로 제한합니다.</p>
+          <div class="workspace-actions"><button id="admin-connector-create" type="button">꺼진 상태로 저장</button></div>
+          <div id="admin-connector-status" class="workspace-status" role="status"></div>
+          <p class="admin-test-boundary">구성 검사는 서버에 로그인 정보가 준비됐는지와 접근 범위 형식만 확인합니다. 외부 서비스와 실제로 통신했다는 뜻은 아닙니다.</p>
+        </details>
       </article>
       <article class="panel workspace-card">
-        <h2>보안 및 접근 제어 상태</h2>
+        <h2>로그인 및 보안</h2>
+        <p>현재 로그인 방식과 권한·연결 변경 상태를 확인합니다.</p>
         <div id="admin-security-summary" class="admin-security-summary"></div>
-        <h3>접근 제어 활동 기록</h3>
-        <p>인증된 작업 공간 진입과 사용자 권한, 연결 구성, 보존 정책 변경을 기록하며 자격 증명 값은 기록하지 않습니다.</p>
-        <div id="admin-security-activity" class="workspace-list bounded-record-list" tabindex="0" aria-label="접근 제어 활동 기록 · 항목이 많으면 내부 스크롤"></div>
-        <p class="bounded-list-hint">기록이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
-        <p id="admin-security-status" class="workspace-status" role="status"></p>
+        <details class="admin-disclosure">
+          <summary>로그인 · 권한 변경 기록</summary>
+          <p>누가 작업 공간에 접근했고 구성원 역할, 연결 서비스, 보관 기간이 언제 바뀌었는지 확인합니다. 비밀번호나 API 키는 기록하지 않습니다.</p>
+          <div id="admin-security-activity" class="workspace-list bounded-record-list" tabindex="0" aria-label="로그인과 권한 변경 기록 · 항목이 많으면 내부 스크롤"></div>
+          <p class="bounded-list-hint">기록이 많으면 이 목록 안에서 스크롤할 수 있습니다.</p>
+          <p id="admin-security-status" class="workspace-status" role="status"></p>
+        </details>
+        <details class="admin-disclosure admin-technical-boundary">
+          <summary>로그인 방식 기술 정보</summary>
+          <p>운영 범위는 OIDC가 필수입니다. 현재 개발 프로필은 데모와 개발 환경에서만 허용됩니다. Drive와 GitHub는 읽기 전용이며, 가져온 GitHub 코드는 이 서버에서 실행되지 않습니다.</p>
+        </details>
       </article>
-      <article class="panel workspace-card admin-boundary-card">
-        <h2>운영 인증 경계</h2>
-        <p>운영 범위는 OIDC가 필수입니다. 현재 개발 프로필은 비운영 데모에서만 허용됩니다. Drive/GitHub는 읽기 전용이며 GitHub 코드는 이 서버에서 실행되지 않습니다.</p>
+      <article class="panel workspace-card">
+        <h2>데이터 및 보관</h2>
+        <p>서비스 상태 확인에 쓰는 비식별 운영 통계의 보관 기간입니다.</p>
+        <label class="workspace-field"><span>운영 통계 보관 기간 · 1–3650일</span><input id="admin-retention-days" type="number" min="1" max="3650" value="90"></label>
+        <div class="workspace-actions"><button id="admin-retention-save" type="button">보관 기간 저장</button></div>
+        <div id="admin-retention-status" class="workspace-status" role="status"></div>
+        <p class="admin-field-help">이 설정은 비식별 운영 통계에만 적용됩니다. 로그인과 권한 변경 기록은 별도로 보관됩니다.</p>
+      </article>
+      <article class="panel workspace-card">
+        <h2>서비스 상태 · 운영</h2>
+        <p id="admin-metrics-status" role="status">사용량과 오류 같은 운영 통계만 표시합니다. 음성·대화 내용과 비밀 값은 표시하지 않습니다.</p>
+        <div id="admin-metrics" class="admin-metrics"></div>
       </article>
     </div>
   </section>
@@ -679,8 +699,8 @@ const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  "voice turn processing failed":"음성 요청을 처리하지 못했습니다. 단계가 변경되었다고 가정하지 말고 현재 단계를 다시 확인해 주세요."
 });
 function researcherErrorMessage(value,fallback="요청을 처리하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요."){const code=typeof value==="string"?value:"",mapped=RESEARCHER_ERROR_MESSAGES[code];if(mapped)return mapped;if(Object.values(RESEARCHER_ERROR_MESSAGES).includes(code))return code;return fallback;}
-function renderAdminMetrics(payload){const target=$("admin-metrics");if(!target||!payload||typeof payload!=="object")return false;const pilot=payload.pilot_metrics,tenantMetrics=Array.isArray(payload.metrics)?payload.metrics:null;let values;if(pilot&&typeof pilot==="object"){const rate=Number.isFinite(pilot.workflow_completion_rate)?`${Math.round(pilot.workflow_completion_rate*100)}%`:"측정 전";values=[["완료 워크플로",Number(pilot.completed_workflows)||0],["실패 명령",Number(pilot.failed_commands)||0],["복구 이벤트",Number(pilot.recovery_events)||0],["상태 변경 실패",Number(pilot.mutation_failures)||0],["사용자 작업",Number(pilot.user_actions)||0],["완료율",rate]];}else if(tenantMetrics){values=tenantMetrics.map(item=>["운영 이벤트",Number.isFinite(item.total)?item.total:"—"]);}else{const reporting=payload.experiment_reporting||{},reports=reporting.reports||{},quality=reporting.quality||{},events=reporting.workflow_events||{},catalog=payload.protocol_catalog||{},runtime=payload.runtime||{},counters=runtime.counters||{};values=[["실험 기록",Number(reports.total)||0],["완료 단계",Number(events.step_completed)||0],["차단",Number(quality.blockers)||0],["실행 PDF",`${Number(catalog.executable)||0}/${Number(catalog.total)||0}`],["완료 Turn",Number(counters.turns_completed)||0]];}target.replaceChildren();for(const [label,value] of values){const card=document.createElement("div"),strong=document.createElement("b"),caption=document.createElement("span");card.className="admin-metric";strong.textContent=String(value);caption.textContent=label;card.append(strong,caption);target.appendChild(card);}const privacy=document.createElement("div");privacy.className="admin-privacy";privacy.textContent="원음·대화문·모델 추론·비밀 값을 포함하지 않는 테넌트 집계입니다.";target.appendChild(privacy);target.hidden=false;if(Number.isInteger(payload.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(payload.analytics_retention_days);return true;}
-async function loadAdminMetrics(){const status=$("admin-metrics-status"),target=$("admin-metrics");if(status)status.textContent="테넌트 비식별 집계를 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/admin/analytics",{method:"GET",cache:"no-store"});if(!response.ok)throw new Error(response.status===403?"관리자 역할이 필요합니다.":"집계를 불러오지 못했습니다.");renderAdminMetrics(await response.json());if(status)status.textContent="테넌트 집계를 갱신했습니다.";return true;}catch(error){if(target)target.replaceChildren();if(status)status.textContent=error?.message||"집계를 불러오지 못했습니다.";return false;}}
+function renderAdminMetrics(payload){const target=$("admin-metrics");if(!target||!payload||typeof payload!=="object")return false;const pilot=payload.pilot_metrics,tenantMetrics=Array.isArray(payload.metrics)?payload.metrics:null;let values;if(pilot&&typeof pilot==="object"){const rate=Number.isFinite(pilot.workflow_completion_rate)?`${Math.round(pilot.workflow_completion_rate*100)}%`:"측정 전";values=[["완료 워크플로",Number(pilot.completed_workflows)||0],["실패 명령",Number(pilot.failed_commands)||0],["복구 이벤트",Number(pilot.recovery_events)||0],["상태 변경 실패",Number(pilot.mutation_failures)||0],["사용자 작업",Number(pilot.user_actions)||0],["완료율",rate]];}else if(tenantMetrics){values=tenantMetrics.map(item=>["운영 이벤트",Number.isFinite(item.total)?item.total:"—"]);}else{const reporting=payload.experiment_reporting||{},reports=reporting.reports||{},quality=reporting.quality||{},events=reporting.workflow_events||{},catalog=payload.protocol_catalog||{},runtime=payload.runtime||{},counters=runtime.counters||{};values=[["실험 기록",Number(reports.total)||0],["완료 단계",Number(events.step_completed)||0],["차단",Number(quality.blockers)||0],["실행 PDF",`${Number(catalog.executable)||0}/${Number(catalog.total)||0}`],["완료 Turn",Number(counters.turns_completed)||0]];}target.replaceChildren();for(const [label,value] of values){const card=document.createElement("div"),strong=document.createElement("b"),caption=document.createElement("span");card.className="admin-metric";strong.textContent=String(value);caption.textContent=label;card.append(strong,caption);target.appendChild(card);}const privacy=document.createElement("div");privacy.className="admin-privacy";privacy.textContent="음성·대화 내용, 사용자 식별자, 모델 추론과 비밀 값을 포함하지 않는 랩 단위 운영 통계입니다.";target.appendChild(privacy);target.hidden=false;if(Number.isInteger(payload.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(payload.analytics_retention_days);return true;}
+async function loadAdminMetrics(){const status=$("admin-metrics-status"),target=$("admin-metrics");if(status)status.textContent="랩 서비스 상태를 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/admin/analytics",{method:"GET",cache:"no-store"});if(!response.ok)throw new Error(response.status===403?"랩 관리자 역할이 필요합니다.":"서비스 상태를 불러오지 못했습니다.");renderAdminMetrics(await response.json());if(status)status.textContent="서비스 상태를 새로고침했습니다.";return true;}catch(error){if(target)target.replaceChildren();if(status)status.textContent=error?.message||"서비스 상태를 불러오지 못했습니다.";return false;}}
 
 let selectedWorkspaceRevision=null,pendingReviewerDecision=null,selectedReviewerAllowedActions=new Set();
 function activateWorkspace(name){for(const item of ["researcher","reviewer","admin"]){const page=$(item+"-workspace"),button=$("workspace-"+item);if(page)page.hidden=item!==name;if(button)button.setAttribute("aria-current",item===name?"page":"false");}if(name==="reviewer"){void loadReviewerWorkspace();void loadDryLabWorkflows();}if(name==="admin"){void loadAdminConnectors();void loadAdminCredentials();void loadAdminMemberships();void loadAdminMetrics();void loadAdminSecurity();updateAdminConnectorFields();}}
@@ -768,7 +788,7 @@ async function loadWorkspaceConnectors(){try{const response=await workspaceFetch
 async function loadWorkspaceProtocolRevisions(){const selects=[$("elab-protocol-revision"),$("experiment-protocol-lineage")].filter(Boolean);if(!selects.length)return false;try{const response=await workspaceFetch("/api/workspace/protocol-library",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();for(const select of selects){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="정확한 리비전 선택";select.appendChild(empty);for(const item of data.protocols||[]){const option=document.createElement("option");option.value=item.revision_id;option.textContent=`${item.title} · v${item.revision_number} · ${item.approval_state}`;select.appendChild(option);}}return true;}catch{return false;}}
 async function saveProtocolPreference(item,favorite){try{const response=await workspaceFetch(`/api/workspace/protocol-library/${encodeURIComponent(item.family_id)}/preference`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({favorite,tags:Array.isArray(item.tags)?item.tags:[]})});if(!response.ok)return false;await loadQuickProtocolLibrary();return true;}catch{return false;}}
 async function loadQuickProtocolLibrary(){const target=$("quick-library-results");if(!target)return false;const search=$("quick-library-search")?.value?.trim()||"";try{const response=await workspaceFetch(`/api/workspace/protocol-library?search=${encodeURIComponent(search)}`,{cache:"no-store"});if(!response.ok)throw new Error("빠른 라이브러리를 불러오지 못했습니다.");const data=await response.json();target.replaceChildren();for(const item of data.protocols||[]){const tags=Array.isArray(item.tags)&&item.tags.length?` · #${item.tags.join(" #")}`:"",row=workspaceRow(`${item.favorite?"★":"☆"} ${item.title} · v${item.revision_number}`,`${item.connector_kind} · ${item.owner||"owner unknown"} · ${item.department||"team 없음"} · ${item.approval_state||"review_required"} · ${item.risk_state}${tags}`),actions=document.createElement("div"),favorite=document.createElement("button");actions.className="workspace-actions";favorite.type="button";favorite.textContent=item.favorite?"즐겨찾기 해제":"즐겨찾기";favorite.addEventListener("click",()=>saveProtocolPreference(item,!item.favorite));actions.appendChild(favorite);if(item.executable&&typeof item.catalog_protocol_id==="string"&&protocolCatalog.has(item.catalog_protocol_id)){const open=document.createElement("button");open.type="button";open.textContent="정확한 리비전 선택";open.addEventListener("click",async()=>{$("protocol-id").value=item.catalog_protocol_id;renderSelectedProtocolContext();await saveProtocolPreference(item,item.favorite);});actions.appendChild(open);}row.appendChild(actions);target.appendChild(row);}if(!(data.protocols||[]).length)target.textContent="검색 결과가 없습니다.";return true;}catch(error){target.textContent=error?.message||"빠른 라이브러리 오류";return false;}}
-const REVIEW_ACTIONS=Object.freeze({approved:{label:"승인",consequence:"이 버전은 새 운영 실험에서 사용할 수 있게 됩니다. 정확한 버전과 감사 기록은 유지됩니다."},rejected:{label:"수정 요청",consequence:"이 버전은 실행할 수 없습니다. 요청 내용은 감사 기록에 남으며 새 리비전을 별도로 제출해야 합니다."},revoked:{label:"향후 사용 중지",consequence:"이 버전은 새 운영 실험에서 더 이상 사용할 수 없습니다. 기존 실험 기록과 이전 결정 이력은 삭제되지 않습니다."}});
+const REVIEW_ACTIONS=Object.freeze({approved:{label:"승인",consequence:"연구자가 이 정확한 버전을 새 실험에서 사용할 수 있게 됩니다. 원본과 결정 기록은 그대로 남습니다."},rejected:{label:"수정 요청",consequence:"연구자는 이 버전으로 새 실험을 시작할 수 없습니다. 요청 내용은 기록에 남으며 수정한 새 버전을 다시 검토해야 합니다."},revoked:{label:"사용 중지",consequence:"이 버전으로는 새 실험을 시작할 수 없습니다. 이미 진행한 실험과 이전 결정 기록은 삭제되지 않습니다."}});
 const REVIEW_FIELD_LABELS=Object.freeze({steps:"절차 단계",warnings:"경고",document:"원본 문서",lab_adaptation:"랩 적용 변경"});
 const ADAPTATION_KIND_LABELS=Object.freeze({equipment_difference:"장비 차이",reagent_substitution:"시약 대체",lab_note:"랩 메모",troubleshooting_tip:"문제 해결 메모"});
 function reviewerSourceLabel(kind){return {protocols_io:"protocols.io",google_drive:"Google Drive",github:"GitHub",local_pdf:"로컬 PDF"}[kind]||"등록된 원본";}
@@ -776,11 +796,11 @@ function reviewerRiskSignalLabel(value){return {hazard_review:"원본에서 위�
 function setReviewerDecisionAvailability(actions=[]){selectedReviewerAllowedActions=new Set(Array.isArray(actions)?actions:[]);const mapping={"reviewer-approve":"approved","reviewer-reject":"rejected","reviewer-revoke":"revoked"};for(const [id,action] of Object.entries(mapping))if($(id))$(id).disabled=!selectedReviewerAllowedActions.has(action);}
 function renderReviewerChangeSummary(data){const target=$("reviewer-change-summary");if(!target)return;target.replaceChildren();const summary=data?.change_summary||{},fields=Array.isArray(summary.changed_fields)?summary.changed_fields:[];if(fields.length){const labels=[...new Set(fields.map(field=>REVIEW_FIELD_LABELS[field]||"기타 구조"))];target.appendChild(workspaceRow("변경 영역",labels.join(" · ")));}if(Number.isInteger(summary.step_count_before)&&Number.isInteger(summary.step_count_after))target.appendChild(workspaceRow("절차 단계 수",`${summary.step_count_before} → ${summary.step_count_after}`));if(Number.isInteger(summary.warning_count_before)&&Number.isInteger(summary.warning_count_after))target.appendChild(workspaceRow("경고 수",`${summary.warning_count_before} → ${summary.warning_count_after}`));for(const change of summary.structured_adaptation_changes||[]){if(!change||typeof change!=="object")continue;const label=ADAPTATION_KIND_LABELS[change.kind]||"구조화 적용 변경",detail=[change.protocol_step_id?`${change.protocol_step_id} 단계`:null,change.summary,change.rationale].filter(value=>typeof value==="string"&&value.trim()).join(" · ");target.appendChild(workspaceRow(label,detail||"세부 설명 없음"));}if(!target.children.length)target.appendChild(workspaceRow("구조 비교 필요","요약 가능한 구조 필드가 없습니다. 기술 차이와 원문을 직접 확인하세요."));}
 function renderReviewerHistory(history){const target=$("reviewer-history");if(!target)return;target.replaceChildren();for(const event of Array.isArray(history)?history:[]){const info=REVIEW_ACTIONS[event?.action],role=ROLE_LABELS[event?.actor_role]||"승인 권한자",title=`${info?.label||"결정"} · ${event?.affected_version||"버전 확인"}`,detail=[event?.actor_display_name,role,event?.created_at,event?.comment].filter(value=>typeof value==="string"&&value.trim()).join(" · ");target.appendChild(workspaceRow(title,detail));}if(!target.children.length)target.appendChild(workspaceRow("기록된 결정 없음","이 버전은 아직 검토 결정이 기록되지 않았습니다."));}
-function renderReviewerPacket(data){const context=data?.review_context||{},source=context.source||{},riskSignal=reviewerRiskSignalLabel(data?.risk?.source_signal),state=data?.decision_state?.state||"review_required";setText("reviewer-selection",`${context.protocol_title||"프로토콜"} · ${context.version_label||"버전 확인"}`);setText("reviewer-protocol",context.protocol_title||"—");setText("reviewer-version",`${context.version_label||"—"} · ${context.revision_id||"리비전 없음"}`);setText("reviewer-requester",context.requester_display_name||"기록되지 않음");setText("reviewer-source",`${reviewerSourceLabel(source.connector_kind)} · ${source.version_identity||"버전 정보 없음"}`);setText("reviewer-reason",context.change_reason||"기록된 변경 이유 없음");renderReviewerChangeSummary(data);setText("reviewer-impact","평가되지 않음 · 검토 완료된 실험 영향 평가가 저장되어 있지 않습니다.");setText("reviewer-risk",`평가되지 않음 · 검토 완료된 위험 수준이 저장되어 있지 않습니다.${riskSignal?` ${riskSignal}이며, 이는 위험 수준 판정이 아닙니다.`:""}`);renderReviewerHistory(data?.history);setReviewerDecisionAvailability(data?.decision_state?.allowed_actions);setText("reviewer-action-guidance",state==="approved"?"현재 승인된 버전입니다. ‘향후 사용 중지’는 새 운영 실험에서의 사용만 차단하며 이력은 보존합니다.":state==="rejected"?"수정 요청이 기록된 버전입니다. 새 리비전 제출 전에는 실행할 수 없습니다.":state==="revoked"?"향후 사용이 중지된 버전입니다. 결정 이력과 기존 실험 기록은 보존됩니다.":"승인은 새 운영 실험에서 사용을 허용합니다. 수정 요청은 이 버전을 실행 불가로 유지합니다.");const confirmation=$("reviewer-decision-confirmation");if(confirmation)confirmation.hidden=true;pendingReviewerDecision=null;}
+function renderReviewerPacket(data){const context=data?.review_context||{},source=context.source||{},riskSignal=reviewerRiskSignalLabel(data?.risk?.source_signal),state=data?.decision_state?.state||"review_required";setText("reviewer-selection",`${context.protocol_title||"프로토콜"} · ${context.version_label||"버전 확인"}`);setText("reviewer-protocol",context.protocol_title||"—");setText("reviewer-version",`${context.version_label||"—"} · ${context.revision_id||"리비전 없음"}`);setText("reviewer-requester",context.requester_display_name||"기록되지 않음");setText("reviewer-source",`${reviewerSourceLabel(source.connector_kind)} · ${source.version_identity||"버전 정보 없음"}`);setText("reviewer-reason",context.change_reason||"기록된 검토 요청 이유 없음");renderReviewerChangeSummary(data);setText("reviewer-impact","평가 정보 없음 · 검토 완료된 실험 영향 평가가 저장되어 있지 않습니다.");setText("reviewer-risk",`평가 정보 없음 · 검토 완료된 위험 수준이 저장되어 있지 않습니다.${riskSignal?` ${riskSignal}이며, 이는 위험 수준 판정이 아닙니다.`:""}`);renderReviewerHistory(data?.history);setReviewerDecisionAvailability(data?.decision_state?.allowed_actions);setText("reviewer-action-guidance",state==="approved"?"현재 승인된 버전입니다. 사용 중지는 새 실험에서의 사용만 막고 기존 기록은 보존합니다.":state==="rejected"?"수정 요청이 기록된 버전입니다. 수정한 새 버전을 다시 검토해야 합니다.":state==="revoked"?"사용이 중지된 버전입니다. 결정 이력과 기존 실험 기록은 보존됩니다.":"승인하면 연구자가 이 버전을 새 실험에서 사용할 수 있습니다. 수정 요청은 실행을 허용하지 않습니다.");const confirmation=$("reviewer-decision-confirmation");if(confirmation)confirmation.hidden=true;pendingReviewerDecision=null;}
 async function loadReviewerWorkspace(){const target=$("reviewer-inbox"),resolved=$("reviewer-resolved-inbox");if(!target)return false;target.textContent="검토 요청을 불러오는 중…";if(resolved)resolved.textContent="처리된 요청을 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/reviewer/inbox",{cache:"no-store"});if(!response.ok)throw new Error("검토 요청을 불러오지 못했습니다.");const data=await response.json(),items=Array.isArray(data.items)?data.items:[],pendingItems=items.filter(item=>item?.status!=="resolved"),resolvedItems=items.filter(item=>item?.status==="resolved");target.replaceChildren();if(resolved)resolved.replaceChildren();const renderItem=(item,container,buttonLabel)=>{if(!container)return;const title=`${item?.change_kind==="changed"?"변경":"신규"} · ${item?.protocol_title||"프로토콜"} · ${item?.version_label||item?.version_identity||"버전 확인"}`,requester=item?.requester_display_name==="Not recorded"?"요청자 기록 없음":item?.requester_display_name||"요청자 기록 없음",risk=item?.risk_level==="not_assessed"?"위험 수준 평가되지 않음":"위험 수준 확인 필요",row=workspaceRow(title,`${requester} · 변경 이유: ${item?.request_reason||"기록 없음"} · ${reviewerSourceLabel(item?.connector_kind)} · ${risk}`);if(typeof item?.revision_id!=="string"){row.appendChild(workspaceRow("검토 시작 불가","정확한 프로토콜 리비전이 아직 생성되지 않았습니다."));container.appendChild(row);return;}const actions=document.createElement("div"),button=document.createElement("button");actions.className="workspace-actions";button.type="button";button.textContent=buttonLabel;button.addEventListener("click",()=>loadReviewerDiff(item.revision_id));actions.appendChild(button);row.appendChild(actions);container.appendChild(row);};for(const item of pendingItems)renderItem(item,target,"검토하기");for(const item of resolvedItems)renderItem(item,resolved,"결정 기록 보기");if(!pendingItems.length)target.textContent="대기 중인 검토 요청이 없습니다.";if(resolved&&!resolvedItems.length)resolved.textContent="처리된 요청이 없습니다.";return true;}catch(error){target.textContent=error?.message||"검토 요청 오류";if(resolved)resolved.textContent="처리된 요청을 불러오지 못했습니다.";return false;}}
-async function loadReviewerDiff(revisionId){const target=$("reviewer-diff"),status=$("reviewer-status");if(status)status.textContent="변경 요약과 결정 이력을 불러오는 중…";try{const response=await workspaceFetch(`/api/workspace/reviewer/revisions/${encodeURIComponent(revisionId)}/diff`,{cache:"no-store"});if(!response.ok)throw new Error("검토 자료를 불러오지 못했습니다.");const data=await response.json();selectedWorkspaceRevision=revisionId;if(target)target.textContent=(data.lines||[]).join("\n")||"첫 리비전 · 전체 원문 검토 필요";renderReviewerPacket(data);if(status)status.textContent="변경 이유, 영향, 위험, 원문과 결정 결과를 확인하세요.";return true;}catch(error){setReviewerDecisionAvailability([]);if(status)status.textContent=error?.message||"검토 자료 오류";return false;}}
+async function loadReviewerDiff(revisionId){const target=$("reviewer-diff"),status=$("reviewer-status");if(status)status.textContent="확인할 내용과 결정 기록을 불러오는 중…";try{const response=await workspaceFetch(`/api/workspace/reviewer/revisions/${encodeURIComponent(revisionId)}/diff`,{cache:"no-store"});if(!response.ok)throw new Error("검토 자료를 불러오지 못했습니다.");const data=await response.json();selectedWorkspaceRevision=revisionId;if(target)target.textContent=(data.lines||[]).join("\n")||"첫 버전 · 전체 원문 검토 필요";renderReviewerPacket(data);if(status)status.textContent="검토 이유, 변경 내용, 남은 위험과 결정 결과를 확인하세요.";return true;}catch(error){setReviewerDecisionAvailability([]);if(status)status.textContent=error?.message||"검토 자료 오류";return false;}}
 function stageReviewerDecision(action){const status=$("reviewer-status"),comment=$("reviewer-comment")?.value?.trim()||"",info=REVIEW_ACTIONS[action];if(!selectedWorkspaceRevision||!info||!selectedReviewerAllowedActions.has(action)){if(status)status.textContent="현재 상태에서 선택할 수 없는 결정입니다. 검토 자료를 새로고침해 주세요.";return false;}if(!comment){if(status)status.textContent="결정 근거 또는 요청할 수정 내용을 먼저 기록해 주세요.";return false;}pendingReviewerDecision=action;setText("reviewer-confirm-title",`${info.label} 결과 확인`);setText("reviewer-confirm-consequence",info.consequence);const confirmation=$("reviewer-decision-confirmation");if(confirmation)confirmation.hidden=false;if(status)status.textContent="아래 결과를 확인한 뒤 기록을 확정하세요.";return true;}
-async function submitReviewerDecision(action=pendingReviewerDecision){const status=$("reviewer-status"),comment=$("reviewer-comment")?.value?.trim()||"",info=REVIEW_ACTIONS[action];if(!selectedWorkspaceRevision||!comment||!info||!selectedReviewerAllowedActions.has(action)){if(status)status.textContent="검토 자료, 허용된 결정, 결정 근거가 필요합니다.";return false;}const revisionId=selectedWorkspaceRevision,idempotency=(globalThis.crypto?.randomUUID?.()||`${Date.now()}-${action}`).replace(/[^A-Za-z0-9._:@-]/g,"-");try{const response=await workspaceFetch(`/api/workspace/reviewer/revisions/${encodeURIComponent(revisionId)}/decision`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,comment,idempotency_key:idempotency})});const data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"다른 검토 결정이 먼저 기록되었습니다. 최신 결정 이력을 다시 확인해 주세요.":"검토 결정을 저장하지 못했습니다.");pendingReviewerDecision=null;const confirmation=$("reviewer-decision-confirmation");if(confirmation)confirmation.hidden=true;await loadReviewerWorkspace();await loadReviewerDiff(revisionId);if(status)status.textContent=`${info.label} 결정과 책임 이력을 저장했습니다.`;return true;}catch(error){if(status)status.textContent=error?.message||"검토 결정 오류";return false;}}
+async function submitReviewerDecision(action=pendingReviewerDecision){const status=$("reviewer-status"),comment=$("reviewer-comment")?.value?.trim()||"",info=REVIEW_ACTIONS[action];if(!selectedWorkspaceRevision||!comment||!info||!selectedReviewerAllowedActions.has(action)){if(status)status.textContent="검토 자료, 선택할 수 있는 결정과 결정 근거가 필요합니다.";return false;}const revisionId=selectedWorkspaceRevision,idempotency=(globalThis.crypto?.randomUUID?.()||`${Date.now()}-${action}`).replace(/[^A-Za-z0-9._:@-]/g,"-");try{const response=await workspaceFetch(`/api/workspace/reviewer/revisions/${encodeURIComponent(revisionId)}/decision`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,comment,idempotency_key:idempotency})});const data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"다른 검토 결정이 먼저 기록되었습니다. 최신 결정 기록을 다시 확인해 주세요.":"검토 결정을 저장하지 못했습니다.");pendingReviewerDecision=null;const confirmation=$("reviewer-decision-confirmation");if(confirmation)confirmation.hidden=true;await loadReviewerWorkspace();await loadReviewerDiff(revisionId);await loadQuickProtocolLibrary();await loadWorkspaceProtocolRevisions();if(status)status.textContent=`${info.label} 결정과 책임 기록을 저장했습니다.`;return true;}catch(error){if(status)status.textContent=error?.message||"검토 결정 오류";return false;}}
 async function importProtocolsIo(){const status=$("protocols-io-status"),connector_id=$("protocols-io-connector")?.value||"",identifier=$("protocols-io-identifier")?.value?.trim()||"";if(!connector_id||!identifier){if(status)status.textContent="연결과 DOI/URL/URI가 필요합니다.";return false;}if(status)status.textContent="구조화 원본을 가져오는 중…";try{const response=await workspaceFetch("/api/workspace/sources/protocols-io/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({connector_id,identifier})}),data=await response.json();if(!response.ok)throw new Error(data.detail||"가져오기 실패");if(status)status.textContent=`${data.inbox_state} · ${data.revision_id} · 검토 필요`;await loadReviewerWorkspace();return true;}catch(error){if(status)status.textContent=error?.message||"가져오기 오류";return false;}}
 async function syncGoogleDrive(){const status=$("drive-status"),connector_id=$("drive-connector")?.value||"",folder_id=$("drive-folder")?.value?.trim()||"";if(!connector_id||!folder_id){if(status)status.textContent="연결과 허용 폴더 ID가 필요합니다.";return false;}if(status)status.textContent="Drive 변경 로그를 확인하는 중…";try{const response=await workspaceFetch("/api/workspace/sources/google-drive/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({connector_id,folder_id})}),data=await response.json();if(!response.ok)throw new Error(data.detail||"Drive 동기화 실패");if(status)status.textContent=`${data.sync_mode} · 새 초안 ${(data.imports||[]).length}개 · 변경 토큰 저장됨`;await loadReviewerWorkspace();return true;}catch(error){if(status)status.textContent=error?.message||"Drive 동기화 오류";return false;}}
 async function importGitHubSource(){const status=$("github-status"),connector_id=$("github-connector")?.value||"",repository=$("github-repository")?.value?.trim()||"",ref=$("github-ref")?.value?.trim()||"",path=$("github-path")?.value?.trim()||"",kind=$("github-import-kind")?.value||"protocol";if(!connector_id||!repository||!ref||!path){if(status)status.textContent="연결, 저장소, ref, 경로가 필요합니다.";return false;}const dry=kind!=="protocol",url=dry?"/api/workspace/sources/github/dry-lab/import":"/api/workspace/sources/github/import",body={connector_id,repository,ref,path,...(dry?{engine:kind}:{})};if(status)status.textContent="정확한 GitHub 커밋을 확인하는 중…";try{const response=await workspaceFetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error(data.detail||"GitHub 가져오기 실패");if(status)status.textContent=`${data.revision_id||data.workflow_revision_id} · 검토 필요 · 코드 실행 안 함`;await loadReviewerWorkspace();await loadDryLabWorkflows();return true;}catch(error){if(status)status.textContent=error?.message||"GitHub 가져오기 오류";return false;}}
@@ -792,23 +812,24 @@ const ADMIN_ROLE_LABELS=Object.freeze({researcher:"연구자",reviewer:"검토�
 const ADMIN_PERMISSION_LABELS=Object.freeze({"protocol.read":"프로토콜 보기","protocol.import":"프로토콜 가져오기","protocol.execute":"실험 실행","protocol.review":"변경 검토","protocol.approve":"프로토콜 승인","protocol.revoke":"향후 사용 중지","report.read":"실험 기록 보기","report.write":"실험 기록 작성","connector.read":"연결 사용","connector.manage":"연결 관리","eln.writeback":"ELN 기록 전송","knowledge.write":"랩 지식 기록","knowledge.promote":"랩 지식 승인","asset.read":"자산 보기","asset.manage":"자산 관리","analytics.read":"운영 지표 보기","membership.manage":"사용자 권한 관리","retention.manage":"보존 정책 관리"});
 const ADMIN_CONNECTOR_LABELS=Object.freeze({google_drive:"Google Drive",protocols_io:"protocols.io",github:"GitHub App",elabftw:"eLabFTW"});
 const ADMIN_CONNECTOR_STATUS=Object.freeze({enabled:"활성",ready_to_enable:"활성화 준비됨",needs_test:"구성 검사 필요",test_failed:"구성 검사 실패"});
-const ADMIN_FAILURE_LABELS=Object.freeze({credential_unavailable:"보안 연결 자격 증명을 서버에서 사용할 수 없습니다.",scope_invalid:"허용한 접근 범위 형식을 확인해 주세요."});
+const ADMIN_FAILURE_LABELS=Object.freeze({credential_unavailable:"서버 로그인 정보를 사용할 수 없습니다.",scope_invalid:"허용한 접근 범위 형식을 확인해 주세요."});
 const ADMIN_ACTION_LABELS=Object.freeze({"workspace.accessed":"인증된 작업 공간 접근","membership.updated":"사용자 권한 변경","connector.created":"연결 구성 생성","connector.configuration_tested":"연결 구성 검사","connector.enabled":"연결 활성화","connector.disabled":"연결 비활성화","retention.updated":"보존 정책 변경"});
 let adminPermissionLevels=new Map();
 function adminPermissionText(values){return (Array.isArray(values)?values:[]).map(value=>ADMIN_PERMISSION_LABELS[value]||value).join(" · ")||"허용 작업 없음";}
+function adminTechnicalDetails(text){const details=document.createElement("details"),summary=document.createElement("summary"),content=document.createElement("small");details.className="admin-row-details";summary.textContent="기술 세부 정보";content.textContent=text;details.append(summary,content);return details;}
 function renderAdminPermissionPreview(){const target=$("admin-permission-preview"),role=$("admin-member-role")?.value||"researcher";if(!target)return false;target.textContent=`허용 작업 · ${adminPermissionText(adminPermissionLevels.get(role)||[])}`;return true;}
 function updateAdminConnectorFields(){const kind=$("admin-connector-kind")?.value||"google_drive",help=$("admin-connector-scope-help"),webhook=$("admin-webhook-credential-field"),roots=$("admin-connector-roots");const guidance={google_drive:["Google Drive 폴더는 folder:ID, 공유 드라이브는 shared-drive:ID 형식으로 제한합니다.","folder:folder_id\nshared-drive:drive_id"],protocols_io:["허용할 DOI 또는 프로토콜 URI 접두어를 protocol:값 형식으로 제한합니다.","protocol:10.17504/protocols.io"],github:["저장소, 브랜치, 경로를 owner/repo@branch:path 형식으로 제한합니다.","lab/protocols@main:protocols"],elabftw:["허용된 eLabFTW HTTPS 주소 하나만 입력합니다.","https://eln.example.org"]}[kind];if(help)help.textContent=guidance[0];if(roots)roots.placeholder=guidance[1];if(webhook)webhook.hidden=kind!=="github";return true;}
-async function loadAdminCredentials(){const primary=$("admin-connector-secret"),webhook=$("admin-webhook-secret"),status=$("admin-connector-status");if(!primary||!webhook)return false;try{const response=await workspaceFetch("/api/workspace/admin/connector-credentials",{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("보안 연결 자격 증명 목록을 불러오지 못했습니다.");for(const [select,placeholder] of [[primary,"보안 연결 자격 증명 선택"],[webhook,"선택 안 함"]]){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent=placeholder;select.appendChild(empty);for(const item of data.credentials||[]){const option=document.createElement("option");option.value=item.credential_handle;option.textContent=`${item.display_name} · ${item.available?"사용 가능":"서버 설정 필요"}`;option.disabled=item.available!==true;select.appendChild(option);}}if(!(data.credentials||[]).length&&status)status.textContent="서버 운영자가 먼저 보안 연결 자격 증명을 준비해야 합니다.";return true;}catch(error){if(status)status.textContent=error?.message||"자격 증명 목록 오류";return false;}}
-function connectorRow(item){const title=`${item.display_name} · ${ADMIN_CONNECTOR_LABELS[item.connector_kind]||item.connector_kind}`,statusLabel=ADMIN_CONNECTOR_STATUS[item.operational_status]||"상태 확인 필요",scope=(item.allowed_roots||[]).join(" · ")||"접근 범위 없음",failure=item.last_failure_code?` · ${ADMIN_FAILURE_LABELS[item.last_failure_code]||item.last_failure_code}`:"",checked=item.last_checked_at?` · 마지막 검사 ${item.last_checked_at}`:"";const row=workspaceRow(title,`${statusLabel} · 접근 범위 ${scope}${checked}${failure}`),actions=document.createElement("div");actions.className="workspace-actions admin-connector-actions";if(item.operational_status==="needs_test"||item.operational_status==="test_failed"){const testButton=document.createElement("button");testButton.type="button";testButton.textContent="구성 검사";testButton.addEventListener("click",()=>{void testAdminConnector(item.connector_id);});actions.appendChild(testButton);}if(item.operational_status==="ready_to_enable"){const enableButton=document.createElement("button");enableButton.type="button";enableButton.textContent="연결 활성화";enableButton.addEventListener("click",()=>{void setAdminConnectorEnabled(item.connector_id,true);});actions.appendChild(enableButton);}if(item.operational_status==="enabled"){const disableButton=document.createElement("button");disableButton.type="button";disableButton.textContent="연결 비활성화";disableButton.className="admin-danger-action";disableButton.addEventListener("click",()=>{void setAdminConnectorEnabled(item.connector_id,false);});actions.appendChild(disableButton);}if(actions.children.length)row.appendChild(actions);return row;}
+async function loadAdminCredentials(){const primary=$("admin-connector-secret"),webhook=$("admin-webhook-secret"),status=$("admin-connector-status");if(!primary||!webhook)return false;try{const response=await workspaceFetch("/api/workspace/admin/connector-credentials",{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("서버 로그인 정보 목록을 불러오지 못했습니다.");for(const [select,placeholder] of [[primary,"서버 로그인 정보 선택"],[webhook,"선택 안 함"]]){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent=placeholder;select.appendChild(empty);for(const item of data.credentials||[]){const option=document.createElement("option");option.value=item.credential_handle;option.textContent=`${item.display_name} · ${item.available?"사용 가능":"서버 설정 필요"}`;option.disabled=item.available!==true;select.appendChild(option);}}if(!(data.credentials||[]).length&&status)status.textContent="서버 운영자가 먼저 연결용 로그인 정보를 준비해야 합니다.";return true;}catch(error){if(status)status.textContent=error?.message||"로그인 정보 목록 오류";return false;}}
+function connectorRow(item){const title=`${item.display_name} · ${ADMIN_CONNECTOR_LABELS[item.connector_kind]||"외부 서비스"}`,statusLabel=ADMIN_CONNECTOR_STATUS[item.operational_status]||"상태 확인 필요",scope={google_drive:"허용된 폴더만 읽기",protocols_io:"지정한 프로토콜만 읽기",github:"지정한 저장소와 경로만 읽기",elabftw:"확인한 완료 기록만 전송"}[item.connector_kind]||"제한된 범위",failure=item.last_failure_code?` · ${ADMIN_FAILURE_LABELS[item.last_failure_code]||"조치 필요"}`:"",checked=item.last_checked_at?` · 마지막 확인 ${item.last_checked_at}`:"";const row=workspaceRow(title,`${statusLabel} · ${scope}${checked}${failure}`),actions=document.createElement("div");actions.className="workspace-actions admin-connector-actions";if(item.operational_status==="needs_test"||item.operational_status==="test_failed"){const testButton=document.createElement("button");testButton.type="button";testButton.textContent="구성 검사";testButton.addEventListener("click",()=>{void testAdminConnector(item.connector_id);});actions.appendChild(testButton);}if(item.operational_status==="ready_to_enable"){const enableButton=document.createElement("button");enableButton.type="button";enableButton.textContent="연결 활성화";enableButton.addEventListener("click",()=>{void setAdminConnectorEnabled(item.connector_id,true);});actions.appendChild(enableButton);}if(item.operational_status==="enabled"){const disableButton=document.createElement("button");disableButton.type="button";disableButton.textContent="연결 비활성화";disableButton.className="admin-danger-action";disableButton.addEventListener("click",()=>{void setAdminConnectorEnabled(item.connector_id,false);});actions.appendChild(disableButton);}if(actions.children.length)row.appendChild(actions);row.appendChild(adminTechnicalDetails(`연결 ID ${item.connector_id||"기록 없음"} · 종류 ${item.connector_kind||"기록 없음"} · 접근 범위 ${(item.allowed_roots||[]).join(" · ")||"없음"}${item.last_failure_code?` · 오류 코드 ${item.last_failure_code}`:""}`));return row;}
 async function loadAdminConnectors(){const target=$("admin-connectors");if(!target)return false;try{const response=await workspaceFetch("/api/workspace/connectors",{cache:"no-store"});if(!response.ok)throw new Error("외부 연결 상태를 불러오지 못했습니다.");const data=await response.json();target.replaceChildren();for(const item of data.connectors||[])target.appendChild(connectorRow(item));if(!(data.connectors||[]).length)target.textContent="구성된 외부 연결이 없습니다.";return true;}catch(error){target.textContent=error?.message||"연결 상태 오류";return false;}}
-async function createAdminConnector(){const status=$("admin-connector-status"),payload={connector_kind:$("admin-connector-kind")?.value||"",display_name:$("admin-connector-name")?.value?.trim()||"",credential_handle:$("admin-connector-secret")?.value||"",webhook_credential_handle:$("admin-webhook-secret")?.value||undefined,allowed_roots:($("admin-connector-roots")?.value||"").split(/\r?\n/).map(item=>item.trim()).filter(Boolean)};if(!payload.display_name||!payload.credential_handle||!payload.allowed_roots.length){if(status)status.textContent="연결 이름, 보안 연결 자격 증명, 접근 범위를 모두 입력해 주세요.";return false;}try{const response=await workspaceFetch("/api/workspace/admin/connectors",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.detail||"연결 구성을 저장하지 못했습니다.");if(status)status.textContent=`${data.display_name} · 비활성 상태로 저장했습니다. 목록에서 구성 검사를 진행해 주세요.`;if($("admin-connector-name"))$("admin-connector-name").value="";if($("admin-connector-secret"))$("admin-connector-secret").value="";if($("admin-webhook-secret"))$("admin-webhook-secret").value="";if($("admin-connector-roots"))$("admin-connector-roots").value="";await loadAdminConnectors();await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"연결 구성 오류";return false;}}
-async function testAdminConnector(connectorId){const status=$("admin-connector-status");try{const response=await workspaceFetch(`/api/workspace/admin/connectors/${encodeURIComponent(connectorId)}/test`,{method:"POST"}),data=await response.json();if(!response.ok)throw new Error(data.detail||"구성 검사를 수행하지 못했습니다.");if(status)status.textContent=data.validation_status==="configuration_verified"?"서버 자격 증명과 접근 범위 구성을 확인했습니다. 외부 제공자 통신은 아직 검증하지 않았습니다.":ADMIN_FAILURE_LABELS[data.last_failure_code]||"구성 검사에 실패했습니다.";await loadAdminConnectors();await loadAdminSecurity();return data.validation_status==="configuration_verified";}catch(error){if(status)status.textContent=error?.message||"구성 검사 오류";return false;}}
+async function createAdminConnector(){const status=$("admin-connector-status"),payload={connector_kind:$("admin-connector-kind")?.value||"",display_name:$("admin-connector-name")?.value?.trim()||"",credential_handle:$("admin-connector-secret")?.value||"",webhook_credential_handle:$("admin-webhook-secret")?.value||undefined,allowed_roots:($("admin-connector-roots")?.value||"").split(/\r?\n/).map(item=>item.trim()).filter(Boolean)};if(!payload.display_name||!payload.credential_handle||!payload.allowed_roots.length){if(status)status.textContent="연결 이름, 서버 로그인 정보와 접근 범위를 모두 입력해 주세요.";return false;}try{const response=await workspaceFetch("/api/workspace/admin/connectors",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.detail||"연결 구성을 저장하지 못했습니다.");if(status)status.textContent=`${data.display_name} · 꺼진 상태로 저장했습니다. 목록에서 구성 검사를 진행해 주세요.`;if($("admin-connector-name"))$("admin-connector-name").value="";if($("admin-connector-secret"))$("admin-connector-secret").value="";if($("admin-webhook-secret"))$("admin-webhook-secret").value="";if($("admin-connector-roots"))$("admin-connector-roots").value="";await loadAdminConnectors();await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"연결 구성 오류";return false;}}
+async function testAdminConnector(connectorId){const status=$("admin-connector-status");try{const response=await workspaceFetch(`/api/workspace/admin/connectors/${encodeURIComponent(connectorId)}/test`,{method:"POST"}),data=await response.json();if(!response.ok)throw new Error(data.detail||"구성 검사를 수행하지 못했습니다.");if(status)status.textContent=data.validation_status==="configuration_verified"?"서버 로그인 정보와 접근 범위 구성을 확인했습니다. 외부 서비스 통신은 아직 검증하지 않았습니다.":ADMIN_FAILURE_LABELS[data.last_failure_code]||"구성 검사에 실패했습니다.";await loadAdminConnectors();await loadAdminSecurity();return data.validation_status==="configuration_verified";}catch(error){if(status)status.textContent=error?.message||"구성 검사 오류";return false;}}
 async function setAdminConnectorEnabled(connectorId,enabled){const status=$("admin-connector-status");try{const response=await workspaceFetch(`/api/workspace/admin/connectors/${encodeURIComponent(connectorId)}/enabled`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})}),data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"구성 검사를 통과한 연결만 활성화할 수 있습니다.":data.detail||"연결 상태를 변경하지 못했습니다.");if(status)status.textContent=enabled?"연결을 활성화했습니다. 허용된 범위에서만 사용할 수 있습니다.":"연결을 비활성화했습니다.";await loadAdminConnectors();await loadWorkspaceConnectors();await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"연결 상태 오류";return false;}}
-async function loadAdminMemberships(){const target=$("admin-memberships");if(!target)return false;try{const response=await workspaceFetch("/api/workspace/admin/memberships",{cache:"no-store"});if(!response.ok)throw new Error("사용자 권한을 불러오지 못했습니다.");const data=await response.json();adminPermissionLevels=new Map((data.permission_levels||[]).map(item=>[item.role,item.permissions||[]]));target.replaceChildren();for(const item of data.memberships||[])target.appendChild(workspaceRow(`${item.display_name} · ${ADMIN_ROLE_LABELS[item.role]||item.role}`,`${item.active?"활성":"중지"} · 계정 식별자 ${item.principal_id} · ${adminPermissionText(item.permissions)}`));if(!(data.memberships||[]).length)target.textContent="등록된 사용자 권한이 없습니다.";renderAdminPermissionPreview();return true;}catch(error){target.textContent=error?.message||"사용자 권한 오류";return false;}}
-async function saveAdminMembership(){const status=$("admin-member-status"),target_principal_id=$("admin-member-id")?.value?.trim()||"",payload={subject:$("admin-member-subject")?.value?.trim()||"",display_name:$("admin-member-name")?.value?.trim()||"",role:$("admin-member-role")?.value||"researcher",active:$("admin-member-active")?.checked===true};if(!target_principal_id||!payload.subject||!payload.display_name){if(status)status.textContent="계정 식별자, 사용자 아이덴티티, 표시 이름이 필요합니다.";return false;}try{const response=await workspaceFetch(`/api/workspace/admin/memberships/${encodeURIComponent(target_principal_id)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"자신의 관리자 권한은 직접 중지할 수 없습니다.":data.detail||"사용자 권한을 저장하지 못했습니다.");if(status)status.textContent=`${data.display_name} · ${ADMIN_ROLE_LABELS[data.role]||data.role} · ${data.active?"활성":"중지"}`;await loadAdminMemberships();await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"사용자 권한 오류";return false;}}
-function renderAdminSecurity(payload){const summary=$("admin-security-summary"),activity=$("admin-security-activity");if(!summary||!activity||!payload)return false;summary.replaceChildren();const auth=payload.authentication||{},connections=payload.connections||{},retention=payload.retention||{};for(const [label,value] of [["운영 인증",auth.production_requirement==="oidc"?"OIDC 필수":"확인 필요"],["현재 인증",auth.current_method==="development"?"개발 데모 프로필":auth.current_method||"확인 불가"],["활성 연결",`${connections.enabled||0}/${connections.total||0}`],["검사 필요",connections.needs_test||0],["연결 실패",connections.failed||0],["지표 보존",`${retention.analytics_retention_days||"—"}일`]]){const card=document.createElement("div"),strong=document.createElement("strong"),span=document.createElement("span");strong.textContent=String(value);span.textContent=label;card.append(strong,span);summary.appendChild(card);}activity.replaceChildren();for(const item of payload.activity||[]){const outcome=item.outcome==="success"?"완료":"실패",reason=item.reason_code?` · ${ADMIN_FAILURE_LABELS[item.reason_code]||item.reason_code}`:"";activity.appendChild(workspaceRow(`${ADMIN_ACTION_LABELS[item.action]||item.action} · ${outcome}`,`${item.actor_display_name||item.actor_principal_id} · ${item.created_at} · 대상 ${item.target_kind}${reason}`));}if(!(payload.activity||[]).length)activity.textContent="기록된 관리자 활동이 없습니다.";if(Number.isInteger(retention.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(retention.analytics_retention_days);return true;}
-async function loadAdminSecurity(){const status=$("admin-security-status");if(status)status.textContent="보안 상태를 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/admin/security",{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("보안 상태를 불러오지 못했습니다.");renderAdminSecurity(data);if(status)status.textContent="자격 증명 값, 원음, 대화문, 모델 추론은 이 기록에 포함되지 않습니다.";return true;}catch(error){if(status)status.textContent=error?.message||"보안 상태 오류";return false;}}
-async function saveRetentionPolicy(){const status=$("admin-retention-status"),days=Number.parseInt($("admin-retention-days")?.value||"",10);if(!Number.isInteger(days)||days<1||days>3650){if(status)status.textContent="1–3650일을 입력하세요.";return false;}try{const response=await workspaceFetch("/api/workspace/admin/retention",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({analytics_retention_days:days})}),data=await response.json();if(!response.ok)throw new Error(data.detail||"보존 정책 저장 실패");if(status)status.textContent=`${data.analytics_retention_days}일 · 오래된 비식별 운영 이벤트 ${data.events_purged}개 삭제`;await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"보존 정책 오류";return false;}}
+async function loadAdminMemberships(){const target=$("admin-memberships");if(!target)return false;try{const response=await workspaceFetch("/api/workspace/admin/memberships",{cache:"no-store"});if(!response.ok)throw new Error("구성원 목록을 불러오지 못했습니다.");const data=await response.json();adminPermissionLevels=new Map((data.permission_levels||[]).map(item=>[item.role,item.permissions||[]]));target.replaceChildren();for(const item of data.memberships||[]){const row=workspaceRow(`${item.display_name} · ${ADMIN_ROLE_LABELS[item.role]||"구성원"}`,item.active?"사용 가능":"사용 중지");row.appendChild(adminTechnicalDetails(`계정 ID ${item.principal_id||"기록 없음"} · 내부 역할 ${item.role||"기록 없음"} · ${adminPermissionText(item.permissions)}`));target.appendChild(row);}if(!(data.memberships||[]).length)target.textContent="등록된 구성원이 없습니다.";renderAdminPermissionPreview();return true;}catch(error){target.textContent=error?.message||"구성원 목록 오류";return false;}}
+async function saveAdminMembership(){const status=$("admin-member-status"),target_principal_id=$("admin-member-id")?.value?.trim()||"",payload={subject:$("admin-member-subject")?.value?.trim()||"",display_name:$("admin-member-name")?.value?.trim()||"",role:$("admin-member-role")?.value||"researcher",active:$("admin-member-active")?.checked===true};if(!target_principal_id||!payload.subject||!payload.display_name){if(status)status.textContent="내부 계정 키, 로그인 연결 키와 표시 이름을 입력해 주세요.";return false;}try{const response=await workspaceFetch(`/api/workspace/admin/memberships/${encodeURIComponent(target_principal_id)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"자신의 랩 관리자 역할은 직접 중지할 수 없습니다.":data.detail||"구성원 역할을 저장하지 못했습니다.");if(status)status.textContent=`${data.display_name} · ${ADMIN_ROLE_LABELS[data.role]||"구성원"} · ${data.active?"사용 가능":"사용 중지"}`;await loadAdminMemberships();await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"구성원 역할 오류";return false;}}
+function renderAdminSecurity(payload){const summary=$("admin-security-summary"),activity=$("admin-security-activity"),attention=$("admin-attention");if(!summary||!activity||!payload)return false;summary.replaceChildren();const auth=payload.authentication||{},connections=payload.connections||{},retention=payload.retention||{},signIn=auth.current_method==="development"?"개발 모드":auth.current_method?"조직 로그인":"확인 필요",loginReadiness=auth.current_method==="development"?"운영 설정 필요":"확인됨";for(const [label,value] of [["로그인 방식",signIn],["운영 로그인",loginReadiness],["정상 연결",`${connections.enabled||0}/${connections.total||0}`],["확인할 연결",connections.needs_test||0],["연결 오류",connections.failed||0],["운영 통계 보관",`${retention.analytics_retention_days||"—"}일`]]){const card=document.createElement("div"),strong=document.createElement("strong"),span=document.createElement("span");strong.textContent=String(value);span.textContent=label;card.append(strong,span);summary.appendChild(card);}const issues=[];if(auth.current_method==="development")issues.push("현재는 개발 모드 로그인입니다. 실제 운영 전에 조직 로그인을 연결해 주세요.");if(Number(connections.failed)>0)issues.push(`연결 오류 ${connections.failed}건을 확인하세요.`);if(Number(connections.needs_test)>0)issues.push(`구성 확인이 필요한 연결 ${connections.needs_test}건이 있습니다.`);if(attention){attention.textContent=issues.length?issues.join(" "):"지금 조치가 필요한 운영 항목은 없습니다.";attention.classList?.toggle("needs-action",issues.length>0);}activity.replaceChildren();for(const item of payload.activity||[]){const outcome=item.outcome==="success"?"완료":"실패",reason=item.reason_code?` · ${ADMIN_FAILURE_LABELS[item.reason_code]||"사유 확인 필요"}`:"",row=workspaceRow(`${ADMIN_ACTION_LABELS[item.action]||"관리자 작업"} · ${outcome}`,`${item.actor_display_name||"관리자"} · ${item.created_at}${reason}`);row.appendChild(adminTechnicalDetails(`작업 ${item.action||"기록 없음"} · 대상 ${item.target_kind||"기록 없음"}${item.reason_code?` · 사유 코드 ${item.reason_code}`:""}`));activity.appendChild(row);}if(!(payload.activity||[]).length)activity.textContent="기록된 로그인·권한 변경이 없습니다.";if(Number.isInteger(retention.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(retention.analytics_retention_days);return true;}
+async function loadAdminSecurity(){const status=$("admin-security-status");if(status)status.textContent="로그인과 보안 상태를 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/admin/security",{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error("로그인과 보안 상태를 불러오지 못했습니다.");renderAdminSecurity(data);if(status)status.textContent="이 기록에는 비밀번호, API 키와 음성·대화 내용이 포함되지 않습니다.";return true;}catch(error){if(status)status.textContent=error?.message||"로그인·보안 상태 오류";return false;}}
+async function saveRetentionPolicy(){const status=$("admin-retention-status"),days=Number.parseInt($("admin-retention-days")?.value||"",10);if(!Number.isInteger(days)||days<1||days>3650){if(status)status.textContent="1일에서 3650일 사이로 입력해 주세요.";return false;}try{const response=await workspaceFetch("/api/workspace/admin/retention",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({analytics_retention_days:days})}),data=await response.json();if(!response.ok)throw new Error(data.detail||"보관 기간을 저장하지 못했습니다.");if(status)status.textContent=`${data.analytics_retention_days}일 보관 · 기간이 지난 운영 통계 ${data.events_purged}건을 정리했습니다.`;await loadAdminSecurity();return true;}catch(error){if(status)status.textContent=error?.message||"보관 기간 오류";return false;}}
 function updateElnWritebackAvailability(report){const button=$("elab-writeback"),confirmed=$("elab-confirm")?.checked===true;if(button)button.disabled=!(report?.status==="completed"&&confirmed&&$("elabftw-connector")?.value&&$("elab-protocol-revision")?.value);}
 async function writebackToElab(){const status=$("elab-writeback-status");if(!lastReportId||$("elab-confirm")?.checked!==true){if(status)status.textContent="완료 기록과 명시적 확인이 필요합니다.";return false;}const payload={connector_id:$("elabftw-connector")?.value||"",report_id:lastReportId,protocol_revision_id:$("elab-protocol-revision")?.value||"",confirmed:true,idempotency_key:(globalThis.crypto?.randomUUID?.()||`eln-${Date.now()}`).replace(/[^A-Za-z0-9._:@-]/g,"-")};try{const response=await workspaceFetch("/api/workspace/eln/elabftw/writeback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.detail||"eLabFTW 기록 실패");if(status)status.textContent=`eLabFTW 실험 ${data.external_experiment_id} 기록 완료 · 원음 전송 안 함`;if($("elab-writeback"))$("elab-writeback").disabled=true;return true;}catch(error){if(status)status.textContent=error?.message||"eLabFTW 기록 오류";return false;}}
 function startReportPolling(reportId){

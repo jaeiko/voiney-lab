@@ -12,22 +12,97 @@ async function openReviewerWorkspace(page) {
 }
 
 test.describe('Reviewer workspace', () => {
-  test('shows the inbox, impact-first summary, audit, and decision panels', async ({ page }) => {
+  test('shows a calm decision flow with technical evidence collapsed', async ({ page }) => {
     await openReviewerWorkspace(page);
     await expect(page.locator('#reviewer-inbox')).toBeVisible();
     await expect(page.locator('#reviewer-change-summary')).toBeVisible();
-    await expect(page.locator('#reviewer-impact')).toContainText('평가되지 않음');
-    await expect(page.locator('#reviewer-risk')).toContainText('평가되지 않음');
-    await expect(page.locator('#reviewer-history')).toBeVisible();
+    await expect(page.locator('#reviewer-impact')).toContainText('평가');
+    await expect(page.locator('#reviewer-risk')).toContainText('평가');
+    await expect(page.locator('#reviewer-history')).toBeHidden();
     await expect(page.locator('#reviewer-diff')).toBeHidden();
     await page.locator('#reviewer-technical-details').click();
     await expect(page.locator('#reviewer-diff')).toBeVisible();
+    await expect(page.locator('#reviewer-history')).toBeVisible();
     await expect(page.locator('#reviewer-approve')).toBeVisible();
     await expect(page.locator('#reviewer-approve')).toHaveText('승인');
     await expect(page.locator('#reviewer-reject')).toBeVisible();
     await expect(page.locator('#reviewer-reject')).toHaveText('수정 요청');
     await expect(page.locator('#reviewer-revoke')).toBeVisible();
-    await expect(page.locator('#reviewer-revoke')).toHaveText('향후 사용 중지');
+    await expect(page.locator('#reviewer-revoke')).toHaveText('사용 중지');
+  });
+
+  test('opens a real queue item and confirms through the existing approval endpoint', async ({ page }) => {
+    const revisionId = 'revision-browser-review';
+    let approvalRequest = null;
+    await page.route('**/api/workspace/reviewer/inbox', async route => {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ items: [{
+          revision_id: revisionId, status: 'pending', change_kind: 'changed',
+          protocol_title: '반복 범위 확인 프로토콜', version_label: 'v2',
+          requester_display_name: 'Researcher A', request_reason: '모호한 반복 범위를 명확히 함',
+          connector_kind: 'protocols_io', risk_level: 'not_assessed',
+        }] }),
+      });
+    });
+    await page.route(`**/api/workspace/reviewer/revisions/${revisionId}/diff`, async route => {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          review_context: {
+            protocol_title: '반복 범위 확인 프로토콜', revision_id: revisionId,
+            version_label: 'v2', requester_display_name: 'Researcher A',
+            change_reason: '모호한 반복 범위를 명확히 함',
+            source: { connector_kind: 'protocols_io', version_identity: 'source-v2' },
+          },
+          change_summary: {
+            changed_fields: ['steps'], step_count_before: 4, step_count_after: 4,
+            warning_count_before: 1, warning_count_after: 1,
+            structured_adaptation_changes: [],
+          },
+          risk: { level: 'not_assessed', source_signal: 'review_required' },
+          decision_state: { state: 'review_required', allowed_actions: ['approved', 'rejected'] },
+          history: [], lines: ['repeat_range: steps 2-3'],
+        }),
+      });
+    });
+    await page.route(`**/api/workspace/reviewer/revisions/${revisionId}/decision`, async route => {
+      approvalRequest = { method: route.request().method(), body: route.request().postDataJSON() };
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          event: { action: 'approved' },
+          state: { state: 'approved', available_for_new_operational_sessions: true },
+        }),
+      });
+    });
+    await page.route('**/api/workspace/protocol-library**', async route => {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ protocols: [{
+          family_id: 'family-reviewed', revision_id: revisionId,
+          title: '반복 범위 확인 프로토콜', revision_number: 2,
+          connector_kind: 'protocols_io', owner: 'Researcher A', department: 'Lab',
+          approval_state: 'approved', risk_state: 'reviewed', executable: false,
+          favorite: false, tags: [],
+        }] }),
+      });
+    });
+
+    await openReviewerWorkspace(page);
+    await expect(page.getByRole('button', { name: '검토하기' })).toBeVisible();
+    await page.getByRole('button', { name: '검토하기' }).click();
+    await expect(page.locator('#reviewer-reason')).toContainText('모호한 반복 범위');
+    await expect(page.locator('#reviewer-version')).toContainText(revisionId);
+    await page.locator('#reviewer-comment').fill('원문과 변경된 반복 범위를 확인했습니다.');
+    await page.locator('#reviewer-approve').click();
+    await page.locator('#reviewer-decision-confirm').click();
+    await expect.poll(() => approvalRequest).not.toBeNull();
+    expect(approvalRequest.method).toBe('POST');
+    expect(approvalRequest.body.action).toBe('approved');
+    expect(approvalRequest.body.comment).toContain('반복 범위');
+    await page.locator('#workspace-researcher').click();
+    await expect(page.locator('#quick-library-results')).toContainText('반복 범위 확인 프로토콜');
   });
 
   test('stages an allowed decision with explicit consequences and does not imply unknown risk', async ({ page }) => {
@@ -61,7 +136,7 @@ test.describe('Reviewer workspace', () => {
     await page.locator('#reviewer-comment').fill('Source and warning changes reviewed.');
     await page.locator('#reviewer-approve').click();
     await expect(page.locator('#reviewer-decision-confirmation')).toBeVisible();
-    await expect(page.locator('#reviewer-confirm-consequence')).toContainText('새 운영 실험');
+    await expect(page.locator('#reviewer-confirm-consequence')).toContainText('새 실험');
     await page.locator('#reviewer-decision-cancel').click();
     await expect(page.locator('#reviewer-decision-confirmation')).toBeHidden();
     await expect(page.locator('#reviewer-status')).toContainText('프로토콜 상태는 변경되지 않았습니다');
@@ -79,15 +154,20 @@ test.describe('Reviewer workspace', () => {
     expect(ocrAcceptClass).not.toContain('btn-reviewer-approve');
   });
 
-  test('source connector panels (protocols.io, Drive, GitHub) are present and read-only-labelled', async ({ page }) => {
+  test('source connector tools remain available behind a secondary disclosure', async ({ page }) => {
     await openReviewerWorkspace(page);
+    await expect(page.locator('#protocols-io-import')).toBeHidden();
+    await page.locator('.reviewer-source-tools > summary').click();
+    await page.locator('.reviewer-source-group').nth(0).locator('summary').click();
+    await page.locator('.reviewer-source-group').nth(1).locator('summary').click();
+    await page.locator('.reviewer-source-group').nth(2).locator('summary').click();
     await expect(page.locator('#protocols-io-import')).toBeVisible();
     await expect(page.locator('#drive-sync')).toBeVisible();
     await expect(page.locator('#github-import')).toBeVisible();
     await expect(page.locator('#github-status')).toContainText('실행하지 않습니다');
   });
 
-  test('a short inbox stays compact beside a long readable decision record', async ({ page }) => {
+  test('desktop and narrow layouts keep one centered readable column without overflow', async ({ page }) => {
     await openReviewerWorkspace(page);
     await page.evaluate(() => {
       const inbox = document.querySelector('#reviewer-inbox');
@@ -139,6 +219,12 @@ test.describe('Reviewer workspace', () => {
       const hint = document.querySelector('#reviewer-history + .bounded-list-hint');
       return {
         viewportWidth: window.innerWidth,
+        inboxCardTop: inboxCard.top,
+        inboxCardLeft: inboxCard.left,
+        inboxCardWidth: inboxCard.width,
+        decisionCardTop: decisionCard.top,
+        decisionCardLeft: decisionCard.left,
+        decisionCardWidth: decisionCard.width,
         inboxCardHeight: inboxCard.height,
         decisionCardHeight: decisionCard.height,
         changeClientHeight: change.clientHeight,
@@ -151,8 +237,11 @@ test.describe('Reviewer workspace', () => {
         horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       };
     });
+    expect(layout.decisionCardTop).toBeGreaterThan(layout.inboxCardTop + layout.inboxCardHeight - 1);
+    expect(Math.abs(layout.inboxCardLeft - layout.decisionCardLeft)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.inboxCardWidth - layout.decisionCardWidth)).toBeLessThanOrEqual(1);
+    expect(layout.decisionCardWidth).toBeLessThanOrEqual(1121);
     if (layout.viewportWidth > 980) {
-      expect(layout.inboxCardHeight + 100).toBeLessThan(layout.decisionCardHeight);
       expect(layout.changeScrollHeight).toBeGreaterThan(layout.changeClientHeight);
       expect(layout.historyScrollHeight).toBeGreaterThan(layout.historyClientHeight);
       expect(layout.hintDisplay).not.toBe('none');
@@ -164,5 +253,24 @@ test.describe('Reviewer workspace', () => {
     expect(layout.diffScrollHeight).toBeGreaterThan(layout.diffClientHeight);
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
     await expect(page.locator('#reviewer-diff')).toContainText('Line 90');
+  });
+
+  test('tablet layout has no horizontal overflow and keeps the decision flow full-width', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 900 });
+    await openReviewerWorkspace(page);
+    const layout = await page.evaluate(() => {
+      const workspace = document.querySelector('#reviewer-workspace');
+      const queue = document.querySelector('.reviewer-queue-card');
+      const decision = document.querySelector('.reviewer-decision-card');
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        workspaceWidth: workspace.getBoundingClientRect().width,
+        queueWidth: queue.getBoundingClientRect().width,
+        decisionWidth: decision.getBoundingClientRect().width,
+      };
+    });
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.queueWidth - layout.decisionWidth)).toBeLessThanOrEqual(1);
+    expect(layout.queueWidth).toBeLessThan(layout.workspaceWidth);
   });
 });
