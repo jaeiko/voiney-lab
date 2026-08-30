@@ -20,16 +20,13 @@ from voice_workflow_agent.curated_protocol import (
 from voice_workflow_agent.source_presentation import (
     PRESENTATION_LABELS,
     SOURCE_DISCLOSURE_LABEL,
-    PresentationTranslationCache,
     SourcePresentationStatus,
-    TranslationCacheKey,
     TranslationSettings,
     check_source_preservation,
     looks_korean,
     present_source,
     source_identifiers,
     source_measurements,
-    source_ratios,
 )
 
 
@@ -90,27 +87,6 @@ class SourcePreservationTests(unittest.TestCase):
         self.assertTrue(check_source_preservation("Add 5 mL.", "5 ML 넣습니다.").preserved)
         self.assertFalse(check_source_preservation("Add 5 mL.", "5 L 넣습니다.").preserved)
 
-    def test_an_explicit_ratio_must_keep_its_order(self):
-        source = "Mix Solution A at 50:49:1 and Solution B at 2 parts to 1 part."
-        self.assertEqual(source_ratios(source), (("50", "49", "1"), ("2", "1")))
-        faithful = "Solution A를 50:49:1로, Solution B를 2 대 1로 혼합합니다."
-        self.assertTrue(check_source_preservation(source, faithful).preserved)
-        altered = "Solution A를 50:49:1로, Solution B를 1 대 2로 혼합합니다."
-        self.assertEqual(
-            check_source_preservation(source, altered).reason,
-            "ratio_dropped",
-        )
-
-    def test_protocol_material_and_equipment_tokens_can_be_required(self):
-        source = "Add acetonitrile to the Eppendorf Thermomixer."
-        result = check_source_preservation(
-            source,
-            "acetonitrile을 장비에 넣습니다.",
-            stable_tokens=("acetonitrile", "Eppendorf", "Thermomixer"),
-        )
-        self.assertEqual(result.reason, "stable_token_dropped")
-        self.assertIn("Eppendorf", result.missing_stable_tokens)
-
     def test_korean_detection_catches_an_echoed_english_answer(self):
         self.assertTrue(looks_korean(FAITHFUL_KOREAN))
         self.assertFalse(looks_korean(SOURCE))
@@ -130,9 +106,8 @@ class PresentationBoundaryTests(unittest.TestCase):
         presentation = present_source(language="ko", source_text=SOURCE)
         self.assertIs(presentation.status, SourcePresentationStatus.SOURCE_ONLY)
         self.assertEqual(presentation.primary_text, SOURCE)
-        self.assertEqual(presentation.rejection_reason, "translator_unavailable")
-        self.assertIn("안전한 자동 한국어 번역", presentation.notice)
-        self.assertNotIn(SOURCE, presentation.speech_text())
+        self.assertEqual(presentation.rejection_reason, "translation_disabled")
+        self.assertIn("확인된 한국어 번역이 없어", presentation.notice)
 
     def test_a_runtime_translation_is_never_called_verified(self):
         presentation = present_source(
@@ -145,18 +120,6 @@ class PresentationBoundaryTests(unittest.TestCase):
         self.assertIn("자동 번역", presentation.label)
         self.assertNotIn("검증된", presentation.label)
         self.assertIn("검토를 거치지 않은 자동 번역", presentation.notice)
-
-    def test_a_development_sidecar_never_claims_reviewer_approval(self):
-        presentation = present_source(
-            language="ko", source_text=SOURCE,
-            development_translation=FAITHFUL_KOREAN,
-        )
-        self.assertIs(
-            presentation.status, SourcePresentationStatus.DEVELOPMENT_SIDECAR,
-        )
-        self.assertFalse(presentation.reviewer_approved_translation)
-        self.assertIn("개발용", presentation.label)
-        self.assertNotIn("검증된", presentation.label)
 
     def test_no_label_except_the_reviewed_one_claims_verification(self):
         for status, label in PRESENTATION_LABELS.items():
@@ -231,54 +194,12 @@ class PresentationBoundaryTests(unittest.TestCase):
             presentation.status, SourcePresentationStatus.SOURCE_LANGUAGE)
         self.assertEqual(presentation.primary_text, SOURCE)
 
-    def test_translation_is_on_by_default_and_can_be_explicitly_disabled(self):
-        self.assertTrue(TranslationSettings.from_environment({}).enabled)
-        self.assertFalse(
+    def test_translation_stays_off_unless_explicitly_enabled(self):
+        self.assertFalse(TranslationSettings.from_environment({}).enabled)
+        self.assertTrue(
             TranslationSettings.from_environment(
-                {"VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED": "0"}
+                {"VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED": "1"}
             ).enabled)
-
-    def test_successful_immutable_source_translation_is_cached(self):
-        calls = 0
-
-        def translate(_source: str) -> str:
-            nonlocal calls
-            calls += 1
-            return FAITHFUL_KOREAN
-
-        cache = PresentationTranslationCache(maximum_entries=4)
-        key = TranslationCacheKey.for_source(
-            protocol_revision_id="revision-4",
-            source_document_sha256="a" * 64,
-            step_id="step-2/current_step",
-            source_text=SOURCE,
-            target_language="ko",
-            model="fake-translator",
-        )
-        for _ in range(2):
-            presentation = present_source(
-                language="ko", source_text=SOURCE, translator=translate,
-                settings=TranslationSettings(enabled=True), cache_key=key,
-                cache=cache,
-            )
-            self.assertIs(
-                presentation.status,
-                SourcePresentationStatus.AUTOMATIC_TRANSLATION,
-            )
-        self.assertEqual(calls, 1)
-        self.assertEqual(len(cache), 1)
-
-    def test_provider_failure_is_visible_and_non_mutating(self):
-        def fail(_source: str) -> str:
-            raise RuntimeError("synthetic provider failure")
-
-        presentation = present_source(
-            language="ko", source_text=SOURCE, translator=fail,
-            settings=TranslationSettings(enabled=True),
-        )
-        self.assertEqual(presentation.rejection_reason, "translation_failed")
-        self.assertEqual(presentation.source_text, SOURCE)
-        self.assertNotIn(SOURCE, presentation.speech_text())
 
 
 class KoreanNextStepPreviewTests(unittest.TestCase):
@@ -321,12 +242,10 @@ class KoreanNextStepPreviewTests(unittest.TestCase):
         self.assertIn(SOURCE_DISCLOSURE_LABEL, plan.display_text)
         self.assertIn(source.instruction_source_text[:40], plan.display_text)
 
-    def test_the_development_sidecar_is_used_without_claiming_review(self):
+    def test_a_step_with_a_reviewed_sidecar_is_reported_as_verified(self):
         session = self.session("2")
         plan = self.preview(session)
-        self.assertEqual(plan.translation_status, "development_sidecar")
-        self.assertIn("개발용 한국어 번역", plan.display_text)
-        self.assertNotIn("검증된 한국어 번역", plan.display_text)
+        self.assertEqual(plan.translation_status, "verified_sidecar")
 
     def test_a_step_without_a_sidecar_shows_the_source_and_says_so(self):
         """The gap this pass closes: English no longer masquerades as Korean."""
@@ -335,12 +254,8 @@ class KoreanNextStepPreviewTests(unittest.TestCase):
         session._localized_fact = lambda *_args, **_kwargs: None
         plan = self.preview(session)
         self.assertEqual(plan.translation_status, "source_only")
-        self.assertIn("안전한 자동 한국어 번역", plan.display_text)
+        self.assertIn("확인된 한국어 번역이 없어", plan.display_text)
         self.assertIn("다음 단계는 3단계입니다", plan.speech_text)
-        self.assertNotIn(
-            self.fixture.steps[session.current_index + 1].instruction_source_text,
-            plan.speech_text,
-        )
         self.assertFalse(plan.state_changed)
 
     def test_an_enabled_translator_preserves_every_number_in_the_source(self):
@@ -369,29 +284,6 @@ class KoreanNextStepPreviewTests(unittest.TestCase):
         # the preservation check discards the answer before anyone hears it.
         self.assertEqual(plan.translation_status, "source_only")
         self.assertNotIn("완전히 투명해질 때까지", plan.display_text)
-
-    def test_normal_completion_advances_once_and_presents_the_new_step_in_korean(self):
-        session = self.session("1", translation_settings=TranslationSettings(
-            enabled=True,
-        ))
-        target = self.fixture.steps[1]
-        automatic = self.fixture.localized_fact(target.step_id, "current_step")
-        self.assertIsNotNone(automatic)
-        session._localized_fact = lambda *_args, **_kwargs: None
-        session.presentation_translator = lambda _source: automatic
-        before_revision = session._revision
-        plan = session.plan(
-            "완료됐어요", turn_id=1, language="ko",
-            configuration_id=1, generation=0,
-        )
-        self.assertTrue(plan.state_changed)
-        self.assertEqual(session.current_index, 1)
-        self.assertEqual(session._revision, before_revision + 1)
-        self.assertEqual(plan.translation_status, "automatic_translation")
-        self.assertIn("1단계를 완료했습니다", plan.speech_text)
-        self.assertIn("2단계", plan.speech_text)
-        self.assertIn("자동 번역", plan.display_text)
-        self.assertIn(SOURCE_DISCLOSURE_LABEL, plan.display_text)
 
     def test_the_final_step_preview_still_changes_nothing(self):
         last = self.fixture.steps[-1].source_label

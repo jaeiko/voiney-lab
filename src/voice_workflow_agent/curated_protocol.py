@@ -36,7 +36,7 @@ from voice_workflow_agent.experiment_protocol_config import (
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
 from voice_workflow_agent.source_presentation import (
     SOURCE_DISCLOSURE_LABEL, SourcePresentation, SourcePresentationStatus,
-    TranslationCacheKey, TranslationSettings, present_source)
+    TranslationSettings, present_source)
 from voice_workflow_agent.completion_intent import (
     CompletionIntentDecision,
     classify_korean_completion_command,
@@ -496,20 +496,6 @@ class CuratedProtocolTurnPlan:
     @property
     def spoken_summary(self) -> str | None:
         return self.speech_text
-
-
-@dataclass(frozen=True)
-class StepPresentationBundle:
-    """Korean-first presentation plus immutable source evidence for one step."""
-
-    display_text: str
-    speech_text: str
-    primary_text: str
-    source_texts: tuple[str, ...]
-    source_pages: tuple[int, ...]
-    evidence_ids: tuple[str, ...]
-    translation_status: str
-    display_document: dict[str, Any]
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -2954,14 +2940,6 @@ def classify_curated_control_intent(
             target_step="authoritative_current_step",
             language=language,
         )
-    if _OFF_CHECKPOINT_NOT_COMPLETE.fullmatch(key):
-        return CuratedControlIntent(
-            intent_kind="off_checkpoint_not_complete",
-            action=CuratedProtocolAction.OFF_TOPIC,
-            target_step="authoritative_current_step",
-            language=language,
-            normalized_transcript=key,
-        )
     if non_mutating_completion == "completion_criteria_question":
         return CuratedControlIntent(
             intent_kind=non_mutating_completion,
@@ -2993,6 +2971,14 @@ def classify_curated_control_intent(
             target_step=target_step,
             language=language,
             allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    if _OFF_CHECKPOINT_NOT_COMPLETE.fullmatch(key):
+        return CuratedControlIntent(
+            intent_kind="off_checkpoint_not_complete",
+            action=CuratedProtocolAction.OFF_TOPIC,
+            target_step="authoritative_current_step",
+            language=language,
             normalized_transcript=key,
         )
     if completion_context and re.fullmatch(
@@ -3623,10 +3609,8 @@ def _display_document(
     title: str,
     lead: str | None = None,
     primary: str | None = None,
-    primary_heading: str = "답변",
     bullets: tuple[str, ...] = (),
     source: str | None = None,
-    source_heading: str = SOURCE_DISCLOSURE_LABEL,
     citation: str | None = None,
     extra_sections: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, Any]:
@@ -3642,17 +3626,9 @@ def _display_document(
                 "items": clean_bullets,
             })
     if isinstance(primary, str) and primary.strip():
-        sections.append({
-            "kind": "section",
-            "heading": primary_heading,
-            "text": primary.strip(),
-        })
+        sections.append({"kind": "section", "heading": "답변", "text": primary.strip()})
     if isinstance(source, str) and source.strip():
-        sections.append({
-            "kind": "source",
-            "heading": source_heading,
-            "text": source.strip(),
-        })
+        sections.append({"kind": "source", "heading": "원문 · English", "text": source.strip()})
     if isinstance(citation, str) and citation.strip():
         sections.append({"kind": "citation", "heading": "출처", "text": citation.strip()})
     for heading, text in extra_sections:
@@ -5061,127 +5037,30 @@ class CuratedProtocolSession:
     def _present_step_source(
         self,
         step: Any,
-        localized_translation: str | None,
+        verified_translation: str | None,
         *,
-        fact_id: str = "current_step",
         safety_critical: bool = False,
     ) -> SourcePresentation:
         """Route one step's approved source text through the single boundary.
 
-        Current development-fixture localizations are source-bound but are not
-        reviewer approvals, so they use the honest development-sidecar label.
-        A catalog revision without a sidecar reaches the enabled-by-default,
-        mechanically checked runtime translator. Neither path can mutate state.
+        The reviewer-approved Korean sidecar wins whenever it exists, so the
+        common path generates nothing. Only a step with no approved translation
+        can reach the runtime translator, and only when that is explicitly
+        enabled - otherwise the exact approved English is the answer.
         """
 
         source = step.instruction_source_text
-        localized = localized_translation
-        source_identity = (
-            self.fixture.source_pdf_sha256 or self.fixture.fixture_sha256
-        )
+        localized = verified_translation
+        if localized:
+            localized = re.sub(
+                rf"^{re.escape(step.source_label)}단계:\s*", "", localized)
         return present_source(
             language="ko",
             source_text=source,
-            development_translation=localized,
+            verified_translation=localized,
             translator=self.presentation_translator,
             settings=self.translation_settings,
-            stable_tokens=self._stable_source_tokens(source),
-            cache_key=TranslationCacheKey.for_source(
-                protocol_revision_id=self.fixture.revision_id,
-                source_document_sha256=source_identity,
-                step_id=f"{step.step_id}/{fact_id}",
-                source_text=source,
-                target_language="ko",
-                model=self.translation_settings.model,
-            ),
             safety_critical=safety_critical,
-        )
-
-    def _stable_source_tokens(self, source: str) -> tuple[str, ...]:
-        """Scientific material/equipment tokens explicitly present in source."""
-
-        stopwords = {
-            "brand", "catalog", "grade", "international", "model", "name",
-            "type", "sku", "scientific", "millipore", "sigma", "aldrich",
-        }
-        source_folded = source.casefold()
-        tokens: list[str] = []
-        resources = (
-            *self.fixture.draft.protocol.materials,
-            *self.fixture.draft.protocol.equipment,
-        )
-        for resource in resources:
-            resource_name = str(getattr(resource, "name_source_text", ""))
-            for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", resource_name):
-                if (
-                    token.casefold() not in stopwords
-                    and token.casefold() in source_folded
-                    and token not in tokens
-                ):
-                    tokens.append(token)
-        return tuple(tokens)
-
-    def _step_presentation_bundle(
-        self,
-        index: int,
-        language: str,
-        control_text: str,
-        *,
-        safety_critical: bool = False,
-    ) -> StepPresentationBundle:
-        """Use the same Korean presentation boundary for every step surface."""
-
-        step = self.fixture.steps[index]
-        source_texts = (step.instruction_source_text,)
-        pages = (step.evidence.source_page_number,)
-        evidence_ids = ("current_step",)
-        if language != "ko":
-            display, primary, _, _, _, status = _step_presentation(
-                self.fixture, index, language, control_text,
-            )
-            return StepPresentationBundle(
-                display_text=display,
-                speech_text=control_text,
-                primary_text=primary,
-                source_texts=source_texts,
-                source_pages=pages,
-                evidence_ids=evidence_ids,
-                translation_status=status,
-                display_document=_display_document(
-                    title=f"Step {step.source_label}",
-                    lead=control_text,
-                    primary=primary,
-                    source=step.instruction_source_text,
-                    source_heading="Source",
-                ),
-            )
-
-        localized = self._localized_fact(step.step_id, "current_step")
-        presentation = self._present_step_source(
-            step,
-            localized,
-            safety_critical=safety_critical,
-        )
-        display = f"{control_text}\n\n{presentation.display_text()}"
-        speech = f"{control_text} {presentation.speech_text()}".strip()
-        citation = f"current_step · 원문 p.{step.evidence.source_page_number}"
-        return StepPresentationBundle(
-            display_text=display,
-            speech_text=speech,
-            primary_text=presentation.display_primary_text,
-            source_texts=source_texts,
-            source_pages=pages,
-            evidence_ids=evidence_ids,
-            translation_status=presentation.status.value,
-            display_document=_display_document(
-                title=f"{step.source_label}단계",
-                lead=control_text,
-                primary=presentation.display_primary_text,
-                primary_heading=presentation.label,
-                source=step.instruction_source_text,
-                source_heading=SOURCE_DISCLOSURE_LABEL,
-                citation=citation,
-            ),
         )
 
     def _step_learning_presentation(
@@ -7087,28 +6966,39 @@ class CuratedProtocolSession:
                 timer_active=timer_active,
             )
             if language == "ko" and not resumed:
-                control_text = "실험을 시작합니다. 현재 1단계입니다."
-            presentation = self._step_presentation_bundle(
-                self.current_index,
-                language,
-                control_text,
+                control_text = (
+                    "실험을 시작합니다. 현재 1단계입니다. "
+                    "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                    "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요."
+                )
+            response, primary, sources, pages, evidence_ids, translation_status = (
+                _step_presentation(
+                    self.fixture,
+                    self.current_index,
+                    language,
+                    control_text,
+                )
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.START,
-                display_text=presentation.display_text,
-                speech_text=presentation.speech_text,
+                display_text=response,
+                speech_text=control_text,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
                 state_changed=changed,
-                primary_text=presentation.primary_text,
-                source_texts=presentation.source_texts,
-                source_pages=presentation.source_pages,
-                evidence_ids=presentation.evidence_ids,
-                translation_status=presentation.translation_status,
+                primary_text=primary,
+                source_texts=sources,
+                source_pages=pages,
+                evidence_ids=evidence_ids,
+                translation_status=translation_status,
                 intent_kind=intent.intent_kind,
-                display_document=presentation.display_document,
+                display_document=_display_document(
+                    title=f"{step.source_label}단계",
+                    primary=primary,
+                    source=sources[0] if sources else None,
+                ),
             )
         elif command is CuratedProtocolAction.AUDIO_RECOVERY:
             response = {
@@ -7252,27 +7142,29 @@ class CuratedProtocolSession:
                 if language == "ko" else
                 f"Resuming protocol. Currently at step {step.source_label}.{timer_suffix}"
             )
-            presentation = self._step_presentation_bundle(
-                self.current_index,
-                language,
-                control_text,
+            response, primary, sources, pages, evidence_ids, translation_status = (
+                _step_presentation(
+                    self.fixture,
+                    self.current_index,
+                    language,
+                    control_text,
+                )
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.RESUME,
-                display_text=presentation.display_text,
-                speech_text=presentation.speech_text,
+                display_text=response,
+                speech_text=control_text,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
                 state_changed=True,
-                primary_text=presentation.primary_text,
-                source_texts=presentation.source_texts,
-                source_pages=presentation.source_pages,
-                evidence_ids=presentation.evidence_ids,
-                translation_status=presentation.translation_status,
+                primary_text=primary,
+                source_texts=sources,
+                source_pages=pages,
+                evidence_ids=evidence_ids,
+                translation_status=translation_status,
                 intent_kind=intent.intent_kind,
-                display_document=presentation.display_document,
             )
         elif command is CuratedProtocolAction.REPORT_HANDOFF:
             recip_label = "지도교수님" if any(t in transcript for t in ("교수", "교수님", "advisor", "professor")) else "연구실 안전관리자"
@@ -7775,7 +7667,6 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.NEXT_INFORMATION:
             current = steps[self.current_index]
-            preview_document: dict[str, Any] | None = None
             if self.current_index >= len(steps) - 1:
                 response = (
                     "This is the final protocol step; there is no later step to preview. "
@@ -7826,19 +7717,6 @@ class CuratedProtocolSession:
                     display_response = (
                         f"{lead}\n{presentation.display_text(tail)}")
                     preview_status = presentation.status.value
-                    preview_document = _display_document(
-                        title=f"다음 {next_step.source_label}단계",
-                        lead=lead,
-                        primary=presentation.display_primary_text,
-                        primary_heading=presentation.label,
-                        source=next_step.instruction_source_text,
-                        source_heading=SOURCE_DISCLOSURE_LABEL,
-                        citation=(
-                            "current_step · 원문 p."
-                            f"{next_step.evidence.source_page_number}"
-                        ),
-                        extra_sections=(("상태 확인", tail),),
-                    )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.NEXT_INFORMATION,
                 display_text=display_response,
@@ -7857,7 +7735,6 @@ class CuratedProtocolSession:
                 requested_followup=intent.requested_followup,
                 target_step=next_label,
                 question_kind=intent.question_kind,
-                display_document=preview_document,
             )
         elif command is CuratedProtocolAction.COMPLETION_CRITERIA:
             step = steps[self.current_index]
@@ -8166,28 +8043,31 @@ class CuratedProtocolSession:
                 )
                 if language == "ko":
                     control_text = (
-                        f"{completed_step.source_label}단계를 완료했습니다. "
+                        f"{completed_step.source_label}단계를 완료로 저장했습니다. "
                         f"현재는 {step.source_label}단계입니다."
                     )
-                presentation = self._step_presentation_bundle(
-                    self.current_index,
-                    language,
-                    control_text,
+                response, primary, sources, pages, evidence_ids, translation_status = (
+                    _step_presentation(
+                        self.fixture,
+                        self.current_index,
+                        language,
+                        control_text,
+                    )
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
-                    display_text=presentation.display_text,
-                    speech_text=presentation.speech_text,
+                    display_text=response,
+                    speech_text=control_text,
                     speech_mode=CuratedProtocolSpeechMode.CONTROL,
                     facts=self.fixture.facts_for_step(self.current_index),
                     step_label=step.source_label,
                     final_step=self.current_index == len(steps) - 1,
                     state_changed=changed,
-                    primary_text=presentation.primary_text,
-                    source_texts=presentation.source_texts,
-                    source_pages=presentation.source_pages,
-                    evidence_ids=presentation.evidence_ids,
-                    translation_status=presentation.translation_status,
+                    primary_text=primary,
+                    source_texts=sources,
+                    source_pages=pages,
+                    evidence_ids=evidence_ids,
+                    translation_status=translation_status,
                     intent_kind=intent.intent_kind,
                     reported_completion=intent.reported_completion,
                     requested_transition=intent.requested_transition,
@@ -8197,7 +8077,11 @@ class CuratedProtocolSession:
                     observation_predicate=intent.observation_predicate,
                     observation_outcome=intent.observation_outcome,
                     timer_payload=early_exit,
-                    display_document=presentation.display_document,
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
             else:
                 early_exit = self._record_early_step_timer_exit()
@@ -8257,37 +8141,53 @@ class CuratedProtocolSession:
                 preview_index = 0
                 preview_step = steps[preview_index]
                 if language == "ko":
-                    control_text = (
-                        "아직 실험 시작 전입니다. 1단계를 화면에 표시했습니다. "
-                        "지금 실험을 시작할까요?"
-                    )
+                    localized = self._localized_fact(preview_step.step_id, "current_step")
+                    if localized:
+                        fact = localized.split(":", 1)[-1].strip().rstrip(".")
+                        control_text = (
+                            f"아직 실험 시작 전입니다. 1단계는 {fact} 하는 단계입니다. "
+                            "지금 실험을 시작할까요?"
+                        )
+                    else:
+                        control_text = (
+                            "아직 실험 시작 전입니다. 1단계는 염색된 단백질 밴드에서 "
+                            "작은 조각을 나누고 지정된 AMBIC 용액이 담긴 튜브에 넣는 단계입니다. "
+                            "지금 실험을 시작할까요?"
+                        )
                 else:
                     control_text = (
                         "The experiment has not started yet. I displayed Step 1 on the screen. "
                         "Would you like to start the experiment now?"
                     )
-                presentation = self._step_presentation_bundle(
-                    preview_index,
-                    language,
-                    control_text,
+                response, primary, sources, pages, evidence_ids, translation_status = (
+                    _step_presentation(
+                        self.fixture,
+                        preview_index,
+                        language,
+                        control_text,
+                    )
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=command,
-                    display_text=presentation.display_text,
-                    speech_text=presentation.speech_text,
+                    display_text=response,
+                    speech_text=control_text,
                     speech_mode=CuratedProtocolSpeechMode.CONTROL,
                     facts=self.fixture.facts_for_step(preview_index),
                     step_label=None,
                     final_step=False,
                     state_changed=False,
-                    primary_text=presentation.primary_text,
-                    source_texts=presentation.source_texts,
-                    source_pages=presentation.source_pages,
-                    evidence_ids=presentation.evidence_ids,
-                    translation_status=presentation.translation_status,
+                    primary_text=primary,
+                    source_texts=sources,
+                    source_pages=pages,
+                    evidence_ids=evidence_ids,
+                    translation_status=translation_status,
                     intent_kind=intent.intent_kind,
                     target_step=preview_step.source_label,
-                    display_document=presentation.display_document,
+                    display_document=_display_document(
+                        title=f"{preview_step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
             else:
                 step = steps[self.current_index]
@@ -8301,27 +8201,34 @@ class CuratedProtocolSession:
                     step_index=self.current_index,
                     timer_active=timer_active,
                 )
-                presentation = self._step_presentation_bundle(
-                    self.current_index,
-                    language,
-                    control_text,
+                response, primary, sources, pages, evidence_ids, translation_status = (
+                    _step_presentation(
+                        self.fixture,
+                        self.current_index,
+                        language,
+                        control_text,
+                    )
                 )
                 plan = CuratedProtocolTurnPlan(
                     action=action,
-                    display_text=presentation.display_text,
-                    speech_text=presentation.speech_text,
+                    display_text=response,
+                    speech_text=control_text,
                     speech_mode=CuratedProtocolSpeechMode.CONTROL,
                     facts=self.fixture.facts_for_step(self.current_index),
                     step_label=step.source_label,
                     final_step=self.current_index == len(steps) - 1,
                     state_changed=False,
-                    primary_text=presentation.primary_text,
-                    source_texts=presentation.source_texts,
-                    source_pages=presentation.source_pages,
-                    evidence_ids=presentation.evidence_ids,
-                    translation_status=presentation.translation_status,
+                    primary_text=primary,
+                    source_texts=sources,
+                    source_pages=pages,
+                    evidence_ids=evidence_ids,
+                    translation_status=translation_status,
                     intent_kind=intent.intent_kind,
-                    display_document=presentation.display_document,
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계",
+                        primary=primary,
+                        source=sources[0] if sources else None,
+                    ),
                 )
         elif command is CuratedProtocolAction.FULL_DETAIL:
             target_index = self._step_index_for_label(intent.target_step)
@@ -8346,30 +8253,30 @@ class CuratedProtocolSession:
                 self._replay[turn_id] = plan
                 return plan
             step = steps[target_index]
-            detail_document: dict[str, Any] | None = None
             if intent.intent_kind == "full_detail":
-                control_text = (
-                    f"{step.source_label}단계 전체 안내입니다."
-                    if language == "ko"
-                    else f"Full guidance for Step {step.source_label}."
-                )
-                presentation = self._step_presentation_bundle(
-                    target_index,
+                localized = self._localized_fact(step.step_id, "current_step")
+                response = _display_contract(
                     language,
-                    control_text,
-                    safety_critical=(
-                        target_index == self.current_index
-                        and self._current_step_readiness_blocker() is not None
+                    (
+                        localized
+                        if language == "ko" and localized is not None
+                        else step.instruction_source_text
                     ),
+                    (step.instruction_source_text,),
+                    (step.evidence.source_page_number,),
+                    ("current_step",),
+                    translated=language != "ko" or localized is not None,
                 )
-                response = presentation.display_text
-                speech = presentation.speech_text
+                speech = step.instruction_source_text
                 admitted_facts = self.fixture.facts_for_step(target_index)
-                sources = presentation.source_texts
-                pages = presentation.source_pages
-                evidence_ids = presentation.evidence_ids
-                translation_status = presentation.translation_status
-                detail_document = presentation.display_document
+                sources = (step.instruction_source_text,)
+                pages = (step.evidence.source_page_number,)
+                evidence_ids = ("current_step",)
+                translation_status = (
+                    "verified_sidecar"
+                    if language == "ko" and localized is not None
+                    else "source_language"
+                )
             else:
                 (
                     response, speech, admitted_facts, sources, pages,
@@ -8382,11 +8289,7 @@ class CuratedProtocolSession:
                         intent.intent_kind == "expected_result_explanation"
                     ),
                 )
-            primary = (
-                presentation.primary_text
-                if intent.intent_kind == "full_detail"
-                else response.split("\n\n원문 · English", 1)[0]
-            )
+            primary = response.split("\n\n원문 · English", 1)[0]
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.FULL_DETAIL,
                 display_text=response,
@@ -8415,13 +8318,10 @@ class CuratedProtocolSession:
                     and any(fact.kind == "note" for fact in admitted_facts)
                     else ("ACTIVE_PROTOCOL",)
                 ),
-                display_document=(
-                    detail_document
-                    or _display_document(
-                        title=f"{step.source_label}단계",
-                        primary=primary,
-                        source=sources[0] if sources else None,
-                    )
+                display_document=_display_document(
+                    title=f"{step.source_label}단계",
+                    primary=primary,
+                    source=sources[0] if sources else None,
                 ),
             )
         elif command is CuratedProtocolAction.VISUAL_REQUEST:
@@ -8461,15 +8361,18 @@ class CuratedProtocolSession:
                         "이미지 생성 기능이 활성화된 경우에만 별도 삽화를 준비합니다."
                     ),
                 }).get(language, f"현재 {step.source_label}단계에는 검증된 원본 시각 자료가 없습니다.")
-            presentation = self._step_presentation_bundle(
-                self.current_index,
-                language,
-                control_text,
+            response, primary, sources, pages, evidence_ids, translation_status = (
+                _step_presentation(
+                    self.fixture,
+                    self.current_index,
+                    language,
+                    control_text,
+                )
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.VISUAL_REQUEST,
-                display_text=presentation.display_text,
-                speech_text=presentation.speech_text,
+                display_text=response,
+                speech_text=control_text,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=(
                     self.related_facts(transcript)
@@ -8479,11 +8382,11 @@ class CuratedProtocolSession:
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
                 state_changed=False,
-                primary_text=presentation.primary_text,
-                source_texts=presentation.source_texts,
-                source_pages=presentation.source_pages,
-                evidence_ids=presentation.evidence_ids,
-                translation_status=presentation.translation_status,
+                primary_text=primary,
+                source_texts=sources,
+                source_pages=pages,
+                evidence_ids=evidence_ids,
+                translation_status=translation_status,
                 intent_kind=intent.intent_kind,
                 target_step=intent.target_step,
                 visual_requested=True,
@@ -8497,7 +8400,6 @@ class CuratedProtocolSession:
                 question_dimensions=intent.question_dimensions,
                 coreference_status=intent.coreference_status,
                 coreference_reason=intent.coreference_reason,
-                display_document=presentation.display_document,
             )
             if intent.requested_entities:
                 envelope=self.protocol_answer_envelope(
@@ -8891,12 +8793,13 @@ class CuratedProtocolSession:
             step = steps[self.current_index]
             if intent.intent_kind == "off_checkpoint_not_complete":
                 response = (
-                    "알겠습니다. 다음 단계로 넘어가지 않고 "
-                    f"현재 {step.source_label}단계를 계속 유지합니다. "
-                    "작업이 끝나면 ‘완료됐어요’라고 말씀해 주세요."
+                    "이 단계는 별도의 완료 조건을 확인하는 단계가 아닙니다. "
+                    "작업이 끝났다면 ‘이 단계 완료’라고 말씀해 주세요. "
+                    f"현재 단계는 {step.source_label}단계 그대로입니다."
                     if language == "ko" else
-                    f"Understood. I will keep the workflow at Step {step.source_label} "
-                    "and will not advance it. Say 'completed' when the work is finished."
+                    f"Step {step.source_label} is not a condition checkpoint. "
+                    "Say 'complete this step' when the current work is finished. "
+                    "The experiment state was not changed."
                 )
             else:
                 response = {

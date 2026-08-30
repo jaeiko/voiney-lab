@@ -236,7 +236,7 @@ class HumanCheckpointSessionTests(unittest.TestCase):
                 )
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(self.label(session), "3")
-                self.assertIn("2단계를 완료했습니다", plan.speech_text)
+                self.assertIn("2단계를 완료로 저장", plan.speech_text)
                 replay = session.plan(
                     transcript, turn_id=1, language="ko",
                     configuration_id=1, generation=0,
@@ -259,7 +259,7 @@ class HumanCheckpointSessionTests(unittest.TestCase):
                 self.assertEqual((session.current_index, session._revision), before)
 
     def test_off_checkpoint_not_complete_is_safe_and_actionable(self):
-        for transcript in ("아직 안 됐어요", "아직이에요", "아직 안 끝났어"):
+        for transcript in ("아직 안 됐어요", "아직이에요"):
             with self.subTest(transcript=transcript):
                 session = self.session("2")
                 before = (session.current_index, session._revision)
@@ -268,11 +268,12 @@ class HumanCheckpointSessionTests(unittest.TestCase):
                     configuration_id=1, generation=0,
                 )
                 self.assertFalse(plan.state_changed)
-                self.assertIn("알겠습니다", plan.speech_text)
-                self.assertIn("다음 단계로 넘어가지 않고", plan.speech_text)
-                self.assertIn("현재 2단계를 계속 유지", plan.speech_text)
-                self.assertIn("완료됐어요", plan.speech_text)
-                self.assertNotIn("완료 조건", plan.speech_text)
+                # Natural bench guidance: say what this step is, say what to do
+                # instead, and state plainly that nothing moved.
+                self.assertIn("별도의 완료 조건을 확인하는 단계가 아닙니다", plan.speech_text)
+                self.assertIn("이 단계 완료", plan.speech_text)
+                self.assertIn("현재 단계는", plan.speech_text)
+                self.assertIn("그대로입니다", plan.speech_text)
                 self.assertEqual((session.current_index, session._revision), before)
 
     def test_solicited_checkpoint_natural_answers_drive_exact_state_machine(self):

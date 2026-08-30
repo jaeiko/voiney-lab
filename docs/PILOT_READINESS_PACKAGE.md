@@ -12,11 +12,11 @@ Protocol Revision → ExperimentSession → deterministic START → voice guidan
 disconnect/recovery → Timeline → completion → report → optional ELN
 boundary) is exercised end to end by:
 
-- The complete offline pytest gate, including production WebSocket, persistence,
-  source, identity, connector, recovery, and privacy boundaries.
-- The Playwright suite across desktop and mobile, including a real
-  reviewer-approval → researcher checkpoint journey and a microphone-denied
-manual execution journey.
+- 790 pytest cases + 691 subtests (current full local suite), including
+  `test_curated_protocol_cascade.py`'s multi-turn scenario tests and
+  `test_server_procedure_integration.py`.
+- 38 Playwright browser tests (`tests/e2e/`) across desktop and mobile,
+  covering the researcher/reviewer/admin workspaces.
 - `python scripts/replay_turns.py` and both
   `scripts/evaluate_candidate_a_*.py` evaluators (deterministic,
   provider-free routing checks — see
@@ -42,30 +42,20 @@ reasoning.
 
 | KPI | Definition and source |
 |---|---|
-| Voice turns / successful turns | Accepted Cascade endpoints and non-greeting `turn.done` events; the derived rate is reported only when turns exist |
-| Clarification / repeat use | Deterministic clarification plans, explicit current-step repeat requests, and consecutive repeated utterances; no utterance text or hash is persisted |
-| STT failures | Provider failures plus empty/non-speech admission failures |
-| Ambiguous/blocked mutations | Ambiguous completion commands and state-changing requests refused by language, speaker, checkpoint, or deterministic policy gates |
-| Interruption quality | Ignored acoustic candidates, confirmed barge-ins, and playback-only interruption events are separate counters |
-| Speaker ambiguity | Unknown-speaker mutation rejections and overlapping-speaker mutation ambiguity events; no biometric voiceprint exists |
 | Completed workflows | Experiment sessions whose durable state is `completed` |
-| Completed steps | Durable `step_completed` events, including idempotent replay protection |
 | Failed commands | Empty/non-speech admissions and bounded turn-processing failures recorded as privacy-safe analytics |
 | Recovery events | Durable `session_recovered` timeline events |
-| Persistence failures | Explicit persistence attempts whose workflow state was rejected or rolled back; this is not labeled “unintended mutation” |
+| Mutation failures | Failed report/session/observation/pause/resume/stop persistence attempts whose state was rejected or rolled back |
 | User actions | Retained server-accepted workflow-turn samples |
 | Completion rate | Completed experiment sessions divided by all tenant experiment sessions |
-| Session duration | Wall-clock time from durable session start to completion for completed sessions; average/max are descriptive, not efficiency targets |
-| Observation/evidence capture | Durable `observation_recorded` and `evidence_attached` event totals plus per-session timeline counts |
+| Documentation completeness | Durable `observation_recorded` and `evidence_attached` event totals plus per-session timeline counts |
 | Pause/resume activity | Durable `session_paused` and `session_resumed` event totals |
-| Manual fallback actions | Durable manual protocol starts/completions, bench pause/resume/stop, manual observations, and evidence attachments; generic clicks are not counted |
 
 The response labels its measurement window: session/event counters are lifetime
-for retained durable records, while voice and failure counters follow analytics
-retention. There is no claim that a blocked attempt was an unintended mutation;
-false mutation remains a separately validated safety outcome. Step omission,
-abandonment, and arbitrary screen interactions have no dedicated counter and
-must not be inferred from missing events.
+for retained durable records, while failed-command, mutation-failure, and user-
+action counters follow analytics retention. Step-omission attempts, correction
+rate, and time-based abandonment do not yet have dedicated counters; do not
+infer those values from missing events.
 
 ## 3. Pilot package materials
 
@@ -84,28 +74,10 @@ must not be inferred from missing events.
 4. Use the observation/evidence controls on the bench workspace for anything you want on the record — voice or manual, either is fine.
 5. "일시정지" (Pause) at any point; resume later by reselecting the same experiment session.
 
-If the microphone cannot be used after the server accepts the session, the
-state changes to **수동 실행** instead of ending the experiment. Confirm the
-approved step/version on screen, use **프로토콜 시작** if the fresh workflow is
-still ready, then use current-step completion, pause, stop, observation, and
-evidence controls. Repeated STT failures, severe noise, or unavailable TTS are
-also reasons to press **음성 없이 계속** and use this screen path. If the
-approved step or source is not visible, stop using the agent and return to the
-approved source protocol.
-
 ### Reviewer quick-start
 1. Open the reviewer workspace; new/changed sources appear in the inbox.
 2. Read the diff before deciding — accepting OCR text is not the same as approving a protocol.
-3. Approve, request a revision, or stop future use; every decision is append-only
-   and visible in the audit trail.
-
-The reviewer checks source ambiguity, represented structure, changed steps,
-material/concentration/time/equipment changes, warnings, source-defined human
-checkpoints, and whether the exact represented revision is fit for execution.
-The reviewer is not made an experiment safety guarantor, regulatory certifier,
-or autonomous scientific authority. OCR/source-text acceptance only accepts an
-extraction for later analysis; execution approval authorizes one exact revision;
-stopping future use prevents new sessions while preserving existing history.
+3. Approve, reject, or revoke; every decision is append-only and visible in the audit trail.
 
 ### Admin setup checklist
 - [ ] Confirm the OIDC configuration (not development identity) is active if this is anything beyond a fully controlled internal pilot.
@@ -144,37 +116,21 @@ Reproducible? (steps if yes)
 6. What would you change before using this unsupervised?
 
 ### Privacy / data-handling explanation (for participants)
-
-Stored under the lab/workspace boundary: exact source/revision identity,
-session lifecycle and step events, explicit observations, explicitly attached
-evidence bytes and metadata, report/export events, approval/audit events,
-connector configuration status without credential values, and allowlisted
-operational aggregates. Access uses fixed lab roles and tenant checks.
-
-Not retained by the pilot analytics path: raw microphone audio, transcript
-content, model prompts/reasoning, provider tokens/API keys, free-form protocol
-text, user identifiers, or biometric voiceprints. Audio/transcript data is sent
-ephemerally to the configured STT/TTS/model providers when those features are
-used; the deployment owner must approve the provider/data agreement before a
-real pilot. Diagnostic recordings remain disabled by default and require
-separate consent and bounded retention.
-
-Analytics retention is configurable per lab from 1–3650 days and enforcement
-purges expired analytics. Durable protocol/session/report/audit records are
-append-only and have no general per-record deletion UI; the organization must
-define whole-deployment/tenant deletion, legal hold, storage encryption, and
-backup retention before participants begin. Reports and evidence can be
-exported through their authorized product paths. Evidence is stored as
-`not_interpreted`; observations are observation-only; neither silently becomes
-instruction authority. This is a product boundary, not a legal-compliance claim.
+Raw audio and full transcripts are not retained in analytics. Observations
+and evidence you explicitly record are stored as `observation_only` /
+`not_interpreted` — they become part of your experiment record but never
+silently become new instructions. Model reasoning and provider secrets are
+never logged. See `README.md`'s "Security and privacy boundaries" section
+for the complete, code-enforced list.
 
 ### Known limitations (state these to every pilot participant)
 - Controlled-pilot system: not a validated GLP/GMP/clinical system, not a
   full ELN/LIMS, not an autonomous scientist, not a safety authority.
 - No external integration (Drive, GitHub, protocols.io, OIDC against a real
-  IdP, interactive Google login, eLabFTW, OCR) was live-tested in this pass.
-  Historical bounded xAI STT/TTS and analysis-connectivity evidence is retained
-  in Section 4 and the capability matrix; it is not current field evidence.
+  IdP, eLabFTW, OCR) has been live-tested in this environment — see
+  `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`'s classification table.
+  xAI STT/TTS and the LLM structured-analysis endpoint **were** live-tested
+  this pass (Section 4 below).
 - The legacy `procedures.py` tutorial lane exists but is off by default and
   should not be enabled for a pilot unless specifically intended.
 

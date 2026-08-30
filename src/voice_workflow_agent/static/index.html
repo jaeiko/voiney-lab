@@ -26,7 +26,6 @@
     </div>
     <div class="rail-right">
       <button id="rail-new-session" type="button" class="btn-rail-secondary">새 세션</button>
-      <button id="switch-to-manual" type="button" class="btn-rail-secondary" hidden disabled>음성 없이 계속</button>
       <button id="rail-pause-session" type="button" class="btn-rail-secondary" disabled>일시정지</button>
       <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
       <button id="toggle-setup-btn" type="button" class="btn-rail-ghost" aria-expanded="true" aria-controls="hero-setup">실험 설정 접기</button>
@@ -214,10 +213,6 @@
               <span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span>
             </div>
             <p id="voice-command-hint" class="voice-command-hint">“현재 단계 완료”로 저장하거나 “다음 단계 알려줘”로 미리 확인하세요.</p>
-            <div id="manual-fallback-action" class="bench-completion-action" hidden>
-              <button id="manual-start-protocol" type="button" disabled>프로토콜 시작</button>
-              <span id="manual-fallback-status" role="status">음성 없이 승인된 현재 단계 화면으로 진행할 수 있습니다.</span>
-            </div>
             <div id="bench-completion-action" class="bench-completion-action" hidden>
               <button id="complete-current-step" type="button" disabled>현재 단계 완료</button>
               <span id="bench-action-status" role="status">완료를 누르면 서버 저장 결과를 확인합니다.</span>
@@ -590,7 +585,7 @@ function sanitizeExternalResearchAnswer(text){
    .replace(/\s+([,.:;?!])/g,"$1")
    .trim();
 }
-let socket,micContext,micWorkletNode,micSource,micStream,playContext,cascadeGain,sessionActive=false,manualFallbackMode=false;
+let socket,micContext,micWorkletNode,micSource,micStream,playContext,cascadeGain,sessionActive=false;
 let receiving=null,receivedFrames=[],receivingFiller=null,fillerFrames=[],fillerSource=null,fillerIdentity=null,activeTurn=null,activeCascadeGeneration=null,audioComplete=false,turnComplete=false,playing=false,nextSegment=0,activeSource=null,replaySource=null,lastReplayableAudio=null,pendingVoiceReplay=false,sessionGeneration=0,playbackEpoch=0,visibleState="IDLE";
 let pipelineMode="cascade";
 let micSignalSeen=false;
@@ -618,10 +613,9 @@ const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers
 const UI={
  IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
  THINKING:["승인자료와 보고 작업을 확인하는 중…",true,false],SPEAKING:["Voice Workflow Agent가 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
- MANUAL:["음성을 사용할 수 없습니다 · 화면의 현재 단계와 수동 실행 기능은 계속 사용할 수 있습니다.",true,false],
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
-const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",MANUAL:"수동 실행",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
+const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
 const ROLE_LABELS=Object.freeze({researcher:"연구자",reviewer:"검토자",lab_admin:"랩 관리자",organization_admin:"조직 관리자"});
 const RECOVERY_NOT_RESTORED_LABELS=Object.freeze({pending_confirmations:"완료 확인 대기",conversation_history:"이전 대화",active_timers:"진행 중이던 단계 타이머"});
 const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"웹 참고 자료 검색",generate_instructional_visual:"설명용 이미지 생성",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인",start_procedure:"승인 절차 시작",get_current_step:"현재 절차 단계 확인",complete_current_step:"현재 절차 단계 완료",record_step_observation:"현재 단계 관찰 기록",start_step_timer:"현재 단계 타이머 시작",get_workflow_summary:"워크플로 감사 요약"};
@@ -696,7 +690,7 @@ function renderExperimentContext(){
  setText("experiment-context-approval",sessionRevision&&entry&&entry.revision_id!==sessionRevision?"복구된 과거 버전 · 승인 기록 재확인 필요":approvalContextLabel(exactEntry));
  setText("experiment-context-step",step?`${step}단계 · ${stateInfo?.label||"상태 확인"}`:"시작 전");
  let actions="승인된 프로토콜 선택";
- if(sessionActive)actions=manualFallbackMode?"현재 단계·상세 보기 · 현재 단계 완료 · 관찰·근거 기록 · 일시정지 · 종료":"현재 단계 듣기 · 관찰 기록 · 일시정지 · 종료";
+ if(sessionActive)actions="현재 단계 듣기 · 관찰 기록 · 일시정지 · 종료";
  else if(experimentIsResumable())actions="실험 이어하기 · 현재 단계 확인 · 종료";
  else if(entry?.available_for_execution===true)actions="새 실험 시작 · 현재 단계 듣기 · 관찰 기록";
  setText("experiment-context-actions",actions);
@@ -712,10 +706,8 @@ function renderState(state,detail=""){
  if($("rail-state"))$("rail-state").textContent=visibleLabel;
  if(visibleState==="SPEAKING")updateMicrophoneStatus("speaking");
  else if(visibleState==="LISTENING")updateMicrophoneStatus(micSignalSeen?"signal":"listening");
- else if(visibleState==="MANUAL")updateMicrophoneStatus("unavailable");
  else if(visibleState==="IDLE")updateMicrophoneStatus("idle");
  const selectedEntry=protocolCatalog.get($("protocol-id")?.value),protocolUnavailable=!experimentIsResumable()&&selectedEntry?.available_for_execution!==true;setDisabled($("start"),view[1]||protocolUnavailable);setDisabled($("stop"),view[2]);
- const manualSwitch=$("switch-to-manual");if(manualSwitch){manualSwitch.hidden=!sessionActive||manualFallbackMode;setDisabled(manualSwitch,!sessionActive||manualFallbackMode);}
  setDisabled($("rail-stop-session"),view[2]);
  setDisabled($("rail-pause-session"),!sessionActive);
  const configurationLocked=!["IDLE","ERROR"].includes(visibleState);
@@ -807,7 +799,7 @@ const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  "voice turn processing failed":"음성 요청을 처리하지 못했습니다. 단계가 변경되었다고 가정하지 말고 현재 단계를 다시 확인해 주세요."
 });
 function researcherErrorMessage(value,fallback="요청을 처리하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요."){const code=typeof value==="string"?value:"",mapped=RESEARCHER_ERROR_MESSAGES[code];if(mapped)return mapped;if(Object.values(RESEARCHER_ERROR_MESSAGES).includes(code))return code;return fallback;}
-function renderAdminMetrics(payload){const target=$("admin-metrics");if(!target||!payload||typeof payload!=="object")return false;const pilot=payload.pilot_metrics,tenantMetrics=Array.isArray(payload.metrics)?payload.metrics:null;let values;if(pilot&&typeof pilot==="object"){const rate=Number.isFinite(pilot.workflow_completion_rate)?`${Math.round(pilot.workflow_completion_rate*100)}%`:"측정 전";values=[["음성 Turn",Number(pilot.voice_turns)||0],["성공 Turn",Number(pilot.successful_voice_turns)||0],["확인 재요청",Number(pilot.clarification_requests)||0],["단계 반복 요청",Number(pilot.repeat_requests)||0],["음성 인식 실패",Number(pilot.stt_failures)||0],["차단된 상태 변경",Number(pilot.blocked_mutation_attempts)||0],["의도적 끼어들기",Number(pilot.confirmed_barge_ins)||0],["무시된 소음 후보",Number(pilot.ignored_barge_in_candidates)||0],["수동 실행 작업",Number(pilot.manual_fallback_actions)||0],["완료 단계",Number(pilot.completed_workflow_steps)||0],["복구 이벤트",Number(pilot.recovery_events)||0],["저장 실패",Number(pilot.persistence_failures)||0],["완료율",rate]];}else if(tenantMetrics){values=tenantMetrics.map(item=>["운영 이벤트",Number.isFinite(item.total)?item.total:"—"]);}else{const reporting=payload.experiment_reporting||{},reports=reporting.reports||{},quality=reporting.quality||{},events=reporting.workflow_events||{},catalog=payload.protocol_catalog||{},runtime=payload.runtime||{},counters=runtime.counters||{};values=[["실험 기록",Number(reports.total)||0],["완료 단계",Number(events.step_completed)||0],["차단",Number(quality.blockers)||0],["실행 PDF",`${Number(catalog.executable)||0}/${Number(catalog.total)||0}`],["완료 Turn",Number(counters.turns_completed)||0]];}target.replaceChildren();for(const [label,value] of values){const card=document.createElement("div"),strong=document.createElement("b"),caption=document.createElement("span");card.className="admin-metric";strong.textContent=String(value);caption.textContent=label;card.append(strong,caption);target.appendChild(card);}const privacy=document.createElement("div");privacy.className="admin-privacy";privacy.textContent="이 화면에는 사용량과 오류 같은 운영 통계만 표시됩니다. 음성·대화 내용, 사용자 식별자, 생체 음성정보, API 키는 저장하거나 표시하지 않습니다.";target.appendChild(privacy);target.hidden=false;if(Number.isInteger(payload.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(payload.analytics_retention_days);return true;}
+function renderAdminMetrics(payload){const target=$("admin-metrics");if(!target||!payload||typeof payload!=="object")return false;const pilot=payload.pilot_metrics,tenantMetrics=Array.isArray(payload.metrics)?payload.metrics:null;let values;if(pilot&&typeof pilot==="object"){const rate=Number.isFinite(pilot.workflow_completion_rate)?`${Math.round(pilot.workflow_completion_rate*100)}%`:"측정 전";values=[["완료 워크플로",Number(pilot.completed_workflows)||0],["실패 명령",Number(pilot.failed_commands)||0],["복구 이벤트",Number(pilot.recovery_events)||0],["상태 변경 실패",Number(pilot.mutation_failures)||0],["사용자 작업",Number(pilot.user_actions)||0],["완료율",rate]];}else if(tenantMetrics){values=tenantMetrics.map(item=>["운영 이벤트",Number.isFinite(item.total)?item.total:"—"]);}else{const reporting=payload.experiment_reporting||{},reports=reporting.reports||{},quality=reporting.quality||{},events=reporting.workflow_events||{},catalog=payload.protocol_catalog||{},runtime=payload.runtime||{},counters=runtime.counters||{};values=[["실험 기록",Number(reports.total)||0],["완료 단계",Number(events.step_completed)||0],["차단",Number(quality.blockers)||0],["실행 PDF",`${Number(catalog.executable)||0}/${Number(catalog.total)||0}`],["완료 Turn",Number(counters.turns_completed)||0]];}target.replaceChildren();for(const [label,value] of values){const card=document.createElement("div"),strong=document.createElement("b"),caption=document.createElement("span");card.className="admin-metric";strong.textContent=String(value);caption.textContent=label;card.append(strong,caption);target.appendChild(card);}const privacy=document.createElement("div");privacy.className="admin-privacy";privacy.textContent="이 화면에는 사용량과 오류 같은 운영 통계만 표시됩니다. 음성 내용, 대화 내용, API 키 같은 민감한 정보는 표시하지 않습니다.";target.appendChild(privacy);target.hidden=false;if(Number.isInteger(payload.analytics_retention_days)&&$("admin-retention-days"))$("admin-retention-days").value=String(payload.analytics_retention_days);return true;}
 async function loadAdminMetrics(){const status=$("admin-metrics-status"),target=$("admin-metrics");if(status)status.textContent="연구실 운영 현황을 불러오는 중…";try{const response=await workspaceFetch("/api/workspace/admin/analytics",{method:"GET",cache:"no-store"});if(!response.ok)throw new Error(response.status===403?"관리자 역할이 필요합니다.":"운영 현황을 불러오지 못했습니다.");renderAdminMetrics(await response.json());if(status)status.textContent="연구실 운영 현황을 새로고침했습니다.";return true;}catch(error){if(target)target.replaceChildren();if(status)status.textContent=error?.message||"운영 현황을 불러오지 못했습니다.";return false;}}
 
 let selectedWorkspaceRevision=null,pendingReviewerDecision=null,selectedReviewerAllowedActions=new Set();
@@ -1356,7 +1348,6 @@ function resetVoiceProcessing(){}
 function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말씀해 주세요.`;}
 function resetSessionUI(){
- manualFallbackMode=false;
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();
@@ -1370,8 +1361,6 @@ function resetSessionUI(){
  $("last-report-id").textContent="아직 열린 실험 기록 없음";
  $("last-report-state").textContent="세션이 시작되면 서버가 실험 기록 초안을 관리합니다.";
  if($("bench-completion-action"))$("bench-completion-action").hidden=true;
- if($("manual-fallback-action"))$("manual-fallback-action").hidden=true;
- setDisabled($("manual-start-protocol"),true);setText("manual-fallback-status","음성 없이 승인된 현재 단계 화면으로 진행할 수 있습니다.");
  setDisabled($("complete-current-step"),true);setText("bench-action-status","완료를 누르면 서버 저장 결과를 확인합니다.");
  for(const id of ["export-report-markdown","export-report-json","export-report-csv","export-report-docx"]){
   const link=$(id);if(link){link.removeAttribute?.("href");link.setAttribute?.("aria-disabled","true");}
@@ -1496,26 +1485,6 @@ function sendCurrentStepCompletion(){
  }));
  return true;
 }
-function sendManualProtocolStart(){
- const accepted=acceptedSessionConfiguration;
- if(!manualFallbackMode||curatedProtocolState?.active||!sessionActive||!accepted||!socket||socket.readyState!==WebSocket.OPEN)return false;
- setDisabled($("manual-start-protocol"),true);
- setText("manual-fallback-status","프로토콜 시작 요청 중 · 아직 저장되지 않았습니다.");
- socket.send(JSON.stringify({
-  type:"workflow.start_protocol",
-  configuration_id:accepted.configuration_id,
-  generation:accepted.server_generation,
- }));
- return true;
-}
-function renderManualFallbackAction(){
- const box=$("manual-fallback-action"),button=$("manual-start-protocol"),status=$("manual-fallback-status");
- if(!box||!button)return;
- const ready=manualFallbackMode&&sessionActive&&curatedProtocolState?.attached===true&&!curatedProtocolState.active&&["preview","ready"].includes(curatedProtocolState.workflow_status)&&curatedProtocolState.block_reason===null;
- box.hidden=!manualFallbackMode;
- setDisabled(button,!ready);
- if(manualFallbackMode&&curatedProtocolState?.active&&status&&!/(요청 중|저장했습니다)/.test(status.textContent))setText("manual-fallback-status","수동 실행 중 · 현재 단계 화면과 완료·관찰·근거 기능을 사용하세요.");
-}
 function renderHumanCheckpoint(value){
  const box=$("human-checkpoint");
  if(!box)return;
@@ -1549,7 +1518,6 @@ function renderCuratedProtocolState(message){
  const previewValid=!value.active&&["preview","ready"].includes(value.workflow_status)&&nonempty(value.current_step_label)&&nonempty(value.current_step_id);
  const activeValid=value.active?nonempty(value.current_step_label)&&nonempty(value.current_step_id):(previewValid||(value.current_step_label===null&&value.current_step_id===null));
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
- const previousStepId=curatedProtocolState?.current_step_id;
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);renderHumanCheckpoint(value);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
@@ -1576,10 +1544,8 @@ function renderCuratedProtocolState(message){
  const completionAction=$("bench-completion-action"),atCheckpoint=Boolean(value.human_checkpoint);
  if(completionAction)completionAction.hidden=!value.active||atCheckpoint;
  setDisabled($("complete-current-step"),!sessionActive||!value.active||blocked||atCheckpoint);
- renderManualFallbackAction();
  renderExperimentContext();
  renderState(visibleState);
- if(value.active&&nonempty(previousStepId)&&previousStepId!==value.current_step_id)announceMilestone(`현재 단계가 ${value.current_step_label}단계로 변경되었습니다.`);
  if(Number.isInteger(message.turn_id)){
   const node=turnNode(message.turn_id),outcome=node.querySelector?.(".turn-visual");
   if(outcome){
@@ -2019,7 +1985,6 @@ function applyTurnOutcome(message,browserGeneration=sessionGeneration){
  const snapshot=beginChatPatch(node);
  saved.dataset.mutated=String(message.state_changed);
  saved.textContent=TURN_OUTCOME_LABELS[message.workflow_outcome];
- if(message.state_changed&&["workflow_state_saved","experiment_report_saved"].includes(message.workflow_outcome))announceMilestone(`${saved.textContent}.`);
  finishChatPatch(snapshot,"outcome");return true;
 }
 function applyPlaybackOutcome(turnId,browserGeneration,code){
@@ -2044,7 +2009,7 @@ function applyTurnState(message,browserGeneration=sessionGeneration){
  // A cancelled Turn means its spoken answer stopped early, not that the
  // workflow failed. Anything the server already committed stays committed and
  // is still shown in 처리 결과 above.
- if(state==="cancelled")node.querySelector(".error").textContent="답변 재생이 중단됐습니다. 저장된 실험 상태는 그대로 유지됩니다.";else if(state==="blocked"){node.querySelector(".error").textContent="확인이 필요해 상태를 변경하지 않았습니다.";announceMilestone("확인이 필요해 상태 변경을 차단했습니다.");}else if(state==="error")node.querySelector(".error").textContent="오류가 발생했습니다. 실험 상태는 변경되지 않았습니다.";
+ if(state==="cancelled")node.querySelector(".error").textContent="답변 재생이 중단됐습니다. 저장된 실험 상태는 그대로 유지됩니다.";else if(state==="blocked")node.querySelector(".error").textContent="확인이 필요해 상태를 변경하지 않았습니다.";else if(state==="error")node.querySelector(".error").textContent="오류가 발생했습니다. 실험 상태는 변경되지 않았습니다.";
  return true;
 }
 function removeTurnProgress(id,browserGeneration,serverGeneration){const browserKey=turnBrowserKey(id,browserGeneration),known=turnServerGenerations.get(browserKey),target=serverGeneration===null?known:serverGeneration;if(Number.isInteger(target))turnProgress.delete(turnProgressKey(id,target));if(serverGeneration===null||known===serverGeneration)turnServerGenerations.delete(browserKey);}
@@ -2053,9 +2018,7 @@ function removeProvisionalTurns(browserGeneration=sessionGeneration){for(const [
 function cascadeTurnKey(turnId,generation){return `${generation}:${turnId}`;}
 function cascadeTurnInterrupted(message){return Number.isInteger(message?.turn_id)&&Number.isInteger(message?.generation)&&interruptedCascadeTurns.has(cascadeTurnKey(message.turn_id,message.generation));}
 function currentCascadeMessage(message){return message.turn_id===activeTurn&&(!Number.isInteger(message.generation)||activeCascadeGeneration===null||message.generation===activeCascadeGeneration);}
-function activateManualFallback(error,id,voiceUnavailable=true){const text=String(error?.message||error);manualFallbackMode=true;sessionActive=true;if(id)turnNode(id).querySelector(".error").textContent=`${text} · 수동 실행으로 전환했습니다.`;clearPlayback();void closeAudio();renderState("MANUAL",`${voiceUnavailable?"음성 사용 불가":"화면 조작 모드"} · ${text} 화면의 승인된 단계, 시작·완료, 관찰·근거, 일시정지와 종료 기능은 계속 사용할 수 있습니다.`);updateMicrophoneStatus("unavailable");const checkpoint=Boolean(curatedProtocolState?.human_checkpoint),blocked=curatedProtocolState?.block_reason!==null;setDisabled($("complete-current-step"),!curatedProtocolState?.active||checkpoint||blocked);renderManualFallbackAction();announceMilestone(`${voiceUnavailable?"음성을 사용할 수 없어":"사용자가 화면 조작을 선택해"} 수동 실행으로 전환했습니다. 현재 실험 상태는 유지됩니다.`);}
-function chooseManualFallback(){if(!sessionActive||manualFallbackMode)return false;activateManualFallback("음성 대신 화면 조작을 선택했습니다.",undefined,false);return true;}
-function fail(error,id){if(acceptedSessionConfiguration&&sessionActive&&socket?.readyState===WebSocket.OPEN){activateManualFallback(error,id);return;}const text=String(error?.message||error);sessionActive=false;manualFallbackMode=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
+function fail(error,id){const text=String(error?.message||error);sessionActive=false;if(id)turnNode(id).querySelector(".error").textContent=text;clearPlayback();stopWorkflowTimer();stopReportPolling();void closeAudio();renderState("ERROR","오류: "+text);}
 
 async function init(generation=sessionGeneration){return new Promise((resolve,reject)=>{const scheme=location.protocol==="https:"?"wss":"ws",profile=selectedDevProfile(),query=profile?`?dev_profile=${encodeURIComponent(profile)}`:"",current=new WebSocket(scheme+"://"+location.host+"/ws"+query);socket=current;current.binaryType="arraybuffer";current.onopen=()=>{if(generation===sessionGeneration&&socket===current)resolve();};current.onmessage=e=>onMessage(e,generation,current);current.onclose=()=>{if(generation!==sessionGeneration||socket!==current)return;sessionActive=false;pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="연결 종료 · 다시 선택하고 시작해 주세요";removeProvisionalTurns(generation);clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();void closeAudio();renderState("ERROR","연결이 예기치 않게 종료됐습니다. 설정을 다시 확인해 주세요.");};current.onerror=()=>{if(generation!==sessionGeneration||socket!==current)return;fail("WebSocket 연결 실패");reject(new Error("WebSocket 연결 실패"));};});}
 function resamplePcm16(input,sourceRate,targetRate){
@@ -2119,7 +2082,7 @@ async function closeAudio(){
 }
 async function startSession(){
  const generation=sessionGeneration;
- sessionActive=false;manualFallbackMode=false;
+ sessionActive=false;
  acceptedSessionConfiguration=null;
  const configuration_id=++nextConfigurationId,inputLanguage=$("input-language")?.value||"ko",resumeExisting=experimentIsResumable(),pending={configuration_id,mode:"cascade",language:"ko",protocol_id:$("protocol-id")?.value||null,...(inputLanguage!=="ko"?{input_language:inputLanguage}:{}),...(resumeExisting?{experiment_session_id:currentExperimentSessionId,experiment_session_version:currentExperimentSessionVersion}:{})};
  pendingSessionConfiguration=pending;
@@ -2366,7 +2329,7 @@ function clearExperimentResumeSelection(){
  updateSessionStateBadge(null);updateStartActionLabel();renderResumeDisclosure();
 }
 function newUser(){if(!sessionActive)return;sendControl("session.reset");}
-async function stopSession(){const wasActive=sessionActive;sessionActive=false;manualFallbackMode=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();setSetupCollapsed(false);const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
+async function stopSession(){const wasActive=sessionActive;sessionActive=false;removeProvisionalTurns(sessionGeneration);sessionGeneration++;if(wasActive)sendControl("session.stop");pendingSessionConfiguration=null;acceptedSessionConfiguration=null;$("session-configuration-status").textContent="서버 확인 대기";clearPlayback();stopWorkflowTimer();stopReportPolling();invalidateCuratedProtocolState();setSetupCollapsed(false);const oldSocket=socket;socket=null;await closeAudio();if(oldSocket&&oldSocket.readyState<WebSocket.CLOSING)oldSocket.close(1000,"session stopped");renderState("IDLE");}
 function join(frames){const size=frames.reduce((n,x)=>n+x.byteLength,0),out=new Uint8Array(size);let at=0;for(const x of frames){out.set(new Uint8Array(x),at);at+=x.byteLength;}return out.buffer;}
 async function playLastReplayableAudio(statusNode){if(!lastReplayableAudio||!playContext){if(statusNode)statusNode.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";return false;}if(playing||activeSource||replaySource){if(statusNode)statusNode.textContent="다른 음성이 재생 중입니다. 끝난 뒤 한 번 더 눌러 주세요.";return false;}try{await playContext.resume();const input=new Int16Array(lastReplayableAudio.slice(0)),audio=playContext.createBuffer(1,input.length,16000),samples=audio.getChannelData(0);for(let i=0;i<input.length;i++)samples[i]=input[i]/32768;const source=playContext.createBufferSource();replaySource=source;source.buffer=audio;source.connect(playContext.destination);source.onended=()=>{if(replaySource===source)replaySource=null;if(statusNode)statusNode.textContent="답변을 한 번 다시 재생했습니다.";};source.start();if(statusNode)statusNode.textContent="마지막 답변을 다시 재생 중입니다.";return true;}catch(_){replaySource=null;if(statusNode)statusNode.textContent="재생하지 못했습니다. 브라우저의 오디오 권한과 출력 장치를 확인해 주세요.";return false;}}
 
@@ -2409,9 +2372,8 @@ async function onMessage(e,generation,current){
   pendingSessionConfiguration=null;
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
-  sessionActive=true;
-  try{await ensureAudio(generation);}catch(error){if(generation===sessionGeneration&&socket===current&&acceptedSessionConfiguration?.configuration_id===m.configuration_id){setSetupCollapsed(true);activateManualFallback(error);renderExperimentContext();renderResumeDisclosure();}return;}
-  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;manualFallbackMode=false;setSetupCollapsed(true);renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
+  try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;setSetupCollapsed(true);renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
   if(curatedProtocolState?.active){const atCheckpoint=Boolean(curatedProtocolState.human_checkpoint);if($("bench-completion-action"))$("bench-completion-action").hidden=atCheckpoint;setDisabled($("complete-current-step"),atCheckpoint||curatedProtocolState.block_reason!==null);}
  }
  if(m.type==="session.greeting"){
@@ -2427,7 +2389,7 @@ async function onMessage(e,generation,current){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
   pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();setSetupCollapsed(false);const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
  }
- if(m.type==="session.stopped"){sessionActive=false;manualFallbackMode=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();setSetupCollapsed(false);renderState("IDLE");}
+ if(m.type==="session.stopped"){sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();setSetupCollapsed(false);renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
  if(m.type==="session.language_confirmation_required"){$("language-status").textContent="Language confirmation required";}
@@ -2436,24 +2398,15 @@ async function onMessage(e,generation,current){
  if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
- if(m.type==="experiment.session.error"){const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;announceMilestone(`저장 실패. ${message}`);}
+ if(m.type==="experiment.session.error"){const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="workflow.action.result"&&m.action==="complete_current_step"){
   const accepted=acceptedSessionConfiguration;
   if(accepted&&m.configuration_id===accepted.configuration_id&&m.generation===accepted.server_generation){
    setText("bench-action-status",normalizePresentationText(m.message||(
     m.state_mutation?"완료 상태를 저장했습니다.":"실험 상태는 변경되지 않았습니다."
    )));
-   announceMilestone(m.state_mutation?"현재 단계 완료를 저장했습니다.":"현재 단계 완료를 저장하지 않았습니다. 실험 상태는 변경되지 않았습니다.");
    const checkpoint=Boolean(curatedProtocolState?.human_checkpoint);
    setDisabled($("complete-current-step"),!sessionActive||checkpoint);
-  }
- }
- if(m.type==="workflow.action.result"&&m.action==="start_protocol"){
-  const accepted=acceptedSessionConfiguration;
-  if(accepted&&m.configuration_id===accepted.configuration_id&&m.generation===accepted.server_generation){
-   setText("manual-fallback-status",normalizePresentationText(m.message||(m.state_mutation?"프로토콜 시작을 저장했습니다.":"프로토콜을 시작하지 않았습니다.")));
-   announceMilestone(m.state_mutation?"프로토콜 시작을 저장했습니다.":"프로토콜을 시작하지 않았습니다. 실험 상태는 변경되지 않았습니다.");
-   renderManualFallbackAction();
   }
  }
  if(m.type==="protocol.visual.state"&&applyGeneratedVisualState(m,generation))promoteTurnVisualToPanel(m,generation);
@@ -2483,12 +2436,12 @@ async function onMessage(e,generation,current){
  if(m.type==="filler.audio.start"){const accepted=acceptedSessionConfiguration,valid=accepted&&accepted.mode==="cascade"&&m.configuration_id===accepted.configuration_id&&currentCascadeMessage(m)&&!cascadeTurnInterrupted(m)&&Number.isInteger(m.frame_count)&&m.frame_count>0;if(valid&&!playing&&!activeSource){receivingFiller=m;fillerFrames=[];}}
  if(m.type==="filler.audio.end"&&receivingFiller&&m.turn_id===receivingFiller.turn_id&&m.generation===receivingFiller.generation){const meta=receivingFiller,data=join(fillerFrames);receivingFiller=null;fillerFrames=[];await playFiller(data,meta,generation);}
  if(m.type==="filler.audio.clear")clearFillerPlayback(m.turn_id,m.generation);
- if(m.type==="turn.filler"&&acceptedSessionConfiguration?.configuration_id===m.configuration_id&&currentCascadeMessage(m)){const key=cascadeTurnKey(m.turn_id,m.generation),node=turns.get(turnBrowserKey(m.turn_id,generation)),acceptedTranscript=node&&node.querySelector?.(".transcript")?.textContent!=="듣는 중…",status=node?.querySelector?.(".filler-status");if(m.outcome==="played"){pendingFillers.set(key,"음성 안내 · 재생됨");if(acceptedTranscript&&status){status.textContent="음성 안내 · 재생됨";status.hidden=false;}}else if(["skipped","cancelled","failed"].includes(m.outcome)){pendingFillers.delete(key);if(status){status.textContent="";status.hidden=true;}}}
+ if(m.type==="turn.filler"&&acceptedSessionConfiguration?.configuration_id===m.configuration_id&&currentCascadeMessage(m)){const key=cascadeTurnKey(m.turn_id,m.generation),node=turns.get(turnBrowserKey(m.turn_id,generation)),acceptedTranscript=node&&node.querySelector?.(".transcript")?.textContent!=="듣는 중…";if(m.outcome==="played"){pendingFillers.set(key,"대기 안내 · 재생됨");if(acceptedTranscript)node.querySelector(".filler-status").textContent="대기 안내 · 재생됨";}else if(["skipped","cancelled","failed"].includes(m.outcome)){pendingFillers.delete(key);if(node)node.querySelector(".filler-status").textContent="";}}
  if(m.type==="state.changed"&&sessionActive&&!cascadeTurnInterrupted(m)&&(!Number.isInteger(m.turn_id)||currentCascadeMessage(m))&&m.state!=="AGENT_SPEAKING")renderState(m.state==="PROCESSING"?"THINKING":"LISTENING");
  if(m.type==="turn.processing"&&sessionActive&&!cascadeTurnInterrupted(m)&&(activeTurn===null||currentCascadeMessage(m)))renderState("THINKING");
  if(m.type==="speech.start"){activeTurn=m.turn_id;activeCascadeGeneration=Number.isInteger(m.generation)?m.generation:null;if(Number.isInteger(m.generation)){const key=turnBrowserKey(m.turn_id,generation),known=turnServerGenerations.get(key);if(known===undefined)turnServerGenerations.set(key,m.generation);provisionalTurns.set(key,m.generation);}resetVoiceProcessing();}
  if(m.type==="speech.rejected"){removeProvisionalTurn(m.turn_id,generation,Number.isInteger(m.generation)?m.generation:null);if(sessionActive)renderState("LISTENING");}
- if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation)),status=node.querySelector(".filler-status");if(filler&&status){status.textContent=filler;status.hidden=false;}updateVoiceProcessing("recognized");}
+ if(m.type==="transcript"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){provisionalTurns.delete(turnBrowserKey(m.turn_id,generation));const node=turnNode(m.turn_id,generation);node.querySelector(".transcript").textContent=m.text;const filler=pendingFillers.get(cascadeTurnKey(m.turn_id,m.generation));if(filler)node.querySelector(".filler-status").textContent=filler;updateVoiceProcessing("recognized");}
  if(m.type==="turn.state")applyTurnState(m,generation);
  if((m.type==="reply.complete"||m.type==="reply.delta")&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&!interruptedTurns.has(m.turn_id)){const owner=turnNode(m.turn_id,generation);if(!owner.dataset.greetingOwner)renderStructuredReply(owner,m);}
  if(m.type==="server.operation"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)&&m.route==="curated_protocol"&&Object.prototype.hasOwnProperty.call(SERVER_OPERATION_LABELS,m.operation)){if(m.operation==="audio_replay_request")audioRecoveryTurns.add(cascadeTurnKey(m.turn_id,m.generation));const target=turnNode(m.turn_id,generation).querySelector(".server-operation");target.textContent=`처리 경로 · curated_protocol · 서버 작업 · ${SERVER_OPERATION_LABELS[m.operation]}`;target.hidden=false;}
@@ -2504,7 +2457,6 @@ async function onMessage(e,generation,current){
 }
 
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
-$("switch-to-manual")?.addEventListener("click",chooseManualFallback);
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
 $("human-checkpoint-not-met")?.addEventListener("click",()=>sendHumanCheckpointDecision("not_met"));
@@ -2513,7 +2465,6 @@ $("human-checkpoint-continue")?.addEventListener("click",()=>sendHumanCheckpoint
 $("human-checkpoint-pause")?.addEventListener("click",()=>sendHumanCheckpointDecision("pause"));
 $("human-checkpoint-review")?.addEventListener("click",()=>sendHumanCheckpointDecision("request_review"));
 $("complete-current-step")?.addEventListener("click",sendCurrentStepCompletion);
-$("manual-start-protocol")?.addEventListener("click",sendManualProtocolStart);
 $("rail-stop-session")?.addEventListener("click",stopSession);
 $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();clearExperimentResumeSelection();resetSessionUI();renderState("IDLE");announceMilestone("새 세션이 준비되었습니다.");});
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;$("rail-new-session")?.focus();});

@@ -20,8 +20,6 @@ downstream write-back. It is a controlled-pilot system—not a validated
 GLP/GMP/clinical system, a full ELN/LIMS, an autonomous scientist, or a safety
 authority.
 
-Current maturity: **Controlled Pilot Ready — Engineering / Field-Unvalidated**.
-
 ## Product contract
 
 - The active voice path is Cascade: browser PCM → WebRTC VAD → xAI STT → shared
@@ -380,21 +378,15 @@ question gets a Korean answer through one boundary — `source_presentation.py` 
 and never by paraphrasing an approved protocol:
 
 1. a reviewer-approved Korean sidecar always wins;
-2. otherwise, a runtime translation is enabled by default for the Korean
-   pilot/development profile and is mechanically checked for preserved repeated
-   measurements, units, concentrations, durations, ratios, identifiers, and
-   stable reagent/equipment tokens; deployments may explicitly disable it with
-   `VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED=0`;
-3. if no safe Korean presentation is available, the UI keeps the exact approved
-   source under `원문 보기` and TTS directs the researcher there without reading
-   the full English instruction aloud.
+2. otherwise, with `VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED=1`, a
+   runtime translation may be generated, mechanically checked for preserved
+   numbers, units, concentrations, durations and identifiers, and discarded
+   outright if any changed;
+3. otherwise the exact approved source is the answer, with an honest notice.
 
 A runtime translation is always labelled `자동 번역`, never `검증된 한국어 번역`.
 An unresolved execution gate is safety-critical and never reaches a translator.
-Successful automatic translations are cached process-locally by immutable
-revision/source/step/policy/model identity; cache reuse never changes their
-`자동 번역` authority. The exact approved text always stays available under
-`원문 보기`, and translation output has no path to workflow mutation.
+The exact approved text always stays available under `원문 보기`.
 
 ## Workspace identity and authorization
 
@@ -704,14 +696,13 @@ npx playwright test
 GitHub Actions (`.github/workflows/ci.yml`) runs both on every push/PR to
 `main` and `refactor/**`. Its browser job uses `playwright.ci.config.ts` with
 `scripts/run_ci_server.sh`, a credential-free launcher that writes to its own
-throwaway data directory, explicitly blanks live provider credentials, and
-enables no live provider. That launcher loads the Candidate A fixture only when
-its externally licensed source PDF is actually present. Otherwise it creates an
-explicitly fictional, non-operational source in the throwaway catalog so the
-same reviewer-to-bench approval, checkpoint, degraded-voice, and recovery
-boundaries run without proprietary content. Both configs honour
-`PLAYWRIGHT_APP_PORT`, so a browser run never collides with a developer's own
-server on `8000`:
+throwaway data directory and enables no live provider. That launcher loads the
+Candidate A fixture only when its externally licensed source PDF is actually
+present; in CI it is absent by design, so the server starts with an empty
+protocol catalog and `tests/e2e/protocol-journey.spec.ts` skips itself with an
+explicit reason. Where the PDF is available the same command runs the full
+reviewer-to-bench journey. Both configs honour `PLAYWRIGHT_APP_PORT`, so a
+browser run never collides with a developer's own server on `8000`:
 
 ```bash
 PLAYWRIGHT_APP_PORT=8123 npx playwright test --config=playwright.ci.config.ts

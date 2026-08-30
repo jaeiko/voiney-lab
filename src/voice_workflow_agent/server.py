@@ -688,7 +688,6 @@ def _record_workspace_experiment_progress(
     turn_id:int,
     generation:int,
     pre_transition_index:int,
-    capture_source:str="voice",
 )->dict[str,object]|None:
     """Mirror only deterministic committed protocol actions into recovery state."""
 
@@ -703,9 +702,7 @@ def _record_workspace_experiment_progress(
         CuratedProtocolAction.RESUME,
     }:
         return None
-    if capture_source not in {"voice","manual"}:
-        raise WorkspaceError("Experiment progress capture source is invalid.")
-    key=f"{capture_source}-{generation}-{turn_id}-{plan.action.value}"
+    key=f"voice-{generation}-{turn_id}-{plan.action.value}"
     if plan.action is CuratedProtocolAction.STOP:
         return _transition_workspace_experiment(
             session,action="stop",event_key=key,reason="voice_command"
@@ -755,7 +752,6 @@ def _record_workspace_experiment_progress(
                 "configuration_id":session.accepted_configuration_id,
                 "turn_id":turn_id,
                 "generation":generation,
-                "capture_source":capture_source,
             },
         )
         session.experiment_state_version=int(state["version"])
@@ -842,7 +838,6 @@ async def _record_human_checkpoint_decision(
                 mark_completed=outcome.status=="advanced",
                 payload={
                     "authority":"researcher_confirmation",
-                    "capture_source":"manual",
                     "checkpoint_id":outcome.checkpoint_id,
                     "condition_source_text":(
                         outcome.condition_source_text or "")[:1000],
@@ -4459,9 +4454,6 @@ class ListenerSession:
         self.greeting_emitted=False
         self.greeting_audio_ready=False
         self.client_audio_constraints:dict[str,object]={}
-        # Session-local only: supports a content-free repeat-use counter. The
-        # fingerprint is never persisted or returned to the browser.
-        self._previous_utterance_fingerprint:bytes|None=None
         self.stt_settings=CascadeSttSettings.from_environment()
         # Noise-aware interruption gate. It never decides what a workflow does;
         # it decides whether a sound is worth ducking the agent for.
@@ -4475,9 +4467,8 @@ class ListenerSession:
         self.diarization_settings=(
             diarization_settings or SpeakerDiarizationSettings.from_environment())
         self.participants=SessionParticipants()
-        # Presentation-only translation. Enabled for the normal Korean pilot
-        # profile, explicitly disableable by deployment, and never connected to
-        # the mutation path - see source_presentation.
+        # Presentation-only translation. Off unless explicitly enabled, and the
+        # translator never reaches the mutation path - see source_presentation.
         self.translation_settings=(
             translation_settings or TranslationSettings.from_environment())
         self.presentation_translator=(
@@ -4564,7 +4555,6 @@ class ListenerSession:
         self.greeting_emitted=False
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
-        self._previous_utterance_fingerprint=None
         self.active=True; self.active_turn_id=None; self.cooldown_until=0
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
@@ -4589,7 +4579,6 @@ class ListenerSession:
         self.accepted_revision_id=None
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
-        self._previous_utterance_fingerprint=None
         self._reset_turn_identity()
         if self.curated_protocol_session is not None:
             self.curated_protocol_session.reset()
@@ -4627,7 +4616,6 @@ class ListenerSession:
         self.language_mode="manual"; self.manual_language=context.language
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
-        self._previous_utterance_fingerprint=None
         self._reset_turn_identity()
     def set_language_mode(self,mode:str,context:ToolContext|None=None)->None:
         if mode=="manual":
@@ -4642,7 +4630,6 @@ class ListenerSession:
         self.history.reset()
         self.last_confirmed_language=None
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
-        self._previous_utterance_fingerprint=None
         self._reset_turn_identity()
     def is_current(self,turn_id:int,generation:int)->bool:
         return self.active and self.generation==generation and self.active_turn_id==turn_id
@@ -4855,13 +4842,6 @@ class ListenerSession:
                         "total_frames=%d noise_floor_rms=%.5f",
                         reason,result.voiced_frames,result.total_frames,
                         gate.noise_floor_rms)
-                    _record_workspace_metric(
-                        category="voice",metric_name="barge_in_ignored",
-                        dimensions={
-                            "status":"ignored",
-                            "reason_code":str(reason)[:100],
-                        },
-                    )
                     self._reset_interrupt_input(
                         playback=self.state==TurnState.AGENT_SPEAKING)
                     continue
@@ -5071,14 +5051,6 @@ class LockedSender:
     async def text(self,kind:str,**fields):
         async with self.lock: await self.websocket.send_text(event(kind,**fields))
         RUNTIME_METRICS.observe(kind,fields)
-        if kind=="turn.done" and fields.get("route")!="server_greeting":
-            _record_workspace_metric(
-                category="voice",metric_name="successful_turn",
-                dimensions={
-                    "status":"completed",
-                    "route":str(fields.get("route") or "unknown")[:100],
-                },
-            )
     async def segment(
         self,turn_id:int,index:int,frames:list[bytes],generation:int|None=None,
     ):
@@ -6087,14 +6059,11 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
                 if plan.reported_observation else
                 "단계를 완료하고 실험 기록에 반영했습니다."
             )
-            # The deterministic plan may describe semantic completion before
-            # persistence, but record-success language is added only here,
-            # after the reporting gate succeeds.
             persisted_speech=plan.speech_text.replace(
-                "단계를 완료했습니다.",record_phrase,1,
+                "단계를 완료로 저장했습니다.",record_phrase,1,
             )
             persisted_display=plan.display_text.replace(
-                "단계를 완료했습니다.",record_phrase,1,
+                "단계를 완료로 저장했습니다.",record_phrase,1,
             )
             if persisted_display==plan.display_text:
                 persisted_display=f"{persisted_speech}\n\n{plan.display_text}"
@@ -6106,26 +6075,10 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
             )
             persisted_speech=f"{acknowledgment} {plan.speech_text}"
             persisted_display=f"{acknowledgment}\n\n{plan.display_text}"
-        display_document=getattr(plan,"display_document",None)
-        if language=="ko" and isinstance(display_document,dict):
-            sections=[]
-            for section in display_document.get("sections",()):
-                if not isinstance(section,dict):
-                    continue
-                updated=dict(section)
-                if updated.get("kind")=="lead" and isinstance(
-                    updated.get("text"),str
-                ):
-                    updated["text"]=updated["text"].replace(
-                        "단계를 완료했습니다.",record_phrase,1,
-                    )
-                sections.append(updated)
-            display_document={**display_document,"sections":sections}
         return replace(
             plan,
             display_text=persisted_display,
             speech_text=persisted_speech,
-            display_document=display_document,
         )
     if (
         plan.action is CuratedProtocolAction.NEXT
@@ -6446,15 +6399,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     stt_keyterms=transcription_context.keyterms
     if accepted_transcription is None:
         started=clock()
-        try:
-            transcription=await asyncio.to_thread(
-                transcribe_cascade_audio,source_pcm,transcription_context)
-        except Exception:
-            _record_workspace_metric(
-                category="voice",metric_name="stt_failure",
-                dimensions={"status":"failed","reason_code":"provider_failure"},
-            )
-            raise
+        transcription=await asyncio.to_thread(
+            transcribe_cascade_audio,source_pcm,transcription_context)
         timings["stt"]=round((clock()-started)*1000)
     else:
         transcription=accepted_transcription
@@ -6478,10 +6424,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     if not transcript.strip():
         if session.reject_empty_transcript(turn_id):
             _record_workspace_metric(
-                category="voice",metric_name="stt_failure",
-                dimensions={"status":"rejected","reason_code":"empty_transcript"},
-            )
-            _record_workspace_metric(
                 category="voice",metric_name="command_failure",
                 dimensions={"status":"rejected","reason_code":"empty_transcript"},
             )
@@ -6495,13 +6437,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     if not input_decision.accepted:
         if session.reject_empty_transcript(turn_id):
-            _record_workspace_metric(
-                category="voice",metric_name="stt_failure",
-                dimensions={
-                    "status":"rejected",
-                    "reason_code":str(input_decision.reason or "non_speech")[:100],
-                },
-            )
             _record_workspace_metric(
                 category="voice",metric_name="command_failure",
                 dimensions={
@@ -6544,28 +6479,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         **speaker_diagnostics,
     )
     if not speaker_decision.mutation_allowed:
-        reason=speaker_decision.reason[:100]
         _record_workspace_metric(
             category="voice",metric_name="command_failure",
             dimensions={
                 "status":"blocked",
-                "reason_code":reason,
+                "reason_code":speaker_decision.reason[:100],
             },
         )
-        _record_workspace_metric(
-            category="workflow",metric_name="blocked_mutation",
-            dimensions={"status":"blocked","reason_code":reason},
-        )
-        if reason=="unknown_speaker":
-            _record_workspace_metric(
-                category="voice",metric_name="unknown_speaker_mutation_rejection",
-                dimensions={"status":"blocked","reason_code":reason},
-            )
-        elif reason=="overlapping_speakers":
-            _record_workspace_metric(
-                category="voice",metric_name="overlapping_speaker_ambiguity",
-                dimensions={"status":"blocked","reason_code":reason},
-            )
         if not await current_text("transcript",turn_id=turn_id,text=transcript):
             return
         await finish_blocked_voice(
@@ -6656,21 +6576,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 "status":"blocked",
             },
         )
-        _record_workspace_metric(
-            category="voice",metric_name="clarification_request",
-            dimensions={
-                "status":"blocked",
-                "reason_code":admission.mismatch_status or "language_uncertain",
-            },
-        )
-        if arbitrate_request(transcript).mutation_candidate:
-            _record_workspace_metric(
-                category="workflow",metric_name="blocked_mutation",
-                dimensions={
-                    "status":"blocked",
-                    "reason_code":"language_uncertain",
-                },
-            )
         await current_text(
             "stt.language_mismatch",turn_id=turn_id,
             configured_language=admission.expected_language,
@@ -6691,17 +6596,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         return
     if not await current_text("transcript",turn_id=turn_id,text=transcript):
         return
-    utterance_fingerprint=hashlib.sha256(
-        " ".join(transcript.casefold().split()).encode("utf-8")
-    ).digest()
-    if hmac.compare_digest(
-        session._previous_utterance_fingerprint or b"",utterance_fingerprint
-    ):
-        _record_workspace_metric(
-            category="voice",metric_name="repeated_utterance",
-            dimensions={"status":"observed","event_kind":"consecutive_repeat"},
-        )
-    session._previous_utterance_fingerprint=utterance_fingerprint
     emergency=recognize_emergency(transcript)
     if emergency is not None:
         text=emergency.response
@@ -6889,47 +6783,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "status":"mutated" if plan.state_changed else "read_only",
                 },
             )
-            clarification_actions={
-                CuratedProtocolAction.CLARIFY_COMPLETION,
-                CuratedProtocolAction.CLARIFY_REFERENCE,
-                CuratedProtocolAction.CLARIFY_PARAMETER,
-                CuratedProtocolAction.TRANSCRIPT_UNRELIABLE,
-            }
-            if plan.action in clarification_actions:
-                _record_workspace_metric(
-                    category="voice",metric_name="clarification_request",
-                    dimensions={
-                        "status":"requested",
-                        "event_kind":plan.action.value,
-                        "reason_code":routed_turn.arbitration.reason_code or "ambiguous",
-                    },
-                )
-            if plan.action is CuratedProtocolAction.REPEAT:
-                _record_workspace_metric(
-                    category="voice",metric_name="repeat_request",
-                    dimensions={"status":"completed","event_kind":"current_step"},
-                )
-            if plan.action is CuratedProtocolAction.CLARIFY_COMPLETION:
-                _record_workspace_metric(
-                    category="workflow",metric_name="ambiguous_mutation_command",
-                    dimensions={
-                        "status":"blocked",
-                        "reason_code":routed_turn.arbitration.reason_code or "ambiguous",
-                    },
-                )
-            if (
-                request_arbitration.mutation_candidate
-                and not plan.state_changed
-                and plan.speech_mode is CuratedProtocolSpeechMode.BLOCKED
-            ):
-                _record_workspace_metric(
-                    category="workflow",metric_name="blocked_mutation",
-                    dimensions={
-                        "status":"blocked",
-                        "event_kind":plan.action.value,
-                        "reason_code":routed_turn.arbitration.reason_code or "policy_gate",
-                    },
-                )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
                     plan.normalized_transcript
@@ -7701,16 +7554,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if speech_policy=="speak":
             await sender.segment(turn_id,0,frames,generation)
         await current_text(
-            "reply.complete",turn_id=turn_id,text=display_text,
-            primary_text=plan.primary_text,
-            source_texts=list(plan.source_texts),
-            source_pages=list(plan.source_pages),
-            evidence_ids=list(plan.evidence_ids),
-            translation_status=plan.translation_status,
-            source_language="en",speech_text=speech_text,
-            answer_origin=plan.answer_origin,
-            citations=list(plan.citations),
-            display_document=getattr(plan,"display_document",None))
+            "reply.complete",turn_id=turn_id,text=display_text)
         await current_text(
             "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
         if plan.action is CuratedProtocolAction.AUDIO_RECOVERY:
@@ -8186,10 +8030,6 @@ async def run_turn_safely(
     accepted_stt_context:CascadeTranscriptionContext|None=None,
 ):
     generation=session.turn_generations.get(turn_id,session.generation)
-    _record_workspace_metric(
-        category="voice",metric_name="voice_turn",
-        dimensions={"status":"accepted_endpoint","route":"cascade"},
-    )
     sender=LockedSender(websocket)
     language=(session.accepted_language or session.manual_language or
               (session.tool_context.language if session.tool_context else "ko"))
@@ -8578,24 +8418,6 @@ async def voice_socket(websocket:WebSocket):
                             item.kind,fields["reason"],
                             item.result.voiced_frames,item.result.total_frames,
                             item.latency_ms)
-                    if item.kind=="assistant.interrupted":
-                        interruption_reason=str(
-                            item.reason or "confirmed_speech"
-                        )[:100]
-                        _record_workspace_metric(
-                            category="voice",metric_name="barge_in_confirmed",
-                            dimensions={
-                                "status":"confirmed",
-                                "reason_code":interruption_reason,
-                            },
-                        )
-                        _record_workspace_metric(
-                            category="voice",metric_name="playback_interruption",
-                            dimensions={
-                                "status":"playback_only",
-                                "reason_code":interruption_reason,
-                            },
-                        )
                     if item.kind=="speech.start":
                         if task is not None and not task.done():
                             task.cancel()
@@ -9102,132 +8924,6 @@ async def voice_socket(websocket:WebSocket):
                         action="resume",
                         state=fixture_state,
                     ))
-            elif control["type"]=="workflow.start_protocol":
-                curated=session.curated_protocol_session
-                control_identity_valid=bool(
-                    session.active
-                    and curated is not None
-                    and not curated.active
-                    and curated.workflow_status in {"preview","ready"}
-                    and control["configuration_id"]
-                    ==session.accepted_configuration_id
-                    and control["generation"]==session.generation
-                )
-                if not control_identity_valid:
-                    await websocket.send_text(event(
-                        "workflow.action.result",
-                        action="start_protocol",
-                        configuration_id=session.accepted_configuration_id,
-                        generation=session.generation,
-                        state_mutation=False,
-                        message=(
-                            "세션이 바뀌었거나 프로토콜을 시작할 수 없는 상태입니다. "
-                            "화면을 새로 확인해 주세요. 실험 상태는 변경하지 않았습니다."
-                        ),
-                    ))
-                    continue
-                assert curated is not None
-                restore_point=curated._checkpoint()
-                pre_transition_index=curated.current_index
-                control_turn_id=1_100_000_000+curated._revision
-                plan=curated.plan(
-                    "프로토콜 시작",
-                    turn_id=control_turn_id,
-                    language=session.accepted_language or "ko",
-                    configuration_id=session.accepted_configuration_id,
-                    generation=session.generation,
-                )
-                experiment_state=None
-                try:
-                    if not plan.state_changed:
-                        raise WorkspaceError(
-                            "The deterministic protocol start was not admitted."
-                        )
-                    experiment_state=await asyncio.to_thread(
-                        _record_workspace_experiment_progress,
-                        session,curated,plan,
-                        turn_id=control_turn_id,
-                        generation=session.generation,
-                        pre_transition_index=pre_transition_index,
-                        capture_source="manual",
-                    )
-                    if experiment_state is None:
-                        raise WorkspaceError(
-                            "Experiment progress persistence is unavailable."
-                        )
-                except Exception as exc:
-                    curated._restore(restore_point)
-                    _record_workspace_metric(
-                        category="workflow",metric_name="mutation_failure",
-                        dimensions={
-                            "status":"rolled_back",
-                            "reason_code":str(
-                                getattr(exc,"code","workspace_error"))[:100],
-                            "event_kind":"start_protocol",
-                        },
-                    )
-                    await websocket.send_text(event(
-                        "experiment.session.error",
-                        code=getattr(exc,"code","workspace_error"),
-                    ))
-                    await websocket.send_text(event(
-                        "protocol.fixture.state",
-                        configuration_id=session.accepted_configuration_id,
-                        action="start_protocol",
-                        state=curated.state(),
-                    ))
-                    await websocket.send_text(event(
-                        "workflow.action.result",
-                        action="start_protocol",
-                        configuration_id=session.accepted_configuration_id,
-                        generation=session.generation,
-                        state_mutation=False,
-                        message=(
-                            "실험 세션을 저장하지 못해 프로토콜 시작을 확정하지 "
-                            "않았습니다. 시작 전 상태는 그대로입니다."
-                        ),
-                    ))
-                    continue
-                if session.experiment_report_store is not None:
-                    try:
-                        report=await asyncio.to_thread(
-                            _record_experiment_report_plan,
-                            session,curated,plan,
-                            turn_id=control_turn_id,
-                            generation=session.generation,
-                            pre_transition_index=pre_transition_index,
-                        )
-                    except Exception:
-                        await websocket.send_text(event(
-                            "experiment.report.error",
-                            code="report_persistence_failed",
-                        ))
-                    else:
-                        await websocket.send_text(event(
-                            "experiment.report.state",report=report,
-                            configuration_id=session.accepted_configuration_id,
-                            generation=session.generation,
-                        ))
-                await websocket.send_text(event(
-                    "experiment.session.state",state=experiment_state,
-                ))
-                await websocket.send_text(event(
-                    "protocol.fixture.state",
-                    configuration_id=session.accepted_configuration_id,
-                    action="start_protocol",
-                    state=curated.state(spoken_summary=plan.spoken_summary),
-                ))
-                await websocket.send_text(event(
-                    "workflow.action.result",
-                    action="start_protocol",
-                    configuration_id=session.accepted_configuration_id,
-                    generation=session.generation,
-                    state_mutation=True,
-                    message=(
-                        "프로토콜 시작을 저장했습니다. 승인된 1단계 화면을 "
-                        "확인한 뒤 수동 완료 기능으로 진행하세요."
-                    ),
-                ))
             elif control["type"]=="workflow.complete_current_step":
                 curated=session.curated_protocol_session
                 current_step=(
@@ -9284,7 +8980,6 @@ async def voice_socket(websocket:WebSocket):
                             turn_id=control_turn_id,
                             generation=session.generation,
                             pre_transition_index=pre_transition_index,
-                            capture_source="manual",
                         )
                         if experiment_state is None:
                             raise WorkspaceError(
@@ -9360,14 +9055,7 @@ async def voice_socket(websocket:WebSocket):
                     generation=session.generation,
                     step_id=current_step.step_id,
                     state_mutation=bool(plan.state_changed),
-                    message=(
-                        f"{current_step.source_label}단계를 완료로 저장했습니다. "
-                        + (
-                            f"현재는 {curated.fixture.steps[curated.current_index].source_label}단계입니다."
-                            if curated.active else
-                            "프로토콜의 모든 단계를 완료했습니다."
-                        )
-                    ),
+                    message=plan.display_text,
                 ))
             elif control["type"]=="workflow.human_checkpoint":
                 curated=session.curated_protocol_session

@@ -19,10 +19,9 @@ The rules it enforces:
 4. Every number, unit, concentration, duration, and identifier in the source
    must survive into the translation, checked mechanically. A translation that
    drops or alters one is rejected outright rather than shown with a warning.
-5. Anything that fails any check keeps the exact source text on screen with an
-   honest notice. Korean TTS directs the researcher to that source instead of
-   reading a long English instruction aloud. Inventing smoother Korean never is
-   allowed.
+5. Anything that fails any check falls back to the exact source text with an
+   honest notice. Failing closed to English is always allowed; inventing
+   smoother Korean never is.
 
 Nothing here decides whether a workflow advances. It formats an answer that the
 deterministic layer has already decided to give.
@@ -30,13 +29,9 @@ deterministic layer has already decided to give.
 
 from __future__ import annotations
 
-import hashlib
-import logging
 import os
 import re
-import threading
 import unicodedata
-from collections import Counter, OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -44,19 +39,11 @@ from enum import Enum
 from voice_workflow_agent.configuration import bounded_integer
 
 
-log = logging.getLogger("voice_workflow_agent.source_presentation")
-
-
-PRESENTATION_POLICY_VERSION = "ko-source-presentation-v2"
-
-
 class SourcePresentationStatus(str, Enum):
     """Where the primary text a researcher hears actually came from."""
 
     #: A reviewer-approved Korean sidecar shipped with the protocol revision.
     VERIFIED_SIDECAR = "verified_sidecar"
-    #: A source-bound development localization without reviewer approval.
-    DEVELOPMENT_SIDECAR = "development_sidecar"
     #: Generated at runtime and mechanically checked. Not reviewer-approved.
     AUTOMATIC_TRANSLATION = "automatic_translation"
     #: No trustworthy Korean available, so the exact source is the answer.
@@ -69,7 +56,6 @@ class SourcePresentationStatus(str, Enum):
 #: word 검증된, because only it has actually been reviewed.
 PRESENTATION_LABELS: Mapping[str, str] = {
     SourcePresentationStatus.VERIFIED_SIDECAR.value: "답변 · 검증된 한국어 번역",
-    SourcePresentationStatus.DEVELOPMENT_SIDECAR.value: "답변 · 개발용 한국어 번역",
     SourcePresentationStatus.AUTOMATIC_TRANSLATION.value: "답변 · 자동 번역",
     SourcePresentationStatus.SOURCE_ONLY.value: "답변 · 원문 그대로",
     SourcePresentationStatus.SOURCE_LANGUAGE.value: "답변",
@@ -77,14 +63,11 @@ PRESENTATION_LABELS: Mapping[str, str] = {
 
 PRESENTATION_NOTICES: Mapping[str, str | None] = {
     SourcePresentationStatus.VERIFIED_SIDECAR.value: None,
-    SourcePresentationStatus.DEVELOPMENT_SIDECAR.value: (
-        "검토 승인 전 개발용 번역입니다. 수치와 조건은 아래 원문을 기준으로 확인해 주세요."
-    ),
     SourcePresentationStatus.AUTOMATIC_TRANSLATION.value: (
         "검토를 거치지 않은 자동 번역입니다. 수치와 조건은 아래 원문을 기준으로 확인해 주세요."
     ),
     SourcePresentationStatus.SOURCE_ONLY.value: (
-        "안전한 자동 한국어 번역을 만들지 못해 승인된 원문을 표시했습니다."
+        "확인된 한국어 번역이 없어 승인된 원문을 그대로 표시했습니다."
     ),
     SourcePresentationStatus.SOURCE_LANGUAGE.value: None,
 }
@@ -96,12 +79,12 @@ SOURCE_DISCLOSURE_LABEL = "원문 보기"
 class TranslationSettings:
     """Runtime presentation-translation policy.
 
-    Enabled by default for the normal Korean pilot/development path. A deployment
-    can still disable it explicitly. Every generated result remains unapproved
-    presentation text and must pass the mechanical preservation gate.
+    Disabled by default. A pilot that has not agreed how a machine translation
+    of an approved protocol will be reviewed should be showing English, not
+    generating Korean.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     model: str = "grok-4.6"
     #: Bounds one presentation translation. Long source text is a sign the
     #: caller is trying to translate a document rather than one step.
@@ -119,7 +102,7 @@ class TranslationSettings:
         return cls(
             enabled=bounded_integer(
                 env, "VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED",
-                1, 0, 1) == 1,
+                0, 0, 1) == 1,
             model=model,
             maximum_source_characters=bounded_integer(
                 env, "VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_MAX_CHARS",
@@ -141,8 +124,7 @@ _UNIT = (
     r"일|시간|분|초|배|회|번|개"
 )
 _MEASUREMENT = re.compile(
-    rf"(?<![\w.])(\d+(?:[.,]\d+)?)\s*(?:({_UNIT})(?![A-Za-z]))?",
-    re.IGNORECASE,
+    rf"(?<![\w.])(\d+(?:[.,]\d+)?)\s*(?:({_UNIT})(?![A-Za-z]))?"
 )
 
 #: Reagent codes, equipment names and step identifiers that must survive
@@ -158,27 +140,8 @@ _IDENTIFIER = re.compile(
 #: legitimately disappear in a Korean sentence.
 _IDENTIFIER_STOPWORDS = frozenset({
     "OK", "NOTE", "STEP", "AND", "THE", "FOR", "NOT", "ALL", "USE", "ADD",
-    "RETAIN", "REMOVE", "MIX", "IN", "DARK",
     "PCR",  # kept out only because it is checked as a keyterm elsewhere
 })
-
-
-_RATIO_PATTERNS = (
-    re.compile(
-        r"(?<![\w.])(\d+(?:[.,]\d+)?(?:\s*:\s*\d+(?:[.,]\d+)?)+)"
-        r"(?!\s*:\s*\d)(?![A-Za-z0-9.])"
-    ),
-    re.compile(
-        r"(?<![\w.])(\d+(?:[.,]\d+)?)\s*(?:parts?|부분)(?![A-Za-z])"
-        r".{0,160}?"
-        r"(?<![\w.])(\d+(?:[.,]\d+)?)\s*(?:parts?|부분)(?![A-Za-z])",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?<![\w.])(\d+(?:[.,]\d+)?)\s*대\s*"
-        r"(\d+(?:[.,]\d+)?)(?![A-Za-z0-9.])"
-    ),
-)
 
 
 def _normalize(text: str) -> str:
@@ -207,26 +170,19 @@ def source_identifiers(text: str) -> tuple[str, ...]:
     ))
 
 
-def source_ratios(text: str) -> tuple[tuple[str, ...], ...]:
-    """Return explicitly ratio-marked numeric tuples in source order."""
-
-    normalized = _normalize(text)
-    found: list[tuple[str, ...]] = []
-    for pattern_index, pattern in enumerate(_RATIO_PATTERNS):
-        for match in pattern.finditer(normalized):
-            if pattern_index == 0:
-                values = tuple(
-                    part.strip() for part in re.split(r"\s*:\s*", match.group(1))
-                )
-            else:
-                values = tuple(part.strip() for part in match.groups())
-            if len(values) >= 2 and values not in found:
-                found.append(values)
-    return tuple(found)
+def _measurement_pattern(measurement: str) -> re.Pattern[str]:
+    number, _, unit = measurement.partition(" ")
+    if not unit:
+        return re.compile(rf"(?<![\w.]){re.escape(number)}(?![\w.])")
+    # The number must be followed by the same unit. Spacing and letter case may
+    # differ (5mL / 5 ML); the unit itself may not (5 mL is not 5 L).
+    return re.compile(
+        rf"(?<![\w.]){re.escape(number)}\s*{re.escape(unit)}(?![A-Za-z])",
+        re.IGNORECASE)
 
 
-def _canonical_measurement(measurement: str) -> str:
-    return measurement.replace("μ", "µ").replace(" ", "").casefold()
+def _measurement_occurrences(text: str, measurement: str) -> int:
+    return len(_measurement_pattern(measurement).findall(text))
 
 
 @dataclass(frozen=True)
@@ -235,9 +191,7 @@ class PreservationResult:
 
     preserved: bool
     missing_measurements: tuple[str, ...] = ()
-    missing_ratios: tuple[tuple[str, ...], ...] = ()
     missing_identifiers: tuple[str, ...] = ()
-    missing_stable_tokens: tuple[str, ...] = ()
 
     @property
     def reason(self) -> str | None:
@@ -245,18 +199,11 @@ class PreservationResult:
             return None
         if self.missing_measurements:
             return "measurement_dropped"
-        if self.missing_ratios:
-            return "ratio_dropped"
-        if self.missing_stable_tokens:
-            return "stable_token_dropped"
         return "identifier_dropped"
 
 
 def check_source_preservation(
-    source: str,
-    candidate: str,
-    *,
-    stable_tokens: Sequence[str] = (),
+    source: str, candidate: str,
 ) -> PreservationResult:
     """Verify that a candidate Korean text kept everything that must not change.
 
@@ -270,51 +217,20 @@ def check_source_preservation(
     # Counted, not merely present. A source that states 100 mM twice and a
     # translation that states it once has changed one of them, and asking only
     # "does 100 mM appear?" would wave that through.
-    source_measurement_counts = Counter(
-        _canonical_measurement(item) for item in source_measurements(source)
-    )
-    candidate_measurement_counts = Counter(
-        _canonical_measurement(item) for item in source_measurements(candidate)
-    )
-    representative_measurements = {
-        _canonical_measurement(item): item for item in source_measurements(source)
-    }
     missing_measurements = tuple(
-        representative_measurements[measurement]
-        for measurement, required_count in source_measurement_counts.items()
-        if candidate_measurement_counts[measurement] < required_count
+        measurement
+        for measurement in dict.fromkeys(source_measurements(source))
+        if _measurement_occurrences(normalized, measurement)
+        < _measurement_occurrences(normalized_source, measurement)
     )
     missing_identifiers = tuple(
         identifier for identifier in source_identifiers(source)
         if identifier.lower() not in normalized.lower()
     )
-    candidate_ratios = source_ratios(normalized)
-    missing_ratios = tuple(
-        ratio for ratio in source_ratios(normalized_source)
-        if ratio not in candidate_ratios
-    )
-    normalized_folded = normalized.casefold()
-    source_folded = normalized_source.casefold()
-    bounded_stable_tokens = tuple(dict.fromkeys(
-        _normalize(token) for token in stable_tokens
-        if isinstance(token, str) and _normalize(token)
-    ))
-    missing_stable_tokens = tuple(
-        token for token in bounded_stable_tokens
-        if source_folded.count(token.casefold())
-        > normalized_folded.count(token.casefold())
-    )
     return PreservationResult(
-        preserved=(
-            not missing_measurements
-            and not missing_ratios
-            and not missing_identifiers
-            and not missing_stable_tokens
-        ),
+        preserved=not missing_measurements and not missing_identifiers,
         missing_measurements=missing_measurements,
-        missing_ratios=missing_ratios,
         missing_identifiers=missing_identifiers,
-        missing_stable_tokens=missing_stable_tokens,
     )
 
 
@@ -350,7 +266,6 @@ class SourcePresentation:
     def translated(self) -> bool:
         return self.status in (
             SourcePresentationStatus.VERIFIED_SIDECAR,
-            SourcePresentationStatus.DEVELOPMENT_SIDECAR,
             SourcePresentationStatus.AUTOMATIC_TRANSLATION,
         )
 
@@ -363,27 +278,10 @@ class SourcePresentation:
     def speech_text(self, suffix: str = "") -> str:
         """What is spoken. The source block is a screen affordance, not audio."""
 
-        primary = self.primary_text.strip()
-        if (
-            self.language == "ko"
-            and self.status is SourcePresentationStatus.SOURCE_ONLY
-        ):
-            primary = (
-                "안전한 자동 한국어 번역을 만들지 못했습니다. "
-                "화면의 원문 보기에서 승인된 원문을 확인해 주세요."
-            )
-        parts = [primary]
+        parts = [self.primary_text.strip()]
         if suffix.strip():
             parts.append(suffix.strip())
         return " ".join(part for part in parts if part)
-
-    @property
-    def display_primary_text(self) -> str:
-        """Primary screen copy without promoting a source-only fallback."""
-
-        if self.status is SourcePresentationStatus.SOURCE_ONLY:
-            return self.notice or "승인된 원문을 확인해 주세요."
-        return self.primary_text.strip()
 
     def display_text(self, suffix: str = "") -> str:
         """Korean first, then the exact approved original under 원문 보기."""
@@ -394,13 +292,13 @@ class SourcePresentation:
                 body = f"{body} {suffix.strip()}"
             return f"{body}\n\nSource\n{self.citation}" if self.citation else body
 
-        lines = [self.label, self.display_primary_text]
+        lines = [self.label, self.primary_text.strip()]
         if suffix.strip():
             lines.append(suffix.strip())
-        if self.notice and self.notice != self.display_primary_text:
+        if self.notice:
             lines.append(self.notice)
         source = self.source_text.strip()
-        if source:
+        if source and source != self.primary_text.strip():
             lines.append(f"\n{SOURCE_DISCLOSURE_LABEL} · English\n{source}")
         if self.citation:
             lines.append(f"\n출처\n{self.citation}")
@@ -412,12 +310,8 @@ def present_source(
     language: str,
     source_text: str,
     verified_translation: str | None = None,
-    development_translation: str | None = None,
     translator: Callable[[str], str] | None = None,
     settings: TranslationSettings | None = None,
-    stable_tokens: Sequence[str] = (),
-    cache_key: "TranslationCacheKey | None" = None,
-    cache: "PresentationTranslationCache | None" = None,
     citation: str | None = None,
     safety_critical: bool = False,
 ) -> SourcePresentation:
@@ -436,19 +330,11 @@ def present_source(
             language=language, primary_text=source, source_text=source,
             status=SourcePresentationStatus.SOURCE_LANGUAGE, citation=citation)
 
-    for candidate_translation, status in (
-        (verified_translation, SourcePresentationStatus.VERIFIED_SIDECAR),
-        (development_translation, SourcePresentationStatus.DEVELOPMENT_SIDECAR),
-    ):
-        if candidate_translation and candidate_translation.strip():
-            candidate = candidate_translation.strip()
-            rejection = _reject_candidate(
-                source, candidate, policy, stable_tokens=stable_tokens,
-            )
-            if rejection is None:
-                return SourcePresentation(
-                    language=language, primary_text=candidate,
-                    source_text=source, status=status, citation=citation)
+    if verified_translation and verified_translation.strip():
+        return SourcePresentation(
+            language=language, primary_text=verified_translation.strip(),
+            source_text=source,
+            status=SourcePresentationStatus.VERIFIED_SIDECAR, citation=citation)
 
     if safety_critical:
         return SourcePresentation(
@@ -463,40 +349,13 @@ def present_source(
             status=SourcePresentationStatus.SOURCE_ONLY,
             rejection_reason=rejection, citation=citation)
 
-    translation_cache = (
-        cache if cache is not None else PRESENTATION_TRANSLATION_CACHE
-    )
-    cached = translation_cache.get(cache_key) if cache_key is not None else None
-    if cached is not None:
-        verdict = _reject_candidate(
-            source, cached, policy, stable_tokens=stable_tokens,
-        )
-        if verdict is None:
-            return SourcePresentation(
-                language=language, primary_text=cached, source_text=source,
-                status=SourcePresentationStatus.AUTOMATIC_TRANSLATION,
-                citation=citation,
-            )
-        translation_cache.discard(cache_key)
-
-    try:
-        candidate = str(translator(source) or "").strip()  # type: ignore[misc]
-    except Exception:
-        log.warning("presentation translation failed; approved source retained")
-        return SourcePresentation(
-            language=language, primary_text=source, source_text=source,
-            status=SourcePresentationStatus.SOURCE_ONLY,
-            rejection_reason="translation_failed", citation=citation)
-    verdict = _reject_candidate(
-        source, candidate, policy, stable_tokens=stable_tokens,
-    )
+    candidate = str(translator(source) or "").strip()  # type: ignore[misc]
+    verdict = _reject_candidate(source, candidate, policy)
     if verdict is not None:
         return SourcePresentation(
             language=language, primary_text=source, source_text=source,
             status=SourcePresentationStatus.SOURCE_ONLY,
             rejection_reason=verdict, citation=citation)
-    if cache_key is not None:
-        translation_cache.put(cache_key, candidate)
     return SourcePresentation(
         language=language, primary_text=candidate, source_text=source,
         status=SourcePresentationStatus.AUTOMATIC_TRANSLATION, citation=citation)
@@ -508,21 +367,15 @@ def _translation_rejection(
 ) -> str | None:
     if not source:
         return "empty_source"
-    if not policy.enabled:
+    if not policy.enabled or translator is None:
         return "translation_disabled"
-    if translator is None:
-        return "translator_unavailable"
     if len(source) > policy.maximum_source_characters:
         return "source_too_long"
     return None
 
 
 def _reject_candidate(
-    source: str,
-    candidate: str,
-    policy: TranslationSettings,
-    *,
-    stable_tokens: Sequence[str] = (),
+    source: str, candidate: str, policy: TranslationSettings,
 ) -> str | None:
     if not candidate:
         return "empty_translation"
@@ -530,90 +383,10 @@ def _reject_candidate(
         return "translation_not_korean"
     if len(candidate) > policy.maximum_source_characters * 3:
         return "translation_too_long"
-    preservation = check_source_preservation(
-        source, candidate, stable_tokens=stable_tokens,
-    )
+    preservation = check_source_preservation(source, candidate)
     if not preservation.preserved:
         return preservation.reason
     return None
-
-
-@dataclass(frozen=True)
-class TranslationCacheKey:
-    """Immutable identity for one approved-source presentation translation."""
-
-    protocol_revision_id: str
-    source_document_sha256: str
-    step_id: str
-    source_text_sha256: str
-    target_language: str
-    policy_version: str
-    model: str
-
-    @classmethod
-    def for_source(
-        cls,
-        *,
-        protocol_revision_id: str,
-        source_document_sha256: str,
-        step_id: str,
-        source_text: str,
-        target_language: str,
-        model: str,
-    ) -> "TranslationCacheKey":
-        return cls(
-            protocol_revision_id=protocol_revision_id,
-            source_document_sha256=source_document_sha256,
-            step_id=step_id,
-            source_text_sha256=hashlib.sha256(
-                source_text.encode("utf-8")
-            ).hexdigest(),
-            target_language=target_language,
-            policy_version=PRESENTATION_POLICY_VERSION,
-            model=model,
-        )
-
-
-class PresentationTranslationCache:
-    """Small process-local LRU cache for successful immutable translations."""
-
-    def __init__(self, maximum_entries: int = 256) -> None:
-        if not 1 <= maximum_entries <= 4096:
-            raise ValueError("translation cache size is outside safe bounds")
-        self.maximum_entries = maximum_entries
-        self._values: OrderedDict[TranslationCacheKey, str] = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key: TranslationCacheKey | None) -> str | None:
-        if key is None:
-            return None
-        with self._lock:
-            value = self._values.get(key)
-            if value is not None:
-                self._values.move_to_end(key)
-            return value
-
-    def put(self, key: TranslationCacheKey, value: str) -> None:
-        with self._lock:
-            self._values[key] = value
-            self._values.move_to_end(key)
-            while len(self._values) > self.maximum_entries:
-                self._values.popitem(last=False)
-
-    def discard(self, key: TranslationCacheKey) -> None:
-        with self._lock:
-            self._values.pop(key, None)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._values.clear()
-
-    def __len__(self) -> int:
-        with self._lock:
-            return len(self._values)
-
-
-PRESENTATION_TRANSLATION_CACHE = PresentationTranslationCache()
 
 
 #: The whole instruction given to a presentation translator. Deliberately

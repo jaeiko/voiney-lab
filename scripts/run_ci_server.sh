@@ -45,11 +45,6 @@ export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="false"
 export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
 export WEB_VISUAL_SEARCH_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
-# Keep browser acceptance deterministic even when a developer shell or local
-# dotenv file contains a live provider credential. CI exercises the complete
-# offline failure/fallback contract and must never call a provider implicitly.
-export XAI_API_KEY=""
-export VOICE_WORKFLOW_AGENT_PRESENTATION_TRANSLATION_ENABLED="0"
 
 FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"

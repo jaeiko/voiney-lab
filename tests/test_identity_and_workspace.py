@@ -417,64 +417,6 @@ def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(work
         step_id="step-1",
         step_label="1",
     )
-    experiment = workspace.record_experiment_progress(
-        admin,
-        experiment["session_id"],
-        expected_version=experiment["version"],
-        event_key="manual-step-completed",
-        event_type="step_completed",
-        step_id="step-1",
-        step_label="1",
-        next_step_id="step-2",
-        next_step_label="2",
-        mark_completed=True,
-        payload={"capture_source": "manual"},
-    )
-    workspace.record_observation(
-        admin,
-        experiment["session_id"],
-        event_key="manual-observation",
-        content="synthetic observation",
-        category="note",
-        capture_source="manual",
-        protocol_step_id="step-2",
-    )
-    workspace.record_evidence(
-        admin,
-        experiment["session_id"],
-        event_key="manual-evidence",
-        evidence_kind="document",
-        original_filename="synthetic.txt",
-        media_type="text/plain",
-        byte_size=9,
-        sha256=hashlib.sha256(b"synthetic").hexdigest(),
-        storage_reference="evidence/synthetic.txt",
-        protocol_step_id="step-2",
-    )
-    # Replaying the same idempotency keys returns the same durable records and
-    # must not inflate the manual-fallback KPI.
-    workspace.record_observation(
-        admin,
-        experiment["session_id"],
-        event_key="manual-observation",
-        content="synthetic observation",
-        category="note",
-        capture_source="manual",
-        protocol_step_id="step-2",
-    )
-    workspace.record_evidence(
-        admin,
-        experiment["session_id"],
-        event_key="manual-evidence",
-        evidence_kind="document",
-        original_filename="synthetic.txt",
-        media_type="text/plain",
-        byte_size=9,
-        sha256=hashlib.sha256(b"synthetic").hexdigest(),
-        storage_reference="evidence/synthetic.txt",
-        protocol_step_id="step-2",
-    )
-    experiment = workspace.get_experiment(admin, experiment["session_id"])
     workspace.transition_experiment(
         admin,
         experiment["session_id"],
@@ -494,46 +436,6 @@ def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(work
         metric_name="mutation_failure",
         dimensions={"status": "rolled_back", "reason_code": "workspace_error"},
     )
-    for metric_name in (
-        "clarification_request",
-        "repeat_request",
-        "repeated_utterance",
-        "stt_failure",
-        "barge_in_ignored",
-        "barge_in_confirmed",
-        "playback_interruption",
-        "unknown_speaker_mutation_rejection",
-        "overlapping_speaker_ambiguity",
-    ):
-        workspace.record_analytics(
-            admin,
-            category="voice",
-            metric_name=metric_name,
-            dimensions={"status": "synthetic"},
-        )
-    for metric_name in (
-        "ambiguous_mutation_command",
-        "blocked_mutation",
-    ):
-        workspace.record_analytics(
-            admin,
-            category="workflow",
-            metric_name=metric_name,
-            dimensions={"status": "synthetic"},
-        )
-    for _ in range(2):
-        workspace.record_analytics(
-            admin,
-            category="voice",
-            metric_name="voice_turn",
-            dimensions={"status": "accepted_endpoint"},
-        )
-    workspace.record_analytics(
-        admin,
-        category="voice",
-        metric_name="successful_turn",
-        dimensions={"status": "completed"},
-    )
     for action in ("current", "next"):
         workspace.record_analytics(
             admin,
@@ -545,29 +447,9 @@ def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(work
 
     metrics = workspace.pilot_metrics_summary(admin)
     assert metrics["completed_workflows"] == 1
-    assert metrics["completed_workflow_steps"] == 1
-    assert metrics["voice_turns"] == 2
-    assert metrics["successful_voice_turns"] == 1
-    assert metrics["voice_turn_success_rate"] == 0.5
-    assert metrics["clarification_requests"] == 1
-    assert metrics["repeat_requests"] == 1
-    assert metrics["repeated_utterances"] == 1
-    assert metrics["stt_failures"] == 1
-    assert metrics["ambiguous_state_changing_commands"] == 1
-    assert metrics["blocked_mutation_attempts"] == 1
-    assert metrics["ignored_barge_in_candidates"] == 1
-    assert metrics["confirmed_barge_ins"] == 1
-    assert metrics["playback_only_interruptions"] == 1
-    assert metrics["unknown_speaker_mutation_rejections"] == 1
-    assert metrics["overlapping_speaker_ambiguity_events"] == 1
     assert metrics["failed_commands"] == 1
     assert metrics["recovery_events"] == 1
     assert metrics["mutation_failures"] == 1
-    assert metrics["persistence_failures"] == 1
-    assert metrics["manual_fallback_actions"] == 3
-    assert metrics["observation_captures"] == 1
-    assert metrics["evidence_captures"] == 1
-    assert metrics["completed_session_duration_seconds"]["samples"] == 1
     assert metrics["user_actions"] == 2
     assert metrics["workflow_completion_rate"] == 1.0
     assert metrics["details"]["durable_actions_by_type"]["session_completed"] == 1
@@ -576,7 +458,6 @@ def test_pilot_metrics_roll_up_durable_workflow_and_retained_failure_events(work
         "transcripts": False,
         "identifiers": False,
         "free_text": False,
-        "biometric_voiceprints": False,
     }
     assert workspace.pilot_metrics_summary(outsider)["completed_workflows"] == 0
 

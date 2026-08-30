@@ -800,10 +800,6 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             "프로토콜 시작해줘",
         )
         canonical = self.fixture.steps[0].instruction_source_text
-        localized = self.fixture.localized_fact(
-            self.fixture.steps[0].step_id, "current_step"
-        )
-        self.assertIsNotNone(localized)
 
         with patch(
             "voice_workflow_agent.curated_protocol.extract_protocol_pdf",
@@ -837,10 +833,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     self.assertNotIn("검증된 개발용 픽스처", plan.display_text)
                     self.assertEqual(
                         plan.speech_text,
-                        f"실험을 시작합니다. 현재 1단계입니다. {localized}",
-                    )
-                    self.assertEqual(
-                        plan.translation_status, "development_sidecar"
+                        "실험을 시작합니다. 현재 1단계입니다. "
+                        "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                        "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
                     )
                     self.assertEqual(session.current_index, 0)
                     started = session.state()
@@ -894,25 +889,23 @@ class CuratedProtocolSessionTests(unittest.TestCase):
     def test_display_and_speech_are_explicit_and_full_detail_is_reviewed(self):
         session = CuratedProtocolSession(self.fixture)
         canonical = self.fixture.steps[0].instruction_source_text
-        localized = self.fixture.localized_fact(
-            self.fixture.steps[0].step_id, "current_step"
-        )
-        self.assertIsNotNone(localized)
         ordinary = (
             (
                 "프로토콜을 시작해 줘",
                 CuratedProtocolAction.START,
-                f"실험을 시작합니다. 현재 1단계입니다. {localized}",
+                "실험을 시작합니다. 현재 1단계입니다. "
+                "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+                "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
             ),
             (
                 "현재 단계 알려줘",
                 CuratedProtocolAction.CURRENT,
-                f"현재 1단계입니다. 안내를 화면에 표시했습니다. {localized}",
+                "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             ),
             (
                 "다시 말해줘",
                 CuratedProtocolAction.REPEAT,
-                f"현재 1단계 안내를 다시 표시했습니다. {localized}",
+                "현재 1단계 안내를 다시 표시했습니다.",
             ),
         )
         opening = None
@@ -935,7 +928,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(resume.action, CuratedProtocolAction.START)
         self.assertEqual(
             resume.speech_text,
-            f"1단계 안내를 화면에 다시 표시했습니다. {localized}",
+            "1단계 안내를 화면에 다시 표시했습니다.",
         )
         self.assertFalse(resume.state_changed)
         self.assertEqual(session.state(), opening)
@@ -958,11 +951,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     CuratedProtocolAction.FULL_DETAIL,
                 )
                 self.assertIn(canonical, detail.display_text)
-                self.assertIn("답변 · 개발용 한국어 번역", detail.display_text)
-                self.assertEqual(
-                    detail.speech_text,
-                    f"1단계 전체 안내입니다. {localized}",
-                )
+                self.assertIn("답변 · 한국어 참고 번역", detail.display_text)
+                self.assertEqual(detail.speech_text, canonical)
                 self.assertEqual(
                     detail.speech_mode,
                     CuratedProtocolSpeechMode.FULL_DETAIL,
@@ -2800,10 +2790,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("turn.done",[item["type"] for item in socket.text])
         self.assertEqual(
             tts.call_args.args[0],
-            "현재 1단계입니다. 안내를 화면에 표시했습니다. "
-            + self.fixture.localized_fact(
-                self.fixture.steps[0].step_id, "current_step"
-            ))
+            "현재 1단계입니다. 안내를 화면에 표시했습니다.")
         display=next(item["text"] for item in socket.text
                      if item["type"]=="reply.delta")
         self.assertIn(self.fixture.steps[0].instruction_source_text,display)
@@ -3156,9 +3143,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(
             tts.call_args.args[0],
             "실험을 시작합니다. 현재 1단계입니다. "
-            + self.fixture.localized_fact(
-                self.fixture.steps[0].step_id, "current_step"
-            ),
+            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
         )
         self.assertNotIn("검증된 개발용 픽스처", display)
         self.assertTrue(session.playback_ended(1))
@@ -3245,10 +3231,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn(self.fixture.steps[1].instruction_source_text, next_reply)
         self.assertEqual(
             next_tts.call_args.args[0],
-            "1단계를 완료했습니다. 현재는 2단계입니다. "
-            + self.fixture.localized_fact(
-                self.fixture.steps[1].step_id, "current_step"
-            ),
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
         )
         self.assertEqual(next_client.chat.completions.calls, [])
         self.assertTrue(next_session.playback_ended(1))
@@ -3849,10 +3832,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             self.assertEqual(session.curated_protocol_session.current_index, 1)
             self.assertEqual(
                 tts.call_args_list[0].args[0],
-                "1단계를 완료했습니다. 현재는 2단계입니다. "
-                + self.fixture.localized_fact(
-                    self.fixture.steps[1].step_id, "current_step"
-                ),
+                "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
             )
             self.assertIn(
                 self.fixture.steps[1].instruction_source_text,
@@ -4037,18 +4017,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 1)
         self.assertEqual(
             tts.call_args.args[0],
-            "1단계를 완료했습니다. 현재는 2단계입니다. "
-            + self.fixture.localized_fact(
-                self.fixture.steps[1].step_id, "current_step"
-            ),
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
         )
         closing_state = session.curated_protocol_session.state(
-            spoken_summary=(
-                "1단계를 완료했습니다. 현재는 2단계입니다. "
-                + self.fixture.localized_fact(
-                    self.fixture.steps[1].step_id, "current_step"
-                )
-            )
+            spoken_summary="1단계를 완료로 저장했습니다. 현재는 2단계입니다."
         )
         state_events = [
             item for item in socket.text
@@ -4328,24 +4300,20 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         step_one = self.fixture.steps[0].instruction_source_text
         step_two = self.fixture.steps[1].instruction_source_text
-        step_one_ko = self.fixture.localized_fact(
-            self.fixture.steps[0].step_id, "current_step"
-        )
-        step_two_ko = self.fixture.localized_fact(
-            self.fixture.steps[1].step_id, "current_step"
-        )
         spoken = [call.args[0] for call in tts.call_args_list]
         self.assertEqual(spoken, [
             f"Voice Workflow Agent입니다. 선택한 {self.fixture.title} "
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
-            f"실험을 시작합니다. 현재 1단계입니다. {step_one_ko}",
-            f"현재 1단계입니다. 안내를 화면에 표시했습니다. {step_one_ko}",
-            f"현재 1단계 안내를 다시 표시했습니다. {step_one_ko}",
-            f"1단계를 완료했습니다. 현재는 2단계입니다. {step_two_ko}",
+            "실험을 시작합니다. 현재 1단계입니다. "
+            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
+            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
+            "현재 1단계입니다. 안내를 화면에 표시했습니다.",
+            "현재 1단계 안내를 다시 표시했습니다.",
+            "1단계를 완료로 저장했습니다. 현재는 2단계입니다.",
             self.fixture.localized_fact(
                 self.fixture.steps[1].step_id, "current_step"
             ),
-            f"2단계 전체 안내입니다. {step_two_ko}",
+            step_two,
             "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
