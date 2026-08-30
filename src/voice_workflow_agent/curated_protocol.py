@@ -1754,6 +1754,7 @@ _TIMER_START_PATTERNS = (
 )
 _TIMER_QUERY_PATTERNS = (
     re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
+    re.compile(r"^타임\s*(?:얼마나\s*남았어|몇\s*(?:분|초)\s*남았어|남은\s*시간\s*알려\s*(?:줘|주세요))$"),
     re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
 )
@@ -6566,41 +6567,74 @@ class CuratedProtocolSession:
                 intent_kind="report_handoff",
             )
         elif command is CuratedProtocolAction.START_TIMER:
-            success, duration, _ = self.start_timer()
             step = steps[self.current_index]
-            if success:
-                minutes = duration // 60
-                seconds = duration % 60
-                time_str = f"{minutes}분" if seconds == 0 else f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
-                time_str_en = f"{minutes} min" if seconds == 0 else f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
+            existing_timer = self.timer_status()
+            if (
+                existing_timer.get("state") == "running"
+                and existing_timer.get("step_index") == self.current_index
+            ):
+                remaining = int(existing_timer.get("remaining_seconds", 0))
+                minutes = remaining // 60
+                seconds = remaining % 60
+                time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
+                time_str_en = f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
                 response = (
-                    f"{time_str} 타이머를 시작했습니다. 화면에서 남은 시간을 확인할 수 있습니다."
+                    f"현재 {step.source_label}단계 타이머가 이미 진행 중입니다. 남은 시간은 약 {time_str}입니다."
                     if language == "ko" else
-                    f"Started a {time_str_en} timer. You can watch the remaining time on screen."
+                    f"The Step {step.source_label} timer is already running with approximately {time_str_en} remaining."
+                )
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.START_TIMER,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    primary_text=response,
+                    intent_kind=intent.intent_kind,
+                    timer_payload=existing_timer,
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계 타이머",
+                        primary=response,
+                    ),
                 )
             else:
-                response = (
-                    f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 전체 실험 경과 시간은 계속 기록 중입니다."
-                    if language == "ko" else
-                    f"Step {step.source_label} has no separate protocol-defined timer. The overall experiment elapsed time is still being recorded."
+                success, duration, _ = self.start_timer()
+                if success:
+                    minutes = duration // 60
+                    seconds = duration % 60
+                    time_str = f"{minutes}분" if seconds == 0 else f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
+                    time_str_en = f"{minutes} min" if seconds == 0 else f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
+                    response = (
+                        f"{time_str} 타이머를 시작했습니다. 화면에서 남은 시간을 확인할 수 있습니다."
+                        if language == "ko" else
+                        f"Started a {time_str_en} timer. You can watch the remaining time on screen."
+                    )
+                else:
+                    response = (
+                        f"현재 {step.source_label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 전체 실험 경과 시간은 계속 기록 중입니다."
+                        if language == "ko" else
+                        f"Step {step.source_label} has no separate protocol-defined timer. The overall experiment elapsed time is still being recorded."
+                    )
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.START_TIMER,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=True,
+                    primary_text=response,
+                    intent_kind=intent.intent_kind,
+                    timer_payload=self.timer_status(),
+                    display_document=_display_document(
+                        title=f"{step.source_label}단계 타이머",
+                        primary=response,
+                    ),
                 )
-            plan = CuratedProtocolTurnPlan(
-                action=CuratedProtocolAction.START_TIMER,
-                display_text=response,
-                speech_text=response,
-                speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                facts=self.fixture.facts_for_step(self.current_index),
-                step_label=step.source_label,
-                final_step=self.current_index == len(steps) - 1,
-                state_changed=True,
-                primary_text=response,
-                intent_kind=intent.intent_kind,
-                timer_payload=self.timer_status(),
-                display_document=_display_document(
-                    title=f"{step.source_label}단계 타이머",
-                    primary=response,
-                ),
-            )
         elif command is CuratedProtocolAction.TIMER_STATUS:
             timer_info = self.timer_status()
             step = steps[self.current_index]

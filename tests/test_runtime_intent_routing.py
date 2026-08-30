@@ -173,12 +173,29 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
         for transcript in (
             "타이머 얼마나 남았어?",
             "몇 분 남았어?",
+            "타임 얼마나 남았어?",
+            "타임 몇 분 남았어?",
+            "타임 남은 시간 알려줘",
             "timer status",
             "how much time is left",
         ):
             with self.subTest(transcript=transcript):
                 intent = classify_curated_control_intent(transcript, language="ko")
                 self.assertEqual(intent.action, CuratedProtocolAction.TIMER_STATUS)
+
+    def test_taim_variant_is_not_broadly_treated_as_timer_control(self) -> None:
+        for transcript in (
+            "점심 타임 얼마나 남았어?",
+            "time 얼마나 남았어?",
+            "타임이라는 단어 뜻 알려줘",
+        ):
+            with self.subTest(transcript=transcript):
+                intent = classify_curated_control_intent(transcript, language="ko")
+                self.assertNotIn(intent.action, {
+                    CuratedProtocolAction.START_TIMER,
+                    CuratedProtocolAction.TIMER_STATUS,
+                })
+                self.assertFalse(intent.allows_state_mutation)
 
     def test_mixed_script_timer_start_uses_production_runtime_boundary(self) -> None:
         workflow = self.active_workflow()

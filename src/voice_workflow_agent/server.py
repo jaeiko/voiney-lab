@@ -681,6 +681,7 @@ def _record_workspace_experiment_progress(
         CuratedProtocolAction.STOP,
         CuratedProtocolAction.PAUSE,
         CuratedProtocolAction.RESUME,
+        CuratedProtocolAction.START_TIMER,
     }:
         return None
     key=f"voice-{generation}-{turn_id}-{plan.action.value}"
@@ -701,6 +702,31 @@ def _record_workspace_experiment_progress(
         curated.fixture.steps[curated.current_index]
         if curated.active else None
     )
+    event_payload={
+        "authority":"curated_protocol",
+        "intent_kind":plan.intent_kind,
+        "configuration_id":session.accepted_configuration_id,
+        "turn_id":turn_id,
+        "generation":generation,
+    }
+    if plan.action is CuratedProtocolAction.START_TIMER:
+        planned_timer=plan.timer_payload
+        if (
+            not isinstance(planned_timer,dict)
+            or planned_timer.get("state")!="running"
+            or planned_timer.get("step_id")!=previous.step_id
+            or planned_timer.get("step_label")!=previous.source_label
+        ):
+            raise WorkspaceError(
+                "Timer progress requires a running current-step timer."
+            )
+        event_payload["timer"]={
+            key:planned_timer[key] for key in (
+                "state","duration_seconds","remaining_seconds",
+                "elapsed_seconds","step_index","step_id","step_label",
+                "deadline_at","started_at",
+            )
+        }
     principal,store=_commercial_workspace()
     try:
         state=store.record_experiment_progress(
@@ -711,6 +737,8 @@ def _record_workspace_experiment_progress(
             event_type=(
                 "protocol_started"
                 if plan.action is CuratedProtocolAction.START else
+                "timer_started"
+                if plan.action is CuratedProtocolAction.START_TIMER else
                 "step_completed" if plan.reported_completion else "step_advanced"
             ),
             step_id=previous.step_id,
@@ -721,13 +749,7 @@ def _record_workspace_experiment_progress(
                 plan.action is CuratedProtocolAction.NEXT
                 and plan.reported_completion
             ),
-            payload={
-                "authority":"curated_protocol",
-                "intent_kind":plan.intent_kind,
-                "configuration_id":session.accepted_configuration_id,
-                "turn_id":turn_id,
-                "generation":generation,
-            },
+            payload=event_payload,
         )
         session.experiment_state_version=int(state["version"])
     finally:

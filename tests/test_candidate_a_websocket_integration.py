@@ -694,6 +694,48 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 accepted_stt_ms=1,
             ))
 
+    def _timed_workspace_listener(self, workspace_dir, principal):
+        curated = CuratedProtocolSession(self.fixture)
+        listener = ListenerSession(curated_protocol_session=curated)
+        listener.start()
+        listener.accept_configuration(
+            41,
+            "cascade",
+            "ko",
+            self.fixture.protocol_id,
+            self.fixture.revision_id,
+        )
+        curated.active = True
+        curated.current_index = 2
+        curated._workflow_status = "active"
+        step = self.fixture.steps[2]
+        store = initialize_workspace_store(
+            WorkspaceSettings(True, workspace_dir)
+        )
+        created = store.start_experiment(
+            principal,
+            session_id=listener.session_id,
+            protocol_id=self.fixture.protocol_id,
+            protocol_revision_id=self.fixture.revision_id,
+            current_step_id=step.step_id,
+            current_step_label=step.source_label,
+            voice_connection_id=listener.voice_connection_id,
+        )
+        running = store.record_experiment_progress(
+            principal,
+            listener.session_id,
+            expected_version=created["version"],
+            expected_voice_connection_id=listener.voice_connection_id,
+            event_key="setup-protocol-started",
+            event_type="protocol_started",
+            step_id=step.step_id,
+            step_label=step.source_label,
+            payload={"authority": "test_setup"},
+        )
+        listener.experiment_state_version = running["version"]
+        store.close()
+        return curated, listener, running
+
     @staticmethod
     def _offline_config():
         placeholder = Path("/tmp/offline-session-contract")
@@ -1032,6 +1074,222 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 and item["code"] == "workspace_conflict"
                 for item in socket.sent
             ))
+
+    def test_timer_start_new_turn_is_non_mutating_and_keeps_original_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            environment, principal = self._bootstrap_tenant(workspace_dir)
+            curated, listener, before = self._timed_workspace_listener(
+                workspace_dir, principal
+            )
+            listener.experiment_report_store = ExperimentReportStore(
+                Path(tmpdir) / "reports.sqlite"
+            )
+            socket = _ScriptedSocket([])
+            turn_id = 6
+            event_key = (
+                f"voice-{listener.generation}-{turn_id}-start_timer"
+            )
+            second_turn_id = 7
+            second_event_key = (
+                f"voice-{listener.generation}-{second_turn_id}-start_timer"
+            )
+            current_time = 2_000_000_000.0
+
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False), patch(
+                    "voice_workflow_agent.curated_protocol.time.time",
+                    return_value=current_time,
+                ):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "Timer를 시작해줘.",
+                        turn_id=turn_id,
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            persisted = store.get_experiment(principal, listener.session_id)
+            store.close()
+            timer_events = [
+                event for event in persisted["events"]
+                if event["event_key"] == event_key
+            ]
+            self.assertEqual(len(timer_events), 1)
+            timer_event = timer_events[0]
+            self.assertEqual(timer_event["event_type"], "timer_started")
+            self.assertEqual(timer_event["step_id"], "candidate-a-step-03")
+            self.assertEqual(timer_event["step_label"], "3")
+            self.assertEqual(
+                timer_event["payload"]["timer"],
+                curated._replay[turn_id].timer_payload,
+            )
+            self.assertEqual(set(timer_event["payload"]), {
+                "authority",
+                "intent_kind",
+                "configuration_id",
+                "turn_id",
+                "generation",
+                "timer",
+            })
+            self.assertEqual(set(timer_event["payload"]["timer"]), {
+                "state",
+                "duration_seconds",
+                "remaining_seconds",
+                "elapsed_seconds",
+                "step_index",
+                "step_id",
+                "step_label",
+                "deadline_at",
+                "started_at",
+            })
+            self.assertEqual(timer_event["payload"]["timer"]["state"], "running")
+            self.assertEqual(
+                timer_event["payload"]["timer"]["duration_seconds"], 900
+            )
+            self.assertEqual(persisted["protocol_id"], self.fixture.protocol_id)
+            self.assertEqual(
+                persisted["protocol_revision_id"], self.fixture.revision_id
+            )
+            self.assertEqual(persisted["version"], before["version"] + 1)
+            self.assertEqual(listener.experiment_state_version, persisted["version"])
+            self.assertEqual(curated.timer_status()["state"], "running")
+            self.assertFalse(any(
+                item["type"] == "experiment.session.error"
+                for item in socket.sent
+            ))
+            reply = next(
+                item for item in socket.sent if item["type"] == "reply.complete"
+            )
+            self.assertIn("타이머를 시작했습니다", reply["text"])
+            self.assertEqual(listener.experiment_report_store.list_reports(), [])
+
+            listener.playback_ended(turn_id)
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False), patch(
+                    "voice_workflow_agent.curated_protocol.time.time",
+                    return_value=current_time + 120,
+                ):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "Timer를 시작해줘.",
+                        turn_id=second_turn_id,
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            replayed = store.get_experiment(principal, listener.session_id)
+            store.close()
+            self.assertEqual(replayed["version"], persisted["version"])
+            self.assertEqual(
+                sum(
+                    event["event_type"] == "timer_started"
+                    for event in replayed["events"]
+                ),
+                1,
+            )
+            self.assertFalse(any(
+                event["event_key"] == second_event_key
+                for event in replayed["events"]
+            ))
+            second_plan = curated._replay[second_turn_id]
+            self.assertFalse(second_plan.state_changed)
+            self.assertEqual(
+                second_plan.timer_payload["started_at"],
+                timer_event["payload"]["timer"]["started_at"],
+            )
+            self.assertEqual(
+                second_plan.timer_payload["deadline_at"],
+                timer_event["payload"]["timer"]["deadline_at"],
+            )
+            self.assertLess(
+                second_plan.timer_payload["remaining_seconds"],
+                timer_event["payload"]["timer"]["remaining_seconds"],
+            )
+            decisions = [
+                item for item in socket.sent
+                if item["type"] == "turn.route_decision"
+            ]
+            self.assertEqual(decisions[-1]["action"], "start_timer")
+            self.assertFalse(decisions[-1]["state_mutation"])
+            replies = [
+                item["text"] for item in socket.sent
+                if item["type"] == "reply.complete"
+            ]
+            self.assertIn("이미 진행 중입니다", replies[-1])
+            self.assertEqual(listener.experiment_report_store.list_reports(), [])
+
+    def test_timer_start_from_stale_recovered_voice_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            environment, principal = self._bootstrap_tenant(workspace_dir)
+            curated, listener, before = self._timed_workspace_listener(
+                workspace_dir, principal
+            )
+            listener.experiment_report_store = ExperimentReportStore(
+                Path(tmpdir) / "reports.sqlite"
+            )
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            recovered = store.resume_experiment(
+                principal,
+                listener.session_id,
+                expected_version=before["version"],
+                protocol_id=self.fixture.protocol_id,
+                protocol_revision_id=self.fixture.revision_id,
+                voice_connection_id="voice-recovered-elsewhere",
+            )
+            store.close()
+            socket = _ScriptedSocket([])
+
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "Timer를 시작해줘.",
+                        turn_id=7,
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            unchanged = store.get_experiment(principal, listener.session_id)
+            store.close()
+            self.assertEqual(unchanged["version"], recovered["version"])
+            self.assertFalse(any(
+                event["event_type"] == "timer_started"
+                for event in unchanged["events"]
+            ))
+            self.assertEqual(curated.timer_status()["state"], "not_started")
+            self.assertEqual(
+                listener.experiment_state_version,
+                before["version"],
+            )
+            self.assertTrue(any(
+                item["type"] == "experiment.session.error"
+                and item["code"] == "workspace_conflict"
+                for item in socket.sent
+            ))
+            reply = next(
+                item for item in socket.sent if item["type"] == "reply.complete"
+            )
+            self.assertIn("상태 변경을 확정하지 않았습니다", reply["text"])
+            self.assertEqual(listener.experiment_report_store.list_reports(), [])
 
     def test_stopped_experiment_is_not_resumed(self) -> None:
         """C: once an experiment is stopped, a fresh Voice start (no
