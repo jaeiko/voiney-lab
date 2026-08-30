@@ -86,6 +86,7 @@ class Case:
     intent: SemanticIntent | None = None
     mutation_requested: bool = False
     evidence: str = ""
+    target: str | None = None
     #: Start the protocol-defined step timer before the turn.
     running_timer: bool = False
     #: Route against a not-yet-started session.
@@ -111,7 +112,7 @@ def fake_resolver(case: Case):
         assert case.intent is not None
         return SemanticIntentProposal(
             intent=case.intent,
-            target=None,
+            target=case.target,
             mutation_requested=case.mutation_requested,
             confidence=0.95,
             explicit_action_evidence=case.evidence,
@@ -345,8 +346,13 @@ class SemanticParaphraseCorpusTests(SemanticFallbackTestCase):
         Case("타이머 돌려줘", Stage.SEMANTIC, CuratedProtocolAction.START_TIMER,
              True, "semantic_start_timer", intent=SemanticIntent.START_TIMER,
              mutation_requested=True, evidence="돌려줘"),
+        Case("Time을 시작해줘.", Stage.SEMANTIC,
+             CuratedProtocolAction.START_TIMER, True, "semantic_start_timer",
+             intent=SemanticIntent.START_TIMER, mutation_requested=True,
+             evidence="시작해줘", target="timer"),
         Case("이제 시간 좀 재줄래?", Stage.SEMANTIC,
-             CuratedProtocolAction.START_TIMER, False, "semantic_start_timer",
+             CuratedProtocolAction.TIMER_STATUS, False,
+             "semantic_running_timer_read_only",
              intent=SemanticIntent.START_TIMER, mutation_requested=True,
              evidence="재줄래", running_timer=True),
         Case("시간 재면 어떻게 돼?", Stage.SEMANTIC,
@@ -430,10 +436,44 @@ class SemanticParaphraseCorpusTests(SemanticFallbackTestCase):
         deadline_before = workflow._timer_started_at + workflow._timer_duration_seconds
         routed = self.route(workflow, case.utterance, fake_resolver(case))
         deadline_after = workflow._timer_started_at + workflow._timer_duration_seconds
-        self.assertEqual(routed.plan.action, CuratedProtocolAction.START_TIMER)
+        self.assertEqual(routed.plan.action, CuratedProtocolAction.TIMER_STATUS)
         self.assertFalse(routed.plan.state_changed)
         self.assertEqual(deadline_after, deadline_before)
         self.assertIn("이미 진행 중", routed.plan.speech_text)
+        self.assertIn("초기화하지 않습니다", routed.plan.speech_text)
+
+    def test_low_confidence_running_timer_start_is_read_only(self) -> None:
+        workflow = self.workflow()
+        workflow.start_timer()
+        started_at = workflow._timer_started_at
+        duration = workflow._timer_duration_seconds
+
+        async def resolver(_context):
+            return SemanticIntentProposal(
+                intent=SemanticIntent.START_TIMER,
+                target="timer",
+                mutation_requested=True,
+                confidence=0.8,
+                explicit_action_evidence="시간 좀 재줄래",
+                reason="polite timer start request",
+            )
+
+        routed = self.route(
+            workflow, "이제 이제 시간 좀 재줄래?", resolver
+        )
+        self.assertEqual(routed.plan.action, CuratedProtocolAction.TIMER_STATUS)
+        self.assertFalse(routed.plan.state_changed)
+        self.assertEqual(workflow._timer_started_at, started_at)
+        self.assertEqual(workflow._timer_duration_seconds, duration)
+        assert routed.semantic is not None
+        self.assertEqual(
+            routed.semantic.reason_code, "semantic_running_timer_read_only"
+        )
+        self.assertEqual(
+            routed.semantic.proposed_intent,
+            SemanticIntent.TIMER_INFORMATION.value,
+        )
+        self.assertIn("초기화하지 않습니다", routed.plan.speech_text)
 
     def test_a_timer_hypothetical_explains_without_starting_or_resetting(self) -> None:
         case = next(
@@ -951,6 +991,65 @@ class SemanticProductionBoundaryTests(SemanticFallbackTestCase):
         self.assertTrue(fallback["accepted"])
         self.assertNotIn("Time", json.dumps(fallback, ensure_ascii=False))
         self.assertEqual(canonical_state(workflow), before)
+
+    def test_websocket_accepts_the_authoritative_current_timer_target(self) -> None:
+        workflow = self.workflow()
+        session = self.listener(workflow, enabled=True)
+        socket = self.run_socket_turn(
+            session,
+            "Time을 시작해줘.",
+            client_factory=self.proposal_client({
+                "intent": "start_timer",
+                "target": "timer",
+                "mutation_requested": True,
+                "confidence": 0.96,
+                "explicit_action_evidence": "시작해줘",
+                "reason": "starts the current step timer",
+            }),
+        )
+        decision = self.route_decision(socket)
+        self.assertEqual(decision["action"], "start_timer")
+        self.assertTrue(decision["state_mutation"])
+        self.assertEqual(
+            decision["semantic_fallback"]["reason_code"],
+            "semantic_start_timer",
+        )
+        self.assertEqual(workflow.timer_status()["state"], "running")
+        self.assertEqual(workflow.timer_status()["duration_seconds"], 900)
+
+    def test_websocket_downgrades_low_confidence_running_timer_start(self) -> None:
+        workflow = self.workflow()
+        workflow.start_timer()
+        started_at = workflow._timer_started_at
+        duration = workflow._timer_duration_seconds
+        session = self.listener(workflow, enabled=True)
+        socket = self.run_socket_turn(
+            session,
+            "이제 이제 시간 좀 재줄래?",
+            client_factory=self.proposal_client({
+                "intent": "start_timer",
+                "target": "timer",
+                "mutation_requested": True,
+                "confidence": 0.8,
+                "explicit_action_evidence": "시간 좀 재줄래",
+                "reason": "polite timer start request",
+            }),
+        )
+        decision = self.route_decision(socket)
+        self.assertEqual(decision["action"], "timer_status")
+        self.assertFalse(decision["state_mutation"])
+        self.assertEqual(
+            decision["semantic_fallback"]["reason_code"],
+            "semantic_running_timer_read_only",
+        )
+        self.assertEqual(
+            decision["semantic_fallback"]["proposed_intent"],
+            "timer_information",
+        )
+        self.assertEqual(workflow._timer_started_at, started_at)
+        self.assertEqual(workflow._timer_duration_seconds, duration)
+        reply = next(item for item in socket.text if item["type"] == "reply.complete")
+        self.assertIn("초기화하지 않습니다", reply["text"])
 
     def test_the_websocket_turn_records_workspace_allowlisted_dimensions(self) -> None:
         workflow = self.workflow()

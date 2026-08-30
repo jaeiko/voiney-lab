@@ -451,6 +451,29 @@ def evaluate_semantic_proposal(
     if tier is None:
         return SemanticIntentDecision(False, "unsupported_intent")
 
+    # Starting an already-running authoritative step timer has no remaining
+    # mutation to authorize.  Collapse the proposal into the existing
+    # read-only timer-information projection before applying the mutation
+    # confidence floor.  The ordinary evidence and target fences still apply,
+    # and confidence must still clear the informational floor.  Projecting to
+    # TIMER_INFORMATION rather than START_TIMER makes this non-mutating even if
+    # the timer expires between policy evaluation and state-machine planning.
+    if (
+        proposal.intent is SemanticIntent.START_TIMER
+        and context.step_timer_state == "running"
+    ):
+        if proposal.confidence < settings.minimum_confidence:
+            return _reject("low_confidence", proposal)
+        rejection = _mutation_evidence_rejection(proposal, context, tier)
+        if rejection is not None:
+            return _reject(rejection, proposal)
+        return SemanticIntentDecision(
+            accepted=True,
+            reason_code="semantic_running_timer_read_only",
+            intent=SemanticIntent.TIMER_INFORMATION,
+            confidence=proposal.confidence,
+        )
+
     floor = (
         settings.minimum_confidence
         if tier is SemanticIntentTier.INFORMATIONAL
@@ -466,31 +489,9 @@ def evaluate_semantic_proposal(
 
     utterance = context.utterance
     if tier is not SemanticIntentTier.INFORMATIONAL:
-        # Confidence is never authorization: a state-changing meaning has to be
-        # visible in what the researcher actually said.
-        if not context.workflow_active:
-            return _reject("workflow_not_active", proposal)
-        if context.pending_interaction is not None:
-            return _reject("pending_gate_owns_turn", proposal)
-        if not proposal.mutation_requested:
-            return _reject("mutation_not_requested", proposal)
-        evidence = proposal.explicit_action_evidence
-        if not evidence or evidence.casefold() not in utterance.casefold():
-            return _reject("evidence_not_verbatim", proposal)
-        if (
-            _INTERROGATIVE_EVIDENCE.search(utterance)
-            and not (
-                tier is SemanticIntentTier.BOUNDED_CONTROL
-                and _POLITE_ACTION_REQUEST.search(utterance)
-            )
-        ):
-            return _reject("interrogative_not_authorized", proposal)
-        if _HYPOTHETICAL_EVIDENCE.search(utterance):
-            return _reject("hypothetical_not_authorized", proposal)
-        if not _targets_authoritative_current_step(proposal.target, context):
-            # A proposal may never redirect a mutation onto another step; the
-            # authoritative current step is the only thing it can speak about.
-            return _reject("target_not_current_step", proposal)
+        rejection = _mutation_evidence_rejection(proposal, context, tier)
+        if rejection is not None:
+            return _reject(rejection, proposal)
 
     if proposal.intent is SemanticIntent.STOP:
         # Ending a run stays a deterministic, explicitly worded command.
@@ -536,23 +537,86 @@ def evaluate_semantic_proposal(
 
 #: Server-recognized ways of naming "the step the session is actually on".
 _CURRENT_STEP_TARGETS = frozenset({
-    "current", "current_step", "authoritative_current_step", "this", "this_step",
+    "current", "current step", "authoritative current step", "this", "this step",
     "현재", "현재 단계", "이 단계", "지금",
+})
+_CURRENT_STEP_TIMER_TARGETS = frozenset({
+    "timer", "step timer", "current timer", "current step timer",
+    "authoritative current step timer", "this timer", "this step timer",
+    "타이머", "현재 타이머", "현재 단계 타이머", "이 단계 타이머", "지금 타이머",
 })
 
 
+def _mutation_evidence_rejection(
+    proposal: SemanticIntentProposal,
+    context: SemanticIntentContext,
+    tier: SemanticIntentTier,
+) -> str | None:
+    """Return the first server-owned fence a mutating proposal fails."""
+
+    # Confidence is never authorization: a state-changing meaning has to be
+    # visible in what the researcher actually said.
+    if not context.workflow_active:
+        return "workflow_not_active"
+    if context.pending_interaction is not None:
+        return "pending_gate_owns_turn"
+    if not proposal.mutation_requested:
+        return "mutation_not_requested"
+    evidence = proposal.explicit_action_evidence
+    if not evidence or evidence.casefold() not in context.utterance.casefold():
+        return "evidence_not_verbatim"
+    if (
+        _INTERROGATIVE_EVIDENCE.search(context.utterance)
+        and not (
+            tier is SemanticIntentTier.BOUNDED_CONTROL
+            and _POLITE_ACTION_REQUEST.search(context.utterance)
+        )
+    ):
+        return "interrogative_not_authorized"
+    if _HYPOTHETICAL_EVIDENCE.search(context.utterance):
+        return "hypothetical_not_authorized"
+    if not _targets_authoritative_current_step(
+        proposal.target, context, intent=proposal.intent
+    ):
+        # A proposal may never redirect a mutation onto another step; the
+        # authoritative current step is the only thing it can speak about.
+        return "target_not_current_step"
+    return None
+
+
+def _normalized_semantic_target(target: str) -> str:
+    """Normalize target separators without guessing a target's meaning."""
+
+    normalized = unicodedata.normalize("NFKC", target).strip().casefold()
+    return re.sub(r"[\s_-]+", " ", normalized)
+
+
 def _targets_authoritative_current_step(
-    target: str | None, context: SemanticIntentContext
+    target: str | None,
+    context: SemanticIntentContext,
+    *,
+    intent: SemanticIntent | None = None,
 ) -> bool:
-    """True when a proposal names the current step, or names nothing at all."""
+    """True only when a proposal targets the current step or its own timer."""
 
     if not target:
         return True
-    normalized = " ".join(target.strip().casefold().split())
+    normalized = _normalized_semantic_target(target)
     if normalized in _CURRENT_STEP_TARGETS:
         return True
     label = (context.current_step_label or "").strip().casefold()
-    return bool(label) and normalized in {label, f"{label}단계", f"step {label}"}
+    if label and normalized in {label, f"{label}단계", f"step {label}"}:
+        return True
+    if intent is not SemanticIntent.START_TIMER or not context.timer_available:
+        return False
+    timer_targets = set(_CURRENT_STEP_TIMER_TARGETS)
+    if label:
+        timer_targets.update({
+            f"{label} timer",
+            f"step {label} timer",
+            f"{label}단계 타이머",
+        })
+    return normalized in timer_targets
 
 
 def _reject(
@@ -582,6 +646,8 @@ SEMANTIC_INTENT_PROMPT = (
     "Asking for the wall-clock time is not \"timer_status\".\n"
     "- \"timer_information\" means asking what starting or running the step "
     "timer would do. It is informational even when phrased hypothetically.\n"
+    "- Use target \"current_step_timer\" for a request about the timer owned "
+    "by the authoritative current step. Never target another step.\n"
     "- Set \"mutation_requested\" true only when the researcher is commanding a "
     "change of workflow or timer state, never when they are asking about one.\n"
     "- \"explicit_action_evidence\" must be a verbatim span copied from the "

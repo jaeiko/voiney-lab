@@ -306,6 +306,91 @@ class SemanticPolicyTests(unittest.TestCase):
         )
         self.assertTrue(decision.accepted, decision.reason_code)
 
+    def test_current_step_timer_targets_preserve_the_step_fence(self) -> None:
+        for target in (
+            "timer", "step_timer", "current_step_timer", "step 3 timer",
+            "3단계 타이머", "현재 단계 타이머",
+        ):
+            with self.subTest(target=target):
+                decision = evaluate_semantic_proposal(
+                    proposal(
+                        SemanticIntent.START_TIMER,
+                        mutation=True,
+                        confidence=0.99,
+                        evidence="시작해줘",
+                        target=target,
+                    ),
+                    context(
+                        "Time을 시작해줘.",
+                        timer_state="not_started",
+                    ),
+                    ENABLED,
+                )
+                self.assertTrue(decision.accepted, decision.reason_code)
+                self.assertIs(decision.intent, SemanticIntent.START_TIMER)
+
+        refused = evaluate_semantic_proposal(
+            proposal(
+                SemanticIntent.START_TIMER,
+                mutation=True,
+                confidence=0.99,
+                evidence="시작해줘",
+                target="step 4 timer",
+            ),
+            context("Time을 시작해줘.", timer_state="not_started"),
+            ENABLED,
+        )
+        self.assert_rejected(refused, "target_not_current_step")
+
+    def test_running_timer_start_downgrades_at_the_informational_floor(self) -> None:
+        decision = evaluate_semantic_proposal(
+            proposal(
+                SemanticIntent.START_TIMER,
+                mutation=True,
+                confidence=0.8,
+                evidence="시간 좀 재줄래",
+                target="timer",
+            ),
+            context("이제 이제 시간 좀 재줄래?"),
+            ENABLED,
+        )
+        self.assertTrue(decision.accepted, decision.reason_code)
+        self.assertEqual(decision.reason_code, "semantic_running_timer_read_only")
+        self.assertIs(decision.intent, SemanticIntent.TIMER_INFORMATION)
+        self.assertFalse(decision.state_mutation)
+
+    def test_low_confidence_start_cannot_start_a_not_started_timer(self) -> None:
+        decision = evaluate_semantic_proposal(
+            proposal(
+                SemanticIntent.START_TIMER,
+                mutation=True,
+                confidence=0.8,
+                evidence="시간 좀 재줄래",
+                target="timer",
+            ),
+            context(
+                "이제 이제 시간 좀 재줄래?",
+                timer_state="not_started",
+                remaining=0,
+            ),
+            ENABLED,
+        )
+        self.assert_rejected(decision, "low_confidence_for_mutation")
+
+    def test_below_informational_confidence_running_timer_proposal_is_refused(self) -> None:
+        decision = evaluate_semantic_proposal(
+            proposal(
+                SemanticIntent.START_TIMER,
+                mutation=True,
+                confidence=0.5,
+                evidence="시간 좀 재줄래",
+                target="timer",
+            ),
+            context("이제 이제 시간 좀 재줄래?"),
+            ENABLED,
+        )
+        self.assert_rejected(decision, "low_confidence")
+
     def test_a_mutation_may_not_be_redirected_onto_another_step(self) -> None:
         self.assert_rejected(
             evaluate_semantic_proposal(

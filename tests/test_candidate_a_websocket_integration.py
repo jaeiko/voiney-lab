@@ -27,6 +27,7 @@ from voice_workflow_agent.server import (
     run_turn,
     voice_socket,
 )
+from voice_workflow_agent.semantic_intent import SemanticIntentSettings
 import voice_workflow_agent.server as server_module
 from voice_workflow_agent.identity import Principal, Role
 from voice_workflow_agent.workspace_store import (
@@ -672,9 +673,42 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         return socket
 
     @staticmethod
-    def _run_curated_turn(listener, socket, transcript, *, turn_id):
+    def _run_curated_turn(
+        listener, socket, transcript, *, turn_id, semantic_payload=None
+    ):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
+
+        if semantic_payload is None:
+            client_factory = AssertionError(
+                "LLM must not run for deterministic workflow control"
+            )
+        else:
+            listener.semantic_intent_settings = SemanticIntentSettings(enabled=True)
+
+            def client_factory(*_args, **_kwargs):
+                class Client:
+                    model = "fake-semantic-model"
+
+                    class chat:
+                        class completions:
+                            @staticmethod
+                            async def create(**_create_kwargs):
+                                message = type(
+                                    "Message",
+                                    (),
+                                    {"content": json.dumps(
+                                        semantic_payload, ensure_ascii=False
+                                    )},
+                                )
+                                choice = type(
+                                    "Choice", (), {"message": message()}
+                                )
+                                return type(
+                                    "Response", (), {"choices": [choice()]}
+                                )()
+
+                return Client()
 
         listener.active_turn_id = turn_id
         listener.detector.state = TurnState.PROCESSING
@@ -686,7 +720,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             side_effect=immediate,
         ), patch(
             "voice_workflow_agent.server.AsyncOpenAI",
-            side_effect=AssertionError("LLM must not run for workflow control"),
+            side_effect=client_factory,
         ):
             asyncio.run(run_turn(
                 socket, listener, b"\0\0", turn_id, 1,
@@ -1074,6 +1108,193 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 and item["code"] == "workspace_conflict"
                 for item in socket.sent
             ))
+
+    def test_semantic_current_timer_target_persists_one_timer_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            environment, principal = self._bootstrap_tenant(workspace_dir)
+            curated, listener, before = self._timed_workspace_listener(
+                workspace_dir, principal
+            )
+            listener.experiment_report_store = ExperimentReportStore(
+                Path(tmpdir) / "reports.sqlite"
+            )
+            socket = _ScriptedSocket([])
+            turn_id = 6
+            current_time = 2_000_000_000.0
+
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False), patch(
+                    "voice_workflow_agent.curated_protocol.time.time",
+                    return_value=current_time,
+                ):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "Time을 시작해줘.",
+                        turn_id=turn_id,
+                        semantic_payload={
+                            "intent": "start_timer",
+                            "target": "timer",
+                            "mutation_requested": True,
+                            "confidence": 0.96,
+                            "explicit_action_evidence": "시작해줘",
+                            "reason": "starts the current step timer",
+                        },
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            persisted = store.get_experiment(principal, listener.session_id)
+            store.close()
+            timer_events = [
+                event for event in persisted["events"]
+                if event["event_type"] == "timer_started"
+            ]
+            self.assertEqual(len(timer_events), 1)
+            self.assertEqual(persisted["version"], before["version"] + 1)
+            self.assertEqual(listener.experiment_state_version, persisted["version"])
+            self.assertEqual(timer_events[0]["step_label"], "3")
+            self.assertEqual(
+                timer_events[0]["payload"]["timer"]["duration_seconds"], 900
+            )
+            decision = next(
+                item for item in socket.sent
+                if item["type"] == "turn.route_decision"
+            )
+            self.assertEqual(decision["action"], "start_timer")
+            self.assertTrue(decision["state_mutation"])
+            self.assertEqual(
+                decision["semantic_fallback"]["reason_code"],
+                "semantic_start_timer",
+            )
+            reply = next(
+                item for item in socket.sent if item["type"] == "reply.complete"
+            )
+            self.assertIn("15분 타이머를 시작했습니다", reply["text"])
+
+    def test_low_confidence_semantic_start_on_running_timer_is_not_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "workspace"
+            environment, principal = self._bootstrap_tenant(workspace_dir)
+            curated, listener, _ = self._timed_workspace_listener(
+                workspace_dir, principal
+            )
+            listener.experiment_report_store = ExperimentReportStore(
+                Path(tmpdir) / "reports.sqlite"
+            )
+            socket = _ScriptedSocket([])
+            first_turn_id = 6
+            second_turn_id = 7
+            current_time = 2_000_000_000.0
+
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False), patch(
+                    "voice_workflow_agent.curated_protocol.time.time",
+                    return_value=current_time,
+                ):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "타이머를 시작해줘",
+                        turn_id=first_turn_id,
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            persisted = store.get_experiment(principal, listener.session_id)
+            store.close()
+            first_timer_event = next(
+                event for event in persisted["events"]
+                if event["event_type"] == "timer_started"
+            )
+            original_timer = first_timer_event["payload"]["timer"]
+            original_version = persisted["version"]
+            original_started_at = curated._timer_started_at
+            original_duration = curated._timer_duration_seconds
+            original_deadline = original_started_at + original_duration
+            listener.playback_ended(first_turn_id)
+
+            token = server_module._REQUEST_PRINCIPAL.set(principal)
+            try:
+                with patch.dict("os.environ", environment, clear=False), patch(
+                    "voice_workflow_agent.curated_protocol.time.time",
+                    return_value=current_time + 120,
+                ):
+                    self._run_curated_turn(
+                        listener,
+                        socket,
+                        "이제 이제 시간 좀 재줄래?",
+                        turn_id=second_turn_id,
+                        semantic_payload={
+                            "intent": "start_timer",
+                            "target": "timer",
+                            "mutation_requested": True,
+                            "confidence": 0.8,
+                            "explicit_action_evidence": "시간 좀 재줄래",
+                            "reason": "polite timer start request",
+                        },
+                    )
+            finally:
+                server_module._REQUEST_PRINCIPAL.reset(token)
+
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, workspace_dir)
+            )
+            replayed = store.get_experiment(principal, listener.session_id)
+            store.close()
+            self.assertEqual(replayed["version"], original_version)
+            self.assertEqual(listener.experiment_state_version, original_version)
+            self.assertEqual(
+                sum(
+                    event["event_type"] == "timer_started"
+                    for event in replayed["events"]
+                ),
+                1,
+            )
+            replayed_timer_event = next(
+                event for event in replayed["events"]
+                if event["event_type"] == "timer_started"
+            )
+            self.assertEqual(replayed_timer_event["payload"]["timer"], original_timer)
+            self.assertFalse(any(
+                event["event_key"]
+                == f"voice-{listener.generation}-{second_turn_id}-timer_status"
+                for event in replayed["events"]
+            ))
+            self.assertEqual(curated._timer_started_at, original_started_at)
+            self.assertEqual(
+                curated._timer_started_at + curated._timer_duration_seconds,
+                original_deadline,
+            )
+            second_plan = curated._replay[second_turn_id]
+            self.assertEqual(second_plan.action, CuratedProtocolAction.TIMER_STATUS)
+            self.assertFalse(second_plan.state_changed)
+            decisions = [
+                item for item in socket.sent
+                if item["type"] == "turn.route_decision"
+            ]
+            self.assertEqual(decisions[-1]["action"], "timer_status")
+            self.assertFalse(decisions[-1]["state_mutation"])
+            self.assertEqual(
+                decisions[-1]["semantic_fallback"]["reason_code"],
+                "semantic_running_timer_read_only",
+            )
+            replies = [
+                item["text"] for item in socket.sent
+                if item["type"] == "reply.complete"
+            ]
+            self.assertIn("다시 시작하거나 초기화하지 않습니다", replies[-1])
+            self.assertIn("남은 시간은 약", replies[-1])
+            self.assertEqual(listener.experiment_report_store.list_reports(), [])
 
     def test_timer_start_new_turn_is_non_mutating_and_keeps_original_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
