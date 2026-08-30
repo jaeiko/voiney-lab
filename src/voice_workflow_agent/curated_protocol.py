@@ -1749,6 +1749,7 @@ _RESUME_PATTERNS = (
 _TIMER_START_PATTERNS = (
     re.compile(r"(?:타이머|시간\s*측정|배양\s*시간).*(?:시작|재기\s*시작|재줘|틀어)"),
     re.compile(r"^(?:지금\s*)?시작했어$"),
+    re.compile(r"^(?:지금\s*)?timer\s*(?:를|을)?\s+시작(?:\s*해(?:줘|줄래)?)?$", re.I),
     re.compile(r"^(?:start\s+(?:the\s+)?timer|timer\s+start)$", re.I),
 )
 _TIMER_QUERY_PATTERNS = (

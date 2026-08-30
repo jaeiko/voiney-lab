@@ -11,6 +11,7 @@ from unittest.mock import patch
 from voice_workflow_agent.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
+    classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
 from voice_workflow_agent.intent_arbitration import RequestIntent
@@ -142,6 +143,53 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
         self.assertEqual(routed.plan.action, CuratedProtocolAction.VISUAL_REQUEST)
         self.assertEqual(routed.plan.visual_intent, "lab_equipment_image")
         self.assertFalse(routed.state_mutation)
+
+    def test_timer_start_classifier_accepts_korean_english_and_mixed_script(self) -> None:
+        for transcript in (
+            "타이머 시작해줘",
+            "타이머를 시작해줘",
+            "Timer 시작해줘",
+            "Timer를 시작해줘",
+            "timer를 시작해 줘",
+            "start timer",
+            "timer start",
+        ):
+            with self.subTest(transcript=transcript):
+                intent = classify_curated_control_intent(transcript, language="ko")
+                self.assertEqual(intent.action, CuratedProtocolAction.START_TIMER)
+
+    def test_timer_word_in_unrelated_sentences_does_not_start_timer(self) -> None:
+        for transcript in (
+            "timer 기능이 무엇인지 설명해줘",
+            "timer 앱을 시작해줘",
+            "timer가 언제 시작하는지 알려줘",
+            "timer를 시작해도 돼?",
+        ):
+            with self.subTest(transcript=transcript):
+                intent = classify_curated_control_intent(transcript, language="ko")
+                self.assertNotEqual(intent.action, CuratedProtocolAction.START_TIMER)
+
+    def test_timer_status_questions_keep_timer_status_priority(self) -> None:
+        for transcript in (
+            "타이머 얼마나 남았어?",
+            "몇 분 남았어?",
+            "timer status",
+            "how much time is left",
+        ):
+            with self.subTest(transcript=transcript):
+                intent = classify_curated_control_intent(transcript, language="ko")
+                self.assertEqual(intent.action, CuratedProtocolAction.TIMER_STATUS)
+
+    def test_mixed_script_timer_start_uses_production_runtime_boundary(self) -> None:
+        workflow = self.active_workflow()
+        workflow.current_index = 2
+        self.assertEqual(workflow.timer_status()["state"], "not_started")
+
+        routed = self.route(workflow, "Timer를 시작해줘.")
+
+        self.assertEqual(routed.plan.action, CuratedProtocolAction.START_TIMER)
+        self.assertTrue(routed.state_mutation)
+        self.assertEqual(workflow.timer_status()["state"], "running")
 
     def test_websocket_cascade_emits_sanitized_route_decision_from_same_boundary(self) -> None:
         workflow = self.active_workflow()
