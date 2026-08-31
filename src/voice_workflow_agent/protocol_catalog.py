@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
@@ -47,8 +49,13 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     ProtocolChunkPlan,
     ValidatedChunkResult,
     analyze_protocol_chunk,
+    assemble_validated_protocol_claims,
     merge_validated_chunk_results,
     plan_protocol_chunks,
+)
+from voice_workflow_agent.protocol_claim_analysis import (
+    ProtocolChunkClaimAnalysis,
+    serialize_chunk_claim_analysis,
 )
 from voice_workflow_agent.protocol_ocr import (
     OcrResult,
@@ -82,6 +89,11 @@ _OCR_COMPLETED_EVENT = "protocol_ocr_completed"
 _OCR_FAILED_EVENT = "protocol_ocr_failed"
 _OCR_REVIEWED_EVENT = "protocol_ocr_reviewed"
 _CHUNK_RUN_LOCKS = tuple(threading.Lock() for _ in range(64))
+CLAIM_CHUNK_ANALYSIS_ENABLED_ENV = (
+    "VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED"
+)
+_TRUE_FEATURE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_FEATURE_VALUES = frozenset({"0", "false", "no", "off", ""})
 
 
 class ProtocolCatalogError(RuntimeError):
@@ -292,6 +304,12 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     extracted_chars = sum(len(page.text.strip()) for page in extraction.pages)
     if extraction.non_empty_page_count == 0 or extracted_chars < 32:
         return "ocr_required"
+    if (
+        _claim_chunk_analysis_enabled()
+        and extraction.page_count
+        > ChunkAnalysisLimits().max_core_pages_per_chunk
+    ):
+        return "chunked_analysis_required"
     try:
         prepare_protocol_analysis_request(
             extraction, max_input_bytes=MAX_SINGLE_PASS_INPUT_BYTES
@@ -299,6 +317,18 @@ def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     except ProtocolAnalysisInputTooLargeError:
         return "chunked_analysis_required"
     return "structured_analysis_ready"
+
+
+def _claim_chunk_analysis_enabled() -> bool:
+    raw = os.environ.get(CLAIM_CHUNK_ANALYSIS_ENABLED_ENV, "false")
+    normalized = raw.strip().casefold()
+    if normalized in _TRUE_FEATURE_VALUES:
+        return True
+    if normalized in _FALSE_FEATURE_VALUES:
+        return False
+    raise ProtocolCatalogUnavailableError(
+        f"{CLAIM_CHUNK_ANALYSIS_ENABLED_ENV} must be a boolean."
+    )
 
 
 def _event_id(*values: object) -> str:
@@ -348,7 +378,7 @@ def _worker_analyze_chunk(
     model: ProtocolAnalysisModel,
     max_retries: int,
 ) -> tuple[
-    ProtocolAnalysisDraft | None,
+    ProtocolChunkClaimAnalysis | None,
     int,
     str | None,
     dict[str, object] | None,
@@ -1606,15 +1636,13 @@ class ProtocolCatalog:
                 limits=limits,
             )
         except ProtocolChunkAdmissionError as exc:
-            if sum(
-                len(page.text.encode("utf-8")) for page in extraction.pages
-            ) <= limits.max_chunk_text_bytes:
-                raise ProtocolChunkedAnalysisRequiredError(
-                    "Protocol does not require the bounded chunk path."
-                ) from exc
             raise ProtocolChunkAnalysisFailedError(
                 "Protocol exceeds a bounded chunk-analysis admission limit."
             ) from exc
+        if len(plan.chunks) < 2:
+            raise ProtocolChunkedAnalysisRequiredError(
+                "Protocol does not produce multiple bounded source chunks."
+            )
         with _chunk_run_lock(plan.analysis_run_id):
             existing = self._latest_chunk_events(revision)
             if existing:
@@ -1639,6 +1667,7 @@ class ProtocolCatalog:
             max_workers=limits.max_concurrency,
             thread_name_prefix="protocol-chunk-analysis",
         )
+        deadline = time.monotonic() + limits.timeout_seconds
         timed_out = False
         try:
             for offset in range(0, len(plan.chunks), limits.max_concurrency):
@@ -1666,10 +1695,8 @@ class ProtocolCatalog:
                             limits.max_retries,
                         )
                     ] = chunk
-                done, pending = wait(
-                    futures,
-                    timeout=limits.timeout_seconds,
-                )
+                remaining_seconds = max(0.0, deadline - time.monotonic())
+                done, pending = wait(futures, timeout=remaining_seconds)
                 for future in pending:
                     future.cancel()
                     chunk = futures[future]
@@ -1692,12 +1719,12 @@ class ProtocolCatalog:
                 for future in done:
                     chunk = futures[future]
                     (
-                        draft,
+                        analysis,
                         attempts,
                         failure_code,
                         evidence_failure,
                     ) = future.result()
-                    if draft is None:
+                    if analysis is None:
                         failure_payload: dict[str, object] = {
                             "chunk_id": chunk.chunk_id,
                             "ordinal": chunk.ordinal,
@@ -1720,11 +1747,9 @@ class ProtocolCatalog:
                         )
                         failed = True
                         continue
-                    result = ValidatedChunkResult(chunk, draft, attempts)
-                    payload_json, payload_sha256 = serialize_analysis(
-                        draft.protocol,
-                        draft.readiness,
-                        draft.capability_policy_id,
+                    result = ValidatedChunkResult(chunk, analysis, attempts)
+                    payload_json, payload_sha256 = serialize_chunk_claim_analysis(
+                        analysis,
                     )
                     if len(payload_json.encode("utf-8")) > limits.max_chunk_result_bytes:
                         self._append_chunk_event(
@@ -1753,10 +1778,10 @@ class ProtocolCatalog:
                             "ordinal": chunk.ordinal,
                             "status": "completed",
                             "attempts": attempts,
-                            "analysis_payload_sha256": payload_sha256,
+                            "claim_payload_sha256": payload_sha256,
                             # This is a strictly decoded, evidence-validated
                             # internal recovery record. Status APIs omit it.
-                            "analysis_payload_json": payload_json,
+                            "claim_payload_json": payload_json,
                         },
                         chunk.chunk_id,
                         "completed",
@@ -1788,7 +1813,15 @@ class ProtocolCatalog:
             "started",
         )
         try:
-            merged = merge_validated_chunk_results(extraction, plan, results)
+            merged_claims = merge_validated_chunk_results(
+                extraction,
+                plan,
+                results,
+            )
+            merged = assemble_validated_protocol_claims(
+                extraction,
+                merged_claims,
+            )
         except ProtocolChunkMergeError as exc:
             self._append_chunk_event(
                 revision,
@@ -1865,6 +1898,10 @@ class ProtocolCatalog:
             {"status": "analyzing", "analysis_id": analysis_id},
         )
         if status == "chunked_analysis_required":
+            if not _claim_chunk_analysis_enabled():
+                raise ProtocolChunkedAnalysisRequiredError(
+                    "Evidence-first claim chunk analysis is disabled."
+                )
             return self._analyze_chunked(
                 revision,
                 extraction,

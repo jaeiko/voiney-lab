@@ -191,6 +191,20 @@ it is not displayed forever as an unexplained `analysis_required` state.
 Unsupported conditions, ambiguities, critical missing values, conflicts,
 unreviewed/invalid OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
+Long text-native onboarding is evidence-first. Documents over eight pages, or
+documents that exceed the existing single-pass request envelope, are split into
+page-aligned chunks without lowering the 192 KiB per-chunk text ceiling. The
+provider returns a small claim DTO rather than one `ExperimentProtocol` per
+chunk. Every material, equipment, action, value, prerequisite, hazard,
+observation, repeat, or explicit missing-value claim repeats the immutable source
+revision, SHA-256, one-based page, and exact contiguous excerpt. Deterministic
+validation rejects a whole chunk on any fabricated, stale, non-contiguous, or
+out-of-scope evidence; merge requires every planned chunk and complete page
+coverage before whole-document consistency validation and final domain assembly.
+Chunk calls are serial by default, concurrency two is explicit/experimental, and
+the 120-second limit is one total-run deadline rather than a fresh timeout per
+batch. No partial-success result is persisted as a review candidate.
+
 ## Lab adaptations
 
 A local protocol difference is represented as a new immutable child revision, never
@@ -468,6 +482,7 @@ python -m voice_workflow_agent.worker
 | `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | Absolute approved safety-catalog path |
 | `VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
 | `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` | Absolute ignored protocol-store directory |
+| `VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` | Default-off gate for controlled evidence-first claim-chunk evaluation |
 | `VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED` | Enables tenant/RBAC/source workspace |
 | `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR` | Absolute ignored workspace directory |
 | `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |

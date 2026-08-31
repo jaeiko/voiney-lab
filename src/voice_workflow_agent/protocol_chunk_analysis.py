@@ -11,21 +11,26 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, fields, is_dataclass, replace
-from enum import Enum
-from typing import Any, Iterable
+from dataclasses import dataclass, fields, replace
+from typing import Iterable
 
-from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
     MAX_SINGLE_PASS_INPUT_BYTES,
     ProtocolAnalysisDraft,
     ProtocolAnalysisError,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisModel,
-    ProtocolEvidenceDiagnostic,
-    analyze_protocol_extraction,
-    prepare_protocol_analysis_request,
-    validate_protocol_analysis_evidence,
+)
+from voice_workflow_agent.protocol_claim_analysis import (
+    MAX_CHUNK_CLAIM_RESPONSE_BYTES,
+    MergedProtocolClaims,
+    ProtocolChunkClaimAnalysis,
+    ProtocolClaimConsistencyError,
+    analyze_chunk_claims,
+    assemble_experiment_protocol,
+    prepare_chunk_claim_request,
+    validate_chunk_claim_analysis,
+    validate_whole_protocol_claims,
 )
 from voice_workflow_agent.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
@@ -33,15 +38,16 @@ from voice_workflow_agent.experiment_protocol_pdf import (
 )
 
 
-PLANNER_VERSION = "bounded-page-v1"
+PLANNER_VERSION = "evidence-claim-page-v2"
 _HARD_MAX_PAGES = 512
 _HARD_MAX_EXTRACTED_TEXT_BYTES = 8 * 1024 * 1024
 _HARD_MAX_CHUNKS = 64
 _HARD_MAX_CHUNK_TEXT_BYTES = 192 * 1024
-_HARD_MAX_CHUNK_RESULT_BYTES = 2 * 1024 * 1024
+_HARD_MAX_CHUNK_RESULT_BYTES = MAX_CHUNK_CLAIM_RESPONSE_BYTES
 _HARD_MAX_CONCURRENCY = 2
 _HARD_MAX_TIMEOUT_SECONDS = 120.0
 _HARD_MAX_RETRIES = 1
+_HARD_MAX_CORE_PAGES_PER_CHUNK = 32
 
 
 class ProtocolChunkError(ValueError):
@@ -73,10 +79,11 @@ class ChunkAnalysisLimits:
     max_chunks: int = 64
     max_chunk_text_bytes: int = 192 * 1024
     max_chunk_result_bytes: int = 2 * 1024 * 1024
-    max_concurrency: int = 2
+    max_concurrency: int = 1
     timeout_seconds: float = 120.0
     max_retries: int = 1
     overlap_pages: int = 1
+    max_core_pages_per_chunk: int = 8
 
     def __post_init__(self) -> None:
         integer_limits = (
@@ -88,6 +95,7 @@ class ChunkAnalysisLimits:
             self.max_concurrency,
             self.max_retries,
             self.overlap_pages,
+            self.max_core_pages_per_chunk,
         )
         if any(
             not isinstance(value, int) or isinstance(value, bool) or value < 0
@@ -99,11 +107,12 @@ class ChunkAnalysisLimits:
         if (
             self.max_pages < 1
             or self.max_extracted_text_bytes < 1
-            or self.max_chunks < 2
+            or self.max_chunks < 1
             or self.max_chunk_text_bytes < 1
             or self.max_chunk_result_bytes < 1
             or self.max_concurrency < 1
             or self.overlap_pages > 1
+            or self.max_core_pages_per_chunk < 1
             or self.max_pages > _HARD_MAX_PAGES
             or self.max_extracted_text_bytes > _HARD_MAX_EXTRACTED_TEXT_BYTES
             or self.max_chunks > _HARD_MAX_CHUNKS
@@ -111,6 +120,8 @@ class ChunkAnalysisLimits:
             or self.max_chunk_result_bytes > _HARD_MAX_CHUNK_RESULT_BYTES
             or self.max_concurrency > _HARD_MAX_CONCURRENCY
             or self.max_retries > _HARD_MAX_RETRIES
+            or self.max_core_pages_per_chunk
+            > _HARD_MAX_CORE_PAGES_PER_CHUNK
             or not isinstance(self.timeout_seconds, (int, float))
             or isinstance(self.timeout_seconds, bool)
             or not math.isfinite(self.timeout_seconds)
@@ -203,7 +214,7 @@ class ProtocolChunkPlan:
 @dataclass(frozen=True)
 class ValidatedChunkResult:
     chunk: ProtocolAnalysisChunk
-    draft: ProtocolAnalysisDraft
+    analysis: ProtocolChunkClaimAnalysis
     attempts: int = 1
 
 
@@ -289,7 +300,10 @@ def plan_protocol_chunks(
     current: list[int] = []
     current_bytes = 0
     for page_number, byte_count in enumerate(page_sizes, start=1):
-        if current and current_bytes + byte_count > limits.max_chunk_text_bytes:
+        if current and (
+            current_bytes + byte_count > limits.max_chunk_text_bytes
+            or len(current) >= limits.max_core_pages_per_chunk
+        ):
             core_groups.append(tuple(current))
             current = []
             current_bytes = 0
@@ -297,10 +311,6 @@ def plan_protocol_chunks(
         current_bytes += byte_count
     if current:
         core_groups.append(tuple(current))
-    if len(core_groups) < 2:
-        raise ProtocolChunkAdmissionError(
-            "Protocol fits the single-pass path and does not need chunking."
-        )
     if len(core_groups) > limits.max_chunks:
         raise ProtocolChunkAdmissionError(
             "Protocol exceeds the maximum chunk count."
@@ -408,38 +418,39 @@ def extraction_for_chunk(
         raise ProtocolChunkResultError(
             "Chunk source text identity changed after planning."
         )
-    prepare_protocol_analysis_request(
+    request_json = prepare_chunk_claim_request(
         scoped,
-        max_input_bytes=MAX_SINGLE_PASS_INPUT_BYTES,
+        source_revision=chunk.candidate_revision_id,
+        chunk_id=chunk.chunk_id,
+        ordinal=chunk.ordinal,
+        core_page_refs=chunk.core_page_refs,
+        context_page_refs=chunk.overlap_page_refs,
     )
+    if len(request_json.encode("utf-8")) > MAX_SINGLE_PASS_INPUT_BYTES:
+        raise ProtocolChunkAdmissionError(
+            "Chunk claim request exceeds the bounded provider envelope."
+        )
     return scoped
-
-
-def _iter_evidence(value: Any) -> Iterable[domain.SourceEvidence]:
-    if isinstance(value, domain.SourceEvidence):
-        yield value
-        return
-    if isinstance(value, (ProtocolPdfExtraction, Enum)) or value is None:
-        return
-    if isinstance(value, tuple):
-        for item in value:
-            yield from _iter_evidence(item)
-        return
-    if is_dataclass(value):
-        for field in fields(value):
-            yield from _iter_evidence(getattr(value, field.name))
 
 
 def analyze_protocol_chunk(
     extraction: ProtocolPdfExtraction,
     chunk: ProtocolAnalysisChunk,
     model: ProtocolAnalysisModel,
-) -> ProtocolAnalysisDraft:
-    """Analyze and re-check one exact chunk through the production boundary."""
+) -> ProtocolChunkClaimAnalysis:
+    """Extract and validate only evidence-first claims for one exact chunk."""
 
     scoped = extraction_for_chunk(extraction, chunk)
     try:
-        draft = analyze_protocol_extraction(scoped, model)
+        return analyze_chunk_claims(
+            scoped,
+            model,
+            source_revision=chunk.candidate_revision_id,
+            chunk_id=chunk.chunk_id,
+            ordinal=chunk.ordinal,
+            core_page_refs=chunk.core_page_refs,
+            context_page_refs=chunk.overlap_page_refs,
+        )
     except ProtocolAnalysisEvidenceError as exc:
         exc.enrich_diagnostic(
             chunk_id=chunk.chunk_id,
@@ -447,39 +458,6 @@ def analyze_protocol_chunk(
             source_hash=chunk.document_id,
         )
         raise
-    protocol = draft.protocol
-    if protocol.protocol_id != chunk.protocol_id:
-        protocol = replace(protocol, protocol_id=chunk.protocol_id)
-        protocol, evidence_count = validate_protocol_analysis_evidence(
-            protocol,
-            scoped,
-        )
-        draft = replace(
-            draft,
-            protocol=protocol,
-            readiness=domain.assess_readiness(
-                protocol,
-                capability_policy=draft.capability_policy,
-            ),
-            verified_evidence_count=evidence_count,
-        )
-    allowed = set(chunk.source_page_refs)
-    if any(
-        evidence.source_page_number not in allowed
-        for evidence in _iter_evidence(draft.protocol)
-    ):
-        raise ProtocolAnalysisEvidenceError(
-            "Chunk analysis cites a source page outside its chunk.",
-            diagnostic=ProtocolEvidenceDiagnostic(
-                validation_stage="chunk_scope_validation",
-                reason_code="chunk_identity_mismatch",
-                mismatch_class="chunk_page_scope_mismatch",
-                chunk_id=chunk.chunk_id,
-                source_revision=chunk.candidate_revision_id,
-                source_hash=chunk.document_id,
-            ),
-        )
-    return draft
 
 
 def validate_chunk_result(
@@ -503,84 +481,51 @@ def validate_chunk_result(
         or result.chunk.planner_version != plan.planner_version
         or result.chunk.planner_configuration_sha256
         != plan.planner_configuration_sha256
-        or result.draft.extraction != extraction_for_chunk(extraction, expected)
-        or result.draft.protocol.metadata.file_checksum != plan.document_id
     ):
         raise ProtocolChunkResultError(
             "Chunk result provenance does not match the active analysis run."
         )
     try:
-        revalidated, evidence_count = validate_protocol_analysis_evidence(
-            result.draft.protocol,
-            result.draft.extraction,
+        extraction_for_chunk(extraction, expected)
+        validate_chunk_claim_analysis(
+            result.analysis,
+            extraction,
+            source_revision=expected.candidate_revision_id,
+            chunk_id=expected.chunk_id,
+            core_page_refs=expected.core_page_refs,
         )
     except ProtocolAnalysisError as exc:
         raise ProtocolChunkResultError(
             "Chunk result failed deterministic revalidation."
         ) from exc
-    if (
-        revalidated != result.draft.protocol
-        or evidence_count != result.draft.verified_evidence_count
-        or domain.assess_readiness(
-            revalidated,
-            capability_policy=result.draft.capability_policy,
-        )
-        != result.draft.readiness
-    ):
+    except Exception as exc:
         raise ProtocolChunkResultError(
-            "Chunk result no longer matches its validated analysis."
-        )
-    allowed = set(expected.source_page_refs)
-    if any(
-        evidence.source_page_number not in allowed
-        for evidence in _iter_evidence(result.draft.protocol)
-    ):
-        raise ProtocolChunkResultError(
-            "Chunk result contains out-of-scope evidence."
-        )
+            "Chunk result failed deterministic revalidation."
+        ) from exc
 
 
-def _merge_records(
-    groups: Iterable[Iterable[Any]],
-    identity,
+def _merge_by_identifier(
+    values: Iterable[object],
+    *,
+    identifier_name: str,
     conflict_code: str,
-) -> tuple[Any, ...]:
-    ordered: list[Any] = []
-    known: dict[str, Any] = {}
-    for group in groups:
-        for item in group:
-            key = identity(item)
-            prior = known.get(key)
-            if prior is None:
-                known[key] = item
-                ordered.append(item)
-            elif prior != item:
-                raise ProtocolChunkMergeError(conflict_code)
-    return tuple(ordered)
-
-
-def _construct_id(value: domain.WorkflowConstruct) -> str:
-    for name in (
-        "branch_id",
-        "repetition_id",
-        "parallel_id",
-        "recurring_action_id",
-        "subprocedure_id",
-        "ambiguity_id",
-        "conflict_id",
-    ):
-        identifier = getattr(value, name, None)
-        if isinstance(identifier, str):
-            return identifier
-    raise ProtocolChunkMergeError("construct_identity_missing")
+) -> tuple[object, ...]:
+    merged: dict[str, object] = {}
+    for value in values:
+        identifier = getattr(value, identifier_name)
+        prior = merged.get(identifier)
+        if prior is not None and prior != value:
+            raise ProtocolChunkMergeError(conflict_code)
+        merged[identifier] = value
+    return tuple(merged.values())
 
 
 def merge_validated_chunk_results(
     extraction: ProtocolPdfExtraction,
     plan: ProtocolChunkPlan,
     results: Iterable[ValidatedChunkResult],
-) -> ProtocolAnalysisDraft:
-    """Merge only a complete, isolated set of validated structured results."""
+) -> MergedProtocolClaims:
+    """Deterministically merge only a complete set of valid claim DTOs."""
 
     supplied = tuple(results)
     by_id: dict[str, ValidatedChunkResult] = {}
@@ -600,125 +545,72 @@ def merge_validated_chunk_results(
     ) > 4 * 1024 * 1024:
         raise ProtocolChunkMergeError("merge_metadata_limit_exceeded")
 
-    first = ordered[0].draft
-    metadata = replace(first.protocol.metadata, pdf=extraction)
-    metadata_values = tuple(
-        getattr(metadata, field.name)
-        for field in fields(metadata)
-        if field.name not in {"pdf", "evidence"}
+    coverage = tuple(
+        item
+        for result in ordered
+        for item in result.analysis.page_coverage
     )
-    for result in ordered[1:]:
-        candidate = replace(result.draft.protocol.metadata, pdf=extraction)
-        candidate_values = tuple(
-            getattr(candidate, field.name)
-            for field in fields(candidate)
-            if field.name not in {"pdf", "evidence"}
-        )
-        if candidate_values != metadata_values:
-            raise ProtocolChunkMergeError("metadata_conflict")
-
-    before_start = _merge_records(
-        (item.draft.protocol.before_start for item in ordered),
-        lambda item: item.prerequisite_id,
-        "prerequisite_conflict",
+    structure = _merge_by_identifier(
+        (
+            item
+            for result in ordered
+            for item in result.analysis.structure
+        ),
+        identifier_name="marker_id",
+        conflict_code="structure_marker_conflict",
     )
-    materials = _merge_records(
-        (item.draft.protocol.materials for item in ordered),
-        lambda item: item.material_id,
-        "material_conflict",
+    claims = _merge_by_identifier(
+        (
+            item
+            for result in ordered
+            for item in result.analysis.claims
+        ),
+        identifier_name="claim_id",
+        conflict_code="claim_identity_conflict",
     )
-    equipment = _merge_records(
-        (item.draft.protocol.equipment for item in ordered),
-        lambda item: item.equipment_id,
-        "equipment_conflict",
-    )
-
-    section_order: list[str] = []
-    section_headers: dict[str, tuple[str, domain.SourceEvidence]] = {}
-    section_steps: dict[str, list[domain.ProtocolSourceStep]] = {}
-    step_by_id: dict[str, domain.ProtocolSourceStep] = {}
-    label_to_step: dict[str, domain.ProtocolSourceStep] = {}
-    last_section_with_new_content: str | None = None
-    for result in ordered:
-        for section in result.draft.protocol.sections:
-            header = (section.title_source_text, section.evidence)
-            prior_header = section_headers.get(section.section_id)
-            is_new_section = prior_header is None
-            if prior_header is None:
-                section_order.append(section.section_id)
-                section_headers[section.section_id] = header
-                section_steps[section.section_id] = []
-            elif prior_header[0] != header[0]:
-                raise ProtocolChunkMergeError("section_conflict")
-            new_steps = tuple(
-                step for step in section.steps if step.step_id not in step_by_id
-            )
-            if (
-                new_steps
-                and not is_new_section
-                and last_section_with_new_content != section.section_id
-            ):
-                raise ProtocolChunkMergeError("section_order_conflict")
-            for step in section.steps:
-                prior_step = step_by_id.get(step.step_id)
-                prior_label = label_to_step.get(step.source_label)
-                if prior_step is not None:
-                    if prior_step != step:
-                        raise ProtocolChunkMergeError("step_conflict")
-                    continue
-                if prior_label is not None and prior_label != step:
-                    raise ProtocolChunkMergeError("source_label_conflict")
-                step_by_id[step.step_id] = step
-                label_to_step[step.source_label] = step
-                section_steps[section.section_id].append(step)
-            if is_new_section or new_steps:
-                last_section_with_new_content = section.section_id
-    sections = tuple(
-        domain.ProtocolSection(
-            section_id,
-            section_headers[section_id][0],
-            section_headers[section_id][1],
-            tuple(section_steps[section_id]),
-        )
-        for section_id in section_order
-    )
-    constructs = _merge_records(
-        (item.draft.protocol.constructs for item in ordered),
-        _construct_id,
-        "construct_conflict",
-    )
-    descriptions = tuple(
-        item.draft.protocol.description
-        for item in ordered
-        if item.draft.protocol.description is not None
-    )
-    description = descriptions[0] if descriptions else None
-    if any(item != description for item in descriptions[1:]):
-        raise ProtocolChunkMergeError("description_conflict")
-
-    merged = domain.ExperimentProtocol(
+    merged = MergedProtocolClaims(
         protocol_id=plan.protocol_id,
-        metadata=metadata,
-        before_start=before_start,
-        materials=materials,
-        equipment=equipment,
-        sections=sections,
-        constructs=constructs,
-        description=description,
+        source_revision=plan.candidate_revision_id,
+        source_sha256=plan.document_id,
+        capability_policy_id=ordered[0].analysis.capability_policy_id,
+        required_chunk_ids=tuple(chunk.chunk_id for chunk in plan.chunks),
+        page_coverage=tuple(
+            sorted(coverage, key=lambda item: item.source_page_number)
+        ),
+        structure=tuple(
+            sorted(
+                structure,
+                key=lambda item: (
+                    item.evidence.source_page_number,
+                    item.source_order,
+                    item.marker_id,
+                ),
+            )
+        ),
+        claims=tuple(
+            sorted(
+                claims,
+                key=lambda item: (
+                    item.evidence.source_page_number,
+                    item.source_order,
+                    item.claim_id,
+                ),
+            )
+        ),
     )
-    verified, evidence_count = validate_protocol_analysis_evidence(
-        merged,
-        extraction,
-    )
-    readiness = domain.assess_readiness(
-        verified,
-        capability_policy=first.capability_policy,
-    )
-    return ProtocolAnalysisDraft(
-        extraction=extraction,
-        protocol=verified,
-        readiness=readiness,
-        capability_policy=first.capability_policy,
-        analysis_schema_version=first.analysis_schema_version,
-        verified_evidence_count=evidence_count,
-    )
+    try:
+        return validate_whole_protocol_claims(extraction, merged)
+    except ProtocolClaimConsistencyError as exc:
+        raise ProtocolChunkMergeError(exc.reason_code) from exc
+
+
+def assemble_validated_protocol_claims(
+    extraction: ProtocolPdfExtraction,
+    merged: MergedProtocolClaims,
+) -> ProtocolAnalysisDraft:
+    """Run the final deterministic adapter into ``ExperimentProtocol``."""
+
+    try:
+        return assemble_experiment_protocol(extraction, merged)
+    except ProtocolClaimConsistencyError as exc:
+        raise ProtocolChunkMergeError(exc.reason_code) from exc

@@ -71,7 +71,9 @@ raw PDF stream
   → text-empty branch: trusted OCR adapter
   → exact-source/page validation + append-only OCR evidence
   → human accept/reject against the PDF
-  → explicit analysis job (single or chunked)
+  → explicit analysis job (single-pass or page-bounded evidence claims)
+  → per-claim revision/hash/page/exact-excerpt validation
+  → complete-chunk deterministic merge + whole-document consistency gate
   → typed ExperimentProtocol validation
   → fail-closed readiness assessment
   → source-linked review projection
@@ -88,6 +90,14 @@ remain explicit and block execution.
 Structured protocol analysis requires the deployment-supplied
 `PROTOCOL_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
 separate from the bounded low-latency semantic-intent model and timeout policy.
+When the default-off deployment gate
+`VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
+documents over eight pages enter the evidence-claim path even when their
+extracted byte count is small. Its provider DTO is not ExperimentProtocol:
+it contains page coverage, source structure markers, and independently evidenced
+scientific/execution claims. Every required chunk must validate before merge,
+`analysis_incomplete` coverage is terminal for that run, the 120-second bound is
+one total-run deadline, and provider concurrency remains serial by default.
 
 OCR is a source-preserving extraction boundary in `protocol_ocr.py`, not an
 approval or execution authority. HTTP callers cannot choose a provider; the

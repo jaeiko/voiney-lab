@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import threading
@@ -14,10 +15,8 @@ from unittest.mock import Mock, patch
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
-    validate_protocol_analysis_evidence,
 )
 from voice_workflow_agent.experiment_protocol_config import (
     ProtocolPersistenceSettings,
@@ -27,6 +26,7 @@ from voice_workflow_agent.experiment_protocol_store import (
     initialize_protocol_store,
 )
 from voice_workflow_agent.protocol_catalog import (
+    CLAIM_CHUNK_ANALYSIS_ENABLED_ENV,
     ProtocolCatalog,
     ProtocolChunkAnalysisFailedError,
     ProtocolChunkMergeConflictError,
@@ -39,10 +39,14 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     ProtocolChunkResultError,
     ValidatedChunkResult,
     analyze_protocol_chunk,
+    assemble_validated_protocol_claims,
     extraction_for_chunk,
     merge_validated_chunk_results,
     plan_protocol_chunks,
     validate_chunk_result,
+)
+from voice_workflow_agent.protocol_claim_analysis import (
+    CLAIM_RESPONSE_SCHEMA,
 )
 
 
@@ -88,57 +92,93 @@ class FakeChunkModel:
         self.conflict_on_page = conflict_on_page
 
     def analyze(self, *, system_prompt, input_json, response_schema) -> str:
-        del system_prompt, response_schema
+        del system_prompt
+        assert response_schema == CLAIM_RESPONSE_SCHEMA
+        assert "ExperimentProtocol" not in json.dumps(response_schema)
         self.calls += 1
         request = json.loads(input_json)
-        pages = [page for page in request["pages"] if page["text"].strip()]
-        first = pages[0]
-        sections = []
+        source = request["source"]
+        chunk = request["chunk"]
+        pages = [page for page in request["pages"] if page["role"] == "core"]
+        structure = []
+        claims = []
+        coverage = []
         for page in pages:
             number = page["source_page_number"]
             instruction = f"{number}. Do action {number}."
             title = f"Section {number}"
             if number == self.conflict_on_page:
                 instruction = f"{number}. Do conflicting action {number}."
-            if instruction not in page["text"]:
-                continue
-            sections.append(
+            item_ids = []
+            evidence = lambda excerpt: {
+                "source_revision": source["source_revision"],
+                "source_sha256": source["source_sha256"],
+                "source_page_number": number,
+                "source_excerpt": excerpt,
+            }
+            if number == 1:
+                structure.append(
+                    {
+                        "marker_id": "protocol-title",
+                        "kind": "protocol_title",
+                        "source_order": 0,
+                        "source_text": "Protocol Large",
+                        "section_id": None,
+                        "evidence": evidence("Protocol Large"),
+                    }
+                )
+                item_ids.append("protocol-title")
+            if title in page["text"]:
+                marker_id = f"marker-section-{number}"
+                structure.append(
+                    {
+                        "marker_id": marker_id,
+                        "kind": "section",
+                        "source_order": 1,
+                        "source_text": title,
+                        "section_id": f"section-{number}",
+                        "evidence": evidence(title),
+                    }
+                )
+                item_ids.append(marker_id)
+            if instruction in page["text"]:
+                claim_id = f"action-{number}"
+                claims.append(
+                    {
+                        "claim_id": claim_id,
+                        "category": "action",
+                        "source_order": 2,
+                        "source_text": instruction,
+                        "section_id": f"section-{number}",
+                        "step_id": f"step-{number}",
+                        "source_label": str(number),
+                        "target_claim_id": None,
+                        "required_for_execution": True,
+                        "evidence": evidence(instruction),
+                    }
+                )
+                item_ids.append(claim_id)
+            coverage.append(
                 {
-                    "section_id": f"section-{number}",
-                    "title_source_text": title,
-                    "evidence": {
-                        "source_page_number": number,
-                        "source_excerpt": title,
-                    },
-                    "steps": [
-                        {
-                            "step_id": f"step-{number}",
-                            "source_label": str(number),
-                            "instruction_source_text": instruction,
-                            "evidence": {
-                                "source_page_number": number,
-                                "source_excerpt": instruction,
-                            },
-                        }
-                    ],
+                    "source_revision": source["source_revision"],
+                    "source_sha256": source["source_sha256"],
+                    "source_page_number": number,
+                    "page_text_sha256": hashlib.sha256(
+                        page["text"].encode("utf-8")
+                    ).hexdigest(),
+                    "status": "complete" if item_ids else "no_relevant_claims",
+                    "evidence_item_ids": item_ids,
                 }
             )
         response = {
-            "analysis_schema_version": 1,
-            "pdf_sha256": request["pdf"]["sha256"],
+            "claim_schema_version": 1,
             "capability_policy_id": "p1-conservative",
-            "protocol": {
-                "protocol_id": "provider-draft",
-                "metadata": {
-                    "title": "Protocol Large",
-                    "original_language": "en",
-                    "evidence": {
-                        "source_page_number": first["source_page_number"],
-                        "source_excerpt": "Protocol Large",
-                    },
-                },
-                "sections": sections,
-            },
+            "source_revision": source["source_revision"],
+            "source_sha256": source["source_sha256"],
+            "chunk_id": chunk["chunk_id"],
+            "page_coverage": coverage,
+            "structure": structure,
+            "claims": claims,
         }
         return json.dumps(response, separators=(",", ":"))
 
@@ -154,7 +194,7 @@ class RetryOnceChunkModel(FakeChunkModel):
         first_page = next(
             page["source_page_number"]
             for page in request["pages"]
-            if page["text"].strip()
+            if page["role"] == "core"
         )
         with self._lock:
             if first_page not in self._seen:
@@ -166,6 +206,11 @@ class RetryOnceChunkModel(FakeChunkModel):
 
 class ProtocolChunkAnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.claim_chunk_gate = patch.dict(
+            "os.environ",
+            {CLAIM_CHUNK_ANALYSIS_ENABLED_ENV: "true"},
+        )
+        self.claim_chunk_gate.start()
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.pdf = self.root / "large.pdf"
@@ -200,6 +245,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+        self.claim_chunk_gate.stop()
 
     def results(self, model: FakeChunkModel | None = None):
         model = model or FakeChunkModel()
@@ -309,7 +355,9 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
 
         def outside_response(**kwargs):
             response = json.loads(original(**kwargs))
-            response["protocol"]["metadata"]["evidence"] = {
+            response["claims"][0]["evidence"] = {
+                "source_revision": self.plan.candidate_revision_id,
+                "source_sha256": self.extraction.sha256,
                 "source_page_number": outside.source_page_number,
                 "source_excerpt": "Protocol Large",
             }
@@ -320,11 +368,12 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             analyze_protocol_chunk(self.extraction, chunk, bad)
 
     def test_complete_valid_results_merge_in_source_order_and_require_review(self):
-        merged = merge_validated_chunk_results(
+        claims = merge_validated_chunk_results(
             self.extraction,
             self.plan,
             self.results(),
         )
+        merged = assemble_validated_protocol_claims(self.extraction, claims)
         labels = tuple(
             step.source_label
             for section in merged.protocol.sections
@@ -370,53 +419,57 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
 
     def test_duplicate_exact_chunk_deduplicates_but_conflict_fails(self):
         results = self.results()
-        merged = merge_validated_chunk_results(
+        claims = merge_validated_chunk_results(
             self.extraction,
             self.plan,
             results + (results[0],),
         )
+        merged = assemble_validated_protocol_claims(self.extraction, claims)
         self.assertEqual(
             sum(len(section.steps) for section in merged.protocol.sections),
             6,
         )
-        protocol = replace(
-            results[0].draft.protocol,
-            metadata=replace(results[0].draft.protocol.metadata, title="Other"),
-        )
-        bad_draft = replace(results[0].draft, protocol=protocol)
-        with self.assertRaises(ProtocolChunkResultError):
-            validate_chunk_result(
-                self.plan,
-                replace(results[0], draft=bad_draft),
+        with self.assertRaises(ProtocolChunkMergeError) as conflict:
+            merge_validated_chunk_results(
                 self.extraction,
+                self.plan,
+                results + (replace(results[0], attempts=2),),
             )
+        self.assertEqual(conflict.exception.reason_code, "duplicate_chunk_conflict")
 
     def test_valid_but_conflicting_section_identity_fails_closed(self):
         results = list(self.results())
         second = results[1]
-        section = second.draft.protocol.sections[0]
-        changed_protocol = replace(
-            second.draft.protocol,
-            sections=(replace(section, section_id="section-1"),),
+        changed_marker = replace(
+            second.analysis.structure[0],
+            marker_id=results[0].analysis.structure[-1].marker_id,
         )
-        changed_protocol, evidence_count = validate_protocol_analysis_evidence(
-            changed_protocol,
-            second.draft.extraction,
+        results[1] = replace(
+            second,
+            analysis=replace(
+                second.analysis,
+                structure=(changed_marker,),
+                page_coverage=(
+                    replace(
+                        second.analysis.page_coverage[0],
+                        evidence_item_ids=(
+                            changed_marker.marker_id,
+                            second.analysis.claims[0].claim_id,
+                        ),
+                    ),
+                ),
+            ),
         )
-        changed_draft = replace(
-            second.draft,
-            protocol=changed_protocol,
-            readiness=domain.assess_readiness(changed_protocol),
-            verified_evidence_count=evidence_count,
-        )
-        results[1] = replace(second, draft=changed_draft)
         with self.assertRaises(ProtocolChunkMergeError) as conflict:
             merge_validated_chunk_results(
                 self.extraction,
                 self.plan,
                 results,
             )
-        self.assertEqual(conflict.exception.reason_code, "section_conflict")
+        self.assertEqual(
+            conflict.exception.reason_code,
+            "structure_marker_conflict",
+        )
 
     def test_catalog_large_run_is_explicit_idempotent_and_review_required(self):
         settings = ProtocolPersistenceSettings(True, self.root / "catalog")
@@ -466,6 +519,10 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
                 "analysis_payload_json",
                 json.dumps(status.public_dict()),
             )
+            self.assertNotIn(
+                "claim_payload_json",
+                json.dumps(status.public_dict()),
+            )
         finally:
             store.close()
 
@@ -496,8 +553,17 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
                 class ConflictingSectionModel(FakeChunkModel):
                     def analyze(self, **kwargs):
                         response = json.loads(super().analyze(**kwargs))
-                        for section in response["protocol"]["sections"]:
-                            section["section_id"] = "shared-section"
+                        for marker in response["structure"]:
+                            if marker["kind"] == "section":
+                                original = marker["marker_id"]
+                                marker["marker_id"] = "shared-section-marker"
+                                for coverage in response["page_coverage"]:
+                                    coverage["evidence_item_ids"] = [
+                                        "shared-section-marker"
+                                        if item_id == original
+                                        else item_id
+                                        for item_id in coverage["evidence_item_ids"]
+                                    ]
                         return json.dumps(response, separators=(",", ":"))
 
                 with self.assertRaises(ProtocolChunkMergeConflictError):
@@ -648,6 +714,93 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             ]
             self.assertEqual(len(completed), status.total_chunks)
             self.assertTrue(all(event.payload["attempts"] == 2 for event in completed))
+        finally:
+            store.close()
+
+    def test_concurrency_is_serial_by_default_and_two_is_explicitly_bounded(self):
+        self.assertEqual(ChunkAnalysisLimits().max_concurrency, 1)
+        store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.root / "concurrency-catalog")
+        )
+        active = 0
+        maximum_active = 0
+        lock = threading.Lock()
+
+        class ObservedConcurrencyModel(FakeChunkModel):
+            def analyze(inner_self, **kwargs):
+                nonlocal active, maximum_active
+                with lock:
+                    active += 1
+                    maximum_active = max(maximum_active, active)
+                try:
+                    time.sleep(0.02)
+                    return super().analyze(**kwargs)
+                finally:
+                    with lock:
+                        active -= 1
+
+        try:
+            catalog = ProtocolCatalog(store)
+            with patch(
+                "voice_workflow_agent.protocol_catalog._analysis_state",
+                return_value="chunked_analysis_required",
+            ):
+                entry = catalog.register(
+                    self.pdf,
+                    source_filename="large.pdf",
+                    media_type="application/pdf",
+                ).entry
+                catalog.analyze(
+                    entry.protocol_id,
+                    ObservedConcurrencyModel(),
+                    analysis_id="analysis-concurrency-two",
+                    chunk_limits=replace(
+                        self.limits,
+                        max_concurrency=2,
+                        max_retries=0,
+                    ),
+                )
+            self.assertEqual(maximum_active, 2)
+        finally:
+            store.close()
+
+    def test_timeout_is_one_total_run_deadline_not_one_timeout_per_batch(self):
+        store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.root / "deadline-catalog")
+        )
+
+        class PerChunkDelayModel(FakeChunkModel):
+            def analyze(self, **kwargs):
+                time.sleep(0.03)
+                return super().analyze(**kwargs)
+
+        try:
+            catalog = ProtocolCatalog(store)
+            with patch(
+                "voice_workflow_agent.protocol_catalog._analysis_state",
+                return_value="chunked_analysis_required",
+            ):
+                entry = catalog.register(
+                    self.pdf,
+                    source_filename="large.pdf",
+                    media_type="application/pdf",
+                ).entry
+                started = time.monotonic()
+                with self.assertRaises(ProtocolChunkAnalysisFailedError):
+                    catalog.analyze(
+                        entry.protocol_id,
+                        PerChunkDelayModel(),
+                        analysis_id="analysis-total-deadline",
+                        chunk_limits=replace(
+                            self.limits,
+                            max_concurrency=1,
+                            timeout_seconds=0.05,
+                            max_retries=0,
+                        ),
+                    )
+                elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.12)
+            self.assertFalse(store.list_analysis_revisions(entry.protocol_id, 1))
         finally:
             store.close()
 
