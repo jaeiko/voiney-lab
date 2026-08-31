@@ -42,9 +42,11 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
+    CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_RESPONSE_SCHEMA,
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     ClaimCategory,
+    prepare_chunk_claim_request,
 )
 
 
@@ -185,9 +187,7 @@ class RichClaimModel:
                     "source_revision": source["source_revision"],
                     "source_sha256": source["source_sha256"],
                     "source_page_number": page_number,
-                    "page_text_sha256": hashlib.sha256(
-                        page["text"].encode("utf-8")
-                    ).hexdigest(),
+                    "page_text_sha256": page["page_text_sha256"],
                     "status": "complete",
                     "evidence_item_ids": item_ids,
                 }
@@ -255,6 +255,97 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             self.assertEqual(claim.evidence.source_page_number, 1)
             self.assertIn(claim.evidence.source_excerpt, self.extraction.pages[0].text)
             self.assertIn(claim.source_text, claim.evidence.source_excerpt)
+
+    def test_request_supplies_exact_server_hash_for_every_provider_page(self):
+        second_source = self.root / "provider-pages.pdf"
+        write_pages(
+            second_source,
+            (
+                "Protocol Evidence Context page.",
+                "Protocol Evidence Core page.",
+            ),
+        )
+        extraction = extract_protocol_pdf(second_source)
+        request = json.loads(
+            prepare_chunk_claim_request(
+                extraction,
+                source_revision="pdf-provider-pages",
+                chunk_id="chunk-provider-pages",
+                ordinal=1,
+                core_page_refs=(2,),
+                context_page_refs=(1,),
+            )
+        )
+
+        self.assertEqual(len(request["pages"]), 2)
+        for page in request["pages"]:
+            page_number = page["source_page_number"]
+            self.assertEqual(
+                page["page_text_sha256"],
+                hashlib.sha256(
+                    extraction.pages[page_number - 1].text.encode("utf-8")
+                ).hexdigest(),
+            )
+        self.assertIn("opaque, server-owned page identity", CLAIM_ANALYSIS_SYSTEM_PROMPT)
+        self.assertIn("Never\ncalculate, derive", CLAIM_ANALYSIS_SYSTEM_PROMPT)
+
+    def test_correct_echoed_page_hash_passes_validation(self):
+        result = self.analyze()
+        self.assertEqual(
+            result.analysis.page_coverage[0].page_text_sha256,
+            hashlib.sha256(self.extraction.pages[0].text.encode("utf-8")).hexdigest(),
+        )
+
+    def test_altered_or_missing_page_hash_fails_closed(self):
+        def altered(response):
+            response["page_coverage"][0]["page_text_sha256"] = "0" * 64
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as altered_failure:
+            self.analyze(RichClaimModel(altered))
+        self.assertEqual(
+            altered_failure.exception.diagnostic.reason_code,
+            "invalid_source_hash",
+        )
+
+        def missing(response):
+            del response["page_coverage"][0]["page_text_sha256"]
+
+        with self.assertRaises(ProtocolAnalysisResponseError):
+            self.analyze(RichClaimModel(missing))
+
+    def test_hash_from_another_supplied_page_fails_closed(self):
+        two_page_source = self.root / "wrong-page-hash.pdf"
+        page_text = (
+            "Protocol Evidence Preparation Before start: thaw sample. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            + self.action
+        )
+        write_pages(
+            two_page_source,
+            ("First page identity. " + page_text, "Second page identity. " + page_text),
+        )
+        extraction = extract_protocol_pdf(two_page_source)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+            limits=ChunkAnalysisLimits(max_core_pages_per_chunk=1),
+        )
+        self.assertEqual(plan.chunks[1].overlap_page_refs, (1,))
+        first_page_hash = hashlib.sha256(
+            extraction.pages[0].text.encode("utf-8")
+        ).hexdigest()
+
+        def other_page(response):
+            response["page_coverage"][0]["page_text_sha256"] = first_page_hash
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as failure:
+            analyze_protocol_chunk(
+                extraction,
+                plan.chunks[1],
+                RichClaimModel(other_page),
+            )
+        self.assertEqual(failure.exception.diagnostic.reason_code, "invalid_source_hash")
 
     def test_claims_merge_then_assemble_with_exact_final_provenance_and_blockers(self):
         merged_claims = merge_validated_chunk_results(

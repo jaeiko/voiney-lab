@@ -370,6 +370,10 @@ paraphrase, translate, merge passages, infer missing values, or add scientific
 knowledge. Explicit source ambiguity or a missing execution value is a blocking
 claim, never a guessed value.
 
+Each supplied page_text_sha256 is an opaque, server-owned page identity. Copy the
+exact supplied value for the cited core page into its coverage record. Never
+calculate, derive, normalize, shorten, alter, or invent a page_text_sha256.
+
 Return exactly one coverage record for every core page. Mark it complete when
 all relevant claims and markers on that page were extracted, no_relevant_claims
 only when the page contains none, and analysis_incomplete whenever the page
@@ -386,6 +390,12 @@ def _canonical_json(value: object) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _page_text_sha256(extraction: ProtocolPdfExtraction, page_number: int) -> str:
+    return hashlib.sha256(
+        extraction.pages[page_number - 1].text.encode("utf-8")
+    ).hexdigest()
 
 
 def serialize_chunk_claim_analysis(
@@ -425,6 +435,7 @@ def prepare_chunk_claim_request(
                 "role": (
                     "core" if page_number in set(core_page_refs) else "context"
                 ),
+                "page_text_sha256": _page_text_sha256(extraction, page_number),
                 "text": extraction.pages[page_number - 1].text,
             }
             for page_number in context_page_refs + core_page_refs
@@ -824,9 +835,7 @@ def parse_chunk_claim_response(
                     source_hash=extraction.sha256,
                 ),
             )
-        expected_page_hash = hashlib.sha256(
-            extraction.pages[page_number - 1].text.encode("utf-8")
-        ).hexdigest()
+        expected_page_hash = _page_text_sha256(extraction, page_number)
         if record["page_text_sha256"] != expected_page_hash:
             raise ProtocolAnalysisEvidenceError(
                 "Chunk page coverage text identity changed.",
@@ -1044,9 +1053,7 @@ def validate_chunk_claim_analysis(
             or coverage.source_revision != source_revision
             or coverage.source_sha256 != extraction.sha256
             or coverage.page_text_sha256
-            != hashlib.sha256(
-                extraction.pages[page_number - 1].text.encode("utf-8")
-            ).hexdigest()
+            != _page_text_sha256(extraction, page_number)
             or tuple(sorted(coverage.evidence_item_ids)) != expected_ids
             or len(set(coverage.evidence_item_ids))
             != len(coverage.evidence_item_ids)

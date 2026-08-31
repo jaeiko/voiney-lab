@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import tempfile
 import threading
@@ -163,9 +162,7 @@ class FakeChunkModel:
                     "source_revision": source["source_revision"],
                     "source_sha256": source["source_sha256"],
                     "source_page_number": number,
-                    "page_text_sha256": hashlib.sha256(
-                        page["text"].encode("utf-8")
-                    ).hexdigest(),
+                    "page_text_sha256": page["page_text_sha256"],
                     "status": "complete" if item_ids else "no_relevant_claims",
                     "evidence_item_ids": item_ids,
                 }

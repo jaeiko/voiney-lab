@@ -403,7 +403,14 @@ class OpenAICompatibleProtocolAnalysisModel:
     reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
-        if self.reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
+        if self.reasoning_effort not in {
+            None,
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        }:
             raise ValueError("Protocol analysis reasoning effort is invalid.")
 
     def analyze(

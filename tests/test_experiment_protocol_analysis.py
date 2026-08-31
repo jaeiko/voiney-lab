@@ -1478,7 +1478,7 @@ class ProtocolAnalysisTests(unittest.TestCase):
         adapter = OpenAICompatibleProtocolAnalysisModel(
             client,
             "configured-model",
-            "low",
+            "none",
         )
 
         draft = analyze_protocol_pdf(self.pdf, adapter)
@@ -1486,7 +1486,7 @@ class ProtocolAnalysisTests(unittest.TestCase):
         self.assertEqual(draft.protocol.protocol_id, "protocol-alpha")
         call = completions.calls[0]
         self.assertEqual(call["temperature"], 0)
-        self.assertEqual(call["reasoning_effort"], "low")
+        self.assertEqual(call["reasoning_effort"], "none")
         self.assertEqual(
             call["response_format"],
             {
