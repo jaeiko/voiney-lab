@@ -33,7 +33,10 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import CLAIM_RESPONSE_SCHEMA
+from voice_workflow_agent.protocol_claim_analysis import (
+    CLAIM_RESPONSE_SCHEMA,
+    CLAIM_SCHEMA_VERSION,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,15 +116,27 @@ class ExactNumberedStepClaimModel:
 
     @staticmethod
     def _evidence(
-        source: dict[str, object],
-        page_number: int,
+        page: dict[str, object],
         excerpt: str,
     ) -> dict[str, object]:
+        segments = page["evidence_segments"]
+        if not isinstance(segments, list):
+            raise ValueError("Provider page has invalid evidence segments.")
+        page_text = "".join(str(segment["text"]) for segment in segments)
+        start = page_text.index(excerpt)
+        end = start + len(excerpt)
+        selected: list[str] = []
+        offset = 0
+        for segment in segments:
+            segment_text = str(segment["text"])
+            segment_end = offset + len(segment_text)
+            if segment_end > start and offset < end:
+                selected.append(str(segment["segment_id"]))
+            offset = segment_end
         return {
-            "source_revision": source["source_revision"],
-            "source_sha256": source["source_sha256"],
-            "source_page_number": page_number,
-            "source_excerpt": excerpt,
+            "source_page_number": page["source_page_number"],
+            "page_text_sha256": page["page_text_sha256"],
+            "evidence_segment_ids": selected,
         }
 
     def analyze(
@@ -145,10 +160,13 @@ class ExactNumberedStepClaimModel:
         ]
         for page in core_pages:
             page_number = page["source_page_number"]
-            page_text = page["text"]
+            page_text = "".join(
+                str(segment["text"])
+                for segment in page["evidence_segments"]
+            )
             item_ids: list[str] = []
             if page_number == self.title_page:
-                title_evidence = self._evidence(source, page_number, self.title)
+                title_evidence = self._evidence(page, self.title)
                 structure.extend(
                     (
                         {
@@ -187,7 +205,7 @@ class ExactNumberedStepClaimModel:
                         continue
                     action_id = f"action-p{page_number}-{action_index}"
                     step_id = f"step-{label}"
-                    action_evidence = self._evidence(source, page_number, excerpt)
+                    action_evidence = self._evidence(page, excerpt)
                     claims.append(
                         {
                             "claim_id": action_id,
@@ -264,7 +282,7 @@ class ExactNumberedStepClaimModel:
             )
         return json.dumps(
             {
-                "claim_schema_version": 1,
+                "claim_schema_version": CLAIM_SCHEMA_VERSION,
                 "capability_policy_id": "p1-conservative",
                 "source_revision": source["source_revision"],
                 "source_sha256": source["source_sha256"],

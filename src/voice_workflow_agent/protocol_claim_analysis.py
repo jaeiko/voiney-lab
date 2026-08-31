@@ -29,11 +29,13 @@ from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
 from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
-CLAIM_SCHEMA_VERSION = 1
+CLAIM_SCHEMA_VERSION = 2
+EVIDENCE_SEGMENT_VERSION = 1
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024
 _MAX_TEXT_CHARS = 32 * 1024
+_MAX_EVIDENCE_SEGMENTS_PER_SPAN = 256
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 _NUMBERED_SOURCE_LINE = re.compile(
     r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,3})(?:[.)])?[ \t]+(?P<next>\S+)"
@@ -96,11 +98,13 @@ class ProtocolClaimConsistencyError(ValueError):
 
 @dataclass(frozen=True)
 class ClaimSourceEvidence:
-    """Independent immutable source identity for one proposed claim."""
+    """Server-resolved immutable source identity for one proposed claim."""
 
     source_revision: str
     source_sha256: str
     source_page_number: int
+    page_text_sha256: str
+    evidence_segment_ids: tuple[str, ...]
     source_excerpt: str
 
     def public_dict(self) -> dict[str, object]:
@@ -108,7 +112,28 @@ class ClaimSourceEvidence:
             "source_revision": self.source_revision,
             "source_sha256": self.source_sha256,
             "source_page_number": self.source_page_number,
+            "page_text_sha256": self.page_text_sha256,
+            "evidence_segment_ids": list(self.evidence_segment_ids),
             "source_excerpt": self.source_excerpt,
+        }
+
+
+@dataclass(frozen=True)
+class ProtocolEvidenceSegment:
+    """One deterministic, page-bounded unit of immutable extracted text."""
+
+    segment_id: str
+    source_revision: str
+    source_sha256: str
+    source_page_number: int
+    page_text_sha256: str
+    segment_index: int
+    text: str
+
+    def provider_dict(self) -> dict[str, object]:
+        return {
+            "segment_id": self.segment_id,
+            "text": self.text,
         }
 
 
@@ -223,16 +248,19 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "source_revision": {"type": "string"},
-        "source_sha256": {"type": "string"},
         "source_page_number": {"type": "integer", "minimum": 1},
-        "source_excerpt": {"type": "string"},
+        "page_text_sha256": {"type": "string"},
+        "evidence_segment_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
+            "items": {"type": "string"},
+        },
     },
     "required": [
-        "source_revision",
-        "source_sha256",
         "source_page_number",
-        "source_excerpt",
+        "page_text_sha256",
+        "evidence_segment_ids",
     ],
 }
 CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -362,13 +390,15 @@ step identity, and section identity. Parameter claims must target the action,
 material, or equipment claim they qualify. Use stable identifiers across page
 boundaries when a context page shows the beginning of the same source step.
 
-For every claim and structural marker, copy source_revision and source_sha256
-exactly from the request, cite a one-based core source page, and copy one exact
-contiguous source_excerpt from that page. source_text must itself be an exact
-contiguous substring of source_excerpt. Do not normalize whitespace, repair OCR,
-paraphrase, translate, merge passages, infer missing values, or add scientific
-knowledge. Explicit source ambiguity or a missing execution value is a blocking
-claim, never a guessed value.
+Each page is supplied as ordered evidence_segments. For every claim and
+structural marker, cite a one-based core source page, copy its page_text_sha256,
+and select one or more directly adjacent evidence_segment_ids in source order.
+Never return source_excerpt text. The server resolves the selected IDs to the
+exact immutable excerpt. source_text must itself be an exact contiguous
+substring of the selected segments. Do not normalize whitespace, repair OCR,
+paraphrase, translate, merge non-adjacent passages, infer missing values, or add
+scientific knowledge. Explicit source ambiguity or a missing execution value is
+a blocking claim, never a guessed value.
 
 Each supplied page_text_sha256 is an opaque, server-owned page identity. Copy the
 exact supplied value for the cited core page into its coverage record. Never
@@ -396,6 +426,68 @@ def _page_text_sha256(extraction: ProtocolPdfExtraction, page_number: int) -> st
     return hashlib.sha256(
         extraction.pages[page_number - 1].text.encode("utf-8")
     ).hexdigest()
+
+
+def generate_page_evidence_segments(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+    page_number: int,
+) -> tuple[ProtocolEvidenceSegment, ...]:
+    """Split one page at exact line and numbered-action boundaries."""
+
+    if (
+        not isinstance(source_revision, str)
+        or not source_revision.strip()
+        or not isinstance(page_number, int)
+        or isinstance(page_number, bool)
+        or page_number < 1
+        or page_number > extraction.page_count
+    ):
+        raise ValueError("Evidence segment source identity is invalid.")
+    page_text = extraction.pages[page_number - 1].text
+    boundaries = {0, len(page_text)}
+    offset = 0
+    for line in page_text.splitlines(keepends=True):
+        offset += len(line)
+        boundaries.add(offset)
+    for pattern in (_NUMBERED_SOURCE_LINE, _INLINE_NUMBERED_SOURCE):
+        boundaries.update(match.start("label") for match in pattern.finditer(page_text))
+    ordered_boundaries = sorted(boundaries)
+    segment_texts = tuple(
+        page_text[start:end]
+        for start, end in zip(ordered_boundaries, ordered_boundaries[1:])
+        if end > start
+    )
+    if "".join(segment_texts) != page_text:
+        raise ValueError("Evidence segments do not reconstruct the source page.")
+    page_hash = _page_text_sha256(extraction, page_number)
+    segments: list[ProtocolEvidenceSegment] = []
+    for segment_index, text in enumerate(segment_texts):
+        identity = {
+            "evidence_segment_version": EVIDENCE_SEGMENT_VERSION,
+            "source_revision": source_revision,
+            "source_sha256": extraction.sha256,
+            "source_page_number": page_number,
+            "page_text_sha256": page_hash,
+            "segment_index": segment_index,
+            "segment_text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+        segment_id = "seg-" + hashlib.sha256(
+            _canonical_json(identity).encode("utf-8")
+        ).hexdigest()
+        segments.append(
+            ProtocolEvidenceSegment(
+                segment_id=segment_id,
+                source_revision=source_revision,
+                source_sha256=extraction.sha256,
+                source_page_number=page_number,
+                page_text_sha256=page_hash,
+                segment_index=segment_index,
+                text=text,
+            )
+        )
+    return tuple(segments)
 
 
 def serialize_chunk_claim_analysis(
@@ -436,7 +528,14 @@ def prepare_chunk_claim_request(
                     "core" if page_number in set(core_page_refs) else "context"
                 ),
                 "page_text_sha256": _page_text_sha256(extraction, page_number),
-                "text": extraction.pages[page_number - 1].text,
+                "evidence_segments": [
+                    segment.provider_dict()
+                    for segment in generate_page_evidence_segments(
+                        extraction,
+                        source_revision=source_revision,
+                        page_number=page_number,
+                    )
+                ],
             }
             for page_number in context_page_refs + core_page_refs
         ],
@@ -478,14 +577,128 @@ def _identifier(value: object, location: str) -> str:
     return value
 
 
-def _source_pages_containing(
+def resolve_claim_source_evidence(
+    raw: object,
     extraction: ProtocolPdfExtraction,
-    excerpt: str,
-) -> tuple[int, ...]:
-    return tuple(
-        page.source_page_number
-        for page in extraction.pages
-        if excerpt in page.text
+    *,
+    source_revision: str,
+    core_pages: frozenset[int],
+    chunk_id: str,
+) -> ClaimSourceEvidence:
+    value = _expect_record(
+        raw,
+        {
+            "source_page_number",
+            "page_text_sha256",
+            "evidence_segment_ids",
+        },
+        "evidence",
+    )
+    page_number = value["source_page_number"]
+    valid_page = (
+        isinstance(page_number, int)
+        and not isinstance(page_number, bool)
+        and page_number in core_pages
+        and page_number <= extraction.page_count
+    )
+    if not valid_page:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence cites a page outside the active core chunk.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="source_identity_mismatch",
+                page_number=(page_number if isinstance(page_number, int) else None),
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    expected_page_hash = _page_text_sha256(extraction, page_number)
+    if value["page_text_sha256"] != expected_page_hash:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence has a mismatched immutable page identity.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="invalid_source_hash",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    raw_segment_ids = value["evidence_segment_ids"]
+    if (
+        not isinstance(raw_segment_ids, list)
+        or not 1 <= len(raw_segment_ids) <= _MAX_EVIDENCE_SEGMENTS_PER_SPAN
+        or any(
+            not isinstance(segment_id, str)
+            or not _STABLE_ID.fullmatch(segment_id)
+            for segment_id in raw_segment_ids
+        )
+    ):
+        raise ProtocolAnalysisResponseError(
+            "Chunk claim response has an invalid evidence segment list."
+        )
+    segment_ids = tuple(raw_segment_ids)
+    segments = generate_page_evidence_segments(
+        extraction,
+        source_revision=source_revision,
+        page_number=page_number,
+    )
+    segment_positions = {
+        segment.segment_id: segment.segment_index for segment in segments
+    }
+    if any(segment_id not in segment_positions for segment_id in segment_ids):
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence contains an unknown or stale segment identity.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="evidence_segment_unknown",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    positions = tuple(segment_positions[segment_id] for segment_id in segment_ids)
+    expected_positions = tuple(range(positions[0], positions[-1] + 1))
+    if positions != expected_positions:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence segments are reversed or non-contiguous.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="evidence_segment_range_invalid",
+                mismatch_class="non_contiguous_source_evidence",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    excerpt = "".join(segments[position].text for position in positions)
+    if not excerpt.strip() or len(excerpt) > _MAX_TEXT_CHARS:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence resolves to an invalid source span.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="evidence_segment_range_invalid",
+                mismatch_class="invalid_source_evidence",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    return ClaimSourceEvidence(
+        source_revision=source_revision,
+        source_sha256=extraction.sha256,
+        source_page_number=page_number,
+        page_text_sha256=expected_page_hash,
+        evidence_segment_ids=segment_ids,
+        source_excerpt=excerpt,
     )
 
 
@@ -497,68 +710,12 @@ def _decode_evidence(
     core_pages: frozenset[int],
     chunk_id: str,
 ) -> ClaimSourceEvidence:
-    value = _expect_record(
+    return resolve_claim_source_evidence(
         raw,
-        {
-            "source_revision",
-            "source_sha256",
-            "source_page_number",
-            "source_excerpt",
-        },
-        "evidence",
-    )
-    excerpt = _required_text(value["source_excerpt"], "source excerpt")
-    page_number = value["source_page_number"]
-    valid_page = (
-        isinstance(page_number, int)
-        and not isinstance(page_number, bool)
-        and page_number in core_pages
-        and page_number <= extraction.page_count
-    )
-    identity_matches = (
-        value["source_revision"] == source_revision
-        and value["source_sha256"] == extraction.sha256
-    )
-    if not valid_page or not identity_matches:
-        raise ProtocolAnalysisEvidenceError(
-            "Chunk claim evidence has a mismatched immutable source identity.",
-            diagnostic=ProtocolEvidenceDiagnostic(
-                validation_stage="chunk_claim_evidence_validation",
-                reason_code="chunk_identity_mismatch",
-                mismatch_class="source_identity_mismatch",
-                page_number=(page_number if isinstance(page_number, int) else None),
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
-                received_source_hash=(
-                    value["source_sha256"]
-                    if isinstance(value["source_sha256"], str)
-                    else None
-                ),
-            ),
-        )
-    page_text = extraction.pages[page_number - 1].text
-    if excerpt not in page_text:
-        raise ProtocolAnalysisEvidenceError(
-            "Chunk claim evidence is not an exact contiguous source excerpt.",
-            diagnostic=ProtocolEvidenceDiagnostic(
-                validation_stage="chunk_claim_evidence_validation",
-                reason_code="quote_not_found",
-                mismatch_class="fabricated_or_non_verbatim_quote",
-                page_number=page_number,
-                matching_source_pages=_source_pages_containing(extraction, excerpt),
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
-                quote_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
-                quote_length=len(excerpt),
-            ),
-        )
-    return ClaimSourceEvidence(
+        extraction,
         source_revision=source_revision,
-        source_sha256=extraction.sha256,
-        source_page_number=page_number,
-        source_excerpt=excerpt,
+        core_pages=core_pages,
+        chunk_id=chunk_id,
     )
 
 
@@ -983,8 +1140,34 @@ def validate_chunk_claim_analysis(
             raise ProtocolAnalysisResponseError(
                 "Decoded chunk claim evidence is malformed."
             )
+        try:
+            resolved_evidence = resolve_claim_source_evidence(
+                {
+                    "source_page_number": evidence.source_page_number,
+                    "page_text_sha256": evidence.page_text_sha256,
+                    "evidence_segment_ids": list(evidence.evidence_segment_ids),
+                },
+                extraction,
+                source_revision=source_revision,
+                core_pages=core,
+                chunk_id=chunk_id,
+            )
+        except (ProtocolAnalysisEvidenceError, ProtocolAnalysisResponseError) as exc:
+            raise ProtocolAnalysisEvidenceError(
+                "Decoded chunk claim evidence failed span revalidation.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="decoded_chunk_claim_validation",
+                    reason_code="evidence_segment_range_invalid",
+                    mismatch_class="claim_evidence_mismatch",
+                    page_number=evidence.source_page_number,
+                    chunk_id=chunk_id,
+                    source_revision=source_revision,
+                    source_hash=extraction.sha256,
+                ),
+            ) from exc
         if (
-            evidence.source_revision != source_revision
+            evidence != resolved_evidence
+            or evidence.source_revision != source_revision
             or evidence.source_sha256 != extraction.sha256
             or evidence.source_page_number not in core
             or evidence.source_excerpt

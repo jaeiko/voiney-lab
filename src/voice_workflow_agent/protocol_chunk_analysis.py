@@ -38,7 +38,7 @@ from voice_workflow_agent.experiment_protocol_pdf import (
 )
 
 
-PLANNER_VERSION = "evidence-claim-page-v2"
+PLANNER_VERSION = "evidence-claim-span-v3"
 _HARD_MAX_PAGES = 512
 _HARD_MAX_EXTRACTED_TEXT_BYTES = 8 * 1024 * 1024
 _HARD_MAX_CHUNKS = 64

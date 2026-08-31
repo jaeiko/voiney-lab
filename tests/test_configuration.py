@@ -261,18 +261,19 @@ class DeploymentConfigurationTests(unittest.TestCase):
             model=server._protocol_analysis_model()
         self.assertEqual(model.reasoning_effort,"medium")
 
-        with patch.dict(
-            os.environ,
-            {
-                "XAI_API_KEY":"fake-key",
-                "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
-                "PROTOCOL_ANALYSIS_REASONING_EFFORT":"unbounded",
-            },
-            clear=True,
-        ),patch.object(server,"OpenAI") as client:
-            with self.assertRaises(server.ServerConfigurationError):
-                server._protocol_analysis_model()
-        client.assert_not_called()
+        for invalid_effort in ("none", "unbounded"):
+            with self.subTest(invalid_effort=invalid_effort),patch.dict(
+                os.environ,
+                {
+                    "XAI_API_KEY":"fake-key",
+                    "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+                    "PROTOCOL_ANALYSIS_REASONING_EFFORT":invalid_effort,
+                },
+                clear=True,
+            ),patch.object(server,"OpenAI") as client:
+                with self.assertRaises(server.ServerConfigurationError):
+                    server._protocol_analysis_model()
+            client.assert_not_called()
 
 
 if __name__=="__main__":

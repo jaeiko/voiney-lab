@@ -46,6 +46,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_RESPONSE_SCHEMA,
+    CLAIM_SCHEMA_VERSION,
 )
 
 
@@ -85,6 +86,40 @@ def write_pages(path: Path, page_texts: tuple[str | None, ...]) -> None:
         writer.write(target)
 
 
+def page_text(page: dict[str, object]) -> str:
+    return "".join(
+        segment["text"] for segment in page["evidence_segments"]  # type: ignore[index]
+    )
+
+
+def evidence_for_excerpt(
+    page: dict[str, object], excerpt: str
+) -> dict[str, object]:
+    segments = page["evidence_segments"]
+    assert isinstance(segments, list)
+    text = page_text(page)
+    start = text.index(excerpt)
+    end = start + len(excerpt)
+    selected: list[str] = []
+    offset = 0
+    for segment in segments:
+        assert isinstance(segment, dict)
+        segment_text = segment["text"]
+        segment_id = segment["segment_id"]
+        assert isinstance(segment_text, str)
+        assert isinstance(segment_id, str)
+        segment_end = offset + len(segment_text)
+        if segment_end > start and offset < end:
+            selected.append(segment_id)
+        offset = segment_end
+    assert selected
+    return {
+        "source_page_number": page["source_page_number"],
+        "page_text_sha256": page["page_text_sha256"],
+        "evidence_segment_ids": selected,
+    }
+
+
 class FakeChunkModel:
     def __init__(self, *, conflict_on_page: int | None = None) -> None:
         self.calls = 0
@@ -109,12 +144,7 @@ class FakeChunkModel:
             if number == self.conflict_on_page:
                 instruction = f"{number}. Do conflicting action {number}."
             item_ids = []
-            evidence = lambda excerpt: {
-                "source_revision": source["source_revision"],
-                "source_sha256": source["source_sha256"],
-                "source_page_number": number,
-                "source_excerpt": excerpt,
-            }
+            evidence = lambda excerpt: evidence_for_excerpt(page, excerpt)
             if number == 1:
                 structure.append(
                     {
@@ -127,7 +157,7 @@ class FakeChunkModel:
                     }
                 )
                 item_ids.append("protocol-title")
-            if title in page["text"]:
+            if title in page_text(page):
                 marker_id = f"marker-section-{number}"
                 structure.append(
                     {
@@ -140,7 +170,7 @@ class FakeChunkModel:
                     }
                 )
                 item_ids.append(marker_id)
-            if instruction in page["text"]:
+            if instruction in page_text(page):
                 claim_id = f"action-{number}"
                 claims.append(
                     {
@@ -168,7 +198,7 @@ class FakeChunkModel:
                 }
             )
         response = {
-            "claim_schema_version": 1,
+            "claim_schema_version": CLAIM_SCHEMA_VERSION,
             "capability_policy_id": "p1-conservative",
             "source_revision": source["source_revision"],
             "source_sha256": source["source_sha256"],
@@ -353,10 +383,9 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         def outside_response(**kwargs):
             response = json.loads(original(**kwargs))
             response["claims"][0]["evidence"] = {
-                "source_revision": self.plan.candidate_revision_id,
-                "source_sha256": self.extraction.sha256,
                 "source_page_number": outside.source_page_number,
-                "source_excerpt": "Protocol Large",
+                "page_text_sha256": "0" * 64,
+                "evidence_segment_ids": ["seg-" + "0" * 64],
             }
             return json.dumps(response)
 
