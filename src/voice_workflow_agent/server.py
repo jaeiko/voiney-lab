@@ -224,7 +224,15 @@ from voice_workflow_agent.workspace_store import (
 )
 
 PROJECT_ROOT=Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _load_project_environment(path:Path|None=None)->bool:
+    """Load development values without overriding the process environment."""
+
+    return load_dotenv(path or PROJECT_ROOT/".env",override=False)
+
+
+_load_project_environment()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voice_workflow_agent")
 
@@ -2006,6 +2014,168 @@ async def update_workspace_retention(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+def _workspace_catalog_analysis_gate(
+    principal: Principal,
+    workspace,
+    revision_id: str,
+) -> dict[str, object] | None:
+    """Project the live catalog gate for one local-PDF workspace revision."""
+
+    revision = workspace.get_revision(principal, revision_id)
+    source = workspace.source_for_revision(principal, revision_id)
+    if source.connector_kind != "local_pdf":
+        return None
+    protocol_id = source.metadata.get("catalog_protocol_id")
+    execution_identity = revision.content.get("execution_identity")
+    if not isinstance(execution_identity, dict):
+        execution_identity = {}
+    recorded_protocol_id = execution_identity.get("protocol_id")
+    recorded_source_hash = execution_identity.get("source_sha256")
+    base: dict[str, object] = {
+        "kind": "catalog_structured_analysis",
+        "catalog_protocol_id": (
+            protocol_id if isinstance(protocol_id, str) else None
+        ),
+        "workspace_revision_id": revision_id,
+        "source_hash": source.source_hash,
+        "candidate_revision_id": None,
+        "analysis_status": "analysis_unavailable",
+        "failure_code": None,
+        "failure_detail": None,
+        "readiness_status": "analysis_required",
+        "execution_approval_allowed": False,
+        "available_for_execution": False,
+        "representation": "recovery_triage",
+        "action": "Regenerate valid structured analysis before approval.",
+    }
+    if (
+        not isinstance(protocol_id, str)
+        or not protocol_id
+        or recorded_protocol_id != protocol_id
+        or recorded_source_hash != source.source_hash
+        or revision.source_hash != source.source_hash
+        or source.version_identity != source.source_hash
+    ):
+        base.update(
+            {
+                "analysis_status": "invalid_source_revision",
+                "failure_code": "invalid_source_revision",
+                "action": "Repair the immutable source/revision binding before review.",
+            }
+        )
+        return base
+    try:
+        _scope_catalog_resource(protocol_id)
+        catalog, catalog_store = _open_protocol_catalog()
+        try:
+            entry = catalog.get_entry(protocol_id)
+            review = catalog.review(protocol_id)
+        finally:
+            catalog_store.close()
+    except (
+        HTTPException,
+        ProtocolCatalogError,
+        ProtocolConfigurationError,
+        ProtocolFeatureDisabledError,
+    ):
+        base["failure_code"] = "protocol_catalog_unavailable"
+        base["action"] = "Restore the catalog before review or approval."
+        return base
+    analysis_failure = review.get("analysis_failure")
+    readiness = review.get("readiness")
+    readiness_status = (
+        readiness.get("status")
+        if isinstance(readiness, dict)
+        and isinstance(readiness.get("status"), str)
+        else "analysis_required"
+    )
+    failure_code = (
+        analysis_failure.get("code")
+        if isinstance(analysis_failure, dict)
+        and isinstance(analysis_failure.get("code"), str)
+        else None
+    )
+    failure_detail = (
+        analysis_failure.get("detail")
+        if isinstance(analysis_failure, dict)
+        and isinstance(analysis_failure.get("detail"), dict)
+        else None
+    )
+    exact_source = entry.source_sha256 == source.source_hash
+    analyzed_revision = (
+        review.get("analysis_available") is True
+        and entry.revision_id.startswith("pdf-")
+        and "-analysis-" in entry.revision_id
+    )
+    approval_allowed = bool(
+        exact_source
+        and analyzed_revision
+        and readiness_status == "guidance_ready"
+    )
+    if not exact_source:
+        status = "invalid_source_revision"
+        failure_code = "invalid_source_revision"
+        action = "Regenerate analysis for this exact immutable source revision."
+    elif failure_code is not None:
+        status = "analysis_failed"
+        action = "Retry structured analysis; this item is recovery/triage only."
+    elif not analyzed_revision:
+        status = entry.analysis_status
+        action = "Complete structured analysis before execution approval."
+    elif readiness_status != "guidance_ready":
+        status = "analysis_not_ready"
+        action = "Resolve readiness and safety blockers before approval."
+    elif entry.approval_status == "approved":
+        status = "approved"
+        action = "The exact analyzed revision is already execution-approved."
+    else:
+        status = "approval_ready"
+        action = "Approve this exact analyzed revision for Researcher execution."
+    base.update(
+        {
+            "candidate_revision_id": (
+                entry.revision_id if analyzed_revision else None
+            ),
+            "analysis_status": status,
+            "failure_code": failure_code,
+            "failure_detail": failure_detail,
+            "readiness_status": readiness_status,
+            "execution_approval_allowed": approval_allowed,
+            "available_for_execution": entry.available_for_execution,
+            "representation": (
+                "execution_approval"
+                if approval_allowed
+                else "recovery_triage"
+            ),
+            "action": action,
+        }
+    )
+    return base
+
+
+def _apply_workspace_catalog_gate(
+    packet: dict[str, object],
+    gate: dict[str, object] | None,
+) -> dict[str, object]:
+    if gate is None:
+        return packet
+    packet["catalog_analysis_gate"] = gate
+    decision_state = packet.get("decision_state")
+    if not isinstance(decision_state, dict):
+        return packet
+    actions = decision_state.get("allowed_actions")
+    allowed = list(actions) if isinstance(actions, list) else []
+    if gate.get("execution_approval_allowed") is not True:
+        allowed = [action for action in allowed if action != "approved"]
+    decision_state["allowed_actions"] = allowed
+    decision_state["available_for_new_operational_sessions"] = bool(
+        decision_state.get("state") == "approved"
+        and gate.get("available_for_execution") is True
+    )
+    decision_state["execution_gate_state"] = gate.get("analysis_status")
+    return packet
+
+
 @app.get("/api/workspace/reviewer/inbox")
 def get_workspace_reviewer_inbox()->dict[str,object]:
     try:
@@ -2024,7 +2194,15 @@ def get_workspace_revision_diff(revision_id:str)->dict[str,object]:
         principal,store=_commercial_workspace()
         try:
             require_permission(principal,Permission.PROTOCOL_REVIEW)
-            return store.revision_diff(principal,revision_id)
+            packet=store.revision_diff(principal,revision_id)
+            return _apply_workspace_catalog_gate(
+                packet,
+                _workspace_catalog_analysis_gate(
+                    principal,
+                    store,
+                    revision_id,
+                ),
+            )
         finally:
             store.close()
     except Exception as exc:
@@ -2037,16 +2215,82 @@ async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,o
     try:
         principal,store=_commercial_workspace()
         try:
+            action=str(payload.get("action", ""))
+            comment=str(payload.get("comment", ""))
+            idempotency_key=str(payload.get("idempotency_key", ""))
+            replacement_revision_id=(
+                str(payload["replacement_revision_id"])
+                if payload.get("replacement_revision_id") else None
+            )
+            gate=_workspace_catalog_analysis_gate(
+                principal,
+                store,
+                revision_id,
+            )
+            catalog_entry=None
+            if action=="approved" and gate is not None:
+                packet=_apply_workspace_catalog_gate(
+                    store.revision_diff(principal,revision_id),
+                    gate,
+                )
+                decision_state=packet.get("decision_state")
+                allowed=(
+                    decision_state.get("allowed_actions",[])
+                    if isinstance(decision_state,dict) else []
+                )
+                if (
+                    gate.get("execution_approval_allowed") is not True
+                    or "approved" not in allowed
+                ):
+                    raise WorkspaceConflictError(
+                        "Valid structured analysis of this exact source revision "
+                        "is required before execution approval."
+                    )
+                if (
+                    not comment.strip()
+                    or len(comment)>4000
+                    or re.fullmatch(
+                        r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",
+                        idempotency_key,
+                    ) is None
+                ):
+                    raise WorkspaceError("Approval request is invalid.")
+                protocol_id=gate.get("catalog_protocol_id")
+                candidate_revision_id=gate.get("candidate_revision_id")
+                if not isinstance(protocol_id,str) or not isinstance(
+                    candidate_revision_id,str
+                ):
+                    raise WorkspaceConflictError(
+                        "Catalog analysis identity is unavailable."
+                    )
+                catalog,catalog_store=_open_protocol_catalog()
+                try:
+                    role=next(
+                        item.value for item in principal.roles
+                        if item.value in {
+                            "reviewer","lab_admin","organization_admin",
+                        }
+                    )
+                    catalog_entry=catalog.approve(
+                        protocol_id,
+                        candidate_revision_id,
+                        policy=SharedSecretApprovalPolicy(
+                            "tenant-rbac-authorized"
+                        ),
+                        presented_secret="tenant-rbac-authorized",
+                        actor_principal_id=principal.principal_id,
+                        actor_role=role,
+                        comment=comment,
+                    )
+                finally:
+                    catalog_store.close()
             event=store.record_approval(
                 principal,
                 revision_id=revision_id,
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
-                idempotency_key=str(payload.get("idempotency_key", "")),
-                replacement_revision_id=(
-                    str(payload["replacement_revision_id"])
-                    if payload.get("replacement_revision_id") else None
-                ),
+                action=action,
+                comment=comment,
+                idempotency_key=idempotency_key,
+                replacement_revision_id=replacement_revision_id,
             )
             store.record_analytics(
                 principal,
@@ -2054,7 +2298,18 @@ async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,o
                 metric_name="review_decision",
                 dimensions={"status":event.action,"event_kind":"approval"},
             )
-            return {"event":event.__dict__,"state":store.revision_operational_state(principal,revision_id)}
+            state=store.revision_operational_state(principal,revision_id)
+            if catalog_entry is not None:
+                state.update(
+                    {
+                        "catalog_protocol_id":catalog_entry.protocol_id,
+                        "catalog_revision_id":catalog_entry.revision_id,
+                        "available_for_new_operational_sessions":(
+                            catalog_entry.available_for_execution
+                        ),
+                    }
+                )
+            return {"event":event.__dict__,"state":state}
         finally:
             store.close()
     except Exception as exc:
@@ -3352,9 +3607,28 @@ async def trigger_protocol_analysis(
         except Exception as exc:
             # The catalog persists bounded failure codes.  Provider responses,
             # prompts, and source text never enter logs or the lifecycle record.
+            diagnostic = getattr(exc, "diagnostic", None)
+            evidence_failure = (
+                diagnostic.public_dict()
+                if diagnostic is not None
+                and callable(getattr(diagnostic, "public_dict", None))
+                else {}
+            )
             log.warning(
-                "protocol.analysis.background_failed protocol_id=%s error=%s",
-                protocol_id,type(exc).__name__,
+                "protocol.analysis.background_failed error=%s stage=%s "
+                "evidence_item_index=%s evidence_type=%s page_number=%s "
+                "chunk_id=%s source_revision=%s reason_code=%s "
+                "mismatch_class=%s source_hash=%s",
+                type(exc).__name__,
+                evidence_failure.get("validation_stage"),
+                evidence_failure.get("evidence_item_index"),
+                evidence_failure.get("evidence_type"),
+                evidence_failure.get("page_number"),
+                evidence_failure.get("chunk_id"),
+                evidence_failure.get("source_revision"),
+                evidence_failure.get("reason_code"),
+                evidence_failure.get("mismatch_class"),
+                evidence_failure.get("source_hash"),
             )
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",

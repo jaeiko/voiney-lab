@@ -22,6 +22,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisError,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisModel,
+    ProtocolEvidenceDiagnostic,
     analyze_protocol_extraction,
     prepare_protocol_analysis_request,
     validate_protocol_analysis_evidence,
@@ -437,7 +438,15 @@ def analyze_protocol_chunk(
     """Analyze and re-check one exact chunk through the production boundary."""
 
     scoped = extraction_for_chunk(extraction, chunk)
-    draft = analyze_protocol_extraction(scoped, model)
+    try:
+        draft = analyze_protocol_extraction(scoped, model)
+    except ProtocolAnalysisEvidenceError as exc:
+        exc.enrich_diagnostic(
+            chunk_id=chunk.chunk_id,
+            source_revision=chunk.candidate_revision_id,
+            source_hash=chunk.document_id,
+        )
+        raise
     protocol = draft.protocol
     if protocol.protocol_id != chunk.protocol_id:
         protocol = replace(protocol, protocol_id=chunk.protocol_id)
@@ -460,7 +469,15 @@ def analyze_protocol_chunk(
         for evidence in _iter_evidence(draft.protocol)
     ):
         raise ProtocolAnalysisEvidenceError(
-            "Chunk analysis cites a source page outside its chunk."
+            "Chunk analysis cites a source page outside its chunk.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_scope_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="chunk_page_scope_mismatch",
+                chunk_id=chunk.chunk_id,
+                source_revision=chunk.candidate_revision_id,
+                source_hash=chunk.document_id,
+            ),
         )
     return draft
 

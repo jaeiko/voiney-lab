@@ -22,6 +22,7 @@ from voice_workflow_agent.curated_protocol import CuratedProtocolFixture
 from voice_workflow_agent.experiment_protocol_analysis import (
     MAX_SINGLE_PASS_INPUT_BYTES,
     ProtocolAnalysisDraft,
+    ProtocolAnalysisEvidenceError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolAnalysisModel,
     analyze_protocol_extraction,
@@ -211,6 +212,7 @@ class ProtocolAnalysisRunStatus:
     pending_chunks: int
     chunks: tuple[dict[str, object], ...]
     failure_code: str | None = None
+    failure_detail: dict[str, object] | None = None
     merge_status: str | None = None
     restart_behavior: str = "explicit_analysis_request_only"
     lifecycle_state: str = "uploaded"
@@ -227,6 +229,7 @@ class ProtocolAnalysisRunStatus:
             "pending_chunks": self.pending_chunks,
             "chunks": list(self.chunks),
             "failure_code": self.failure_code,
+            "failure_detail": self.failure_detail,
             "merge_status": self.merge_status,
             "restart_behavior": self.restart_behavior,
             "lifecycle_state": self.lifecycle_state,
@@ -314,6 +317,23 @@ def _safe_failure_code(exc: BaseException) -> str:
     return value
 
 
+def _safe_evidence_failure(
+    exc: BaseException,
+    *,
+    source_revision: str,
+    source_hash: str,
+    chunk_id: str | None = None,
+) -> dict[str, object] | None:
+    if not isinstance(exc, ProtocolAnalysisEvidenceError):
+        return None
+    exc.enrich_diagnostic(
+        source_revision=source_revision,
+        source_hash=source_hash,
+        **({"chunk_id": chunk_id} if chunk_id is not None else {}),
+    )
+    return exc.diagnostic.public_dict()
+
+
 def _chunk_run_lock(analysis_run_id: str) -> threading.Lock:
     stripe = int(
         hashlib.sha256(analysis_run_id.encode("utf-8")).hexdigest()[:8],
@@ -327,16 +347,36 @@ def _worker_analyze_chunk(
     chunk,
     model: ProtocolAnalysisModel,
     max_retries: int,
-) -> tuple[ProtocolAnalysisDraft | None, int, str | None]:
+) -> tuple[
+    ProtocolAnalysisDraft | None,
+    int,
+    str | None,
+    dict[str, object] | None,
+]:
     attempts = 0
     while attempts <= max_retries:
         attempts += 1
         try:
-            return analyze_protocol_chunk(extraction, chunk, model), attempts, None
+            return (
+                analyze_protocol_chunk(extraction, chunk, model),
+                attempts,
+                None,
+                None,
+            )
         except Exception as exc:
             if attempts > max_retries:
-                return None, attempts, _safe_failure_code(exc)
-    return None, attempts, "chunk_analysis_failed"
+                return (
+                    None,
+                    attempts,
+                    _safe_failure_code(exc),
+                    _safe_evidence_failure(
+                        exc,
+                        source_revision=chunk.candidate_revision_id,
+                        source_hash=chunk.document_id,
+                        chunk_id=chunk.chunk_id,
+                    ),
+                )
+    return None, attempts, "chunk_analysis_failed", None
 
 
 class ProtocolCatalog:
@@ -838,6 +878,18 @@ class ProtocolCatalog:
                 ),
                 None,
             )
+            latest_failure_detail = next(
+                (
+                    event.payload.get("evidence_failure")
+                    for event in reversed(lifecycle_events)
+                    if event.event_type == _ANALYSIS_FAILED_EVENT
+                    and isinstance(event.payload, dict)
+                    and isinstance(
+                        event.payload.get("evidence_failure"), dict
+                    )
+                ),
+                None,
+            )
             analysis_run_id = next(
                 (
                     event.payload.get("analysis_id")
@@ -867,6 +919,7 @@ class ProtocolCatalog:
                 pending_chunks=0,
                 chunks=(),
                 failure_code=latest_failure,
+                failure_detail=latest_failure_detail,
                 lifecycle_state=entry.lifecycle_state,
             )
         plan_event = next(
@@ -875,24 +928,41 @@ class ProtocolCatalog:
         plan_payload = plan_event.payload
         raw_chunks = plan_payload.get("chunks", [])
         chunks: list[dict[str, object]] = []
-        statuses: dict[str, tuple[str, str | None]] = {}
+        statuses: dict[
+            str,
+            tuple[str, str | None, dict[str, object] | None],
+        ] = {}
         state = "chunk_planned"
         failure_code = None
+        failure_detail = None
         merge_status = None
         cancelled = False
         for event in events:
             payload = event.payload
             if event.event_type == _CHUNK_STARTED_EVENT:
                 state = "chunk_analysis_in_progress"
-                statuses[str(payload.get("chunk_id"))] = ("in_progress", None)
+                statuses[str(payload.get("chunk_id"))] = (
+                    "in_progress",
+                    None,
+                    None,
+                )
             elif event.event_type == _CHUNK_COMPLETED_EVENT:
-                statuses[str(payload.get("chunk_id"))] = ("completed", None)
+                statuses[str(payload.get("chunk_id"))] = (
+                    "completed",
+                    None,
+                    None,
+                )
             elif event.event_type == _CHUNK_FAILED_EVENT:
                 code = payload.get("failure_code")
                 failure_code = code if isinstance(code, str) else "chunk_analysis_failed"
+                raw_detail = payload.get("evidence_failure")
+                detail = raw_detail if isinstance(raw_detail, dict) else None
+                if detail is not None:
+                    failure_detail = detail
                 statuses[str(payload.get("chunk_id"))] = (
                     "failed",
                     failure_code,
+                    detail,
                 )
                 state = "chunk_analysis_failed"
             elif event.event_type == _MERGE_STARTED_EVENT:
@@ -921,18 +991,22 @@ class ProtocolCatalog:
             if not isinstance(raw, dict) or not isinstance(raw.get("chunk_id"), str):
                 continue
             chunk_id = raw["chunk_id"]
-            status, code = statuses.get(chunk_id, ("pending", None))
-            chunks.append(
-                {
-                    "chunk_id": chunk_id,
-                    "ordinal": raw.get("ordinal"),
-                    "source_page_start": raw.get("source_page_start"),
-                    "source_page_end": raw.get("source_page_end"),
-                    "source_page_refs": raw.get("source_page_refs", []),
-                    "status": status,
-                    "failure_code": code,
-                }
+            status, code, detail = statuses.get(
+                chunk_id,
+                ("pending", None, None),
             )
+            chunk_status: dict[str, object] = {
+                "chunk_id": chunk_id,
+                "ordinal": raw.get("ordinal"),
+                "source_page_start": raw.get("source_page_start"),
+                "source_page_end": raw.get("source_page_end"),
+                "source_page_refs": raw.get("source_page_refs", []),
+                "status": status,
+                "failure_code": code,
+            }
+            if detail is not None:
+                chunk_status["failure_detail"] = detail
+            chunks.append(chunk_status)
         completed = sum(chunk["status"] == "completed" for chunk in chunks)
         failed = sum(chunk["status"] == "failed" for chunk in chunks)
         return ProtocolAnalysisRunStatus(
@@ -946,6 +1020,7 @@ class ProtocolCatalog:
             pending_chunks=len(chunks) - completed - failed,
             chunks=tuple(chunks),
             failure_code=failure_code,
+            failure_detail=failure_detail,
             merge_status=merge_status,
             restart_behavior=(
                 "terminal_review_required"
@@ -1243,6 +1318,17 @@ class ProtocolCatalog:
             ),
             None,
         )
+        latest_failure_detail = next(
+            (
+                event.payload.get("evidence_failure")
+                for event in reversed(revision_events)
+                if event.event_type
+                in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+                and isinstance(event.payload, dict)
+                and isinstance(event.payload.get("evidence_failure"), dict)
+            ),
+            None,
+        )
         base: dict[str, object] = {
             **entry.public_dict(),
             "analysis_available": analysis is not None,
@@ -1250,6 +1336,7 @@ class ProtocolCatalog:
             "analysis_failure": (
                 {
                     "code": latest_failure,
+                    "detail": latest_failure_detail,
                     "retryable": latest_failure
                     not in {"ocr_required", "protocol_pdf_too_large"},
                     "action": (
@@ -1604,20 +1691,30 @@ class ProtocolCatalog:
                 failed = timed_out
                 for future in done:
                     chunk = futures[future]
-                    draft, attempts, failure_code = future.result()
+                    (
+                        draft,
+                        attempts,
+                        failure_code,
+                        evidence_failure,
+                    ) = future.result()
                     if draft is None:
+                        failure_payload: dict[str, object] = {
+                            "chunk_id": chunk.chunk_id,
+                            "ordinal": chunk.ordinal,
+                            "status": "failed",
+                            "attempts": attempts,
+                            "failure_code": failure_code
+                            or "chunk_analysis_failed",
+                        }
+                        if evidence_failure is not None:
+                            failure_payload["evidence_failure"] = (
+                                evidence_failure
+                            )
                         self._append_chunk_event(
                             revision,
                             plan,
                             _CHUNK_FAILED_EVENT,
-                            {
-                                "chunk_id": chunk.chunk_id,
-                                "ordinal": chunk.ordinal,
-                                "status": "failed",
-                                "attempts": attempts,
-                                "failure_code": failure_code
-                                or "chunk_analysis_failed",
-                            },
+                            failure_payload,
                             chunk.chunk_id,
                             "failed",
                         )
@@ -1784,12 +1881,23 @@ class ProtocolCatalog:
             failure_digest = hashlib.sha256(
                 analysis_id.encode("utf-8")
             ).hexdigest()[:24]
+            failure_payload: dict[str, object] = {
+                "status": "failed",
+                "failure_code": failure_code,
+            }
+            evidence_failure = _safe_evidence_failure(
+                exc,
+                source_revision=_revision_id(revision.revision_number),
+                source_hash=revision.pdf_checksum,
+            )
+            if evidence_failure is not None:
+                failure_payload["evidence_failure"] = evidence_failure
             self.store.append_event(
                 f"analysis-failed-{failure_digest}",
                 protocol_id,
                 revision.revision_number,
                 _ANALYSIS_FAILED_EVENT,
-                {"status": "failed", "failure_code": failure_code},
+                failure_payload,
             )
             raise
         if draft.protocol.protocol_id != protocol_id:

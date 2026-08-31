@@ -3,6 +3,15 @@ import { test, expect } from '@playwright/test';
 test.describe.configure({ timeout: 45_000 });
 
 async function openAdminWorkspace(page) {
+  // Admin behavior does not depend on protocol catalog contents. Keep these
+  // tests isolated from large-PDF extraction still running after page close.
+  await page.route('**/api/protocols', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ protocols: [] }),
+    });
+  });
   await page.goto('/');
   await page.locator('#workspace-admin').waitFor({ state: 'visible', timeout: 20_000 });
   await page.locator('#workspace-admin').click();
@@ -98,7 +107,6 @@ test.describe('Lab Admin workspace', () => {
     });
 
     await openAdminWorkspace(page);
-    await page.waitForLoadState('networkidle');
     await expect(page.locator('#admin-connectors')).toContainText('구성 검사 필요');
     await expect(page.getByRole('button', { name: '연결 활성화' })).toHaveCount(0);
     await page.getByRole('button', { name: '구성 검사' }).click();
@@ -110,6 +118,7 @@ test.describe('Lab Admin workspace', () => {
 
   test('desktop and tablet layouts keep one centered column without overflow', async ({ page }) => {
     await openAdminWorkspace(page);
+    await expect(page.locator('#admin-connectors')).not.toHaveText('', { timeout: 15_000 });
     await page.evaluate(() => {
       const memberships = document.querySelector('#admin-memberships');
       memberships.replaceChildren(workspaceRow(
@@ -163,7 +172,6 @@ test.describe('Lab Admin workspace', () => {
       expect(layout.hintDisplay).toBe('none');
     }
     expect(layout.horizontalOverflow).toBeLessThanOrEqual(1);
-    await expect(page.locator('#admin-connectors')).not.toHaveText('');
     await expect(page.locator('#admin-security-activity')).toContainText('Local Lab Admin');
   });
 

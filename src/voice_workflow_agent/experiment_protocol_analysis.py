@@ -9,8 +9,10 @@ optional persistence to the existing Slice 2 and Slice 3 contracts.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import types
+import unicodedata
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -62,10 +64,13 @@ change units, numbers, symbols, punctuation, or scientific notation, or cite
 text from a different page. Omit unsupported optional or list claims instead
 of inventing evidence. Every schema-required evidence object must be grounded
 in an exact excerpt from its cited page. Preserve exact scientific wording and
-Unicode units. Never guess missing values. Return exactly one JSON object with
-no prose, Markdown, or code fences. The response is an unapproved draft; do
-not describe it as confirmed, executable, scientifically validated, or
-approved.
+Unicode units. If an optional list item cannot carry a verbatim excerpt, omit
+that entire item. Never synthesize an excerpt from the item's claim, and never
+use a summary as evidence. The evidence validator compares the returned quote
+to the selected immutable page and rejects the complete response when the quote
+is absent. Never guess missing values. Return exactly one JSON object with no
+prose, Markdown, or code fences. The response is an unapproved draft; do not
+describe it as confirmed, executable, scientifically validated, or approved.
 """
 
 _CONSTRUCT_TYPES = {
@@ -223,8 +228,78 @@ class ProtocolAnalysisResponseError(ProtocolAnalysisError):
     code = "protocol_analysis_invalid_response"
 
 
+@dataclass(frozen=True)
+class ProtocolEvidenceDiagnostic:
+    """Privacy-safe metadata for one fail-closed evidence rejection."""
+
+    validation_stage: str
+    reason_code: str
+    mismatch_class: str
+    evidence_index: int | None = None
+    evidence_type: str | None = None
+    field_path: str | None = None
+    page_number: int | None = None
+    matching_source_pages: tuple[int, ...] = ()
+    chunk_id: str | None = None
+    source_revision: str | None = None
+    source_hash: str | None = None
+    received_source_hash: str | None = None
+    quote_sha256: str | None = None
+    quote_length: int | None = None
+
+    def public_dict(self) -> dict[str, object]:
+        """Return only bounded identities and reason codes, never source text."""
+
+        values: dict[str, object] = {
+            "validation_stage": self.validation_stage,
+            "reason_code": self.reason_code,
+            "mismatch_class": self.mismatch_class,
+        }
+        optional = {
+            "evidence_item_index": self.evidence_index,
+            "evidence_type": self.evidence_type,
+            "field_path": self.field_path,
+            "page_number": self.page_number,
+            "chunk_id": self.chunk_id,
+            "source_revision": self.source_revision,
+            "source_hash": self.source_hash,
+            "received_source_hash": self.received_source_hash,
+            "quote_sha256": self.quote_sha256,
+            "quote_length": self.quote_length,
+        }
+        values.update(
+            (key, value) for key, value in optional.items() if value is not None
+        )
+        if self.matching_source_pages:
+            values["matching_source_pages"] = list(
+                self.matching_source_pages
+            )
+        return values
+
+
 class ProtocolAnalysisEvidenceError(ProtocolAnalysisError):
     code = "protocol_analysis_invalid_evidence"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic: ProtocolEvidenceDiagnostic | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic or ProtocolEvidenceDiagnostic(
+            validation_stage="evidence_validation",
+            reason_code="invalid_evidence",
+            mismatch_class="evidence_contract_violation",
+        )
+
+    def enrich_diagnostic(self, **changes: object) -> None:
+        """Attach caller-owned identities without exposing evidence content."""
+
+        allowed = {field.name for field in fields(ProtocolEvidenceDiagnostic)}
+        if set(changes) - allowed:
+            raise ValueError("Evidence diagnostic field is unsupported.")
+        self.diagnostic = replace(self.diagnostic, **changes)
 
 
 class ProtocolAnalysisPersistenceError(ProtocolAnalysisError):
@@ -557,25 +632,119 @@ class _DomainDecoder:
 def _normalized_text_with_bounds(
     value: str,
 ) -> tuple[str, list[int], list[int]]:
+    """Canonicalize representation-only differences and retain source bounds.
+
+    NFC handles canonically equivalent Unicode without accepting compatibility
+    substitutions such as circled numbers or alternate unit glyphs. Soft
+    hyphens are layout controls, and whitespace runs are representation-only.
+    Accepted excerpts are always projected back to the original source span.
+    """
+
     normalized: list[str] = []
     starts: list[int] = []
     ends: list[int] = []
+    units: list[tuple[str, int, int, bool]] = []
     index = 0
     while index < len(value):
         if value[index].isspace():
             start = index
             while index < len(value) and value[index].isspace():
                 index += 1
-            if normalized and index < len(value):
-                normalized.append(" ")
-                starts.append(start)
-                ends.append(index)
+            units.append((" ", start, index, True))
             continue
-        normalized.append(value[index])
-        starts.append(index)
+        if value[index] == "\u00ad":
+            index += 1
+            continue
+        start = index
         index += 1
-        ends.append(index)
+        while index < len(value) and unicodedata.combining(value[index]):
+            index += 1
+        canonical = unicodedata.normalize("NFC", value[start:index])
+        if canonical:
+            units.append((canonical, start, index, False))
+    while units and units[0][3]:
+        units.pop(0)
+    while units and units[-1][3]:
+        units.pop()
+    previous_whitespace = False
+    for canonical, start, end, whitespace in units:
+        if whitespace and previous_whitespace:
+            continue
+        previous_whitespace = whitespace
+        for character in canonical:
+            normalized.append(character)
+            starts.append(start)
+            ends.append(end)
     return "".join(normalized), starts, ends
+
+
+def _canonical_match_spans(
+    source_text: str,
+    excerpt: str,
+) -> tuple[tuple[int, int], ...]:
+    canonical_source, starts, ends = _normalized_text_with_bounds(source_text)
+    canonical_excerpt, _, _ = _normalized_text_with_bounds(excerpt)
+    if not canonical_excerpt:
+        return ()
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    while True:
+        match_index = canonical_source.find(canonical_excerpt, offset)
+        if match_index < 0:
+            break
+        spans.append(
+            (
+                starts[match_index],
+                ends[match_index + len(canonical_excerpt) - 1],
+            )
+        )
+        offset = match_index + 1
+    return tuple(dict.fromkeys(spans))
+
+
+def _matching_source_pages(
+    excerpt: str,
+    extraction: ProtocolPdfExtraction,
+) -> tuple[int, ...]:
+    return tuple(
+        page.source_page_number
+        for page in extraction.pages
+        if excerpt in page.text or _canonical_match_spans(page.text, excerpt)
+    )
+
+
+def _evidence_diagnostic(
+    extraction: ProtocolPdfExtraction,
+    evidence: domain.SourceEvidence,
+    *,
+    reason_code: str,
+    mismatch_class: str,
+    matching_source_pages: tuple[int, ...] = (),
+) -> ProtocolEvidenceDiagnostic:
+    excerpt = (
+        evidence.source_excerpt
+        if isinstance(evidence.source_excerpt, str)
+        else ""
+    )
+    return ProtocolEvidenceDiagnostic(
+        validation_stage="source_evidence_verification",
+        reason_code=reason_code,
+        mismatch_class=mismatch_class,
+        page_number=(
+            evidence.source_page_number
+            if isinstance(evidence.source_page_number, int)
+            and not isinstance(evidence.source_page_number, bool)
+            else None
+        ),
+        matching_source_pages=matching_source_pages,
+        source_hash=extraction.sha256,
+        quote_sha256=(
+            hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+            if excerpt
+            else None
+        ),
+        quote_length=len(excerpt) if excerpt else None,
+    )
 
 
 def _verified_evidence(
@@ -589,14 +758,26 @@ def _verified_evidence(
         or evidence.source_page_number > extraction.page_count
     ):
         raise ProtocolAnalysisEvidenceError(
-            "Protocol evidence references an unavailable source page."
+            "Protocol evidence references an unavailable source page.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="page_not_found",
+                mismatch_class="page_identity_mismatch",
+            ),
         )
     if (
         not isinstance(evidence.source_excerpt, str)
         or not evidence.source_excerpt.strip()
     ):
         raise ProtocolAnalysisEvidenceError(
-            "Protocol evidence contains an invalid source excerpt."
+            "Protocol evidence contains an invalid source excerpt.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="missing_evidence",
+                mismatch_class="schema_evidence_missing",
+            ),
         )
     detail = evidence.location_detail
     if detail is not None and (
@@ -604,41 +785,94 @@ def _verified_evidence(
         or _WINDOWS_ABSOLUTE_PATH.match(detail)
     ):
         raise ProtocolAnalysisEvidenceError(
-            "Protocol evidence cannot contain an absolute source path."
+            "Protocol evidence cannot contain an absolute source path.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="invalid_location_detail",
+                mismatch_class="unsafe_location_identity",
+            ),
         )
     page_text = extraction.pages[evidence.source_page_number - 1].text
     if evidence.source_excerpt in page_text:
         return evidence
-    normalized_page, starts, ends = _normalized_text_with_bounds(page_text)
-    normalized_excerpt, _, _ = _normalized_text_with_bounds(
-        evidence.source_excerpt
-    )
-    match_index = normalized_page.find(normalized_excerpt)
-    if match_index < 0 or not normalized_excerpt:
-        raise ProtocolAnalysisEvidenceError(
-            "Protocol evidence is not present on its referenced source page."
+    spans = _canonical_match_spans(page_text, evidence.source_excerpt)
+    if not spans:
+        matching_pages = _matching_source_pages(
+            evidence.source_excerpt,
+            extraction,
         )
-    original_start = starts[match_index]
-    original_end = ends[match_index + len(normalized_excerpt) - 1]
+        raise ProtocolAnalysisEvidenceError(
+            "Protocol evidence is not present on its referenced source page.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="quote_not_found",
+                mismatch_class=(
+                    "page_identity_mismatch"
+                    if matching_pages
+                    else "fabricated_or_non_verbatim_quote"
+                ),
+                matching_source_pages=matching_pages,
+            ),
+        )
+    if len(spans) != 1:
+        raise ProtocolAnalysisEvidenceError(
+            "Protocol evidence has more than one normalized source match.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="ambiguous_source_match",
+                mismatch_class="ambiguous_normalized_span",
+                matching_source_pages=(evidence.source_page_number,),
+            ),
+        )
+    original_start, original_end = spans[0]
     return replace(
         evidence,
         source_excerpt=page_text[original_start:original_end],
     )
 
 
+@dataclass
+class _EvidenceTraversalState:
+    next_index: int = 0
+
+
 def _verify_evidence_tree(
     value: Any,
     extraction: ProtocolPdfExtraction,
+    *,
+    _state: _EvidenceTraversalState | None = None,
+    _path: str = "protocol",
+    _owner_type: str | None = None,
 ) -> tuple[Any, int]:
+    state = _state or _EvidenceTraversalState()
     if isinstance(value, domain.SourceEvidence):
-        return _verified_evidence(value, extraction), 1
+        evidence_index = state.next_index
+        state.next_index += 1
+        try:
+            return _verified_evidence(value, extraction), 1
+        except ProtocolAnalysisEvidenceError as exc:
+            exc.enrich_diagnostic(
+                evidence_index=evidence_index,
+                evidence_type=_owner_type or type(value).__name__,
+                field_path=_path,
+            )
+            raise
     if isinstance(value, ProtocolPdfExtraction) or isinstance(value, Enum):
         return value, 0
     if isinstance(value, tuple):
         items: list[Any] = []
         count = 0
-        for item in value:
-            verified, item_count = _verify_evidence_tree(item, extraction)
+        for index, item in enumerate(value):
+            verified, item_count = _verify_evidence_tree(
+                item,
+                extraction,
+                _state=state,
+                _path=f"{_path}[{index}]",
+                _owner_type=_owner_type,
+            )
             items.append(verified)
             count += item_count
         return tuple(items), count
@@ -649,6 +883,9 @@ def _verify_evidence_tree(
             verified, item_count = _verify_evidence_tree(
                 getattr(value, field.name),
                 extraction,
+                _state=state,
+                _path=f"{_path}.{field.name}",
+                _owner_type=type(value).__name__,
             )
             changes[field.name] = verified
             count += item_count
@@ -724,19 +961,34 @@ def _source_label_is_at_excerpt_start(
     )
 
 
+@dataclass
+class _ClaimTraversalState:
+    next_index: int = 0
+
+
 def _verify_claim_tree(
     value: Any,
     extraction: ProtocolPdfExtraction,
     inherited_evidence: domain.SourceEvidence | None = None,
+    *,
+    _state: _ClaimTraversalState | None = None,
+    _path: str = "protocol",
 ) -> None:
+    state = _state or _ClaimTraversalState()
     if (
         isinstance(value, (ProtocolPdfExtraction, domain.SourceEvidence, Enum))
         or value is None
     ):
         return
     if isinstance(value, tuple):
-        for item in value:
-            _verify_claim_tree(item, extraction, inherited_evidence)
+        for index, item in enumerate(value):
+            _verify_claim_tree(
+                item,
+                extraction,
+                inherited_evidence,
+                _state=state,
+                _path=f"{_path}[{index}]",
+            )
         return
     if not is_dataclass(value):
         return
@@ -755,7 +1007,21 @@ def _verify_claim_tree(
         )
     ):
         raise ProtocolAnalysisEvidenceError(
-            "A Protocol source-step label is unsupported by its evidence excerpt."
+            "A Protocol source-step label is unsupported by its evidence excerpt.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="structured_claim_verification",
+                reason_code="source_label_not_found",
+                mismatch_class="claim_evidence_mismatch",
+                evidence_index=state.next_index,
+                evidence_type=type(value).__name__,
+                field_path=f"{_path}.source_label",
+                page_number=(
+                    local_evidence.source_page_number
+                    if local_evidence is not None
+                    else None
+                ),
+                source_hash=extraction.sha256,
+            ),
         )
     for field_name in _CLAIM_FIELDS.get(type(value), ()):
         field_value = getattr(value, field_name)
@@ -763,6 +1029,8 @@ def _verify_claim_tree(
         for claim in claims:
             if claim is None:
                 continue
+            claim_index = state.next_index
+            state.next_index += 1
             if (
                 not isinstance(claim, str)
                 or local_evidence is None
@@ -774,13 +1042,34 @@ def _verify_claim_tree(
             ):
                 raise ProtocolAnalysisEvidenceError(
                     "A structured Protocol claim is unsupported by its "
-                    "referenced source page."
+                    "referenced source page.",
+                    diagnostic=ProtocolEvidenceDiagnostic(
+                        validation_stage="structured_claim_verification",
+                        reason_code="claim_not_found",
+                        mismatch_class="claim_evidence_mismatch",
+                        evidence_index=claim_index,
+                        evidence_type=type(value).__name__,
+                        field_path=f"{_path}.{field_name}",
+                        page_number=(
+                            local_evidence.source_page_number
+                            if local_evidence is not None
+                            else None
+                        ),
+                        matching_source_pages=(
+                            _matching_source_pages(claim, extraction)
+                            if isinstance(claim, str)
+                            else ()
+                        ),
+                        source_hash=extraction.sha256,
+                    ),
                 )
     for field in fields(value):
         _verify_claim_tree(
             getattr(value, field.name),
             extraction,
             local_evidence,
+            _state=state,
+            _path=f"{_path}.{field.name}",
         )
 
 
@@ -848,7 +1137,18 @@ def parse_protocol_analysis_response(
         )
     if response["pdf_sha256"] != extraction.sha256:
         raise ProtocolAnalysisEvidenceError(
-            "Protocol analysis references different PDF bytes."
+            "Protocol analysis references different PDF bytes.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="response_envelope_validation",
+                reason_code="invalid_source_hash",
+                mismatch_class="source_identity_mismatch",
+                source_hash=extraction.sha256,
+                received_source_hash=(
+                    response["pdf_sha256"]
+                    if isinstance(response["pdf_sha256"], str)
+                    else None
+                ),
+            ),
         )
     if response["capability_policy_id"] != capability_policy.profile_id:
         raise ProtocolAnalysisResponseError(
@@ -857,7 +1157,15 @@ def parse_protocol_analysis_response(
     protocol = _DomainDecoder(extraction).decode_protocol(response["protocol"])
     if protocol.metadata.evidence is None:
         raise ProtocolAnalysisEvidenceError(
-            "Protocol metadata must retain source evidence."
+            "Protocol metadata must retain source evidence.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="schema_evidence_validation",
+                reason_code="schema_evidence_missing",
+                mismatch_class="schema_evidence_missing",
+                evidence_type="ProtocolMetadata",
+                field_path="protocol.metadata.evidence",
+                source_hash=extraction.sha256,
+            ),
         )
     protocol, evidence_count = _verify_evidence_tree(protocol, extraction)
     _verify_claim_tree(protocol, extraction)
@@ -870,7 +1178,18 @@ def parse_protocol_analysis_response(
             domain.ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
         }:
             raise ProtocolAnalysisEvidenceError(
-                "Structured Protocol evidence failed source verification."
+                "Structured Protocol evidence failed source verification.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="domain_evidence_validation",
+                    reason_code=(
+                        "page_not_found"
+                        if exc.code
+                        is domain.ProtocolValidationCode.INVALID_SOURCE_PAGE
+                        else "quote_not_found"
+                    ),
+                    mismatch_class="domain_source_identity_mismatch",
+                    source_hash=extraction.sha256,
+                ),
             ) from exc
         raise ProtocolAnalysisResponseError(
             "Structured Protocol failed deterministic domain validation."
@@ -915,7 +1234,18 @@ def validate_protocol_analysis_evidence(
             domain.ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
         }:
             raise ProtocolAnalysisEvidenceError(
-                "Structured Protocol evidence failed source verification."
+                "Structured Protocol evidence failed source verification.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="domain_evidence_validation",
+                    reason_code=(
+                        "page_not_found"
+                        if exc.code
+                        is domain.ProtocolValidationCode.INVALID_SOURCE_PAGE
+                        else "quote_not_found"
+                    ),
+                    mismatch_class="domain_source_identity_mismatch",
+                    source_hash=extraction.sha256,
+                ),
             ) from exc
         raise ProtocolAnalysisResponseError(
             "Structured Protocol failed deterministic domain validation."
@@ -999,7 +1329,14 @@ def save_protocol_analysis(
         or draft.protocol.metadata.file_checksum != draft.extraction.sha256
     ):
         raise ProtocolAnalysisEvidenceError(
-            "Protocol draft does not match the PDF selected for persistence."
+            "Protocol draft does not match the PDF selected for persistence.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="persistence_source_validation",
+                reason_code="invalid_source_hash",
+                mismatch_class="source_identity_mismatch",
+                source_hash=current.sha256,
+                received_source_hash=draft.extraction.sha256,
+            ),
         )
     try:
         verified_protocol, _ = _verify_evidence_tree(
@@ -1011,7 +1348,13 @@ def save_protocol_analysis(
         raise
     if verified_protocol != draft.protocol:
         raise ProtocolAnalysisEvidenceError(
-            "Protocol draft evidence changed before persistence."
+            "Protocol draft evidence changed before persistence.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="persistence_evidence_validation",
+                reason_code="quote_normalization_mismatch",
+                mismatch_class="noncanonical_persisted_evidence",
+                source_hash=current.sha256,
+            ),
         )
     try:
         domain.validate_protocol(draft.protocol)
@@ -1063,7 +1406,15 @@ def save_protocol_analysis(
             )
     if revision.pdf_checksum != draft.extraction.sha256:
         raise ProtocolAnalysisEvidenceError(
-            "Protocol persistence revision references different PDF bytes."
+            "Protocol persistence revision references different PDF bytes.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="persistence_revision_validation",
+                reason_code="invalid_source_revision",
+                mismatch_class="source_revision_mismatch",
+                source_revision=str(protocol_revision_number),
+                source_hash=revision.pdf_checksum,
+                received_source_hash=draft.extraction.sha256,
+            ),
         )
     return store.append_analysis_revision(
         experiment_id,

@@ -124,6 +124,50 @@ def _create_revision(tmp_path, *, source_status="Published"):
     return revision
 
 
+def _create_local_pdf_revision(tmp_path, *, catalog_protocol_id="protocol-local-pdf"):
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    admin = _principal("admin-a")
+    reviewer = _principal("reviewer-a")
+    researcher = _principal("researcher-a")
+    for principal in (admin, reviewer, researcher):
+        store.bootstrap_principal(principal)
+    source_hash = hashlib.sha256(b"local-pdf-source").hexdigest()
+    family = store.create_protocol_family(admin, title="Local PDF Protocol")
+    source = store.register_source(
+        admin,
+        connector_kind="local_pdf",
+        external_id="upload:local-protocol.pdf",
+        version_identity=source_hash,
+        source_hash=source_hash,
+        canonical_url=None,
+        metadata={
+            "source_status": "Uploaded draft",
+            "risk_state": "review_required",
+            "catalog_protocol_id": catalog_protocol_id,
+        },
+    )
+    revision = store.add_protocol_revision(
+        admin,
+        family_id=family.family_id,
+        source_id=source.source_id,
+        content={
+            "document": {
+                "format": "pdf",
+                "sha256": source_hash,
+                "analysis_state": "structured_analysis_ready",
+            },
+            "execution_identity": {
+                "protocol_id": catalog_protocol_id,
+                "source_sha256": source_hash,
+                "catalog_revision_id": "pdf-1",
+            },
+        },
+        change_summary="Local PDF registered",
+    )
+    store.close()
+    return revision, source_hash
+
+
 def test_workspace_session_routes_and_server_allowlisted_dev_identity(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     reviewer = asyncio.run(_request("GET", "/api/workspace/session", profile="reviewer-a"))
@@ -627,6 +671,192 @@ def test_protocol_library_uses_authoritative_catalog_execution_state(
     assert item["catalog_revision_id"] == "pdf-1-analysis-1"
     assert item["approval_state"] == "development_only"
     assert item["risk_state"] == "executable_draft"
+
+
+def test_failed_local_pdf_analysis_is_recovery_only_and_cannot_be_approved(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch, tmp_path)
+    revision, source_hash = _create_local_pdf_revision(tmp_path)
+
+    class FailedCatalog:
+        @staticmethod
+        def get_entry(protocol_id):
+            assert protocol_id == "protocol-local-pdf"
+            return SimpleNamespace(
+                protocol_id=protocol_id,
+                source_sha256=source_hash,
+                revision_id="pdf-1",
+                analysis_status="analysis_failed",
+                approval_status="unapproved",
+                available_for_execution=False,
+                lifecycle_state="blocked",
+            )
+
+        @staticmethod
+        def review(protocol_id):
+            assert protocol_id == "protocol-local-pdf"
+            return {
+                "analysis_available": False,
+                "analysis_failure": {
+                    "code": "protocol_analysis_invalid_evidence",
+                    "detail": {
+                        "validation_stage": "source_evidence_verification",
+                        "evidence_item_index": 1,
+                        "evidence_type": "BeforeStartPrerequisite",
+                        "page_number": 3,
+                        "reason_code": "quote_not_found",
+                        "mismatch_class": "fabricated_or_non_verbatim_quote",
+                    },
+                },
+                "readiness": {"status": "analysis_required"},
+            }
+
+        @staticmethod
+        def approve(*_args, **_kwargs):
+            raise AssertionError("failed analysis reached catalog approval")
+
+    monkeypatch.setattr(
+        server_module,
+        "_open_protocol_catalog",
+        lambda: (FailedCatalog(), SimpleNamespace(close=lambda: None)),
+    )
+    monkeypatch.setattr(server_module, "_scope_catalog_resource", lambda _value: None)
+
+    difference = asyncio.run(
+        _request(
+            "GET",
+            f"/api/workspace/reviewer/revisions/{revision.revision_id}/diff",
+            profile="reviewer-a",
+        )
+    )
+    assert difference.status_code == 200, difference.text
+    packet = difference.json()
+    assert packet["catalog_analysis_gate"]["representation"] == "recovery_triage"
+    assert packet["catalog_analysis_gate"]["failure_code"] == (
+        "protocol_analysis_invalid_evidence"
+    )
+    assert packet["decision_state"]["allowed_actions"] == ["rejected"]
+    assert packet["decision_state"]["available_for_new_operational_sessions"] is False
+
+    attempted = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/reviewer/revisions/{revision.revision_id}/decision",
+            profile="reviewer-a",
+            json_body={
+                "action": "approved",
+                "comment": "Must remain blocked.",
+                "idempotency_key": "invalid-analysis-approval",
+            },
+        )
+    )
+    assert attempted.status_code == 409, attempted.text
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    try:
+        assert store.approval_history(
+            _principal("reviewer-a"),
+            revision.revision_id,
+        ) == ()
+    finally:
+        store.close()
+
+
+def test_valid_local_pdf_reviewer_approval_bridges_exact_catalog_revision(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch, tmp_path)
+    revision, source_hash = _create_local_pdf_revision(tmp_path)
+
+    class ReadyCatalog:
+        approved = False
+
+        @classmethod
+        def get_entry(cls, protocol_id):
+            assert protocol_id == "protocol-local-pdf"
+            return SimpleNamespace(
+                protocol_id=protocol_id,
+                source_sha256=source_hash,
+                revision_id="pdf-1-analysis-1",
+                analysis_status="approved" if cls.approved else "review_required",
+                approval_status="approved" if cls.approved else "unapproved",
+                available_for_execution=cls.approved,
+                lifecycle_state="approved" if cls.approved else "review_required",
+            )
+
+        @staticmethod
+        def review(protocol_id):
+            assert protocol_id == "protocol-local-pdf"
+            return {
+                "analysis_available": True,
+                "analysis_failure": None,
+                "readiness": {"status": "guidance_ready"},
+            }
+
+        @classmethod
+        def approve(
+            cls,
+            protocol_id,
+            revision_id,
+            *,
+            actor_principal_id,
+            actor_role,
+            **_kwargs,
+        ):
+            assert protocol_id == "protocol-local-pdf"
+            assert revision_id == "pdf-1-analysis-1"
+            assert actor_principal_id == "principal-reviewer-a"
+            assert actor_role == "reviewer"
+            cls.approved = True
+            return cls.get_entry(protocol_id)
+
+    catalog = ReadyCatalog()
+    monkeypatch.setattr(
+        server_module,
+        "_open_protocol_catalog",
+        lambda: (catalog, SimpleNamespace(close=lambda: None)),
+    )
+    monkeypatch.setattr(server_module, "_scope_catalog_resource", lambda _value: None)
+
+    difference = asyncio.run(
+        _request(
+            "GET",
+            f"/api/workspace/reviewer/revisions/{revision.revision_id}/diff",
+            profile="reviewer-a",
+        )
+    ).json()
+    assert difference["catalog_analysis_gate"]["representation"] == (
+        "execution_approval"
+    )
+    assert "approved" in difference["decision_state"]["allowed_actions"]
+
+    approved = asyncio.run(
+        _request(
+            "POST",
+            f"/api/workspace/reviewer/revisions/{revision.revision_id}/decision",
+            profile="reviewer-a",
+            json_body={
+                "action": "approved",
+                "comment": "Exact source analysis and readiness reviewed.",
+                "idempotency_key": "valid-local-analysis-approval",
+            },
+        )
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["state"]["catalog_revision_id"] == "pdf-1-analysis-1"
+    assert approved.json()["state"]["available_for_new_operational_sessions"] is True
+
+    library = asyncio.run(
+        _request("GET", "/api/workspace/protocol-library", profile="researcher-a")
+    )
+    item = next(
+        value
+        for value in library.json()["protocols"]
+        if value["revision_id"] == revision.revision_id
+    )
+    assert item["executable"] is True
+    assert item["catalog_revision_id"] == "pdf-1-analysis-1"
+    assert item["approval_state"] == "approved"
 
 
 def test_role_separated_connector_api_never_returns_credential_reference(monkeypatch, tmp_path):

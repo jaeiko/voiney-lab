@@ -26,7 +26,9 @@ from voice_workflow_agent.curated_protocol import (
 )
 from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisDraft,
+    ProtocolAnalysisEvidenceError,
     ProtocolAnalysisInputTooLargeError,
+    ProtocolEvidenceDiagnostic,
 )
 from voice_workflow_agent.experiment_protocol_config import (
     ProtocolFeatureDisabledError,
@@ -523,6 +525,52 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertNotIn("sensitive", json.dumps(event.payload))
         with self.assertRaises(ProtocolCatalogUnavailableError):
             self.catalog.load_executable_fixture(entry.protocol_id)
+
+    def test_evidence_failure_persists_only_allowlisted_diagnostics(self):
+        entry = self.catalog.register(
+            self.alpha,
+            source_filename="alpha.pdf",
+            media_type="application/pdf",
+        ).entry
+        error = ProtocolAnalysisEvidenceError(
+            "Evidence quote was invalid.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="source_evidence_verification",
+                reason_code="quote_not_found",
+                mismatch_class="fabricated_or_non_verbatim_quote",
+                evidence_index=1,
+                evidence_type="BeforeStartPrerequisite",
+                field_path="protocol.before_start[0].evidence",
+                page_number=3,
+                quote_sha256="a" * 64,
+                quote_length=111,
+            ),
+        )
+        with patch(
+            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            side_effect=error,
+        ):
+            with self.assertRaises(ProtocolAnalysisEvidenceError):
+                self.catalog.analyze(
+                    entry.protocol_id,
+                    Mock(),
+                    analysis_id="analysis-evidence-failure",
+                )
+
+        event = self.store.list_events(entry.protocol_id)[-1]
+        detail = event.payload["evidence_failure"]
+        self.assertEqual(event.payload["failure_code"], "protocol_analysis_invalid_evidence")
+        self.assertEqual(detail["evidence_item_index"], 1)
+        self.assertEqual(detail["evidence_type"], "BeforeStartPrerequisite")
+        self.assertEqual(detail["page_number"], 3)
+        self.assertEqual(detail["source_revision"], "pdf-1")
+        self.assertEqual(detail["source_hash"], entry.source_sha256)
+        self.assertNotIn("source_excerpt", detail)
+        self.assertNotIn("provider_response", detail)
+        status = self.catalog.analysis_run_status(entry.protocol_id).public_dict()
+        self.assertEqual(status["failure_detail"], detail)
+        review = self.catalog.review(entry.protocol_id)
+        self.assertEqual(review["analysis_failure"]["detail"], detail)
 
     def test_large_single_pass_input_is_deferred_without_model_call(self):
         model = Mock()

@@ -85,6 +85,10 @@ warnings, missing values, advanced constructs, and readiness reasons. Unsupporte
 conditional/parallel/repeat constructs and missing or conflicting execution values
 remain explicit and block execution.
 
+Structured protocol analysis requires the deployment-supplied
+`PROTOCOL_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
+separate from the bounded low-latency semantic-intent model and timeout policy.
+
 OCR is a source-preserving extraction boundary in `protocol_ocr.py`, not an
 approval or execution authority. HTTP callers cannot choose a provider; the
 server accepts only a deployment-injected `ProtocolOcrProvider`. Results must

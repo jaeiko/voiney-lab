@@ -712,6 +712,8 @@ class ProtocolAnalysisTests(unittest.TestCase):
         self.assertRegex(prompt, r"\bone\s+contiguous\b")
         self.assertIn("material", prompt)
         self.assertIn("Never paraphrase", prompt)
+        self.assertIn("Never synthesize an excerpt", prompt)
+        self.assertIn("rejects the complete response", prompt)
         normalized_prompt = " ".join(prompt.casefold().split())
         self.assertIn("cite text from a different page", normalized_prompt)
         self.assertIn(
@@ -799,6 +801,15 @@ class ProtocolAnalysisTests(unittest.TestCase):
             self.analyze(response)
 
         self.assertEqual(raised.exception.code, "protocol_analysis_invalid_evidence")
+        diagnostic = raised.exception.diagnostic.public_dict()
+        self.assertEqual(diagnostic["reason_code"], "quote_not_found")
+        self.assertEqual(
+            diagnostic["mismatch_class"],
+            "page_identity_mismatch",
+        )
+        self.assertEqual(diagnostic["page_number"], 2)
+        self.assertEqual(diagnostic["matching_source_pages"], [1])
+        self.assertEqual(diagnostic["evidence_type"], "Material")
 
     def test_well_written_two_page_pdf_becomes_evidence_linked_draft(self):
         model = self.model()
@@ -869,14 +880,144 @@ class ProtocolAnalysisTests(unittest.TestCase):
             "1. Add 500 µL buffer at 4°C.",
         )
 
+    def test_unicode_canonical_evidence_restores_exact_source_text(self):
+        source = "Caf\u00e9 protocol"
+        provider = "Cafe\u0301 protocol"
+        extraction = replace(
+            self.extraction,
+            pages=(
+                replace(
+                    self.extraction.pages[0],
+                    text=f"{source}\nUse buffer.",
+                ),
+                self.extraction.pages[1],
+            ),
+        )
+
+        verified = analysis_module._verified_evidence(
+            domain.SourceEvidence(1, provider),
+            extraction,
+        )
+
+        self.assertEqual(verified.source_excerpt, source)
+
+    def test_soft_hyphen_evidence_restores_exact_source_text(self):
+        source = "Follow the proto\u00adcol exactly."
+        extraction = replace(
+            self.extraction,
+            pages=(
+                replace(self.extraction.pages[0], text=source),
+                self.extraction.pages[1],
+            ),
+        )
+
+        verified = analysis_module._verified_evidence(
+            domain.SourceEvidence(1, "Follow the protocol exactly."),
+            extraction,
+        )
+
+        self.assertEqual(verified.source_excerpt, source)
+
+    def test_unicode_compatibility_substitution_is_rejected(self):
+        extraction = replace(
+            self.extraction,
+            pages=(
+                replace(self.extraction.pages[0], text="Use ① vial."),
+                self.extraction.pages[1],
+            ),
+        )
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
+            analysis_module._verified_evidence(
+                domain.SourceEvidence(1, "Use 1 vial."),
+                extraction,
+            )
+
+        self.assertEqual(
+            raised.exception.diagnostic.reason_code,
+            "quote_not_found",
+        )
+
+    def test_ambiguous_normalized_evidence_fails_closed(self):
+        extraction = replace(
+            self.extraction,
+            pages=(
+                replace(
+                    self.extraction.pages[0],
+                    text="Use   buffer. Use\tbuffer.",
+                ),
+                self.extraction.pages[1],
+            ),
+        )
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
+            analysis_module._verified_evidence(
+                domain.SourceEvidence(1, "Use buffer."),
+                extraction,
+            )
+
+        self.assertEqual(
+            raised.exception.diagnostic.reason_code,
+            "ambiguous_source_match",
+        )
+
     def test_fabricated_quote_is_rejected(self):
         response = copy.deepcopy(self.response)
         response["protocol"]["metadata"]["evidence"]["source_excerpt"] = (
             "Fabricated protocol title"
         )
 
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
             self.analyze(response)
+
+        diagnostic = raised.exception.diagnostic.public_dict()
+        self.assertEqual(
+            diagnostic["validation_stage"],
+            "source_evidence_verification",
+        )
+        self.assertEqual(diagnostic["reason_code"], "quote_not_found")
+        self.assertEqual(
+            diagnostic["mismatch_class"],
+            "fabricated_or_non_verbatim_quote",
+        )
+        self.assertEqual(diagnostic["evidence_item_index"], 0)
+        self.assertEqual(diagnostic["evidence_type"], "ProtocolMetadata")
+        self.assertEqual(
+            diagnostic["field_path"],
+            "protocol.metadata.evidence",
+        )
+        self.assertEqual(diagnostic["page_number"], 1)
+        self.assertEqual(diagnostic["source_hash"], self.extraction.sha256)
+        self.assertNotIn("source_excerpt", diagnostic)
+
+    def test_fabricated_prerequisite_reports_exact_item_without_content(self):
+        response = copy.deepcopy(self.response)
+        response["protocol"]["before_start"] = [
+            {
+                "prerequisite_id": "prerequisite-1",
+                "source_text": "Wear gloves before setup.",
+                "evidence": evidence(
+                    1,
+                    "Wear suitable personal protective equipment before setup.",
+                ),
+            }
+        ]
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as raised:
+            self.analyze(response)
+
+        diagnostic = raised.exception.diagnostic.public_dict()
+        self.assertEqual(diagnostic["evidence_item_index"], 1)
+        self.assertEqual(
+            diagnostic["evidence_type"],
+            "BeforeStartPrerequisite",
+        )
+        self.assertEqual(
+            diagnostic["field_path"],
+            "protocol.before_start[0].evidence",
+        )
+        self.assertEqual(diagnostic["reason_code"], "quote_not_found")
+        self.assertNotIn("Wear", json.dumps(diagnostic))
 
     def test_source_label_in_verified_excerpt_is_accepted(self):
         draft = self.analyze()

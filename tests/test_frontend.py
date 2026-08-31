@@ -177,6 +177,8 @@ assert(stageReviewerDecision("approved")===false&&ids["reviewer-status"].textCon
 ids["reviewer-comment"].value="Source, warnings, and impact boundary reviewed.";
 assert(stageReviewerDecision("approved")===true&&!ids["reviewer-decision-confirmation"].hidden&&ids["reviewer-confirm-consequence"].textContent.includes("새 실험"),"approval consequence confirmation missing");
 assert(stageReviewerDecision("revoked")===false,"disallowed stale decision reached confirmation");
+renderReviewerPacket({...packet,catalog_analysis_gate:{representation:"recovery_triage",analysis_status:"analysis_failed",failure_code:"protocol_analysis_invalid_evidence"},decision_state:{state:"review_required",allowed_actions:["rejected"],available_for_new_operational_sessions:false}});
+assert(ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["reviewer-action-guidance"].textContent.includes("분석")&&ids["reviewer-action-guidance"].textContent.includes("승인"),"failed analysis was represented as executable approval");
 """
         result = run_node_harness(harness)
         self.assertEqual(result.returncode, 0, result.stderr)

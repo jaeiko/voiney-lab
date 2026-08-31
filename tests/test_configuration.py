@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from voice_workflow_agent.configuration import (
 )
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import VadConfig
+from voice_workflow_agent.semantic_intent import SemanticIntentSettings
 from pathlib import Path
 
 
@@ -198,6 +200,52 @@ class VadStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cascade_playback_onset_voiced_frames=12",messages[0])
         self.assertIn("cascade_playback_onset_window_frames=15",messages[0])
         self.assertNotIn("API_KEY",messages[0])
+
+
+class DeploymentConfigurationTests(unittest.TestCase):
+    def test_process_environment_precedes_local_development_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment_file=Path(temporary)/".env"
+            environment_file.write_text(
+                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED":"false"},
+                clear=True,
+            ):
+                server._load_project_environment(environment_file)
+                self.assertFalse(
+                    SemanticIntentSettings.from_environment().enabled
+                )
+
+    def test_local_development_environment_precedes_documented_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment_file=Path(temporary)/".env"
+            environment_file.write_text(
+                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ,{},clear=True):
+                server._load_project_environment(environment_file)
+                self.assertTrue(
+                    SemanticIntentSettings.from_environment().enabled
+                )
+
+    def test_protocol_analysis_model_is_deployment_supplied_grok_4_6(self):
+        with patch.dict(
+            os.environ,
+            {
+                "XAI_API_KEY":"fake-key",
+                "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+            },
+            clear=True,
+        ),patch.object(server,"OpenAI") as client:
+            model=server._protocol_analysis_model()
+
+        self.assertEqual(model.model,"grok-4.6")
+        client.assert_called_once()
 
 
 if __name__=="__main__":
