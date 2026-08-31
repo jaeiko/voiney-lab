@@ -462,6 +462,7 @@ python -m voice_workflow_agent.worker
 | `XAI_API_KEY` | Server-only xAI credential |
 | `CHAT_MODEL`, `WORKER_MODEL` | Agent and handoff-worker models |
 | `PROTOCOL_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
+| `PROTOCOL_ANALYSIS_REASONING_EFFORT` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
 | `TTS_VOICE` | Cascade voice; defaults to `leo` |
 | `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
 | `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | Absolute approved safety-catalog path |
@@ -475,8 +476,11 @@ python -m voice_workflow_agent.worker
 
 `PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
-current deployment example. The separate low-latency semantic-intent path keeps
-its dedicated non-reasoning model and timeout settings.
+current deployment example. Protocol analysis explicitly defaults to high
+reasoning effort. Lower effort levels remain deployment-configurable but must
+pass protocol-specific completeness and evidence validation before use. The
+separate low-latency semantic-intent path keeps its dedicated non-reasoning
+model and timeout settings.
 
 ### Identity configuration
 

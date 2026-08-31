@@ -3358,11 +3358,19 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
 
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
+    reasoning_effort=os.environ.get(
+        "PROTOCOL_ANALYSIS_REASONING_EFFORT","high"
+    ).strip().casefold()
+    if reasoning_effort not in {"low","medium","high","xhigh"}:
+        raise ServerConfigurationError(
+            "PROTOCOL_ANALYSIS_REASONING_EFFORT is invalid.",
+            "PROTOCOL_ANALYSIS_REASONING_EFFORT",
+        )
     client=OpenAI(
         base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
         max_retries=0,timeout=120.0)
     return OpenAICompatibleProtocolAnalysisModel(
-        client,require_env("PROTOCOL_ANALYSIS_MODEL"))
+        client,require_env("PROTOCOL_ANALYSIS_MODEL"),reasoning_effort)
 
 
 def _auto_activate_ready_uploads_enabled() -> bool:

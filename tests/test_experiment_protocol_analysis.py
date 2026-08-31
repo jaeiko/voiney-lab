@@ -734,14 +734,19 @@ class ProtocolAnalysisTests(unittest.TestCase):
             r"\bOmit\s+unsupported\s+optional\s+or\s+list\s+claims\b",
         )
         self.assertIn("schema-required evidence object", prompt)
-
     def test_request_prompt_requires_complete_numbered_source_inventory(self):
         model = self.model()
 
         analyze_protocol_pdf(self.pdf, model)
 
         prompt = model.calls[0]["system_prompt"]
+        request = json.loads(model.calls[0]["input_json"])
         self.assertEqual(prompt, ANALYSIS_SYSTEM_PROMPT)
+        self.assertNotIn("response_contract", request)
+        self.assertEqual(
+            model.calls[0]["response_schema"],
+            ANALYSIS_RESPONSE_SCHEMA,
+        )
         self.assertRegex(
             prompt,
             r"every\s+executable\s+instruction",
@@ -1470,13 +1475,18 @@ class ProtocolAnalysisTests(unittest.TestCase):
                 )()
             },
         )()
-        adapter = OpenAICompatibleProtocolAnalysisModel(client, "configured-model")
+        adapter = OpenAICompatibleProtocolAnalysisModel(
+            client,
+            "configured-model",
+            "low",
+        )
 
         draft = analyze_protocol_pdf(self.pdf, adapter)
 
         self.assertEqual(draft.protocol.protocol_id, "protocol-alpha")
         call = completions.calls[0]
         self.assertEqual(call["temperature"], 0)
+        self.assertEqual(call["reasoning_effort"], "low")
         self.assertEqual(
             call["response_format"],
             {
@@ -1489,6 +1499,14 @@ class ProtocolAnalysisTests(unittest.TestCase):
             },
         )
         self.assertIn("BEGIN_UNTRUSTED_PROTOCOL_DOCUMENT", call["messages"][1]["content"])
+
+    def test_openai_compatible_adapter_rejects_invalid_reasoning_effort(self):
+        with self.assertRaises(ValueError):
+            OpenAICompatibleProtocolAnalysisModel(
+                object(),
+                "configured-model",
+                "unbounded",
+            )
 
     def test_failed_analysis_creates_no_persistence_records(self):
         settings = ProtocolPersistenceSettings(True, self.root / "failed-data")

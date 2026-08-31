@@ -351,7 +351,6 @@ class ProtocolAnalysisRequest:
                 }
                 for page in self.pages
             ],
-            "response_contract": ANALYSIS_RESPONSE_SCHEMA,
         }
         return json.dumps(
             payload,
@@ -401,6 +400,11 @@ class OpenAICompatibleProtocolAnalysisModel:
 
     client: Any
     model: str
+    reasoning_effort: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
+            raise ValueError("Protocol analysis reasoning effort is invalid.")
 
     def analyze(
         self,
@@ -410,9 +414,9 @@ class OpenAICompatibleProtocolAnalysisModel:
         response_schema: dict[str, Any],
     ) -> str:
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            request: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
@@ -423,7 +427,7 @@ class OpenAICompatibleProtocolAnalysisModel:
                         ),
                     },
                 ],
-                response_format={
+                "response_format": {
                     "type": "json_schema",
                     "json_schema": {
                         "name": ANALYSIS_RESPONSE_SCHEMA_NAME,
@@ -431,7 +435,12 @@ class OpenAICompatibleProtocolAnalysisModel:
                         "strict": True,
                     },
                 },
-                temperature=0,
+                "temperature": 0,
+            }
+            if self.reasoning_effort is not None:
+                request["reasoning_effort"] = self.reasoning_effort
+            response = self.client.chat.completions.create(
+                **request,
             )
             content = response.choices[0].message.content
         except Exception as exc:
