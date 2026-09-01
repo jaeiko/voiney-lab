@@ -139,6 +139,7 @@ class FakeChunkModel:
         assert "all other non-action claims" in normalized_prompt
         assert "never substitute for it" in normalized_prompt
         assert "ExperimentProtocol" not in json.dumps(response_schema)
+        assert "evidence_item_ids" not in json.dumps(response_schema)
         self.calls += 1
         request = json.loads(input_json)
         pages = [page for page in request["pages"] if page["role"] == "core"]
@@ -202,7 +203,6 @@ class FakeChunkModel:
                 {
                     "source_page_number": number,
                     "status": "complete" if item_ids else "no_relevant_claims",
-                    "evidence_item_ids": item_ids,
                 }
             )
         response = {
@@ -646,15 +646,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
                         response = json.loads(super().analyze(**kwargs))
                         for marker in response["structure"]:
                             if marker["kind"] == "section":
-                                original = marker["marker_id"]
                                 marker["marker_id"] = "shared-section-marker"
-                                for coverage in response["page_coverage"]:
-                                    coverage["evidence_item_ids"] = [
-                                        "shared-section-marker"
-                                        if item_id == original
-                                        else item_id
-                                        for item_id in coverage["evidence_item_ids"]
-                                    ]
                         return json.dumps(response, separators=(",", ":"))
 
                 with self.assertRaises(ProtocolChunkMergeConflictError):

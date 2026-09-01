@@ -257,7 +257,6 @@ class RichClaimModel:
                 {
                     "source_page_number": page_number,
                     "status": "complete",
-                    "evidence_item_ids": item_ids,
                 }
             ],
             "structure": structure,
@@ -446,9 +445,6 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         coverage_schema = claim_response_schema(self.claim_request())["properties"][
             "page_coverage"
         ]
-        reference_schema = coverage_schema["items"]["properties"][
-            "evidence_item_ids"
-        ]
 
         self.assertEqual(coverage_schema["minItems"], 1)
         self.assertEqual(coverage_schema["maxItems"], 1)
@@ -456,33 +452,22 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"]["maxItems"],
             MAX_PAGE_COVERAGE_RECORDS,
         )
-        self.assertEqual(reference_schema["minItems"], 0)
-        self.assertEqual(
-            reference_schema["maxItems"],
-            MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+        self.assertNotIn(
+            "evidence_item_ids",
+            coverage_schema["items"]["properties"],
         )
-        self.assertIs(reference_schema["uniqueItems"], True)
+        self.assertNotIn(
+            "evidence_item_ids",
+            coverage_schema["items"]["required"],
+        )
 
         too_many_coverage_records = [
-            {"source_page_number": 1, "status": "complete", "evidence_item_ids": []}
+            {"source_page_number": 1, "status": "complete"}
             for _ in range(MAX_PAGE_COVERAGE_RECORDS + 1)
         ]
-        too_many_references = [
-            f"claim-{index}"
-            for index in range(MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1)
-        ]
-        duplicate_references = ["duplicate", "duplicate"]
         self.assertGreater(
             len(too_many_coverage_records),
             coverage_schema["maxItems"],
-        )
-        self.assertGreater(
-            len(too_many_references),
-            reference_schema["maxItems"],
-        )
-        self.assertNotEqual(
-            len(duplicate_references),
-            len(set(duplicate_references)),
         )
 
     def test_request_schema_binds_page_handle_pairs_and_exact_coverage(self):
@@ -646,7 +631,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         )
         self.assertGreater(metrics.schema_after_bytes, metrics.schema_before_bytes)
 
-    def test_coverage_cardinality_and_duplicate_refs_fail_without_repair(self):
+    def test_coverage_cardinality_is_derived_and_provider_refs_are_rejected(self):
         def too_many_coverage_records(response):
             record = response["page_coverage"][0]
             response["page_coverage"] = [
@@ -656,40 +641,169 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         with self.assertRaises(ProtocolAnalysisResponseError):
             self.analyze(RichClaimModel(too_many_coverage_records))
 
-        def too_many_references(response):
-            response["page_coverage"][0]["evidence_item_ids"] = [
-                f"bounded-ref-{index}"
-                for index in range(MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1)
-            ]
+        def provider_authored_reference(response):
+            response["page_coverage"][0]["evidence_item_ids"] = ["fabricated"]
+
+        with self.assertRaises(ProtocolAnalysisResponseError):
+            self.analyze(RichClaimModel(provider_authored_reference))
+
+        def too_many_emitted_items(response):
+            template = next(
+                claim
+                for claim in response["claims"]
+                if claim["category"] == "material"
+            )
+            response["claims"] = []
+            for index in range(MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1):
+                claim = dict(template)
+                claim["claim_id"] = f"material-{index}"
+                response["claims"].append(claim)
 
         with self.assertRaises(ProtocolAnalysisEvidenceError) as cardinality_failure:
-            self.analyze(RichClaimModel(too_many_references))
+            self.analyze(RichClaimModel(too_many_emitted_items))
         self.assertEqual(
             cardinality_failure.exception.diagnostic.mismatch_class,
             "coverage_reference_cardinality_exceeded",
         )
         self.assertEqual(
             cardinality_failure.exception.diagnostic.actual_count,
-            MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1,
-        )
-
-        def duplicate_reference(response):
-            item_ids = response["page_coverage"][0]["evidence_item_ids"]
-            item_ids.append(item_ids[0])
-
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as duplicate_failure:
-            self.analyze(RichClaimModel(duplicate_reference))
-        self.assertEqual(
-            duplicate_failure.exception.diagnostic.mismatch_class,
-            "duplicate_coverage_reference",
+            MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 3,
         )
 
         valid = self.analyze()
         self.assertEqual(len(valid.analysis.page_coverage), 1)
-        self.assertLessEqual(
-            len(valid.analysis.page_coverage[0].evidence_item_ids),
-            MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+        self.assertEqual(
+            valid.analysis.page_coverage[0].evidence_item_ids,
+            tuple(
+                sorted(
+                    [item.marker_id for item in valid.analysis.structure]
+                    + [item.claim_id for item in valid.analysis.claims]
+                )
+            ),
         )
+
+    def test_nine_emitted_items_are_all_derived_into_page_coverage(self):
+        def retain_nine_items(response):
+            response["claims"] = response["claims"][:7]
+
+        result = self.analyze(RichClaimModel(retain_nine_items))
+        expected = {
+            item.marker_id for item in result.analysis.structure
+        } | {
+            item.claim_id for item in result.analysis.claims
+        }
+
+        self.assertEqual(len(expected), 9)
+        self.assertEqual(
+            set(result.analysis.page_coverage[0].evidence_item_ids),
+            expected,
+        )
+        self.assertTrue(
+            {item.marker_id for item in result.analysis.structure}
+            <= set(result.analysis.page_coverage[0].evidence_item_ids)
+        )
+        self.assertTrue(
+            {item.claim_id for item in result.analysis.claims}
+            <= set(result.analysis.page_coverage[0].evidence_item_ids)
+        )
+
+    def test_canonical_coverage_backstop_rejects_missing_fabricated_and_duplicate_ids(self):
+        result = self.analyze().analysis
+        coverage = result.page_coverage[0]
+        claim_id = result.claims[0].claim_id
+        marker_id = result.structure[0].marker_id
+        cases = {
+            "missing claim": tuple(
+                item_id
+                for item_id in coverage.evidence_item_ids
+                if item_id != claim_id
+            ),
+            "missing marker": tuple(
+                item_id
+                for item_id in coverage.evidence_item_ids
+                if item_id != marker_id
+            ),
+            "fabricated": (*coverage.evidence_item_ids, "fabricated-id"),
+            "duplicate": (
+                *coverage.evidence_item_ids,
+                coverage.evidence_item_ids[0],
+            ),
+        }
+        for label, evidence_item_ids in cases.items():
+            with self.subTest(label=label):
+                altered = replace(
+                    result,
+                    page_coverage=(
+                        replace(
+                            coverage,
+                            evidence_item_ids=evidence_item_ids,
+                        ),
+                    ),
+                )
+                with self.assertRaises(ProtocolAnalysisEvidenceError):
+                    validate_chunk_claim_analysis(
+                        altered,
+                        self.extraction,
+                        source_revision="pdf-1",
+                        chunk_id=self.plan.chunks[0].chunk_id,
+                        core_page_refs=self.plan.chunks[0].core_page_refs,
+                    )
+
+    def test_zero_item_core_page_requires_no_relevant_claims_status(self):
+        source = self.root / "zero-items.pdf"
+        write_pages(source, ("Context page without relevant claims.",))
+        extraction = extract_protocol_pdf(source)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+        )
+
+        class ZeroItemModel:
+            def __init__(self, status: str) -> None:
+                self.status = status
+
+            def analyze(self, *, system_prompt, input_json, response_schema) -> str:
+                del system_prompt, response_schema
+                request = json.loads(input_json)
+                page_number = next(
+                    page["source_page_number"]
+                    for page in request["pages"]
+                    if page["role"] == "core"
+                )
+                return json.dumps(
+                    {
+                        "claim_schema_version": CLAIM_SCHEMA_VERSION,
+                        "capability_policy_id": "p1-conservative",
+                        "request_handle": request["request_handle"],
+                        "page_coverage": [
+                            {
+                                "source_page_number": page_number,
+                                "status": self.status,
+                            }
+                        ],
+                        "structure": [],
+                        "claims": [],
+                    }
+                )
+
+        result = analyze_protocol_chunk(
+            extraction,
+            plan.chunks[0],
+            ZeroItemModel("no_relevant_claims"),
+        )
+        self.assertEqual(result.page_coverage[0].evidence_item_ids, ())
+        self.assertEqual(
+            result.page_coverage[0].status.value,
+            "no_relevant_claims",
+        )
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            analyze_protocol_chunk(
+                extraction,
+                plan.chunks[0],
+                ZeroItemModel("complete"),
+            )
 
     def test_every_core_page_still_requires_exactly_one_coverage_record(self):
         two_page_source = self.root / "exact-coverage.pdf"
@@ -1119,6 +1233,41 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.assertEqual(action.evidence.location_detail, expected_locator)
         self.assertEqual(action.warnings[0].evidence.location_detail, expected_locator)
 
+    def test_multiple_action_claims_share_one_executable_step_identity(self):
+        def second_action_claim(response):
+            original = next(
+                claim
+                for claim in response["claims"]
+                if claim["category"] == "action"
+            )
+            additional = dict(original)
+            additional["claim_id"] = "action-1-additional"
+            additional["source_order"] = original["source_order"] + 1
+            additional["evidence"] = dict(original["evidence"])
+            response["claims"].append(additional)
+
+        result = self.analyze(RichClaimModel(second_action_claim))
+        merged = merge_validated_chunk_results(
+            self.extraction,
+            self.plan,
+            (result,),
+        )
+        draft = assemble_validated_protocol_claims(self.extraction, merged)
+
+        self.assertEqual(len(draft.protocol.sections[0].steps), 1)
+        self.assertEqual(
+            len(draft.protocol.sections[0].steps[0].sub_actions),
+            2,
+        )
+        self.assertEqual(
+            {
+                claim.step_id
+                for claim in result.analysis.claims
+                if claim.category is ClaimCategory.ACTION
+            },
+            {"step-1"},
+        )
+
     def test_provider_cannot_introduce_source_excerpt(self):
         def fabricated(response):
             response["claims"][4]["evidence"]["source_excerpt"] = "fabricated"
@@ -1172,7 +1321,6 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             record["source_order"] = 11
             record["evidence"] = dict(record["evidence"])
             response["claims"].append(record)
-            response["page_coverage"][0]["evidence_item_ids"].append("duration-2")
 
         result = self.analyze(RichClaimModel(second_duration))
         merged = merge_validated_chunk_results(
@@ -1259,7 +1407,6 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 for claim in response["claims"]
                 if claim["category"] != "action"
             ]
-            response["page_coverage"][0]["evidence_item_ids"].remove("action-1")
             self.assertTrue(
                 any(
                     claim["category"] in {"quantity", "duration", "prerequisite"}

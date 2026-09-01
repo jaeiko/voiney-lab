@@ -31,7 +31,7 @@ from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
 from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
-CLAIM_SCHEMA_VERSION = 4
+CLAIM_SCHEMA_VERSION = 5
 EVIDENCE_SEGMENT_VERSION = 2
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
@@ -366,18 +366,10 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": [item.value for item in PageCoverageStatus],
                     },
-                    "evidence_item_ids": {
-                        "type": "array",
-                        "minItems": 0,
-                        "maxItems": MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
-                        "uniqueItems": True,
-                        "items": {"type": "string"},
-                    },
                 },
                 "required": [
                     "source_page_number",
                     "status",
-                    "evidence_item_ids",
                 ],
             },
         },
@@ -656,8 +648,9 @@ derive, normalize, shorten, alter, or invent an identity.
 Return exactly one coverage record for every core page. Mark it complete when
 all relevant claims and markers on that page were extracted, no_relevant_claims
 only when the page contains none, and analysis_incomplete whenever the page
-cannot be fully accounted for. evidence_item_ids must exactly list the claim and
-marker identifiers emitted from that page. Return one JSON object only.
+cannot be fully accounted for. Coverage status is a page-level semantic judgment;
+the server separately accounts for every emitted claim and marker from its
+validated source page. Return one JSON object only.
 """
 
 
@@ -1485,7 +1478,6 @@ def parse_chunk_claim_response(
             {
                 "source_page_number",
                 "status",
-                "evidence_item_ids",
             },
             "page coverage",
         )
@@ -1504,60 +1496,10 @@ def parse_chunk_claim_response(
                 ),
             ) from exc
         page_number = record["source_page_number"]
-        item_ids = record["evidence_item_ids"]
-        if (
-            isinstance(item_ids, list)
-            and len(item_ids) > MAX_EVIDENCE_ITEM_REFS_PER_PAGE
-        ):
-            raise ProtocolAnalysisEvidenceError(
-                "Chunk page coverage exceeds the bounded evidence reference limit.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="chunk_page_coverage_validation",
-                    reason_code="coverage_mismatch",
-                    mismatch_class="coverage_reference_cardinality_exceeded",
-                    evidence_index=item_index,
-                    evidence_type="page_coverage",
-                    page_number=(
-                        page_number if isinstance(page_number, int) else None
-                    ),
-                    expected_count=MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
-                    actual_count=len(item_ids),
-                    page_coverage_count=len(raw_coverage),
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
-                    source_hash=extraction.sha256,
-                ),
-            )
-        if (
-            isinstance(item_ids, list)
-            and all(isinstance(item_id, str) for item_id in item_ids)
-            and len(set(item_ids)) != len(item_ids)
-        ):
-            raise ProtocolAnalysisEvidenceError(
-                "Chunk page coverage contains duplicate evidence references.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="chunk_page_coverage_validation",
-                    reason_code="coverage_mismatch",
-                    mismatch_class="duplicate_coverage_reference",
-                    evidence_index=item_index,
-                    evidence_type="page_coverage",
-                    page_number=(
-                        page_number if isinstance(page_number, int) else None
-                    ),
-                    expected_count=len(set(item_ids)),
-                    actual_count=len(item_ids),
-                    page_coverage_count=len(raw_coverage),
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
-                    source_hash=extraction.sha256,
-                ),
-            )
         if (
             not isinstance(page_number, int)
             or isinstance(page_number, bool)
             or page_number not in core_pages
-            or not isinstance(item_ids, list)
-            or any(not isinstance(item_id, str) for item_id in item_ids)
         ):
             raise ProtocolAnalysisEvidenceError(
                 "Chunk page coverage does not match the immutable source.",
@@ -1577,6 +1519,40 @@ def parse_chunk_claim_response(
                 ),
             )
         expected_page_hash = _page_text_sha256(extraction, page_number)
+        item_ids = tuple(
+            sorted(
+                identifier
+                for identifier, item_page in (
+                    *(
+                        (marker.marker_id, marker.evidence.source_page_number)
+                        for marker in markers
+                    ),
+                    *(
+                        (claim.claim_id, claim.evidence.source_page_number)
+                        for claim in claims
+                    ),
+                )
+                if item_page == page_number
+            )
+        )
+        if len(item_ids) > MAX_EVIDENCE_ITEM_REFS_PER_PAGE:
+            raise ProtocolAnalysisEvidenceError(
+                "Derived chunk page coverage exceeds the bounded reference limit.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="coverage_mismatch",
+                    mismatch_class="coverage_reference_cardinality_exceeded",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_number=page_number,
+                    expected_count=MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+                    actual_count=len(item_ids),
+                    page_coverage_count=len(raw_coverage),
+                    chunk_id=chunk_id,
+                    source_revision=source_revision,
+                    source_hash=extraction.sha256,
+                ),
+            )
         coverage.append(
             ProtocolPageClaimCoverage(
                 source_revision=source_revision,
@@ -1584,7 +1560,7 @@ def parse_chunk_claim_response(
                 source_page_number=page_number,
                 page_text_sha256=expected_page_hash,
                 status=status,
-                evidence_item_ids=tuple(item_ids),
+                evidence_item_ids=item_ids,
             )
         )
     analysis = ProtocolChunkClaimAnalysis(

@@ -26,8 +26,10 @@ from voice_workflow_agent.experiment_protocol_pdf import (
 )
 from voice_workflow_agent.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
+    ValidatedChunkResult,
     extraction_for_chunk,
     plan_protocol_chunks,
+    validate_chunk_result,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
@@ -67,7 +69,7 @@ TIMEOUT_SECONDS = 119.0
 EXPECTED_CORE_PAGES = tuple(range(25, 30))
 EXPECTED_CONTEXT_PAGES = (24,)
 EXPECTED_CLAIMS = 20
-EXPECTED_RESPONSE_BYTES = 6_551
+EXPECTED_RESPONSE_BYTES = 6_110
 
 
 def _canonical_json(value: object) -> str:
@@ -355,6 +357,11 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
             core_page_refs=chunk.core_page_refs,
             request=request,
         )
+        validate_chunk_result(
+            plan,
+            ValidatedChunkResult(chunk=chunk, analysis=analysis),
+            extraction,
+        )
         validation_metadata.update(
             {
                 "coverage_record_count": len(analysis.page_coverage),
@@ -389,6 +396,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
                     for claim in analysis.claims
                 )
                 == required_action_count,
+                "merge_input_revalidation_succeeded": True,
                 "canonical_validation_succeeded": True,
             }
         )
@@ -405,6 +413,11 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         chunk_id=chunk.chunk_id,
         core_page_refs=chunk.core_page_refs,
         request=request,
+    )
+    validate_chunk_result(
+        plan,
+        ValidatedChunkResult(chunk=chunk, analysis=deterministic_analysis),
+        extraction,
     )
     deterministic_bytes = len(deterministic_response.encode("utf-8"))
     deterministic_claims = len(deterministic_analysis.claims)
@@ -440,10 +453,11 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
             default=0,
         ),
         "structure_marker_count": len(deterministic_analysis.structure),
+        "merge_input_revalidation_succeeded": True,
         "canonical_validation_succeeded": True,
         "structural_telemetry": deterministic_telemetry.public_dict(),
     }
-    case_metadata["schema_cardinality_bounds"] = {
+    case_metadata["canonical_coverage_cardinality_bounds"] = {
         "required_page_coverage_records": len(chunk.core_page_refs),
         "permitted_core_coverage_pages": list(chunk.core_page_refs),
         "maximum_page_coverage_records": MAX_PAGE_COVERAGE_RECORDS,
@@ -451,6 +465,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
             MAX_EVIDENCE_ITEM_REFS_PER_PAGE
         ),
         "coverage_references_must_be_unique": True,
+        "coverage_references_server_derived": True,
     }
 
     runtime: dict[str, Any] = {

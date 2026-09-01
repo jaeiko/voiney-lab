@@ -283,7 +283,6 @@ class ExactNumberedStepClaimModel:
                 {
                     "source_page_number": page_number,
                     "status": "complete" if item_ids else "no_relevant_claims",
-                    "evidence_item_ids": item_ids,
                 }
             )
         return json.dumps(
@@ -378,6 +377,24 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
     action_count = sum(
         claim.category.value == "action" for claim in merged.claims
     )
+    marker_count = len(merged.structure)
+    coverage_reference_count = sum(
+        len(item.evidence_item_ids) for item in merged.page_coverage
+    )
+    emitted_item_ids = {
+        item.marker_id for item in merged.structure
+    } | {
+        item.claim_id for item in merged.claims
+    }
+    coverage_item_ids = {
+        item_id
+        for coverage in merged.page_coverage
+        for item_id in coverage.evidence_item_ids
+    }
+    emitted_items_accounted_for_exactly_once = (
+        coverage_item_ids == emitted_item_ids
+        and coverage_reference_count == len(emitted_item_ids)
+    )
     canonical_source_text_reconstructed = all(
         item.source_text == item.evidence.source_excerpt
         for item in (*merged.structure, *merged.claims)
@@ -401,7 +418,12 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
         "chunk_count": len(plan.chunks),
         "configured_concurrency": concurrency,
         "claim_count": len(merged.claims),
+        "marker_count": marker_count,
         "action_count": action_count,
+        "canonical_coverage_reference_count": coverage_reference_count,
+        "emitted_items_accounted_for_exactly_once": (
+            emitted_items_accounted_for_exactly_once
+        ),
         "all_required_chunks_valid": len(analyses) == len(plan.chunks),
         "exact_evidence_validated": True,
         "canonical_source_text_reconstructed": (
