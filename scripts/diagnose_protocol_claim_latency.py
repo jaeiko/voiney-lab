@@ -80,7 +80,12 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     if not ANKOM_SOURCE.is_file():
         raise RuntimeError("The fixed ANKOM diagnostic source is unavailable.")
     extraction = extract_protocol_pdf(ANKOM_SOURCE)
-    limits = ChunkAnalysisLimits(max_retries=0)
+    # Preserve the committed 8-page latency baseline even when production
+    # planning adds smaller output-complexity units.
+    limits = ChunkAnalysisLimits(
+        max_retries=0,
+        max_core_source_bytes_per_chunk=192 * 1024,
+    )
     protocol_id = f"protocol-{extraction.sha256[:32]}"
     plan = plan_protocol_chunks(
         extraction,

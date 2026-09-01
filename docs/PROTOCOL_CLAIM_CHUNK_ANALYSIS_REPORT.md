@@ -37,8 +37,10 @@ non-contiguous selections. Only server-resolved text and identity enter canonica
 
 - Claim-chunk production routing is protected by the default-off
   `VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` deployment gate.
-- The page planner uses at most eight core pages per chunk as well as the
-  unchanged 192 KiB text ceiling.
+- The page planner retains established windows of at most eight core pages and
+  the unchanged 192 KiB text ceiling, then subdivides each window at a
+  deterministic 4 KiB core-source target to bound expected output cardinality.
+  An atomic source page is never split.
 - The production default is one provider call at a time. Two-way concurrency is
   bounded and test-only/explicit until a live provider run over the real sources
   passes.
@@ -176,6 +178,26 @@ resolution, canonical evidence validation, and chunk completeness were
 unavailable or false. The stop condition prohibited a retry or second chunk.
 Payload compaction is demonstrated; under-120-second provider completion with
 valid evidence is not.
+
+### Output-cardinality follow-up, 2026-09-01 UTC
+
+The deterministic provider fake produced one complete, canonically valid
+18,378-byte response for core pages 25–32: 41 non-duplicate claims, 19 numbered
+actions, 8 page-coverage records, and 41 evidence-handle references. The claims
+array accounted for 16,968 bytes (92.328%); claim count predicted output bytes
+more closely than page, action, or segment count in the measured 8/4/2-page
+units. A conservative server-derivation-only DTO projection reduced bytes by
+23.447%, while a 4 KiB core-source subdivision produced two complete valid units:
+pages 25–29 at 9,301 bytes/20 claims and pages 30–32 at 9,232 bytes/21 claims.
+Worst expected per-call bytes fell 49.391%; total expected bytes rose 0.843%.
+
+Exactly one default-tier `grok-4.3` diagnostic then used the harder pages 25–29
+unit with reasoning effort `none`, zero retries, and a 119-second total deadline.
+Headers arrived at 1.205718 seconds and first output at 1.257477 seconds. The
+stream emitted 12,195 non-empty deltas and 33,252 bytes through 118.993178
+seconds but did not finish by 119.000928 seconds. No complete JSON reached parsing
+or canonical validation. Smaller deterministic units are now enforced, but real
+provider viability remains unproven and output generation remains the blocker.
 
 ## Legacy provenance debt
 

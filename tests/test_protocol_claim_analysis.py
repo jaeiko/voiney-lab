@@ -835,6 +835,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             limits=limits,
         )
         self.assertEqual(limits.max_chunk_text_bytes, 192 * 1024)
+        self.assertEqual(limits.max_core_source_bytes_per_chunk, 4 * 1024)
         self.assertEqual(len(plan.chunks), 5)
         self.assertTrue(all(len(chunk.core_page_refs) <= 8 for chunk in plan.chunks))
         with patch.dict("os.environ", {}, clear=True):
@@ -857,7 +858,8 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         write_pages(
             source,
             tuple(
-                f"Protocol Large Section {number} {number}. Do action {number}."
+                f"Protocol Large Section {number} {number}. Do action {number}. "
+                + "x" * 700
                 for number in range(1, 10)
             ),
         )
@@ -885,8 +887,8 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 self.assertEqual(analyzed.analysis_status, "review_required")
                 self.assertFalse(analyzed.available_for_execution)
                 status = catalog.analysis_run_status(entry.protocol_id)
-                self.assertEqual(status.total_chunks, 2)
-                self.assertEqual(status.completed_chunks, 2)
+                self.assertEqual(status.total_chunks, 3)
+                self.assertEqual(status.completed_chunks, 3)
         finally:
             store.close()
 

@@ -321,6 +321,66 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             )
         with self.assertRaises(ProtocolChunkAdmissionError):
             replace(self.limits, max_concurrency=3)
+        with self.assertRaises(ProtocolChunkAdmissionError):
+            replace(self.limits, max_core_source_bytes_per_chunk=0)
+        with self.assertRaises(ProtocolChunkAdmissionError):
+            replace(
+                self.limits,
+                max_core_source_bytes_per_chunk=192 * 1024 + 1,
+            )
+
+    def test_core_source_budget_subdivides_legacy_page_windows(self):
+        sizes = tuple(
+            len(page.text.encode("utf-8"))
+            for page in self.extraction.pages
+        )
+        budget = sizes[0] + sizes[1] + 1
+        limits = replace(
+            self.limits,
+            max_chunks=8,
+            max_chunk_text_bytes=64 * 1024,
+            max_core_pages_per_chunk=4,
+            max_core_source_bytes_per_chunk=budget,
+        )
+
+        plan = plan_protocol_chunks(
+            self.extraction,
+            self.protocol_id,
+            "pdf-1",
+            limits=limits,
+        )
+
+        self.assertEqual(
+            tuple(chunk.core_page_refs for chunk in plan.chunks),
+            ((1, 2), (3, 4), (5, 6)),
+        )
+        self.assertEqual(
+            tuple(
+                page
+                for chunk in plan.chunks
+                for page in chunk.core_page_refs
+            ),
+            tuple(range(1, 7)),
+        )
+        self.assertNotEqual(
+            plan.planner_configuration_sha256,
+            plan_protocol_chunks(
+                self.extraction,
+                self.protocol_id,
+                "pdf-1",
+                limits=replace(
+                    limits,
+                    max_core_source_bytes_per_chunk=budget + 1,
+                ),
+            ).planner_configuration_sha256,
+        )
+        with self.assertRaises(ProtocolChunkAdmissionError):
+            plan_protocol_chunks(
+                self.extraction,
+                self.protocol_id,
+                "pdf-1",
+                limits=replace(limits, max_chunks=2),
+            )
 
     def test_planner_overlap_is_page_local_bounded_and_identity_bound(self):
         overlap_pdf = self.root / "overlap.pdf"

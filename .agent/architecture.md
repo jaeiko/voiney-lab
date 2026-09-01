@@ -96,7 +96,10 @@ documents over eight pages enter the evidence-claim path even when their
 extracted byte count is small. Its provider DTO is not ExperimentProtocol:
 it contains page coverage, source structure markers, and independently evidenced
 scientific/execution claims. Pages are exposed as deterministic, bounded
-numbered-action blocks with compact request-scoped handles. An immutable
+numbered-action blocks with compact request-scoped handles. Established
+eight-core-page windows are subdivided at a deterministic 4 KiB core-source
+target to bound expected provider-output cardinality without splitting an atomic
+source page. An immutable
 server-side map binds each handle to the canonical segment identity, revision,
 document hash, page, page-text hash, segment order, and exact text. The provider
 selects only adjacent handles; the server reconstructs the exact excerpt and

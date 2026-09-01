@@ -38,7 +38,7 @@ from voice_workflow_agent.experiment_protocol_pdf import (
 )
 
 
-PLANNER_VERSION = "evidence-claim-handle-v4"
+PLANNER_VERSION = "evidence-claim-handle-v5"
 _HARD_MAX_PAGES = 512
 _HARD_MAX_EXTRACTED_TEXT_BYTES = 8 * 1024 * 1024
 _HARD_MAX_CHUNKS = 64
@@ -48,6 +48,7 @@ _HARD_MAX_CONCURRENCY = 2
 _HARD_MAX_TIMEOUT_SECONDS = 120.0
 _HARD_MAX_RETRIES = 1
 _HARD_MAX_CORE_PAGES_PER_CHUNK = 32
+_HARD_MAX_CORE_SOURCE_BYTES_PER_CHUNK = 192 * 1024
 
 
 class ProtocolChunkError(ValueError):
@@ -84,6 +85,7 @@ class ChunkAnalysisLimits:
     max_retries: int = 1
     overlap_pages: int = 1
     max_core_pages_per_chunk: int = 8
+    max_core_source_bytes_per_chunk: int = 4 * 1024
 
     def __post_init__(self) -> None:
         integer_limits = (
@@ -96,6 +98,7 @@ class ChunkAnalysisLimits:
             self.max_retries,
             self.overlap_pages,
             self.max_core_pages_per_chunk,
+            self.max_core_source_bytes_per_chunk,
         )
         if any(
             not isinstance(value, int) or isinstance(value, bool) or value < 0
@@ -113,6 +116,7 @@ class ChunkAnalysisLimits:
             or self.max_concurrency < 1
             or self.overlap_pages > 1
             or self.max_core_pages_per_chunk < 1
+            or self.max_core_source_bytes_per_chunk < 1
             or self.max_pages > _HARD_MAX_PAGES
             or self.max_extracted_text_bytes > _HARD_MAX_EXTRACTED_TEXT_BYTES
             or self.max_chunks > _HARD_MAX_CHUNKS
@@ -122,6 +126,8 @@ class ChunkAnalysisLimits:
             or self.max_retries > _HARD_MAX_RETRIES
             or self.max_core_pages_per_chunk
             > _HARD_MAX_CORE_PAGES_PER_CHUNK
+            or self.max_core_source_bytes_per_chunk
+            > _HARD_MAX_CORE_SOURCE_BYTES_PER_CHUNK
             or not isinstance(self.timeout_seconds, (int, float))
             or isinstance(self.timeout_seconds, bool)
             or not math.isfinite(self.timeout_seconds)
@@ -296,7 +302,7 @@ def plan_protocol_chunks(
             "One source page exceeds the per-chunk text limit."
         )
 
-    core_groups: list[tuple[int, ...]] = []
+    legacy_core_groups: list[tuple[int, ...]] = []
     current: list[int] = []
     current_bytes = 0
     for page_number, byte_count in enumerate(page_sizes, start=1):
@@ -304,13 +310,36 @@ def plan_protocol_chunks(
             current_bytes + byte_count > limits.max_chunk_text_bytes
             or len(current) >= limits.max_core_pages_per_chunk
         ):
-            core_groups.append(tuple(current))
+            legacy_core_groups.append(tuple(current))
             current = []
             current_bytes = 0
         current.append(page_number)
         current_bytes += byte_count
     if current:
-        core_groups.append(tuple(current))
+        legacy_core_groups.append(tuple(current))
+
+    # Preserve the established page/text windows, then subdivide only where
+    # their provider output burden is likely to be high. Source bytes are a
+    # deterministic, content-agnostic proxy for claim cardinality; a single
+    # atomic page may exceed the target because provenance remains page-bound.
+    core_groups: list[tuple[int, ...]] = []
+    for legacy_group in legacy_core_groups:
+        current = []
+        current_bytes = 0
+        for page_number in legacy_group:
+            byte_count = page_sizes[page_number - 1]
+            if (
+                current
+                and current_bytes + byte_count
+                > limits.max_core_source_bytes_per_chunk
+            ):
+                core_groups.append(tuple(current))
+                current = []
+                current_bytes = 0
+            current.append(page_number)
+            current_bytes += byte_count
+        if current:
+            core_groups.append(tuple(current))
     if len(core_groups) > limits.max_chunks:
         raise ProtocolChunkAdmissionError(
             "Protocol exceeds the maximum chunk count."

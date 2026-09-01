@@ -193,14 +193,16 @@ unreviewed/invalid OCR, corrupt/encrypted PDFs, and unsafe files fail closed.
 
 Long text-native onboarding is evidence-first. Documents over eight pages, or
 documents that exceed the existing single-pass request envelope, are split into
-page-aligned chunks without lowering the 192 KiB per-chunk text ceiling. The
-provider returns a small claim DTO rather than one `ExperimentProtocol` per
-chunk. Every material, equipment, action, value, prerequisite, hazard,
-observation, repeat, or explicit missing-value claim repeats the immutable source
-revision, SHA-256, one-based page, and exact contiguous excerpt. Deterministic
-validation rejects a whole chunk on any fabricated, stale, non-contiguous, or
-out-of-scope evidence; merge requires every planned chunk and complete page
-coverage before whole-document consistency validation and final domain assembly.
+page-aligned chunks without lowering the 192 KiB per-chunk text ceiling. Each
+established eight-core-page window is further subdivided at a deterministic
+4 KiB core-source target to bound expected claim-output cardinality; an atomic
+page is never split. The provider returns a small claim DTO rather than one
+`ExperimentProtocol` per chunk and selects compact request-scoped evidence
+handles. The server resolves those handles to immutable source identity and exact
+contiguous excerpts. Deterministic validation rejects a whole chunk on any
+fabricated, stale, non-contiguous, or out-of-scope evidence; merge requires every
+planned chunk and complete page coverage before whole-document consistency
+validation and final domain assembly.
 Chunk calls are serial by default, concurrency two is explicit/experimental, and
 the 120-second limit is one total-run deadline rather than a fresh timeout per
 batch. No partial-success result is persisted as a review candidate.
