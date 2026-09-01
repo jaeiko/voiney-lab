@@ -68,7 +68,25 @@ from voice_workflow_agent.protocol_ocr import (
 _SAFE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.pdf$", re.IGNORECASE)
 _STABLE_PROTOCOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+))?$")
+_ACTOR_PRINCIPAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}")
+_ACTOR_ROLES = frozenset({"reviewer", "lab_admin", "organization_admin"})
+
+
+def _checked_actor(
+    actor_principal_id: str,
+    actor_role: str | None,
+    error: type[Exception],
+) -> None:
+    """Reject an unidentified or unauthorized human actor."""
+
+    if not _ACTOR_PRINCIPAL.fullmatch(actor_principal_id):
+        raise error("Protocol approval actor is invalid.")
+    if actor_role not in _ACTOR_ROLES:
+        raise error("Protocol approval role is invalid.")
+
+
 _APPROVAL_EVENT = "protocol_revision_approved"
+_SAFETY_ACKNOWLEDGEMENT_EVENT = "protocol_safety_warnings_acknowledged"
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
 _ANALYSIS_READY_EVENT = "protocol_analysis_ready"
@@ -1161,17 +1179,15 @@ class ProtocolCatalog:
         readiness = (
             analysis.readiness_status if analysis else "analysis_required"
         )
-        if analysis is not None and not approved:
-            lifecycle_state = (
-                "review_required"
-                if readiness == domain.ReadinessStatus.GUIDANCE_READY.value
-                else "blocked"
+        execution_ready = analysis is not None and (
+            readiness == domain.ReadinessStatus.GUIDANCE_READY.value
+            or self._safety_gate_cleared(
+                revision.experiment_id, revision.revision_number, analysis
             )
-        available = bool(
-            approved
-            and analysis is not None
-            and readiness == domain.ReadinessStatus.GUIDANCE_READY.value
         )
+        if analysis is not None and not approved:
+            lifecycle_state = "review_required" if execution_ready else "blocked"
+        available = bool(approved and execution_ready)
         title = (
             analysis.protocol.metadata.title
             if analysis is not None
@@ -2024,6 +2040,104 @@ class ProtocolCatalog:
         )
         return self.get_entry(protocol_id)
 
+    def _safety_warnings_acknowledged(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+    ) -> bool:
+        """True when a human acknowledged this exact analysis revision."""
+
+        return any(
+            event.event_type == _SAFETY_ACKNOWLEDGEMENT_EVENT
+            and event.protocol_revision_number == protocol_revision_number
+            and event.analysis_revision_number == analysis_revision_number
+            for event in self.store.list_events(protocol_id)
+        )
+
+    def _safety_gate_cleared(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis: Any,
+    ) -> bool:
+        """True when the only thing blocking readiness is an acknowledged gate.
+
+        Every other blocking reason still blocks.  An acknowledgement discharges
+        the absent-safety-warning gate and nothing else.
+        """
+
+        if set(analysis.readiness.reason_codes) != {
+            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+        }:
+            return False
+        return self._safety_warnings_acknowledged(
+            protocol_id,
+            protocol_revision_number,
+            analysis.analysis_revision_number,
+        )
+
+    def acknowledge_absent_safety_warnings(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Record a human confirming this Protocol declares no safety warning.
+
+        The absent-warning gate is deliberately not self-clearing: some
+        protocols genuinely carry no hazard, and only a person can tell that
+        apart from an extraction that dropped one.  The confirmation is written
+        to the append-only ledger with the actor and the store's ``recorded_at``
+        timestamp, so who cleared it and when stays auditable.
+        """
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            raise ProtocolApprovalError(
+                "A validated analysis revision is required for acknowledgement."
+            )
+        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
+        revision = self.store.get_protocol_revision(
+            protocol_id, protocol_revision_number
+        )
+        if revision is None:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        analysis = self.store.get_analysis_revision(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
+        reason_code = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS
+        if reason_code.value not in analysis.readiness.reason_codes:
+            raise ProtocolApprovalError(
+                "This analysis revision has no absent-safety-warning gate."
+            )
+        self.store.append_event(
+            (
+                f"safety-ack-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _SAFETY_ACKNOWLEDGEMENT_EVENT,
+            {
+                "decision": "acknowledged",
+                "reason_code": reason_code.value,
+                "declared_safety_warning_count": 0,
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (
+                    comment or "Reviewer confirmed no source safety warning."
+                )[:4000],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
     def approve(
         self,
         protocol_id: str,
@@ -2053,15 +2167,15 @@ class ProtocolCatalog:
             protocol_id, protocol_revision_number, analysis_revision_number
         )
         if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            raise ProtocolApprovalError(
-                "Protocol analysis is not ready for execution approval."
-            )
+            if not self._safety_gate_cleared(
+                protocol_id, protocol_revision_number, analysis
+            ):
+                raise ProtocolApprovalError(
+                    "Protocol analysis is not ready for execution approval."
+                )
         payload = {"decision": "approved", "authority": "service_policy"}
         if actor_principal_id is not None:
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",actor_principal_id):
-                raise ProtocolApprovalError("Protocol approval actor is invalid.")
-            if actor_role not in {"reviewer","lab_admin","organization_admin"}:
-                raise ProtocolApprovalError("Protocol approval role is invalid.")
+            _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
             payload.update({
                 "actor_principal_id":actor_principal_id,
                 "actor_role":actor_role,
@@ -2093,9 +2207,12 @@ class ProtocolCatalog:
                 "Protocol analysis is required before development activation."
             )
         if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            raise ProtocolCatalogUnavailableError(
-                f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
-            )
+            if not self._safety_gate_cleared(
+                protocol_id, revision.revision_number, analysis
+            ):
+                raise ProtocolCatalogUnavailableError(
+                    f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
+                )
         self.store.append_event(
             f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-{analysis.analysis_revision_number}",
             protocol_id,

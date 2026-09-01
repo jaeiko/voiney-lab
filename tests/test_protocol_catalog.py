@@ -119,7 +119,9 @@ def analysis_draft(path: Path, protocol_id: str, title: str) -> ProtocolAnalysis
     page_text = extraction.pages[0].text
     section_text = "Section preparation"
     instruction = "1. Add solution."
+    warning_text = "Wear gloves."
     assert section_text in page_text and instruction in page_text and title in page_text
+    assert warning_text in page_text
     evidence = lambda excerpt: domain.SourceEvidence(1, excerpt)
     protocol = domain.ExperimentProtocol(
         protocol_id,
@@ -136,7 +138,17 @@ def analysis_draft(path: Path, protocol_id: str, title: str) -> ProtocolAnalysis
                 evidence(section_text),
                 (
                     domain.ProtocolSourceStep(
-                        "step-1", "1", instruction, evidence(instruction)
+                        "step-1",
+                        "1",
+                        instruction,
+                        evidence(instruction),
+                        warnings=(
+                            domain.SourceStatement(
+                                "glove-warning",
+                                warning_text,
+                                evidence(warning_text),
+                            ),
+                        ),
                     ),
                 ),
             ),
@@ -167,12 +179,12 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.beta = self.root / "beta.pdf"
         write_text_pdf(
             self.alpha,
-            "Protocol Alpha\nSection preparation\n1. Add solution.",
+            "Protocol Alpha\nSection preparation\n1. Add solution.\nWear gloves.",
             title="Protocol Alpha",
         )
         write_text_pdf(
             self.beta,
-            "Protocol Beta\nSection preparation\n1. Add solution.",
+            "Protocol Beta\nSection preparation\n1. Add solution.\nWear gloves.",
             title="Protocol Beta",
         )
 
@@ -1006,7 +1018,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         synthetic = self.root / "synthetic.pdf"
         synthetic_bytes = write_text_pdf(
             synthetic,
-            "Protocol Synthetic\nSection preparation\n1. Add solution.",
+            "Protocol Synthetic\nSection preparation\n1. Add solution.\nWear gloves.",
             title="Protocol Synthetic",
         )
 
@@ -1265,7 +1277,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         source = self.root / "reviewable.pdf"
         source_bytes = write_text_pdf(
             source,
-            "Protocol Reviewable\nSection preparation\n1. Add solution.",
+            "Protocol Reviewable\nSection preparation\n1. Add solution.\nWear gloves.",
             title="Protocol Reviewable",
         )
         registration = await self._request(

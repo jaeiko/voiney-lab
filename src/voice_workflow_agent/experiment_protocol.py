@@ -94,6 +94,7 @@ class ReadinessReasonCode(str, Enum):
         "unresolved_execution_value_conflict"
     )
     SAFETY_CRITICAL_CONFLICT = "safety_critical_conflict"
+    NO_DECLARED_SAFETY_WARNINGS = "no_declared_safety_warnings"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
 
@@ -1465,6 +1466,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE,
             ReadinessReasonCode.UNRESOLVED_EXECUTION_VALUE_CONFLICT,
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
+            ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
@@ -1475,6 +1477,27 @@ _REASON_ORDER = {
         )
     )
 }
+
+
+def declared_safety_warning_count(protocol: ExperimentProtocol) -> int:
+    """Count safety warnings this Protocol would surface during execution.
+
+    Only step- and action-attached warnings count.  A hazard that reaches the
+    domain without attaching to a step is never read out at the moment it
+    matters, so it does not discharge the execution-time safety obligation.
+
+    This counts *our own extracted output*.  It deliberately never inspects the
+    source document for hazard wording: the gate asks whether this Protocol
+    declares a warning, not whether some phrase appears in the PDF.
+    """
+
+    total = 0
+    for section in protocol.sections:
+        for step in section.steps:
+            total += len(step.warnings)
+            for action in step.sub_actions:
+                total += len(action.warnings)
+    return total
 
 
 def assess_readiness(
@@ -1504,6 +1527,20 @@ def assess_readiness(
             ReadinessReason(
                 code=ReadinessReasonCode.NO_EXECUTABLE_STEPS,
                 message="The structured Protocol contains no executable source steps.",
+            )
+        )
+
+    if any(section.steps for section in protocol.sections) and (
+        declared_safety_warning_count(protocol) == 0
+    ):
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
+                message=(
+                    "The structured Protocol declares no step-level safety "
+                    "warning. A reviewer must confirm this is correct before "
+                    "execution."
+                ),
             )
         )
 

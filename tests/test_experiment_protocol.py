@@ -69,6 +69,7 @@ PAGE_ONE_TEXT = "\n".join(
         "Expected clear solution.",
         "Keep the tube closed.",
         "Work carefully.",
+        "Wear gloves; Solution A is corrosive.",
         "Use the centrifuge at 800 rpm.",
         "Before starting, warm the instrument for 30 minutes.",
         "Room temperature shaking for 20 minutes is an alternative.",
@@ -92,6 +93,7 @@ PAGE_TWO_TEXT = "\n".join(
         "3. Store the sample.",
         "Store the sample.",
         "Dependency evidence.",
+        "Wear gloves; Solution A is corrosive.",
     )
 )
 
@@ -179,6 +181,19 @@ def source_action(
     return ProtocolSubAction(**values)
 
 
+SAFETY_WARNING_TEXT = "Wear gloves; Solution A is corrosive."
+
+
+def safety_warning(page: int = 1) -> SourceStatement:
+    """A source-backed hazard so a fixture can be execution-ready."""
+
+    return SourceStatement(
+        f"safety-warning-p{page}",
+        SAFETY_WARNING_TEXT,
+        evidence(SAFETY_WARNING_TEXT, page),
+    )
+
+
 def source_step(
     step_id: str = "step-1",
     source_label: str = "1",
@@ -191,6 +206,7 @@ def source_step(
         "instruction_source_text": instruction,
         "evidence": evidence(instruction),
         "sub_actions": (source_action(),),
+        "warnings": (safety_warning(),),
     }
     values.update(overrides)
     return ProtocolSourceStep(**values)

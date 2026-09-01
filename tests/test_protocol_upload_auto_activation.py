@@ -32,7 +32,7 @@ class ProtocolUploadAutoActivationTests(unittest.TestCase):
         self.sample_pdf = self.root / "sample.pdf"
         write_text_pdf(
             self.sample_pdf,
-            "Protocol Test\nSection preparation\n1. Add solution.",
+            "Protocol Test\nSection preparation\n1. Add solution.\nWear gloves.",
             title="Protocol Test",
         )
 
