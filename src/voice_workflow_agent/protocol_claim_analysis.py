@@ -38,6 +38,8 @@ _MAX_MARKERS_PER_CHUNK = 1024
 _MAX_TEXT_CHARS = 32 * 1024
 _MAX_EVIDENCE_SEGMENTS_PER_SPAN = 256
 _MAX_PROVIDER_SEGMENT_CHARS = 4096
+MAX_PAGE_COVERAGE_RECORDS = 32
+MAX_EVIDENCE_ITEM_REFS_PER_PAGE = 256
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 _NUMBERED_SOURCE_LINE = re.compile(
     r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,3})(?:[.)])?[ \t]+(?P<next>\S+)"
@@ -319,6 +321,8 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
         "request_handle": {"type": "string"},
         "page_coverage": {
             "type": "array",
+            "minItems": 1,
+            "maxItems": MAX_PAGE_COVERAGE_RECORDS,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -330,6 +334,9 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "evidence_item_ids": {
                         "type": "array",
+                        "minItems": 0,
+                        "maxItems": MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+                        "uniqueItems": True,
                         "items": {"type": "string"},
                     },
                 },
@@ -720,6 +727,9 @@ def resolve_claim_source_evidence(
     raw: object,
     *,
     request: ProviderClaimRequest,
+    item_index: int | None = None,
+    item_type: str | None = None,
+    category: str | None = None,
 ) -> ClaimSourceEvidence:
     value = _expect_record(
         raw,
@@ -730,19 +740,33 @@ def resolve_claim_source_evidence(
         "evidence",
     )
     page_number = value["source_page_number"]
+    candidate_handles = value["evidence_segment_ids"]
+    candidate_handle_count = (
+        len(candidate_handles) if isinstance(candidate_handles, list) else None
+    )
     valid_page = (
         isinstance(page_number, int)
         and not isinstance(page_number, bool)
         and page_number in request.core_page_refs
     )
     if not valid_page:
+        mismatch_class = (
+            "context_evidence_for_core_item"
+            if isinstance(page_number, int)
+            and page_number in request.context_page_refs
+            else "source_identity_mismatch"
+        )
         raise ProtocolAnalysisEvidenceError(
             "Chunk claim evidence cites a page outside the active core chunk.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="chunk_identity_mismatch",
-                mismatch_class="source_identity_mismatch",
+                mismatch_class=mismatch_class,
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=(page_number if isinstance(page_number, int) else None),
+                provider_handle_count=candidate_handle_count,
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -772,7 +796,11 @@ def resolve_claim_source_evidence(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="chunk_identity_mismatch",
                 mismatch_class="source_identity_mismatch",
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -790,7 +818,11 @@ def resolve_claim_source_evidence(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="evidence_segment_unknown",
                 mismatch_class="source_identity_mismatch",
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -803,7 +835,11 @@ def resolve_claim_source_evidence(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="evidence_segment_unknown",
                 mismatch_class="source_identity_mismatch",
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -816,8 +852,13 @@ def resolve_claim_source_evidence(
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="chunk_identity_mismatch",
-                mismatch_class="source_identity_mismatch",
+                mismatch_class="provider_handle_page_mismatch",
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
+                expected_page_number=page_number,
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -829,13 +870,25 @@ def resolve_claim_source_evidence(
     positions = tuple(page_positions[segment.segment_id] for segment in selected)
     expected_positions = tuple(range(positions[0], positions[-1] + 1))
     if positions != expected_positions:
+        if len(set(provider_handles)) != len(provider_handles):
+            mismatch_class = "duplicate_provider_handle_selection"
+        elif positions != tuple(sorted(positions)):
+            mismatch_class = "reversed_provider_handle_selection"
+        else:
+            mismatch_class = "non_contiguous_source_evidence"
         raise ProtocolAnalysisEvidenceError(
             "Chunk claim evidence segments are reversed or non-contiguous.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="evidence_segment_range_invalid",
-                mismatch_class="non_contiguous_source_evidence",
+                mismatch_class=mismatch_class,
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
+                expected_count=len(expected_positions),
+                actual_count=len(positions),
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -849,7 +902,12 @@ def resolve_claim_source_evidence(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="evidence_segment_range_invalid",
                 mismatch_class="invalid_source_evidence",
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=category,
                 page_number=page_number,
+                provider_handle_count=len(provider_handles),
+                actual_length=len(excerpt),
                 chunk_id=request.chunk_id,
                 source_revision=request.source_revision,
                 source_hash=request.source_sha256,
@@ -869,10 +927,16 @@ def _decode_evidence(
     raw: object,
     *,
     request: ProviderClaimRequest,
+    item_index: int | None = None,
+    item_type: str | None = None,
+    category: str | None = None,
 ) -> ClaimSourceEvidence:
     return resolve_claim_source_evidence(
         raw,
         request=request,
+        item_index=item_index,
+        item_type=item_type,
+        category=category,
     )
 
 
@@ -1026,10 +1090,7 @@ def parse_chunk_claim_response(
         "root",
     )
     if (
-        value["claim_schema_version"] != CLAIM_SCHEMA_VERSION
-        or value["capability_policy_id"] != capability_policy_id
-        or value["request_handle"] != request.request_handle
-        or request.source_revision != source_revision
+        request.source_revision != source_revision
         or request.source_sha256 != extraction.sha256
         or request.chunk_id != chunk_id
         or request.core_page_refs != core_page_refs
@@ -1046,6 +1107,33 @@ def parse_chunk_claim_response(
                 source_hash=extraction.sha256,
             ),
         )
+    if value["request_handle"] != request.request_handle:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim response does not match the active request.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_envelope_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="request_handle_mismatch",
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    if (
+        value["claim_schema_version"] != CLAIM_SCHEMA_VERSION
+        or value["capability_policy_id"] != capability_policy_id
+    ):
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim response uses the wrong analysis contract.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_envelope_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="claim_contract_identity_mismatch",
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
     raw_structure = value["structure"]
     raw_claims = value["claims"]
     raw_coverage = value["page_coverage"]
@@ -1055,13 +1143,14 @@ def parse_chunk_claim_response(
         or not isinstance(raw_claims, list)
         or len(raw_claims) > _MAX_CLAIMS_PER_CHUNK
         or not isinstance(raw_coverage, list)
+        or len(raw_coverage) > MAX_PAGE_COVERAGE_RECORDS
     ):
         raise ProtocolAnalysisResponseError(
             "Chunk claim response exceeds a bounded record limit."
         )
     core_pages = frozenset(core_page_refs)
     markers: list[ProtocolStructureMarker] = []
-    for item in raw_structure:
+    for item_index, item in enumerate(raw_structure):
         record = _expect_record(
             item,
             {
@@ -1078,11 +1167,21 @@ def parse_chunk_claim_response(
             kind = StructureMarkerKind(record["kind"])
         except (TypeError, ValueError) as exc:
             raise ProtocolAnalysisResponseError(
-                "Chunk claim response has an unsupported structure marker."
+                "Chunk claim response has an unsupported structure marker.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_claim_record_validation",
+                    reason_code="unsupported_structure_marker",
+                    mismatch_class="semantic_contract_violation",
+                    evidence_index=item_index,
+                    evidence_type="structure_marker",
+                ),
             ) from exc
         evidence = _decode_evidence(
             record["evidence"],
             request=request,
+            item_index=item_index,
+            item_type="structure_marker",
+            category=kind.value,
         )
         source_text = _required_text(record["source_text"], "structure")
         if source_text not in evidence.source_excerpt:
@@ -1092,7 +1191,12 @@ def parse_chunk_claim_response(
                     validation_stage="chunk_claim_text_validation",
                     reason_code="claim_not_found",
                     mismatch_class="claim_evidence_mismatch",
+                    evidence_index=item_index,
+                    evidence_type="structure_marker",
+                    category=kind.value,
                     page_number=evidence.source_page_number,
+                    expected_length=len(evidence.source_excerpt),
+                    actual_length=len(source_text),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1114,7 +1218,7 @@ def parse_chunk_claim_response(
             )
         )
     claims: list[ProtocolClaim] = []
-    for item in raw_claims:
+    for item_index, item in enumerate(raw_claims):
         record = _expect_record(
             item,
             {
@@ -1135,11 +1239,21 @@ def parse_chunk_claim_response(
             category = ClaimCategory(record["category"])
         except (TypeError, ValueError) as exc:
             raise ProtocolAnalysisResponseError(
-                "Chunk claim response has an unsupported claim category."
+                "Chunk claim response has an unsupported claim category.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_claim_record_validation",
+                    reason_code="unsupported_claim_category",
+                    mismatch_class="semantic_contract_violation",
+                    evidence_index=item_index,
+                    evidence_type="claim",
+                ),
             ) from exc
         evidence = _decode_evidence(
             record["evidence"],
             request=request,
+            item_index=item_index,
+            item_type="claim",
+            category=category.value,
         )
         source_text = _required_text(record["source_text"], "claim")
         if source_text not in evidence.source_excerpt:
@@ -1149,7 +1263,12 @@ def parse_chunk_claim_response(
                     validation_stage="chunk_claim_text_validation",
                     reason_code="claim_not_found",
                     mismatch_class="claim_evidence_mismatch",
+                    evidence_index=item_index,
+                    evidence_type="claim",
+                    category=category.value,
                     page_number=evidence.source_page_number,
+                    expected_length=len(evidence.source_excerpt),
+                    actual_length=len(source_text),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1185,10 +1304,18 @@ def parse_chunk_claim_response(
     ]
     if len(set(identifiers)) != len(identifiers):
         raise ProtocolAnalysisResponseError(
-            "Chunk claim response contains duplicate evidence item identifiers."
+            "Chunk claim response contains duplicate evidence item identifiers.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_relationship_validation",
+                reason_code="duplicate_evidence_item_identifier",
+                mismatch_class="duplicate_or_conflicting_record",
+                evidence_type="evidence_item",
+                expected_count=len(set(identifiers)),
+                actual_count=len(identifiers),
+            ),
         )
     coverage: list[ProtocolPageClaimCoverage] = []
-    for item in raw_coverage:
+    for item_index, item in enumerate(raw_coverage):
         record = _expect_record(
             item,
             {
@@ -1202,10 +1329,65 @@ def parse_chunk_claim_response(
             status = PageCoverageStatus(record["status"])
         except (TypeError, ValueError) as exc:
             raise ProtocolAnalysisResponseError(
-                "Chunk claim response has an unsupported coverage status."
+                "Chunk claim response has an unsupported coverage status.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="unsupported_coverage_status",
+                    mismatch_class="semantic_contract_violation",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_coverage_count=len(raw_coverage),
+                ),
             ) from exc
         page_number = record["source_page_number"]
         item_ids = record["evidence_item_ids"]
+        if (
+            isinstance(item_ids, list)
+            and len(item_ids) > MAX_EVIDENCE_ITEM_REFS_PER_PAGE
+        ):
+            raise ProtocolAnalysisEvidenceError(
+                "Chunk page coverage exceeds the bounded evidence reference limit.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="coverage_mismatch",
+                    mismatch_class="coverage_reference_cardinality_exceeded",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_number=(
+                        page_number if isinstance(page_number, int) else None
+                    ),
+                    expected_count=MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+                    actual_count=len(item_ids),
+                    page_coverage_count=len(raw_coverage),
+                    chunk_id=chunk_id,
+                    source_revision=source_revision,
+                    source_hash=extraction.sha256,
+                ),
+            )
+        if (
+            isinstance(item_ids, list)
+            and all(isinstance(item_id, str) for item_id in item_ids)
+            and len(set(item_ids)) != len(item_ids)
+        ):
+            raise ProtocolAnalysisEvidenceError(
+                "Chunk page coverage contains duplicate evidence references.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="coverage_mismatch",
+                    mismatch_class="duplicate_coverage_reference",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_number=(
+                        page_number if isinstance(page_number, int) else None
+                    ),
+                    expected_count=len(set(item_ids)),
+                    actual_count=len(item_ids),
+                    page_coverage_count=len(raw_coverage),
+                    chunk_id=chunk_id,
+                    source_revision=source_revision,
+                    source_hash=extraction.sha256,
+                ),
+            )
         if (
             not isinstance(page_number, int)
             or isinstance(page_number, bool)
@@ -1219,7 +1401,12 @@ def parse_chunk_claim_response(
                     validation_stage="chunk_page_coverage_validation",
                     reason_code="chunk_identity_mismatch",
                     mismatch_class="source_identity_mismatch",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
                     page_number=(page_number if isinstance(page_number, int) else None),
+                    expected_count=len(core_pages),
+                    actual_count=len(raw_coverage),
+                    page_coverage_count=len(raw_coverage),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1286,7 +1473,26 @@ def validate_chunk_claim_analysis(
         )
     core = frozenset(core_page_refs)
     item_pages: dict[str, int] = {}
-    for item in (*analysis.structure, *analysis.claims):
+    indexed_items = (
+        *(
+            ("structure_marker", index, item)
+            for index, item in enumerate(analysis.structure)
+        ),
+        *(
+            ("claim", index, item)
+            for index, item in enumerate(analysis.claims)
+        ),
+    )
+    for item_type, item_index, item in indexed_items:
+        item_category = (
+            item.kind.value
+            if isinstance(item, ProtocolStructureMarker)
+            else (
+                item.category.value
+                if isinstance(item, ProtocolClaim)
+                else None
+            )
+        )
         if isinstance(item, ProtocolStructureMarker):
             if (
                 not _STABLE_ID.fullmatch(item.marker_id)
@@ -1353,7 +1559,15 @@ def validate_chunk_claim_analysis(
         )
         if identifier in item_pages:
             raise ProtocolAnalysisResponseError(
-                "Decoded chunk claims contain duplicate identifiers."
+                "Decoded chunk claims contain duplicate identifiers.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_claim_relationship_validation",
+                    reason_code="duplicate_evidence_item_identifier",
+                    mismatch_class="duplicate_or_conflicting_record",
+                    evidence_index=item_index,
+                    evidence_type=item_type,
+                    category=item_category,
+                ),
             )
         evidence = item.evidence
         if not isinstance(evidence, ClaimSourceEvidence):
@@ -1368,14 +1582,25 @@ def validate_chunk_claim_analysis(
                 core_pages=core,
                 chunk_id=chunk_id,
             )
-        except (ProtocolAnalysisEvidenceError, ProtocolAnalysisResponseError) as exc:
+        except ProtocolAnalysisEvidenceError as exc:
+            exc.enrich_diagnostic(
+                evidence_index=item_index,
+                evidence_type=item_type,
+                category=item_category,
+            )
+            raise
+        except ProtocolAnalysisResponseError as exc:
             raise ProtocolAnalysisEvidenceError(
                 "Decoded chunk claim evidence failed span revalidation.",
                 diagnostic=ProtocolEvidenceDiagnostic(
                     validation_stage="decoded_chunk_claim_validation",
                     reason_code="evidence_segment_range_invalid",
                     mismatch_class="claim_evidence_mismatch",
+                    evidence_index=item_index,
+                    evidence_type=item_type,
+                    category=item_category,
                     page_number=evidence.source_page_number,
+                    provider_handle_count=len(evidence.evidence_segment_ids),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1396,7 +1621,13 @@ def validate_chunk_claim_analysis(
                     validation_stage="decoded_chunk_claim_validation",
                     reason_code="quote_not_found",
                     mismatch_class="claim_evidence_mismatch",
+                    evidence_index=item_index,
+                    evidence_type=item_type,
+                    category=item_category,
                     page_number=evidence.source_page_number,
+                    provider_handle_count=len(evidence.evidence_segment_ids),
+                    expected_length=len(evidence.source_excerpt),
+                    actual_length=len(item.source_text),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1413,7 +1644,16 @@ def validate_chunk_claim_analysis(
     coverage_by_page = {item.source_page_number: item for item in analysis.page_coverage}
     if len(coverage_by_page) != len(analysis.page_coverage) or set(coverage_by_page) != core:
         raise ProtocolAnalysisResponseError(
-            "Chunk claims do not account for every core source page exactly once."
+            "Chunk claims do not account for every core source page exactly once.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_page_coverage_validation",
+                reason_code="coverage_mismatch",
+                mismatch_class="incomplete_or_duplicate_page_coverage",
+                evidence_type="page_coverage",
+                expected_count=len(core),
+                actual_count=len(analysis.page_coverage),
+                page_coverage_count=len(analysis.page_coverage),
+            ),
         )
     for page_number in core_page_refs:
         coverage = coverage_by_page[page_number]
@@ -1427,13 +1667,19 @@ def validate_chunk_claim_analysis(
             and claim.evidence.source_page_number == page_number
         }
         if not set(numbered_labels).issubset(action_labels):
+            missing_numbered_actions = set(numbered_labels) - action_labels
             raise ProtocolAnalysisEvidenceError(
                 "Chunk claims omit a numbered source action.",
                 diagnostic=ProtocolEvidenceDiagnostic(
                     validation_stage="chunk_page_coverage_validation",
                     reason_code="numbered_action_missing",
                     mismatch_class="claim_coverage_mismatch",
+                    evidence_type="page_coverage",
                     page_number=page_number,
+                    expected_count=len(numbered_labels),
+                    actual_count=len(action_labels),
+                    missing_numbered_action_count=len(missing_numbered_actions),
+                    page_coverage_count=len(analysis.page_coverage),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,
@@ -1471,7 +1717,11 @@ def validate_chunk_claim_analysis(
                     validation_stage="chunk_page_coverage_validation",
                     reason_code="coverage_mismatch",
                     mismatch_class="claim_coverage_mismatch",
+                    evidence_type="page_coverage",
                     page_number=page_number,
+                    expected_count=len(expected_ids),
+                    actual_count=len(coverage.evidence_item_ids),
+                    page_coverage_count=len(analysis.page_coverage),
                     chunk_id=chunk_id,
                     source_revision=source_revision,
                     source_hash=extraction.sha256,

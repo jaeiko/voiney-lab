@@ -46,7 +46,9 @@ from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_RESPONSE_SCHEMA,
     CLAIM_SCHEMA_VERSION,
+    MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
+    MAX_PAGE_COVERAGE_RECORDS,
     ClaimCategory,
     generate_page_evidence_segments,
     prepare_chunk_claim_request_context,
@@ -222,6 +224,18 @@ class RichClaimModel:
         return json.dumps(response, separators=(",", ":"))
 
 
+class RequestAwareRichClaimModel(RichClaimModel):
+    """Expose only the fictional request structure to deterministic mutations."""
+
+    def analyze(self, *, system_prompt, input_json, response_schema) -> str:
+        self.request = json.loads(input_json)
+        return super().analyze(
+            system_prompt=system_prompt,
+            input_json=input_json,
+            response_schema=response_schema,
+        )
+
+
 class ProtocolClaimAnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -279,6 +293,122 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             self.assertTrue(claim.evidence.evidence_segment_ids)
             self.assertIn(claim.evidence.source_excerpt, self.extraction.pages[0].text)
             self.assertIn(claim.source_text, claim.evidence.source_excerpt)
+
+    def test_claim_schema_makes_overlong_coverage_arrays_invalid(self):
+        coverage_schema = CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"]
+        reference_schema = coverage_schema["items"]["properties"][
+            "evidence_item_ids"
+        ]
+
+        self.assertEqual(coverage_schema["minItems"], 1)
+        self.assertEqual(
+            coverage_schema["maxItems"],
+            MAX_PAGE_COVERAGE_RECORDS,
+        )
+        self.assertEqual(reference_schema["minItems"], 0)
+        self.assertEqual(
+            reference_schema["maxItems"],
+            MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+        )
+        self.assertIs(reference_schema["uniqueItems"], True)
+
+        too_many_coverage_records = [
+            {"source_page_number": 1, "status": "complete", "evidence_item_ids": []}
+            for _ in range(MAX_PAGE_COVERAGE_RECORDS + 1)
+        ]
+        too_many_references = [
+            f"claim-{index}"
+            for index in range(MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1)
+        ]
+        duplicate_references = ["duplicate", "duplicate"]
+        self.assertGreater(
+            len(too_many_coverage_records),
+            coverage_schema["maxItems"],
+        )
+        self.assertGreater(
+            len(too_many_references),
+            reference_schema["maxItems"],
+        )
+        self.assertNotEqual(
+            len(duplicate_references),
+            len(set(duplicate_references)),
+        )
+
+    def test_coverage_cardinality_and_duplicate_refs_fail_without_repair(self):
+        def too_many_coverage_records(response):
+            record = response["page_coverage"][0]
+            response["page_coverage"] = [
+                dict(record) for _ in range(MAX_PAGE_COVERAGE_RECORDS + 1)
+            ]
+
+        with self.assertRaises(ProtocolAnalysisResponseError):
+            self.analyze(RichClaimModel(too_many_coverage_records))
+
+        def too_many_references(response):
+            response["page_coverage"][0]["evidence_item_ids"] = [
+                f"bounded-ref-{index}"
+                for index in range(MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1)
+            ]
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as cardinality_failure:
+            self.analyze(RichClaimModel(too_many_references))
+        self.assertEqual(
+            cardinality_failure.exception.diagnostic.mismatch_class,
+            "coverage_reference_cardinality_exceeded",
+        )
+        self.assertEqual(
+            cardinality_failure.exception.diagnostic.actual_count,
+            MAX_EVIDENCE_ITEM_REFS_PER_PAGE + 1,
+        )
+
+        def duplicate_reference(response):
+            item_ids = response["page_coverage"][0]["evidence_item_ids"]
+            item_ids.append(item_ids[0])
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as duplicate_failure:
+            self.analyze(RichClaimModel(duplicate_reference))
+        self.assertEqual(
+            duplicate_failure.exception.diagnostic.mismatch_class,
+            "duplicate_coverage_reference",
+        )
+
+        valid = self.analyze()
+        self.assertEqual(len(valid.analysis.page_coverage), 1)
+        self.assertLessEqual(
+            len(valid.analysis.page_coverage[0].evidence_item_ids),
+            MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+        )
+
+    def test_every_core_page_still_requires_exactly_one_coverage_record(self):
+        two_page_source = self.root / "exact-coverage.pdf"
+        page_text = (
+            "Protocol Evidence Preparation Before start: thaw sample. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            + self.action
+        )
+        write_pages(two_page_source, (page_text, page_text))
+        extraction = extract_protocol_pdf(two_page_source)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+        )
+        self.assertEqual(plan.chunks[0].core_page_refs, (1, 2))
+
+        with self.assertRaises(ProtocolAnalysisResponseError) as failure:
+            analyze_protocol_chunk(
+                extraction,
+                plan.chunks[0],
+                RichClaimModel(),
+            )
+        safe = failure.exception.diagnostic.privacy_safe_dict()
+        self.assertEqual(safe["reason_code"], "coverage_mismatch")
+        self.assertEqual(
+            safe["mismatch_class"],
+            "incomplete_or_duplicate_page_coverage",
+        )
+        self.assertEqual(safe["expected_count"], 2)
+        self.assertEqual(safe["actual_count"], 1)
 
     def test_evidence_segments_are_deterministic_and_source_identity_bound(self):
         multiline = replace(
@@ -606,6 +736,10 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.assertEqual(
             altered_failure.exception.diagnostic.reason_code, "chunk_identity_mismatch"
         )
+        self.assertEqual(
+            altered_failure.exception.diagnostic.mismatch_class,
+            "request_handle_mismatch",
+        )
 
         def missing(response):
             del response["request_handle"]
@@ -816,6 +950,154 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             failure.exception.diagnostic.reason_code,
             "numbered_action_missing",
         )
+        self.assertEqual(
+            failure.exception.diagnostic.missing_numbered_action_count,
+            1,
+        )
+
+    def test_privacy_safe_diagnostics_cover_completed_response_failures(self):
+        private_claim_id = "private-claim-id"
+        private_handle = "s-private-handle"
+        private_source_text = "PRIVATE MODEL NORMALIZATION"
+
+        def unknown_handle(response):
+            response["claims"][0]["evidence"]["evidence_segment_ids"] = [
+                private_handle
+            ]
+
+        def source_text_mismatch(response):
+            response["claims"][0]["source_text"] = private_source_text
+
+        def incomplete_coverage(response):
+            response["page_coverage"] = []
+
+        def duplicate_record(response):
+            response["claims"][1]["claim_id"] = private_claim_id
+            response["claims"][0]["claim_id"] = private_claim_id
+
+        cases = (
+            (
+                unknown_handle,
+                ProtocolAnalysisEvidenceError,
+                "evidence_segment_unknown",
+                "source_identity_mismatch",
+            ),
+            (
+                source_text_mismatch,
+                ProtocolAnalysisEvidenceError,
+                "claim_not_found",
+                "claim_evidence_mismatch",
+            ),
+            (
+                incomplete_coverage,
+                ProtocolAnalysisResponseError,
+                "coverage_mismatch",
+                "incomplete_or_duplicate_page_coverage",
+            ),
+            (
+                duplicate_record,
+                ProtocolAnalysisResponseError,
+                "duplicate_evidence_item_identifier",
+                "duplicate_or_conflicting_record",
+            ),
+        )
+        for mutation, error_type, reason_code, mismatch_class in cases:
+            with self.subTest(reason_code=reason_code):
+                with self.assertRaises(error_type) as failure:
+                    self.analyze(RichClaimModel(mutation))
+                safe = failure.exception.diagnostic.privacy_safe_dict()
+                rendered = json.dumps(safe, sort_keys=True)
+                self.assertEqual(safe["reason_code"], reason_code)
+                self.assertEqual(safe["mismatch_class"], mismatch_class)
+                for private_value in (
+                    private_claim_id,
+                    private_handle,
+                    private_source_text,
+                    self.extraction.sha256,
+                ):
+                    self.assertNotIn(private_value, rendered)
+                self.assertFalse(
+                    {"source_hash", "quote_sha256", "chunk_id", "source_revision"}
+                    & set(safe)
+                )
+
+    def test_selector_diagnostics_distinguish_wrong_page_context_and_range(self):
+        two_page_source = self.root / "selector-diagnostics.pdf"
+        page_text = (
+            "Protocol Evidence Preparation Before start: thaw sample. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            + self.action
+            + " 2. Finish processing."
+        )
+        write_pages(two_page_source, (page_text, page_text))
+        extraction = extract_protocol_pdf(two_page_source)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+            limits=ChunkAnalysisLimits(max_core_pages_per_chunk=1),
+        )
+        chunk = plan.chunks[1]
+        self.assertEqual(chunk.overlap_page_refs, (1,))
+
+        model = RequestAwareRichClaimModel()
+
+        def wrong_page_handle(response):
+            context_page = next(
+                page for page in model.request["pages"] if page["role"] == "context"
+            )
+            response["claims"][0]["evidence"]["evidence_segment_ids"] = [
+                context_page["segments"][0][0]
+            ]
+
+        def context_page_evidence(response):
+            context_page = next(
+                page for page in model.request["pages"] if page["role"] == "context"
+            )
+            response["claims"][0]["evidence"] = {
+                "source_page_number": context_page["source_page_number"],
+                "evidence_segment_ids": [context_page["segments"][0][0]],
+            }
+
+        def non_contiguous_handles(response):
+            core_page = next(
+                page for page in model.request["pages"] if page["role"] == "core"
+            )
+            self.assertGreaterEqual(len(core_page["segments"]), 3)
+            response["claims"][0]["evidence"]["evidence_segment_ids"] = [
+                core_page["segments"][0][0],
+                core_page["segments"][2][0],
+            ]
+
+        cases = (
+            (
+                wrong_page_handle,
+                "chunk_identity_mismatch",
+                "provider_handle_page_mismatch",
+            ),
+            (
+                context_page_evidence,
+                "chunk_identity_mismatch",
+                "context_evidence_for_core_item",
+            ),
+            (
+                non_contiguous_handles,
+                "evidence_segment_range_invalid",
+                "non_contiguous_source_evidence",
+            ),
+        )
+        for mutation, reason_code, mismatch_class in cases:
+            model.mutation = mutation
+            with self.subTest(mismatch_class=mismatch_class):
+                with self.assertRaises(ProtocolAnalysisEvidenceError) as failure:
+                    analyze_protocol_chunk(extraction, chunk, model)
+                safe = failure.exception.diagnostic.privacy_safe_dict()
+                self.assertEqual(safe["reason_code"], reason_code)
+                self.assertEqual(safe["mismatch_class"], mismatch_class)
+                self.assertEqual(safe["item_type"], "claim")
+                self.assertEqual(safe["item_index"], 0)
+                self.assertEqual(safe["category"], "material")
+                self.assertGreaterEqual(safe["provider_handle_count"], 1)
 
     def test_page_count_claim_routing_is_default_off_and_explicitly_enabled(self):
         many = self.root / "many.pdf"

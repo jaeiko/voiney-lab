@@ -356,12 +356,8 @@ def _safe_evidence_failure(
 ) -> dict[str, object] | None:
     if not isinstance(exc, ProtocolAnalysisEvidenceError):
         return None
-    exc.enrich_diagnostic(
-        source_revision=source_revision,
-        source_hash=source_hash,
-        **({"chunk_id": chunk_id} if chunk_id is not None else {}),
-    )
-    return exc.diagnostic.public_dict()
+    del source_revision, source_hash, chunk_id
+    return exc.diagnostic.privacy_safe_dict()
 
 
 def _chunk_run_lock(analysis_run_id: str) -> threading.Lock:

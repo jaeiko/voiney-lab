@@ -227,6 +227,19 @@ class ProtocolAnalysisModelError(ProtocolAnalysisError):
 class ProtocolAnalysisResponseError(ProtocolAnalysisError):
     code = "protocol_analysis_invalid_response"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic: ProtocolEvidenceDiagnostic | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic or ProtocolEvidenceDiagnostic(
+            validation_stage="response_decoding",
+            reason_code="invalid_response",
+            mismatch_class="response_contract_violation",
+        )
+
 
 @dataclass(frozen=True)
 class ProtocolEvidenceDiagnostic:
@@ -246,6 +259,15 @@ class ProtocolEvidenceDiagnostic:
     received_source_hash: str | None = None
     quote_sha256: str | None = None
     quote_length: int | None = None
+    category: str | None = None
+    provider_handle_count: int | None = None
+    expected_page_number: int | None = None
+    expected_count: int | None = None
+    actual_count: int | None = None
+    expected_length: int | None = None
+    actual_length: int | None = None
+    missing_numbered_action_count: int | None = None
+    page_coverage_count: int | None = None
 
     def public_dict(self) -> dict[str, object]:
         """Return only bounded identities and reason codes, never source text."""
@@ -266,6 +288,17 @@ class ProtocolEvidenceDiagnostic:
             "received_source_hash": self.received_source_hash,
             "quote_sha256": self.quote_sha256,
             "quote_length": self.quote_length,
+            "category": self.category,
+            "provider_handle_count": self.provider_handle_count,
+            "expected_page_number": self.expected_page_number,
+            "expected_count": self.expected_count,
+            "actual_count": self.actual_count,
+            "expected_length": self.expected_length,
+            "actual_length": self.actual_length,
+            "missing_numbered_action_count": (
+                self.missing_numbered_action_count
+            ),
+            "page_coverage_count": self.page_coverage_count,
         }
         values.update(
             (key, value) for key, value in optional.items() if value is not None
@@ -274,6 +307,36 @@ class ProtocolEvidenceDiagnostic:
             values["matching_source_pages"] = list(
                 self.matching_source_pages
             )
+        return values
+
+    def privacy_safe_dict(self) -> dict[str, object]:
+        """Return structural failure metadata with no source/provider identity."""
+
+        values: dict[str, object] = {
+            "validation_stage": self.validation_stage,
+            "reason_code": self.reason_code,
+            "mismatch_class": self.mismatch_class,
+        }
+        optional = {
+            "item_index": self.evidence_index,
+            "item_type": self.evidence_type,
+            "field_path": self.field_path,
+            "category": self.category,
+            "source_page": self.page_number,
+            "provider_handle_count": self.provider_handle_count,
+            "expected_source_page": self.expected_page_number,
+            "expected_count": self.expected_count,
+            "actual_count": self.actual_count,
+            "expected_length": self.expected_length,
+            "actual_length": self.actual_length,
+            "missing_numbered_action_count": (
+                self.missing_numbered_action_count
+            ),
+            "page_coverage_count": self.page_coverage_count,
+        }
+        values.update(
+            (key, value) for key, value in optional.items() if value is not None
+        )
         return values
 
 

@@ -11,6 +11,10 @@ from voice_workflow_agent.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
+from voice_workflow_agent.experiment_protocol_analysis import (
+    ProtocolAnalysisEvidenceError,
+    ProtocolEvidenceDiagnostic,
+)
 from voice_workflow_agent.protocol_claim_stream_telemetry import (
     IncrementalProtocolClaimTelemetry,
     measure_protocol_claim_json_telemetry,
@@ -154,6 +158,7 @@ class ProtocolProviderDiagnosticTests(unittest.TestCase):
         self.assertTrue(result.complete_json_returned)
         self.assertTrue(result.parse_succeeded)
         self.assertTrue(result.validation_succeeded)
+        self.assertIsNone(result.canonical_validation_diagnostic)
         self.assertEqual(validated, ["{}"])
         self.assertEqual(result.t_headers_seconds, 1.0)
         self.assertEqual(result.t_first_seconds, 2.0)
@@ -277,6 +282,94 @@ class ProtocolProviderDiagnosticTests(unittest.TestCase):
 
         self.assertNotIn(private_delta, capture.getvalue())
         self.assertNotIn(private_delta, json.dumps(result.public_dict()))
+
+    def test_canonical_failure_exposes_only_allowlisted_validation_metadata(self):
+        private_source = "PRIVATE PROVIDER SOURCE VALUE"
+        private_handle = "s-private-provider-handle"
+        private_claim_id = "private-claim-id"
+        private_hash = "a" * 64
+        raw = json.dumps(
+            {
+                "source_text": private_source,
+                "evidence_segment_ids": [private_handle],
+                "claim_id": private_claim_id,
+            },
+            separators=(",", ":"),
+        )
+        stream = FakeStream([chunk(raw), chunk(finish_reason="stop")])
+
+        def reject_complete(value: str) -> None:
+            self.assertEqual(value, raw)
+            raise ProtocolAnalysisEvidenceError(
+                "Sanitized validator rejection.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_claim_evidence_validation",
+                    reason_code="evidence_segment_unknown",
+                    mismatch_class="source_identity_mismatch",
+                    evidence_index=2,
+                    evidence_type="claim",
+                    category="action",
+                    page_number=25,
+                    provider_handle_count=1,
+                    expected_count=2,
+                    actual_count=1,
+                    chunk_id=private_claim_id,
+                    source_revision="private-revision",
+                    source_hash=private_hash,
+                    quote_sha256=private_hash,
+                ),
+            )
+
+        capture = io.StringIO()
+        handler = logging.StreamHandler(capture)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            result = self.run_diagnostic(
+                FakeCompletions(stream),
+                reject_complete,
+            )
+        finally:
+            root.removeHandler(handler)
+
+        public = result.public_dict()
+        diagnostic = public["canonical_validation_diagnostic"]
+        self.assertEqual(
+            diagnostic,
+            {
+                "validation_stage": "chunk_claim_evidence_validation",
+                "reason_code": "evidence_segment_unknown",
+                "mismatch_class": "source_identity_mismatch",
+                "item_type": "claim",
+                "category": "action",
+                "item_index": 2,
+                "source_page": 25,
+                "provider_handle_count": 1,
+                "expected_count": 2,
+                "actual_count": 1,
+            },
+        )
+        self.assertEqual(result.failure_code, "protocol_analysis_invalid_evidence")
+        self.assertFalse(result.validation_succeeded)
+        rendered = json.dumps(public, sort_keys=True)
+        for private_value in (
+            private_source,
+            private_handle,
+            private_claim_id,
+            private_hash,
+            "private-revision",
+        ):
+            self.assertNotIn(private_value, rendered)
+            self.assertNotIn(private_value, capture.getvalue())
+        self.assertFalse(
+            {
+                "source_hash",
+                "quote_sha256",
+                "chunk_id",
+                "source_revision",
+            }
+            & set(diagnostic)
+        )
 
     def test_priority_is_explicit_and_granted_tier_is_observed(self):
         stream = FakeStream(

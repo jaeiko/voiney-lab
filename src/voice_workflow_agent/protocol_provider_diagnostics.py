@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import signal
 import threading
 import time
@@ -45,6 +46,86 @@ class _DiagnosticWallClockTimeout(TimeoutError):
     """Private total-wall-clock deadline signal."""
 
 
+_SAFE_DIAGNOSTIC_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
+_SAFE_FIELD_PATH = re.compile(r"^[A-Za-z][A-Za-z0-9_.\[\]-]{0,199}$")
+
+
+def _safe_diagnostic_token(value: object, fallback: str) -> str:
+    if isinstance(value, str) and _SAFE_DIAGNOSTIC_TOKEN.fullmatch(value):
+        return value
+    return fallback
+
+
+def _safe_diagnostic_count(value: object) -> int | None:
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 10_000_000
+    ):
+        return value
+    return None
+
+
+def _safe_canonical_validation_diagnostic(
+    exc: BaseException,
+) -> dict[str, object]:
+    """Project one exception to a strict content-free metadata allowlist."""
+
+    diagnostic = getattr(exc, "diagnostic", None)
+    values: dict[str, object] = {
+        "validation_stage": _safe_diagnostic_token(
+            getattr(diagnostic, "validation_stage", None),
+            "canonical_validation",
+        ),
+        "reason_code": _safe_diagnostic_token(
+            getattr(diagnostic, "reason_code", None),
+            _safe_diagnostic_token(
+                getattr(exc, "code", None),
+                "canonical_validation_failed",
+            ),
+        ),
+        "mismatch_class": _safe_diagnostic_token(
+            getattr(diagnostic, "mismatch_class", None),
+            "validation_exception",
+        ),
+    }
+    text_fields = {
+        "item_type": getattr(diagnostic, "evidence_type", None),
+        "category": getattr(diagnostic, "category", None),
+    }
+    for key, value in text_fields.items():
+        if isinstance(value, str) and _SAFE_DIAGNOSTIC_TOKEN.fullmatch(value):
+            values[key] = value
+    field_path = getattr(diagnostic, "field_path", None)
+    if isinstance(field_path, str) and _SAFE_FIELD_PATH.fullmatch(field_path):
+        values["field_path"] = field_path
+    numeric_fields = {
+        "item_index": getattr(diagnostic, "evidence_index", None),
+        "source_page": getattr(diagnostic, "page_number", None),
+        "provider_handle_count": getattr(
+            diagnostic, "provider_handle_count", None
+        ),
+        "expected_source_page": getattr(
+            diagnostic, "expected_page_number", None
+        ),
+        "expected_count": getattr(diagnostic, "expected_count", None),
+        "actual_count": getattr(diagnostic, "actual_count", None),
+        "expected_length": getattr(diagnostic, "expected_length", None),
+        "actual_length": getattr(diagnostic, "actual_length", None),
+        "missing_numbered_action_count": getattr(
+            diagnostic, "missing_numbered_action_count", None
+        ),
+        "page_coverage_count": getattr(
+            diagnostic, "page_coverage_count", None
+        ),
+    }
+    for key, value in numeric_fields.items():
+        safe_value = _safe_diagnostic_count(value)
+        if safe_value is not None:
+            values[key] = safe_value
+    return values
+
+
 @dataclass(frozen=True)
 class ProtocolProviderStreamDiagnostic:
     """Content-free result for exactly one streamed provider request."""
@@ -77,6 +158,7 @@ class ProtocolProviderStreamDiagnostic:
     complete_json_returned: bool
     parse_succeeded: bool
     validation_succeeded: bool
+    canonical_validation_diagnostic: dict[str, object] | None
     timeout_phase: TimeoutPhase | None
     failure_code: str | None
     usage_available: bool
@@ -127,6 +209,11 @@ class ProtocolProviderStreamDiagnostic:
             "complete_json_returned": self.complete_json_returned,
             "parse_succeeded": self.parse_succeeded,
             "validation_succeeded": self.validation_succeeded,
+            "canonical_validation_diagnostic": (
+                dict(self.canonical_validation_diagnostic)
+                if self.canonical_validation_diagnostic is not None
+                else None
+            ),
             "timeout_phase": self.timeout_phase,
             "failure_code": self.failure_code,
             "usage": {
@@ -274,6 +361,7 @@ def run_protocol_provider_stream_diagnostic(
     complete_json_returned = False
     parse_succeeded = False
     validation_succeeded = False
+    canonical_validation_diagnostic: dict[str, object] | None = None
     timeout_phase: TimeoutPhase | None = None
     failure_code: str | None = None
     stream: object | None = None
@@ -357,6 +445,9 @@ def run_protocol_provider_stream_diagnostic(
                         validate_complete(complete_text)
                         validation_succeeded = True
                     except Exception as exc:
+                        canonical_validation_diagnostic = (
+                            _safe_canonical_validation_diagnostic(exc)
+                        )
                         code = getattr(exc, "code", None)
                         failure_code = (
                             code
@@ -439,6 +530,7 @@ def run_protocol_provider_stream_diagnostic(
         complete_json_returned=complete_json_returned,
         parse_succeeded=parse_succeeded,
         validation_succeeded=validation_succeeded,
+        canonical_validation_diagnostic=canonical_validation_diagnostic,
         timeout_phase=timeout_phase,
         failure_code=failure_code,
         usage_available=usage_available,

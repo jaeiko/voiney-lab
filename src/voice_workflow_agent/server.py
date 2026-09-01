@@ -3617,26 +3617,33 @@ async def trigger_protocol_analysis(
             # prompts, and source text never enter logs or the lifecycle record.
             diagnostic = getattr(exc, "diagnostic", None)
             evidence_failure = (
-                diagnostic.public_dict()
+                diagnostic.privacy_safe_dict()
                 if diagnostic is not None
-                and callable(getattr(diagnostic, "public_dict", None))
+                and callable(getattr(diagnostic, "privacy_safe_dict", None))
                 else {}
             )
             log.warning(
                 "protocol.analysis.background_failed error=%s stage=%s "
-                "evidence_item_index=%s evidence_type=%s page_number=%s "
-                "chunk_id=%s source_revision=%s reason_code=%s "
-                "mismatch_class=%s source_hash=%s",
+                "item_index=%s item_type=%s category=%s source_page=%s "
+                "provider_handle_count=%s reason_code=%s mismatch_class=%s "
+                "expected_count=%s actual_count=%s expected_length=%s "
+                "actual_length=%s missing_numbered_action_count=%s "
+                "page_coverage_count=%s",
                 type(exc).__name__,
                 evidence_failure.get("validation_stage"),
-                evidence_failure.get("evidence_item_index"),
-                evidence_failure.get("evidence_type"),
-                evidence_failure.get("page_number"),
-                evidence_failure.get("chunk_id"),
-                evidence_failure.get("source_revision"),
+                evidence_failure.get("item_index"),
+                evidence_failure.get("item_type"),
+                evidence_failure.get("category"),
+                evidence_failure.get("source_page"),
+                evidence_failure.get("provider_handle_count"),
                 evidence_failure.get("reason_code"),
                 evidence_failure.get("mismatch_class"),
-                evidence_failure.get("source_hash"),
+                evidence_failure.get("expected_count"),
+                evidence_failure.get("actual_count"),
+                evidence_failure.get("expected_length"),
+                evidence_failure.get("actual_length"),
+                evidence_failure.get("missing_numbered_action_count"),
+                evidence_failure.get("page_coverage_count"),
             )
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",

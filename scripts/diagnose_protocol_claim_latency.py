@@ -29,6 +29,8 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_RESPONSE_SCHEMA,
+    MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
+    MAX_PAGE_COVERAGE_RECORDS,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
@@ -185,10 +187,18 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         claim.category.value == "action"
         for claim in deterministic_analysis.claims
     )
+    deterministic_coverage_reference_counts = tuple(
+        len(item.evidence_item_ids)
+        for item in deterministic_analysis.page_coverage
+    )
     if (
         deterministic_bytes != EXPECTED_RESPONSE_BYTES
         or deterministic_claims != EXPECTED_CLAIMS
         or deterministic_actions != EXPECTED_NUMBERED_ACTIONS
+        or len(deterministic_analysis.page_coverage)
+        > MAX_PAGE_COVERAGE_RECORDS
+        or max(deterministic_coverage_reference_counts, default=0)
+        > MAX_EVIDENCE_ITEM_REFS_PER_PAGE
     ):
         raise RuntimeError("The deterministic claim-output baseline changed.")
     deterministic_telemetry = measure_protocol_claim_json_telemetry(
@@ -200,9 +210,20 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         "claim_count": deterministic_claims,
         "numbered_action_count": deterministic_actions,
         "coverage_record_count": len(deterministic_analysis.page_coverage),
+        "maximum_coverage_reference_count": max(
+            deterministic_coverage_reference_counts,
+            default=0,
+        ),
         "structure_marker_count": len(deterministic_analysis.structure),
         "canonical_validation_succeeded": True,
         "structural_telemetry": deterministic_telemetry.public_dict(),
+    }
+    case_metadata["schema_cardinality_bounds"] = {
+        "maximum_page_coverage_records": MAX_PAGE_COVERAGE_RECORDS,
+        "maximum_evidence_item_references_per_page": (
+            MAX_EVIDENCE_ITEM_REFS_PER_PAGE
+        ),
+        "coverage_references_must_be_unique": True,
     }
 
     runtime: dict[str, Any] = {
