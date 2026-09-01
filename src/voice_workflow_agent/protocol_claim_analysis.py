@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 from base64 import urlsafe_b64encode
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable
@@ -30,7 +31,7 @@ from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
 from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
-CLAIM_SCHEMA_VERSION = 3
+CLAIM_SCHEMA_VERSION = 4
 EVIDENCE_SEGMENT_VERSION = 2
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
@@ -359,7 +360,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                         "enum": [item.value for item in StructureMarkerKind],
                     },
                     "source_order": {"type": "integer", "minimum": 0},
-                    "source_text": {"type": "string"},
                     "section_id": _NULLABLE_STRING_SCHEMA,
                     "evidence": _EVIDENCE_SCHEMA,
                 },
@@ -367,7 +367,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "marker_id",
                     "kind",
                     "source_order",
-                    "source_text",
                     "section_id",
                     "evidence",
                 ],
@@ -385,7 +384,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                         "enum": [item.value for item in ClaimCategory],
                     },
                     "source_order": {"type": "integer", "minimum": 0},
-                    "source_text": {"type": "string"},
                     "section_id": _NULLABLE_STRING_SCHEMA,
                     "step_id": _NULLABLE_STRING_SCHEMA,
                     "source_label": _NULLABLE_STRING_SCHEMA,
@@ -397,7 +395,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "claim_id",
                     "category",
                     "source_order",
-                    "source_text",
                     "section_id",
                     "step_id",
                     "source_label",
@@ -419,6 +416,40 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
+def claim_response_schema(core_page_refs: tuple[int, ...]) -> dict[str, Any]:
+    """Bind provider page choices and coverage cardinality to one request."""
+
+    if (
+        not core_page_refs
+        or len(core_page_refs) > MAX_PAGE_COVERAGE_RECORDS
+        or len(set(core_page_refs)) != len(core_page_refs)
+        or any(
+            not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number < 1
+            for page_number in core_page_refs
+        )
+    ):
+        raise ValueError("Core page references are invalid for the claim schema.")
+    schema = deepcopy(CLAIM_RESPONSE_SCHEMA)
+    coverage = schema["properties"]["page_coverage"]
+    coverage["minItems"] = len(core_page_refs)
+    coverage["maxItems"] = len(core_page_refs)
+    coverage["items"]["properties"]["source_page_number"] = {
+        "type": "integer",
+        "enum": list(core_page_refs),
+    }
+    for section_name in ("structure", "claims"):
+        evidence = schema["properties"][section_name]["items"]["properties"][
+            "evidence"
+        ]
+        evidence["properties"]["source_page_number"] = {
+            "type": "integer",
+            "enum": list(core_page_refs),
+        }
+    return schema
+
+
 CLAIM_ANALYSIS_SYSTEM_PROMPT = """\
 Extract evidence-linked Protocol claims from only the supplied core pages.
 Context pages are read-only continuity context: never emit a claim or marker
@@ -437,10 +468,10 @@ boundaries when a context page shows the beginning of the same source step.
 Each page is supplied as ordered segment pairs. For every claim and structural
 marker, cite a one-based core source page and select one or more directly
 adjacent evidence_segment_ids in source order. Never return source_excerpt text.
-The server resolves the selected handles to the exact immutable excerpt.
-source_text must itself be an exact contiguous substring of the selected
-segments. Do not normalize whitespace, repair OCR, paraphrase, translate, merge
-non-adjacent passages, infer missing values, or add scientific knowledge.
+Never return source_text. The server resolves the selected handles to the exact
+immutable excerpt and uses that exact excerpt as canonical source_text. Do not
+normalize whitespace, repair OCR, paraphrase, translate, merge non-adjacent
+passages, infer missing values, or add scientific knowledge.
 Explicit source ambiguity or a missing execution value is a blocking claim,
 never a guessed value.
 
@@ -1157,7 +1188,6 @@ def parse_chunk_claim_response(
                 "marker_id",
                 "kind",
                 "source_order",
-                "source_text",
                 "section_id",
                 "evidence",
             },
@@ -1183,25 +1213,6 @@ def parse_chunk_claim_response(
             item_type="structure_marker",
             category=kind.value,
         )
-        source_text = _required_text(record["source_text"], "structure")
-        if source_text not in evidence.source_excerpt:
-            raise ProtocolAnalysisEvidenceError(
-                "A structure marker is unsupported by its exact excerpt.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="chunk_claim_text_validation",
-                    reason_code="claim_not_found",
-                    mismatch_class="claim_evidence_mismatch",
-                    evidence_index=item_index,
-                    evidence_type="structure_marker",
-                    category=kind.value,
-                    page_number=evidence.source_page_number,
-                    expected_length=len(evidence.source_excerpt),
-                    actual_length=len(source_text),
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
-                    source_hash=extraction.sha256,
-                ),
-            )
         section_id = _optional_identifier(record["section_id"], "section")
         if (kind is StructureMarkerKind.SECTION) != (section_id is not None):
             raise ProtocolAnalysisResponseError(
@@ -1212,7 +1223,7 @@ def parse_chunk_claim_response(
                 marker_id=_identifier(record["marker_id"], "marker"),
                 kind=kind,
                 source_order=_source_order(record["source_order"]),
-                source_text=source_text,
+                source_text=evidence.source_excerpt,
                 section_id=section_id,
                 evidence=evidence,
             )
@@ -1225,7 +1236,6 @@ def parse_chunk_claim_response(
                 "claim_id",
                 "category",
                 "source_order",
-                "source_text",
                 "section_id",
                 "step_id",
                 "source_label",
@@ -1255,25 +1265,6 @@ def parse_chunk_claim_response(
             item_type="claim",
             category=category.value,
         )
-        source_text = _required_text(record["source_text"], "claim")
-        if source_text not in evidence.source_excerpt:
-            raise ProtocolAnalysisEvidenceError(
-                "A Protocol claim is unsupported by its exact source excerpt.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="chunk_claim_text_validation",
-                    reason_code="claim_not_found",
-                    mismatch_class="claim_evidence_mismatch",
-                    evidence_index=item_index,
-                    evidence_type="claim",
-                    category=category.value,
-                    page_number=evidence.source_page_number,
-                    expected_length=len(evidence.source_excerpt),
-                    actual_length=len(source_text),
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
-                    source_hash=extraction.sha256,
-                ),
-            )
         required = record["required_for_execution"]
         if not isinstance(required, bool):
             raise ProtocolAnalysisResponseError(
@@ -1284,7 +1275,7 @@ def parse_chunk_claim_response(
                 claim_id=_identifier(record["claim_id"], "claim"),
                 category=category,
                 source_order=_source_order(record["source_order"]),
-                source_text=source_text,
+                source_text=evidence.source_excerpt,
                 section_id=_optional_identifier(record["section_id"], "section"),
                 step_id=_optional_identifier(record["step_id"], "step"),
                 source_label=(
@@ -1613,7 +1604,7 @@ def validate_chunk_claim_analysis(
             or evidence.source_page_number not in core
             or evidence.source_excerpt
             not in extraction.pages[evidence.source_page_number - 1].text
-            or item.source_text not in evidence.source_excerpt
+            or item.source_text != evidence.source_excerpt
         ):
             raise ProtocolAnalysisEvidenceError(
                 "Decoded chunk claim evidence failed exact revalidation.",
@@ -1752,7 +1743,7 @@ def analyze_chunk_claims(
         raw_response = model.analyze(
             system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
             input_json=input_json,
-            response_schema=CLAIM_RESPONSE_SCHEMA,
+            response_schema=claim_response_schema(request.core_page_refs),
         )
     except (ProtocolAnalysisEvidenceError, ProtocolAnalysisResponseError):
         raise

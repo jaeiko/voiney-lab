@@ -28,9 +28,9 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
-    CLAIM_RESPONSE_SCHEMA,
     MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
     MAX_PAGE_COVERAGE_RECORDS,
+    claim_response_schema,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
@@ -61,7 +61,7 @@ EXPECTED_CORE_PAGES = tuple(range(25, 30))
 EXPECTED_CONTEXT_PAGES = (24,)
 EXPECTED_NUMBERED_ACTIONS = 13
 EXPECTED_CLAIMS = 20
-EXPECTED_RESPONSE_BYTES = 9_301
+EXPECTED_RESPONSE_BYTES = 6_551
 
 
 def _canonical_json(value: object) -> str:
@@ -119,12 +119,13 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         context_page_refs=chunk.overlap_page_refs,
     )
     input_json = request.input_json()
+    response_schema = claim_response_schema(chunk.core_page_refs)
     non_streaming_request = build_protocol_analysis_chat_request(
         model=MODEL,
         reasoning_effort=REASONING_EFFORT,
         system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
         input_json=input_json,
-        response_schema=CLAIM_RESPONSE_SCHEMA,
+        response_schema=response_schema,
     )
     streaming_request = dict(non_streaming_request)
     streaming_request["stream"] = True
@@ -163,15 +164,45 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         validation_metadata.update(
             {
                 "coverage_record_count": len(analysis.page_coverage),
+                "coverage_reference_count": sum(
+                    len(item.evidence_item_ids)
+                    for item in analysis.page_coverage
+                ),
                 "structure_marker_count": len(analysis.structure),
                 "claim_count": len(analysis.claims),
+                "action_count": sum(
+                    claim.category.value == "action"
+                    for claim in analysis.claims
+                ),
+                "evidence_handle_reference_count": sum(
+                    len(item.evidence.evidence_segment_ids)
+                    for item in (*analysis.structure, *analysis.claims)
+                ),
+                "exact_source_text_reconstruction": all(
+                    item.source_text == item.evidence.source_excerpt
+                    for item in (*analysis.structure, *analysis.claims)
+                ),
+                "core_coverage_exact": (
+                    len(analysis.page_coverage) == len(chunk.core_page_refs)
+                    and {
+                        item.source_page_number
+                        for item in analysis.page_coverage
+                    }
+                    == set(chunk.core_page_refs)
+                ),
+                "numbered_action_completeness": sum(
+                    claim.category.value == "action"
+                    for claim in analysis.claims
+                )
+                == EXPECTED_NUMBERED_ACTIONS,
+                "canonical_validation_succeeded": True,
             }
         )
 
     deterministic_response = ExactNumberedStepClaimModel(extraction).analyze(
         system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
         input_json=input_json,
-        response_schema=CLAIM_RESPONSE_SCHEMA,
+        response_schema=response_schema,
     )
     deterministic_analysis = parse_chunk_claim_response(
         deterministic_response,
@@ -219,6 +250,8 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         "structural_telemetry": deterministic_telemetry.public_dict(),
     }
     case_metadata["schema_cardinality_bounds"] = {
+        "required_page_coverage_records": len(chunk.core_page_refs),
+        "permitted_core_coverage_pages": list(chunk.core_page_refs),
         "maximum_page_coverage_records": MAX_PAGE_COVERAGE_RECORDS,
         "maximum_evidence_item_references_per_page": (
             MAX_EVIDENCE_ITEM_REFS_PER_PAGE
@@ -228,6 +261,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
 
     runtime: dict[str, Any] = {
         "input_json": input_json,
+        "response_schema": response_schema,
         "validate_complete": validate_complete,
         "validation_metadata": validation_metadata,
     }
@@ -313,7 +347,7 @@ def main() -> int:
             reasoning_effort=REASONING_EFFORT,
             system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
             input_json=runtime["input_json"],
-            response_schema=CLAIM_RESPONSE_SCHEMA,
+            response_schema=runtime["response_schema"],
             validate_complete=runtime["validate_complete"],
             timeout_seconds=TIMEOUT_SECONDS,
             service_tier=arguments.service_tier,

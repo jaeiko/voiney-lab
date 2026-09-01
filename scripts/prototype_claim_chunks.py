@@ -34,8 +34,8 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
-    CLAIM_RESPONSE_SCHEMA,
     CLAIM_SCHEMA_VERSION,
+    claim_response_schema,
 )
 
 
@@ -146,8 +146,6 @@ class ExactNumberedStepClaimModel:
         response_schema: dict[str, Any],
     ) -> str:
         del system_prompt
-        if response_schema != CLAIM_RESPONSE_SCHEMA:
-            raise ValueError("Prototype received the full Protocol schema.")
         request = json.loads(input_json)
         structure: list[dict[str, object]] = []
         claims: list[dict[str, object]] = []
@@ -155,6 +153,9 @@ class ExactNumberedStepClaimModel:
         core_pages = [
             page for page in request["pages"] if page["role"] == "core"
         ]
+        core_page_refs = tuple(page["source_page_number"] for page in core_pages)
+        if response_schema != claim_response_schema(core_page_refs):
+            raise ValueError("Prototype received the wrong claim schema.")
         for page in core_pages:
             page_number = page["source_page_number"]
             page_text = "".join(str(segment[1]) for segment in page["segments"])
@@ -167,7 +168,6 @@ class ExactNumberedStepClaimModel:
                             "marker_id": "protocol-title",
                             "kind": "protocol_title",
                             "source_order": 0,
-                            "source_text": self.title,
                             "section_id": None,
                             "evidence": title_evidence,
                         },
@@ -175,7 +175,6 @@ class ExactNumberedStepClaimModel:
                             "marker_id": "marker-protocol-steps",
                             "kind": "section",
                             "source_order": 1,
-                            "source_text": self.title,
                             "section_id": "section-protocol-steps",
                             "evidence": title_evidence,
                         },
@@ -205,7 +204,6 @@ class ExactNumberedStepClaimModel:
                             "claim_id": action_id,
                             "category": "action",
                             "source_order": 10 + action_index * 20,
-                            "source_text": excerpt,
                             "section_id": "section-protocol-steps",
                             "step_id": step_id,
                             "source_label": label,
@@ -233,7 +231,6 @@ class ExactNumberedStepClaimModel:
                                     "claim_id": claim_id,
                                     "category": category,
                                     "source_order": 11 + action_index * 20 + parameter_index,
-                                    "source_text": source_text,
                                     "section_id": "section-protocol-steps",
                                     "step_id": step_id,
                                     "source_label": None,
@@ -254,7 +251,6 @@ class ExactNumberedStepClaimModel:
                                 "claim_id": claim_id,
                                 "category": "repeat_condition",
                                 "source_order": 29 + action_index * 20,
-                                "source_text": repeat.group(0).strip(),
                                 "section_id": "section-protocol-steps",
                                 "step_id": step_id,
                                 "source_label": None,
@@ -351,6 +347,18 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
     action_count = sum(
         claim.category.value == "action" for claim in merged.claims
     )
+    canonical_source_text_reconstructed = all(
+        item.source_text == item.evidence.source_excerpt
+        for item in (*merged.structure, *merged.claims)
+    )
+    request_coverage_exact = all(
+        len(result.analysis.page_coverage) == len(result.chunk.core_page_refs)
+        and {
+            item.source_page_number for item in result.analysis.page_coverage
+        }
+        == set(result.chunk.core_page_refs)
+        for result in analyses
+    )
     return {
         "filename": path.name,
         "source_sha256": extraction.sha256,
@@ -365,6 +373,10 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
         "action_count": action_count,
         "all_required_chunks_valid": len(analyses) == len(plan.chunks),
         "exact_evidence_validated": True,
+        "canonical_source_text_reconstructed": (
+            canonical_source_text_reconstructed
+        ),
+        "request_coverage_exact": request_coverage_exact,
         "readiness_status": draft.readiness.status.value,
         "readiness_reason_codes": list(draft.readiness.reason_codes),
         "extraction_seconds": round(extraction_seconds, 6),

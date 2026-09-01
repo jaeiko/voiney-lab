@@ -50,9 +50,11 @@ from voice_workflow_agent.protocol_claim_analysis import (
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     MAX_PAGE_COVERAGE_RECORDS,
     ClaimCategory,
+    claim_response_schema,
     generate_page_evidence_segments,
     prepare_chunk_claim_request_context,
     resolve_claim_source_evidence,
+    validate_chunk_claim_analysis,
 )
 
 
@@ -129,10 +131,15 @@ class RichClaimModel:
 
     def analyze(self, *, system_prompt, input_json, response_schema) -> str:
         del system_prompt
-        if response_schema != CLAIM_RESPONSE_SCHEMA:
-            raise AssertionError("The chunk path reused the full Protocol schema.")
         request = json.loads(input_json)
-        page = next(item for item in request["pages"] if item["role"] == "core")
+        core_pages = tuple(
+            item for item in request["pages"] if item["role"] == "core"
+        )
+        if response_schema != claim_response_schema(
+            tuple(item["source_page_number"] for item in core_pages)
+        ):
+            raise AssertionError("The chunk path used the wrong claim schema.")
+        page = core_pages[0]
         page_number = page["source_page_number"]
 
         def evidence(excerpt: str) -> dict[str, object]:
@@ -173,7 +180,6 @@ class RichClaimModel:
                     "claim_id": claim_id,
                     "category": category,
                     "source_order": order,
-                    "source_text": text,
                     "section_id": None if top_level else "section-preparation",
                     "step_id": None if top_level else "step-1",
                     "source_label": "1" if is_action else None,
@@ -189,7 +195,6 @@ class RichClaimModel:
                 "marker_id": "protocol-title",
                 "kind": "protocol_title",
                 "source_order": 0,
-                "source_text": "Protocol Evidence",
                 "section_id": None,
                 "evidence": evidence("Protocol Evidence"),
             },
@@ -197,7 +202,6 @@ class RichClaimModel:
                 "marker_id": "marker-preparation",
                 "kind": "section",
                 "source_order": 1,
-                "source_text": "Preparation",
                 "section_id": "section-preparation",
                 "evidence": evidence("Preparation"),
             },
@@ -281,6 +285,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.assertNotIn("ExperimentProtocol", rendered_schema)
         self.assertNotIn('"protocol"', rendered_schema)
         self.assertNotIn("source_excerpt", rendered_schema)
+        self.assertNotIn("source_text", rendered_schema)
         result = self.analyze()
         self.assertEqual(
             {claim.category for claim in result.analysis.claims},
@@ -292,17 +297,77 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             self.assertEqual(claim.evidence.source_page_number, 1)
             self.assertTrue(claim.evidence.evidence_segment_ids)
             self.assertIn(claim.evidence.source_excerpt, self.extraction.pages[0].text)
-            self.assertIn(claim.source_text, claim.evidence.source_excerpt)
+            self.assertEqual(claim.source_text, claim.evidence.source_excerpt)
+
+    def test_provider_cannot_author_or_override_canonical_source_text(self):
+        result = self.analyze()
+        self.assertTrue(
+            all(
+                item.source_text == item.evidence.source_excerpt
+                for item in (*result.analysis.structure, *result.analysis.claims)
+            )
+        )
+
+        def inject_paraphrase(response):
+            response["claims"][0]["source_text"] = "provider paraphrase"
+
+        with self.assertRaises(ProtocolAnalysisResponseError):
+            self.analyze(RichClaimModel(inject_paraphrase))
+
+        altered = replace(
+            result.analysis,
+            claims=(
+                replace(result.analysis.claims[0], source_text="provider paraphrase"),
+                *result.analysis.claims[1:],
+            ),
+        )
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            validate_chunk_claim_analysis(
+                altered,
+                self.extraction,
+                source_revision="pdf-1",
+                chunk_id=self.plan.chunks[0].chunk_id,
+                core_page_refs=self.plan.chunks[0].core_page_refs,
+            )
+
+    def test_semantic_relationships_remain_provider_selected_and_validated(self):
+        model = RequestAwareRichClaimModel()
+
+        def retarget_quantity_to_material(response):
+            material = response["claims"][0]
+            quantity = response["claims"][4]
+            quantity["target_claim_id"] = material["claim_id"]
+            quantity["section_id"] = None
+            quantity["step_id"] = None
+            quantity["evidence"] = dict(material["evidence"])
+
+        model.mutation = retarget_quantity_to_material
+        result = self.analyze(model)
+        quantity = next(
+            claim
+            for claim in result.analysis.claims
+            if claim.claim_id == "quantity-1"
+        )
+        self.assertEqual(quantity.target_claim_id, "material-buffer")
+        self.assertEqual(quantity.source_text, quantity.evidence.source_excerpt)
+        merged = merge_validated_chunk_results(
+            self.extraction,
+            self.plan,
+            (result,),
+        )
+        draft = assemble_validated_protocol_claims(self.extraction, merged)
+        self.assertEqual(len(draft.protocol.materials[0].quantities), 1)
 
     def test_claim_schema_makes_overlong_coverage_arrays_invalid(self):
-        coverage_schema = CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"]
+        coverage_schema = claim_response_schema((1,))["properties"]["page_coverage"]
         reference_schema = coverage_schema["items"]["properties"][
             "evidence_item_ids"
         ]
 
         self.assertEqual(coverage_schema["minItems"], 1)
+        self.assertEqual(coverage_schema["maxItems"], 1)
         self.assertEqual(
-            coverage_schema["maxItems"],
+            CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"]["maxItems"],
             MAX_PAGE_COVERAGE_RECORDS,
         )
         self.assertEqual(reference_schema["minItems"], 0)
@@ -333,6 +398,26 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             len(duplicate_references),
             len(set(duplicate_references)),
         )
+
+    def test_request_schema_exactly_binds_coverage_to_core_pages(self):
+        core_pages = (7, 9, 12)
+        schema = claim_response_schema(core_pages)
+        coverage = schema["properties"]["page_coverage"]
+        self.assertEqual(coverage["minItems"], len(core_pages))
+        self.assertEqual(coverage["maxItems"], len(core_pages))
+        self.assertEqual(
+            coverage["items"]["properties"]["source_page_number"]["enum"],
+            list(core_pages),
+        )
+        self.assertNotIn(
+            6,
+            coverage["items"]["properties"]["source_page_number"]["enum"],
+        )
+        for section_name in ("structure", "claims"):
+            evidence_page = schema["properties"][section_name]["items"][
+                "properties"
+            ]["evidence"]["properties"]["source_page_number"]
+            self.assertEqual(evidence_page["enum"], list(core_pages))
 
     def test_coverage_cardinality_and_duplicate_refs_fail_without_repair(self):
         def too_many_coverage_records(response):
@@ -800,8 +885,9 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             draft.readiness.reason_codes,
         )
         action = draft.protocol.sections[0].steps[0].sub_actions[0]
-        self.assertEqual(action.process_timer.duration.source_text, "15 min")
-        self.assertEqual(action.required_observations[0].source_text, "observe clear")
+        self.assertEqual(action.process_timer.duration.source_text, self.action)
+        self.assertEqual(action.required_observations[0].source_text, self.action)
+        self.assertEqual(action.instruction_source_text, action.evidence.source_excerpt)
         expected_locator = f"source_revision=pdf-1;source_sha256={self.extraction.sha256}"
         self.assertEqual(action.evidence.location_detail, expected_locator)
         self.assertEqual(action.warnings[0].evidence.location_detail, expected_locator)
@@ -857,7 +943,6 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             record = dict(response["claims"][7])
             record["claim_id"] = "duration-2"
             record["source_order"] = 11
-            record["source_text"] = "20 min"
             record["evidence"] = dict(record["evidence"])
             response["claims"].append(record)
             response["page_coverage"][0]["evidence_item_ids"].append("duration-2")
@@ -874,15 +959,20 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             for item in draft.protocol.constructs
             if isinstance(item, domain.SourceAmbiguity)
         )
-        self.assertTrue(any(item.source_text == "20 min" for item in ambiguities))
+        self.assertTrue(any(item.source_text == self.action for item in ambiguities))
         self.assertIn(
             domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value,
             draft.readiness.reason_codes,
         )
         conditions = draft.protocol.sections[0].steps[0].sub_actions[0].conditions
         self.assertEqual(
-            [item.source_text for item in conditions if "min" in item.source_text],
-            ["15 min", "20 min"],
+            [
+                item.source_text
+                for item in conditions
+                if item.statement_id
+                in {"parameter-duration-1", "parameter-duration-2"}
+            ],
+            [self.action, self.action],
         )
 
     def test_analysis_required_claim_result_cannot_be_approved_or_executed(self):
@@ -965,7 +1055,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 private_handle
             ]
 
-        def source_text_mismatch(response):
+        def provider_source_text_injection(response):
             response["claims"][0]["source_text"] = private_source_text
 
         def incomplete_coverage(response):
@@ -983,10 +1073,10 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 "source_identity_mismatch",
             ),
             (
-                source_text_mismatch,
-                ProtocolAnalysisEvidenceError,
-                "claim_not_found",
-                "claim_evidence_mismatch",
+                provider_source_text_injection,
+                ProtocolAnalysisResponseError,
+                "invalid_response",
+                "response_contract_violation",
             ),
             (
                 incomplete_coverage,

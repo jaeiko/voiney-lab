@@ -45,8 +45,8 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     validate_chunk_result,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
-    CLAIM_RESPONSE_SCHEMA,
     CLAIM_SCHEMA_VERSION,
+    claim_response_schema,
 )
 
 
@@ -123,11 +123,13 @@ class FakeChunkModel:
 
     def analyze(self, *, system_prompt, input_json, response_schema) -> str:
         del system_prompt
-        assert response_schema == CLAIM_RESPONSE_SCHEMA
         assert "ExperimentProtocol" not in json.dumps(response_schema)
         self.calls += 1
         request = json.loads(input_json)
         pages = [page for page in request["pages"] if page["role"] == "core"]
+        assert response_schema == claim_response_schema(
+            tuple(page["source_page_number"] for page in pages)
+        )
         structure = []
         claims = []
         coverage = []
@@ -145,7 +147,6 @@ class FakeChunkModel:
                         "marker_id": "protocol-title",
                         "kind": "protocol_title",
                         "source_order": 0,
-                        "source_text": "Protocol Large",
                         "section_id": None,
                         "evidence": evidence("Protocol Large"),
                     }
@@ -158,7 +159,6 @@ class FakeChunkModel:
                         "marker_id": marker_id,
                         "kind": "section",
                         "source_order": 1,
-                        "source_text": title,
                         "section_id": f"section-{number}",
                         "evidence": evidence(title),
                     }
@@ -171,7 +171,6 @@ class FakeChunkModel:
                         "claim_id": claim_id,
                         "category": "action",
                         "source_order": 2,
-                        "source_text": instruction,
                         "section_id": f"section-{number}",
                         "step_id": f"step-{number}",
                         "source_label": str(number),

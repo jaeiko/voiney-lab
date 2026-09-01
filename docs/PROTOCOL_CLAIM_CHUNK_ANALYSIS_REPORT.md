@@ -23,15 +23,16 @@ or unresolved action/section reference prevents assembly and persistence. The
 catalog still requires explicit review, and existing readiness gates block
 missing values and unsupported repeats/conditions.
 
-Claim schema version 3 retains the version-2 removal of provider-authored
-`source_excerpt` while compacting the provider boundary. Canonical segment IDs
-remain SHA-256 identities over the segment schema/version, source revision,
-document SHA, page number, page-text SHA, segment index, and segment-text SHA.
-The provider sees only compact request-scoped handles and exact segment text.
-An immutable server map resolves handles back to canonical identity and rejects
-unknown, stale, cross-request, cross-page, reversed, duplicated, and
-non-contiguous selections. Only server-resolved text and identity enter canonical
-`SourceEvidence`.
+Claim schema version 4 retains the version-2 removal of provider-authored
+`source_excerpt` and the version-3 compact provider boundary, and also removes
+provider-authored `source_text`. Canonical segment IDs remain SHA-256 identities
+over the segment schema/version, source revision, document SHA, page number,
+page-text SHA, segment index, and segment-text SHA. The provider sees only compact
+request-scoped handles and exact segment text. An immutable server map resolves
+handles back to canonical identity and rejects unknown, stale, cross-request,
+cross-page, reversed, duplicated, and non-contiguous selections. The resolved
+exact excerpt becomes canonical claim/marker `source_text`; only server-resolved
+text and identity enter canonical `SourceEvidence`.
 
 ## Resource and latency policy
 
