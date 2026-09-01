@@ -1487,6 +1487,9 @@ class ProtocolAnalysisTests(unittest.TestCase):
         call = completions.calls[0]
         self.assertEqual(call["temperature"], 0)
         self.assertEqual(call["reasoning_effort"], "none")
+        self.assertNotIn("stream", call)
+        self.assertNotIn("stream_options", call)
+        self.assertNotIn("service_tier", call)
         self.assertEqual(
             call["response_format"],
             {

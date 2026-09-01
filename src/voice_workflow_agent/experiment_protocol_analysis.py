@@ -390,6 +390,44 @@ class ProtocolAnalysisModel(Protocol):
         """Return exactly one raw JSON object string."""
 
 
+def build_protocol_analysis_chat_request(
+    *,
+    model: str,
+    reasoning_effort: str | None,
+    system_prompt: str,
+    input_json: str,
+    response_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the canonical non-streaming provider request payload."""
+
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"{_DOCUMENT_BEGIN}\n"
+                    f"{input_json}\n"
+                    f"{_DOCUMENT_END}"
+                ),
+            },
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": ANALYSIS_RESPONSE_SCHEMA_NAME,
+                "schema": response_schema,
+                "strict": True,
+            },
+        },
+        "temperature": 0,
+    }
+    if reasoning_effort is not None:
+        request["reasoning_effort"] = reasoning_effort
+    return request
+
+
 @dataclass(frozen=True)
 class OpenAICompatibleProtocolAnalysisModel:
     """Adapter for an explicitly supplied OpenAI-compatible client.
@@ -421,31 +459,13 @@ class OpenAICompatibleProtocolAnalysisModel:
         response_schema: dict[str, Any],
     ) -> str:
         try:
-            request: dict[str, Any] = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"{_DOCUMENT_BEGIN}\n"
-                            f"{input_json}\n"
-                            f"{_DOCUMENT_END}"
-                        ),
-                    },
-                ],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": ANALYSIS_RESPONSE_SCHEMA_NAME,
-                        "schema": response_schema,
-                        "strict": True,
-                    },
-                },
-                "temperature": 0,
-            }
-            if self.reasoning_effort is not None:
-                request["reasoning_effort"] = self.reasoning_effort
+            request = build_protocol_analysis_chat_request(
+                model=self.model,
+                reasoning_effort=self.reasoning_effort,
+                system_prompt=system_prompt,
+                input_json=input_json,
+                response_schema=response_schema,
+            )
             response = self.client.chat.completions.create(
                 **request,
             )
