@@ -13,6 +13,7 @@ from unittest.mock import patch
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from scripts.diagnose_protocol_claim_latency import _privacy_safe_action_audit
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
@@ -56,6 +57,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     prepare_chunk_claim_request_context,
     resolve_claim_source_evidence,
     validate_chunk_claim_analysis,
+    _numbered_step_labels,
 )
 
 
@@ -347,6 +349,39 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             self.assertTrue(claim.evidence.evidence_segment_ids)
             self.assertIn(claim.evidence.source_excerpt, self.extraction.pages[0].text)
             self.assertEqual(claim.source_text, claim.evidence.source_excerpt)
+        action = next(
+            claim
+            for claim in result.analysis.claims
+            if claim.category is ClaimCategory.ACTION
+        )
+        for category in (ClaimCategory.QUANTITY, ClaimCategory.DURATION):
+            parameter = next(
+                claim
+                for claim in result.analysis.claims
+                if claim.category is category
+            )
+            self.assertEqual(parameter.target_claim_id, action.claim_id)
+            self.assertEqual(parameter.step_id, action.step_id)
+
+    def test_prompt_requires_one_action_claim_per_numbered_source_action(self):
+        normalized_prompt = " ".join(CLAIM_ANALYSIS_SYSTEM_PROMPT.split())
+        self.assertIn(
+            "For each distinct explicit numbered source action",
+            normalized_prompt,
+        )
+        self.assertIn(
+            "Never omit or merge numbered source actions",
+            normalized_prompt,
+        )
+        self.assertIn(
+            "all other non-action claims may coexist with an action claim but "
+            "never substitute for it",
+            normalized_prompt,
+        )
+        self.assertIn(
+            "mark that page analysis_incomplete",
+            normalized_prompt,
+        )
 
     def test_provider_cannot_author_or_override_canonical_source_text(self):
         result = self.analyze()
@@ -1225,6 +1260,12 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 if claim["category"] != "action"
             ]
             response["page_coverage"][0]["evidence_item_ids"].remove("action-1")
+            self.assertTrue(
+                any(
+                    claim["category"] in {"quantity", "duration", "prerequisite"}
+                    for claim in response["claims"]
+                )
+            )
 
         with self.assertRaises(ProtocolAnalysisEvidenceError) as failure:
             self.analyze(RichClaimModel(omit_action))
@@ -1236,6 +1277,100 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             failure.exception.diagnostic.missing_numbered_action_count,
             1,
         )
+
+    def test_two_numbered_actions_cannot_collapse_into_one_action_claim(self):
+        source = self.root / "two-actions.pdf"
+        write_pages(
+            source,
+            (
+                "Protocol Evidence Preparation Before start: thaw sample. "
+                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+                + self.action
+                + " 2. Finish processing.",
+            ),
+        )
+        extraction = extract_protocol_pdf(source)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+        )
+
+        with self.assertRaises(ProtocolAnalysisEvidenceError) as failure:
+            analyze_protocol_chunk(
+                extraction,
+                plan.chunks[0],
+                RichClaimModel(),
+            )
+
+        self.assertEqual(
+            failure.exception.diagnostic.reason_code,
+            "numbered_action_missing",
+        )
+        self.assertEqual(
+            failure.exception.diagnostic.missing_numbered_action_count,
+            1,
+        )
+
+    def test_diagnostic_action_audit_is_structural_and_content_free(self):
+        request = self.claim_request()
+        valid_raw = RichClaimModel().analyze(
+            system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
+            input_json=request.input_json(),
+            response_schema=claim_response_schema(request),
+        )
+        valid = _privacy_safe_action_audit(
+            valid_raw,
+            self.extraction,
+            request,
+        )
+        self.assertEqual(valid["required_action_count"], 1)
+        self.assertEqual(valid["provider_action_count"], 1)
+        self.assertEqual(valid["missing_action_count"], 0)
+
+        def omit_action(response):
+            response["claims"] = [
+                claim
+                for claim in response["claims"]
+                if claim["category"] != "action"
+            ]
+
+        omitted_raw = RichClaimModel(omit_action).analyze(
+            system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
+            input_json=request.input_json(),
+            response_schema=claim_response_schema(request),
+        )
+        omitted = _privacy_safe_action_audit(
+            omitted_raw,
+            self.extraction,
+            request,
+        )
+        rendered = json.dumps(omitted, sort_keys=True)
+        self.assertEqual(omitted["provider_action_count"], 0)
+        self.assertEqual(omitted["missing_action_count"], 1)
+        self.assertEqual(omitted["missing_action_identities"], ["p1-n1"])
+        self.assertIn(
+            "duration",
+            omitted["missing_action_other_categories"]["p1-n1"],
+        )
+        self.assertNotIn(self.action, rendered)
+        self.assertNotIn(self.extraction.sha256, rendered)
+
+    def test_common_false_positive_numbered_structures_are_excluded(self):
+        source_text = "\n".join(
+            (
+                "1.1 Scope",
+                "1 200 mg",
+                "[1] Reference entry",
+                "Figure 1A",
+                "Page 25",
+                "Note 1: context only",
+                "1) 10 mL",
+                "7. Mix the sample.",
+            )
+        )
+
+        self.assertEqual(_numbered_step_labels(source_text), ("7",))
 
     def test_privacy_safe_diagnostics_cover_completed_response_failures(self):
         private_claim_id = "private-claim-id"

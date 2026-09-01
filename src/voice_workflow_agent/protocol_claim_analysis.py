@@ -627,10 +627,16 @@ Every scientific or execution fact must be its own claim. Categories include
 material, equipment, action, quantity, concentration, temperature, duration,
 agitation_speed, prerequisite, warning_hazard, observation_checkpoint,
 repeat_condition, and explicit_missing_ambiguous_value. Never combine distinct
-values into evidence-free fields. An action must preserve its source step label,
-step identity, and section identity. Parameter claims must target the action,
-material, or equipment claim they qualify. Use stable identifiers across page
-boundaries when a context page shows the beginning of the same source step.
+values into evidence-free fields. For each distinct explicit numbered source
+action on every core page, emit a distinct action claim that preserves that
+action's source step label, step identity, section identity, and direct evidence.
+Never omit or merge numbered source actions. Quantity, duration, prerequisite,
+warning_hazard, explicit_missing_ambiguous_value, and all other non-action claims
+may coexist with an action claim but never substitute for it. If every numbered
+source action cannot be represented, mark that page analysis_incomplete.
+Parameter claims must target the action, material, or equipment claim they
+qualify. Use stable identifiers across page boundaries when a context page shows
+the beginning of the same source step.
 
 Each page is supplied as ordered segment pairs. For every claim and structural
 marker, cite a one-based core source page and select one or more directly

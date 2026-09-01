@@ -131,7 +131,13 @@ class FakeChunkModel:
         self.conflict_on_page = conflict_on_page
 
     def analyze(self, *, system_prompt, input_json, response_schema) -> str:
-        del system_prompt
+        normalized_prompt = " ".join(system_prompt.split())
+        assert (
+            "For each distinct explicit numbered source action"
+            in normalized_prompt
+        )
+        assert "all other non-action claims" in normalized_prompt
+        assert "never substitute for it" in normalized_prompt
         assert "ExperimentProtocol" not in json.dumps(response_schema)
         self.calls += 1
         request = json.loads(input_json)

@@ -20,7 +20,10 @@ from openai import OpenAI
 from voice_workflow_agent.experiment_protocol_analysis import (
     build_protocol_analysis_chat_request,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
+from voice_workflow_agent.experiment_protocol_pdf import (
+    ProtocolPdfExtraction,
+    extract_protocol_pdf,
+)
 from voice_workflow_agent.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     extraction_for_chunk,
@@ -30,7 +33,9 @@ from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
     MAX_PAGE_COVERAGE_RECORDS,
+    ClaimCategory,
     ProviderClaimRequest,
+    _numbered_action_matches,
     claim_response_schema,
     claim_response_schema_metrics,
     parse_chunk_claim_response,
@@ -61,7 +66,6 @@ REASONING_EFFORT = "none"
 TIMEOUT_SECONDS = 119.0
 EXPECTED_CORE_PAGES = tuple(range(25, 30))
 EXPECTED_CONTEXT_PAGES = (24,)
-EXPECTED_NUMBERED_ACTIONS = 13
 EXPECTED_CLAIMS = 20
 EXPECTED_RESPONSE_BYTES = 6_551
 
@@ -132,6 +136,138 @@ def _page_local_handles_are_valid(
     return True
 
 
+def _required_action_handle_map(
+    extraction: ProtocolPdfExtraction,
+    request: ProviderClaimRequest,
+) -> dict[tuple[int, str], frozenset[str]]:
+    """Map bounded page/label identities to their issued request handles."""
+
+    result: dict[tuple[int, str], frozenset[str]] = {}
+    for request_page in request.pages:
+        if request_page.role != "core":
+            continue
+        page_number = request_page.source_page_number
+        page_text = extraction.pages[page_number - 1].text
+        matches = _numbered_action_matches(page_text)
+        segment_ranges: list[tuple[int, int, str]] = []
+        offset = 0
+        for evidence in request_page.evidence:
+            segment_end = offset + len(evidence.segment.text)
+            segment_ranges.append((offset, segment_end, evidence.handle))
+            offset = segment_end
+        for index, match in enumerate(matches):
+            start = match.start("label")
+            end = (
+                matches[index + 1].start("label")
+                if index + 1 < len(matches)
+                else len(page_text)
+            )
+            handles = frozenset(
+                handle
+                for segment_start, segment_end, handle in segment_ranges
+                if segment_end > start and segment_start < end
+            )
+            if not handles:
+                raise RuntimeError(
+                    "A deterministic action has no issued provider evidence handle."
+                )
+            result[(page_number, match.group("label"))] = handles
+    return result
+
+
+def _privacy_safe_action_audit(
+    raw_response: str,
+    extraction: ProtocolPdfExtraction,
+    request: ProviderClaimRequest,
+) -> dict[str, object]:
+    """Reduce one complete response to bounded action-coverage metadata."""
+
+    payload = json.loads(raw_response)
+    claims = payload.get("claims", ()) if isinstance(payload, dict) else ()
+    if not isinstance(claims, list):
+        claims = []
+    required_handles = _required_action_handle_map(extraction, request)
+    expected_order = tuple(required_handles)
+    expected = frozenset(expected_order)
+    action_by_label: set[tuple[int, str]] = set()
+    action_by_evidence: set[tuple[int, str]] = set()
+    categories_by_evidence: dict[tuple[int, str], set[str]] = {
+        identity: set() for identity in expected_order
+    }
+    provider_action_count = 0
+    unmapped_action_count = 0
+    mapping_mismatch_count = 0
+    multi_action_evidence_count = 0
+    allowed_categories = {item.value for item in ClaimCategory}
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        category = claim.get("category")
+        if category not in allowed_categories:
+            continue
+        evidence = claim.get("evidence")
+        page_number = (
+            evidence.get("source_page_number")
+            if isinstance(evidence, dict)
+            else None
+        )
+        raw_handles = (
+            evidence.get("evidence_segment_ids")
+            if isinstance(evidence, dict)
+            else None
+        )
+        selected_handles = (
+            frozenset(item for item in raw_handles if isinstance(item, str))
+            if isinstance(raw_handles, list)
+            else frozenset()
+        )
+        evidence_identities = {
+            identity
+            for identity, handles in required_handles.items()
+            if identity[0] == page_number and selected_handles & handles
+        }
+        for identity in evidence_identities:
+            categories_by_evidence[identity].add(category)
+        if category != ClaimCategory.ACTION.value:
+            continue
+        provider_action_count += 1
+        if len(evidence_identities) > 1:
+            multi_action_evidence_count += 1
+        action_by_evidence.update(evidence_identities)
+        source_label = claim.get("source_label")
+        label_identity = (page_number, source_label)
+        if label_identity in expected:
+            action_by_label.add(label_identity)
+            if label_identity not in evidence_identities:
+                mapping_mismatch_count += 1
+        else:
+            unmapped_action_count += 1
+
+    represented = action_by_label & action_by_evidence
+    missing = tuple(
+        identity for identity in expected_order if identity not in represented
+    )
+    return {
+        "required_action_count": len(expected_order),
+        "provider_action_count": provider_action_count,
+        "represented_required_action_count": len(represented),
+        "missing_action_count": len(missing),
+        "missing_action_identities": [
+            f"p{page_number}-n{label}" for page_number, label in missing
+        ],
+        "missing_action_other_categories": {
+            f"p{page_number}-n{label}": sorted(
+                categories_by_evidence[(page_number, label)] - {"action"}
+            )
+            for page_number, label in missing
+            if categories_by_evidence[(page_number, label)] - {"action"}
+        },
+        "action_identity_mapping_mismatch_count": mapping_mismatch_count,
+        "multi_action_evidence_claim_count": multi_action_evidence_count,
+        "unmapped_action_claim_count": unmapped_action_count,
+    }
+
+
 def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     if not ANKOM_SOURCE.is_file():
         raise RuntimeError("The fixed ANKOM diagnostic source is unavailable.")
@@ -163,6 +299,8 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         context_page_refs=chunk.overlap_page_refs,
     )
     input_json = request.input_json()
+    required_action_handles = _required_action_handle_map(scoped, request)
+    required_action_count = len(required_action_handles)
     response_schema = claim_response_schema(request)
     schema_metrics = claim_response_schema_metrics(request)
     non_streaming_request = build_protocol_analysis_chat_request(
@@ -180,7 +318,11 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         "chunk_ordinal": chunk.ordinal,
         "core_page_refs": list(chunk.core_page_refs),
         "context_page_refs": list(chunk.overlap_page_refs),
-        "expected_numbered_actions": EXPECTED_NUMBERED_ACTIONS,
+        "expected_numbered_actions": required_action_count,
+        "expected_numbered_action_identities": [
+            f"p{page_number}-n{label}"
+            for page_number, label in required_action_handles
+        ],
         "claim_input_bytes": len(input_json.encode("utf-8")),
         "logical_non_streaming_payload_bytes": len(
             _canonical_json(non_streaming_request).encode("utf-8")
@@ -201,6 +343,9 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     def validate_complete(raw_response: str) -> None:
         validation_metadata["page_local_handle_validity"] = (
             _page_local_handles_are_valid(raw_response, request)
+        )
+        validation_metadata["action_completeness_audit"] = (
+            _privacy_safe_action_audit(raw_response, scoped, request)
         )
         analysis = parse_chunk_claim_response(
             raw_response,
@@ -243,7 +388,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
                     claim.category.value == "action"
                     for claim in analysis.claims
                 )
-                == EXPECTED_NUMBERED_ACTIONS,
+                == required_action_count,
                 "canonical_validation_succeeded": True,
             }
         )
@@ -274,7 +419,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     if (
         deterministic_bytes != EXPECTED_RESPONSE_BYTES
         or deterministic_claims != EXPECTED_CLAIMS
-        or deterministic_actions != EXPECTED_NUMBERED_ACTIONS
+        or deterministic_actions != required_action_count
         or len(deterministic_analysis.page_coverage)
         > MAX_PAGE_COVERAGE_RECORDS
         or max(deterministic_coverage_reference_counts, default=0)
