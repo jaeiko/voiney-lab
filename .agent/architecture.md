@@ -72,7 +72,7 @@ raw PDF stream
   → exact-source/page validation + append-only OCR evidence
   → human accept/reject against the PDF
   → explicit analysis job (single-pass or page-bounded evidence claims)
-  → per-claim revision/hash/page/exact-excerpt validation
+  → per-claim source-bound segment selection + server-owned exact-excerpt resolution
   → complete-chunk deterministic merge + whole-document consistency gate
   → typed ExperimentProtocol validation
   → fail-closed readiness assessment
@@ -95,7 +95,13 @@ When the default-off deployment gate
 documents over eight pages enter the evidence-claim path even when their
 extracted byte count is small. Its provider DTO is not ExperimentProtocol:
 it contains page coverage, source structure markers, and independently evidenced
-scientific/execution claims. Every required chunk must validate before merge,
+scientific/execution claims. Pages are exposed as deterministic, bounded
+numbered-action blocks with compact request-scoped handles. An immutable
+server-side map binds each handle to the canonical segment identity, revision,
+document hash, page, page-text hash, segment order, and exact text. The provider
+selects only adjacent handles; the server reconstructs the exact excerpt and
+rejects unknown, stale, cross-request, cross-page, reversed, duplicated, or
+non-contiguous selections. Every required chunk must validate before merge,
 `analysis_incomplete` coverage is terminal for that run, the 120-second bound is
 one total-run deadline, and provider concurrency remains serial by default.
 

@@ -497,6 +497,18 @@ pass protocol-specific completeness and evidence validation before use. The
 separate low-latency semantic-intent path keeps its dedicated non-reasoning
 model and timeout settings.
 
+The default-off claim-chunk path supplies deterministic, bounded action-block
+evidence and accepts only adjacent compact request-scoped handles from the
+provider. An immutable server map resolves each handle to its full canonical
+segment ID, revision/document/page hashes, segment order, and exact source text.
+The server reconstructs the exact canonical excerpt before running the unchanged
+protocol evidence validator; provider-authored excerpt text and provider-echoed
+canonical hashes are not part of that response schema. The shared monolithic
+configuration intentionally does not accept reasoning effort `none`. If claim
+extraction later requires a different model or effort policy, introduce separate
+`PROTOCOL_CLAIM_ANALYSIS_MODEL` and claim-reasoning configuration instead of
+changing the monolithic defaults.
+
 ### Identity configuration
 
 For operational workspace mode, configure all of:

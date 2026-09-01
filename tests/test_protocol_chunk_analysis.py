@@ -87,15 +87,13 @@ def write_pages(path: Path, page_texts: tuple[str | None, ...]) -> None:
 
 
 def page_text(page: dict[str, object]) -> str:
-    return "".join(
-        segment["text"] for segment in page["evidence_segments"]  # type: ignore[index]
-    )
+    return "".join(segment[1] for segment in page["segments"])  # type: ignore[index]
 
 
 def evidence_for_excerpt(
     page: dict[str, object], excerpt: str
 ) -> dict[str, object]:
-    segments = page["evidence_segments"]
+    segments = page["segments"]
     assert isinstance(segments, list)
     text = page_text(page)
     start = text.index(excerpt)
@@ -103,9 +101,8 @@ def evidence_for_excerpt(
     selected: list[str] = []
     offset = 0
     for segment in segments:
-        assert isinstance(segment, dict)
-        segment_text = segment["text"]
-        segment_id = segment["segment_id"]
+        assert isinstance(segment, list)
+        segment_id, segment_text = segment
         assert isinstance(segment_text, str)
         assert isinstance(segment_id, str)
         segment_end = offset + len(segment_text)
@@ -115,7 +112,6 @@ def evidence_for_excerpt(
     assert selected
     return {
         "source_page_number": page["source_page_number"],
-        "page_text_sha256": page["page_text_sha256"],
         "evidence_segment_ids": selected,
     }
 
@@ -131,8 +127,6 @@ class FakeChunkModel:
         assert "ExperimentProtocol" not in json.dumps(response_schema)
         self.calls += 1
         request = json.loads(input_json)
-        source = request["source"]
-        chunk = request["chunk"]
         pages = [page for page in request["pages"] if page["role"] == "core"]
         structure = []
         claims = []
@@ -189,10 +183,7 @@ class FakeChunkModel:
                 item_ids.append(claim_id)
             coverage.append(
                 {
-                    "source_revision": source["source_revision"],
-                    "source_sha256": source["source_sha256"],
                     "source_page_number": number,
-                    "page_text_sha256": page["page_text_sha256"],
                     "status": "complete" if item_ids else "no_relevant_claims",
                     "evidence_item_ids": item_ids,
                 }
@@ -200,9 +191,7 @@ class FakeChunkModel:
         response = {
             "claim_schema_version": CLAIM_SCHEMA_VERSION,
             "capability_policy_id": "p1-conservative",
-            "source_revision": source["source_revision"],
-            "source_sha256": source["source_sha256"],
-            "chunk_id": chunk["chunk_id"],
+            "request_handle": request["request_handle"],
             "page_coverage": coverage,
             "structure": structure,
             "claims": claims,
@@ -384,8 +373,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             response = json.loads(original(**kwargs))
             response["claims"][0]["evidence"] = {
                 "source_page_number": outside.source_page_number,
-                "page_text_sha256": "0" * 64,
-                "evidence_segment_ids": ["seg-" + "0" * 64],
+                "evidence_segment_ids": ["s-" + "0" * 16],
             }
             return json.dumps(response)
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable
@@ -29,13 +30,14 @@ from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
 from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
-CLAIM_SCHEMA_VERSION = 2
-EVIDENCE_SEGMENT_VERSION = 1
+CLAIM_SCHEMA_VERSION = 3
+EVIDENCE_SEGMENT_VERSION = 2
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024
 _MAX_TEXT_CHARS = 32 * 1024
 _MAX_EVIDENCE_SEGMENTS_PER_SPAN = 256
+_MAX_PROVIDER_SEGMENT_CHARS = 4096
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 _NUMBERED_SOURCE_LINE = re.compile(
     r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,3})(?:[.)])?[ \t]+(?P<next>\S+)"
@@ -130,11 +132,58 @@ class ProtocolEvidenceSegment:
     segment_index: int
     text: str
 
+
+@dataclass(frozen=True)
+class ProviderEvidenceHandle:
+    """Request-scoped provider handle bound to one canonical segment."""
+
+    handle: str
+    segment: ProtocolEvidenceSegment
+
+    def provider_pair(self) -> tuple[str, str]:
+        return (self.handle, self.segment.text)
+
+
+@dataclass(frozen=True)
+class ProviderEvidencePage:
+    """Minimal provider page plus its immutable server-owned handle map."""
+
+    source_page_number: int
+    role: str
+    evidence: tuple[ProviderEvidenceHandle, ...]
+
     def provider_dict(self) -> dict[str, object]:
         return {
-            "segment_id": self.segment_id,
-            "text": self.text,
+            "source_page_number": self.source_page_number,
+            "role": self.role,
+            "segments": [item.provider_pair() for item in self.evidence],
         }
+
+
+@dataclass(frozen=True)
+class ProviderClaimRequest:
+    """Compact provider request with a full immutable server-side identity map."""
+
+    request_handle: str
+    capability_policy_id: str
+    source_revision: str
+    source_sha256: str
+    chunk_id: str
+    ordinal: int
+    core_page_refs: tuple[int, ...]
+    context_page_refs: tuple[int, ...]
+    pages: tuple[ProviderEvidencePage, ...]
+
+    def provider_dict(self) -> dict[str, object]:
+        return {
+            "claim_schema_version": CLAIM_SCHEMA_VERSION,
+            "capability_policy_id": self.capability_policy_id,
+            "request_handle": self.request_handle,
+            "pages": [page.provider_dict() for page in self.pages],
+        }
+
+    def input_json(self) -> str:
+        return _canonical_json(self.provider_dict())
 
 
 @dataclass(frozen=True)
@@ -249,7 +298,6 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
     "additionalProperties": False,
     "properties": {
         "source_page_number": {"type": "integer", "minimum": 1},
-        "page_text_sha256": {"type": "string"},
         "evidence_segment_ids": {
             "type": "array",
             "minItems": 1,
@@ -259,7 +307,6 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
     },
     "required": [
         "source_page_number",
-        "page_text_sha256",
         "evidence_segment_ids",
     ],
 }
@@ -269,19 +316,14 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
     "properties": {
         "claim_schema_version": {"type": "integer", "const": CLAIM_SCHEMA_VERSION},
         "capability_policy_id": {"type": "string"},
-        "source_revision": {"type": "string"},
-        "source_sha256": {"type": "string"},
-        "chunk_id": {"type": "string"},
+        "request_handle": {"type": "string"},
         "page_coverage": {
             "type": "array",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "source_revision": {"type": "string"},
-                    "source_sha256": {"type": "string"},
                     "source_page_number": {"type": "integer", "minimum": 1},
-                    "page_text_sha256": {"type": "string"},
                     "status": {
                         "type": "string",
                         "enum": [item.value for item in PageCoverageStatus],
@@ -292,10 +334,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                 },
                 "required": [
-                    "source_revision",
-                    "source_sha256",
                     "source_page_number",
-                    "page_text_sha256",
                     "status",
                     "evidence_item_ids",
                 ],
@@ -365,9 +404,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
     "required": [
         "claim_schema_version",
         "capability_policy_id",
-        "source_revision",
-        "source_sha256",
-        "chunk_id",
+        "request_handle",
         "page_coverage",
         "structure",
         "claims",
@@ -390,19 +427,20 @@ step identity, and section identity. Parameter claims must target the action,
 material, or equipment claim they qualify. Use stable identifiers across page
 boundaries when a context page shows the beginning of the same source step.
 
-Each page is supplied as ordered evidence_segments. For every claim and
-structural marker, cite a one-based core source page, copy its page_text_sha256,
-and select one or more directly adjacent evidence_segment_ids in source order.
-Never return source_excerpt text. The server resolves the selected IDs to the
-exact immutable excerpt. source_text must itself be an exact contiguous
-substring of the selected segments. Do not normalize whitespace, repair OCR,
-paraphrase, translate, merge non-adjacent passages, infer missing values, or add
-scientific knowledge. Explicit source ambiguity or a missing execution value is
-a blocking claim, never a guessed value.
+Each page is supplied as ordered segment pairs. For every claim and structural
+marker, cite a one-based core source page and select one or more directly
+adjacent evidence_segment_ids in source order. Never return source_excerpt text.
+The server resolves the selected handles to the exact immutable excerpt.
+source_text must itself be an exact contiguous substring of the selected
+segments. Do not normalize whitespace, repair OCR, paraphrase, translate, merge
+non-adjacent passages, infer missing values, or add scientific knowledge.
+Explicit source ambiguity or a missing execution value is a blocking claim,
+never a guessed value.
 
-Each supplied page_text_sha256 is an opaque, server-owned page identity. Copy the
-exact supplied value for the cited core page into its coverage record. Never
-calculate, derive, normalize, shorten, alter, or invent a page_text_sha256.
+Each page contains ordered [handle, exact_text] segment pairs. Segment handles
+and request_handle are opaque, request-scoped server identities. Copy only the
+selected adjacent handles and the exact request_handle; never calculate,
+derive, normalize, shorten, alter, or invent an identity.
 
 Return exactly one coverage record for every core page. Mark it complete when
 all relevant claims and markers on that page were extracted, no_relevant_claims
@@ -428,13 +466,61 @@ def _page_text_sha256(extraction: ProtocolPdfExtraction, page_number: int) -> st
     ).hexdigest()
 
 
+def _numbered_action_matches(page_text: str) -> tuple[re.Match[str], ...]:
+    matches = sorted(
+        (
+            *_NUMBERED_SOURCE_LINE.finditer(page_text),
+            *_INLINE_NUMBERED_SOURCE.finditer(page_text),
+        ),
+        key=lambda match: match.start("label"),
+    )
+    actions: list[re.Match[str]] = []
+    seen_offsets: set[int] = set()
+    for match in matches:
+        following = match.group("next").strip(".,:;()[]{}").casefold()
+        offset = match.start("label")
+        if (
+            following.isdecimal()
+            or following in _VALUE_UNITS
+            or offset in seen_offsets
+        ):
+            continue
+        actions.append(match)
+        seen_offsets.add(offset)
+    return tuple(actions)
+
+
+def _bounded_action_block_boundaries(page_text: str) -> tuple[int, ...]:
+    """Return exact action-block boundaries with a deterministic size ceiling."""
+
+    coarse = sorted(
+        {
+            0,
+            len(page_text),
+            *(match.start("label") for match in _numbered_action_matches(page_text)),
+        }
+    )
+    bounded = [coarse[0]]
+    for block_end in coarse[1:]:
+        block_start = bounded[-1]
+        while block_end - block_start > _MAX_PROVIDER_SEGMENT_CHARS:
+            hard_end = block_start + _MAX_PROVIDER_SEGMENT_CHARS
+            newline = page_text.rfind("\n", block_start + 1, hard_end + 1)
+            split_at = newline + 1 if newline >= block_start + 1 else hard_end
+            bounded.append(split_at)
+            block_start = split_at
+        if bounded[-1] != block_end:
+            bounded.append(block_end)
+    return tuple(bounded)
+
+
 def generate_page_evidence_segments(
     extraction: ProtocolPdfExtraction,
     *,
     source_revision: str,
     page_number: int,
 ) -> tuple[ProtocolEvidenceSegment, ...]:
-    """Split one page at exact line and numbered-action boundaries."""
+    """Split one page into exact, bounded numbered-action blocks."""
 
     if (
         not isinstance(source_revision, str)
@@ -446,14 +532,7 @@ def generate_page_evidence_segments(
     ):
         raise ValueError("Evidence segment source identity is invalid.")
     page_text = extraction.pages[page_number - 1].text
-    boundaries = {0, len(page_text)}
-    offset = 0
-    for line in page_text.splitlines(keepends=True):
-        offset += len(line)
-        boundaries.add(offset)
-    for pattern in (_NUMBERED_SOURCE_LINE, _INLINE_NUMBERED_SOURCE):
-        boundaries.update(match.start("label") for match in pattern.finditer(page_text))
-    ordered_boundaries = sorted(boundaries)
+    ordered_boundaries = _bounded_action_block_boundaries(page_text)
     segment_texts = tuple(
         page_text[start:end]
         for start, end in zip(ordered_boundaries, ordered_boundaries[1:])
@@ -497,6 +576,91 @@ def serialize_chunk_claim_analysis(
     return payload, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _compact_handle(prefix: str, identity: object, *, digest_bytes: int) -> str:
+    digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).digest()
+    encoded = urlsafe_b64encode(digest[:digest_bytes]).decode("ascii").rstrip("=")
+    return prefix + encoded
+
+
+def prepare_chunk_claim_request_context(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+    chunk_id: str,
+    ordinal: int,
+    core_page_refs: tuple[int, ...],
+    context_page_refs: tuple[int, ...],
+    capability_policy_id: str = domain.P1_CAPABILITY_POLICY.profile_id,
+) -> ProviderClaimRequest:
+    page_numbers = context_page_refs + core_page_refs
+    canonical_pages = tuple(
+        (
+            page_number,
+            generate_page_evidence_segments(
+                extraction,
+                source_revision=source_revision,
+                page_number=page_number,
+            ),
+        )
+        for page_number in page_numbers
+    )
+    request_identity = {
+        "claim_schema_version": CLAIM_SCHEMA_VERSION,
+        "capability_policy_id": capability_policy_id,
+        "source_revision": source_revision,
+        "source_sha256": extraction.sha256,
+        "chunk_id": chunk_id,
+        "ordinal": ordinal,
+        "core_page_refs": core_page_refs,
+        "context_page_refs": context_page_refs,
+        "pages": [
+            {
+                "source_page_number": page_number,
+                "page_text_sha256": _page_text_sha256(extraction, page_number),
+                "segment_ids": [segment.segment_id for segment in segments],
+            }
+            for page_number, segments in canonical_pages
+        ],
+    }
+    request_handle = _compact_handle("r-", request_identity, digest_bytes=16)
+    seen_handles: set[str] = set()
+    pages: list[ProviderEvidencePage] = []
+    core_pages = frozenset(core_page_refs)
+    for page_number, segments in canonical_pages:
+        evidence: list[ProviderEvidenceHandle] = []
+        for segment in segments:
+            handle = _compact_handle(
+                "s-",
+                {
+                    "request_handle": request_handle,
+                    "canonical_segment_id": segment.segment_id,
+                },
+                digest_bytes=12,
+            )
+            if handle in seen_handles:
+                raise ValueError("Provider evidence handle collision.")
+            seen_handles.add(handle)
+            evidence.append(ProviderEvidenceHandle(handle=handle, segment=segment))
+        pages.append(
+            ProviderEvidencePage(
+                source_page_number=page_number,
+                role="core" if page_number in core_pages else "context",
+                evidence=tuple(evidence),
+            )
+        )
+    return ProviderClaimRequest(
+        request_handle=request_handle,
+        capability_policy_id=capability_policy_id,
+        source_revision=source_revision,
+        source_sha256=extraction.sha256,
+        chunk_id=chunk_id,
+        ordinal=ordinal,
+        core_page_refs=core_page_refs,
+        context_page_refs=context_page_refs,
+        pages=tuple(pages),
+    )
+
+
 def prepare_chunk_claim_request(
     extraction: ProtocolPdfExtraction,
     *,
@@ -507,40 +671,15 @@ def prepare_chunk_claim_request(
     context_page_refs: tuple[int, ...],
     capability_policy_id: str = domain.P1_CAPABILITY_POLICY.profile_id,
 ) -> str:
-    payload = {
-        "claim_schema_version": CLAIM_SCHEMA_VERSION,
-        "capability_policy_id": capability_policy_id,
-        "source": {
-            "source_revision": source_revision,
-            "source_sha256": extraction.sha256,
-            "page_count": extraction.page_count,
-        },
-        "chunk": {
-            "chunk_id": chunk_id,
-            "ordinal": ordinal,
-            "core_page_refs": list(core_page_refs),
-            "context_page_refs": list(context_page_refs),
-        },
-        "pages": [
-            {
-                "source_page_number": page_number,
-                "role": (
-                    "core" if page_number in set(core_page_refs) else "context"
-                ),
-                "page_text_sha256": _page_text_sha256(extraction, page_number),
-                "evidence_segments": [
-                    segment.provider_dict()
-                    for segment in generate_page_evidence_segments(
-                        extraction,
-                        source_revision=source_revision,
-                        page_number=page_number,
-                    )
-                ],
-            }
-            for page_number in context_page_refs + core_page_refs
-        ],
-    }
-    return _canonical_json(payload)
+    return prepare_chunk_claim_request_context(
+        extraction,
+        source_revision=source_revision,
+        chunk_id=chunk_id,
+        ordinal=ordinal,
+        core_page_refs=core_page_refs,
+        context_page_refs=context_page_refs,
+        capability_policy_id=capability_policy_id,
+    ).input_json()
 
 
 def _expect_record(value: object, expected: set[str], location: str) -> dict[str, Any]:
@@ -579,17 +718,13 @@ def _identifier(value: object, location: str) -> str:
 
 def resolve_claim_source_evidence(
     raw: object,
-    extraction: ProtocolPdfExtraction,
     *,
-    source_revision: str,
-    core_pages: frozenset[int],
-    chunk_id: str,
+    request: ProviderClaimRequest,
 ) -> ClaimSourceEvidence:
     value = _expect_record(
         raw,
         {
             "source_page_number",
-            "page_text_sha256",
             "evidence_segment_ids",
         },
         "evidence",
@@ -598,8 +733,7 @@ def resolve_claim_source_evidence(
     valid_page = (
         isinstance(page_number, int)
         and not isinstance(page_number, bool)
-        and page_number in core_pages
-        and page_number <= extraction.page_count
+        and page_number in request.core_page_refs
     )
     if not valid_page:
         raise ProtocolAnalysisEvidenceError(
@@ -609,23 +743,9 @@ def resolve_claim_source_evidence(
                 reason_code="chunk_identity_mismatch",
                 mismatch_class="source_identity_mismatch",
                 page_number=(page_number if isinstance(page_number, int) else None),
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
-            ),
-        )
-    expected_page_hash = _page_text_sha256(extraction, page_number)
-    if value["page_text_sha256"] != expected_page_hash:
-        raise ProtocolAnalysisEvidenceError(
-            "Chunk claim evidence has a mismatched immutable page identity.",
-            diagnostic=ProtocolEvidenceDiagnostic(
-                validation_stage="chunk_claim_evidence_validation",
-                reason_code="invalid_source_hash",
-                mismatch_class="source_identity_mismatch",
-                page_number=page_number,
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
             ),
         )
     raw_segment_ids = value["evidence_segment_ids"]
@@ -641,29 +761,72 @@ def resolve_claim_source_evidence(
         raise ProtocolAnalysisResponseError(
             "Chunk claim response has an invalid evidence segment list."
         )
-    segment_ids = tuple(raw_segment_ids)
-    segments = generate_page_evidence_segments(
-        extraction,
-        source_revision=source_revision,
-        page_number=page_number,
+    provider_handles = tuple(raw_segment_ids)
+    matching_pages = tuple(
+        item for item in request.pages if item.source_page_number == page_number
     )
-    segment_positions = {
-        segment.segment_id: segment.segment_index for segment in segments
-    }
-    if any(segment_id not in segment_positions for segment_id in segment_ids):
+    if len(matching_pages) != 1:
         raise ProtocolAnalysisEvidenceError(
-            "Chunk claim evidence contains an unknown or stale segment identity.",
+            "Active provider evidence mapping has invalid page identity.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
+            ),
+        )
+    page = matching_pages[0]
+    mapped_evidence = tuple(
+        item for request_page in request.pages for item in request_page.evidence
+    )
+    handle_map = {item.handle: item.segment for item in mapped_evidence}
+    if len(handle_map) != len(mapped_evidence):
+        raise ProtocolAnalysisEvidenceError(
+            "Active provider evidence mapping contains a handle collision.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="chunk_claim_evidence_validation",
                 reason_code="evidence_segment_unknown",
                 mismatch_class="source_identity_mismatch",
                 page_number=page_number,
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
             ),
         )
-    positions = tuple(segment_positions[segment_id] for segment_id in segment_ids)
+    if any(handle not in handle_map for handle in provider_handles):
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence contains an unknown or stale request handle.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="evidence_segment_unknown",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
+            ),
+        )
+    selected = tuple(handle_map[handle] for handle in provider_handles)
+    if any(segment.source_page_number != page_number for segment in selected):
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claim evidence handle belongs to a different source page.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
+            ),
+        )
+    page_positions = {
+        item.segment.segment_id: item.segment.segment_index for item in page.evidence
+    }
+    positions = tuple(page_positions[segment.segment_id] for segment in selected)
     expected_positions = tuple(range(positions[0], positions[-1] + 1))
     if positions != expected_positions:
         raise ProtocolAnalysisEvidenceError(
@@ -673,17 +836,124 @@ def resolve_claim_source_evidence(
                 reason_code="evidence_segment_range_invalid",
                 mismatch_class="non_contiguous_source_evidence",
                 page_number=page_number,
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
             ),
         )
-    excerpt = "".join(segments[position].text for position in positions)
+    excerpt = "".join(segment.text for segment in selected)
     if not excerpt.strip() or len(excerpt) > _MAX_TEXT_CHARS:
         raise ProtocolAnalysisEvidenceError(
             "Chunk claim evidence resolves to an invalid source span.",
             diagnostic=ProtocolEvidenceDiagnostic(
                 validation_stage="chunk_claim_evidence_validation",
+                reason_code="evidence_segment_range_invalid",
+                mismatch_class="invalid_source_evidence",
+                page_number=page_number,
+                chunk_id=request.chunk_id,
+                source_revision=request.source_revision,
+                source_hash=request.source_sha256,
+            ),
+        )
+    return ClaimSourceEvidence(
+        source_revision=request.source_revision,
+        source_sha256=request.source_sha256,
+        source_page_number=page_number,
+        page_text_sha256=selected[0].page_text_sha256,
+        evidence_segment_ids=tuple(segment.segment_id for segment in selected),
+        source_excerpt=excerpt,
+    )
+
+
+def _decode_evidence(
+    raw: object,
+    *,
+    request: ProviderClaimRequest,
+) -> ClaimSourceEvidence:
+    return resolve_claim_source_evidence(
+        raw,
+        request=request,
+    )
+
+
+def _resolve_canonical_claim_source_evidence(
+    evidence: ClaimSourceEvidence,
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+    core_pages: frozenset[int],
+    chunk_id: str,
+) -> ClaimSourceEvidence:
+    page_number = evidence.source_page_number
+    if (
+        evidence.source_revision != source_revision
+        or evidence.source_sha256 != extraction.sha256
+        or not isinstance(page_number, int)
+        or isinstance(page_number, bool)
+        or page_number not in core_pages
+        or evidence.page_text_sha256 != _page_text_sha256(extraction, page_number)
+    ):
+        raise ProtocolAnalysisEvidenceError(
+            "Canonical chunk claim evidence has stale source identity.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="decoded_chunk_claim_validation",
+                reason_code="chunk_identity_mismatch",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number if isinstance(page_number, int) else None,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    segments = generate_page_evidence_segments(
+        extraction,
+        source_revision=source_revision,
+        page_number=page_number,
+    )
+    segment_map = {segment.segment_id: segment for segment in segments}
+    if (
+        not evidence.evidence_segment_ids
+        or len(evidence.evidence_segment_ids) > _MAX_EVIDENCE_SEGMENTS_PER_SPAN
+        or any(
+            not isinstance(segment_id, str)
+            or not _STABLE_ID.fullmatch(segment_id)
+            or segment_id not in segment_map
+            for segment_id in evidence.evidence_segment_ids
+        )
+    ):
+        raise ProtocolAnalysisEvidenceError(
+            "Canonical chunk claim evidence contains a stale segment identity.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="decoded_chunk_claim_validation",
+                reason_code="evidence_segment_unknown",
+                mismatch_class="source_identity_mismatch",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    selected = tuple(segment_map[item] for item in evidence.evidence_segment_ids)
+    positions = tuple(segment.segment_index for segment in selected)
+    if positions != tuple(range(positions[0], positions[-1] + 1)):
+        raise ProtocolAnalysisEvidenceError(
+            "Canonical chunk claim evidence is reversed or non-contiguous.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="decoded_chunk_claim_validation",
+                reason_code="evidence_segment_range_invalid",
+                mismatch_class="non_contiguous_source_evidence",
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    excerpt = "".join(segment.text for segment in selected)
+    if not excerpt.strip() or len(excerpt) > _MAX_TEXT_CHARS:
+        raise ProtocolAnalysisEvidenceError(
+            "Canonical chunk claim evidence resolves to an invalid source span.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="decoded_chunk_claim_validation",
                 reason_code="evidence_segment_range_invalid",
                 mismatch_class="invalid_source_evidence",
                 page_number=page_number,
@@ -696,26 +966,9 @@ def resolve_claim_source_evidence(
         source_revision=source_revision,
         source_sha256=extraction.sha256,
         source_page_number=page_number,
-        page_text_sha256=expected_page_hash,
-        evidence_segment_ids=segment_ids,
+        page_text_sha256=selected[0].page_text_sha256,
+        evidence_segment_ids=tuple(segment.segment_id for segment in selected),
         source_excerpt=excerpt,
-    )
-
-
-def _decode_evidence(
-    raw: object,
-    extraction: ProtocolPdfExtraction,
-    *,
-    source_revision: str,
-    core_pages: frozenset[int],
-    chunk_id: str,
-) -> ClaimSourceEvidence:
-    return resolve_claim_source_evidence(
-        raw,
-        extraction,
-        source_revision=source_revision,
-        core_pages=core_pages,
-        chunk_id=chunk_id,
     )
 
 
@@ -728,17 +981,11 @@ def _source_order(value: object) -> int:
 
 
 def _numbered_step_labels(page_text: str) -> tuple[str, ...]:
-    labels: list[str] = []
-    matches = (
-        *_NUMBERED_SOURCE_LINE.finditer(page_text),
-        *_INLINE_NUMBERED_SOURCE.finditer(page_text),
+    return tuple(
+        dict.fromkeys(
+            match.group("label") for match in _numbered_action_matches(page_text)
+        )
     )
-    for match in matches:
-        following = match.group("next").strip(".,:;()[]{}").casefold()
-        if following.isdecimal() or following in _VALUE_UNITS:
-            continue
-        labels.append(match.group("label"))
-    return tuple(dict.fromkeys(labels))
 
 
 def parse_chunk_claim_response(
@@ -748,6 +995,7 @@ def parse_chunk_claim_response(
     source_revision: str,
     chunk_id: str,
     core_page_refs: tuple[int, ...],
+    request: ProviderClaimRequest,
     capability_policy_id: str = domain.P1_CAPABILITY_POLICY.profile_id,
 ) -> ProtocolChunkClaimAnalysis:
     if not isinstance(raw_response, str) or not raw_response.strip():
@@ -770,9 +1018,7 @@ def parse_chunk_claim_response(
         {
             "claim_schema_version",
             "capability_policy_id",
-            "source_revision",
-            "source_sha256",
-            "chunk_id",
+            "request_handle",
             "page_coverage",
             "structure",
             "claims",
@@ -782,9 +1028,12 @@ def parse_chunk_claim_response(
     if (
         value["claim_schema_version"] != CLAIM_SCHEMA_VERSION
         or value["capability_policy_id"] != capability_policy_id
-        or value["source_revision"] != source_revision
-        or value["source_sha256"] != extraction.sha256
-        or value["chunk_id"] != chunk_id
+        or value["request_handle"] != request.request_handle
+        or request.source_revision != source_revision
+        or request.source_sha256 != extraction.sha256
+        or request.chunk_id != chunk_id
+        or request.core_page_refs != core_page_refs
+        or request.capability_policy_id != capability_policy_id
     ):
         raise ProtocolAnalysisEvidenceError(
             "Chunk claim response does not match the active source and chunk.",
@@ -795,11 +1044,6 @@ def parse_chunk_claim_response(
                 chunk_id=chunk_id,
                 source_revision=source_revision,
                 source_hash=extraction.sha256,
-                received_source_hash=(
-                    value["source_sha256"]
-                    if isinstance(value["source_sha256"], str)
-                    else None
-                ),
             ),
         )
     raw_structure = value["structure"]
@@ -838,10 +1082,7 @@ def parse_chunk_claim_response(
             ) from exc
         evidence = _decode_evidence(
             record["evidence"],
-            extraction,
-            source_revision=source_revision,
-            core_pages=core_pages,
-            chunk_id=chunk_id,
+            request=request,
         )
         source_text = _required_text(record["source_text"], "structure")
         if source_text not in evidence.source_excerpt:
@@ -898,10 +1139,7 @@ def parse_chunk_claim_response(
             ) from exc
         evidence = _decode_evidence(
             record["evidence"],
-            extraction,
-            source_revision=source_revision,
-            core_pages=core_pages,
-            chunk_id=chunk_id,
+            request=request,
         )
         source_text = _required_text(record["source_text"], "claim")
         if source_text not in evidence.source_excerpt:
@@ -954,10 +1192,7 @@ def parse_chunk_claim_response(
         record = _expect_record(
             item,
             {
-                "source_revision",
-                "source_sha256",
                 "source_page_number",
-                "page_text_sha256",
                 "status",
                 "evidence_item_ids",
             },
@@ -972,9 +1207,7 @@ def parse_chunk_claim_response(
         page_number = record["source_page_number"]
         item_ids = record["evidence_item_ids"]
         if (
-            record["source_revision"] != source_revision
-            or record["source_sha256"] != extraction.sha256
-            or not isinstance(page_number, int)
+            not isinstance(page_number, int)
             or isinstance(page_number, bool)
             or page_number not in core_pages
             or not isinstance(item_ids, list)
@@ -993,19 +1226,6 @@ def parse_chunk_claim_response(
                 ),
             )
         expected_page_hash = _page_text_sha256(extraction, page_number)
-        if record["page_text_sha256"] != expected_page_hash:
-            raise ProtocolAnalysisEvidenceError(
-                "Chunk page coverage text identity changed.",
-                diagnostic=ProtocolEvidenceDiagnostic(
-                    validation_stage="chunk_page_coverage_validation",
-                    reason_code="invalid_source_hash",
-                    mismatch_class="source_identity_mismatch",
-                    page_number=page_number,
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
-                    source_hash=extraction.sha256,
-                ),
-            )
         coverage.append(
             ProtocolPageClaimCoverage(
                 source_revision=source_revision,
@@ -1141,12 +1361,8 @@ def validate_chunk_claim_analysis(
                 "Decoded chunk claim evidence is malformed."
             )
         try:
-            resolved_evidence = resolve_claim_source_evidence(
-                {
-                    "source_page_number": evidence.source_page_number,
-                    "page_text_sha256": evidence.page_text_sha256,
-                    "evidence_segment_ids": list(evidence.evidence_segment_ids),
-                },
+            resolved_evidence = _resolve_canonical_claim_source_evidence(
+                evidence,
                 extraction,
                 source_revision=source_revision,
                 core_pages=core,
@@ -1273,7 +1489,7 @@ def analyze_chunk_claims(
     core_page_refs: tuple[int, ...],
     context_page_refs: tuple[int, ...],
 ) -> ProtocolChunkClaimAnalysis:
-    input_json = prepare_chunk_claim_request(
+    request = prepare_chunk_claim_request_context(
         extraction,
         source_revision=source_revision,
         chunk_id=chunk_id,
@@ -1281,6 +1497,7 @@ def analyze_chunk_claims(
         core_page_refs=core_page_refs,
         context_page_refs=context_page_refs,
     )
+    input_json = request.input_json()
     try:
         raw_response = model.analyze(
             system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
@@ -1299,6 +1516,7 @@ def analyze_chunk_claims(
         source_revision=source_revision,
         chunk_id=chunk_id,
         core_page_refs=core_page_refs,
+        request=request,
     )
 
 

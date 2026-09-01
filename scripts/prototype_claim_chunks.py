@@ -119,23 +119,22 @@ class ExactNumberedStepClaimModel:
         page: dict[str, object],
         excerpt: str,
     ) -> dict[str, object]:
-        segments = page["evidence_segments"]
+        segments = page["segments"]
         if not isinstance(segments, list):
             raise ValueError("Provider page has invalid evidence segments.")
-        page_text = "".join(str(segment["text"]) for segment in segments)
+        page_text = "".join(str(segment[1]) for segment in segments)
         start = page_text.index(excerpt)
         end = start + len(excerpt)
         selected: list[str] = []
         offset = 0
         for segment in segments:
-            segment_text = str(segment["text"])
+            segment_text = str(segment[1])
             segment_end = offset + len(segment_text)
             if segment_end > start and offset < end:
-                selected.append(str(segment["segment_id"]))
+                selected.append(str(segment[0]))
             offset = segment_end
         return {
             "source_page_number": page["source_page_number"],
-            "page_text_sha256": page["page_text_sha256"],
             "evidence_segment_ids": selected,
         }
 
@@ -150,8 +149,6 @@ class ExactNumberedStepClaimModel:
         if response_schema != CLAIM_RESPONSE_SCHEMA:
             raise ValueError("Prototype received the full Protocol schema.")
         request = json.loads(input_json)
-        source = request["source"]
-        chunk = request["chunk"]
         structure: list[dict[str, object]] = []
         claims: list[dict[str, object]] = []
         coverage: list[dict[str, object]] = []
@@ -160,10 +157,7 @@ class ExactNumberedStepClaimModel:
         ]
         for page in core_pages:
             page_number = page["source_page_number"]
-            page_text = "".join(
-                str(segment["text"])
-                for segment in page["evidence_segments"]
-            )
+            page_text = "".join(str(segment[1]) for segment in page["segments"])
             item_ids: list[str] = []
             if page_number == self.title_page:
                 title_evidence = self._evidence(page, self.title)
@@ -272,10 +266,7 @@ class ExactNumberedStepClaimModel:
                         item_ids.append(claim_id)
             coverage.append(
                 {
-                    "source_revision": source["source_revision"],
-                    "source_sha256": source["source_sha256"],
                     "source_page_number": page_number,
-                    "page_text_sha256": page["page_text_sha256"],
                     "status": "complete" if item_ids else "no_relevant_claims",
                     "evidence_item_ids": item_ids,
                 }
@@ -284,9 +275,7 @@ class ExactNumberedStepClaimModel:
             {
                 "claim_schema_version": CLAIM_SCHEMA_VERSION,
                 "capability_policy_id": "p1-conservative",
-                "source_revision": source["source_revision"],
-                "source_sha256": source["source_sha256"],
-                "chunk_id": chunk["chunk_id"],
+                "request_handle": request["request_handle"],
                 "page_coverage": coverage,
                 "structure": structure,
                 "claims": claims,

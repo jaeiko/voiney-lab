@@ -49,7 +49,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     ClaimCategory,
     generate_page_evidence_segments,
-    prepare_chunk_claim_request,
+    prepare_chunk_claim_request_context,
     resolve_claim_source_evidence,
 )
 
@@ -90,15 +90,13 @@ def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
 
 
 def page_text(page: dict[str, object]) -> str:
-    return "".join(
-        segment["text"] for segment in page["evidence_segments"]  # type: ignore[index]
-    )
+    return "".join(segment[1] for segment in page["segments"])  # type: ignore[index]
 
 
 def evidence_for_excerpt(
     page: dict[str, object], excerpt: str
 ) -> dict[str, object]:
-    segments = page["evidence_segments"]
+    segments = page["segments"]
     assert isinstance(segments, list)
     text = page_text(page)
     start = text.index(excerpt)
@@ -106,9 +104,8 @@ def evidence_for_excerpt(
     selected: list[str] = []
     offset = 0
     for segment in segments:
-        assert isinstance(segment, dict)
-        segment_text = segment["text"]
-        segment_id = segment["segment_id"]
+        assert isinstance(segment, list)
+        segment_id, segment_text = segment
         assert isinstance(segment_text, str)
         assert isinstance(segment_id, str)
         segment_end = offset + len(segment_text)
@@ -118,7 +115,6 @@ def evidence_for_excerpt(
     assert selected
     return {
         "source_page_number": page["source_page_number"],
-        "page_text_sha256": page["page_text_sha256"],
         "evidence_segment_ids": selected,
     }
 
@@ -134,8 +130,6 @@ class RichClaimModel:
         if response_schema != CLAIM_RESPONSE_SCHEMA:
             raise AssertionError("The chunk path reused the full Protocol schema.")
         request = json.loads(input_json)
-        source = request["source"]
-        chunk = request["chunk"]
         page = next(item for item in request["pages"] if item["role"] == "core")
         page_number = page["source_page_number"]
 
@@ -212,15 +206,10 @@ class RichClaimModel:
         response = {
             "claim_schema_version": CLAIM_SCHEMA_VERSION,
             "capability_policy_id": "p1-conservative",
-            "source_revision": source["source_revision"],
-            "source_sha256": source["source_sha256"],
-            "chunk_id": chunk["chunk_id"],
+            "request_handle": request["request_handle"],
             "page_coverage": [
                 {
-                    "source_revision": source["source_revision"],
-                    "source_sha256": source["source_sha256"],
                     "source_page_number": page_number,
-                    "page_text_sha256": page["page_text_sha256"],
                     "status": "complete",
                     "evidence_item_ids": item_ids,
                 }
@@ -297,7 +286,11 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             pages=(
                 replace(
                     self.extraction.pages[0],
-                    text="first extracted line\nsecond extracted line\nthird extracted line",
+                    text=(
+                        "Preparation notes\n"
+                        "1. Add 10 mL buffer.\nKeep the vessel covered.\n"
+                        "2. Incubate for 15 min.\nWARNING: hot surface."
+                    ),
                 ),
             ),
         )
@@ -320,11 +313,41 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.assertEqual(first, duplicate)
         self.assertEqual("".join(segment.text for segment in first), multiline.pages[0].text)
         self.assertEqual(len(first), 3)
+        self.assertIn("Keep the vessel covered", first[1].text)
+        self.assertIn("WARNING: hot surface", first[2].text)
         self.assertNotEqual(
             [segment.segment_id for segment in first],
             [segment.segment_id for segment in other_revision],
         )
         self.assertTrue(all(segment.segment_id.startswith("seg-") for segment in first))
+
+    def test_action_blocks_are_bounded_and_preserve_multiline_execution_text(self):
+        action = (
+            "1. Before start, add 10 mL buffer and incubate for 15 min.\n"
+            "WARNING: hot surface. Repeat until the sample is clear.\n"
+            + ("Continue mixing without changing the source text.\n" * 120)
+        )
+        extraction = replace(
+            self.extraction,
+            pages=(replace(self.extraction.pages[0], text=action + "2. Stop mixing."),),
+        )
+        segments = generate_page_evidence_segments(
+            extraction,
+            source_revision="pdf-long-action",
+            page_number=1,
+        )
+
+        self.assertEqual("".join(item.text for item in segments), extraction.pages[0].text)
+        self.assertTrue(all(len(item.text) <= 4096 for item in segments))
+        reconstructed = "".join(item.text for item in segments)
+        for phrase in (
+            "Before start",
+            "10 mL",
+            "15 min",
+            "WARNING: hot surface",
+            "Repeat until the sample is clear",
+        ):
+            self.assertIn(phrase, reconstructed)
 
     def test_single_and_adjacent_multi_segment_evidence_resolve_exactly(self):
         multiline = replace(
@@ -332,44 +355,42 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             pages=(
                 replace(
                     self.extraction.pages[0],
-                    text="first extracted line\nsecond extracted line\nthird extracted line",
+                    text="Preparation\n1. Add buffer.\nContinue mixing.\n2. Stop mixing.",
                 ),
             ),
         )
-        segments = generate_page_evidence_segments(
+        request = prepare_chunk_claim_request_context(
             multiline,
             source_revision="pdf-segments",
-            page_number=1,
-        )
-        identity = {
-            "source_page_number": 1,
-            "page_text_sha256": segments[0].page_text_sha256,
-        }
-        single = resolve_claim_source_evidence(
-            {**identity, "evidence_segment_ids": [segments[1].segment_id]},
-            multiline,
-            source_revision="pdf-segments",
-            core_pages=frozenset({1}),
             chunk_id="chunk-segments",
+            ordinal=0,
+            core_page_refs=(1,),
+            context_page_refs=(),
+        )
+        segments = request.pages[0].evidence
+        single = resolve_claim_source_evidence(
+            {"source_page_number": 1, "evidence_segment_ids": [segments[1].handle]},
+            request=request,
         )
         adjacent = resolve_claim_source_evidence(
             {
-                **identity,
+                "source_page_number": 1,
                 "evidence_segment_ids": [
-                    segments[0].segment_id,
-                    segments[1].segment_id,
+                    segments[0].handle,
+                    segments[1].handle,
                 ],
             },
-            multiline,
-            source_revision="pdf-segments",
-            core_pages=frozenset({1}),
-            chunk_id="chunk-segments",
+            request=request,
         )
 
-        self.assertEqual(single.source_excerpt, segments[1].text)
+        self.assertEqual(single.source_excerpt, segments[1].segment.text)
         self.assertEqual(
             adjacent.source_excerpt,
-            segments[0].text + segments[1].text,
+            segments[0].segment.text + segments[1].segment.text,
+        )
+        self.assertEqual(
+            adjacent.evidence_segment_ids,
+            (segments[0].segment.segment_id, segments[1].segment.segment_id),
         )
 
     def test_fabricated_wrong_page_revision_hash_and_invalid_ranges_fail(self):
@@ -384,49 +405,58 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             pages=(
                 replace(
                     self.extraction.pages[0],
-                    text="first extracted line\nsecond extracted line\nthird extracted line",
+                    text="Preparation\n1. Add buffer.\n2. Mix.\n3. Stop.",
                 ),
                 second_page,
             ),
         )
-        segments = generate_page_evidence_segments(
+        request = prepare_chunk_claim_request_context(
             multiline,
             source_revision="pdf-segments",
-            page_number=1,
+            chunk_id="chunk-segments",
+            ordinal=0,
+            core_page_refs=(1,),
+            context_page_refs=(2,),
         )
-        page_two = generate_page_evidence_segments(
+        wrong_revision = prepare_chunk_claim_request_context(
             multiline,
-            source_revision="pdf-segments",
-            page_number=2,
+            source_revision="pdf-other",
+            chunk_id="chunk-segments",
+            ordinal=0,
+            core_page_refs=(1,),
+            context_page_refs=(2,),
         )
-        identity = {
-            "source_page_number": 1,
-            "page_text_sha256": segments[0].page_text_sha256,
-        }
+        core_page = next(page for page in request.pages if page.source_page_number == 1)
+        context_page = next(page for page in request.pages if page.source_page_number == 2)
+        segments = core_page.evidence
         cases = (
-            {**identity, "evidence_segment_ids": ["seg-" + "0" * 64]},
             {
-                **identity,
-                "evidence_segment_ids": [page_two[0].segment_id],
+                "source_page_number": 1,
+                "evidence_segment_ids": ["s-" + "0" * 16],
             },
             {
-                **identity,
+                "source_page_number": 1,
+                "evidence_segment_ids": [context_page.evidence[0].handle],
+            },
+            {
+                "source_page_number": 1,
                 "evidence_segment_ids": [
-                    segments[0].segment_id,
-                    segments[2].segment_id,
+                    segments[0].handle,
+                    segments[2].handle,
                 ],
             },
             {
-                **identity,
+                "source_page_number": 1,
                 "evidence_segment_ids": [
-                    segments[1].segment_id,
-                    segments[0].segment_id,
+                    segments[1].handle,
+                    segments[0].handle,
                 ],
             },
             {
-                **identity,
-                "page_text_sha256": "0" * 64,
-                "evidence_segment_ids": [segments[0].segment_id],
+                "source_page_number": 1,
+                "evidence_segment_ids": [
+                    wrong_revision.pages[1].evidence[0].handle
+                ],
             },
         )
         for raw in cases:
@@ -434,36 +464,26 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                 with self.assertRaises(ProtocolAnalysisEvidenceError):
                     resolve_claim_source_evidence(
                         raw,
-                        multiline,
-                        source_revision="pdf-segments",
-                        core_pages=frozenset({1}),
-                        chunk_id="chunk-segments",
+                        request=request,
                     )
         with self.assertRaises(ProtocolAnalysisEvidenceError):
             resolve_claim_source_evidence(
                 {
-                    **identity,
-                    "evidence_segment_ids": [segments[0].segment_id],
+                    "source_page_number": 1,
+                    "evidence_segment_ids": [segments[0].handle],
                 },
-                multiline,
-                source_revision="pdf-other",
-                core_pages=frozenset({1}),
-                chunk_id="chunk-segments",
+                request=wrong_revision,
             )
         with self.assertRaises(ProtocolAnalysisEvidenceError):
             resolve_claim_source_evidence(
                 {
                     "source_page_number": 2,
-                    "page_text_sha256": page_two[0].page_text_sha256,
-                    "evidence_segment_ids": [page_two[0].segment_id],
+                    "evidence_segment_ids": [context_page.evidence[0].handle],
                 },
-                multiline,
-                source_revision="pdf-segments",
-                core_pages=frozenset({1}),
-                chunk_id="chunk-segments",
+                request=request,
             )
 
-    def test_request_supplies_exact_server_hash_for_every_provider_page(self):
+    def test_request_is_minimal_exact_and_handles_are_request_scoped(self):
         second_source = self.root / "provider-pages.pdf"
         write_pages(
             second_source,
@@ -473,60 +493,127 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             ),
         )
         extraction = extract_protocol_pdf(second_source)
-        request = json.loads(
-            prepare_chunk_claim_request(
-                extraction,
-                source_revision="pdf-provider-pages",
-                chunk_id="chunk-provider-pages",
-                ordinal=1,
-                core_page_refs=(2,),
-                context_page_refs=(1,),
-            )
+        context = prepare_chunk_claim_request_context(
+            extraction,
+            source_revision="pdf-provider-pages",
+            chunk_id="chunk-provider-pages",
+            ordinal=1,
+            core_page_refs=(2,),
+            context_page_refs=(1,),
         )
+        request = json.loads(context.input_json())
 
+        self.assertEqual(
+            set(request),
+            {"claim_schema_version", "capability_policy_id", "request_handle", "pages"},
+        )
         self.assertEqual(len(request["pages"]), 2)
         for page in request["pages"]:
             page_number = page["source_page_number"]
-            self.assertEqual(
-                page["page_text_sha256"],
-                hashlib.sha256(
-                    extraction.pages[page_number - 1].text.encode("utf-8")
-                ).hexdigest(),
-            )
+            self.assertEqual(set(page), {"source_page_number", "role", "segments"})
             self.assertEqual(
                 page_text(page),
                 extraction.pages[page_number - 1].text,
             )
-            self.assertTrue(page["evidence_segments"])
-        self.assertIn("opaque, server-owned page identity", CLAIM_ANALYSIS_SYSTEM_PROMPT)
-        self.assertIn("Never\ncalculate, derive", CLAIM_ANALYSIS_SYSTEM_PROMPT)
+            self.assertTrue(page["segments"])
+            self.assertTrue(all(len(segment[0]) == 18 for segment in page["segments"]))
+        other = prepare_chunk_claim_request_context(
+            extraction,
+            source_revision="pdf-provider-pages",
+            chunk_id="chunk-provider-pages-other",
+            ordinal=1,
+            core_page_refs=(2,),
+            context_page_refs=(1,),
+        )
+        self.assertNotEqual(context.request_handle, other.request_handle)
+        self.assertNotEqual(
+            context.pages[0].evidence[0].handle,
+            other.pages[0].evidence[0].handle,
+        )
+        with self.assertRaises(ProtocolAnalysisEvidenceError):
+            resolve_claim_source_evidence(
+                {
+                    "source_page_number": 2,
+                    "evidence_segment_ids": [other.pages[1].evidence[0].handle],
+                },
+                request=context,
+            )
+        self.assertIn("opaque, request-scoped server identities", CLAIM_ANALYSIS_SYSTEM_PROMPT)
         self.assertIn("Never return source_excerpt text", CLAIM_ANALYSIS_SYSTEM_PROMPT)
 
-    def test_correct_echoed_page_hash_passes_validation(self):
+    def test_compact_request_is_smaller_than_full_canonical_segment_contract(self):
+        context = prepare_chunk_claim_request_context(
+            self.extraction,
+            source_revision="pdf-1",
+            chunk_id="chunk-size-regression",
+            ordinal=0,
+            core_page_refs=(1,),
+            context_page_refs=(),
+        )
+        legacy = {
+            "claim_schema_version": 2,
+            "capability_policy_id": "p1-conservative",
+            "source": {
+                "source_revision": context.source_revision,
+                "source_sha256": context.source_sha256,
+                "page_count": self.extraction.page_count,
+            },
+            "chunk": {
+                "chunk_id": context.chunk_id,
+                "ordinal": context.ordinal,
+                "core_page_refs": list(context.core_page_refs),
+                "context_page_refs": list(context.context_page_refs),
+            },
+            "pages": [
+                {
+                    "source_page_number": page.source_page_number,
+                    "role": page.role,
+                    "page_text_sha256": page.evidence[0].segment.page_text_sha256,
+                    "evidence_segments": [
+                        {
+                            "segment_id": item.segment.segment_id,
+                            "text": item.segment.text,
+                        }
+                        for item in page.evidence
+                    ],
+                }
+                for page in context.pages
+            ],
+        }
+        legacy_bytes = len(
+            json.dumps(
+                legacy,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        self.assertLess(len(context.input_json().encode("utf-8")), legacy_bytes)
+
+    def test_server_constructs_canonical_page_hash_after_validation(self):
         result = self.analyze()
         self.assertEqual(
             result.analysis.page_coverage[0].page_text_sha256,
             hashlib.sha256(self.extraction.pages[0].text.encode("utf-8")).hexdigest(),
         )
 
-    def test_altered_or_missing_page_hash_fails_closed(self):
+    def test_altered_or_missing_request_handle_fails_closed(self):
         def altered(response):
-            response["page_coverage"][0]["page_text_sha256"] = "0" * 64
+            response["request_handle"] = "r-" + "0" * 22
 
         with self.assertRaises(ProtocolAnalysisEvidenceError) as altered_failure:
             self.analyze(RichClaimModel(altered))
         self.assertEqual(
-            altered_failure.exception.diagnostic.reason_code,
-            "invalid_source_hash",
+            altered_failure.exception.diagnostic.reason_code, "chunk_identity_mismatch"
         )
 
         def missing(response):
-            del response["page_coverage"][0]["page_text_sha256"]
+            del response["request_handle"]
 
         with self.assertRaises(ProtocolAnalysisResponseError):
             self.analyze(RichClaimModel(missing))
 
-    def test_hash_from_another_supplied_page_fails_closed(self):
+    def test_handle_from_another_analysis_run_fails_closed(self):
         two_page_source = self.root / "wrong-page-hash.pdf"
         page_text = (
             "Protocol Evidence Preparation Before start: thaw sample. "
@@ -545,20 +632,18 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             limits=ChunkAnalysisLimits(max_core_pages_per_chunk=1),
         )
         self.assertEqual(plan.chunks[1].overlap_page_refs, (1,))
-        first_page_hash = hashlib.sha256(
-            extraction.pages[0].text.encode("utf-8")
-        ).hexdigest()
-
-        def other_page(response):
-            response["page_coverage"][0]["page_text_sha256"] = first_page_hash
+        def other_run(response):
+            response["request_handle"] = "r-" + "x" * 22
 
         with self.assertRaises(ProtocolAnalysisEvidenceError) as failure:
             analyze_protocol_chunk(
                 extraction,
                 plan.chunks[1],
-                RichClaimModel(other_page),
+                RichClaimModel(other_run),
             )
-        self.assertEqual(failure.exception.diagnostic.reason_code, "invalid_source_hash")
+        self.assertEqual(
+            failure.exception.diagnostic.reason_code, "chunk_identity_mismatch"
+        )
 
     def test_claims_merge_then_assemble_with_exact_final_provenance_and_blockers(self):
         merged_claims = merge_validated_chunk_results(
@@ -623,7 +708,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             )
         self.assertEqual(
             failure.exception.diagnostic.reason_code,
-            "invalid_source_hash",
+            "chunk_identity_mismatch",
         )
 
     def test_untrusted_chunk_response_is_bounded_before_json_decoding(self):
