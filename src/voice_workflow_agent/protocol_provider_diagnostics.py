@@ -27,6 +27,10 @@ from voice_workflow_agent.experiment_protocol_analysis import (
 from voice_workflow_agent.protocol_claim_analysis import (
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
 )
+from voice_workflow_agent.protocol_claim_stream_telemetry import (
+    IncrementalProtocolClaimTelemetry,
+    ProtocolClaimStructuralTelemetry,
+)
 
 
 TimeoutPhase = Literal["before_first_output", "after_first_output"]
@@ -65,6 +69,9 @@ class ProtocolProviderStreamDiagnostic:
     stream_chunk_count: int
     output_delta_count: int
     output_bytes: int
+    reasoning_delta_count: int
+    reasoning_bytes: int
+    structural_telemetry: ProtocolClaimStructuralTelemetry
     stream_completed: bool
     finish_reason: str | None
     complete_json_returned: bool
@@ -112,6 +119,9 @@ class ProtocolProviderStreamDiagnostic:
             "stream_chunk_count": self.stream_chunk_count,
             "output_delta_count": self.output_delta_count,
             "output_bytes": self.output_bytes,
+            "reasoning_delta_count": self.reasoning_delta_count,
+            "reasoning_bytes": self.reasoning_bytes,
+            "structural_telemetry": self.structural_telemetry.public_dict(),
             "stream_completed": self.stream_completed,
             "finish_reason": self.finish_reason,
             "complete_json_returned": self.complete_json_returned,
@@ -250,6 +260,9 @@ def run_protocol_provider_stream_diagnostic(
     chunk_count = 0
     delta_count = 0
     output_bytes = 0
+    reasoning_delta_count = 0
+    reasoning_bytes = 0
+    structural_counter = IncrementalProtocolClaimTelemetry()
     content_parts: list[str] = []
     finish_reason: str | None = None
     granted_tier: str | None = None
@@ -297,6 +310,14 @@ def run_protocol_provider_stream_diagnostic(
                     if isinstance(reason, str) and reason:
                         finish_reason = reason
                     delta = _field(choice, "delta")
+                    reasoning_content = _field(delta, "reasoning_content")
+                    if not isinstance(reasoning_content, str):
+                        reasoning_content = _field(delta, "reasoning")
+                    if isinstance(reasoning_content, str) and reasoning_content:
+                        reasoning_delta_count += 1
+                        reasoning_bytes += len(
+                            reasoning_content.encode("utf-8")
+                        )
                     content = _field(delta, "content")
                     if not isinstance(content, str) or not content:
                         continue
@@ -307,6 +328,7 @@ def run_protocol_provider_stream_diagnostic(
                     delta_count += 1
                     encoded_bytes = len(content.encode("utf-8"))
                     output_bytes += encoded_bytes
+                    structural_counter.feed(content)
                     if output_bytes > MAX_CHUNK_CLAIM_RESPONSE_BYTES:
                         failure_code = "provider_output_too_large"
                         raise ProtocolProviderDiagnosticError(
@@ -409,6 +431,9 @@ def run_protocol_provider_stream_diagnostic(
         stream_chunk_count=chunk_count,
         output_delta_count=delta_count,
         output_bytes=output_bytes,
+        reasoning_delta_count=reasoning_delta_count,
+        reasoning_bytes=reasoning_bytes,
+        structural_telemetry=structural_counter.snapshot(),
         stream_completed=stream_completed,
         finish_reason=finish_reason,
         complete_json_returned=complete_json_returned,

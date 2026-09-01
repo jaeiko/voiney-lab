@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one content-free streaming latency probe for ANKOM claim chunk 3.
+"""Run one content-free structural probe for ANKOM core pages 25--29.
 
 The source, model, response schema, compact-handle request, reasoning effort,
 retry policy, and deadline are fixed to the established diagnostic baseline.
@@ -36,6 +36,14 @@ from voice_workflow_agent.protocol_provider_diagnostics import (
     ProtocolProviderStreamDiagnostic,
     run_protocol_provider_stream_diagnostic,
 )
+from voice_workflow_agent.protocol_claim_stream_telemetry import (
+    measure_protocol_claim_json_telemetry,
+)
+
+try:
+    from scripts.prototype_claim_chunks import ExactNumberedStepClaimModel
+except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
+    from prototype_claim_chunks import ExactNumberedStepClaimModel
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,9 +55,11 @@ ANKOM_SOURCE = (
 MODEL = "grok-4.3"
 REASONING_EFFORT = "none"
 TIMEOUT_SECONDS = 119.0
-EXPECTED_CORE_PAGES = tuple(range(25, 33))
+EXPECTED_CORE_PAGES = tuple(range(25, 30))
 EXPECTED_CONTEXT_PAGES = (24,)
-EXPECTED_NUMBERED_ACTIONS = 19
+EXPECTED_NUMBERED_ACTIONS = 13
+EXPECTED_CLAIMS = 20
+EXPECTED_RESPONSE_BYTES = 9_301
 
 
 def _canonical_json(value: object) -> str:
@@ -80,12 +90,7 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     if not ANKOM_SOURCE.is_file():
         raise RuntimeError("The fixed ANKOM diagnostic source is unavailable.")
     extraction = extract_protocol_pdf(ANKOM_SOURCE)
-    # Preserve the committed 8-page latency baseline even when production
-    # planning adds smaller output-complexity units.
-    limits = ChunkAnalysisLimits(
-        max_retries=0,
-        max_core_source_bytes_per_chunk=192 * 1024,
-    )
+    limits = ChunkAnalysisLimits(max_retries=0)
     protocol_id = f"protocol-{extraction.sha256[:32]}"
     plan = plan_protocol_chunks(
         extraction,
@@ -93,13 +98,15 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         "pdf-1",
         limits=limits,
     )
-    chunk = plan.chunks[3]
-    if (
-        chunk.ordinal != 3
-        or chunk.core_page_refs != EXPECTED_CORE_PAGES
-        or chunk.overlap_page_refs != EXPECTED_CONTEXT_PAGES
-    ):
-        raise RuntimeError("The fixed representative chunk identity changed.")
+    matching_chunks = tuple(
+        chunk
+        for chunk in plan.chunks
+        if chunk.core_page_refs == EXPECTED_CORE_PAGES
+        and chunk.overlap_page_refs == EXPECTED_CONTEXT_PAGES
+    )
+    if len(matching_chunks) != 1:
+        raise RuntimeError("The fixed representative analysis unit changed.")
+    chunk = matching_chunks[0]
     scoped = extraction_for_chunk(extraction, chunk)
     request = prepare_chunk_claim_request_context(
         scoped,
@@ -121,7 +128,6 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     streaming_request["stream"] = True
     streaming_request["stream_options"] = {"include_usage": True}
     case_metadata: dict[str, object] = {
-        "source_sha256": extraction.sha256,
         "source_page_count": extraction.page_count,
         "chunk_ordinal": chunk.ordinal,
         "core_page_refs": list(chunk.core_page_refs),
@@ -159,6 +165,45 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
                 "claim_count": len(analysis.claims),
             }
         )
+
+    deterministic_response = ExactNumberedStepClaimModel(extraction).analyze(
+        system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
+        input_json=input_json,
+        response_schema=CLAIM_RESPONSE_SCHEMA,
+    )
+    deterministic_analysis = parse_chunk_claim_response(
+        deterministic_response,
+        scoped,
+        source_revision=chunk.candidate_revision_id,
+        chunk_id=chunk.chunk_id,
+        core_page_refs=chunk.core_page_refs,
+        request=request,
+    )
+    deterministic_bytes = len(deterministic_response.encode("utf-8"))
+    deterministic_claims = len(deterministic_analysis.claims)
+    deterministic_actions = sum(
+        claim.category.value == "action"
+        for claim in deterministic_analysis.claims
+    )
+    if (
+        deterministic_bytes != EXPECTED_RESPONSE_BYTES
+        or deterministic_claims != EXPECTED_CLAIMS
+        or deterministic_actions != EXPECTED_NUMBERED_ACTIONS
+    ):
+        raise RuntimeError("The deterministic claim-output baseline changed.")
+    deterministic_telemetry = measure_protocol_claim_json_telemetry(
+        deterministic_response
+    )
+    del deterministic_response
+    case_metadata["deterministic_baseline"] = {
+        "total_bytes": deterministic_bytes,
+        "claim_count": deterministic_claims,
+        "numbered_action_count": deterministic_actions,
+        "coverage_record_count": len(deterministic_analysis.page_coverage),
+        "structure_marker_count": len(deterministic_analysis.structure),
+        "canonical_validation_succeeded": True,
+        "structural_telemetry": deterministic_telemetry.public_dict(),
+    }
 
     runtime: dict[str, Any] = {
         "input_json": input_json,
