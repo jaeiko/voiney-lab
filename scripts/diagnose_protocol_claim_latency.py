@@ -30,7 +30,9 @@ from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
     MAX_PAGE_COVERAGE_RECORDS,
+    ProviderClaimRequest,
     claim_response_schema,
+    claim_response_schema_metrics,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
@@ -88,6 +90,48 @@ def _classification(result: ProtocolProviderStreamDiagnostic) -> str:
     return "provider_boundary_failure"
 
 
+def _page_local_handles_are_valid(
+    raw_response: str,
+    request: ProviderClaimRequest,
+) -> bool:
+    """Check only provider page/handle membership without retaining content."""
+
+    payload = json.loads(raw_response)
+    if not isinstance(payload, dict):
+        return False
+    allowed = {
+        page.source_page_number: frozenset(
+            item.handle for item in page.evidence
+        )
+        for page in request.pages
+        if page.role == "core"
+    }
+    records = (*payload.get("structure", ()), *payload.get("claims", ()))
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("evidence"),
+            dict,
+        ):
+            return False
+        evidence = record["evidence"]
+        page_number = evidence.get("source_page_number")
+        handles = evidence.get("evidence_segment_ids")
+        if (
+            not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number not in allowed
+            or not isinstance(handles, list)
+            or not handles
+            or any(
+                not isinstance(handle, str)
+                or handle not in allowed[page_number]
+                for handle in handles
+            )
+        ):
+            return False
+    return True
+
+
 def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
     if not ANKOM_SOURCE.is_file():
         raise RuntimeError("The fixed ANKOM diagnostic source is unavailable.")
@@ -119,7 +163,8 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
         context_page_refs=chunk.overlap_page_refs,
     )
     input_json = request.input_json()
-    response_schema = claim_response_schema(chunk.core_page_refs)
+    response_schema = claim_response_schema(request)
+    schema_metrics = claim_response_schema_metrics(request)
     non_streaming_request = build_protocol_analysis_chat_request(
         model=MODEL,
         reasoning_effort=REASONING_EFFORT,
@@ -149,10 +194,14 @@ def _prepare_case() -> tuple[dict[str, object], dict[str, Any]]:
             for page in request.pages
             for item in page.evidence
         ),
+        "page_local_handle_schema": schema_metrics.public_dict(),
     }
     validation_metadata: dict[str, object] = {}
 
     def validate_complete(raw_response: str) -> None:
+        validation_metadata["page_local_handle_validity"] = (
+            _page_local_handles_are_valid(raw_response, request)
+        )
         analysis = parse_chunk_claim_response(
             raw_response,
             scoped,

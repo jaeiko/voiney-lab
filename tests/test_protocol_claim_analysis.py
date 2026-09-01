@@ -51,6 +51,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     MAX_PAGE_COVERAGE_RECORDS,
     ClaimCategory,
     claim_response_schema,
+    claim_response_schema_metrics,
     generate_page_evidence_segments,
     prepare_chunk_claim_request_context,
     resolve_claim_source_evidence,
@@ -123,6 +124,39 @@ def evidence_for_excerpt(
     }
 
 
+def page_local_schema_handles(
+    response_schema: dict[str, object],
+) -> dict[int, tuple[str, ...]]:
+    definitions = response_schema["$defs"]
+    assert isinstance(definitions, dict)
+    selector = definitions["page_local_core_evidence"]
+    assert isinstance(selector, dict)
+    branches = selector["oneOf"]
+    assert isinstance(branches, list)
+    result: dict[int, tuple[str, ...]] = {}
+    for branch in branches:
+        page_schema = branch["properties"]["source_page_number"]
+        handle_schema = branch["properties"]["evidence_segment_ids"]["items"]
+        result[page_schema["const"]] = tuple(handle_schema["enum"])
+    return result
+
+
+def page_local_schema_accepts_evidence(
+    response_schema: dict[str, object],
+    evidence: dict[str, object],
+) -> bool:
+    page_number = evidence.get("source_page_number")
+    handles = evidence.get("evidence_segment_ids")
+    if not isinstance(page_number, int) or isinstance(page_number, bool):
+        return False
+    if not isinstance(handles, list) or not 1 <= len(handles) <= 256:
+        return False
+    allowed = page_local_schema_handles(response_schema).get(page_number)
+    return allowed is not None and all(
+        isinstance(handle, str) and handle in allowed for handle in handles
+    )
+
+
 class RichClaimModel:
     """Strict provider fake that emits every supported claim category."""
 
@@ -135,9 +169,13 @@ class RichClaimModel:
         core_pages = tuple(
             item for item in request["pages"] if item["role"] == "core"
         )
-        if response_schema != claim_response_schema(
-            tuple(item["source_page_number"] for item in core_pages)
-        ):
+        expected_handles = {
+            item["source_page_number"]: tuple(
+                segment[0] for segment in item["segments"]
+            )
+            for item in core_pages
+        }
+        if page_local_schema_handles(response_schema) != expected_handles:
             raise AssertionError("The chunk path used the wrong claim schema.")
         page = core_pages[0]
         page_number = page["source_page_number"]
@@ -280,6 +318,17 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             ),
         )
 
+    def claim_request(self):
+        chunk = self.plan.chunks[0]
+        return prepare_chunk_claim_request_context(
+            self.extraction,
+            source_revision=chunk.candidate_revision_id,
+            chunk_id=chunk.chunk_id,
+            ordinal=chunk.ordinal,
+            core_page_refs=chunk.core_page_refs,
+            context_page_refs=chunk.overlap_page_refs,
+        )
+
     def test_chunk_schema_is_small_and_every_claim_has_independent_provenance(self):
         rendered_schema = json.dumps(CLAIM_RESPONSE_SCHEMA, sort_keys=True)
         self.assertNotIn("ExperimentProtocol", rendered_schema)
@@ -359,7 +408,9 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.assertEqual(len(draft.protocol.materials[0].quantities), 1)
 
     def test_claim_schema_makes_overlong_coverage_arrays_invalid(self):
-        coverage_schema = claim_response_schema((1,))["properties"]["page_coverage"]
+        coverage_schema = claim_response_schema(self.claim_request())["properties"][
+            "page_coverage"
+        ]
         reference_schema = coverage_schema["items"]["properties"][
             "evidence_item_ids"
         ]
@@ -399,9 +450,33 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             len(set(duplicate_references)),
         )
 
-    def test_request_schema_exactly_binds_coverage_to_core_pages(self):
-        core_pages = (7, 9, 12)
-        schema = claim_response_schema(core_pages)
+    def test_request_schema_binds_page_handle_pairs_and_exact_coverage(self):
+        pages = tuple(
+            replace(
+                self.extraction.pages[0],
+                source_page_number=page_number,
+                text=text,
+            )
+            for page_number, text in enumerate(
+                (
+                    "Preparation\n1. Add buffer.\n2. Mix sample.",
+                    "Processing\n3. Incubate sample.\n4. Stop mixing.",
+                    "Context\n5. Prior-page action.",
+                ),
+                start=1,
+            )
+        )
+        extraction = replace(self.extraction, page_count=3, pages=pages)
+        request = prepare_chunk_claim_request_context(
+            extraction,
+            source_revision="pdf-page-local-schema",
+            chunk_id="chunk-page-local-schema",
+            ordinal=0,
+            core_page_refs=(1, 3),
+            context_page_refs=(2,),
+        )
+        core_pages = request.core_page_refs
+        schema = claim_response_schema(request)
         coverage = schema["properties"]["page_coverage"]
         self.assertEqual(coverage["minItems"], len(core_pages))
         self.assertEqual(coverage["maxItems"], len(core_pages))
@@ -410,14 +485,131 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             list(core_pages),
         )
         self.assertNotIn(
-            6,
+            2,
             coverage["items"]["properties"]["source_page_number"]["enum"],
         )
+        expected_handles = {
+            page.source_page_number: tuple(
+                evidence.handle for evidence in page.evidence
+            )
+            for page in request.pages
+            if page.role == "core"
+        }
+        context_handles = {
+            evidence.handle
+            for page in request.pages
+            if page.role == "context"
+            for evidence in page.evidence
+        }
+        self.assertEqual(page_local_schema_handles(schema), expected_handles)
+        self.assertTrue(
+            context_handles.isdisjoint(
+                handle
+                for handles in page_local_schema_handles(schema).values()
+                for handle in handles
+            )
+        )
         for section_name in ("structure", "claims"):
-            evidence_page = schema["properties"][section_name]["items"][
+            evidence_schema = schema["properties"][section_name]["items"][
                 "properties"
-            ]["evidence"]["properties"]["source_page_number"]
-            self.assertEqual(evidence_page["enum"], list(core_pages))
+            ]["evidence"]
+            self.assertEqual(
+                evidence_schema,
+                {"$ref": "#/$defs/page_local_core_evidence"},
+            )
+
+        first_page_handles = list(expected_handles[1])
+        second_page_handles = list(expected_handles[3])
+        context_handle = next(iter(context_handles))
+        cases = (
+            (
+                "matching page and handle",
+                {
+                    "source_page_number": 1,
+                    "evidence_segment_ids": first_page_handles[:1],
+                },
+                True,
+            ),
+            (
+                "same-page adjacent handles",
+                {
+                    "source_page_number": 1,
+                    "evidence_segment_ids": first_page_handles[:2],
+                },
+                True,
+            ),
+            (
+                "wrong core-page handle",
+                {
+                    "source_page_number": 1,
+                    "evidence_segment_ids": second_page_handles[:1],
+                },
+                False,
+            ),
+            (
+                "context-only handle",
+                {"source_page_number": 1, "evidence_segment_ids": [context_handle]},
+                False,
+            ),
+            (
+                "fabricated handle",
+                {"source_page_number": 1, "evidence_segment_ids": ["s-fabricated"]},
+                False,
+            ),
+            (
+                "mixed-page handle list",
+                {
+                    "source_page_number": 1,
+                    "evidence_segment_ids": [
+                        first_page_handles[0],
+                        second_page_handles[0],
+                    ],
+                },
+                False,
+            ),
+            (
+                "declared context page",
+                {"source_page_number": 2, "evidence_segment_ids": [context_handle]},
+                False,
+            ),
+        )
+        for label, evidence, expected in cases:
+            with self.subTest(label=label):
+                self.assertIs(
+                    page_local_schema_accepts_evidence(schema, evidence),
+                    expected,
+                )
+        for page_number, handles in expected_handles.items():
+            for handle in handles:
+                with self.subTest(
+                    label="every issued core handle",
+                    page_number=page_number,
+                ):
+                    self.assertTrue(
+                        page_local_schema_accepts_evidence(
+                            schema,
+                            {
+                                "source_page_number": page_number,
+                                "evidence_segment_ids": [handle],
+                            },
+                        )
+                    )
+
+        metrics = claim_response_schema_metrics(request)
+        self.assertEqual(
+            metrics.handle_enum_entry_count,
+            sum(map(len, expected_handles.values())),
+        )
+        self.assertEqual(
+            metrics.core_handle_count,
+            metrics.handle_enum_entry_count,
+        )
+        self.assertEqual(metrics.context_handle_count, len(context_handles))
+        self.assertEqual(
+            metrics.largest_page_handle_enum,
+            max(map(len, expected_handles.values())),
+        )
+        self.assertGreater(metrics.schema_after_bytes, metrics.schema_before_bytes)
 
     def test_coverage_cardinality_and_duplicate_refs_fail_without_repair(self):
         def too_many_coverage_records(response):

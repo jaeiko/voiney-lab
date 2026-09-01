@@ -46,7 +46,6 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
-    claim_response_schema,
 )
 
 
@@ -116,6 +115,16 @@ def evidence_for_excerpt(
     }
 
 
+def page_local_schema_handles(response_schema) -> dict[int, tuple[str, ...]]:
+    branches = response_schema["$defs"]["page_local_core_evidence"]["oneOf"]
+    return {
+        branch["properties"]["source_page_number"]["const"]: tuple(
+            branch["properties"]["evidence_segment_ids"]["items"]["enum"]
+        )
+        for branch in branches
+    }
+
+
 class FakeChunkModel:
     def __init__(self, *, conflict_on_page: int | None = None) -> None:
         self.calls = 0
@@ -127,9 +136,12 @@ class FakeChunkModel:
         self.calls += 1
         request = json.loads(input_json)
         pages = [page for page in request["pages"] if page["role"] == "core"]
-        assert response_schema == claim_response_schema(
-            tuple(page["source_page_number"] for page in pages)
-        )
+        assert page_local_schema_handles(response_schema) == {
+            page["source_page_number"]: tuple(
+                segment[0] for segment in page["segments"]
+            )
+            for page in pages
+        }
         structure = []
         claims = []
         coverage = []

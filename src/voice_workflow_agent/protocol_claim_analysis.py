@@ -190,6 +190,39 @@ class ProviderClaimRequest:
 
 
 @dataclass(frozen=True)
+class ClaimResponseSchemaMetrics:
+    """Content-free size and cardinality evidence for one request schema."""
+
+    schema_before_bytes: int
+    schema_after_bytes: int
+    schema_growth_bytes: int
+    schema_growth_percent: float
+    core_page_count: int
+    core_handle_count: int
+    context_handle_count: int
+    handle_enum_entry_count: int
+    largest_page_handle_enum: int
+    handles_per_core_page: tuple[tuple[int, int], ...]
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "schema_before_bytes": self.schema_before_bytes,
+            "schema_after_bytes": self.schema_after_bytes,
+            "schema_growth_bytes": self.schema_growth_bytes,
+            "schema_growth_percent": self.schema_growth_percent,
+            "core_page_count": self.core_page_count,
+            "core_handle_count": self.core_handle_count,
+            "context_handle_count": self.context_handle_count,
+            "handle_enum_entry_count": self.handle_enum_entry_count,
+            "largest_page_handle_enum": self.largest_page_handle_enum,
+            "handles_per_core_page": [
+                {"source_page_number": page_number, "handle_count": handle_count}
+                for page_number, handle_count in self.handles_per_core_page
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class ProtocolStructureMarker:
     marker_id: str
     kind: StructureMarkerKind
@@ -416,8 +449,10 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
-def claim_response_schema(core_page_refs: tuple[int, ...]) -> dict[str, Any]:
-    """Bind provider page choices and coverage cardinality to one request."""
+def _claim_response_schema_for_core_pages(
+    core_page_refs: tuple[int, ...],
+) -> dict[str, Any]:
+    """Build the pre-handle baseline with request-exact coverage bounds."""
 
     if (
         not core_page_refs
@@ -448,6 +483,138 @@ def claim_response_schema(core_page_refs: tuple[int, ...]) -> dict[str, Any]:
             "enum": list(core_page_refs),
         }
     return schema
+
+
+def _request_core_page_handles(
+    request: ProviderClaimRequest,
+) -> tuple[tuple[int, tuple[str, ...]], ...]:
+    """Validate and return the active request's exact core-page handle map."""
+
+    if not isinstance(request, ProviderClaimRequest):
+        raise ValueError("A provider claim request is required for the claim schema.")
+    _claim_response_schema_for_core_pages(request.core_page_refs)
+    if (
+        len(set(request.context_page_refs)) != len(request.context_page_refs)
+        or set(request.core_page_refs) & set(request.context_page_refs)
+        or any(
+            not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number < 1
+            for page_number in request.context_page_refs
+        )
+    ):
+        raise ValueError("Context page references are invalid for the claim schema.")
+    expected_roles = {
+        **{page_number: "context" for page_number in request.context_page_refs},
+        **{page_number: "core" for page_number in request.core_page_refs},
+    }
+    if (
+        len(request.pages) != len(expected_roles)
+        or {page.source_page_number for page in request.pages}
+        != set(expected_roles)
+    ):
+        raise ValueError("Provider evidence pages do not match the active request.")
+
+    seen_handles: set[str] = set()
+    handles_by_page: dict[int, tuple[str, ...]] = {}
+    for page in request.pages:
+        if page.role != expected_roles.get(page.source_page_number):
+            raise ValueError("Provider evidence page roles do not match the request.")
+        handles: list[str] = []
+        for item in page.evidence:
+            if (
+                not isinstance(item, ProviderEvidenceHandle)
+                or not _STABLE_ID.fullmatch(item.handle)
+                or item.segment.source_page_number != page.source_page_number
+                or item.segment.source_revision != request.source_revision
+                or item.segment.source_sha256 != request.source_sha256
+                or item.handle in seen_handles
+            ):
+                raise ValueError("Provider evidence handles are invalid for the request.")
+            seen_handles.add(item.handle)
+            handles.append(item.handle)
+        handles_by_page[page.source_page_number] = tuple(handles)
+    return tuple(
+        (page_number, handles_by_page[page_number])
+        for page_number in request.core_page_refs
+    )
+
+
+def claim_response_schema(request: ProviderClaimRequest) -> dict[str, Any]:
+    """Bind evidence page/handle pairs and coverage to one active request."""
+
+    handles_by_core_page = _request_core_page_handles(request)
+    schema = _claim_response_schema_for_core_pages(request.core_page_refs)
+    page_local_branches: list[dict[str, Any]] = []
+    for page_number, handles in handles_by_core_page:
+        if not handles:
+            continue
+        evidence = deepcopy(_EVIDENCE_SCHEMA)
+        evidence["properties"]["source_page_number"] = {
+            "type": "integer",
+            "const": page_number,
+        }
+        evidence["properties"]["evidence_segment_ids"]["items"] = {
+            "type": "string",
+            "enum": list(handles),
+        }
+        page_local_branches.append(evidence)
+
+    if not page_local_branches:
+        # A source unit with no text has no selectable evidence. Keep the schema
+        # provider-compatible (empty unions/enums are rejected) and make both
+        # evidence-bearing collections deterministically empty instead.
+        for section_name in ("structure", "claims"):
+            schema["properties"][section_name]["maxItems"] = 0
+        return schema
+
+    definition_name = "page_local_core_evidence"
+    schema["$defs"] = {
+        definition_name: {
+            "oneOf": page_local_branches,
+        }
+    }
+    evidence_reference = {"$ref": f"#/$defs/{definition_name}"}
+    for section_name in ("structure", "claims"):
+        schema["properties"][section_name]["items"]["properties"][
+            "evidence"
+        ] = deepcopy(evidence_reference)
+    return schema
+
+
+def claim_response_schema_metrics(
+    request: ProviderClaimRequest,
+) -> ClaimResponseSchemaMetrics:
+    """Measure schema growth without exposing source text or handle values."""
+
+    handles_by_core_page = _request_core_page_handles(request)
+    before = _claim_response_schema_for_core_pages(request.core_page_refs)
+    after = claim_response_schema(request)
+    before_bytes = len(_canonical_json(before).encode("utf-8"))
+    after_bytes = len(_canonical_json(after).encode("utf-8"))
+    growth_bytes = after_bytes - before_bytes
+    core_handle_count = sum(len(handles) for _, handles in handles_by_core_page)
+    context_handle_count = sum(
+        len(page.evidence) for page in request.pages if page.role == "context"
+    )
+    return ClaimResponseSchemaMetrics(
+        schema_before_bytes=before_bytes,
+        schema_after_bytes=after_bytes,
+        schema_growth_bytes=growth_bytes,
+        schema_growth_percent=round((growth_bytes / before_bytes) * 100.0, 6),
+        core_page_count=len(handles_by_core_page),
+        core_handle_count=core_handle_count,
+        context_handle_count=context_handle_count,
+        handle_enum_entry_count=core_handle_count,
+        largest_page_handle_enum=max(
+            (len(handles) for _, handles in handles_by_core_page),
+            default=0,
+        ),
+        handles_per_core_page=tuple(
+            (page_number, len(handles))
+            for page_number, handles in handles_by_core_page
+        ),
+    )
 
 
 CLAIM_ANALYSIS_SYSTEM_PROMPT = """\
@@ -1743,7 +1910,7 @@ def analyze_chunk_claims(
         raw_response = model.analyze(
             system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
             input_json=input_json,
-            response_schema=claim_response_schema(request.core_page_refs),
+            response_schema=claim_response_schema(request),
         )
     except (ProtocolAnalysisEvidenceError, ProtocolAnalysisResponseError):
         raise

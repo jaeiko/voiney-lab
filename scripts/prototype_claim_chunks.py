@@ -30,12 +30,14 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     ValidatedChunkResult,
     analyze_protocol_chunk,
     assemble_validated_protocol_claims,
+    extraction_for_chunk,
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
-    claim_response_schema,
+    claim_response_schema_metrics,
+    prepare_chunk_claim_request_context,
 )
 
 
@@ -81,6 +83,18 @@ _PARAMETERS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
+
+
+def _page_local_schema_handles(
+    response_schema: dict[str, Any],
+) -> dict[int, tuple[str, ...]]:
+    branches = response_schema["$defs"]["page_local_core_evidence"]["oneOf"]
+    return {
+        branch["properties"]["source_page_number"]["const"]: tuple(
+            branch["properties"]["evidence_segment_ids"]["items"]["enum"]
+        )
+        for branch in branches
+    }
 
 
 def _exact_metadata_title(extraction: ProtocolPdfExtraction) -> str:
@@ -153,8 +167,13 @@ class ExactNumberedStepClaimModel:
         core_pages = [
             page for page in request["pages"] if page["role"] == "core"
         ]
-        core_page_refs = tuple(page["source_page_number"] for page in core_pages)
-        if response_schema != claim_response_schema(core_page_refs):
+        expected_handles = {
+            page["source_page_number"]: tuple(
+                segment[0] for segment in page["segments"]
+            )
+            for page in core_pages
+        }
+        if _page_local_schema_handles(response_schema) != expected_handles:
             raise ValueError("Prototype received the wrong claim schema.")
         for page in core_pages:
             page_number = page["source_page_number"]
@@ -329,6 +348,18 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
         "pdf-1",
         limits=limits,
     )
+    schema_metrics = []
+    for chunk in plan.chunks:
+        scoped = extraction_for_chunk(extraction, chunk)
+        request = prepare_chunk_claim_request_context(
+            scoped,
+            source_revision=chunk.candidate_revision_id,
+            chunk_id=chunk.chunk_id,
+            ordinal=chunk.ordinal,
+            core_page_refs=chunk.core_page_refs,
+            context_page_refs=chunk.overlap_page_refs,
+        )
+        schema_metrics.append(claim_response_schema_metrics(request))
     model = ExactNumberedStepClaimModel(extraction)
     analysis_started = time.monotonic()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -377,6 +408,29 @@ def run_source(path: Path, concurrency: int) -> dict[str, object]:
             canonical_source_text_reconstructed
         ),
         "request_coverage_exact": request_coverage_exact,
+        "response_schema_profile": {
+            "before_bytes_per_chunk": [
+                item.schema_before_bytes for item in schema_metrics
+            ],
+            "after_bytes_per_chunk": [
+                item.schema_after_bytes for item in schema_metrics
+            ],
+            "growth_percent_per_chunk": [
+                item.schema_growth_percent for item in schema_metrics
+            ],
+            "core_handle_count_per_chunk": [
+                item.core_handle_count for item in schema_metrics
+            ],
+            "maximum_after_bytes": max(
+                item.schema_after_bytes for item in schema_metrics
+            ),
+            "maximum_handle_enum_entries": max(
+                item.handle_enum_entry_count for item in schema_metrics
+            ),
+            "maximum_handles_per_page": max(
+                item.largest_page_handle_enum for item in schema_metrics
+            ),
+        },
         "readiness_status": draft.readiness.status.value,
         "readiness_reason_codes": list(draft.readiness.reason_codes),
         "extraction_seconds": round(extraction_seconds, 6),
