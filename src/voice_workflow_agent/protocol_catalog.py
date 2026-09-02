@@ -1432,24 +1432,18 @@ class ProtocolCatalog:
             return base
 
         protocol = analysis.protocol
-        hazard_terms = (
-            "sulfuric acid", "sulphuric acid", "황산", "concentrated acid",
-            "hot surface", "hot equipment", "corrosive", "72%",
-        )
-        warning_texts = tuple(
-            statement.source_text
-            for section in protocol.sections
-            for step in section.steps
-            for statement in (
-                *step.warnings,
-                *(warning for action in step.sub_actions for warning in action.warnings),
-            )
-        )
-        hazard_review_required = any(
-            term in "\n".join(warning_texts).casefold() for term in hazard_terms
-        ) or (protocol.metadata.source_status or "").casefold() in {
-            "in development", "development", "draft"
-        }
+        # A reviewer reads the declared hazards whenever the Protocol declares
+        # any.  There is no hazard word list: deciding which wording is
+        # dangerous is the reviewer's judgement, and a fixed list quietly
+        # reported "passed" for every hazard it did not happen to contain --
+        # including, worst of all, for a Protocol where extraction had produced
+        # no warning at all.  The zero case is now a blocking readiness reason
+        # (``no_declared_safety_warnings``), so it is never reported as passed
+        # here either.
+        declared_warning_count = domain.declared_safety_warning_count(protocol)
+        hazard_review_required = bool(declared_warning_count) or (
+            protocol.metadata.source_status or ""
+        ).casefold() in {"in development", "development", "draft"}
         metadata = {
             field.name: _review_value(getattr(protocol.metadata, field.name))
             for field in fields(protocol.metadata)
@@ -1473,6 +1467,7 @@ class ProtocolCatalog:
                 "capability_policy_id": analysis.capability_policy_id,
                 "analysis_payload_sha256": analysis.payload_sha256,
                 "hazard_review_required": hazard_review_required,
+                "declared_safety_warning_count": declared_warning_count,
                 "gates": {
                     "parsing": "passed",
                     "structural_readiness": (
@@ -1482,7 +1477,9 @@ class ProtocolCatalog:
                         else "blocked"
                     ),
                     "hazard_review": (
-                        "review_required" if hazard_review_required else "passed"
+                        "review_required"
+                        if declared_warning_count
+                        else "not_declared"
                     ),
                     "human_approval": (
                         "passed" if entry.approval_status == "approved" else "pending"

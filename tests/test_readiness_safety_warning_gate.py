@@ -22,7 +22,10 @@ from voice_workflow_agent.protocol_catalog import (
 )
 
 _GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS
-_PAGE = "Protocol Gate\nSection preparation\n1. Add solution.\nWear gloves."
+_PAGE = (
+    "Protocol Gate\nSection preparation\n1. Add solution.\n"
+    "Wear gloves.\nDanger, highly corrosive."
+)
 
 
 def build_protocol(path: Path, protocol_id: str, *, declare_warning: bool):
@@ -284,6 +287,94 @@ class SafetyAcknowledgementTests(unittest.TestCase):
             _GATE.value,
             [reason["code"] for reason in readiness["reasons"]],
         )
+
+
+class HazardReviewSignalTests(unittest.TestCase):
+    """The reviewer hazard signal must not depend on hazard wording."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+        self.store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.root / "catalog")
+        )
+        self.addCleanup(self.store.close)
+        self.catalog = ProtocolCatalog(self.store)
+        self.pdf = self.root / "gate.pdf"
+        write_text_pdf(self.pdf, _PAGE, title="Protocol Gate")
+        self._analyses = 0
+
+    def _review(self, warning_text: str | None):
+        registration = self.catalog.register(
+            self.pdf,
+            source_filename="gate.pdf",
+            media_type="application/pdf",
+        )
+        protocol_id = registration.entry.protocol_id
+        protocol, _ = build_protocol(
+            self.pdf, protocol_id, declare_warning=False
+        )
+        if warning_text is not None:
+            step = protocol.sections[0].steps[0]
+            statement = domain.SourceStatement(
+                "declared-warning",
+                warning_text,
+                domain.SourceEvidence(1, warning_text),
+            )
+            protocol = replace(
+                protocol,
+                sections=(
+                    replace(
+                        protocol.sections[0],
+                        steps=(replace(step, warnings=(statement,)),),
+                    ),
+                ),
+            )
+        self._analyses += 1
+        self.store.append_analysis_revision(
+            protocol_id,
+            1,
+            f"analysis-gate-{self._analyses}",
+            protocol,
+            domain.assess_readiness(protocol),
+            domain.P1_CAPABILITY_POLICY.profile_id,
+        )
+        return self.catalog.review(protocol_id)
+
+    def test_innocuous_wording_still_requires_hazard_review(self) -> None:
+        """The retired word list contained none of these terms."""
+
+        review = self._review("Wear gloves.")
+        self.assertTrue(review["hazard_review_required"])
+        self.assertEqual(review["gates"]["hazard_review"], "review_required")
+        self.assertEqual(review["declared_safety_warning_count"], 1)
+
+    def test_alarming_wording_is_treated_identically(self) -> None:
+        review = self._review("Danger, highly corrosive.")
+        self.assertEqual(review["gates"]["hazard_review"], "review_required")
+        self.assertEqual(review["declared_safety_warning_count"], 1)
+
+    def test_zero_warnings_is_never_reported_as_passed(self) -> None:
+        """The inverted case: worse extraction must not look safer."""
+
+        review = self._review(None)
+        self.assertEqual(review["declared_safety_warning_count"], 0)
+        self.assertEqual(review["gates"]["hazard_review"], "not_declared")
+        self.assertNotEqual(review["gates"]["hazard_review"], "passed")
+        self.assertIn(
+            _GATE.value,
+            [reason["code"] for reason in review["readiness"]["reasons"]],
+        )
+
+    def test_declared_count_matches_the_domain_helper(self) -> None:
+        for text in ("Wear gloves.", "Danger, highly corrosive.", None):
+            with self.subTest(text=text):
+                review = self._review(text)
+                self.assertEqual(
+                    review["declared_safety_warning_count"],
+                    0 if text is None else 1,
+                )
 
 
 if __name__ == "__main__":
