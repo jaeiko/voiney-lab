@@ -15,7 +15,7 @@ from base64 import urlsafe_b64encode
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
@@ -31,7 +31,9 @@ from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
 from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
-CLAIM_SCHEMA_VERSION = 5
+# 6: page coverage carries an explicit per-segment declination list, so a
+# page can no longer be exempted wholesale by emitting nothing.
+CLAIM_SCHEMA_VERSION = 6
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
@@ -47,6 +49,7 @@ _MAX_PROVIDER_SEGMENT_CHARS = 4096
 MAX_PAGE_COVERAGE_RECORDS = 32
 MAX_EVIDENCE_ITEM_REFS_PER_PAGE = 256
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+_SUBSTANTIVE = re.compile(r"[A-Za-z0-9]")
 # A source step label is at most three digits.  A four-digit run followed by a
 # period is a citation year ("Laliberté 2019. Measuring leaf carbon..."), not a
 # step, and admitting it made the completeness invariant demand an action claim
@@ -294,6 +297,7 @@ class ProtocolPageClaimCoverage:
     page_text_sha256: str
     status: PageCoverageStatus
     evidence_item_ids: tuple[str, ...]
+    declined_segment_ids: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -303,6 +307,7 @@ class ProtocolPageClaimCoverage:
             "page_text_sha256": self.page_text_sha256,
             "status": self.status.value,
             "evidence_item_ids": list(self.evidence_item_ids),
+            "declined_segment_ids": list(self.declined_segment_ids),
         }
 
 
@@ -382,10 +387,16 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": [item.value for item in PageCoverageStatus],
                     },
+                    "declined_evidence_segment_ids": {
+                        "type": "array",
+                        "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": [
                     "source_page_number",
                     "status",
+                    "declined_evidence_segment_ids",
                 ],
             },
         },
@@ -832,6 +843,72 @@ def degraded_segmentation_pages(
     return tuple(degraded)
 
 
+def page_segment_offsets(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+    page_number: int,
+) -> dict[str, tuple[int, int]]:
+    """Map each canonical segment id to its exact half-open page range."""
+
+    offsets: dict[str, tuple[int, int]] = {}
+    cursor = 0
+    for segment in generate_page_evidence_segments(
+        extraction,
+        source_revision=source_revision,
+        page_number=page_number,
+    ):
+        end = cursor + len(segment.text)
+        offsets[segment.segment_id] = (cursor, end)
+        cursor = end
+    return offsets
+
+
+def _claim_page_span(
+    evidence: ClaimSourceEvidence,
+    offsets: Mapping[str, tuple[int, int]],
+) -> tuple[int, int] | None:
+    spans = [
+        offsets[segment_id]
+        for segment_id in evidence.evidence_segment_ids
+        if segment_id in offsets
+    ]
+    if not spans:
+        return None
+    return (min(start for start, _ in spans), max(end for _, end in spans))
+
+
+def step_block_ranges(page_text: str) -> tuple[tuple[int, int], ...]:
+    """One half-open range per numbered action: label start to next label.
+
+    A numbered step owns everything up to the next numbered step, including the
+    unnumbered notes and warnings that follow it.  A claim may cite a narrow
+    segment inside that territory while still belonging to the step, which is
+    what lets an action quote only its own instruction and a warning quote only
+    itself.
+    """
+
+    starts = [
+        match.start("label") for match in _numbered_action_matches(page_text)
+    ]
+    if not starts:
+        return ()
+    bounds = [*starts, len(page_text)]
+    return tuple(
+        (bounds[index], bounds[index + 1]) for index in range(len(starts))
+    )
+
+
+def _enclosing_step_block(
+    page_text: str,
+    span: tuple[int, int],
+) -> tuple[int, int] | None:
+    for start, end in step_block_ranges(page_text):
+        if start <= span[0] and span[1] <= end:
+            return (start, end)
+    return None
+
+
 def serialize_chunk_claim_analysis(
     analysis: ProtocolChunkClaimAnalysis,
 ) -> tuple[str, str]:
@@ -1196,6 +1273,64 @@ def _decode_evidence(
     )
 
 
+def _resolve_declined_segments(
+    raw: object,
+    *,
+    request: ProviderClaimRequest,
+    page_number: int,
+    item_index: int,
+) -> tuple[str, ...]:
+    """Resolve declined handles to canonical segment ids, page-bounded."""
+
+    if not isinstance(raw, list) or len(raw) > _MAX_EVIDENCE_SEGMENTS_PER_SPAN:
+        raise ProtocolAnalysisResponseError(
+            "Chunk page coverage declination list is malformed.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_page_coverage_validation",
+                reason_code="declination_malformed",
+                mismatch_class="semantic_contract_violation",
+                evidence_index=item_index,
+                evidence_type="page_coverage",
+                page_number=page_number,
+            ),
+        )
+    by_handle = {
+        item.handle: item.segment
+        for page in request.pages
+        if page.source_page_number == page_number
+        for item in page.evidence
+    }
+    resolved: list[str] = []
+    for handle in raw:
+        segment = by_handle.get(handle) if isinstance(handle, str) else None
+        if segment is None:
+            raise ProtocolAnalysisEvidenceError(
+                "Chunk page coverage declined an unknown evidence handle.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="unknown_evidence_handle",
+                    mismatch_class="provider_handle_not_in_request",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_number=page_number,
+                ),
+            )
+        resolved.append(segment.segment_id)
+    if len(set(resolved)) != len(resolved):
+        raise ProtocolAnalysisResponseError(
+            "Chunk page coverage declined the same segment twice.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_page_coverage_validation",
+                reason_code="duplicate_declined_segment",
+                mismatch_class="semantic_contract_violation",
+                evidence_index=item_index,
+                evidence_type="page_coverage",
+                page_number=page_number,
+            ),
+        )
+    return tuple(resolved)
+
+
 def _resolve_canonical_claim_source_evidence(
     evidence: ClaimSourceEvidence,
     extraction: ProtocolPdfExtraction,
@@ -1537,6 +1672,7 @@ def parse_chunk_claim_response(
             {
                 "source_page_number",
                 "status",
+                "declined_evidence_segment_ids",
             },
             "page coverage",
         )
@@ -1620,6 +1756,12 @@ def parse_chunk_claim_response(
                 page_text_sha256=expected_page_hash,
                 status=status,
                 evidence_item_ids=item_ids,
+                declined_segment_ids=_resolve_declined_segments(
+                    record["declined_evidence_segment_ids"],
+                    request=request,
+                    page_number=page_number,
+                    item_index=item_index,
+                ),
             )
         )
     analysis = ProtocolChunkClaimAnalysis(
@@ -1640,6 +1782,110 @@ def parse_chunk_claim_response(
         core_page_refs=core_page_refs,
     )
     return analysis
+
+
+_UNIT_BEARING_VALUE = re.compile(
+    r"(?<![A-Za-z0-9])[0-9]+(?:[.,][0-9]+)?\s*(?:"
+    + "|".join(
+        sorted((re.escape(unit) for unit in _VALUE_UNITS), key=len, reverse=True)
+    )
+    + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def segment_is_substantive(segment_text: str) -> bool:
+    """True when a segment carries anything a claim could be about.
+
+    Deterministic and vocabulary-free: one alphanumeric character is enough.
+    A punctuation-only fragment left over from extraction is exempt from
+    accounting because there is nothing there to account for.
+    """
+
+    return bool(_SUBSTANTIVE.search(segment_text))
+
+
+def segment_carries_unit_bearing_value(segment_text: str) -> bool:
+    """True when a segment states a number with a unit.
+
+    Matched case-insensitively, exactly as the numbered-line guard does, so
+    ``758 mL`` and ``2 L`` are recognized. Conflating ``mM`` with ``mm`` is
+    harmless here: this only answers whether a value is present, never which
+    unit it is.
+    """
+
+    return bool(_UNIT_BEARING_VALUE.search(segment_text))
+
+
+def _validate_page_segment_accounting(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+    chunk_id: str,
+    page_number: int,
+    coverage: ProtocolPageClaimCoverage,
+    cited_segment_ids: frozenset[str],
+) -> None:
+    """Every substantive segment is claimed or explicitly declined, once.
+
+    Accounting is not claiming.  The obligation is to say something about each
+    unit of the page, not to assert something about each unit -- forcing a
+    claim onto an empty region would only pressure invention.  What it removes
+    is the silent third option: a segment nobody cited and nobody declined.
+    """
+
+    if coverage.status is PageCoverageStatus.ANALYSIS_INCOMPLETE:
+        # "I could not finish this page" is the one honest answer that cannot
+        # also promise per-segment accounting.  It stays exempt here and blocks
+        # the whole-document merge instead, which is a visible refusal rather
+        # than the page-wide silence it replaces.
+        return
+    segments = generate_page_evidence_segments(
+        extraction,
+        source_revision=source_revision,
+        page_number=page_number,
+    )
+    declined = frozenset(coverage.declined_segment_ids)
+    substantive = {
+        segment.segment_id: segment.text
+        for segment in segments
+        if segment_is_substantive(segment.text)
+    }
+    known = {segment.segment_id for segment in segments}
+
+    def fail(reason: str, count: int) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk page coverage does not account for every source segment.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_page_coverage_validation",
+                reason_code=reason,
+                mismatch_class="segment_accounting_mismatch",
+                evidence_type="page_coverage",
+                page_number=page_number,
+                expected_count=len(substantive),
+                actual_count=count,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+
+    if not declined <= known:
+        fail("declined_segment_not_on_page", len(declined - known))
+    overlap = declined & cited_segment_ids
+    if overlap:
+        fail("segment_claimed_and_declined", len(overlap))
+    unaccounted = set(substantive) - cited_segment_ids - declined
+    if unaccounted:
+        fail("segment_unaccounted", len(unaccounted))
+    forced = [
+        segment_id
+        for segment_id in declined
+        if segment_id in substantive
+        and segment_carries_unit_bearing_value(substantive[segment_id])
+    ]
+    if forced:
+        fail("declined_segment_states_a_value", len(forced))
 
 
 def validate_chunk_claim_analysis(
@@ -1926,6 +2172,19 @@ def validate_chunk_claim_analysis(
                     source_hash=extraction.sha256,
                 ),
             )
+        _validate_page_segment_accounting(
+            extraction,
+            source_revision=source_revision,
+            chunk_id=chunk_id,
+            page_number=page_number,
+            coverage=coverage,
+            cited_segment_ids=frozenset(
+                segment_id
+                for item in (*analysis.structure, *analysis.claims)
+                if item.evidence.source_page_number == page_number
+                for segment_id in item.evidence.evidence_segment_ids
+            ),
+        )
 
 
 def analyze_chunk_claims(
@@ -1986,6 +2245,43 @@ def _source_sort_key(
     )
 
 
+def _within_target_step_block(
+    extraction: ProtocolPdfExtraction,
+    source_revision: str,
+    claim: ProtocolClaim,
+    target: ProtocolClaim,
+    offsets_by_page: dict[int, dict[str, tuple[int, int]]],
+) -> bool:
+    """True when a claim sits inside the numbered step block it is attached to.
+
+    This replaced a substring test against the action's own excerpt.  That test
+    forced an action to quote its entire step -- every following note and
+    warning included -- because otherwise nothing attached to the step could
+    satisfy it.  A step block is territory, not a quotation: the action quotes
+    its own instruction, a warning quotes itself, and both are checked to lie
+    within the same block.
+    """
+
+    page_number = target.evidence.source_page_number
+    offsets = offsets_by_page.get(page_number)
+    if offsets is None:
+        offsets = page_segment_offsets(
+            extraction,
+            source_revision=source_revision,
+            page_number=page_number,
+        )
+        offsets_by_page[page_number] = offsets
+    target_span = _claim_page_span(target.evidence, offsets)
+    claim_span = _claim_page_span(claim.evidence, offsets)
+    if target_span is None or claim_span is None:
+        return False
+    page_text = extraction.pages[page_number - 1].text
+    block = _enclosing_step_block(page_text, target_span)
+    if block is None:
+        return False
+    return block[0] <= claim_span[0] and claim_span[1] <= block[1]
+
+
 def validate_whole_protocol_claims(
     extraction: ProtocolPdfExtraction,
     merged: MergedProtocolClaims,
@@ -2026,6 +2322,7 @@ def validate_whole_protocol_claims(
         if prior is not None and prior != marker:
             raise ProtocolClaimConsistencyError("section_conflict")
         sections[marker.section_id] = marker
+    offsets_by_page: dict[int, dict[str, tuple[int, int]]] = {}
     claims_by_id: dict[str, ProtocolClaim] = {}
     for claim in merged.claims:
         prior = claims_by_id.get(claim.claim_id)
@@ -2115,7 +2412,15 @@ def validate_whole_protocol_claims(
                 claim.section_id != target.section_id
                 or claim.step_id != target.step_id
                 or claim.source_label is not None
-                or claim.source_text not in target.evidence.source_excerpt
+                or claim.evidence.source_page_number
+                != target.evidence.source_page_number
+                or not _within_target_step_block(
+                    extraction,
+                    merged.source_revision,
+                    claim,
+                    target,
+                    offsets_by_page,
+                )
             ):
                 raise ProtocolClaimConsistencyError("action_claim_scope_conflict")
         elif target is not None:

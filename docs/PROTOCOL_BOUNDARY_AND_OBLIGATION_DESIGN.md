@@ -292,9 +292,14 @@ quantity-p30-0-6  segs=1  'In a 1 L glass cylinder, adjust the final volume to 1
 quantity-p30-0-3  segs=1  'Note Under the chemical hood, place a stirring plate, 2 ...'
 ```
 
-The hazard block occupies segments 4–7 and is no longer part of step 50's
-evidence. No hazard *claim* exists yet, because nothing obliges one — that is
-STEP 4.
+**Correction to an earlier overstatement in this section.** An earlier revision
+said the hazard block was "no longer part of step 50's evidence". That was
+wrong, and conflated segmentation with citation. The hazard did become separate
+*segments*, but `action-p30-0` still cited all thirteen of them —
+`[2,3,4,5,6,7,8,9,10,11,12,13,14]` — because the scorer attached the whole step
+block to the action claim. Only `[0]`, `[1]` and `[17]` were uncited. The
+hazard was still inside the action's evidence, so nothing had been separated
+where it counted. §4a records what fixed it.
 
 ### Why in-gel barely moved — an inherent limit, not a defect
 
@@ -384,6 +389,134 @@ the change it is a distinct segment that the provider must either claim or
 explicitly decline, and the declination is recorded, reviewable, and
 attributable to a specific segment id by the existing audit. A silent loss
 becomes a recorded decision.
+
+## 4a. Action-claim citation, and all-segment accounting as implemented
+
+### Narrowing the action claim
+
+The principle already applied to value claims — cite only the segment holding
+your own text — now applies to action claims. An action cites from its label to
+the end of its own instruction sentence, not to the end of its step block.
+Measured on ANKOM p30:
+
+| | `action-p30-0` cites | Uncited segments |
+| --- | --- | --- |
+| before | `[2 … 14]` | `[0] [1] [17]` |
+| after | `[2]` | `[0] [1] [3] [4] [5] [6] [7] [10] [14] [16] [17]` |
+
+The hazard block `[4]–[7]` and the unnumbered execution note `[0]` are now
+outside every claim's citation. `numbered_action_missing` is unaffected: it
+compares numbered labels against action `source_label` values, not evidence
+extents, and the whole suite still passes.
+
+### What had to change to allow it
+
+A parameter claim was validated as a substring of its target action's excerpt.
+That rule *forced* the action to quote its whole step: otherwise nothing
+attached to the step could satisfy it. It is replaced by containment in the
+**step block** — the page range from a numbered label to the next one, derived
+server-side by `step_block_ranges`. A step block is territory, not a
+quotation. The action quotes its instruction, a warning quotes itself, and both
+are checked to lie inside the same block. This is what makes a hazard claim
+citing only the hazard segment expressible at all; under the old rule it was
+rejected.
+
+### The obligation
+
+`_validate_page_segment_accounting`: on every core page, each **substantive**
+segment (one `[A-Za-z0-9]` character, no vocabulary) is either cited by at
+least one claim or marker, or listed in that page's declination list — never
+both, never neither. `CLAIM_SCHEMA_VERSION` 5 → 6, because the response now
+carries `declined_evidence_segment_ids` per coverage record. Declined handles
+are resolved server-side through the same page-bound handle map claims use, so
+a declination cannot name a segment from another page.
+
+Reason codes: `segment_unaccounted`, `segment_claimed_and_declined`,
+`declined_segment_not_on_page`, `declined_segment_states_a_value`,
+`duplicate_declined_segment`, `unknown_evidence_handle`.
+
+`ANALYSIS_INCOMPLETE` is exempt from accounting and blocks the whole-document
+merge instead. That is deliberate: "I could not finish this page" is the one
+honest answer that cannot also promise per-segment accounting, and it is now a
+visible refusal rather than the page-wide silence it replaces.
+
+### The unit cross-check
+
+A segment stating a number with a unit cannot be declined. `_VALUE_UNITS` is
+matched case-insensitively, exactly as the numbered-line guard does, so
+`758 mL` and `2 L` are recognized; conflating `mM` with `mm` is harmless because
+the check only answers whether a value is present, never which unit it is.
+
+## 4b. Did it work? Measured, including where it did not
+
+**Yes for accounting, partially for safety.** On ANKOM p30 the hazard segments
+are now explicitly declined rather than silently absorbed:
+
+```
+p30  CLAIMED    [2, 8, 9, 11, 12, 13, 15]
+     DECLINED   [0, 1, 4, 5, 6, 7, 10, 14, 16, 17]
+     UNACCOUNTED [3]        <- ". " only, non-substantive, correctly exempt
+```
+
+Segment `[0]`, the unnumbered note carrying execution content, is caught too —
+it is now on the record as declined instead of invisible.
+
+**What the obligation does not do is force a hazard *claim*.** Segments
+`[4]`–`[7]` carry no unit-bearing number, so `no_claim` remains permissible for
+them. This is the PARTIAL outcome predicted in §4 and it is the honest limit:
+forcing a claim there would need hazard wording, which is excluded by
+construction. What changed is that the decision is now recorded, attributable
+to a specific segment, and reviewable — a silent loss became a stated one.
+
+**The obligation found 15 real under-extractions.** Segments that state an
+execution value, are not claimed, and therefore cannot be declined:
+
+| Source | Examples |
+| --- | --- |
+| ANKOM (10) | p3 `72 h at 65°C` (Before start), p10 `Weigh 20 g of Sodium sulfite`, p13 `20 g Na2SO3 4.0 mL alpha-amylase` |
+| in-gel (5) | p5 `800 rpm, 37°C, 00:15:00`, p8 `Overnight digestion with trypsin 16h`, p9 `soak the gel piece in 10uL` |
+
+The offline model cannot satisfy this, and the reason is a **second structural
+finding**: a quantity, duration or temperature claim must target an action,
+material or equipment claim, and a value stated outside any numbered step has
+no such target. The claim model has no way to express it. The model therefore
+marks those pages `analysis_incomplete`, and the whole-document merge refuses
+both documents with `incomplete_source_coverage`. That refusal is the correct
+outcome and is now reported by the audit runner as
+`whole_document_merge: rejected`, which still emits per-chunk and
+whole-document findings so a refused document can be examined.
+
+## 4c. Findings by risk class
+
+Counting one `critical` total mixes different things. From here the audit is
+reported in three lines. `value_span_not_isolated` is *imprecise but not
+wrong*, and a fall in that number alone is not an improvement in safety.
+
+| Class | Codes | ANKOM | in-gel |
+| --- | --- | --- | --- |
+| **Safety** | `hazard_not_represented` | **2** | **1** |
+| **Execution** | `prerequisite_not_represented`, `repeat_condition_not_represented`, `value_not_represented` | **7** | **5** |
+| **Precision** | `value_span_not_isolated` | **10** | **18** |
+
+Safety is unchanged by this step, and saying so plainly is the point: narrowing
+citations and adding accounting did not extract a single additional hazard. What
+they changed is that the hazard is now a named, declined unit rather than
+invisible.
+
+## 4d. Degraded pages and the obligation
+
+On a page that yields one segment, accounting is satisfied by one claim, so the
+obligation is one unit wide and effectively vacuous — the concern raised when
+the detector was reinstated.
+
+Decided: the unit cross-check still applies there, so a degraded page stating a
+value cannot be declined, and `degraded_segmentation_pages` is reported
+alongside the findings so a reviewer can see which pages have one-unit-wide
+accounting. It is **not** escalated to a refusal. Both measured degraded pages
+are a cover page and an equipment metadata list; refusing them would block
+every document at its front matter, and forcing a claim would pressure
+invention. Recording that a page's accounting is weak is the strongest
+defensible position that does not do either.
 
 ## 5. Narrowing `no_relevant_claims`
 

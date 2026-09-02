@@ -20,6 +20,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
 from voice_workflow_agent.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
+from tests.test_protocol_claim_analysis import declined_handles
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
 from voice_workflow_agent.experiment_protocol_store import (
     initialize_protocol_store,
@@ -208,6 +209,9 @@ class FakeChunkModel:
                 {
                     "source_page_number": number,
                     "status": "complete" if item_ids else "no_relevant_claims",
+                    "declined_evidence_segment_ids": declined_handles(
+                        page, [*structure, *claims]
+                    ),
                 }
             )
         response = {

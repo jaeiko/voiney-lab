@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import tempfile
 import unittest
@@ -155,6 +156,34 @@ def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
     writer.add_metadata({"/Title": "Protocol Evidence"})
     with path.open("wb") as target:
         writer.write(target)
+
+
+def declined_handles(
+    page: dict[str, object],
+    records: list[dict[str, object]],
+) -> list[str]:
+    """Handles for substantive segments on this page that no record cites.
+
+    Every fixture model has to answer for the whole page now: cite a segment or
+    decline it explicitly.  Punctuation-only fragments carry nothing to claim
+    and are exempt.
+    """
+
+    page_number = page["source_page_number"]
+    cited = {
+        handle
+        for record in records
+        if record["evidence"]["source_page_number"] == page_number
+        for handle in record["evidence"]["evidence_segment_ids"]
+    }
+    segments = page["segments"]
+    assert isinstance(segments, list)
+    return [
+        str(segment[0])
+        for segment in segments
+        if str(segment[0]) not in cited
+        and re.search(r"[A-Za-z0-9]", str(segment[1]))
+    ]
 
 
 def page_text(page: dict[str, object]) -> str:
@@ -318,6 +347,9 @@ class RichClaimModel:
                 {
                     "source_page_number": page_number,
                     "status": "complete",
+                    "declined_evidence_segment_ids": declined_handles(
+                        page, [*structure, *records]
+                    ),
                 }
             ],
             "structure": structure,
@@ -827,10 +859,8 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             def analyze(self, *, system_prompt, input_json, response_schema) -> str:
                 del system_prompt, response_schema
                 request = json.loads(input_json)
-                page_number = next(
-                    page["source_page_number"]
-                    for page in request["pages"]
-                    if page["role"] == "core"
+                page = next(
+                    item for item in request["pages"] if item["role"] == "core"
                 )
                 return json.dumps(
                     {
@@ -839,8 +869,13 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                         "request_handle": request["request_handle"],
                         "page_coverage": [
                             {
-                                "source_page_number": page_number,
+                                "source_page_number": page["source_page_number"],
                                 "status": self.status,
+                                # Claiming nothing now means declining every
+                                # substantive segment, on the record.
+                                "declined_evidence_segment_ids": (
+                                    declined_handles(page, [])
+                                ),
                             }
                         ],
                         "structure": [],

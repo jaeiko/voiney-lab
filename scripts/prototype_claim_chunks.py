@@ -35,6 +35,8 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
+    _SENTENCE_LINE_END,
+    segment_carries_unit_bearing_value,
     CLAIM_SCHEMA_VERSION,
     claim_response_schema_metrics,
     prepare_chunk_claim_request_context,
@@ -249,7 +251,23 @@ class ExactNumberedStepClaimModel:
                         continue
                     action_id = f"action-p{page_number}-{action_index}"
                     step_id = f"step-{label}"
-                    action_evidence = self._evidence(page, excerpt)
+                    # The action quotes its own instruction, not the whole step
+                    # block.  Everything after the first line-ending sentence --
+                    # the notes, the warnings, the preparation values -- belongs
+                    # to the step but is not the action's own text, and citing
+                    # it made those segments look accounted for when nothing had
+                    # actually claimed them.
+                    instruction_end = _SENTENCE_LINE_END.search(
+                        page_text, excerpt_offset
+                    )
+                    action_stop = (
+                        min(instruction_end.end(), excerpt_offset + len(excerpt))
+                        if instruction_end is not None
+                        else excerpt_offset + len(excerpt)
+                    )
+                    action_evidence = self._evidence_span(
+                        page, excerpt_offset, action_stop
+                    )
                     claims.append(
                         {
                             "claim_id": action_id,
@@ -317,10 +335,47 @@ class ExactNumberedStepClaimModel:
                             }
                         )
                         item_ids.append(claim_id)
+            # Every substantive segment this model did not cite is declined
+            # explicitly.  A model that only reads numbered steps and their
+            # values genuinely has nothing to say about a hazard block, and
+            # saying so on the record is the point: the alternative is the
+            # silence that used to hide it.
+            cited_handles = {
+                handle
+                for record in (*structure, *claims)
+                for handle in record["evidence"]["evidence_segment_ids"]
+                if record["evidence"]["source_page_number"] == page_number
+            }
+            declined = [
+                str(segment[0])
+                for segment in page["segments"]
+                if str(segment[0]) not in cited_handles
+                and re.search(r"[A-Za-z0-9]", str(segment[1]))
+            ]
+            # A value stated outside any numbered step has nowhere to attach in
+            # the claim model: a quantity or duration must target an action,
+            # material or equipment claim, and there is none here.  This model
+            # therefore cannot account for such a page, and says so.
+            unaccountable = [
+                handle
+                for handle in declined
+                if segment_carries_unit_bearing_value(
+                    next(
+                        str(segment[1])
+                        for segment in page["segments"]
+                        if str(segment[0]) == handle
+                    )
+                )
+            ]
+            if unaccountable:
+                status = "analysis_incomplete"
+            else:
+                status = "complete" if item_ids else "no_relevant_claims"
             coverage.append(
                 {
                     "source_page_number": page_number,
-                    "status": "complete" if item_ids else "no_relevant_claims",
+                    "status": status,
+                    "declined_evidence_segment_ids": declined,
                 }
             )
         return json.dumps(
