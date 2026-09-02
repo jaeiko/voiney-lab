@@ -740,6 +740,137 @@ hyphenated adjectival measurement is now invisible to the unit cross-check. The
 trade was six false positives against one construction that is rarely the
 operative value, and it is a deliberate choice rather than an oversight.
 
+## 4k. Rule parity: enforced and declared must be the same set
+
+The principle this section applies: every rule the server enforces belongs in
+the schema or the prompt, and every rule the prompt states belongs in the
+server. A rule on one side only is a defect, and the two failure modes are
+different. Enforced-but-undeclared means a provider cannot satisfy it and the
+call is wasted, which is what happened to `section_id`. Declared-but-unenforced
+means it can be ignored without consequence, which is what happened to warning
+attachment.
+
+### Audit
+
+| Rule | Was | Now |
+| --- | --- | --- |
+| `structure.marker_id` matches `_STABLE_ID` | enforce-only | both |
+| `structure.section_id` matches `_STABLE_ID` | enforce-only | both |
+| `claims.claim_id` matches `_STABLE_ID` | enforce-only | both |
+| `claims.section_id` matches `_STABLE_ID` | enforce-only | both |
+| `claims.step_id` matches `_STABLE_ID` | enforce-only | both |
+| `claims.target_claim_id` matches `_STABLE_ID` | enforce-only | both |
+| `claims.source_label` non-empty | enforce-only | both (schema `minLength: 1`) |
+| A value claim is document-level only outside every step block | enforce-only | both |
+| A warning attaches to the step whose span holds it | **neither** | both |
+| Every substantive segment is cited or declined, exactly once | declare-only wording, enforced without a countable check | both, with an explicit count instruction |
+| `source_order` non-negative | both | both |
+| Evidence page-local, contiguous, adjacent | both | both |
+| Numbered action completeness | both | both |
+| Unique `claim_id` / `marker_id` per chunk | enforce-only | enforce-only — a provider cannot check global uniqueness from one chunk, so declaring it would not help |
+| "Every scientific or execution fact must be its own claim" | declare-only | declare-only — a semantic instruction with no deterministic test; kept as guidance, not claimed as a control |
+
+Seven field-level parity defects were closed by declaring `_STABLE_ID` in the
+schema, so strict structured output now rejects a bad identifier at the provider
+instead of the response failing decode. Two rule-level defects were closed by
+declaring the positional attachment rule and the accounting count check. Two
+entries are deliberately left one-sided, with the reason recorded rather than
+papered over.
+
+### The attachment rule, enforced by position and nothing else
+
+`warning_must_attach_to_enclosing_step`: a `warning_hazard` claim whose evidence
+lies inside a numbered step's span must target that step's action claim; one
+whose evidence lies outside every step stays document-level. Verified offline in
+both directions on ANKOM page 30, whose two step blocks are `(150, 881)` and
+`(881, 1341)`:
+
+| Case | Document-level | Step-attached |
+| --- | --- | --- |
+| segments `[4]`-`[7]`, inside step 50 | **rejected** `warning_must_attach_to_enclosing_step` | **admitted** |
+| page 3 segment `[0]`, no step blocks on the page | **admitted** | n/a |
+
+The rule reads offsets, never text. Nothing in the code or the prompt names a
+hazard: what counts as one stays the provider's judgement, and this constrains
+only where the resulting claim may sit. The prompt wording, verbatim:
+
+> A claim attaches by position. A numbered step spans from its own label up to
+> the next numbered label, and owns everything in between. If a claim's evidence
+> lies inside that span it must target that step's action claim, so it is
+> delivered at the step it governs. Only a claim whose evidence lies outside
+> every numbered step is document-level, and only that claim leaves
+> target_claim_id null. This applies to warning_hazard exactly as it does to a
+> quantity or a duration.
+
+A test asserts the prompt contains none of `danger`, `corrosive`, `hazardous`,
+`toxic`, `flammable`, `caution`, `irritant`, `explosive`,
+`protective equipment` or `safety information`.
+
+## 4l. Second authorized call, against the first
+
+One call, no retry, same chunk: core pages 30-32, context page 29.
+
+| | STEP 6 (`b4aa151`) | STEP 7 |
+| --- | --- | --- |
+| latency | 14.2 s | **12.9 s** |
+| response | 8,651 bytes | **6,627 bytes** |
+| claims | 29 | 24 |
+| `warning_hazard` claims | 6 | 6 |
+| of those, **step-attached** | **0 of 6** | **6 of 6** |
+| page 30 hazard segments `[4]`-`[7]` | 4 document-level | **4 step-attached to `c50`** |
+| `section_id` accepted | **no** — prose title | **yes** |
+| page 30 accounting | 16 of 17 | 15 of 17 |
+| canonical validation | rejected | rejected |
+
+**The attachment change worked.** Every hazard claim moved from document-level
+to step-attached without a single hazard word entering the prompt. Position was
+sufficient.
+
+**The identifier parity fix worked.** No identifier in the response violates
+`_STABLE_ID`; the failure that consumed the first call did not recur.
+
+**Canonical validation still rejected the response,** on accounting alone:
+`segment_unaccounted` for page 30 segments `[0]`
+(`Note If not proceeding immediately with the acid lignin method ...`) and
+`[1]` (`Lignin method in beakers`). The model returned **zero** structure
+markers this time, against one in STEP 6, so nothing cited the section heading
+that `[1]` holds. Accounting was 15 of 17 substantive segments, against 16 of 17
+before, with the explicit count instruction in place — so this is model
+judgement, not an undeclared rule. The validator was not relaxed.
+
+Adding only those two declinations locally, chunk validation **passes** with 6
+hazard claims, 6 step-attached, and coverage
+`p30=complete, p31=complete, p32=analysis_incomplete`. That is analysis of the
+captured response, not a provider result.
+
+**The safety gate was not exercised, and is not reported as cleared.** The
+claims are now in the form the gate counts — step-attached warnings reach
+`sub_action.warnings`, which `declared_safety_warning_count` counts, verified by
+construction in §4h. But the chunk never reached assembly: accounting failed,
+and the model marked page 32 `analysis_incomplete` on its own, which blocks the
+whole-document merge regardless. The gate needs an admitted whole-document
+analysis to be exercised, and this call did not produce one.
+
+## 4m. Replay now asserts
+
+`replay_turns.main` dumped JSON and returned 0 unconditionally, with no
+assertions. Every "replay OK" in this work therefore established only that
+nothing raised. Rather than drop it from the verification list, it now checks
+what it can honestly check, because the routing smoke path is genuinely worth
+having:
+
+- every requested turn produced a record, with the expected turn id
+- each record carries a non-empty `intent`, `action`, `runtime_router` and
+  `answer_origin`
+- `state_mutation` is a boolean, and a turn claiming a mutation must show the
+  step actually moving
+- no turn is silent
+
+Checks are shape-and-invariant rather than golden output: pinning exact speech
+would freeze wording that is allowed to change, while a turn that silently
+produced no route is a real regression. Failures print to stderr and return 1.
+Tests cover each failure mode plus the real demo replay passing its own check.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

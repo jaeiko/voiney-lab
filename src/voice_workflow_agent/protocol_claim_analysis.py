@@ -347,8 +347,23 @@ class MergedProtocolClaims:
     claims: tuple[ProtocolClaim, ...]
 
 
+# The pattern is _STABLE_ID. Every identifier the server validates with it is
+# declared here too, so strict structured output rejects a bad identifier at the
+# provider instead of the response failing decode. A rule that is enforced but
+# not declared cannot be satisfied.
+_IDENTIFIER_PATTERN = _STABLE_ID.pattern
+_IDENTIFIER_SCHEMA: dict[str, object] = {
+    "type": "string",
+    "pattern": _IDENTIFIER_PATTERN,
+}
+_NULLABLE_IDENTIFIER_SCHEMA: dict[str, object] = {
+    "anyOf": [
+        {"type": "string", "pattern": _IDENTIFIER_PATTERN},
+        {"type": "null"},
+    ]
+}
 _NULLABLE_STRING_SCHEMA: dict[str, object] = {
-    "anyOf": [{"type": "string"}, {"type": "null"}]
+    "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
 }
 _EVIDENCE_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -406,13 +421,13 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "marker_id": {"type": "string"},
+                    "marker_id": _IDENTIFIER_SCHEMA,
                     "kind": {
                         "type": "string",
                         "enum": [item.value for item in StructureMarkerKind],
                     },
                     "source_order": {"type": "integer", "minimum": 0},
-                    "section_id": _NULLABLE_STRING_SCHEMA,
+                    "section_id": _NULLABLE_IDENTIFIER_SCHEMA,
                     "evidence": _EVIDENCE_SCHEMA,
                 },
                 "required": [
@@ -430,16 +445,16 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "claim_id": {"type": "string"},
+                    "claim_id": _IDENTIFIER_SCHEMA,
                     "category": {
                         "type": "string",
                         "enum": [item.value for item in ClaimCategory],
                     },
                     "source_order": {"type": "integer", "minimum": 0},
-                    "section_id": _NULLABLE_STRING_SCHEMA,
-                    "step_id": _NULLABLE_STRING_SCHEMA,
+                    "section_id": _NULLABLE_IDENTIFIER_SCHEMA,
+                    "step_id": _NULLABLE_IDENTIFIER_SCHEMA,
                     "source_label": _NULLABLE_STRING_SCHEMA,
-                    "target_claim_id": _NULLABLE_STRING_SCHEMA,
+                    "target_claim_id": _NULLABLE_IDENTIFIER_SCHEMA,
                     "required_for_execution": {"type": "boolean"},
                     "evidence": _EVIDENCE_SCHEMA,
                 },
@@ -657,6 +672,18 @@ Parameter claims must target the action, material, or equipment claim they
 qualify. Use stable identifiers across page boundaries when a context page shows
 the beginning of the same source step.
 
+Every identifier you return - marker_id, claim_id, section_id, step_id and
+target_claim_id - must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$. It may hold
+letters, digits, dot, underscore, colon and hyphen, and must not hold a space.
+Return a short slug, never a section's prose title.
+
+A claim attaches by position. A numbered step spans from its own label up to the
+next numbered label, and owns everything in between. If a claim's evidence lies
+inside that span it must target that step's action claim, so it is delivered at
+the step it governs. Only a claim whose evidence lies outside every numbered
+step is document-level, and only that claim leaves target_claim_id null. This
+applies to warning_hazard exactly as it does to a quantity or a duration.
+
 Each page is supplied as ordered segment pairs. For every claim and structural
 marker, cite a one-based core source page and select one or more directly
 adjacent evidence_segment_ids in source order. Never return source_excerpt text.
@@ -684,9 +711,12 @@ least one claim or marker, or listed in that page's declined_evidence_segment_id
 as carrying nothing to claim. Never both, and never neither. Declining a segment
 is a statement on the record that it holds no claim, not a way to skip it, so do
 not decline a segment that states a measured value. A segment that is only
-punctuation or whitespace needs no entry. If you cannot account for a page this
-way, mark that page analysis_incomplete instead of guessing. Return one JSON
-object only.
+punctuation or whitespace needs no entry. Before returning, count for each core
+page: the segments you cited plus the segments you declined must equal the
+segments on that page that contain at least one letter or digit. If the count is
+short you have left one out; decline it if it holds no claim, rather than
+omitting it. If you cannot account for a page this way, mark that page
+analysis_incomplete instead of guessing. Return one JSON object only.
 """
 
 
@@ -2473,6 +2503,17 @@ def validate_whole_protocol_claims(
         elif claim.category is ClaimCategory.WARNING_HAZARD:
             if target is not None and target.category is not ClaimCategory.ACTION:
                 raise ProtocolClaimConsistencyError("claim_target_invalid")
+            # Position, not wording, decides where a warning attaches. Evidence
+            # inside a numbered step's territory must attach to that step, so
+            # the warning is surfaced at the point of execution rather than only
+            # in a before-start list. Evidence outside every step is genuinely
+            # document-level and stays untargeted. Nothing here inspects what
+            # the warning says; whether something is a hazard is the provider's
+            # judgement, and this rule never second-guesses it.
+            if target is None and not document_level:
+                raise ProtocolClaimConsistencyError(
+                    "warning_must_attach_to_enclosing_step"
+                )
         elif claim.category is ClaimCategory.EXPLICIT_MISSING_AMBIGUOUS_VALUE:
             if not claim.required_for_execution or (
                 target is not None and target.category is not ClaimCategory.ACTION

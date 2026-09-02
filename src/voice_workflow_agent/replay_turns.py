@@ -208,9 +208,88 @@ def replay(args: argparse.Namespace) -> list[dict[str, object]]:
     return output
 
 
+_REQUIRED_TURN_KEYS = frozenset(
+    {
+        "turn_id",
+        "transcript",
+        "normalized_text",
+        "intent",
+        "confidence",
+        "runtime_router",
+        "action",
+        "intent_kind",
+        "answer_origin",
+        "state_mutation",
+        "step_before",
+        "step_after",
+        "speech_text",
+        "tools_used",
+        "visual_intent",
+    }
+)
+
+
+def check(records: list[dict[str, object]], expected_turns: int) -> list[str]:
+    """Report what a replay failed to establish.
+
+    Returning zero from a replay used to mean only that nothing raised, which
+    made it a verification step that could not fail. These checks are
+    deliberately shape-and-invariant rather than golden output: pinning exact
+    speech would freeze wording that is allowed to change, while a turn that
+    silently produced no route, no action, or no arbitrated intent is a real
+    regression.
+    """
+
+    problems: list[str] = []
+    if len(records) != expected_turns:
+        problems.append(
+            f"replayed {len(records)} turns, expected {expected_turns}"
+        )
+    for index, record in enumerate(records, 1):
+        missing = _REQUIRED_TURN_KEYS - set(record)
+        if missing:
+            problems.append(f"turn {index} is missing {sorted(missing)}")
+            continue
+        if record["turn_id"] != index:
+            problems.append(f"turn {index} reported turn_id {record['turn_id']!r}")
+        for field in ("intent", "action", "runtime_router", "answer_origin"):
+            value = record[field]
+            if not isinstance(value, str) or not value:
+                problems.append(f"turn {index} produced no {field}")
+        if not isinstance(record["state_mutation"], bool):
+            problems.append(
+                f"turn {index} reported a non-boolean state_mutation"
+            )
+        elif record["state_mutation"] and record["step_before"] == record[
+            "step_after"
+        ]:
+            problems.append(
+                f"turn {index} claimed a state mutation but the step did not move"
+            )
+        if not isinstance(record["speech_text"], str) or not record[
+            "speech_text"
+        ].strip():
+            problems.append(f"turn {index} produced no speech")
+        if not isinstance(record["transcript"], str) or not record["transcript"]:
+            problems.append(f"turn {index} lost its transcript")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
-    json.dump(replay(parse_args(argv)), sys.stdout, ensure_ascii=False, indent=2)
+    args = parse_args(argv)
+    expected = len(tuple(args.turn) or DEFAULT_TURNS)
+    records = replay(args)
+    json.dump(records, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
+    problems = check(records, expected)
+    if problems:
+        for problem in problems:
+            sys.stderr.write(f"replay check failed: {problem}\n")
+        return 1
+    sys.stderr.write(
+        f"replay checked {len(records)} turns: "
+        "each arbitrated, routed, and produced an action\n"
+    )
     return 0
 
 

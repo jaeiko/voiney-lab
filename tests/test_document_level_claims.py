@@ -231,10 +231,32 @@ class DocumentLevelClaimTests(unittest.TestCase):
         merged, _ = self._validate(claim)
         self.assertIn(claim, merged.claims)
 
-    def test_a_hazard_may_also_stand_at_document_level(self) -> None:
+    def test_a_hazard_inside_a_step_may_not_stand_at_document_level(self) -> None:
+        """Superseded expectation, replaced by the positional rule.
+
+        An earlier revision allowed this. It let a warning that governs a
+        numbered step be filed as a document-level note, where execution never
+        reads it out at the step. Position now decides, so the same warning
+        must attach to the step whose territory it sits in.
+        """
+
         claim = self._claim(
             ClaimCategory.WARNING_HAZARD,
             self._index_of("Danger, highly corrosive"),
+            target=None,
+            scoped=False,
+        )
+        with self.assertRaises(ProtocolClaimConsistencyError) as caught:
+            self._validate(claim)
+        self.assertEqual(
+            caught.exception.reason_code,
+            "warning_must_attach_to_enclosing_step",
+        )
+
+    def test_a_hazard_outside_every_step_does_stand_at_document_level(self) -> None:
+        claim = self._claim(
+            ClaimCategory.WARNING_HAZARD,
+            self._index_of("Before start"),
             target=None,
             scoped=False,
         )
