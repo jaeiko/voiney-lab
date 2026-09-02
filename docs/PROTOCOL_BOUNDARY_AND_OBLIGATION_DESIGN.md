@@ -1338,6 +1338,149 @@ not published in any source reachable here, and the unauthenticated error
 response exposes no rate-limit headers. Both need confirming against the
 authenticated documentation before any comparison harness is built.
 
+## 4w. The value-honesty rule was stated, but not as the server enforces it
+
+Two of the four remaining whole-document failures were
+`declined_segment_states_a_value`. The rule **was** in the prompt, so this is
+not the `section_id` defect repeating - the sentence existed:
+
+> Declining a segment is a statement on the record that it holds no claim, not a
+> way to skip it, so do not decline a segment that states a measured value.
+
+It was stated **semantically** and enforced **syntactically**. The server's test
+is a digit immediately followed by one of a closed set of fourteen units,
+case-insensitive, excluding a digit that continues a hyphenated code. "States a
+measured value" is a different question, and a model answering it honestly gets
+a different answer.
+
+The four segments that failed show the divergence exactly:
+
+| Chunk | Page | Matched | Segment |
+| --- | --- | --- | --- |
+| 3 | 19 | `2 h` | `Note ... more than 2 h between procedures` |
+| 3 | 19 | `2 h` | `Note ... within 2 h of the previous procedure` |
+| 5 | 26 | `2 h` | the same flush Note, repeated |
+| 2 | 13 | `20 g` | `20 g Na2SO3 4.0 mL alpha-amylase` + running footer |
+
+Three of the four are a **threshold inside a Note** - a condition on when to
+flush, not a value an operator is asked to produce. Declining them is a
+defensible reading of "measured value" and a violation of the server's test. The
+fourth is a reagent line merged with the page footer, and its values repeat a
+materials list claimed earlier, so it reads as already-claimed furniture.
+
+Nothing about the enforcement was relaxed. The prompt and the schema now state
+the test the server actually applies: the unit set verbatim, that the shape
+decides and not the meaning, and that a threshold, an interval, a container or
+pack size, and a repeat of a value already claimed elsewhere all count. The
+exemptions are named too, since a model cannot infer them: a digit continuing a
+hyphenated code, and a digit with no unit.
+
+### Why the STEP 7 parity audit passed this
+
+Two independent reasons, and the second is the more serious:
+
+1. The audit's rule list was **hand-written**. It enumerated identifier
+   patterns, the positional attachment rule and the accounting count check -
+   the rules someone thought to list. Nothing derived the list of enforced
+   rules from the code, so the audit could not detect an omission in its own
+   enumeration.
+2. It checked that a phrase was **present**, not that the phrase said what the
+   server enforces. Even a complete list would have passed this rule, because
+   the sentence was there. Presence is not parity.
+
+Both are fixed. `tests/test_rule_parity.py` now walks the validator's AST and
+collects every `reason_code` it can raise - fifteen - and requires each to
+appear in a table declaring where the provider is told about it: PROMPT with the
+exact phrases, SCHEMA where the response shape makes it unrepresentable, or
+SERVER for a transport fault no instruction could avoid. A new rule cannot land
+without an entry and a deleted one cannot leave a stale entry. Separately, every
+unit in the server's set must appear in both the prompt and the schema
+description, so extending the set without telling the model fails the suite.
+
+Both directions were mutation-checked rather than assumed: renaming an enforced
+code fails `test_every_enforced_reason_code_is_accounted_for`, and adding a unit
+to the server set fails the prompt and schema unit checks. Phrase matching is
+whitespace-normalized, because a prompt reflow was making a stated rule look
+deleted.
+
+### Effect on the stored responses: none, and that is the honest answer
+
+Replaying the eight captured responses under the fixed contract gives **4/8,
+unchanged**. A prompt and schema fix cannot retroactively repair a response
+produced under the old prompt: the same bytes decline the same segments, so
+chunks 2, 3 and 5 fail identically. Anyone reporting an improvement here would
+be reporting one that did not happen.
+
+What can be measured offline is whether the clarified rule is **satisfiable** -
+the real risk, since a rule stated more precisely is worthless if compliance is
+impossible. Repairing the three chunks the way the prompt now instructs, citing
+each forced segment instead of declining it and attaching it by position, all
+three pass:
+
+```
+chunk 2: passed (repaired 1 forced declination)
+chunk 3: passed (repaired 2 forced declinations)
+chunk 5: passed (repaired 1 forced declination)
+```
+
+The attachment rule accommodates them without a special case: on page 19 the two
+Notes sit at offsets [101,456) and [456,698), inside step 20's block [0,698), so
+they attach to step 20's action claim. This is a **constructed repair, not a
+model response** - it establishes that 7/8 is reachable and that the positional
+path has somewhere to put these claims. It is not a measurement of what a
+provider will do.
+
+## 4x. Cardinality headroom, and one cap that can bind
+
+The per-page limits are `MAX_EVIDENCE_ITEM_REFS_PER_PAGE = 256` and
+`_MAX_EVIDENCE_SEGMENTS_PER_SPAN = 256`. Measured over the whole-document run,
+ANKOM's busiest page carried **23 evidence items** and its densest page **18
+segments** - about eleven times under the limit.
+
+For a 254-segment document the per-page caps cannot bind at all: even if every
+segment in the document fell on one page it would stay under 256. That holds
+whatever the distribution, so the document-level path carrying most of a
+near-unnumbered document is not at risk from these two limits.
+
+`MAX_PAGE_COVERAGE_RECORDS = 32` is the cap that can bind. It allows 32 core
+pages per chunk, so a 34-page document cannot be analysed as a single chunk. It
+is not a constraint on chunked operation - the eight-chunk plan uses three to
+five core pages per chunk - but a whole-document single call would be refused on
+cardinality before any claim was read.
+
+## 4y. The two new documents, and the three calls not spent
+
+`intracellularmetaboliteextraction.pdf` and
+`usingdynamicheadspacecollections.pdf` are still not on this machine. Checked
+again this session: by name across the filesystem, and by listing every PDF on
+the box, which returns the two known protocol sources plus one unrelated system
+document.
+
+So the offline scoring of the new documents is skipped, as instructed. The three
+authorized provider calls are **not spent**. They were authorized for a specific
+target - the three chunks of the intracellular document with the highest
+proportion of segments outside numbered steps - and that target cannot be
+selected without the file. Spending them on ANKOM instead would consume an
+approved budget on something that was not approved and would answer none of the
+questions asked, so the budget stands unused at 0 of 3.
+
+The externally supplied figures are recorded here as the reason the document
+matters, not as measurements taken here:
+
+| Document | Labels/page | Segments | Segments/page | Off-step | Degradation |
+| --- | --- | --- | --- | --- | --- |
+| headspace | 3.6 | 103 | 6.4 | 18% | 0 pages |
+| ANKOM | 1.7 | 174 | 4.3 | 20% | 1 page (p17) |
+| intracellular | 0.1 | 254 | 7.5 | **61%** | 1 page (p10) |
+
+Extraction and segmentation pass on all three, so the mechanical layer does not
+break. What is untested is the consequence of 61% off-step: with five numbered
+labels over 34 pages, `numbered_action_missing` enforces an action claim only
+where a label exists, which on this document is five places. Everywhere else the
+only obligations left are per-segment accounting - the weakest measured
+obligation at 2/8 in the whole-document run - and the document-level claim path.
+That is a prediction from the structure, and it is not reported as a result.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

@@ -400,11 +400,32 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "source_page_number": {"type": "integer", "minimum": 1},
-                    "analysis_incomplete": {"type": "boolean"},
+                    "analysis_incomplete": {
+                        "type": "boolean",
+                        "description": (
+                            "True only when this page could not be read"
+                            " thoroughly enough to account for its segments."
+                            " The page status itself is derived by the server"
+                            " from the segment dispositions, never declared"
+                            " here."
+                        ),
+                    },
                     "declined_evidence_segment_ids": {
                         "type": "array",
                         "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
                         "items": {"type": "string"},
+                        "description": (
+                            "Handles for segments of this page that hold"
+                            " nothing to claim. A segment holding a digit"
+                            " immediately followed by one of c, g, h, l, mg,"
+                            " min, ml, mm, mm3, rpm, s, ul, µl, μl (either"
+                            " case) is"
+                            " refused here regardless of how the number reads:"
+                            " a threshold, interval, container or pack size,"
+                            " or a repeat of a value already claimed elsewhere"
+                            " all count. A digit continuing a hyphenated code"
+                            " and a digit with no unit do not."
+                        ),
                     },
                 },
                 "required": [
@@ -708,16 +729,31 @@ nothing else can supply, and it can only make the outcome stricter.
 Account for every segment of every core page. Each segment is either cited by at
 least one claim or marker, or listed in that page's declined_evidence_segment_ids
 as carrying nothing to claim. Never both, and never neither. Declining a segment
-is a statement on the record that it holds no claim, not a way to skip it, so do
-not decline a segment that states a measured value. A segment that is only
-punctuation or whitespace needs no entry. Before returning, count for each core
-page: the segments you cited plus the segments you declined must equal the
-segments on that page that contain at least one letter or digit. If the count is
-short you have left one out; decline it if it holds no claim, rather than
-omitting it. A segment you neither cite nor decline is recorded against you and
-forces that page to analysis_incomplete, which stops the document being
-approved, so account for it rather than leaving it out. If you cannot account
-for a page this way, mark that page analysis_incomplete instead of guessing.
+is a statement on the record that it holds no claim, not a way to skip it.
+
+A segment you may not decline is decided by shape, not by meaning. If the
+segment holds a digit immediately followed by one of c, g, h, l, mg, min, ml,
+mm, mm3, rpm, s, ul, µl, μl, in either case, then it holds a value and you must
+cite it with a claim. That is the whole test the server applies. It does not
+ask whether the number is an instruction to the operator: a threshold, a limit,
+a condition, an interval, an elapsed time, a container size, a catalogue pack
+size, or a value you already claimed from an identical segment on another page
+all count, and none of them may be declined. A digit that continues a
+hyphenated code, as in I1149-5G, is not a value, and neither is a digit with no
+unit after it, such as a page number. If such a segment carries nothing you can
+name as an instruction, claim it as a document-level claim of the category that
+fits the value, or as explicit_missing_ambiguous_value, rather than declining
+it. A segment that is only punctuation or whitespace needs no entry.
+
+Before returning, count for each core page: the segments you cited plus the
+segments you declined must equal the segments on that page that contain at
+least one letter or digit. If the count is short you have left one out; decline
+it if it holds no claim, rather than omitting it. A segment you neither cite nor
+decline is recorded against you and forces that page to analysis_incomplete,
+which stops the document being approved, so account for it rather than leaving
+it out. If you cannot account for a page this way, mark that page
+analysis_incomplete instead of guessing.
+
 Return one JSON object only.
 """
 
