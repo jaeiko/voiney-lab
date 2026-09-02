@@ -430,7 +430,7 @@ class ExactNumberedStepClaimModel:
             coverage.append(
                 {
                     "source_page_number": page_number,
-                    "status": status,
+                    "analysis_incomplete": status == "analysis_incomplete",
                     "declined_evidence_segment_ids": declined,
                 }
             )

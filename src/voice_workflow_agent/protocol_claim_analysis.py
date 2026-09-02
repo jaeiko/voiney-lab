@@ -400,10 +400,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "source_page_number": {"type": "integer", "minimum": 1},
-                    "status": {
-                        "type": "string",
-                        "enum": [item.value for item in PageCoverageStatus],
-                    },
+                    "analysis_incomplete": {"type": "boolean"},
                     "declined_evidence_segment_ids": {
                         "type": "array",
                         "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
@@ -412,7 +409,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 },
                 "required": [
                     "source_page_number",
-                    "status",
+                    "analysis_incomplete",
                     "declined_evidence_segment_ids",
                 ],
             },
@@ -701,12 +698,12 @@ and request_handle are opaque, request-scoped server identities. Copy only the
 selected adjacent handles and the exact request_handle; never calculate,
 derive, normalize, shorten, alter, or invent an identity.
 
-Return exactly one coverage record for every core page. Mark it complete when
-all relevant claims and markers on that page were extracted, no_relevant_claims
-only when the page contains none, and analysis_incomplete whenever the page
-cannot be fully accounted for. Coverage status is a page-level semantic judgment;
-the server separately accounts for every emitted claim and marker from its
-validated source page.
+Return exactly one coverage record for every core page. Do not report a page
+status: the server derives it from the segment dispositions below, so stating it
+as well would be saying the same thing twice and the two could disagree. Report
+only analysis_incomplete, as a boolean, and set it true when you do not believe
+you finished reading that page. That is a statement about your own reading which
+nothing else can supply, and it can only make the outcome stricter.
 
 Account for every segment of every core page. Each segment is either cited by at
 least one claim or marker, or listed in that page's declined_evidence_segment_ids
@@ -1715,16 +1712,20 @@ def parse_chunk_claim_response(
             item,
             {
                 "source_page_number",
-                "status",
+                "analysis_incomplete",
                 "declined_evidence_segment_ids",
             },
             "page coverage",
         )
-        try:
-            status = PageCoverageStatus(record["status"])
-        except (TypeError, ValueError) as exc:
+        # The page status is no longer the provider's to declare. It is a set
+        # operation over the segment dispositions, so asking for it as well
+        # meant asking for the same fact twice, and the two answers could
+        # disagree. Only the self-report survives, because "I could not finish
+        # this page" is not derivable from any set.
+        self_reported_incomplete = record["analysis_incomplete"]
+        if not isinstance(self_reported_incomplete, bool):
             raise ProtocolAnalysisResponseError(
-                "Chunk claim response has an unsupported coverage status.",
+                "Chunk claim response has an invalid coverage self-report.",
                 diagnostic=ProtocolEvidenceDiagnostic(
                     validation_stage="chunk_page_coverage_validation",
                     reason_code="unsupported_coverage_status",
@@ -1733,7 +1734,12 @@ def parse_chunk_claim_response(
                     evidence_type="page_coverage",
                     page_coverage_count=len(raw_coverage),
                 ),
-            ) from exc
+            )
+        status = (
+            PageCoverageStatus.ANALYSIS_INCOMPLETE
+            if self_reported_incomplete
+            else PageCoverageStatus.COMPLETE
+        )
         page_number = record["source_page_number"]
         if (
             not isinstance(page_number, int)
@@ -1872,7 +1878,7 @@ def _validate_page_segment_accounting(
     page_number: int,
     coverage: ProtocolPageClaimCoverage,
     cited_segment_ids: frozenset[str],
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
     """Every substantive segment is claimed or explicitly declined, once.
 
     Accounting is not claiming.  The obligation is to say something about each
@@ -1886,7 +1892,7 @@ def _validate_page_segment_accounting(
         # also promise per-segment accounting.  It stays exempt here and blocks
         # the whole-document merge instead, which is a visible refusal rather
         # than the page-wide silence it replaces.
-        return ()
+        return ((), tuple(coverage.declined_segment_ids), True)
     segments = generate_page_evidence_segments(
         extraction,
         source_revision=source_revision,
@@ -1919,9 +1925,12 @@ def _validate_page_segment_accounting(
 
     if not declined <= known:
         fail("declined_segment_not_on_page", len(declined - known))
-    overlap = declined & cited_segment_ids
-    if overlap:
-        fail("segment_claimed_and_declined", len(overlap))
+    # A segment both cited and declined used to be refused as a contradiction.
+    # The citation is positive evidence and the declination adds nothing, so
+    # the claim simply wins and the redundant declination is dropped. Nothing
+    # is lost: the claim is still validated in full, and a genuinely declined
+    # segment is still held to every rule below.
+    declined = declined - cited_segment_ids
     forced = [
         segment_id
         for segment_id in declined
@@ -1937,8 +1946,41 @@ def _validate_page_segment_accounting(
     # page to analysis_incomplete, which blocks the whole-document merge just
     # as firmly, while keeping the claims that were correct available for
     # review instead of discarding the chunk.
-    return tuple(
-        sorted(set(substantive) - cited_segment_ids - declined)
+    return (
+        tuple(sorted(set(substantive) - cited_segment_ids - declined)),
+        tuple(sorted(declined)),
+        bool(substantive),
+    )
+
+
+def _derived_coverage(
+    coverage: ProtocolPageClaimCoverage,
+    unaccounted: tuple[str, ...],
+    declined: tuple[str, ...],
+    substantive: bool,
+) -> ProtocolPageClaimCoverage:
+    """Compute the page status the provider no longer declares.
+
+    An omitted segment makes the page incomplete. A page whose every
+    substantive segment was declined has no relevant claims. Anything else with
+    an emitted item is complete. The provider's own
+    ``analysis_incomplete`` self-report is preserved and can only make the
+    outcome stricter, never looser, because it says something no set operation
+    can: that the model does not believe it finished the page.
+    """
+
+    del substantive
+    if unaccounted or coverage.status is PageCoverageStatus.ANALYSIS_INCOMPLETE:
+        status = PageCoverageStatus.ANALYSIS_INCOMPLETE
+    elif not coverage.evidence_item_ids:
+        status = PageCoverageStatus.NO_RELEVANT_CLAIMS
+    else:
+        status = PageCoverageStatus.COMPLETE
+    return replace(
+        coverage,
+        status=status,
+        declined_segment_ids=declined,
+        unaccounted_segment_ids=unaccounted,
     )
 
 
@@ -2160,7 +2202,7 @@ def validate_chunk_claim_analysis(
                 page_coverage_count=len(analysis.page_coverage),
             ),
         )
-    unaccounted: dict[int, tuple[str, ...]] = {}
+    derived: dict[int, tuple[tuple[str, ...], tuple[str, ...], bool]] = {}
     for page_number in core_page_refs:
         coverage = coverage_by_page[page_number]
         numbered_labels = _numbered_step_labels(
@@ -2208,14 +2250,11 @@ def validate_chunk_claim_analysis(
             or tuple(sorted(coverage.evidence_item_ids)) != expected_ids
             or len(set(coverage.evidence_item_ids))
             != len(coverage.evidence_item_ids)
-            or (
-                coverage.status is PageCoverageStatus.COMPLETE
-                and not expected_ids
-            )
-            or (
-                coverage.status is PageCoverageStatus.NO_RELEVANT_CLAIMS
-                and bool(expected_ids)
-            )
+            # The status/item-count consistency clauses that used to sit here
+            # are gone because the status is now derived from the item count
+            # and the dispositions. A page cannot claim to be complete while
+            # holding nothing, or claim nothing while holding items: neither
+            # sentence is sayable any more.
         ):
             raise ProtocolAnalysisEvidenceError(
                 "Chunk page coverage does not match its extracted evidence items.",
@@ -2233,7 +2272,7 @@ def validate_chunk_claim_analysis(
                     source_hash=extraction.sha256,
                 ),
             )
-        unaccounted[page_number] = _validate_page_segment_accounting(
+        derived[page_number] = _validate_page_segment_accounting(
             extraction,
             source_revision=source_revision,
             chunk_id=chunk_id,
@@ -2246,17 +2285,11 @@ def validate_chunk_claim_analysis(
                 for segment_id in item.evidence.evidence_segment_ids
             ),
         )
-    if not any(unaccounted.values()):
-        return analysis
     return replace(
         analysis,
         page_coverage=tuple(
-            replace(
-                item,
-                status=PageCoverageStatus.ANALYSIS_INCOMPLETE,
-                unaccounted_segment_ids=unaccounted[item.source_page_number],
-            )
-            if unaccounted.get(item.source_page_number)
+            _derived_coverage(item, *derived[item.source_page_number])
+            if item.source_page_number in derived
             else item
             for item in analysis.page_coverage
         ),

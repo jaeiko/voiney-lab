@@ -346,7 +346,7 @@ class RichClaimModel:
             "page_coverage": [
                 {
                     "source_page_number": page_number,
-                    "status": "complete",
+                    "analysis_incomplete": False,
                     "declined_evidence_segment_ids": declined_handles(
                         page, [*structure, *records]
                     ),
@@ -870,7 +870,8 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                         "page_coverage": [
                             {
                                 "source_page_number": page["source_page_number"],
-                                "status": self.status,
+                                "analysis_incomplete": self.status
+                                == "analysis_incomplete",
                                 # Claiming nothing now means declining every
                                 # substantive segment, on the record.
                                 "declined_evidence_segment_ids": (
@@ -894,12 +895,19 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             "no_relevant_claims",
         )
 
-        with self.assertRaises(ProtocolAnalysisEvidenceError):
-            analyze_protocol_chunk(
-                extraction,
-                plan.chunks[0],
-                ZeroItemModel("complete"),
-            )
+        # Superseded: a provider used to be able to declare "complete" for a
+        # page holding nothing, and this asserted the refusal. The status is
+        # now derived from the item count and the dispositions, so that
+        # sentence is not sayable. Declaring the opposite self-report cannot
+        # manufacture a complete page either.
+        result = analyze_protocol_chunk(
+            extraction,
+            plan.chunks[0],
+            ZeroItemModel("complete"),
+        )
+        self.assertEqual(
+            result.page_coverage[0].status.value, "no_relevant_claims"
+        )
 
     def test_every_core_page_still_requires_exactly_one_coverage_record(self):
         two_page_source = self.root / "exact-coverage.pdf"
@@ -1492,7 +1500,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
 
     def test_analysis_incomplete_coverage_cannot_form_a_partial_protocol(self):
         def incomplete(response):
-            response["page_coverage"][0]["status"] = "analysis_incomplete"
+            response["page_coverage"][0]["analysis_incomplete"] = True
 
         result = self.analyze(RichClaimModel(incomplete))
         with self.assertRaises(ProtocolChunkMergeError) as failure:

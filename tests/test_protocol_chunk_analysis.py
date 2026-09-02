@@ -208,7 +208,7 @@ class FakeChunkModel:
             coverage.append(
                 {
                     "source_page_number": number,
-                    "status": "complete" if item_ids else "no_relevant_claims",
+                    "analysis_incomplete": False,
                     "declined_evidence_segment_ids": declined_handles(
                         page, [*structure, *claims]
                     ),

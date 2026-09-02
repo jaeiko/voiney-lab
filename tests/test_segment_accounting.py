@@ -104,7 +104,7 @@ class SegmentAccountingTests(unittest.TestCase):
                 "page_coverage": [
                     {
                         "source_page_number": 1,
-                        "status": status,
+                        "analysis_incomplete": status == "analysis_incomplete",
                         "declined_evidence_segment_ids": [
                             self.handles[i] for i in declined
                         ],
@@ -200,7 +200,15 @@ class SegmentAccountingTests(unittest.TestCase):
             coverage.declined_segment_ids,
         )
 
-    def test_a_segment_cannot_be_claimed_and_declined_at_once(self) -> None:
+    def test_a_claim_wins_over_a_redundant_declination(self) -> None:
+        """Superseded: this used to be refused as a contradiction.
+
+        A citation is positive evidence and declining the same segment adds
+        nothing, so the claim stands and the redundant declination is dropped.
+        Nothing is lost: the claim is validated in full, and a segment that is
+        only declined is still held to every rule.
+        """
+
         substantive = sorted(self._substantive())
         action = substantive[0]
         values = [
@@ -209,18 +217,18 @@ class SegmentAccountingTests(unittest.TestCase):
             if i != action and segment_carries_unit_bearing_value(self.texts[i])
         ]
         rest = [i for i in substantive if i != action and i not in values]
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as caught:
-            self._parse(
-                self._response(
-                    claimed=[action],
-                    declined=[action, *rest],
-                    values=values,
-                )
+        analysis = self._parse(
+            self._response(
+                claimed=[action],
+                declined=[action, *rest],
+                values=values,
             )
-        self.assertEqual(
-            caught.exception.diagnostic.reason_code,
-            "segment_claimed_and_declined",
         )
+        coverage = analysis.page_coverage[0]
+        action_id = self.request.pages[0].evidence[action].segment.segment_id
+        self.assertNotIn(action_id, coverage.declined_segment_ids)
+        self.assertEqual(coverage.unaccounted_segment_ids, ())
+        self.assertEqual(coverage.status, PageCoverageStatus.COMPLETE)
 
     def test_a_segment_stating_a_value_cannot_be_declined(self) -> None:
         """The unit cross-check: units are notation, not vocabulary."""

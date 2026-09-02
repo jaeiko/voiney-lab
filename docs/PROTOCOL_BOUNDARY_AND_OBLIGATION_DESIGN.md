@@ -1152,6 +1152,192 @@ This is one pass with no retries. At the current 2-of-8 pass rate a document
 would need repeated passes to be admitted, so the figures above are a floor
 rather than an estimate of what registering a protocol actually costs today.
 
+## 4s. Page status becomes a server derivation
+
+The provider was declaring a segment disposition for every segment *and* a page
+status. The status is a set operation over those dispositions, so the contract
+asked for the same fact twice and the two answers could disagree. Three of the
+eight STEP 9 failures were that disagreement.
+
+Computability, confirmed before changing anything:
+
+```
+complete            = every substantive segment cited or declined, >= 1 item cited
+no_relevant_claims  = every substantive segment declined, 0 items cited
+analysis_incomplete = some substantive segment neither cited nor declined
+```
+
+All three are set operations over `(substantive, cited, declined)`. One thing is
+**not** derivable: a model that closed the ledger but does not believe it read
+the page properly. No set yields that, so `analysis_incomplete` survives as a
+provider **boolean self-report** rather than as a status value, and it can only
+make the derived outcome stricter, never looser. That separation is the point:
+the mechanical fact is computed, the introspective one is asked for.
+
+`status` is gone from the response schema, replaced by `analysis_incomplete`.
+The two status/item-count consistency clauses in the validator are deleted as
+dead code, because neither sentence they refused is sayable any more.
+`CLAIM_SCHEMA_VERSION` stays 6: a field was swapped, and no prior response
+survives the change either way.
+
+A second contradiction went with it. A segment both cited and declined was
+refused; now the citation wins and the redundant declination is dropped. The
+citation is positive evidence, validated in full; declining the same segment
+adds nothing. A segment that is *only* declined is still held to every rule,
+including the unit cross-check.
+
+### Effect, measured by replaying the eight STEP 9 responses
+
+The same captured bytes, re-interpreted under the new contract (the `status`
+field's only surviving meaning is the self-report):
+
+| Chunk | STEP 9 | STEP 10, same response |
+| --- | --- | --- |
+| 0 | `coverage_mismatch` p3 | **passed** |
+| 1 | passed | passed |
+| 2 | `declined_segment_states_a_value` p13 | unchanged |
+| 3 | `coverage_mismatch` p18 | `declined_segment_states_a_value` p19 |
+| 4 | passed | passed |
+| 5 | `declined_segment_states_a_value` p26 | unchanged |
+| 6 | `numbered_action_missing` p32 | unchanged |
+| 7 | `segment_claimed_and_declined` p37 | **passed** |
+
+**Chunks passing canonical validation: 2 of 8 → 4 of 8.**
+
+All three duplication failures are eliminated by construction. Chunk 3 still
+fails, but on a different and genuine fault that the status contradiction had
+been masking: it declined a segment on page 19 that states a value. So the
+failure *class* is gone from all three sites, and one site had a second,
+independent fault underneath it.
+
+The three remaining failures are the ones the design intends to catch: two false
+statements about measured values, and one numbered action not claimed.
+
+## 4t. Repeated boilerplate: identifiable, and not safe to exclude
+
+Six of the thirteen unaccounted segments were running footers or equipment
+blocks, and ANKOM's footer appears on 40 pages, so repetition looked like a way
+to exclude them from the substantive set on a structural fact rather than a
+judgement about meaning.
+
+Measured, masking digits so a page number does not make each footer unique:
+
+| Threshold | ANKOM shapes | of those, content-bearing | in-gel shapes | content-bearing |
+| --- | --- | --- | --- | --- |
+| on >= 2 pages | 18 | **17** | 5 | **4** |
+| on >= 3 pages | 4 | **3** | 1 | 0 |
+| on > half the pages | 1 | 0 | 0 | 0 |
+
+**Not adopted.** Real protocol content repeats, routinely:
+
+- `# Flush procedure: Fill the dispenser with # ml of hot water.` - a numbered
+  step with a quantity, on 3 pages
+- `# Wash the gel piece with # µL acetonitrile # rpm, #°C, #:#:#` - a numbered
+  step with three values, on 2 pages
+- `Sartorius Practum NAME Analytical balance TYPE ... SKU` - an equipment block,
+  on 3 pages
+- **`Safety information HOT! Be careful!` - on 2 pages**
+
+That last one settles it. A repetition rule at the only threshold that catches
+in-gel's footer would exclude hazard text from the ledger. The justification
+changed from "this looks meaningless" to "this repeats", and the failure mode did
+not change at all: real execution content, including a warning, silently leaves
+the accounting. That is the trap rejected in §4p wearing different clothes.
+
+The threshold that is clean on ANKOM - more than half the pages - misses in-gel's
+footer entirely, because segmentation merges the footer with adjacent content on
+most of its pages. Which is the second reason: `#:#:# protocols.io | ...` is a
+single segment holding both a footer *and* a real timer value, so even a perfect
+footer detector would exclude a segment carrying a duration. No segment-level
+boilerplate exclusion is safe while segmentation can merge boilerplate with
+content.
+
+Repetition remains a legitimate *diagnostic* - it would tell a reviewer which
+segments look like running furniture - but it is not admissible as an
+exclusion, and none was implemented.
+
+## 4u. Two new documents: not measured, and why
+
+The task named two further protocols for offline structural validation:
+`intracellularmetaboliteextraction.pdf` (34 pages, 5 numbered labels, 0.1 per
+page) and `usingdynamicheadspacecollections.pdf` (16 pages, 57 labels, 3.6 per
+page). **Neither file is present on this machine.**
+
+The paths given were literal `/path/to/...` placeholders. A search of the whole
+filesystem by name and by content - every PDF on the box, hashed, with page
+counts - found only the two known sources plus an unrelated system document. No
+mount point, home directory or scratch location holds them.
+
+Every question asked about them requires the bytes: the dual-extraction
+cross-check, per-page segment distribution, the degradation detector, the
+proportion of segments outside numbered steps, and the audit's risk split. None
+of it can be derived from the page and label counts supplied, and none of it is
+reported here rather than estimated.
+
+The 0.1-labels-per-page document is the interesting case and the question stands
+unanswered: with five numbered labels across 34 pages,
+`numbered_action_missing` enforces almost nothing, so nearly the whole document
+would rest on per-segment accounting and the document-level claim path - the two
+mechanisms with the weakest measured reliability. That is a prediction, not a
+measurement, and it is recorded as such.
+
+## 4v. protocols.io API as an instrument: partially usable
+
+Assessed as a measuring instrument only.
+
+**Access.** `GET /api/v4/protocols/{uri}` requires `Authorization: Bearer
+<access_token>`; unauthenticated it returns status 1218, "Authorization token is
+not correct". Two tiers exist: a client access token, which reads all public
+data, and OAuth for user-owned content. **No token is configured in this
+environment**, so the response shape could not be verified empirically and
+everything below about field structure comes from documentation.
+
+**Structure.** A protocol carries `steps[]`, each step carrying `components[]`,
+and each component is `{id, guid, order_id, type_id, title, source}` where
+`source` is described as "variative object of component, can be determined by
+type_id". So typed components do exist, keyed by a numeric type id, with
+observed ids 1, 3, 4, 6, 7, 8, 9, 13, 15 and 17-26. The public schema
+repository does not map ids to meanings. The editor exposes components for
+citations, amounts, equipment, reagents by supplier, durations and safety
+warnings, which is consistent with that id set.
+
+**A useful corroboration.** The block labels we have been treating as
+unnumbered prose - `Note`, `Safety information`, `Expected result`, and the
+`NAME / TYPE / BRAND / SKU` equipment blocks - are almost certainly the PDF
+export rendering those typed components. ANKOM page 30's hazard block being
+labelled `Safety information` is then not incidental: it is a safety component
+the author filled in. That is what makes the comparison worth building.
+
+**Comparable to our claims:** numbered step count and order against action
+claims; reagents and materials with supplier and catalogue number against
+material claims; amounts with units against quantity and concentration claims;
+durations against duration claims, where the `HH:MM:SS` literals we now parse
+are the editor's duration component; equipment against equipment claims; safety
+components against `warning_hazard` claims; and step nesting against our
+step-attached versus document-level distinction.
+
+**Not comparable:** evidence spans and segment identity have no counterpart, and
+neither does page-level accounting.
+
+**The asymmetry that decides how it can be used.** A component the author filled
+in is ground truth for **recall**: if the API has a safety component on a step
+and we produced no hazard claim there, we missed it, and that is dispositive.
+The converse does not hold. An author who typed a warning into the step's prose
+rather than into the safety component leaves the API silent while the PDF still
+says it, so API absence is **not** ground truth for precision - it would score
+a correct extraction as a false positive. The API therefore measures what the
+author declared, not what the protocol contains.
+
+Used within that asymmetry it is the first real accuracy instrument available:
+a per-category recall figure against author-declared facts, on the same
+documents, with no provider call needed to produce the reference side.
+
+**Licensing.** Both documents state Creative Commons Attribution on their first
+page, so the content is CC-BY and reuse requires attribution. Rate limits are
+not published in any source reachable here, and the unauthenticated error
+response exposes no rate-limit headers. Both need confirming against the
+authenticated documentation before any comparison harness is built.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A
