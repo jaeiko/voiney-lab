@@ -1027,6 +1027,131 @@ the same segment, for the third time - consistent with the reliability split
 above, and the reason the record now names which obligation fell short rather
 than reporting a single pass or fail.
 
+## 4r. First whole-document run: the real baseline
+
+Eight authorized calls, one per chunk, no retry, against `4a9f130` with no code,
+prompt or schema change beforehand. Three earlier calls had all landed on chunk
+6, which passed each time; this is the first measurement of the other seven.
+
+**Two of eight chunks passed.** Six failed, for six different reasons.
+
+| Chunk | Core pages | Latency | Response | Result | Cause |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 1-4 | 4.2 s | 1,694 B | rejected | `coverage_mismatch` p3 - page marked `complete` with nothing claimed |
+| 1 | 5-8 | 8.0 s | 4,074 B | **passed** | 4 segments recorded unaccounted |
+| 2 | 9-16 | 12.6 s | 6,658 B | rejected | `declined_segment_states_a_value` p13 - declined `20 g Na2SO3 4.0 mL alpha-amylase` |
+| 3 | 17-23 | 17.2 s | 7,788 B | rejected | `coverage_mismatch` p18 - `complete` with nothing claimed |
+| 4 | 24 | 7.9 s | 4,940 B | **passed** | fully accounted, 18 claims |
+| 5 | 25-29 | 12.4 s | 6,796 B | rejected | `declined_segment_states_a_value` p26 - declined a note stating `2 h` |
+| 6 | 30-32 | 25.6 s | 9,579 B | rejected | `numbered_action_missing` p32 - label 55 not claimed |
+| 7 | 33-40 | 16.2 s | 9,245 B | rejected | `segment_claimed_and_declined` p37 - one segment both cited and declined |
+
+Chunk 6 is the one that had passed three times. On its fourth run it failed for
+a reason none of the earlier runs hit. Run-to-run variance is high enough that a
+single passing chunk was never evidence about the document.
+
+### Document totals, from the raw responses
+
+Counted from provider output rather than admitted state, since six chunks were
+refused.
+
+| | Count |
+| --- | --- |
+| claims | 142 |
+| action | 83 |
+| value (quantity, duration, temperature, agitation) | 43 |
+| **warning_hazard** | **9** |
+| **of those, step-attached** | **9 of 9** |
+| equipment / material / prerequisite / other | 17 |
+| structure markers | 23 |
+
+Hazard claims landed on pages 4, 16, 25, 30, 32 and 36. Only page 30 matches the
+audit's hazard cue pattern, and it did receive a claim, so **no page with source
+hazard text lacks a hazard claim** by that measure. The model also found hazards
+on five pages the cue list does not flag, which is direct evidence that a
+vocabulary would have under-detected and is the reason none was added.
+
+### The 13 unaccounted segments, classified
+
+This classification is the basis for deciding whether a second pass is worth
+building.
+
+| Kind | Count | Examples |
+| --- | --- | --- |
+| **Execution information** | **6** | p3 `Before start ... dried for 72 h at 65°C`, p5 `NOTE: A running average blank bag correction factor (C1)`, p10 `Weigh 20 g of Sodium sulfite and keep it for step 16.`, p19 `Detach both cubitainers from ports A and B.`, p30 `Note If not proceeding immediately ... dessicator`, p32 `Note If acid remains in the filter bags ...` |
+| Heading, footer or catalog metadata | 6 | 3 running footers (p5, p6, p8), 3 equipment/catalog lines (p33, p37, p39) |
+| Ambiguous | 1 | p33 `carefully.` - a wrapped fragment |
+
+Six of thirteen carry execution information. Segment `[0]` of page 30 is now
+missed on four consecutive calls, and page 3's before-start drying condition is
+missed again, so this is not a rare event confined to one page: it is spread
+across six pages in five different chunks. The footers and catalog lines are the
+class a second pass would not need to reason about at all.
+
+### Obligation success across eight chunks
+
+Measured per obligation on the raw responses, so a chunk failing one obligation
+still scores on the others. Judged pass only if every core page in the chunk
+satisfied it.
+
+| Obligation | Success |
+| --- | --- |
+| **hazard judgement and attachment** | **8 / 8** |
+| numbered action completeness | 7 / 8 |
+| declination consistency (nothing both cited and declined) | 7 / 8 |
+| coverage status consistency | 6 / 8 |
+| value honesty (did not decline a value-bearing segment) | 5 / 8 |
+| **exhaustive accounting** | **2 / 8** |
+
+"Judgement stable, bookkeeping unstable" holds across eight chunks, and more
+sharply than the three single-chunk calls suggested: hazard judgement is perfect
+at 8 of 8, including attachment, while exhaustive accounting is 2 of 8. The
+middle rows matter too - value honesty at 5 of 8 is a bookkeeping failure with
+safety consequences, since declining a segment that states a value is an active
+false statement about a real measurement.
+
+### Merge and assembly
+
+**Merge not attempted:** only 2 of 8 chunks validated, and the merge requires
+every required chunk. No `ExperimentProtocol` was assembled. Even had all eight
+passed, chunk 1's four unaccounted segments force
+`analysis_incomplete` on pages 5, 6 and 8, which the merge refuses.
+
+### What "canonical validation passed" means at this baseline
+
+Recorded explicitly, because the phrase changed meaning in `4a9f130` and a
+milestone stated without the qualifier would be misleading.
+
+A chunk passing canonical validation at this baseline means: source identity,
+page-local handles, contiguous evidence, exact evidence reconstruction,
+identifier format, claim targeting and attachment position, numbered-action
+completeness, and declination consistency all hold. It does **not** mean the
+page ledger is complete. An omitted segment is recorded in
+`unaccounted_segment_ids` and forces that page to `analysis_incomplete`, which
+still refuses the whole-document merge. So a chunk can pass while the document
+cannot be approved, and chunk 1 is exactly that case.
+
+`unaccounted_segment_ids` was verified to reach both the stored analysis payload
+and the `review()` response. One small gap: `review()` exposes a
+`declined_segment_count` summary but no equivalent count for unaccounted
+segments, so a reviewer must read the per-page list. Recorded, not fixed here.
+
+### Measured cost
+
+| | ANKOM, 40 pages, 8 calls | 20 protocols of this size |
+| --- | --- | --- |
+| wall-clock latency | **104.1 s** (mean 13.0 s per chunk) | 34.7 min |
+| calls | 8 | 160 |
+| request bytes | 35,298 | 705,960 |
+| response bytes | 50,774 | 1,015,480 |
+| prompt tokens | 29,882 | 597,640 |
+| completion tokens | 14,575 | 291,500 |
+| **total tokens** | **44,457** | **889,140** |
+
+This is one pass with no retries. At the current 2-of-8 pass rate a document
+would need repeated passes to be admitted, so the figures above are a floor
+rather than an estimate of what registering a protocol actually costs today.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A
