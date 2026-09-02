@@ -83,6 +83,17 @@ false positives, and dropped rather than shipped:
 
 Deterministic offline fixture model. **Not provider evidence.**
 
+These counts score the offline stub, and the stub extracts every explicit
+numbered step faithfully, so for the dimensions measured here it is an *upper
+bound* on any provider working from numbered steps. The findings are therefore
+**structural, not provider-quality**: a better model would produce the same
+ones, because the request it receives cannot express the distinctions they are
+about. See `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` §2 -- reading them
+as "a real model will do better" is the specific misreading to avoid. That
+document also records (§1) a case where corrupted extraction produced duration
+claims whose quoted evidence did not exist in the document and which
+exact-evidence validation nevertheless admitted.
+
 | Source | Pages | Chunks | Claims | Canonical admission | Critical findings | Chunks semantically clean |
 | --- | --- | --- | --- | --- | --- | --- |
 | ANKOM | 40 | 8 | 126 | passed | 21 | 4 / 8 |
