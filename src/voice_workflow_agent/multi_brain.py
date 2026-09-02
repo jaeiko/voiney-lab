@@ -49,7 +49,7 @@ def _content(response: Any) -> str:
 
 
 _NUMERIC = re.compile(
-    r"(?:\d{2}[:]\d{2}[:]\d{2}|\d+(?:\.\d+)?\s*"
+    r"(?:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?\s*"
     r"(?:mg/mL|ng/uL|mm3|mm³|µL|uL|mL|ml|mM|°C|rpm|min|v/v|C|h|%))",
     re.I,
 )

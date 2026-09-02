@@ -547,7 +547,7 @@ def _verified_source_crop(
 
 
 _PRESENTATION_TOKEN = re.compile(
-    r"(?:\d{2}[:]\d{2}[:]\d{2}|"
+    r"(?:\d{2}:\d{2}:\d{2}|"
     r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:mg/mL|ng/uL|mm3|mm³|µL|uL|mL|ml|mM|°C|rpm|min|v/v|C|h|%)(?![A-Za-z0-9])|"
     r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9]))",
     re.IGNORECASE,
@@ -557,7 +557,7 @@ _PRESENTATION_TOKEN = re.compile(
 def _presentation_tokens(value: str) -> frozenset[str]:
     return frozenset(
         token.casefold().replace(" ", "").replace("ul", "µl").replace("μ", "µ")
-        .replace("mm3", "mm³").replace("", ":")
+        .replace("mm3", "mm³")
         for token in _PRESENTATION_TOKEN.findall(value)
     )
 

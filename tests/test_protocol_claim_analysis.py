@@ -66,6 +66,62 @@ _FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
 # disagree with an unbounded one on synthetic input only.
 
 
+_FIXTURE_LINE_LEADING = 12  # points between successive baselines
+
+
+def write_lined_pages(
+    path: Path,
+    pages: tuple[tuple[str, ...], ...],
+    *,
+    title: str = "Protocol Evidence",
+) -> None:
+    """Write each page as real, separate text lines.
+
+    ``write_pages`` collapses newlines to spaces, so every page it produces has
+    zero line breaks.  Boundary rules that key on end-of-line punctuation are
+    therefore never exercised by those fixtures.  This writer emits one
+    positioned show operation per line instead, so the extracted text contains
+    actual line breaks.  Existing ``write_pages`` callers are unaffected.
+    """
+
+    writer = PdfWriter()
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_ref = writer._add_object(font)
+    for lines in pages:
+        page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
+        operations = ["BT /F1 9 Tf"]
+        baseline = 740
+        for line in lines:
+            escaped = (
+                line.replace("\\", "\\\\")
+                .replace("(", "\\(")
+                .replace(")", "\\)")
+                .replace("\n", " ")
+            )
+            operations.append(f"1 0 0 1 36 {baseline} Tm ({escaped}) Tj")
+            baseline -= _FIXTURE_LINE_LEADING
+        operations.append("ET")
+        stream = DecodedStreamObject()
+        stream.set_data(" ".join(operations).encode("ascii"))
+        page[NameObject("/Resources")] = DictionaryObject(
+            {
+                NameObject("/Font"): DictionaryObject(
+                    {NameObject("/F1"): font_ref}
+                )
+            }
+        )
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    writer.add_metadata({"/Title": title})
+    with path.open("wb") as target:
+        writer.write(target)
+
+
 def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
     writer = PdfWriter()
     font = DictionaryObject(

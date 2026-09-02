@@ -340,7 +340,7 @@ class ApprovedReferenceAnswer:
 
 
 _GROUNDED_NUMERIC_TOKEN = re.compile(
-    r"(?:\d{2}[:]\d{2}[:]\d{2}|"
+    r"(?:\d{2}:\d{2}:\d{2}|"
     r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:mg/mL|ng/uL|mm3|mm³|µL|uL|mL|ml|mM|°C|rpm|min|v/v|C|h|%)(?![A-Za-z0-9])|"
     r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9]))",
     re.IGNORECASE,

@@ -755,60 +755,49 @@ class ClockDurationCensusTests(unittest.TestCase):
 class NoParserCorruptionInSourcesTests(unittest.TestCase):
     """A hardcoded private-use glyph can only have come from a broken parser.
 
-    It matches text that no document contains, so any pattern carrying one is
-    scoring corrupted extraction rather than the source.  This is a guard
-    against new occurrences plus an explicit register of the ones that remain.
+    It matches text no document contains, so a pattern carrying one scores
+    corrupted extraction instead of the source, and a replacement carrying one
+    silently repairs corruption that should have failed closed.
     """
 
-    # Files permitted to contain a private-use glyph, and why.
-    KNOWN = {
-        # Deliberate: these assert that the cross-check census *detects*
-        # corruption, so they must embed a corrupted sample.
-        "tests/test_extraction_cross_check.py",
-        # Deliberate: asserts the browser normalizer repairs legacy text.
-        "tests/test_frontend.py",
-        # DEBT, pypdf-era corruption compensation, to be removed in STEP 3:
-        # three timer patterns accept pypdf's colon substitute alongside a real
-        # colon, and one presentation helper rewrites that glyph into a colon.
-        # With the current extractor they are dead paths at best; if corrupted
-        # text ever reappeared they would quietly normalize it and defeat the
-        # extraction cross-check.
-        "src/voice_workflow_agent/brain.py",
-        "src/voice_workflow_agent/multi_brain.py",
-        "src/voice_workflow_agent/curated_protocol.py",
-    }
-
-    def test_only_known_files_contain_private_use_glyphs(self) -> None:
-        found = set()
-        for root in (Path("src"), Path("scripts"), Path("tests")):
+    def test_production_and_tooling_contain_no_private_use_glyph(self) -> None:
+        offenders = []
+        for root in (Path("src"), Path("scripts")):
             if not root.exists():
                 continue
             for path in sorted(root.rglob("*.py")):
                 text = path.read_text(encoding="utf-8")
-                if any(0xE000 <= ord(character) <= 0xF8FF for character in text):
-                    found.add(path.as_posix())
+                for number, line in enumerate(text.splitlines(), 1):
+                    for character in line:
+                        if 0xE000 <= ord(character) <= 0xF8FF:
+                            offenders.append(
+                                f"{path.as_posix()}:{number} "
+                                f"U+{ord(character):04X}"
+                            )
         self.assertEqual(
-            found - self.KNOWN,
-            set(),
-            "a new hardcoded private-use glyph appeared; it can only have come "
-            "from a broken extraction",
-        )
-        self.assertEqual(
-            self.KNOWN - found,
-            set(),
-            "a known private-use glyph is gone; remove it from KNOWN so the "
-            "register stays accurate",
+            offenders,
+            [],
+            "a private-use glyph is hardcoded in production or tooling; it can "
+            "only have come from a broken extraction",
         )
 
-    def test_the_scoring_tools_are_clean(self) -> None:
-        """The scorer must model a faithful provider on canonical text."""
+    # Tests may embed a corrupted sample, but only to prove it is detected or
+    # repaired.  Any other test file gaining one is a mistake.
+    TEST_FILES_ALLOWED = {
+        "tests/test_extraction_cross_check.py",  # asserts the census detects it
+        "tests/test_frontend.py",  # asserts the browser normalizer repairs it
+    }
 
-        for path in sorted(Path("scripts").rglob("*.py")):
-            with self.subTest(path=path.as_posix()):
-                text = path.read_text(encoding="utf-8")
-                self.assertEqual(
-                    [c for c in text if 0xE000 <= ord(c) <= 0xF8FF], []
-                )
+    def test_only_named_tests_embed_a_corrupted_sample(self) -> None:
+        found = {
+            path.as_posix()
+            for path in sorted(Path("tests").rglob("*.py"))
+            if any(
+                0xE000 <= ord(character) <= 0xF8FF
+                for character in path.read_text(encoding="utf-8")
+            )
+        }
+        self.assertEqual(found, self.TEST_FILES_ALLOWED)
 
 
 
