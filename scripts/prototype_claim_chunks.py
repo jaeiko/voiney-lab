@@ -142,16 +142,16 @@ class ExactNumberedStepClaimModel:
         self.title_page = _title_page(extraction, self.title)
 
     @staticmethod
-    def _evidence(
+    def _evidence_span(
         page: dict[str, object],
-        excerpt: str,
+        start: int,
+        end: int,
     ) -> dict[str, object]:
+        """Select the segments overlapping one absolute page range."""
+
         segments = page["segments"]
         if not isinstance(segments, list):
             raise ValueError("Provider page has invalid evidence segments.")
-        page_text = "".join(str(segment[1]) for segment in segments)
-        start = page_text.index(excerpt)
-        end = start + len(excerpt)
         selected: list[str] = []
         offset = 0
         for segment in segments:
@@ -164,6 +164,19 @@ class ExactNumberedStepClaimModel:
             "source_page_number": page["source_page_number"],
             "evidence_segment_ids": selected,
         }
+
+    @classmethod
+    def _evidence(
+        cls,
+        page: dict[str, object],
+        excerpt: str,
+    ) -> dict[str, object]:
+        segments = page["segments"]
+        if not isinstance(segments, list):
+            raise ValueError("Provider page has invalid evidence segments.")
+        page_text = "".join(str(segment[1]) for segment in segments)
+        start = page_text.index(excerpt)
+        return cls._evidence_span(page, start, start + len(excerpt))
 
     def analyze(
         self,
@@ -217,6 +230,12 @@ class ExactNumberedStepClaimModel:
             if not skip_intro:
                 for action_index, match in enumerate(_STEP.finditer(page_text)):
                     excerpt = match.group(0).strip()
+                    # Absolute offset of `excerpt` within the page, so a
+                    # parameter token can be located without re-searching the
+                    # whole page and possibly landing in a different step.
+                    excerpt_offset = match.start() + (
+                        len(match.group(0)) - len(match.group(0).lstrip())
+                    )
                     label = match.group("label")
                     body = match.group("body").lstrip()
                     if (
@@ -254,6 +273,12 @@ class ExactNumberedStepClaimModel:
                             if identity in seen:
                                 continue
                             seen.add(identity)
+                            token_start = excerpt_offset + parameter.start()
+                            parameter_evidence = self._evidence_span(
+                                page,
+                                token_start,
+                                token_start + len(source_text),
+                            )
                             claim_id = (
                                 f"{category}-p{page_number}-{action_index}-{parameter_index}"
                             )
@@ -268,7 +293,7 @@ class ExactNumberedStepClaimModel:
                                     "source_label": None,
                                     "target_claim_id": action_id,
                                     "required_for_execution": False,
-                                    "evidence": action_evidence,
+                                    "evidence": parameter_evidence,
                                 }
                             )
                             item_ids.append(claim_id)

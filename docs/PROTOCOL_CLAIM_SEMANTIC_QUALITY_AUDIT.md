@@ -99,7 +99,8 @@ exact-evidence validation nevertheless admitted.
 > that quoted corrupted evidence, and a census blind to `HH:MM:SS`
 > durations. The current baseline is ANKOM 32 critical / 65-of-70 value
 > tokens and in-gel 26 critical / 55-of-61 — see
-> `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` §2a.
+> `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` §2a; §3a records the
+> boundary change that followed.
 
 | Source | Pages | Chunks | Claims | Canonical admission | Critical findings | Chunks semantically clean |
 | --- | --- | --- | --- | --- | --- | --- |

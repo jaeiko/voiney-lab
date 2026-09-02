@@ -35,7 +35,9 @@ CLAIM_SCHEMA_VERSION = 5
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
-EVIDENCE_SEGMENT_VERSION = 3
+# 4: a line ending in sentence punctuation also ends a block, so unnumbered
+# content is no longer absorbed into the preceding numbered step.
+EVIDENCE_SEGMENT_VERSION = 4
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024
@@ -55,6 +57,13 @@ _NUMBERED_SOURCE_LINE = re.compile(
 _INLINE_NUMBERED_SOURCE = re.compile(
     r"(?<!\S)(?P<label>[1-9][0-9]{0,2})\.[ \t]+(?P<next>\S+)"
 )
+# A line that ends a sentence ends a content unit.  Without this, every
+# unnumbered block -- a hazard warning, a note, a preparation value -- is
+# absorbed into the preceding numbered step and has no evidence unit of its
+# own, so nothing can cite it and nothing can record that it was considered.
+# Keyed on the line break rather than on the sentence, so a wrapped sentence
+# stays whole.
+_SENTENCE_LINE_END = re.compile(r"[.!?]\s*\n")
 _VALUE_UNITS = {
     "c",
     "g",
@@ -709,6 +718,7 @@ def _bounded_action_block_boundaries(page_text: str) -> tuple[int, ...]:
             0,
             len(page_text),
             *(match.start("label") for match in _numbered_action_matches(page_text)),
+            *(match.end() for match in _SENTENCE_LINE_END.finditer(page_text)),
         }
     )
     bounded = [coarse[0]]
@@ -778,6 +788,48 @@ def generate_page_evidence_segments(
             )
         )
     return tuple(segments)
+
+
+MIN_LINES_FOR_SEGMENTATION = 5
+
+
+def degraded_segmentation_pages(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+) -> tuple[int, ...]:
+    """Pages with clear line structure that still yielded a single segment.
+
+    Block boundaries come from numbered labels and end-of-line sentence
+    punctuation.  A page carrying neither -- an equipment metadata list, a
+    title page, a bullet table, Korean protocol text that does not end lines
+    with a period -- collapses to one segment, and then a single claim accounts
+    for the whole page and everything inside it is absorbed exactly as it was
+    before boundaries were refined.
+
+    Neither existing check notices this.  The extraction cross-check asks
+    whether two engines *read* a page differently, and such a page is read
+    identically by both, so it is reported verified.  Per-segment accounting is
+    satisfied by one claim when there is one segment.
+
+    This is reported, not gated.  Every real protocol has a title page, so
+    blocking on it would fire on every document and make the signal worthless;
+    it becomes decision-relevant once per-segment dispositions exist.
+    """
+
+    degraded: list[int] = []
+    for page_number in range(1, extraction.page_count + 1):
+        page_text = extraction.pages[page_number - 1].text
+        if page_text.count("\n") + 1 < MIN_LINES_FOR_SEGMENTATION:
+            continue
+        segments = generate_page_evidence_segments(
+            extraction,
+            source_revision=source_revision,
+            page_number=page_number,
+        )
+        if len(segments) <= 1:
+            degraded.append(page_number)
+    return tuple(degraded)
 
 
 def serialize_chunk_claim_analysis(

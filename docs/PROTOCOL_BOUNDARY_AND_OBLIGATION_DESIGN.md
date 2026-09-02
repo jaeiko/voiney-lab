@@ -238,6 +238,82 @@ shrink; measured, the cap fires on **no page** of either source under R2
 the hard guard for the degenerate case — a page whose extraction contains no
 newline at all, which is precisely what the synthetic test fixtures produce.
 
+## 3a. R2 as implemented — measured outcome
+
+Implemented in `_bounded_action_block_boundaries` as one added term,
+`_SENTENCE_LINE_END = re.compile(r"[.!?]\s*\n")`.
+`EVIDENCE_SEGMENT_VERSION` 3 → 4; `CLAIM_SCHEMA_VERSION` stays 5, since the
+response shape is unchanged.
+
+**Monotonicity, proven per page.** Every boundary the label-only rule produced
+survives, on all 40 ANKOM pages and all 9 in-gel pages: 0 violations. 34 of 40
+and 8 of 9 pages gained boundaries. The 4096-character ceiling fires on no page
+of either source, and is retained as the guard for a newline-free extraction —
+exercised by a test that builds exactly such a page.
+
+### The boundary change alone moved nothing, and why
+
+| | ANKOM | in-gel |
+| --- | --- | --- |
+| `value_span_not_isolated`, R2 only | 25 → **25** | 20 → **19** |
+
+R2 worked at the layer it targets: ANKOM p30 went from 3 segments to 18, with
+the hazard block isolated as four of them. The metric did not follow, because
+it measures the span a *claim* cites, and the offline scorer attached
+`action_evidence` — the whole step block — to every parameter claim
+unconditionally (`prototype_claim_chunks.py:271`). No boundary refinement can
+move a claim that always cites the entire step.
+
+That is an instrument fault of the same class as the hardcoded corruption
+glyph: the scorer was not modelling a provider that cites its own value.
+Canonical validation permits the narrow citation — a parameter claim's
+`source_text` need only be a substring of its target action's excerpt — so a
+faithful provider would make it. The scorer now selects the segments holding
+its own token, located by absolute page offset within the step so it cannot
+land in a neighbouring one.
+
+### Measured outcome with the instrument repaired
+
+| | ANKOM | in-gel |
+| --- | --- | --- |
+| `value_span_not_isolated` | 25 → **10** (−15, −60%) | 20 → **18** (−2, −10%) |
+| critical total | 32 → **17** | 26 → **22** |
+| chunks semantically clean | 2/8 → **4/8** | 1/3 → 1/3 |
+| claims | 126 (unchanged) | 83 (unchanged) |
+
+ANKOM p30, the case this was built for — every preparation value now cites one
+segment of its own:
+
+```
+quantity-p30-0-4  segs=1  'Use a cylinder to measure 242 ml of dH2O and pour in the...'
+quantity-p30-0-5  segs=1  'Use a glass cylinder to measure 758 mL of H2SO4 and SLOW...'
+duration-p30-0-1  segs=1  'Wait at least 1 h to for the solution to cool down.'
+quantity-p30-0-6  segs=1  'In a 1 L glass cylinder, adjust the final volume to 1 L ...'
+quantity-p30-0-3  segs=1  'Note Under the chemical hood, place a stirring plate, 2 ...'
+```
+
+The hazard block occupies segments 4–7 and is no longer part of step 50's
+evidence. No hazard *claim* exists yet, because nothing obliges one — that is
+STEP 4.
+
+### Why in-gel barely moved — an inherent limit, not a defect
+
+Every one of in-gel's remaining 18 findings is **two or more same-category
+values on a single line**:
+
+```
+12 Incubate for 60min at 60C 800 rpm, 60°C, 01:00:00      <- two durations, one line
+10 Prepare a solution of 1.5mg/mL of DTT 10 millimolar ...  <- five concentrations, one line
+```
+
+R2 splits at line ends. It cannot separate values that share a line, and no
+line-based rule can. ANKOM's notes spread values across lines, which is why it
+gained 15; in-gel packs them into step trailers, which is why it gained 2. The
+honest statement of R2's reach is therefore: it separates content across lines,
+and leaves within-line packing untouched. Closing the remainder needs
+sub-line evidence spans, which is a larger change than this one and is not
+attempted here.
+
 ## 4. Obligation set redesign
 
 Current: `:1816` `if not set(numbered_labels).issubset(action_labels)`, with the
@@ -395,6 +471,25 @@ equipment/metadata line lists. At 37% of a document it is not a gate; it is
 noise. It is retained only as an **advisory metric**, `absorbed_lines` = the
 maximum line count inside one segment (ANKOM max 21, in-gel max 23), reported by
 the audit and never used to block.
+
+## 5b. Segmentation-degradation detector as implemented
+
+`degraded_segmentation_pages(extraction, source_revision=...)`:
+`line_count >= MIN_LINES_FOR_SEGMENTATION (5)` and `segment_count <= 1`.
+Measured, matching the STEP 2 prediction exactly: **ANKOM (17,)** — an
+equipment metadata list — and **in-gel (1,)** — the title/DOI/author cover.
+
+**Surfaced as a diagnostic record, not a gate.** The audit runner reports
+`degraded_segmentation_pages` per source. Refusing request construction or
+adding a readiness reason were both rejected: every real protocol has a cover
+page, so either would fire on every document and become the always-on gate that
+makes acknowledgement a formality — the same failure argued against for a
+prerequisite gate. It becomes decision-relevant in STEP 4, where a degraded
+page's single segment must still be dispositioned and cannot be `no_claim` if
+it carries a unit-bearing value.
+
+The `absorbed_lines >= 8` variant remains rejected as a gate: 15 of 40 ANKOM
+pages, mostly legitimate metadata lists.
 
 ## 6. Cardinality, versioning, regressions, test helper
 

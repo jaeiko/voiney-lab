@@ -929,9 +929,16 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
 
         self.assertEqual(first, duplicate)
         self.assertEqual("".join(segment.text for segment in first), multiline.pages[0].text)
-        self.assertEqual(len(first), 3)
-        self.assertIn("Keep the vessel covered", first[1].text)
-        self.assertIn("WARNING: hot surface", first[2].text)
+        # Five segments, not three: an end-of-line sentence now closes a block,
+        # so the unnumbered lines are no longer absorbed into the numbered step
+        # above them.
+        self.assertEqual(len(first), 5)
+        texts = [segment.text.strip() for segment in first]
+        self.assertIn("Keep the vessel covered.", texts)
+        self.assertIn("WARNING: hot surface.", texts)
+        for step_text in (s for s in texts if s.startswith(("1.", "2."))):
+            self.assertNotIn("Keep the vessel covered", step_text)
+            self.assertNotIn("WARNING: hot surface", step_text)
         self.assertNotEqual(
             [segment.segment_id for segment in first],
             [segment.segment_id for segment in other_revision],

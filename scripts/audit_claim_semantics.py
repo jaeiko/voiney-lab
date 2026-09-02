@@ -25,6 +25,9 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
+from voice_workflow_agent.protocol_claim_analysis import (
+    degraded_segmentation_pages,
+)
 from voice_workflow_agent.protocol_claim_semantic_audit import (
     audit_assembly_preservation,
     audit_chunk_semantics,
@@ -70,6 +73,12 @@ def audit_source(path: Path, *, include_source_excerpts: bool) -> dict[str, obje
         "claim_count": len(merged.claims),
         "provider_mode": "deterministic_offline_fixture",
         "canonical_admission": "passed",
+        # Pages with line structure that still produced one segment.  Reported,
+        # not gated: on such a page a single claim accounts for everything, so
+        # findings attributed elsewhere may simply be unreachable here.
+        "degraded_segmentation_pages": list(
+            degraded_segmentation_pages(extraction, source_revision="pdf-1")
+        ),
         "per_chunk": [
             {
                 "chunk_id": result.chunk.chunk_id,
