@@ -94,6 +94,13 @@ document also records (§1) a case where corrupted extraction produced duration
 claims whose quoted evidence did not exist in the document and which
 exact-evidence validation nevertheless admitted.
 
+> **Superseded.** The table below is the original pypdf-era measurement,
+> kept for the record. Two measurement faults were since repaired: a scorer
+> that quoted corrupted evidence, and a census blind to `HH:MM:SS`
+> durations. The current baseline is ANKOM 32 critical / 65-of-70 value
+> tokens and in-gel 26 critical / 55-of-61 — see
+> `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` §2a.
+
 | Source | Pages | Chunks | Claims | Canonical admission | Critical findings | Chunks semantically clean |
 | --- | --- | --- | --- | --- | --- | --- |
 | ANKOM | 40 | 8 | 126 | passed | 21 | 4 / 8 |

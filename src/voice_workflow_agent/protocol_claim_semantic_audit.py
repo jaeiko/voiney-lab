@@ -115,22 +115,37 @@ _VALUE_UNIT_PATTERNS: tuple[tuple[ClaimCategory, str], ...] = (
     (ClaimCategory.QUANTITY, r"[Ll]|g"),
 )
 
+# protocols.io renders a step timer as an HH:MM:SS literal, which carries no
+# unit word and therefore does not fit the number-plus-unit shape above.  Left
+# undetected it was a silent blind spot: every such duration was invisible to
+# the census, so a claim set could drop all of them without the represented
+# count moving.  Only the three-part form is accepted -- a two-part H:MM is
+# ambiguous with a time of day, and a ratio like (50:49:1) cannot match because
+# its final group is a single digit.
+_CLOCK_DURATION = r"[0-9]{1,2}:[0-9]{2}:[0-9]{2}"
+
 _VALUE_CATEGORIES: frozenset[ClaimCategory] = frozenset(
-    category for category, _ in _VALUE_UNIT_PATTERNS
-)
+    (category for category, _ in _VALUE_UNIT_PATTERNS)
+) | {ClaimCategory.DURATION}
 
 _VALUE_TOKEN = re.compile(
-    r"(?<![A-Za-z0-9])(?:[0-9]+(?:[.,][0-9]+)?)\s*(?:"
+    r"(?<![A-Za-z0-9])(?:"
+    + f"(?P<clock>{_CLOCK_DURATION})|"
+    + r"(?:[0-9]+(?:[.,][0-9]+)?)\s*(?:"
     + "|".join(
         f"(?P<unit{index}>{pattern})"
         for index, (_, pattern) in enumerate(_VALUE_UNIT_PATTERNS)
     )
+    + r")"
     + r")(?![A-Za-z0-9])"
 )
 
 _CATEGORY_BY_GROUP: Mapping[str, ClaimCategory] = {
-    f"unit{index}": category
-    for index, (category, _) in enumerate(_VALUE_UNIT_PATTERNS)
+    "clock": ClaimCategory.DURATION,
+    **{
+        f"unit{index}": category
+        for index, (category, _) in enumerate(_VALUE_UNIT_PATTERNS)
+    },
 }
 
 # Generic protocol-language cues.  These are intentionally conservative: a cue

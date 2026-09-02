@@ -57,6 +57,14 @@ _STEP = re.compile(
     r"(?ms)^(?P<label>[1-9][0-9]{0,2})(?:[.)])?[ \t]+(?P<body>.*?)"
     r"(?=^[1-9][0-9]{0,2}(?:[.)])?[ \t]+|^protocols\.io|\Z)"
 )
+# These patterns match the canonical extraction only.  They previously carried
+# pypdf's private-use substitutes for ":" and "±" -- the temperature pattern
+# accepted both forms, the duration pattern accepted *only* the corrupted one --
+# which let this model emit claims quoting evidence that does not exist in the
+# document.  No corrupted-glyph alternative is kept: the current extractor never
+# produces them, a mismatch between extraction engines now fails closed before
+# admission, and tolerating one broken parser's artifacts here would simply
+# restore the blind spot.
 _PARAMETERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "concentration",
@@ -67,13 +75,13 @@ _PARAMETERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "temperature",
-        re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:\s*[±]\s*[0-9]+)?\s*°?C\b"),
+        re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:\s*±\s*[0-9]+)?\s*°?C\b"),
     ),
     (
         "duration",
         re.compile(
             r"(?<![A-Za-z0-9])(?:[0-9]+(?:\.[0-9]+)?\s*(?:h|min|s)\b|"
-            r"[0-9]{2}[0-9]{2}[0-9]{2})"
+            r"[0-9]{1,2}:[0-9]{2}:[0-9]{2})"
         ),
     ),
     (

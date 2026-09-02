@@ -61,8 +61,9 @@ exposes values the corrupted text hid.
 
 ## 2. What the audit numbers actually measure
 
-`docs/PROTOCOL_CLAIM_SEMANTIC_QUALITY_AUDIT.md` reports 22 critical findings for
-ANKOM and 17 for in-gel. Those numbers score
+`docs/PROTOCOL_CLAIM_SEMANTIC_QUALITY_AUDIT.md` reported 22 critical findings
+for ANKOM and 17 for in-gel. Both figures are superseded — see §2a for the
+current baseline. Those numbers score
 `provider_mode = deterministic_offline_fixture` — the offline stub, not a
 provider.
 
@@ -87,6 +88,60 @@ produce the same findings, because the request it receives cannot express the
 distinctions the findings are about. Reading these numbers as "the stub is
 weak, a real model will do better" is the specific misreading to avoid.
 
+## 2a. Current audit baseline, after repairing the scorer and the census
+
+Two measurement faults were fixed. Neither changed the pipeline; both changed
+what the numbers mean, so the earlier figures are void.
+
+**The scorer quoted corrupted evidence.** `scripts/prototype_claim_chunks.py`
+carried pypdf's private-use substitutes inside its own patterns (§1). Both are
+gone; no corrupted-glyph alternative was kept, because the current extractor
+never produces one and a mismatch between engines now fails closed before
+admission, so tolerating the artifact would only restore the blind spot.
+
+Claim counts return to their pre-swap totals, but on clean evidence:
+
+| Source | pypdf era | after extractor swap | after scorer repair | PUA in any canonical `source_text` |
+| --- | --- | --- | --- | --- |
+| ANKOM | 126 | 115 | **126** | **0** |
+| in-gel | 83 | 75 | **83** | **0** |
+
+The 83 is not a return to the earlier state. Then, 8 duration claims quoted
+`00<PUA>15<PUA>00`; now the same 8 quote `00:15:00`. Verified: zero claims on
+either source contain a private-use character, and 12 of in-gel's 16 duration
+claims quote a real `HH:MM:SS` literal (the rest come from `15min` / `3 h`
+forms).
+
+**The census could not see clock durations.** `HH:MM:SS` carries no unit word,
+so it did not fit the audit's number-plus-unit token shape. This was a silent
+blind spot of exactly the shape that hides regressions: 8 duration claims
+disappeared from in-gel while `value_tokens_represented` stayed at 46, because
+those values were never counted in the first place. `_CLOCK_DURATION` now
+matches the three-part form only — a two-part `H:MM` is ambiguous with a time of
+day, and a ratio such as `(50:49:1)` cannot match because its final group is a
+single digit.
+
+**New baseline. These are the figures to compare against from here.**
+
+| Source | value tokens (represented / detected) | critical findings |
+| --- | --- | --- |
+| ANKOM | **65 / 70** (was 54 / 59) | **32** (was 22) |
+| in-gel | **55 / 61** (was 46 / 51) | **26** (was 17) |
+
+| Code | ANKOM | in-gel |
+| --- | --- | --- |
+| `value_span_not_isolated` | 25 (was 15) | 20 (was 12) |
+| `value_not_represented` | 4 | 4 (was 3) |
+| `hazard_not_represented` | 2 | 1 |
+| `prerequisite_not_represented` | 1 | 1 |
+| `repeat_condition_not_represented` | 1 | 1 |
+
+The rise is concentrated in `value_span_not_isolated` and is the blind spot
+being removed, not a regression: 10 more ANKOM and 8 more in-gel steps are now
+known to hold two or more distinct durations inside a single evidence span. They
+always did; the census simply could not count them. Semantically clean chunks
+fall to 2/8 (ANKOM) and 1/3 (in-gel). Claims lost in assembly remain 0.
+
 ## 3. Segment boundary redesign
 
 ### Offset mapping against the layout comparator: not feasible
@@ -106,11 +161,26 @@ it useless for alignment. Measured, comparing the normalized non-whitespace
 
 The divergence is reading order of superscript footnote markers
 (`Ayotte1,EtienneLaliberté11` vs `Ayotte,EtienneLaliberté`) — the same
-characters, placed differently. A character-level alignment across that is not
-unique, so a deterministic offset map does not exist for 40% of ANKOM pages and
-78% of in-gel pages. Restricting boundaries to the pages where sequences do
-match would reintroduce exactly the silent-degradation problem, and 2/9 coverage
-makes it useless for in-gel anyway.
+characters, placed differently.
+
+**Correction to an earlier overstatement.** Full sequence identity is a
+*sufficient* condition for a trivial index-walk alignment, not a necessary one
+for alignment as such. An approximate alignment (a diff/LCS over the two
+character streams, anchoring on the long agreeing runs) would very likely
+succeed on most of these pages. The reason not to adopt it is therefore not
+impossibility:
+
+> An approximate alignment may well be achievable, but its output is not
+> uniquely determined where characters repeat, and a boundary that lands in a
+> different place depending on which of several equally good alignments the
+> algorithm picks cannot support fail-closed evidence identity. Segment ids are
+> hashed into every claim's evidence, so a non-deterministic boundary is a
+> non-deterministic identity. It is rejected on the determinism requirement,
+> not on feasibility.
+
+Restricting boundaries to the pages where sequences agree exactly (24/40 and
+2/9) would also reintroduce the silent-degradation problem it is meant to
+avoid, and 2/9 coverage makes it useless for in-gel regardless.
 
 **Conclusion: R2 alone, on the canonical pypdfium2 text.**
 
@@ -189,15 +259,29 @@ it.
   unit-bearing number cannot be declared `no_claim`. Units are SI/scientific
   notation, not document vocabulary, so this adds no label dictionary.
 
-  One implementation note: `_VALUE_UNITS` is a **lowercase** set built for a
-  different purpose (guarding numbered-line detection). Matched
-  case-sensitively it misses `758 mL` and `2 L`; matched case-insensitively it
-  conflates `mM` with `mm`. For this check the conflation is harmless, because
-  the check only needs a boolean — "does this segment carry a unit-bearing
-  number?" — and never the unit's identity. Case-insensitive matching is
-  therefore the right choice here, and raises forced segments from 32 to 41
-  (ANKOM) and 16 to 24 (in-gel). The semantic audit's category assignment still
-  needs case sensitivity; that is a different question with a different answer.
+  One implementation note, **corrected after measurement**: `_VALUE_UNITS` is a
+  lowercase set, and an earlier draft of this document claimed it therefore
+  "misses `758 mL` and `2 L`". That is wrong about production. Its only
+  consumer, `_numbered_action_matches` (`:691`), casefolds the candidate token
+  before the set lookup, so `mL`, `µL` and `L` are all recognized correctly.
+  Measured on both sources: **zero** false positives and **zero** false
+  negatives attributable to unit case — no line beginning with a unit-bearing
+  number is admitted as a step label. The lowercase-only form is correct for its
+  current use and is not a live defect.
+
+  The case question applies only to *reusing* the set in a new, case-sensitive
+  matcher. There, matching case-sensitively would miss `758 mL`, and matching
+  case-insensitively conflates `mM` with `mm`. For this cross-check the
+  conflation is harmless, because the check needs only a boolean — "does this
+  segment carry a unit-bearing number?" — never the unit's identity. So the new
+  check should casefold, exactly as the existing consumer does, which raises
+  forced segments from 32 to 41 (ANKOM) and 16 to 24 (in-gel). The semantic
+  audit's *category assignment* still needs case sensitivity; different
+  question, different answer.
+
+  Separately observed and not a case issue: `24 crucibles` is admitted as step
+  label `24`, because the guard only rejects a following *unit*, not a following
+  noun. Recorded, not addressed here.
 
 ### What this covers without any new rule
 
@@ -253,6 +337,64 @@ pressures the provider to invent one, which contradicts fail-closed over
 guessing. **Accounting is not claiming**: the obligation is to say something
 about every segment, not to assert something about every segment. Preserving
 that distinction is what keeps the obligation honest.
+
+## 5a. Segmentation-degradation detector — reinstated
+
+An earlier review deprecated this indicator on two grounds. Both are wrong, and
+both were checked against the current extractor.
+
+**"The extraction cross-check already covers it" — no.** The cross-check asks
+whether two engines *read* the page differently. A page with no sentence
+terminator is read identically by both, so it is reported `verified`. Both local
+sources verify as a whole, and the degraded pages below are inside them. The
+cross-check carries no signal about whether a page can be *segmented*.
+
+**"All-segment accounting already covers it" — no.** If a page collapses to one
+segment, the accounting obligation for that page is one segment, and a single
+claim discharges it. Everything else in the segment — including a hazard block —
+is absorbed exactly as it is today. The earlier reasoning conflated "every
+segment is accounted for" with "every content unit is accounted for"; when
+segmentation fails, those two diverge completely.
+
+Measured: pages that collapse to a single segment under R2 are ANKOM 7, 11, 14,
+17, 18, 40 and in-gel 1. in-gel p1 is 1232 characters across 24 lines reduced to
+one segment; ANKOM p17 is 305 characters across 12 lines. On each, one claim
+would satisfy the whole page.
+
+This matters beyond these two documents: R2 keys on end-of-line
+`[.!?]`, and end-of-line sentence punctuation is not universal. Korean protocol
+text, bullet lists and table-shaped pages routinely lack it, and on such a
+document R2 silently reverts to today's behaviour with no signal.
+
+### Retained definition (fail-closed gate)
+
+```
+segmentation_degraded(page) :=
+    line_count(page) >= 5  AND  segment_count(page) <= 1
+```
+
+Deterministic, vocabulary-free, and computable server-side before the provider
+request is built, so a page it flags can be refused or marked
+`analysis_incomplete` rather than silently under-segmented.
+
+Discriminative power on the current extractor:
+
+| Source | Flagged | Pages | What they are |
+| --- | --- | --- | --- |
+| ANKOM | **1 / 40** | p17 | equipment metadata list (`Oven NAME` / `BRAND` / `SKU`), no sentence punctuation |
+| in-gel | **1 / 9** | p1 | title / DOI / author cover page |
+
+Both are genuinely unsplittable, so the gate is neither always-on nor
+always-off.
+
+### Rejected variant, and why
+
+A stricter form — flag when any single segment absorbs 8 or more lines — fires
+on **15 / 40** ANKOM pages and 3 / 9 in-gel pages. Those are mostly legitimate
+equipment/metadata line lists. At 37% of a document it is not a gate; it is
+noise. It is retained only as an **advisory metric**, `absorbed_lines` = the
+maximum line count inside one segment (ANKOM max 21, in-gel max 23), reported by
+the audit and never used to block.
 
 ## 6. Cardinality, versioning, regressions, test helper
 

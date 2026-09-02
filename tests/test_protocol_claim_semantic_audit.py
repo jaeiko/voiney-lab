@@ -703,5 +703,114 @@ class SemanticAuditSoundnessTests(unittest.TestCase):
         self.assertEqual(subject.claim_schema_version, CLAIM_SCHEMA_VERSION)
 
 
+class ClockDurationCensusTests(unittest.TestCase):
+    """protocols.io renders step timers as HH:MM:SS, which carry no unit word."""
+
+    def test_clock_durations_are_counted_as_values(self) -> None:
+        tokens = detect_source_value_tokens(
+            "Incubate for 00:15:00 then dry for 03:00:00.",
+            source_page_number=1,
+        )
+        self.assertEqual(
+            {(token.text, token.category) for token in tokens},
+            {
+                ("00:15:00", ClaimCategory.DURATION),
+                ("03:00:00", ClaimCategory.DURATION),
+            },
+        )
+
+    def test_a_ratio_is_not_mistaken_for_a_timer(self) -> None:
+        """(50:49:1) is a solvent ratio; its last group is a single digit."""
+
+        tokens = detect_source_value_tokens(
+            "water:Acetonitrile:formic acid (50:49:1) at 37 degrees C",
+            source_page_number=1,
+        )
+        self.assertNotIn(
+            ClaimCategory.DURATION, {token.category for token in tokens}
+        )
+
+    def test_a_doi_url_yields_no_values(self) -> None:
+        self.assertEqual(
+            detect_source_value_tokens(
+                "protocols.io | https://dx.doi.org/10.17504/protocols.io.yinfude",
+                source_page_number=1,
+            ),
+            (),
+        )
+
+    def test_a_dropped_timer_is_now_visible_to_the_audit(self) -> None:
+        """The blind spot: 8 duration claims vanished while the count held."""
+
+        page = "1 Incubate the plate. 00:15:00"
+        self.assertTrue(
+            [
+                token
+                for token in detect_source_value_tokens(page, source_page_number=1)
+                if token.category is ClaimCategory.DURATION
+            ]
+        )
+
+
+class NoParserCorruptionInSourcesTests(unittest.TestCase):
+    """A hardcoded private-use glyph can only have come from a broken parser.
+
+    It matches text that no document contains, so any pattern carrying one is
+    scoring corrupted extraction rather than the source.  This is a guard
+    against new occurrences plus an explicit register of the ones that remain.
+    """
+
+    # Files permitted to contain a private-use glyph, and why.
+    KNOWN = {
+        # Deliberate: these assert that the cross-check census *detects*
+        # corruption, so they must embed a corrupted sample.
+        "tests/test_extraction_cross_check.py",
+        # Deliberate: asserts the browser normalizer repairs legacy text.
+        "tests/test_frontend.py",
+        # DEBT, pypdf-era corruption compensation, to be removed in STEP 3:
+        # three timer patterns accept pypdf's colon substitute alongside a real
+        # colon, and one presentation helper rewrites that glyph into a colon.
+        # With the current extractor they are dead paths at best; if corrupted
+        # text ever reappeared they would quietly normalize it and defeat the
+        # extraction cross-check.
+        "src/voice_workflow_agent/brain.py",
+        "src/voice_workflow_agent/multi_brain.py",
+        "src/voice_workflow_agent/curated_protocol.py",
+    }
+
+    def test_only_known_files_contain_private_use_glyphs(self) -> None:
+        found = set()
+        for root in (Path("src"), Path("scripts"), Path("tests")):
+            if not root.exists():
+                continue
+            for path in sorted(root.rglob("*.py")):
+                text = path.read_text(encoding="utf-8")
+                if any(0xE000 <= ord(character) <= 0xF8FF for character in text):
+                    found.add(path.as_posix())
+        self.assertEqual(
+            found - self.KNOWN,
+            set(),
+            "a new hardcoded private-use glyph appeared; it can only have come "
+            "from a broken extraction",
+        )
+        self.assertEqual(
+            self.KNOWN - found,
+            set(),
+            "a known private-use glyph is gone; remove it from KNOWN so the "
+            "register stays accurate",
+        )
+
+    def test_the_scoring_tools_are_clean(self) -> None:
+        """The scorer must model a faithful provider on canonical text."""
+
+        for path in sorted(Path("scripts").rglob("*.py")):
+            with self.subTest(path=path.as_posix()):
+                text = path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    [c for c in text if 0xE000 <= ord(c) <= 0xF8FF], []
+                )
+
+
+
 if __name__ == "__main__":
     unittest.main()
