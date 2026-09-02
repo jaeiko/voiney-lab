@@ -49,6 +49,7 @@ from voice_workflow_agent.experiment_protocol import (
     validate_protocol,
 )
 from voice_workflow_agent.experiment_protocol_pdf import (
+    TextVerification,
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
@@ -119,6 +120,11 @@ def pdf_identity() -> ProtocolPdfExtraction:
             ProtocolPdfPage(1, PAGE_ONE_TEXT, False),
             ProtocolPdfPage(2, PAGE_TWO_TEXT, False),
         ),
+        # This fixture stands in for a source whose text a second extraction
+        # engine confirmed.  The field defaults to comparator_unavailable, so a
+        # fixture that forgets to say this blocks readiness rather than
+        # silently passing.
+        text_verification=TextVerification.VERIFIED,
     )
 
 

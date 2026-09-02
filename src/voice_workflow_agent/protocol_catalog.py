@@ -86,7 +86,17 @@ def _checked_actor(
 
 
 _APPROVAL_EVENT = "protocol_revision_approved"
-_SAFETY_ACKNOWLEDGEMENT_EVENT = "protocol_safety_warnings_acknowledged"
+_GATE_ACKNOWLEDGEMENT_EVENT = "protocol_readiness_gate_acknowledged"
+# Gates a person may clear.  A gate is listed here only when "we could not
+# determine this" is the honest state and a human genuinely can resolve it.
+# source_text_cross_check_failed is deliberately absent: a proven
+# disagreement between extraction engines is not a judgement call.
+_ACKNOWLEDGEABLE_GATES = frozenset(
+    {
+        domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
+        domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
+    }
+)
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
 _ANALYSIS_READY_EVENT = "protocol_analysis_ready"
@@ -1181,7 +1191,7 @@ class ProtocolCatalog:
         )
         execution_ready = analysis is not None and (
             readiness == domain.ReadinessStatus.GUIDANCE_READY.value
-            or self._safety_gate_cleared(
+            or self._readiness_gates_cleared(
                 revision.experiment_id, revision.revision_number, analysis
             )
         )
@@ -2037,59 +2047,62 @@ class ProtocolCatalog:
         )
         return self.get_entry(protocol_id)
 
-    def _safety_warnings_acknowledged(
+    def _acknowledged_gates(
         self,
         protocol_id: str,
         protocol_revision_number: int,
         analysis_revision_number: int,
-    ) -> bool:
-        """True when a human acknowledged this exact analysis revision."""
+    ) -> frozenset[str]:
+        """Gate reason codes a human has cleared for this analysis revision."""
 
-        return any(
-            event.event_type == _SAFETY_ACKNOWLEDGEMENT_EVENT
+        return frozenset(
+            str(event.payload.get("reason_code"))
+            for event in self.store.list_events(protocol_id)
+            if event.event_type == _GATE_ACKNOWLEDGEMENT_EVENT
             and event.protocol_revision_number == protocol_revision_number
             and event.analysis_revision_number == analysis_revision_number
-            for event in self.store.list_events(protocol_id)
+            and isinstance(event.payload, dict)
         )
 
-    def _safety_gate_cleared(
+    def _readiness_gates_cleared(
         self,
         protocol_id: str,
         protocol_revision_number: int,
         analysis: Any,
     ) -> bool:
-        """True when the only thing blocking readiness is an acknowledged gate.
+        """True when every blocking reason is an acknowledged, clearable gate.
 
-        Every other blocking reason still blocks.  An acknowledgement discharges
-        the absent-safety-warning gate and nothing else.
+        Any reason outside ``_ACKNOWLEDGEABLE_GATES`` still blocks, and an
+        acknowledgement clears only the exact gate it names.
         """
 
-        if set(analysis.readiness.reason_codes) != {
-            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
-        }:
+        blocking = set(analysis.readiness.reason_codes)
+        if not blocking or not blocking <= _ACKNOWLEDGEABLE_GATES:
             return False
-        return self._safety_warnings_acknowledged(
+        return blocking <= self._acknowledged_gates(
             protocol_id,
             protocol_revision_number,
             analysis.analysis_revision_number,
         )
 
-    def acknowledge_absent_safety_warnings(
+    def acknowledge_readiness_gate(
         self,
         protocol_id: str,
         revision_id: str,
         *,
+        reason_code: str,
         actor_principal_id: str,
         actor_role: str,
         comment: str | None = None,
     ) -> ProtocolCatalogEntry:
-        """Record a human confirming this Protocol declares no safety warning.
+        """Record a human clearing one readiness gate on one analysis revision.
 
-        The absent-warning gate is deliberately not self-clearing: some
-        protocols genuinely carry no hazard, and only a person can tell that
-        apart from an extraction that dropped one.  The confirmation is written
-        to the append-only ledger with the actor and the store's ``recorded_at``
-        timestamp, so who cleared it and when stays auditable.
+        These gates are deliberately not self-clearing: some protocols
+        genuinely carry no safety warning, and some environments genuinely
+        cannot run a second extraction engine.  Only a person can tell either
+        apart from a failure.  The decision is written to the append-only
+        ledger with the actor, role, comment and the store's ``recorded_at``
+        timestamp, so who cleared what, and when, stays auditable.
         """
 
         protocol_revision_number, analysis_revision_number = _parse_revision_id(
@@ -2098,6 +2111,10 @@ class ProtocolCatalog:
         if analysis_revision_number is None:
             raise ProtocolApprovalError(
                 "A validated analysis revision is required for acknowledgement."
+            )
+        if reason_code not in _ACKNOWLEDGEABLE_GATES:
+            raise ProtocolApprovalError(
+                "This readiness reason cannot be cleared by acknowledgement."
             )
         _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
         revision = self.store.get_protocol_revision(
@@ -2108,28 +2125,26 @@ class ProtocolCatalog:
         analysis = self.store.get_analysis_revision(
             protocol_id, protocol_revision_number, analysis_revision_number
         )
-        reason_code = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS
-        if reason_code.value not in analysis.readiness.reason_codes:
+        if reason_code not in analysis.readiness.reason_codes:
             raise ProtocolApprovalError(
-                "This analysis revision has no absent-safety-warning gate."
+                "This analysis revision does not carry that readiness gate."
             )
         self.store.append_event(
             (
-                f"safety-ack-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}"
+                f"gate-ack-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}-{reason_code}"
             ),
             protocol_id,
             protocol_revision_number,
-            _SAFETY_ACKNOWLEDGEMENT_EVENT,
+            _GATE_ACKNOWLEDGEMENT_EVENT,
             {
                 "decision": "acknowledged",
-                "reason_code": reason_code.value,
-                "declared_safety_warning_count": 0,
+                "reason_code": reason_code,
                 "actor_principal_id": actor_principal_id,
                 "actor_role": actor_role,
-                "comment": (
-                    comment or "Reviewer confirmed no source safety warning."
-                )[:4000],
+                "comment": (comment or "Reviewer cleared the readiness gate.")[
+                    :4000
+                ],
             },
             analysis_revision_number=analysis_revision_number,
         )
@@ -2164,7 +2179,7 @@ class ProtocolCatalog:
             protocol_id, protocol_revision_number, analysis_revision_number
         )
         if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            if not self._safety_gate_cleared(
+            if not self._readiness_gates_cleared(
                 protocol_id, protocol_revision_number, analysis
             ):
                 raise ProtocolApprovalError(
@@ -2204,7 +2219,7 @@ class ProtocolCatalog:
                 "Protocol analysis is required before development activation."
             )
         if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            if not self._safety_gate_cleared(
+            if not self._readiness_gates_cleared(
                 protocol_id, revision.revision_number, analysis
             ):
                 raise ProtocolCatalogUnavailableError(

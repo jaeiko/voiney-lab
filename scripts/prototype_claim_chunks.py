@@ -41,6 +41,11 @@ from voice_workflow_agent.protocol_claim_analysis import (
 )
 
 
+_FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
+# is never clipped: a bounded extractor would otherwise drop the tail and
+# disagree with an unbounded one on synthetic input only.
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ANKOM = (
     ROOT
@@ -313,7 +318,7 @@ def _write_short_protocol(path: Path) -> None:
         }
     )
     font_ref = writer._add_object(font)
-    page = writer.add_blank_page(width=612, height=792)
+    page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
     stream = DecodedStreamObject()
     operations = ["BT /F1 9 Tf 36 740 Td"]
     for index, line in enumerate(lines):

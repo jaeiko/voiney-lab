@@ -64,6 +64,11 @@ from voice_workflow_agent.experiment_protocol_store import (
 )
 
 
+_FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
+# is never clipped: a bounded extractor would otherwise drop the tail and
+# disagree with an unbounded one on synthetic input only.
+
+
 PAGE_TEXT = "\n".join(
     (
         "Section preparation",
@@ -79,7 +84,7 @@ PAGE_TEXT = "\n".join(
 def write_pdf(path: Path, title: str = "Storage fixture") -> bytes:
     path.parent.mkdir(parents=True, exist_ok=True)
     writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
+    writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
     writer.add_metadata({"/Title": title})
     with path.open("wb") as stream:
         writer.write(stream)

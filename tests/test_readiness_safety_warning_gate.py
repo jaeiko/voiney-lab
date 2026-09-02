@@ -189,9 +189,10 @@ class SafetyAcknowledgementTests(unittest.TestCase):
 
     def test_acknowledgement_records_actor_and_time_then_unblocks(self) -> None:
         entry = self._register(declare_warning=False)
-        self.catalog.acknowledge_absent_safety_warnings(
+        self.catalog.acknowledge_readiness_gate(
             entry.protocol_id,
             entry.revision_id,
+            reason_code=_GATE.value,
             actor_principal_id="reviewer@example.org",
             actor_role="reviewer",
             comment="Source carries no safety warning.",
@@ -199,7 +200,7 @@ class SafetyAcknowledgementTests(unittest.TestCase):
         events = [
             event
             for event in self.store.list_events(entry.protocol_id)
-            if event.event_type == "protocol_safety_warnings_acknowledged"
+            if event.event_type == "protocol_readiness_gate_acknowledged"
         ]
         self.assertEqual(len(events), 1)
         recorded = events[0]
@@ -243,9 +244,10 @@ class SafetyAcknowledgementTests(unittest.TestCase):
             domain.P1_CAPABILITY_POLICY.profile_id,
         )
         entry = self.catalog.get_entry(protocol_id)
-        self.catalog.acknowledge_absent_safety_warnings(
+        self.catalog.acknowledge_readiness_gate(
             entry.protocol_id,
             entry.revision_id,
+            reason_code=_GATE.value,
             actor_principal_id="reviewer@example.org",
             actor_role="reviewer",
         )
@@ -255,9 +257,10 @@ class SafetyAcknowledgementTests(unittest.TestCase):
     def test_acknowledging_an_ungated_analysis_is_rejected(self) -> None:
         entry = self._register(declare_warning=True)
         with self.assertRaises(ProtocolApprovalError):
-            self.catalog.acknowledge_absent_safety_warnings(
+            self.catalog.acknowledge_readiness_gate(
                 entry.protocol_id,
                 entry.revision_id,
+                reason_code=_GATE.value,
                 actor_principal_id="reviewer@example.org",
                 actor_role="reviewer",
             )
@@ -271,9 +274,10 @@ class SafetyAcknowledgementTests(unittest.TestCase):
         ):
             with self.subTest(principal=principal, role=role):
                 with self.assertRaises(ProtocolApprovalError):
-                    self.catalog.acknowledge_absent_safety_warnings(
+                    self.catalog.acknowledge_readiness_gate(
                         entry.protocol_id,
                         entry.revision_id,
+                        reason_code=_GATE.value,
                         actor_principal_id=principal,
                         actor_role=role,
                     )

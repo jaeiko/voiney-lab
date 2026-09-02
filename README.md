@@ -445,6 +445,43 @@ instructions are withheld by default. Cross-origin `Location` responses are
 rejected before PATCH to prevent follow-up SSRF. See the
 [eLabFTW API v2 documentation](https://doc.elabftw.net/api/v2/).
 
+## PDF text extraction and its cross-check
+
+Two PDF libraries are used for different jobs, and the split is deliberate.
+
+| Component | Job | Licence |
+| --- | --- | --- |
+| `pypdf` | File structure, encryption detection, document metadata, parser-warning taxonomy. Its text extractor is **not** used. | BSD-3-Clause |
+| `pypdfium2` | Primary page-text extraction. | Binding: Apache-2.0 **or** BSD-3-Clause. Bundled PDFium engine: BSD-3-Clause. Bundled build dependencies (freetype, libjpeg-turbo, libpng, libtiff, zlib, icu, lcms, openjpeg, …) carry their own permissive licences, shipped in the wheel. |
+| `pdftotext` (poppler-utils, optional) | Independent comparison engine for the extraction cross-check. Invoked as a separate process, never linked. | GPL — separate process only |
+
+`pypdf`'s text extractor silently substituted private-use glyphs for real
+characters: `(50:49:1)` came back as `50491)` and `00:30:00`
+as `003000`. Exact-evidence validation cannot catch that, because
+the corrupted text is self-consistent and hashes cleanly, and its alphanumeric
+content is unchanged — `50491` either way.
+
+Because a silent substitution is invisible to every downstream check, extracted
+text is compared against an independent engine before it can become canonical
+evidence. The comparison is an order-independent character census that
+normalizes away line breaking, control padding, hyphen variants and Unicode
+noncharacters, and deliberately keeps private-use characters and structural
+punctuation. Three outcomes:
+
+- **verified** — the engines agree; the source may become canonical evidence.
+- **mismatch** — proven disagreement. Chunk admission refuses it outright, and
+  `source_text_cross_check_failed` blocks readiness. It cannot be acknowledged
+  away.
+- **comparator_unavailable** — no comparison engine on this host. This is
+  *unknown*, not *wrong*: admission still proceeds, but
+  `source_text_cross_check_unavailable` blocks execution readiness until a
+  named reviewer clears it through `acknowledge_readiness_gate`, which writes
+  the actor, role, comment and timestamp to the append-only ledger. An
+  environment without the comparator therefore never passes quietly.
+
+Installing the comparator (`apt-get install poppler-utils`, or the equivalent
+in the container image) is what keeps that gate from firing on every source.
+
 ## Setup
 
 Python 3.12 or newer is required.

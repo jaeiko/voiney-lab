@@ -32,7 +32,10 @@ from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSI
 
 
 CLAIM_SCHEMA_VERSION = 5
-EVIDENCE_SEGMENT_VERSION = 2
+# 3: step labels are at most three digits (a four-digit run is a citation
+# year, not a step), so block boundaries derived under version 2 are not
+# comparable with these.
+EVIDENCE_SEGMENT_VERSION = 3
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024
@@ -42,11 +45,15 @@ _MAX_PROVIDER_SEGMENT_CHARS = 4096
 MAX_PAGE_COVERAGE_RECORDS = 32
 MAX_EVIDENCE_ITEM_REFS_PER_PAGE = 256
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+# A source step label is at most three digits.  A four-digit run followed by a
+# period is a citation year ("Laliberté 2019. Measuring leaf carbon..."), not a
+# step, and admitting it made the completeness invariant demand an action claim
+# for the publication year.
 _NUMBERED_SOURCE_LINE = re.compile(
-    r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,3})(?:[.)])?[ \t]+(?P<next>\S+)"
+    r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,2})(?:[.)])?[ \t]+(?P<next>\S+)"
 )
 _INLINE_NUMBERED_SOURCE = re.compile(
-    r"(?<!\S)(?P<label>[1-9][0-9]{0,3})\.[ \t]+(?P<next>\S+)"
+    r"(?<!\S)(?P<label>[1-9][0-9]{0,2})\.[ \t]+(?P<next>\S+)"
 )
 _VALUE_UNITS = {
     "c",

@@ -363,6 +363,9 @@ _DOMAIN_ENUM_NAMES = (
     "ReadinessReasonCode",
     "BranchKind",
     "ConflictLevel",
+    # Carried inside ProtocolMetadata.pdf; records whether an independent
+    # extraction engine confirmed the page text this analysis rests on.
+    "TextVerification",
 )
 _ALLOWED_ENUMS = {
     value.__name__: value

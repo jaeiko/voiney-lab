@@ -2,6 +2,20 @@
 
 The SHA-256 value returned here identifies exact file bytes. It does not
 indicate that a Protocol is trusted, approved, official, or current.
+
+Two PDF libraries are used, deliberately, for different jobs:
+
+* ``pypdf`` owns file structure, encryption detection, document metadata and
+  the recoverable-warning taxonomy.  Its *text* extractor is not used.
+* ``pypdfium2`` owns page text.  pypdf's extractor silently substituted
+  private-use glyphs for real characters -- ``(50:49:1)`` came back as
+  ``\ue08150\ue09249\ue0921)`` and ``00:30:00`` as ``00\ue09230\ue09200`` --
+  which exact-evidence validation cannot catch, because the corrupted text is
+  self-consistent and hashes cleanly.
+
+Because a silent substitution is invisible to every downstream check, the
+extracted text is cross-checked against an independent engine before it is
+allowed to become canonical evidence.  See ``verify_page_text``.
 """
 
 from __future__ import annotations
@@ -9,11 +23,17 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import shutil
 import stat
+import subprocess
+import unicodedata
+from collections import Counter
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import BinaryIO
 
+import pypdfium2
 from pypdf import PdfReader
 from pypdf.errors import (
     FileNotDecryptedError,
@@ -71,6 +91,106 @@ class ProtocolPdfChangedError(ProtocolPdfError):
     code = "protocol_pdf_changed_during_extraction"
 
 
+COMPARATOR_COMMAND = "pdftotext"
+COMPARATOR_TIMEOUT_SECONDS = 60.0
+_COMPARATOR_MAX_OUTPUT_BYTES = 32 * 1024 * 1024
+_HYPHENS = "\u2010\u2011\u2012\u2013\u2014\u2212-"
+
+
+class TextVerification(str, Enum):
+    """Whether an independent engine confirmed the extracted page text."""
+
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
+    COMPARATOR_UNAVAILABLE = "comparator_unavailable"
+
+
+def canonical_text_census(text: str) -> Counter[str]:
+    """Engine-agnostic character census used to compare two extractions.
+
+    Two correct engines legitimately disagree about line breaking, reading
+    order of superscripts, control-character padding and end-of-line hyphens,
+    so all four are normalized away.  What survives is an order-independent
+    multiset of the characters that carry meaning.
+
+    Private-use characters (category ``Co``) are deliberately *kept*: they are
+    exactly the corruption this census exists to detect.  Comparing only
+    alphanumerics would not work -- a corrupted ``(50:49:1)`` and a correct one
+    both reduce to ``50491``.
+
+    Noncharacters and unassigned code points (category ``Cn``, e.g. U+FFFE) are
+    dropped for the same reason as control characters: one engine emits them as
+    padding where another emits nothing, and they can never be document
+    content.  ``Co`` is a different category and survives.
+    """
+
+    census: Counter[str] = Counter()
+    for character in unicodedata.normalize("NFKC", text):
+        if character.isspace():
+            continue
+        if unicodedata.category(character) in {"Cc", "Cf", "Cn"}:
+            continue
+        if character in _HYPHENS:
+            continue
+        census[character] += 1
+    return census
+
+
+def _comparator_pages(path: Path) -> tuple[str, ...] | None:
+    """Extract page text with an independent engine, or None if unavailable.
+
+    The comparator is a separate process, so it is invoked with an argument
+    vector (never a shell string), with the source path passed after ``--`` so
+    a filename can never be read as an option, under a wall-clock timeout, and
+    with its output size bounded.
+    """
+
+    executable = shutil.which(COMPARATOR_COMMAND)
+    if executable is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [executable, "-q", "--", str(path), "-"],
+            capture_output=True,
+            timeout=COMPARATOR_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    payload = completed.stdout[:_COMPARATOR_MAX_OUTPUT_BYTES]
+    if len(completed.stdout) > _COMPARATOR_MAX_OUTPUT_BYTES:
+        return None
+    text = payload.decode("utf-8", errors="replace")
+    pages = text.split("\f")
+    if pages and not pages[-1].strip():
+        pages = pages[:-1]
+    return tuple(pages)
+
+
+def verify_page_text(
+    path: Path,
+    pages: tuple[ProtocolPdfPage, ...],
+) -> tuple[TextVerification, tuple[int, ...]]:
+    """Cross-check primary page text against an independent engine."""
+
+    comparator = _comparator_pages(path)
+    if comparator is None:
+        return TextVerification.COMPARATOR_UNAVAILABLE, ()
+    if len(comparator) != len(pages):
+        return TextVerification.MISMATCH, ()
+    divergent = tuple(
+        page.source_page_number
+        for page, other in zip(pages, comparator)
+        if canonical_text_census(page.text) != canonical_text_census(other)
+    )
+    if divergent:
+        return TextVerification.MISMATCH, divergent
+    return TextVerification.VERIFIED, ()
+
+
 @dataclass(frozen=True)
 class ProtocolPdfMetadata:
     title: str | None
@@ -103,6 +223,12 @@ class ProtocolPdfExtraction:
     metadata: ProtocolPdfMetadata
     pages: tuple[ProtocolPdfPage, ...]
     warnings: tuple[str, ...] = ()
+    text_verification: TextVerification = TextVerification.COMPARATOR_UNAVAILABLE
+    divergent_page_numbers: tuple[int, ...] = ()
+
+    @property
+    def text_cross_checked(self) -> bool:
+        return self.text_verification is TextVerification.VERIFIED
 
     @property
     def all_pages_inspected(self) -> bool:
@@ -204,7 +330,40 @@ def _open_reader(stream: BinaryIO) -> PdfReader:
         ) from exc
 
 
-def _extract_pages(reader: PdfReader) -> tuple[ProtocolPdfPage, ...]:
+def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
+    """Read page text with the primary engine; None marks an unreadable page."""
+
+    texts: list[str | None] = [None] * page_count
+    document = None
+    try:
+        document = pypdfium2.PdfDocument(path)
+        available = min(page_count, len(document))
+        for page_index in range(available):
+            try:
+                page = document[page_index]
+                text = page.get_textpage().get_text_range()
+                # Line-ending convention only.  PDF has no line terminators of
+                # its own; pypdfium2 renders CRLF while every other engine and
+                # every stored excerpt uses LF.  No character of content is
+                # added, removed, or substituted here.
+                texts[page_index] = text.replace("\r\n", "\n").replace("\r", "\n")
+            except Exception:  # noqa: BLE001 - one bad page must not lose the rest
+                texts[page_index] = None
+    except Exception:  # noqa: BLE001 - fall through with every page unreadable
+        pass
+    finally:
+        if document is not None:
+            try:
+                document.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return texts
+
+
+def _extract_pages(
+    reader: PdfReader,
+    source_path: Path,
+) -> tuple[ProtocolPdfPage, ...]:
     try:
         page_count = len(reader.pages)
     except (FileNotDecryptedError, OSError, PdfReadError, PyPdfError, TypeError, ValueError) as exc:
@@ -213,20 +372,12 @@ def _extract_pages(reader: PdfReader) -> tuple[ProtocolPdfPage, ...]:
             "Protocol PDF page structure could not be opened.",
         ) from exc
 
+    primary = _pypdfium_page_texts(source_path, page_count)
     pages: list[ProtocolPdfPage] = []
     for page_index in range(page_count):
         warning = None
-        try:
-            text = reader.pages[page_index].extract_text() or ""
-        except (
-            FileNotDecryptedError,
-            KeyError,
-            OSError,
-            PdfReadError,
-            PyPdfError,
-            TypeError,
-            ValueError,
-        ):
+        text = primary[page_index]
+        if text is None:
             text = ""
             warning = "Page text could not be extracted; the page was retained as empty text."
         pages.append(
@@ -290,7 +441,7 @@ def extract_protocol_pdf(path: str | Path) -> ProtocolPdfExtraction:
                 stream.seek(0)
                 reader = _open_reader(stream)
                 metadata, metadata_warning = _read_metadata(reader)
-                pages = _extract_pages(reader)
+                pages = _extract_pages(reader, source_path)
                 final_stat = os.fstat(stream.fileno())
         except ProtocolPdfError:
             raise
@@ -328,6 +479,24 @@ def extract_protocol_pdf(path: str | Path) -> ProtocolPdfExtraction:
         if page.warning is not None and page.warning not in warnings
     )
 
+    verification, divergent = verify_page_text(source_path, pages)
+    # Recorded, never raised.  Extraction is also a read-time operation used to
+    # browse and review an already registered Protocol, and a failed
+    # cross-check is exactly when a person most needs to open the document.
+    # Admission and readiness act on this verdict; see plan_protocol_chunks
+    # and assess_readiness.
+    verification_warning = {
+        TextVerification.MISMATCH: (
+            "Extracted page text did not match an independent extraction engine."
+        ),
+        TextVerification.COMPARATOR_UNAVAILABLE: (
+            "Extracted page text was not cross-checked: no comparison engine "
+            "is available in this environment."
+        ),
+    }.get(verification)
+    if verification_warning and verification_warning not in warnings:
+        warnings.append(verification_warning)
+
     return ProtocolPdfExtraction(
         original_filename=source_path.name,
         byte_size=byte_size,
@@ -338,4 +507,6 @@ def extract_protocol_pdf(path: str | Path) -> ProtocolPdfExtraction:
         metadata=metadata,
         pages=pages,
         warnings=tuple(warnings),
+        text_verification=verification,
+        divergent_page_numbers=divergent,
     )

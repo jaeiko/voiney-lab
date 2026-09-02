@@ -15,6 +15,7 @@ from typing import TypeAlias
 from voice_workflow_agent.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
+    TextVerification,
 )
 
 
@@ -79,6 +80,8 @@ class FeatureCode(str, Enum):
 
 class ReadinessReasonCode(str, Enum):
     INVALID_PROTOCOL = "invalid_protocol"
+    SOURCE_TEXT_CROSS_CHECK_FAILED = "source_text_cross_check_failed"
+    SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE = "source_text_cross_check_unavailable"
     NO_EXECUTABLE_STEPS = "no_executable_steps"
     UNSUPPORTED_CONDITIONAL_BRANCH = "unsupported_conditional_branch"
     UNSUPPORTED_FIXED_RANGE_REPETITION = "unsupported_fixed_range_repetition"
@@ -1461,6 +1464,8 @@ _REASON_ORDER = {
     for index, code in enumerate(
         (
             ReadinessReasonCode.INVALID_PROTOCOL,
+            ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED,
+            ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE,
             ReadinessReasonCode.NO_EXECUTABLE_STEPS,
             ReadinessReasonCode.UNRESOLVED_AMBIGUITY,
             ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE,
@@ -1522,6 +1527,34 @@ def assess_readiness(
         )
 
     reasons: list[ReadinessReason] = []
+    # Evidence integrity comes first: if the extracted source text was not
+    # confirmed by an independent engine, nothing derived from it is
+    # trustworthy, however well formed it looks.
+    verification = getattr(
+        protocol.metadata.pdf, "text_verification", None
+    )
+    if verification is TextVerification.MISMATCH:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED,
+                message=(
+                    "Extracted source text disagreed with an independent "
+                    "extraction engine and cannot support execution."
+                ),
+            )
+        )
+    elif verification is TextVerification.COMPARATOR_UNAVAILABLE:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE,
+                message=(
+                    "Extracted source text was not cross-checked because no "
+                    "comparison engine was available. A reviewer must confirm "
+                    "this source before execution."
+                ),
+            )
+        )
+
     if not any(section.steps for section in protocol.sections):
         reasons.append(
             ReadinessReason(

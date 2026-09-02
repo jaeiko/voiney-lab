@@ -61,6 +61,11 @@ from voice_workflow_agent.protocol_claim_analysis import (
 )
 
 
+_FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
+# is never clipped: a bounded extractor would otherwise drop the tail and
+# disagree with an unbounded one on synthetic input only.
+
+
 def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
     writer = PdfWriter()
     font = DictionaryObject(
@@ -72,7 +77,7 @@ def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
     )
     font_ref = writer._add_object(font)
     for raw_text in page_texts:
-        page = writer.add_blank_page(width=612, height=792)
+        page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
         escaped = (
             raw_text.replace("\\", "\\\\")
             .replace("(", "\\(")

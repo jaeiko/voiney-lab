@@ -29,6 +29,11 @@ from voice_workflow_agent.experiment_protocol_pdf import (
 )
 
 
+_FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
+# is never clipped: a bounded extractor would otherwise drop the tail and
+# disagree with an unbounded one on synthetic input only.
+
+
 def _write_pdf(
     path: Path,
     page_texts: tuple[str | None, ...] = ("Page one marker",),
@@ -38,7 +43,7 @@ def _write_pdf(
 ) -> bytes:
     writer = PdfWriter()
     for page_text in page_texts:
-        page = writer.add_blank_page(width=612, height=792)
+        page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
         if page_text is None:
             continue
         font = DictionaryObject(

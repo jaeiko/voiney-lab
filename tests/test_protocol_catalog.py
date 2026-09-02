@@ -53,6 +53,11 @@ from voice_workflow_agent.protocol_ocr import (
 )
 
 
+_FIXTURE_PAGE_WIDTH = 4000  # wide enough that one unwrapped fixture line
+# is never clipped: a bounded extractor would otherwise drop the tail and
+# disagree with an unbounded one on synthetic input only.
+
+
 async def _dedicated_to_thread(function, *args, **kwargs):
     """Run a worker assertion without leaking asyncio's process-global pool."""
     result = []
@@ -86,7 +91,7 @@ from voice_workflow_agent.server import (
 
 def write_text_pdf(path: Path, text: str | None, *, title: str) -> bytes:
     writer = PdfWriter()
-    page = writer.add_blank_page(width=612, height=792)
+    page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
     if text is not None:
         font = DictionaryObject(
             {
