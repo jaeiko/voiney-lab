@@ -29,6 +29,7 @@ _COVERAGE = {
     "status": "complete",
     "evidence_item_ids": ["action-1"],
     "declined_segment_ids": ["seg-hazard-4", "seg-hazard-5"],
+    "unaccounted_segment_ids": [],
 }
 
 

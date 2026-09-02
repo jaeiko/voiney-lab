@@ -871,6 +871,162 @@ would freeze wording that is allowed to change, while a turn that silently
 produced no route is a real regression. Failures print to stderr and return 1.
 Tests cover each failure mode plus the real demo replay passing its own check.
 
+## 4n. Segment [0]: expressible, and missed anyway
+
+Page 30 segment `[0]` is
+`Note If not proceeding immediately with the acid lignin method, place the
+filter bags in the dessicator until the next step.` It lies outside both step
+blocks on that page and carries no unit-bearing value, so it is declinable and
+the unit cross-check does not reach it.
+
+Every claim category was tried against it, document-level and step-attached:
+
+| Category | Document-level | Step-attached |
+| --- | --- | --- |
+| material, equipment, prerequisite | **admitted** | rejected `top_level_claim_scope_invalid` |
+| quantity, concentration, temperature, duration, agitation_speed | **admitted** | rejected `action_claim_scope_conflict` |
+| warning_hazard, observation_checkpoint, repeat_condition | **admitted** | rejected `action_claim_scope_conflict` |
+| explicit_missing_ambiguous_value | **admitted** | rejected `action_claim_scope_conflict` |
+| action | rejected `action_structure_invalid` | rejected `action_structure_invalid` |
+
+**Twelve of thirteen categories admit it.** `prerequisite` is the semantically
+apt one - a conditional instruction to satisfy before continuing - and
+`repeat_condition` or `observation_checkpoint` are defensible. The
+step-attached rejections are correct: the segment is outside every step, so it
+cannot attach to step 50.
+
+**This is not defect #14.** It is not the same class as #12 (a hazard could not
+be expressed, because the substring rule blocked the step-attached form) or #13
+(a value outside every step had no target). Those were rule defects, where the
+contract made a true statement unsayable, and both were fixed structurally. Here
+the contract is willing and the statement is sayable twelve ways over. The
+failure is **model recall on the ledger**, established by construction rather
+than inferred.
+
+### The content type, and why the same type split into two defect classes
+
+The type is stable and worth naming: **unnumbered, value-free, execution-bearing
+prose.** A hazard block is one instance; a conditional storage instruction is
+another. What differs is not the content but which side failed.
+
+For a hazard, the rule was wrong and the model was right - it wanted to make the
+claim and could not, or could only in the form the safety gate ignores.
+Position-based enforcement fixed it, and the model has produced 6 of 6
+step-attached hazards on two consecutive calls.
+
+For segment `[0]`, the rule is right and the model omits it. Three consecutive
+calls, three misses, never once declined either. The server has no lever: the
+only deterministic handle on value-free prose is the unit cross-check, and by
+construction this text carries no unit. Forcing a claim would need to know what
+the prose means, which is the judgement we deliberately do not encode.
+
+So the type is one type, and it now has one solved half and one unsolved half.
+The unsolved half is a recall problem, not an expressibility problem.
+
+## 4o. `[0]` and `[1]` are different failures
+
+Reported separately because the causes and the fixes differ.
+
+**Segment `[1]`, `Lignin method in beakers` - variable, now resolved.** A section
+heading. STEP 6 cited it with a marker whose `section_id` was the prose title
+`Lignin method in beakers`, which `_STABLE_ID` refused. STEP 7 emitted no
+structure marker at all, so nothing cited it. STEP 8 emitted
+`m1` with `section_id='sec-lignin-beakers'` - a slug - and the heading is cited.
+The variability was the model probing an under-declared contract; declaring
+`_STABLE_ID` in the schema removed the ambiguity, and no `[1]`-specific handling
+was added or needed.
+
+**Segment `[0]` - consistent, unresolved.** Missed on all three calls. Nothing
+about the contract prevents it. No action is taken beyond making the failure
+non-fatal and precisely recorded, because the available levers are either
+ineffective (the unit cross-check cannot see it) or dishonest (a vocabulary that
+guesses which prose matters). It is recorded as an open model-recall limitation.
+
+## 4p. Judgement and bookkeeping: keep them together, change the failure mode
+
+Across three calls, semantic judgement was stable and bookkeeping was not:
+hazard identification produced 6 claims every time, and page 30 accounting went
+16, 15, 16 of 17. The proposal considered was to move the ledger to the server -
+have it auto-decline any substantive segment the model left out, keeping the
+unit cross-check so value-bearing segments still fail closed.
+
+**The case for.** The server can compute the complement set exactly, so asking
+the model to restate what the server already knows spends output budget on
+redundant work. A section heading or a page footer carries no execution meaning.
+Rejecting a chunk over one unlisted heading discards 6 correct hazard claims and
+11 correct action claims, which is a poor trade against the actual risk. And the
+two responsibilities demonstrably have different reliability profiles, which
+usually argues for different owners.
+
+**The case against, which decides it.** The carve-out does not cover the class
+that matters. "No unit-bearing value, therefore safe to auto-decline" is exactly
+the assumption that failed for hazards: `Danger, highly corrosive` carries no
+unit and is the most execution-critical text on the page. Under the proposal a
+hazard the model *missed* - as opposed to declined - would be auto-declined by
+the server and become invisible again, which is precisely the defect this line
+of work spent five steps making visible. Segment `[0]` proves it concretely: it
+carries execution content, carries no unit, and would be auto-declined. A
+detected failure would become an undetected one. The current behaviour is also
+not a false alarm; "this page's ledger is incomplete" is true and actionable.
+
+**Not adopted.** Bookkeeping stays with the model.
+
+**What changed instead.** An omission and a contradiction were being treated
+identically, and they are not the same fault. Claiming and declining the same
+segment, or declining one that states a value, is an active false statement and
+still fails closed. Leaving a segment out is a silence: the server now records it
+against the exact segment ids in a new server-derived
+`unaccounted_segment_ids`, forces that page to `analysis_incomplete`, and lets
+the chunk stand. The whole-document merge refuses `analysis_incomplete` exactly
+as before, so nothing reaches execution and silence still does not pass - but the
+6 correct hazard claims survive for review instead of being thrown away with the
+one missing heading. The behaviour is declared in the prompt, per the parity
+principle:
+
+> A segment you neither cite nor decline is recorded against you and forces that
+> page to analysis_incomplete, which stops the document being approved, so
+> account for it rather than leaving it out.
+
+## 4q. Third authorized call, three-way
+
+| | STEP 6 | STEP 7 | STEP 8 |
+| --- | --- | --- | --- |
+| latency | 14.2 s | 12.9 s | **21.2 s** |
+| response | 8,651 B | 6,627 B | **9,806 B** |
+| claims | 29 | 24 | **33** |
+| `warning_hazard` | 6 | 6 | **6** |
+| step-attached | 0 of 6 | 6 of 6 | **6 of 6** |
+| structure markers | 1 (prose `section_id`) | 0 | **1 (slug)** |
+| page 30 accounting | 16 of 17 | 15 of 17 | **16 of 17** |
+| segment `[0]` | missed | missed | **missed** |
+| canonical validation | rejected | rejected | **passed** |
+
+Canonical validation passes for the first time. Page 30 is
+`analysis_incomplete` with `unaccounted_segment_ids = [0]`, which is the new
+recorded-omission path doing its job: the chunk is admissible and reviewable,
+and the whole-document merge still refuses.
+
+Hazard attachment held at 6 of 6 across two consecutive calls, so the positional
+rule is not a one-off.
+
+### Obligations carried by this single request
+
+Kept as evidence for a later decision about splitting judgement across calls.
+Nothing is split now.
+
+| Obligation | Result | Satisfied |
+| --- | --- | --- |
+| numbered action extraction | 11 action claims | yes |
+| value extraction | 8 value claims | yes |
+| hazard judgement | 6 claims, 6 step-attached | yes |
+| declination list | 3 segments declined | yes |
+| **exhaustive accounting** | **page 30 short by segment `[0]`** | **no** |
+
+Four of five obligations were met. The one failure is the bookkeeping one, on
+the same segment, for the third time - consistent with the reliability split
+above, and the reason the record now names which obligation fell short rather
+than reporting a single pass or fail.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

@@ -127,6 +127,59 @@ def hazard_report(scoped, chunk, analysis) -> dict[str, object]:
     coverage = {
         item.source_page_number: item for item in analysis.page_coverage
     }
+    # Which obligations this one request carried, and where it fell short.
+    # Kept for deciding later whether judgement and bookkeeping belong in
+    # separate calls; nothing is split now.
+    obligations = {
+        "numbered_action": {
+            "claims": sum(
+                1
+                for claim in analysis.claims
+                if claim.category is ClaimCategory.ACTION
+            ),
+            "satisfied": True,
+        },
+        "value_extraction": {
+            "claims": sum(
+                1
+                for claim in analysis.claims
+                if claim.category
+                in {
+                    ClaimCategory.QUANTITY,
+                    ClaimCategory.CONCENTRATION,
+                    ClaimCategory.TEMPERATURE,
+                    ClaimCategory.DURATION,
+                    ClaimCategory.AGITATION_SPEED,
+                }
+            ),
+            "satisfied": True,
+        },
+        "hazard_judgement": {
+            "claims": len(hazards),
+            "step_attached": sum(
+                1 for claim in hazards if claim.target_claim_id is not None
+            ),
+            "satisfied": bool(hazards),
+        },
+        "exhaustive_accounting": {
+            "pages_short": sorted(
+                item.source_page_number
+                for item in analysis.page_coverage
+                if item.unaccounted_segment_ids
+            ),
+            "satisfied": not any(
+                item.unaccounted_segment_ids
+                for item in analysis.page_coverage
+            ),
+        },
+        "declination_list": {
+            "declined": sum(
+                len(item.declined_segment_ids)
+                for item in analysis.page_coverage
+            ),
+            "satisfied": True,
+        },
+    }
     hazard_coverage = coverage.get(HAZARD_PAGE)
     declined = (
         {index_of[s] for s in hazard_coverage.declined_segment_ids if s in index_of}
@@ -134,6 +187,7 @@ def hazard_report(scoped, chunk, analysis) -> dict[str, object]:
         else set()
     )
     return {
+        "obligations": obligations,
         "warning_hazard_claim_count": len(hazards),
         "hazard_block_segments": {
             index: {
@@ -145,6 +199,16 @@ def hazard_report(scoped, chunk, analysis) -> dict[str, object]:
         "page_30_status": (
             hazard_coverage.status.value if hazard_coverage is not None else None
         ),
+        "page_30_unaccounted": (
+            sorted(
+                index_of[s]
+                for s in hazard_coverage.unaccounted_segment_ids
+                if s in index_of
+            )
+            if hazard_coverage is not None
+            else []
+        ),
+        "segment_0_claimed_by": cited.get(0, []),
         "claims_total": len(analysis.claims),
         "claims_by_category": {
             category.value: sum(

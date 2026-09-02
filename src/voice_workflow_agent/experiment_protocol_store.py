@@ -508,6 +508,7 @@ _PAGE_COVERAGE_KEYS = frozenset(
         "status",
         "evidence_item_ids",
         "declined_segment_ids",
+        "unaccounted_segment_ids",
     }
 )
 
@@ -525,7 +526,11 @@ def _checked_page_coverage(item: object) -> dict[str, object]:
         raise ProtocolSerializationError(
             "Stored Protocol page coverage has an invalid page number."
         )
-    for key in ("evidence_item_ids", "declined_segment_ids"):
+    for key in (
+        "evidence_item_ids",
+        "declined_segment_ids",
+        "unaccounted_segment_ids",
+    ):
         value = item[key]
         if not isinstance(value, list) or any(
             not isinstance(entry, str) for entry in value

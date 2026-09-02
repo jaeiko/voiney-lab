@@ -14,6 +14,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
 )
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
 from voice_workflow_agent.protocol_claim_analysis import (
+    PageCoverageStatus,
     CLAIM_SCHEMA_VERSION,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
@@ -134,15 +135,42 @@ class SegmentAccountingTests(unittest.TestCase):
             any("Danger, highly corrosive." in text for text in joined)
         )
 
-    def test_an_unaccounted_segment_is_refused(self) -> None:
-        """The silent third option is gone: neither claimed nor declined."""
+    def test_an_unaccounted_segment_forces_the_page_incomplete(self) -> None:
+        """Superseded expectation: this used to discard the whole chunk.
+
+        An omission is a silence, not a false statement. It is now recorded
+        against the exact segments and forces the page to analysis_incomplete,
+        which blocks the whole-document merge just as firmly, while keeping the
+        claims that were correct available for review. The silent third option
+        is still gone: the page cannot be reported complete.
+        """
 
         substantive = sorted(self._substantive())
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as caught:
-            self._parse(self._response(claimed=[substantive[0]], declined=[]))
-        self.assertEqual(
-            caught.exception.diagnostic.reason_code, "segment_unaccounted"
+        analysis = self._parse(
+            self._response(claimed=[substantive[0]], declined=[])
         )
+        coverage = analysis.page_coverage[0]
+        self.assertEqual(coverage.status, PageCoverageStatus.ANALYSIS_INCOMPLETE)
+        self.assertEqual(
+            len(coverage.unaccounted_segment_ids), len(substantive) - 1
+        )
+        self.assertEqual(coverage.declined_segment_ids, ())
+
+    def test_a_fully_accounted_page_records_no_omission(self) -> None:
+        substantive = sorted(self._substantive())
+        action = substantive[0]
+        values = [
+            i
+            for i in substantive
+            if i != action and segment_carries_unit_bearing_value(self.texts[i])
+        ]
+        rest = [i for i in substantive if i != action and i not in values]
+        analysis = self._parse(
+            self._response(claimed=[action], declined=rest, values=values)
+        )
+        coverage = analysis.page_coverage[0]
+        self.assertEqual(coverage.unaccounted_segment_ids, ())
+        self.assertEqual(coverage.status, PageCoverageStatus.COMPLETE)
 
     def test_declining_the_hazard_is_accepted_and_recorded(self) -> None:
         """Accounting is not claiming; declining is a decision on the record."""

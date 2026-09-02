@@ -13,7 +13,7 @@ import json
 import re
 from base64 import urlsafe_b64encode
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
@@ -298,6 +298,7 @@ class ProtocolPageClaimCoverage:
     status: PageCoverageStatus
     evidence_item_ids: tuple[str, ...]
     declined_segment_ids: tuple[str, ...] = ()
+    unaccounted_segment_ids: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -308,6 +309,7 @@ class ProtocolPageClaimCoverage:
             "status": self.status.value,
             "evidence_item_ids": list(self.evidence_item_ids),
             "declined_segment_ids": list(self.declined_segment_ids),
+            "unaccounted_segment_ids": list(self.unaccounted_segment_ids),
         }
 
 
@@ -715,8 +717,11 @@ punctuation or whitespace needs no entry. Before returning, count for each core
 page: the segments you cited plus the segments you declined must equal the
 segments on that page that contain at least one letter or digit. If the count is
 short you have left one out; decline it if it holds no claim, rather than
-omitting it. If you cannot account for a page this way, mark that page
-analysis_incomplete instead of guessing. Return one JSON object only.
+omitting it. A segment you neither cite nor decline is recorded against you and
+forces that page to analysis_incomplete, which stops the document being
+approved, so account for it rather than leaving it out. If you cannot account
+for a page this way, mark that page analysis_incomplete instead of guessing.
+Return one JSON object only.
 """
 
 
@@ -1813,14 +1818,13 @@ def parse_chunk_claim_response(
         structure=tuple(markers),
         claims=tuple(claims),
     )
-    validate_chunk_claim_analysis(
+    return validate_chunk_claim_analysis(
         analysis,
         extraction,
         source_revision=source_revision,
         chunk_id=chunk_id,
         core_page_refs=core_page_refs,
     )
-    return analysis
 
 
 # The second lookbehind rejects a number that continues a hyphenated code:
@@ -1868,7 +1872,7 @@ def _validate_page_segment_accounting(
     page_number: int,
     coverage: ProtocolPageClaimCoverage,
     cited_segment_ids: frozenset[str],
-) -> None:
+) -> tuple[str, ...]:
     """Every substantive segment is claimed or explicitly declined, once.
 
     Accounting is not claiming.  The obligation is to say something about each
@@ -1882,7 +1886,7 @@ def _validate_page_segment_accounting(
         # also promise per-segment accounting.  It stays exempt here and blocks
         # the whole-document merge instead, which is a visible refusal rather
         # than the page-wide silence it replaces.
-        return
+        return ()
     segments = generate_page_evidence_segments(
         extraction,
         source_revision=source_revision,
@@ -1918,9 +1922,6 @@ def _validate_page_segment_accounting(
     overlap = declined & cited_segment_ids
     if overlap:
         fail("segment_claimed_and_declined", len(overlap))
-    unaccounted = set(substantive) - cited_segment_ids - declined
-    if unaccounted:
-        fail("segment_unaccounted", len(unaccounted))
     forced = [
         segment_id
         for segment_id in declined
@@ -1929,6 +1930,16 @@ def _validate_page_segment_accounting(
     ]
     if forced:
         fail("declined_segment_states_a_value", len(forced))
+    # An omission is not the same fault as a contradiction. Claiming and
+    # declining the same segment, or declining one that states a value, is an
+    # active false statement and still fails closed here. Leaving a segment out
+    # is a silence: it is recorded against the exact segments and forces the
+    # page to analysis_incomplete, which blocks the whole-document merge just
+    # as firmly, while keeping the claims that were correct available for
+    # review instead of discarding the chunk.
+    return tuple(
+        sorted(set(substantive) - cited_segment_ids - declined)
+    )
 
 
 def validate_chunk_claim_analysis(
@@ -1938,8 +1949,14 @@ def validate_chunk_claim_analysis(
     source_revision: str,
     chunk_id: str,
     core_page_refs: tuple[int, ...],
-) -> None:
-    """Revalidate a decoded DTO without trusting its construction path."""
+) -> ProtocolChunkClaimAnalysis:
+    """Revalidate a decoded DTO without trusting its construction path.
+
+    Returns the analysis, with any page whose ledger the provider left
+    incomplete marked ``analysis_incomplete`` and the omitted segments recorded
+    against it. Callers that only want the fail-closed behaviour may ignore the
+    return value; callers that store the analysis must use it.
+    """
 
     if (
         analysis.claim_schema_version != CLAIM_SCHEMA_VERSION
@@ -2143,6 +2160,7 @@ def validate_chunk_claim_analysis(
                 page_coverage_count=len(analysis.page_coverage),
             ),
         )
+    unaccounted: dict[int, tuple[str, ...]] = {}
     for page_number in core_page_refs:
         coverage = coverage_by_page[page_number]
         numbered_labels = _numbered_step_labels(
@@ -2215,7 +2233,7 @@ def validate_chunk_claim_analysis(
                     source_hash=extraction.sha256,
                 ),
             )
-        _validate_page_segment_accounting(
+        unaccounted[page_number] = _validate_page_segment_accounting(
             extraction,
             source_revision=source_revision,
             chunk_id=chunk_id,
@@ -2228,6 +2246,21 @@ def validate_chunk_claim_analysis(
                 for segment_id in item.evidence.evidence_segment_ids
             ),
         )
+    if not any(unaccounted.values()):
+        return analysis
+    return replace(
+        analysis,
+        page_coverage=tuple(
+            replace(
+                item,
+                status=PageCoverageStatus.ANALYSIS_INCOMPLETE,
+                unaccounted_segment_ids=unaccounted[item.source_page_number],
+            )
+            if unaccounted.get(item.source_page_number)
+            else item
+            for item in analysis.page_coverage
+        ),
+    )
 
 
 def analyze_chunk_claims(
