@@ -518,6 +518,120 @@ every document at its front matter, and forcing a claim would pressure
 invention. Recording that a page's accounting is weak is the strongest
 defensible position that does not do either.
 
+## 4e. A place for content outside the numbered steps
+
+STEP 4 left both documents refused at merge: 15 segments stated an execution
+value, could not be declined, and could not be claimed either, because a
+quantity or duration must target an action, material or equipment claim and a
+value outside every numbered step has none.
+
+### The change, and why it is not a new document structure
+
+No new claim category and no new response field. A value claim may carry
+`target_claim_id = null` **if and only if** its evidence lies outside every
+numbered step block on its page. `_outside_every_step_block` decides that from
+the immutable page text, so a provider cannot declare a claim document-level to
+escape a target it actually needed — the one test that matters here is that the
+same claim placed inside a step block is rejected with `claim_target_invalid`.
+A document-level claim must also carry no section, step or label.
+
+`CLAIM_SCHEMA_VERSION` **stays 6**: `target_claim_id` was already nullable, so
+the response shape is unchanged. `EVIDENCE_SEGMENT_VERSION` stays 4; boundaries
+did not move.
+
+Assembly maps these to `BeforeStartPrerequisite` with a `condition-` prefix,
+reusing an existing domain type rather than adding one. That matters because a
+claim reaching no domain object is invisible to a reviewer and to execution;
+`claims_lost_in_assembly` is 0 on both documents, so they do surface.
+
+### Result
+
+| | ANKOM | in-gel |
+| --- | --- | --- |
+| segments stating a value, unclaimed and undeclinable | 10 → **0** | 5 → **0** |
+| whole-document merge | rejected → **accepted** | rejected → **accepted** |
+| claims | 126 → 132 | 83 → 86 |
+
+All 15 are expressible. Each of the six named cases, verified individually:
+
+| Case | Now expressed as |
+| --- | --- |
+| ANKOM p3 `72 h at 65°C` | `temperature-outside-p3-0`, document-level |
+| ANKOM p10 `20 g` | `quantity-outside-p10-1`, document-level |
+| ANKOM p13 `4.0 mL` | `quantity-outside-p13-0`, step-attached |
+| in-gel p5 `800 rpm 37°C 00:15:00` | step-attached claims on that step |
+| in-gel p8 `16h` | step-attached claims on that step |
+| in-gel p9 `10uL` | `temperature-outside-p9-0`, document-level |
+
+One imprecision worth recording rather than hiding: the offline model picks the
+first parameter pattern that matches anywhere in the segment, so in-gel p9's
+volume was labelled `temperature`. That is a scorer flaw, not a rule flaw, and
+the audit's own category checks are the place it should surface.
+
+### A false positive the unit cross-check had to lose
+
+`Catalog #I1149-5G` matched as "5 grams" and `224-1S SKU` as "1 second", so six
+catalog lines were undeclinable for no reason. The cross-check now rejects a
+number that continues a hyphenated code. This is about the shape of a code, not
+about any word. Cost: `2-mm screen` is no longer treated as a standalone
+measurement, which is acceptable for a hyphenated adjectival form.
+
+## 4f. Hazard claims: the rule no longer blocks them, the model still cannot make them
+
+**Expressible: yes, proven.** On ANKOM p30, a `warning_hazard` claim citing
+only its own segment is admitted in both forms, for all four hazard segments:
+
+```
+seg[4] 'Safety information Danger, highly corrosive.'   step-attached ADMITTED  document-level ADMITTED
+seg[5] 'Exothermic reaction ... ALWAYS ADD ACID TO WATER'                ADMITTED                ADMITTED
+seg[6] 'Wear gloves, labcoat, safety glasses.'                           ADMITTED                ADMITTED
+seg[7] 'Work under the chemical hood.'                                   ADMITTED                ADMITTED
+```
+
+Before `6977a70` the step-attached form was impossible: a claim attached to an
+action had to be a substring of that action's excerpt, so a hazard could only
+be admitted by making the action quote the whole step. That rule limit is gone.
+
+**Produced: no.** The offline model emits zero hazard claims, on any page.
+
+**Which limit is it now?** A model limit, not a rule limit. Recognising that
+"Danger, highly corrosive" is a hazard while "Start stirring (slow speed)" is
+not is a semantic judgement. Nothing deterministic and vocabulary-free can make
+it, and a hazard word list is excluded by construction — it was removed from
+this codebase in `a1774b0` for inverting its own purpose.
+
+**Consequence for the safety gate, stated plainly.** Because no protocol yet
+produces a hazard claim, `NO_DECLARED_SAFETY_WARNINGS` fires on every document.
+That is the alarm-fatigue failure argued against when a prerequisite gate was
+rejected: a gate that always fires makes its acknowledgement a formality, and a
+formality is worth nothing on the day it matters.
+
+Avoiding it needs a provider that performs the classification — the gate's
+premise is that *some* protocols genuinely declare no hazard, and that premise
+is currently untested because *no* protocol declares one. Establishing whether
+a real provider clears the gate on ANKOM p30 requires an authorized provider
+call, which has not been made. Until then the gate is honest but
+undiscriminating, and that should be understood as the current state rather
+than as a working control.
+
+## 4g. Declinations are recorded but not visible
+
+ANKOM p30 segments `[4]`–`[7]`, including `ALWAYS ADD ACID TO WATER`, are now
+explicitly declined. Checked where that reaches:
+
+| Surface | Carries the declination? |
+| --- | --- |
+| `ProtocolChunkClaimAnalysis.page_coverage[].declined_segment_ids` | **yes** |
+| Stored analysis revision | **no** — `page_coverage` is not persisted; the store keeps the assembled domain protocol and readiness |
+| `review()` payload | **no** — no `page_coverage`, no declination key |
+| Reviewer screen | **no** |
+
+So for a reviewer, "recorded" is currently indistinguishable from "still
+invisible". The declination exists only inside the chunk analysis during
+processing. Persisting `page_coverage` with the analysis revision and surfacing
+it in `review()` is the missing link; UI and persistence work was out of this
+step's scope and is not done.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

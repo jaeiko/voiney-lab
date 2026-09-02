@@ -1784,8 +1784,12 @@ def parse_chunk_claim_response(
     return analysis
 
 
+# The second lookbehind rejects a number that continues a hyphenated code:
+# "Catalog #I1149-5G" states a pack size, not a measurement the protocol asks
+# an operator to produce, and "224-1S" states nothing at all.  This is about
+# the shape of a code, not about any word.
 _UNIT_BEARING_VALUE = re.compile(
-    r"(?<![A-Za-z0-9])[0-9]+(?:[.,][0-9]+)?\s*(?:"
+    r"(?<![A-Za-z0-9])(?<![A-Za-z0-9]-)[0-9]+(?:[.,][0-9]+)?\s*(?:"
     + "|".join(
         sorted((re.escape(unit) for unit in _VALUE_UNITS), key=len, reverse=True)
     )
@@ -2245,6 +2249,40 @@ def _source_sort_key(
     )
 
 
+def _outside_every_step_block(
+    extraction: ProtocolPdfExtraction,
+    source_revision: str,
+    claim: ProtocolClaim,
+    offsets_by_page: dict[int, dict[str, tuple[int, int]]],
+) -> bool:
+    """True when a claim's evidence lies in no numbered step's territory.
+
+    Such content is a document-level statement, not a qualifier of any step:
+    a drying temperature in a before-start block, a reagent mass in a
+    preparation note, a hazard that governs the whole procedure.  Deciding this
+    is the server's job -- the ranges come from the immutable page text -- so a
+    provider cannot declare a claim document-level to escape needing a target.
+    """
+
+    page_number = claim.evidence.source_page_number
+    offsets = offsets_by_page.get(page_number)
+    if offsets is None:
+        offsets = page_segment_offsets(
+            extraction,
+            source_revision=source_revision,
+            page_number=page_number,
+        )
+        offsets_by_page[page_number] = offsets
+    span = _claim_page_span(claim.evidence, offsets)
+    if span is None:
+        return False
+    page_text = extraction.pages[page_number - 1].text
+    return all(
+        span[1] <= start or end <= span[0]
+        for start, end in step_block_ranges(page_text)
+    )
+
+
 def _within_target_step_block(
     extraction: ProtocolPdfExtraction,
     source_revision: str,
@@ -2396,8 +2434,32 @@ def validate_whole_protocol_claims(
             else None
         )
         allowed = parameter_targets.get(claim.category)
+        document_level = target is None and _outside_every_step_block(
+            extraction,
+            merged.source_revision,
+            claim,
+            offsets_by_page,
+        )
         if allowed is not None:
-            if target is None or target.category not in allowed:
+            if target is None:
+                # A value stated outside every numbered step has nothing in the
+                # step graph to qualify.  It is admitted without a target only
+                # because the server can see that, and it must then carry no
+                # step scoping either.
+                if not document_level:
+                    raise ProtocolClaimConsistencyError("claim_target_invalid")
+                if any(
+                    value is not None
+                    for value in (
+                        claim.section_id,
+                        claim.step_id,
+                        claim.source_label,
+                    )
+                ):
+                    raise ProtocolClaimConsistencyError(
+                        "document_level_claim_scope_invalid"
+                    )
+            elif target.category not in allowed:
                 raise ProtocolClaimConsistencyError("claim_target_invalid")
         elif claim.category is ClaimCategory.WARNING_HAZARD:
             if target is not None and target.category is not ClaimCategory.ACTION:
@@ -2429,7 +2491,7 @@ def validate_whole_protocol_claims(
                 for value in (claim.section_id, claim.step_id, claim.source_label)
             ) or claim.source_text not in target.evidence.source_excerpt:
                 raise ProtocolClaimConsistencyError("resource_claim_scope_conflict")
-        elif claim.category not in {
+        elif not document_level and claim.category not in {
             ClaimCategory.WARNING_HAZARD,
             ClaimCategory.EXPLICIT_MISSING_AMBIGUOUS_VALUE,
         }:
@@ -2490,6 +2552,7 @@ def assemble_experiment_protocol(
     constructs: list[domain.WorkflowConstruct] = []
     global_missing: list[ProtocolClaim] = []
     global_warnings: list[ProtocolClaim] = []
+    global_conditions: list[ProtocolClaim] = []
     for claim in merged.claims:
         if claim.category is ClaimCategory.MATERIAL:
             related = children.get(claim.claim_id, ())
@@ -2540,6 +2603,20 @@ def assemble_experiment_protocol(
             and claim.target_claim_id is None
         ):
             global_missing.append(claim)
+        elif claim.target_claim_id is None:
+            # A value or condition stated outside every numbered step. It is a
+            # before-start condition rather than a step qualifier, and it must
+            # surface somewhere: a claim that reaches no domain object is
+            # invisible to a reviewer and to execution.
+            global_conditions.append(claim)
+    prerequisites.extend(
+        domain.BeforeStartPrerequisite(
+            prerequisite_id=f"condition-{claim.claim_id}",
+            source_text=claim.source_text,
+            evidence=_domain_evidence(claim.evidence),
+        )
+        for claim in global_conditions
+    )
     prerequisites.extend(
         domain.BeforeStartPrerequisite(
             prerequisite_id=f"hazard-{claim.claim_id}",

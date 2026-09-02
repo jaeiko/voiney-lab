@@ -36,6 +36,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     _SENTENCE_LINE_END,
+    step_block_ranges,
     segment_carries_unit_bearing_value,
     CLAIM_SCHEMA_VERSION,
     claim_response_schema_metrics,
@@ -207,6 +208,7 @@ class ExactNumberedStepClaimModel:
             page_number = page["source_page_number"]
             page_text = "".join(str(segment[1]) for segment in page["segments"])
             item_ids: list[str] = []
+            owning_action: dict[int, tuple[str, str]] = {}
             if page_number == self.title_page:
                 title_evidence = self._evidence(page, self.title)
                 structure.extend(
@@ -250,6 +252,10 @@ class ExactNumberedStepClaimModel:
                     ):
                         continue
                     action_id = f"action-p{page_number}-{action_index}"
+                    owning_action[excerpt_offset] = (
+                        action_id,
+                        f"step-{label}",
+                    )
                     step_id = f"step-{label}"
                     # The action quotes its own instruction, not the whole step
                     # block.  Everything after the first line-ending sentence --
@@ -352,25 +358,75 @@ class ExactNumberedStepClaimModel:
                 if str(segment[0]) not in cited_handles
                 and re.search(r"[A-Za-z0-9]", str(segment[1]))
             ]
-            # A value stated outside any numbered step has nowhere to attach in
-            # the claim model: a quantity or duration must target an action,
-            # material or equipment claim, and there is none here.  This model
-            # therefore cannot account for such a page, and says so.
-            unaccountable = [
-                handle
-                for handle in declined
-                if segment_carries_unit_bearing_value(
-                    next(
-                        str(segment[1])
-                        for segment in page["segments"]
-                        if str(segment[0]) == handle
-                    )
+            # A value the model would otherwise decline still has to be
+            # claimed.  Where it sits decides how: inside a numbered step's
+            # territory it qualifies that step's action, and outside every step
+            # it is a document-level condition with no target.  The server
+            # decides which of the two is true, so this cannot be used to dodge
+            # a target that was required.
+            offsets: dict[str, tuple[int, int]] = {}
+            cursor = 0
+            for segment in page["segments"]:
+                length = len(str(segment[1]))
+                offsets[str(segment[0])] = (cursor, cursor + length)
+                cursor += length
+            blocks = step_block_ranges(page_text)
+            handle_text = {
+                str(segment[0]): str(segment[1])
+                for segment in page["segments"]
+            }
+            for order, handle in enumerate(list(declined)):
+                text = handle_text[handle]
+                if not segment_carries_unit_bearing_value(text):
+                    continue
+                category = next(
+                    (
+                        name
+                        for name, pattern in _PARAMETERS
+                        if pattern.search(text)
+                    ),
+                    None,
                 )
-            ]
-            if unaccountable:
-                status = "analysis_incomplete"
-            else:
-                status = "complete" if item_ids else "no_relevant_claims"
+                if category is None:
+                    continue
+                start, stop = offsets[handle]
+                enclosing = next(
+                    (
+                        (block_start, block_stop)
+                        for block_start, block_stop in blocks
+                        if block_start <= start and stop <= block_stop
+                    ),
+                    None,
+                )
+                if enclosing is None:
+                    target_id = None
+                    section_id = None
+                    step_id = None
+                elif enclosing[0] in owning_action:
+                    target_id, step_id = owning_action[enclosing[0]]
+                    section_id = "section-protocol-steps"
+                else:
+                    continue
+                claim_id = f"{category}-outside-p{page_number}-{order}"
+                claims.append(
+                    {
+                        "claim_id": claim_id,
+                        "category": category,
+                        "source_order": 900 + order,
+                        "section_id": section_id,
+                        "step_id": step_id,
+                        "source_label": None,
+                        "target_claim_id": target_id,
+                        "required_for_execution": False,
+                        "evidence": {
+                            "source_page_number": page_number,
+                            "evidence_segment_ids": [handle],
+                        },
+                    }
+                )
+                item_ids.append(claim_id)
+                declined.remove(handle)
+            status = "complete" if item_ids else "no_relevant_claims"
             coverage.append(
                 {
                     "source_page_number": page_number,
