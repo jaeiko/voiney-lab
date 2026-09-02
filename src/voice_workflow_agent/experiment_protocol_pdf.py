@@ -95,6 +95,7 @@ COMPARATOR_COMMAND = "pdftotext"
 COMPARATOR_TIMEOUT_SECONDS = 60.0
 _COMPARATOR_MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 _HYPHENS = "\u2010\u2011\u2012\u2013\u2014\u2212-"
+_UNMAPPED_CATEGORIES = frozenset({"Co", "Cn"})
 
 
 class TextVerification(str, Enum):
@@ -113,27 +114,55 @@ def canonical_text_census(text: str) -> Counter[str]:
     so all four are normalized away.  What survives is an order-independent
     multiset of the characters that carry meaning.
 
-    Private-use characters (category ``Co``) are deliberately *kept*: they are
-    exactly the corruption this census exists to detect.  Comparing only
-    alphanumerics would not work -- a corrupted ``(50:49:1)`` and a correct one
-    both reduce to ``50491``.
+    Unmapped code points -- private use (``Co``) and noncharacter or unassigned
+    (``Cn``) -- are deliberately *kept*: they are exactly the corruption this
+    census exists to detect.  Comparing only alphanumerics would not work: a
+    corrupted ``(50:49:1)`` and a correct one both reduce to ``50491``.
 
-    Noncharacters and unassigned code points (category ``Cn``, e.g. U+FFFE) are
-    dropped for the same reason as control characters: one engine emits them as
-    padding where another emits nothing, and they can never be document
-    content.  ``Co`` is a different category and survives.
+    ``Cn`` was previously dropped alongside the control characters, on the
+    reasoning that one engine emits them as padding where another emits
+    nothing.  That was wrong, and it blinded this census to a real
+    substitution: U+FFFE turns up here *in place of* a document character, not
+    as padding beside one.  Dropping it while also dropping the hyphens meant
+    an engine emitting ``alpha-amylase`` and one emitting ``alpha\ufffeamylase``
+    produced identical censuses, so a genuine disagreement inside a reagent
+    dosing sentence was reported as agreement.
     """
 
     census: Counter[str] = Counter()
     for character in unicodedata.normalize("NFKC", text):
         if character.isspace():
             continue
-        if unicodedata.category(character) in {"Cc", "Cf", "Cn"}:
+        if unicodedata.category(character) in {"Cc", "Cf"}:
             continue
         if character in _HYPHENS:
             continue
         census[character] += 1
     return census
+
+
+def unmapped_code_points(text: str) -> Counter[str]:
+    """Code points that can never be document content.
+
+    A private-use code point has no meaning outside the font that defines it,
+    and a noncharacter such as U+FFFE is permanently reserved and can never be
+    assigned.  Either one appearing in extracted text means the extractor could
+    not map a glyph to a character, so the character at that position is
+    unknown.
+
+    What it *was* is not recoverable here.  In the sources measured, U+FFFE
+    stands where a hyphen or dash belongs, but which one is not determinable
+    from the extraction: a comparison engine reports a plain hyphen at some of
+    those positions, and elsewhere the surrounding text uses an en dash.
+    Substituting either would be repairing the source into something it may not
+    say, so this is reported and refused rather than corrected.
+    """
+
+    return Counter(
+        character
+        for character in unicodedata.normalize("NFKC", text)
+        if unicodedata.category(character) in _UNMAPPED_CATEGORIES
+    )
 
 
 def _comparator_pages(path: Path) -> tuple[str, ...] | None:
@@ -174,8 +203,24 @@ def verify_page_text(
     path: Path,
     pages: tuple[ProtocolPdfPage, ...],
 ) -> tuple[TextVerification, tuple[int, ...]]:
-    """Cross-check primary page text against an independent engine."""
+    """Cross-check primary page text against an independent engine.
 
+    An unmapped code point is decided here, before the comparator is consulted
+    at all.  It is a property of our own extraction, not of any disagreement:
+    the text contains a position whose character we do not know.  Deciding it
+    only by comparison would leave it undetected wherever no comparison engine
+    is installed, and that verdict is acknowledgeable by a person, so
+    genuinely unmapped text could be waved through.  Refusing it outright is
+    not acknowledgeable and does not depend on the environment.
+    """
+
+    unmapped = tuple(
+        page.source_page_number
+        for page in pages
+        if unmapped_code_points(page.text)
+    )
+    if unmapped:
+        return TextVerification.MISMATCH, unmapped
     comparator = _comparator_pages(path)
     if comparator is None:
         return TextVerification.COMPARATOR_UNAVAILABLE, ()

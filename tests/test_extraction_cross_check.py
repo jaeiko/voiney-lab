@@ -13,6 +13,7 @@ from voice_workflow_agent.experiment_protocol_pdf import (
     TextVerification,
     canonical_text_census,
     extract_protocol_pdf,
+    unmapped_code_points,
     verify_page_text,
 )
 from voice_workflow_agent.protocol_chunk_analysis import (
@@ -38,12 +39,27 @@ class CanonicalTextCensusTests(unittest.TestCase):
             canonical_text_census("Add 10 mL"),
         )
 
-    def test_hyphen_and_noncharacter_variants_do_not_count(self) -> None:
+    def test_hyphen_variants_do_not_count(self) -> None:
         self.assertEqual(
             canonical_text_census("2‐mm screen"),
             canonical_text_census("2-mm screen"),
         )
-        self.assertEqual(
+
+    def test_a_noncharacter_counts(self) -> None:
+        """It stands in place of a character, so it is not normalized away.
+
+        This census used to drop category Cn alongside the control characters.
+        Combined with dropping the hyphens, that made an engine emitting
+        alpha-amylase and one emitting alpha\ufffeamylase produce identical
+        censuses, so a real disagreement inside a reagent dosing sentence was
+        reported as agreement.
+        """
+
+        self.assertNotEqual(
+            canonical_text_census("alpha￾amylase"),
+            canonical_text_census("alpha-amylase"),
+        )
+        self.assertNotEqual(
             canonical_text_census("Dry￾ the bags"),
             canonical_text_census("Dry the bags"),
         )
@@ -99,15 +115,27 @@ class PrimaryExtractorTests(unittest.TestCase):
         ankom = extract_protocol_pdf(ANKOM)
         self.assertIn("72 h at 65", ankom.pages[2].text)
 
-    def test_local_sources_pass_the_cross_check(self) -> None:
-        for source in (ANKOM, IN_GEL):
-            with self.subTest(source=source.name):
-                extraction = extract_protocol_pdf(source)
-                self.assertIs(
-                    extraction.text_verification, TextVerification.VERIFIED
-                )
-                self.assertEqual(extraction.divergent_page_numbers, ())
-                self.assertTrue(extraction.text_cross_checked)
+    def test_a_clean_local_source_passes_the_cross_check(self) -> None:
+        extraction = extract_protocol_pdf(IN_GEL)
+        self.assertIs(extraction.text_verification, TextVerification.VERIFIED)
+        self.assertEqual(extraction.divergent_page_numbers, ())
+        self.assertTrue(extraction.text_cross_checked)
+
+    def test_a_source_with_unmapped_glyphs_is_refused(self) -> None:
+        """ANKOM carries nine U+FFFE, one per affected page.
+
+        It used to pass, because the census dropped the noncharacter and the
+        hyphen the other engine emitted in the same position. It does not pass
+        now, and the pages it names are the pages the comparison independently
+        finds divergent.
+        """
+
+        extraction = extract_protocol_pdf(ANKOM)
+        self.assertIs(extraction.text_verification, TextVerification.MISMATCH)
+        self.assertEqual(
+            extraction.divergent_page_numbers,
+            (9, 17, 25, 33, 35, 36, 37, 38, 39),
+        )
 
 
 class CrossCheckOutcomeTests(unittest.TestCase):
@@ -403,3 +431,96 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnmappedCodePointDecisionTests(unittest.TestCase):
+    """What an unmapped code point in extracted text is taken to mean.
+
+    The decision, stated once here and enforced in verify_page_text: a
+    private-use or noncharacter code point means the extractor could not map a
+    glyph, so the character at that position is unknown and the page is
+    refused. It is never substituted, because what it stood for is not
+    recoverable.
+
+    The evidence for "not recoverable" is measured, not assumed. On ANKOM page
+    9 the primary engine yields ``alpha\ufffeamylase`` and the comparison
+    engine yields ``alphaamylase`` -- the hyphen deleted outright -- so neither
+    engine recovers the character. In a reference DOI the primary engine yields
+    ``978-1\ufffe4939`` where the comparison engine yields ``978-14939``,
+    which is a wrong DOI, so the comparator is not an oracle either. And the
+    right character is not even the same everywhere: ``alpha-amylase`` takes a
+    hyphen while ``Liquid Chromatography--Mass Spectrometry`` conventionally
+    takes an en dash. Any single substitution would be wrong somewhere.
+
+    The harm a substitution would do is specific to this design. The affected
+    text on ANKOM page 9 is inside numbered step 11's evidence segment, in a
+    reagent dosing sentence. A guessed character there would be quoted as
+    canonical source_text and then confirmed by exact-evidence validation, so
+    the pipeline would certify a character we invented.
+    """
+
+    def test_a_noncharacter_is_unmapped(self) -> None:
+        self.assertEqual(unmapped_code_points("alpha￾amylase"), {"￾": 1})
+
+    def test_a_private_use_character_is_unmapped(self) -> None:
+        self.assertEqual(unmapped_code_points("5049"), {"": 1})
+
+    def test_ordinary_text_holds_nothing_unmapped(self) -> None:
+        self.assertEqual(unmapped_code_points("Add 8.0 mL of alpha-amylase"), {})
+
+    def test_an_en_dash_is_not_unmapped(self) -> None:
+        """It is a real character, and one of the shapes U+FFFE replaces."""
+
+        self.assertEqual(unmapped_code_points("Chromatography–Mass"), {})
+
+    def test_extraction_does_not_substitute_the_character(self) -> None:
+        """Refusal, not repair: the noncharacter is still there afterwards."""
+
+        extraction = extract_protocol_pdf(ANKOM)
+        self.assertIn("￾", extraction.pages[8].text)
+        self.assertNotIn("alpha-amylase and enough", extraction.pages[8].text)
+
+    def test_it_is_refused_even_with_no_comparator(self) -> None:
+        """The hole this closes.
+
+        Deciding it only by comparison would leave it undetected wherever no
+        comparison engine is installed, and comparator_unavailable is a gate a
+        person may acknowledge, so genuinely unmapped text could be waved
+        through.
+        """
+
+        extraction = extract_protocol_pdf(ANKOM)
+        with patch(
+            "voice_workflow_agent.experiment_protocol_pdf.shutil.which",
+            return_value=None,
+        ):
+            verdict, divergent = verify_page_text(ANKOM, extraction.pages)
+        self.assertIs(verdict, TextVerification.MISMATCH)
+        self.assertIn(9, divergent)
+
+    def test_a_clean_source_is_unaffected_by_that_check(self) -> None:
+        extraction = extract_protocol_pdf(IN_GEL)
+        self.assertEqual(
+            [p.source_page_number for p in extraction.pages
+             if unmapped_code_points(p.text)],
+            [],
+        )
+
+    def test_refusal_blocks_admission(self) -> None:
+        extraction = extract_protocol_pdf(ANKOM)
+        with self.assertRaises(ProtocolChunkAdmissionError):
+            plan_protocol_chunks(extraction, "protocol-x", "pdf-1")
+
+    def test_the_gate_it_raises_is_not_acknowledgeable(self) -> None:
+        """A person may wave through "not cross-checked", never "corrupted"."""
+
+        from voice_workflow_agent.protocol_catalog import _ACKNOWLEDGEABLE_GATES
+
+        self.assertIn(
+            domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
+            _ACKNOWLEDGEABLE_GATES,
+        )
+        self.assertNotIn(
+            domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED.value,
+            _ACKNOWLEDGEABLE_GATES,
+        )

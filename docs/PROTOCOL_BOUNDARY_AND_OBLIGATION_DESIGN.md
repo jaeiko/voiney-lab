@@ -1481,6 +1481,208 @@ only obligations left are per-segment accounting - the weakest measured
 obligation at 2/8 in the whole-document run - and the document-level claim path.
 That is a prediction from the structure, and it is not reported as a result.
 
+## 4z. The cross-check was blind, and the blindness was mine
+
+Reproduced before changing anything. Every figure below is measured here.
+
+| Document | Pages | U+FFFE | Verdict before | Verdict after |
+| --- | --- | --- | --- | --- |
+| ANKOM | 40 | 9 | verified | **mismatch**, pages 9, 17, 25, 33, 35-39 |
+| intracellular | 34 | 12 | verified | **mismatch**, pages 4, 10, 18, 19, 21, 33, 34 |
+| headspace | 16 | 0 | verified | verified |
+| in-gel | 9 | 0 | verified | verified |
+
+Every occurrence is U+FFFE, a noncharacter, category `Cn`. The cause is in
+`canonical_text_census`, and I put it there: an earlier step added `Cn` to the
+dropped categories to silence this exact character, on the reasoning that one
+engine emits noncharacters as padding where another emits nothing. That
+reasoning was wrong. U+FFFE turns up here **in place of** a document character,
+not as padding beside one, and because the census also drops every hyphen
+variant, `alpha-amylase` and `alpha\ufffeamylase` produced identical censuses.
+Two engines that genuinely disagree were reported as agreeing.
+
+The affected text is not incidental. On ANKOM page 9 it is inside numbered step
+11's evidence segment, in a reagent dosing sentence: `Add 8.0 mL of
+alpha\ufffeamylase and enough tap water to fill the dispenser`. The same
+compound word appears correctly earlier in the same segment, so this is
+positional, not a font-wide mapping failure.
+
+### What the character is taken to mean
+
+A noncharacter is permanently reserved and can never be assigned; a private-use
+code point has no meaning outside the font that defines it. Either one in
+extracted text means the extractor could not map a glyph, so **the character at
+that position is unknown**. It is refused, never substituted. Three measured
+reasons, not one assumption:
+
+- The comparator does not recover it either. Where we emit
+  `alpha\ufffeamylase`, `pdftotext` emits `alphaamylase` - the hyphen deleted
+  outright. Neither engine produces the word.
+- The comparator is demonstrably wrong elsewhere. In a reference DOI we emit
+  `978-1\ufffe4939` where it emits `978-14939`, which is not the DOI.
+- The right character is not the same everywhere. `alpha-amylase` takes a
+  hyphen; `Liquid Chromatography-Mass Spectrometry`, where U+FFFE also appears,
+  conventionally takes an en dash. Any single substitution is wrong somewhere.
+
+The specific harm a guess would do belongs to this design: the affected text is
+quoted as canonical `source_text` and then confirmed by exact-evidence
+validation, so the pipeline would certify a character we invented. That is the
+one thing this architecture exists to prevent.
+
+`Cn` is now kept in the census beside `Co`. Separately, unmapped code points are
+decided **before the comparator is consulted at all**, because they are a
+property of our own extraction rather than of any disagreement. Deciding them
+only by comparison would leave them undetected wherever `pdftotext` is not
+installed, and `comparator_unavailable` is a gate a person may acknowledge - so
+genuinely unmapped text could have been waved through. `MISMATCH` is refused at
+admission and its readiness gate is not acknowledgeable.
+
+The two mechanisms agree exactly: the pages carrying unmapped code points are
+the pages the census now finds divergent, and the divergence is **only** the
+noncharacter - the comparator contributes no extra characters on any page. So
+the blindness hid this one class and not a broader corruption.
+
+Consequence, stated plainly: **ANKOM is no longer admissible.** Our primary
+document fails its own cross-check on nine pages. That is the correct outcome
+for text we know contains unknown characters, and it is why this was fixed
+before anything else was measured.
+
+## 5a. The numbered-action trigger fires on figure captions
+
+Reproduced. `_numbered_action_matches` finds 36 labels in the intracellular
+document, and not one is an execution step:
+
+- **23** are figure references - 22 captions of the form `Figure N.` plus one
+  mid-sentence `as shown in Figure 22.`
+- **1** is a reference's volume and page, `17(1), 146.`
+- **12** are section numbers and a table of contents
+- **0** are numbered execution steps
+
+Ten of the twelve chunks contain at least one label, so the obligation can fire
+on 10/12. That is my figure; the brief said 9/12. The difference is what is
+being counted: 10 chunks are *exposed*, meaning a response lacking a matching
+action claim is refused. How many are actually refused cannot be established
+without a response for each, and only one call was authorized.
+
+### One authorized call, and the model did not invent the action
+
+Chunk 8 was chosen: core pages 25-28, four `Figure N.` captions plus the
+`Figure 22` cross-reference, the most caption labels of any chunk whose pages
+carry no unmapped code points. Sending it required clearing the verification
+flag on a local copy, since the document is now refused at admission; the
+harness asserts every page it sends is free of unmapped code points first, and
+nothing it does admits the document.
+
+The obligation demanded action claims labelled 18, 19, 20, 22 and 21.
+
+| Observed | |
+| --- | --- |
+| Claims returned | 11 - 10 action, 1 warning_hazard |
+| Action claims carrying a demanded label | **0 of 5** |
+| Labels actually emitted | page 27: `4.7`, null; page 28: null x 8 |
+| Document-level vs step-attached | 10 vs 1 |
+| Declined segments | 0 |
+| Pages self-reported incomplete | none |
+| Canonical validation | rejected, `numbered_action_missing`, page 25 |
+| Latency / response | 9.2 s / 5057 bytes, 4443 prompt + 1586 completion tokens |
+
+The model produced actions from the prose and attached almost all of them at
+document level, which is what a 61%-off-step document should produce. It did
+**not** manufacture an action out of `Figure 18. Example of incorrect
+identification of closely eluting peaks`. Pages 25 and 26 got no action claim at
+all, and the chunk was refused on page 25.
+
+So the fault is the server rule, not the model. Two further observations: a
+`warning_hazard` claim was produced and attached to a step, on a document said
+to carry no safety blocks; and the per-segment accounting outcome is **not
+measured**, because validation aborts at the page-25 label check before
+accounting runs.
+
+## 5b. Four directions for the trigger, none implemented
+
+Each is judged against the guarantee the rule exists for - a numbered execution
+step is never silently dropped - and against parity, overlap and measurability.
+
+### D1. Dispose of every label, rather than assert an action for it
+
+Every label the server derives must be answered: an action claim carrying that
+label, or an explicit per-page declaration that the label is not an execution
+step, which the server stores and counts.
+
+- **Guarantee**: preserved, arguably strengthened. A label cannot be dropped
+  silently; it must be positively judged, on the record.
+- **Overlap**: complementary, neither subsumes the other. Segment accounting
+  asks whether the *text* was addressed; this asks whether the *label* was
+  judged. In the call above the caption text was partly cited while the label
+  question went unanswered, and the converse - a label declared a non-step whose
+  segment is left unaccounted - is still caught by accounting.
+- **Parity**: expressible, and this is the work. The prompt must state the label
+  shape the server derives, including the filter that skips a label followed by
+  a number or a unit. Saying "numbered steps" instead would repeat the STEP 11
+  error exactly.
+- **Measurability**: satisfied by construction - declarations are stored per
+  page and countable.
+- **Cost**: a schema field and a prompt paragraph, and it asks the provider to
+  judge 36 labels on a document with no steps.
+
+### D2. Drop the inline matcher, keeping only the line-anchored one
+
+`_NUMBERED_SOURCE_LINE` is already anchored at line start;
+`_INLINE_NUMBERED_SOURCE` matches a number mid-line. Measured, per matcher:
+
+| Document | Total labels | Line-anchored | Inline-only |
+| --- | --- | --- | --- |
+| ANKOM | 67 | 67 | **0** |
+| in-gel | 25 | 25 | **0** |
+| headspace | 61 | 61 | **0** |
+| intracellular | 36 | 12 | **24** |
+
+The inline matcher produces every one of the 24 false triggers on intracellular
+- all 23 figure references and the reference page number - and contributes
+nothing on the other three documents.
+
+- **Guarantee**: preserved for every label that begins its own line, which is
+  100% of labels on all three properly numbered documents. It is weakened only
+  for a numbered step appearing mid-line, and no such step exists in any of the
+  four documents measured.
+- **Overlap**: none - it changes the trigger, not the obligation. Caption text
+  remains content to account for, which is the correct division: a caption is
+  something to account for, not something to execute.
+- **Parity**: substantially easier than today. One anchored regex is statable
+  exactly; the inline alternative is what makes the present rule hard to state
+  without paraphrasing it.
+- **Measurability**: this is the condition of adopting it. The narrowing must
+  record how many labels it dropped per document, or it is a silent blocklist.
+  Because it changes the trigger rather than keeping an exclusion list, the
+  instrumentation is to report both counts, so a reviewer sees "24 labels were
+  mid-line and were not treated as steps".
+- **Cost, measured**: 15 tests fail if the matcher is removed. Their fixtures
+  put an entire page on one line, so their numbered steps are inline only as an
+  artifact of the old single-line fixture writer. The multi-line writer already
+  exists, so this is fixture migration - and it must be migration, never
+  loosening the assertions.
+
+### D3. Require the label sequence to be monotonic
+
+Rejected. **Parity fails structurally**: monotonicity across a document is a
+global property, and a chunk sees three to five pages, so the provider cannot
+compute the predicate the server would enforce from what it is given. It also
+drops real steps in any protocol whose numbering restarts per section, and
+counting the drops would not rescue that.
+
+### D4. Do nothing to the trigger and rely on accounting alone
+
+Rejected, but worth stating so the choice is explicit. Accounting asks only that
+something be said about each segment; it cannot tell a numbered step that was
+skipped from prose that was declined. ANKOM's whole-document run caught a
+genuine `numbered_action_missing` on page 32, which accounting alone would not
+have caught. The guarantee is real and something must carry it.
+
+**D2 then D1** is the ordering the measurements support: D2 removes 24 of the 24
+false triggers at no measured cost on any real document, and D1 then answers
+what remains, including intracellular's 12 section and contents numbers, which
+are line-anchored and survive D2.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A
