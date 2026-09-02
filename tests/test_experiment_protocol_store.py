@@ -483,9 +483,14 @@ class ProtocolStoreTests(unittest.TestCase):
         )
 
         self.assertEqual((first_json, first_checksum), (second_json, second_checksum))
-        decoded_protocol, decoded_readiness, policy_id, schema_version = (
-            deserialize_analysis(first_json)
-        )
+        (
+            decoded_protocol,
+            decoded_readiness,
+            policy_id,
+            schema_version,
+            decoded_coverage,
+        ) = deserialize_analysis(first_json)
+        self.assertEqual(decoded_coverage, ())
         self.assertEqual(decoded_protocol, protocol)
         self.assertEqual(decoded_readiness, readiness)
         self.assertEqual(policy_id, "p1-conservative")
@@ -504,9 +509,13 @@ class ProtocolStoreTests(unittest.TestCase):
             readiness,
             "p1-conservative",
         )
-        decoded, decoded_readiness, policy_id, schema_version = (
-            deserialize_analysis(payload_json)
-        )
+        (
+            decoded,
+            decoded_readiness,
+            policy_id,
+            schema_version,
+            _,
+        ) = deserialize_analysis(payload_json)
 
         self.assertEqual(decoded, protocol)
         self.assertEqual(

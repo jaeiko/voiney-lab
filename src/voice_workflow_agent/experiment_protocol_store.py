@@ -282,6 +282,7 @@ class AnalysisRevisionRecord:
     created_at: str
     protocol: domain.ExperimentProtocol
     readiness: domain.ReadinessAssessment
+    page_coverage: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -498,10 +499,48 @@ def _decode_domain(value: Any) -> Any:
     )
 
 
+_PAGE_COVERAGE_KEYS = frozenset(
+    {
+        "source_revision",
+        "source_sha256",
+        "source_page_number",
+        "page_text_sha256",
+        "status",
+        "evidence_item_ids",
+        "declined_segment_ids",
+    }
+)
+
+
+def _checked_page_coverage(item: object) -> dict[str, object]:
+    """Validate one stored page-coverage record at ingress."""
+
+    if not isinstance(item, dict) or set(item) != _PAGE_COVERAGE_KEYS:
+        raise ProtocolSerializationError(
+            "Stored Protocol page coverage record is malformed."
+        )
+    if not isinstance(item["source_page_number"], int) or isinstance(
+        item["source_page_number"], bool
+    ):
+        raise ProtocolSerializationError(
+            "Stored Protocol page coverage has an invalid page number."
+        )
+    for key in ("evidence_item_ids", "declined_segment_ids"):
+        value = item[key]
+        if not isinstance(value, list) or any(
+            not isinstance(entry, str) for entry in value
+        ):
+            raise ProtocolSerializationError(
+                "Stored Protocol page coverage has an invalid identifier list."
+            )
+    return {key: item[key] for key in sorted(item)}
+
+
 def serialize_analysis(
     protocol: domain.ExperimentProtocol,
     readiness: domain.ReadinessAssessment,
     capability_policy_id: str,
+    page_coverage: tuple[dict[str, object], ...] = (),
 ) -> tuple[str, str]:
     """Return canonical JSON and its deterministic SHA-256 identity."""
 
@@ -530,6 +569,13 @@ def serialize_analysis(
         "protocol": _encode_domain(protocol),
         "readiness": _encode_domain(readiness),
     }
+    if page_coverage:
+        # Held as plain JSON, not tagged domain records: the store has no
+        # business knowing the claim module's types, and a reviewer only needs
+        # to read which segments a provider declared it had no claim for.
+        payload["page_coverage"] = [
+            _checked_page_coverage(item) for item in page_coverage
+        ]
     encoded = _canonical_json(payload)
     return encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -548,7 +594,8 @@ def deserialize_analysis(
         raise ProtocolSerializationError(
             "Stored Protocol analysis is not valid JSON."
         ) from exc
-    if not isinstance(payload, dict) or set(payload) != {
+    # page_coverage is optional so analyses stored before it existed still read.
+    if not isinstance(payload, dict) or set(payload) - {"page_coverage"} != {
         "analysis_schema_version",
         "capability_policy_id",
         "protocol",
@@ -576,11 +623,16 @@ def deserialize_analysis(
         raise ProtocolSerializationError(
             "Stored structured Protocol failed validation."
         ) from exc
+    coverage = tuple(
+        _checked_page_coverage(item)
+        for item in payload.get("page_coverage", ())
+    )
     return (
         protocol,
         readiness,
         capability_policy_id,
         ANALYSIS_SCHEMA_VERSION,
+        coverage,
     )
 
 
@@ -992,6 +1044,7 @@ class ProtocolStore:
         protocol: domain.ExperimentProtocol,
         readiness: domain.ReadinessAssessment,
         capability_policy_id: str,
+        page_coverage: tuple[dict[str, object], ...] = (),
     ) -> AnalysisRevisionRecord:
         _identifier(experiment_id, experiment=True)
         _identifier(analysis_id)
@@ -1011,6 +1064,7 @@ class ProtocolStore:
             protocol,
             readiness,
             capability_policy_id,
+            page_coverage,
         )
         reason_codes_json = _canonical_json(list(readiness.reason_codes))
         now = _now()
@@ -1175,9 +1229,13 @@ class ProtocolStore:
             raise ProtocolSerializationError(
                 "Stored analysis payload failed identity verification."
             )
-        protocol, readiness, capability_policy_id, schema_version = (
-            deserialize_analysis(payload_json)
-        )
+        (
+            protocol,
+            readiness,
+            capability_policy_id,
+            schema_version,
+            page_coverage,
+        ) = deserialize_analysis(payload_json)
         try:
             reason_codes = tuple(
                 json.loads(row["readiness_reason_codes_json"])
@@ -1210,6 +1268,7 @@ class ProtocolStore:
             created_at=row["created_at"],
             protocol=protocol,
             readiness=readiness,
+            page_coverage=page_coverage,
         )
 
     def list_analysis_revisions(

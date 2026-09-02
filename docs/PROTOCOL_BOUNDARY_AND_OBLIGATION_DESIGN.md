@@ -632,6 +632,114 @@ processing. Persisting `page_coverage` with the analysis revision and surfacing
 it in `review()` is the missing link; UI and persistence work was out of this
 step's scope and is not done.
 
+## 4h. The authorized provider call: one request, decisive on the question asked
+
+One call, no retry. Model `grok-4.3`, reasoning effort none, chunk 6 of 8 —
+core pages 30-32, context page 29, 28 handles, 3,730-byte request, 3,461-byte
+schema. Latency **14.2 s**, response **8,651 bytes**, 29 claims.
+
+**A pre-flight caught a defect before the call was spent.** The schema *required*
+`declined_evidence_segment_ids` while the prompt never mentioned it, so the
+model would have been forced to emit a field it had no instruction for. The
+prompt was corrected first, with no hazard wording added, so the experiment
+stayed a test of the model's own judgement.
+
+### The question this was for: does a real provider make hazard claims?
+
+**Yes.** Six `warning_hazard` claims, four of them on page 30, covering **all
+four** hazard segments, each citing exactly its own segment:
+
+| Segment | Claim | Form |
+| --- | --- | --- |
+| `[4]` `Safety information Danger, highly corrosive.` | `c-30-2` | document-level |
+| `[5]` `Exothermic reaction ... ALWAYS ADD ACID TO WATER` | `c-30-3` | document-level |
+| `[6]` `Wear gloves, labcoat, safety glasses.` | `c-30-4` | document-level |
+| `[7]` `Work under the chemical hood.` | `c-30-5` | document-level |
+
+The offline model produced zero on the same page. That difference is the whole
+answer to §4f: the limit was the model, and a real one clears it.
+
+### Canonical validation nevertheless rejected the response
+
+Fail-closed, for two independent reasons, and the validator was not relaxed to
+let either through.
+
+**1. `section_id` was a human title.** The marker returned
+`section_id = "Lignin method in beakers"`; `_STABLE_ID` forbids spaces. This is
+a **contract defect, not model judgement**: the schema types `section_id` as a
+plain nullable string with no `pattern`, so strict structured output could not
+enforce the character set, and the prompt never stated it. The model answered
+reasonably to an under-specified contract.
+
+**2. One segment was left unaccounted.** With the identifier slugged locally
+for analysis, validation then refused `segment_unaccounted` on page 30 segment
+`[0]` — `Note If not proceeding immediately with the acid lignin method ...`.
+Everything else accounted: 16 of 17 substantive segments on page 30, and pages
+31 and 32 complete. This one is **model judgement**, and the accounting
+obligation caught it. It is the same segment §4b highlighted as newly visible.
+
+Because validation failed, no analysis revision exists, so no *validated*
+provider result is claimed here. The hazard finding above is reported as
+captured provider output, not as admitted canonical state.
+
+### The safety gate would still have fired — and should
+
+All four hazard claims are **document-level**. `declared_safety_warning_count`
+counts only step- and action-attached warnings, and a document-level hazard
+assembles into `before_start`. Verified on a constructed protocol: the
+document-level form leaves the count at 0 and
+`NO_DECLARED_SAFETY_WARNINGS` fires; the step-attached form clears it.
+
+The gate is **not** being widened to accept the document-level form. Its
+original reasoning holds: a hazard that never attaches to a step is not read
+out at the moment the operator is mixing acid, so it does not discharge the
+execution-time obligation. The hazard block on page 30 sits inside step 50's
+territory and is expressible in the step-attached form; the provider chose the
+document-level one. That is a steerable claim-structure choice, not a licence to
+loosen the gate.
+
+So the gate's premise is now partly tested: a real provider *does* produce
+hazard claims, which was the open question, but not yet in the form the gate
+requires. Establishing whether it will do so when asked needs another
+authorized call, which has not been made.
+
+## 4i. Declinations now persist and reach the reviewer
+
+`page_coverage`, including `declined_segment_ids`, is stored with the analysis
+revision and exposed in `review()` as `page_coverage` plus a
+`declined_segment_count` summary. It is held as plain JSON rather than tagged
+domain records, so the store stays ignorant of the claim module's types, and
+every record is validated at ingress.
+
+`ANALYSIS_SCHEMA_VERSION` is unchanged: the field is optional on read, so an
+analysis stored before it existed still deserializes. Measured storage cost:
+
+| Source | Coverage records | Declined segments | Payload |
+| --- | --- | --- | --- |
+| ANKOM | 40 | 80 | 249,157 → 268,766 bytes (**+7.9%**) |
+| in-gel | 9 | 22 | 134,612 → 140,425 bytes (**+4.3%**) |
+
+A reviewer can now read which segments a provider declared it had no claim for.
+Rendering it is a UI change and was out of scope.
+
+## 4j. Known limitations
+
+Two costs of earlier decisions, recorded rather than left implicit.
+
+**The offline scorer mislabels a value's category.** It picks the first
+parameter pattern that matches anywhere in a segment, so in-gel page 9's volume
+`10uL` was emitted as `temperature`. The claim's evidence is correct and the
+value is real; only the category is wrong. It is a scorer flaw, not a pipeline
+flaw, and the semantic audit's category checks are where it should surface.
+
+**`2-mm screen` is no longer read as a standalone measurement.** Excluding a
+number that continues a hyphenated code was necessary to stop
+`Catalog #I1149-5G` being read as five grams and `224-1S` as one second, which
+made six catalog lines undeclinable for no reason. The cost is that a
+hyphenated adjectival measurement is now invisible to the unit cross-check. The
+trade was six false positives against one construction that is rarely the
+operative value, and it is a deliberate choice rather than an oversight.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

@@ -677,7 +677,16 @@ all relevant claims and markers on that page were extracted, no_relevant_claims
 only when the page contains none, and analysis_incomplete whenever the page
 cannot be fully accounted for. Coverage status is a page-level semantic judgment;
 the server separately accounts for every emitted claim and marker from its
-validated source page. Return one JSON object only.
+validated source page.
+
+Account for every segment of every core page. Each segment is either cited by at
+least one claim or marker, or listed in that page's declined_evidence_segment_ids
+as carrying nothing to claim. Never both, and never neither. Declining a segment
+is a statement on the record that it holds no claim, not a way to skip it, so do
+not decline a segment that states a measured value. A segment that is only
+punctuation or whitespace needs no entry. If you cannot account for a page this
+way, mark that page analysis_incomplete instead of guessing. Return one JSON
+object only.
 """
 
 

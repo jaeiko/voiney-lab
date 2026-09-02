@@ -1476,6 +1476,13 @@ class ProtocolCatalog:
                 "readiness": _review_value(analysis.readiness),
                 "capability_policy_id": analysis.capability_policy_id,
                 "analysis_payload_sha256": analysis.payload_sha256,
+                "page_coverage": [
+                    dict(item) for item in analysis.page_coverage
+                ],
+                "declined_segment_count": sum(
+                    len(item.get("declined_segment_ids") or ())
+                    for item in analysis.page_coverage
+                ),
                 "hazard_review_required": hazard_review_required,
                 "declared_safety_warning_count": declared_warning_count,
                 "gates": {
@@ -1868,6 +1875,10 @@ class ProtocolCatalog:
             merged.protocol,
             merged.readiness,
             merged.capability_policy_id,
+            # Carry the per-segment dispositions with the analysis. Without
+            # this a provider's explicit "no claim here" existed only during
+            # processing, which for a reviewer is the same as never existing.
+            tuple(item.public_dict() for item in merged_claims.page_coverage),
         )
         self._append_chunk_event(
             revision,
