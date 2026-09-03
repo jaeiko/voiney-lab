@@ -245,6 +245,14 @@ def minimal_protocol(**overrides) -> ExperimentProtocol:
     return ExperimentProtocol(**values)
 
 
+# Every Protocol with executable steps now carries the safety-confirmation
+# gate until a reviewer clears it, so a domain-level assessment can never read
+# GUIDANCE_READY on its own. Where these tests used to assert "ready" they now
+# assert "nothing except the safety confirmation is blocking", which is the
+# same statement about the feature under test.
+_SAFETY_GATE = (ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,)
+
+
 class ExperimentProtocolTests(unittest.TestCase):
     def assert_analysis_required(
         self,
@@ -264,9 +272,8 @@ class ExperimentProtocolTests(unittest.TestCase):
         second = assess_readiness(protocol)
 
         self.assertEqual(first, second)
-        self.assertEqual(first.status, ReadinessStatus.GUIDANCE_READY)
-        self.assertEqual(first.label, GUIDANCE_READY_LABEL)
-        self.assertEqual(first.reasons, ())
+        self.assertEqual(first.reason_codes, _SAFETY_GATE)
+        self.assertEqual(first.status, ReadinessStatus.ANALYSIS_REQUIRED)
         self.assertEqual(
             {GUIDANCE_READY_LABEL, ANALYSIS_REQUIRED_LABEL},
             {"안내 준비 완료", "Protocol 분석 필요"},
@@ -666,8 +673,8 @@ class ExperimentProtocolTests(unittest.TestCase):
             assess_readiness(
                 protocol,
                 capability_policy=future_policy,
-            ).status,
-            ReadinessStatus.GUIDANCE_READY,
+            ).reason_codes,
+            _SAFETY_GATE,
         )
 
     def test_fixed_range_is_represented_but_ambiguity_still_blocks(self):
@@ -682,8 +689,8 @@ class ExperimentProtocolTests(unittest.TestCase):
         )
         protocol = replace(minimal_protocol(), constructs=(repetition,))
         self.assertEqual(
-            assess_readiness(protocol).status,
-            ReadinessStatus.GUIDANCE_READY,
+            assess_readiness(protocol).reason_codes,
+            _SAFETY_GATE,
         )
 
         ambiguity = SourceAmbiguity(
@@ -829,8 +836,8 @@ class ExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(
             assess_readiness(
                 replace(minimal_protocol(), constructs=(informational,))
-            ).status,
-            ReadinessStatus.GUIDANCE_READY,
+            ).reason_codes,
+            _SAFETY_GATE,
         )
 
         execution = ProtocolConflict(
@@ -902,6 +909,7 @@ class ExperimentProtocolTests(unittest.TestCase):
             first.reason_codes,
             (
                 ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value,
+                ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
                 ReadinessReasonCode.UNSUPPORTED_PARALLEL_BACKGROUND_WORK.value,
             ),
         )

@@ -1451,9 +1451,18 @@ class ProtocolCatalog:
         # (``no_declared_safety_warnings``), so it is never reported as passed
         # here either.
         declared_warning_count = domain.declared_safety_warning_count(protocol)
-        hazard_review_required = bool(declared_warning_count) or (
-            protocol.metadata.source_status or ""
-        ).casefold() in {"in development", "development", "draft"}
+        # Hazard review follows the readiness gate, not the count.  It used to
+        # be required only when the count was non-zero, which meant a single
+        # provider-produced warning both cleared the gate and, here, was the
+        # reason a reviewer was asked to look -- while a Protocol with no
+        # warning at all asked for no hazard review.  The count is reported
+        # beside this as information; the gate decides.
+        hazard_review_required = (
+            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+            in analysis.readiness.reason_codes
+            or (protocol.metadata.source_status or "").casefold()
+            in {"in development", "development", "draft"}
+        )
         metadata = {
             field.name: _review_value(getattr(protocol.metadata, field.name))
             for field in fields(protocol.metadata)
@@ -1485,6 +1494,15 @@ class ProtocolCatalog:
                 ),
                 "hazard_review_required": hazard_review_required,
                 "declared_safety_warning_count": declared_warning_count,
+                # Whether every remaining blocking reason is an acknowledged
+                # gate. The catalog owns the acknowledgement ledger, so it
+                # answers this; callers must not re-derive it from the
+                # readiness status, which does not know about acknowledgements.
+                "readiness_gates_cleared": self._readiness_gates_cleared(
+                    revision.experiment_id,
+                    revision.revision_number,
+                    analysis,
+                ),
                 "gates": {
                     "parsing": "passed",
                     "structural_readiness": (
@@ -1493,10 +1511,13 @@ class ProtocolCatalog:
                         == domain.ReadinessStatus.GUIDANCE_READY.value
                         else "blocked"
                     ),
+                    # "not_declared" used to be reported whenever the count
+                    # was zero, which read as a cleared gate for the case that
+                    # most needs a reviewer. The gate decides here too.
                     "hazard_review": (
                         "review_required"
-                        if declared_warning_count
-                        else "not_declared"
+                        if hazard_review_required
+                        else "passed"
                     ),
                     "human_approval": (
                         "passed" if entry.approval_status == "approved" else "pending"

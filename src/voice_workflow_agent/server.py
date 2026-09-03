@@ -3723,11 +3723,19 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
         try:
             review = catalog.review(protocol_id)
             readiness = review.get("readiness")
+            # An acknowledged gate counts as cleared here, exactly as it does
+            # for approval. Reading the readiness status alone meant a
+            # Protocol whose only blocker a reviewer had already signed off
+            # could never be activated, because the stored status does not
+            # know about acknowledgements.
             review["development_activation_allowed"] = bool(
                 _development_activation_allowed()
                 and review.get("analysis_available") is True
                 and isinstance(readiness, dict)
-                and readiness.get("status") == "guidance_ready"
+                and (
+                    readiness.get("status") == "guidance_ready"
+                    or review.get("readiness_gates_cleared") is True
+                )
                 and review.get("available_for_execution") is not True
             )
             return review

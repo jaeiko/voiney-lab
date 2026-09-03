@@ -434,6 +434,16 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                         for field in record_fields
                         if field.name != "pdf"
                     )
+                if record_type is domain.SourceEvidence:
+                    # Segment handles are server-computed identities. Asking a
+                    # provider for one would invite it to invent an identity,
+                    # so the field is withheld from the provider schema for
+                    # the same reason the extraction record is.
+                    record_fields = tuple(
+                        field
+                        for field in record_fields
+                        if field.name != "evidence_segment_ids"
+                    )
                 expected_names = {field.name for field in record_fields}
                 expected_required = {
                     field.name
@@ -1241,14 +1251,22 @@ class ProtocolAnalysisTests(unittest.TestCase):
         self.assertEqual(draft.readiness.status, ReadinessStatus.ANALYSIS_REQUIRED)
         self.assertEqual(
             draft.readiness.reason_codes,
-            (ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE.value,),
+            (
+                ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE.value,
+                ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
+            ),
         )
 
     def test_readiness_is_computed_by_domain_policy(self):
         draft = self.analyze()
 
-        self.assertEqual(draft.readiness.status, ReadinessStatus.GUIDANCE_READY)
-        self.assertEqual(draft.readiness.reasons, ())
+        # The safety confirmation is the only thing the domain leaves open:
+        # it is cleared by an audited reviewer, never by extraction.
+        self.assertEqual(
+            draft.readiness.reason_codes,
+            (ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,),
+        )
+        self.assertEqual(draft.readiness.status, ReadinessStatus.ANALYSIS_REQUIRED)
         self.assertEqual(draft.capability_policy_id, "p1-conservative")
 
     def test_every_advanced_construct_maps_and_round_trips(self):

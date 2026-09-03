@@ -536,6 +536,21 @@ def fixture_scope(extraction: ProtocolPdfExtraction) -> dict[str, object]:
     monotonicity idea was rejected for the server, where it fails parity: a
     provider sees three to five pages and cannot compute a document-global
     predicate.  The fixture sees the whole document and enforces nothing.
+
+    KNOWN LIMITATION, deliberately not fixed.  A document whose procedure is
+    entirely prose and whose reference list at the end is cleanly numbered
+    ``1.  2.  3.`` passes this check: the labels increase, so the fixture
+    scores the document and counts the fake execution steps it built from the
+    bibliography.  Monotonicity catches interleaving -- headings and figure
+    numbers running against each other -- and cannot catch a single clean
+    ascending run that is not a procedure.  Measured on the four local
+    sources, none shows that shape: labels are spread over 32 of ANKOM's 40
+    pages, 7 of in-gel's 9 and 13 of headspace's 16, and the near-unnumbered
+    document is already out of scope for a different reason.  No further rule
+    is added while the distribution of document shapes is unknown; a rule
+    guessed from four documents would be the same mistake as a word list.
+    ``tests/test_numbered_label_trigger.py`` holds the failing case as an
+    executable record of the hole.
     """
 
     labels = fixture_step_labels(extraction)

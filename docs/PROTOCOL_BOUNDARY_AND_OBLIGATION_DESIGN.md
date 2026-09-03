@@ -1936,6 +1936,164 @@ nothing here acts on it: `declared_safety_warning_count` counts
 hazard at all. The gate is not being widened or narrowed here; the observation
 is logged for a step that has a measurement to act on.
 
+## 6a. The safety gate was opened by the thing it was meant to check
+
+Reproduced before changing anything, exactly as described:
+
+```
+provider warning present=False: count=0 gate=True  status=analysis_required
+provider warning present=True : count=1 gate=False status=guidance_ready
+```
+
+One provider-produced warning took readiness from `analysis_required` to
+`guidance_ready`. The gate exists to compel a human to confirm the safety
+picture, and the model's own output was waiving it.
+
+The diagnosis is that the gate was counting. A warning in the Protocol is a
+warning **the provider produced**, so a non-zero count records that a model
+called something a hazard - never that the document declares one. STEP 13's
+authorized call showed how thin that can be: the only warning-shaped text on
+the pages concerned was a note that the analysis software crashes often, with no
+chemical, thermal or physical hazard anywhere.
+
+**The fix is that the count no longer clears anything.** The gate is raised
+whenever there are steps to execute, and only an audited human acknowledgement
+clears it. No word list is involved and none was added: what counts as a hazard
+is still the provider's judgement, and whether this Protocol may execute on that
+judgement is now a person's. The claims themselves are untouched - only the
+authority to open the gate moved.
+
+Two projections keyed off the same count and are now derived from the gate:
+
+- `hazard_review_required` was true only when the count was non-zero, so a
+  Protocol with no extracted warning at all asked for **no** hazard review.
+- `gates.hazard_review` reported a bespoke `not_declared` for a zero count,
+  which reads as a finished gate for exactly the case that most needs a
+  reviewer. It now reports `review_required` like any other count.
+
+A third inconsistency surfaced while doing this and is fixed with it:
+`development_activation_allowed` was computed from the raw readiness status,
+which does not know about acknowledgements, so a Protocol whose only blocker a
+reviewer had already signed off could never be activated. The catalog owns the
+acknowledgement ledger, so it now reports `readiness_gates_cleared` and the
+server reads it instead of re-deriving it.
+
+The blast radius is the honest consequence: **every** Protocol now needs an
+explicit safety confirmation before it can be approved or development-activated.
+Twenty tests failed, all of them asserting readiness for fixtures that happened
+to carry a warning, and each was updated to either assert the gate or clear it
+through the audited path. None was loosened.
+
+## 6b. Evidence handles are kept; content still is not
+
+STEP 13 could not establish which span a hazard claim cited, because the
+response had not been persisted. The cause was reading one rule too broadly.
+
+The rule now reads explicitly:
+
+- Persisting **what the provider wrote** stays forbidden.
+- Persisting an **evidence handle** - segment id, page, and the offsets it
+  resolves to - is not covered by that. A handle is a server-computed identity
+  for a span of text the server already owns: a pointer into the document, not
+  a sentence anybody wrote. Keeping it agrees with the server owning authority
+  over its evidence rather than conflicting with it.
+
+`ClaimSourceEvidence` already carried `evidence_segment_ids`, and
+`_domain_evidence` was dropping them on the way into the domain - that single
+line is why the basis became unrecoverable. `domain.SourceEvidence` now carries
+them, and `reopen_evidence_span` reads the source text a stored statement's
+handles point at, recomputing it from the source rather than trusting anything
+saved beside it. A handle that no longer resolves fails closed, because a
+handle that has stopped pointing anywhere means the source or the segmentation
+changed and the stored evidence can no longer be trusted.
+
+One consequence had to be caught rather than accepted: adding the field leaked
+it into the **provider-facing** schema of the older analysis path, which would
+have asked a provider to supply server-owned identities - an invitation to
+invent one. It is withheld there for the same reason the extraction record is
+withheld from `ProtocolMetadata`, and the schema-parity test now records that
+exemption. The pinned curated-fixture schema hash is unchanged as a result.
+
+The round trip is proven both ways: handles survive serialization and reopen the
+same span, the text comes back from the **source** rather than from the stored
+excerpt (a tampered excerpt does not change what is reopened), and a stale
+handle, a wrong revision, or no handle at all each raise rather than guess.
+
+## 6c. The scope check's known hole, measured and pinned
+
+The increasing/duplicate/descent test caught the near-unnumbered document, and
+it will not catch this shape: a procedure written entirely as prose, with a
+reference list at the end numbered cleanly `1. 2. 3.`. The labels increase, so
+the document is scored and the fake execution steps built from the bibliography
+go into the score. Monotonicity detects interleaving; it cannot detect a single
+clean ascending run that is not a procedure.
+
+Measured on the four local sources, none shows that shape - labels are spread
+through the body rather than confined to the tail:
+
+| Document | Labels | Pages with labels | Page range | Label span | Tail-only |
+| --- | --- | --- | --- | --- | --- |
+| ANKOM | 67 | 32 | 4-39 of 40 | 1-67 | no |
+| in-gel | 25 | 7 | 3-9 of 9 | 1-25 | no |
+| headspace | 62 | 13 | 4-16 of 16 | 1-62 | no |
+| intracellular | 12 | 5 | 4-30 of 34 | 1-5 | no |
+
+**Not fixed, deliberately.** A rule inferred from four documents would be the
+same mistake as a word list. The limitation is written into `fixture_scope`'s
+docstring and, more usefully, held as an executable test: a synthetic prose
+document with numbered references is asserted to be **wrongly in scope**, as
+current behaviour rather than desired behaviour. A future rule that closes the
+hole makes that test fail loudly instead of passing silently.
+
+## 6d. Where each document actually stops
+
+Measured, with the gate and resolver as they now stand.
+
+| Document | Extraction | Page admission | Chunk analysis | Merge | Assembly |
+| --- | --- | --- | --- | --- | --- |
+| ANKOM | verified | 8 chunks | **stops: 4/8 valid** | not reached | not reached |
+| in-gel | verified | 3 chunks | never run | not reached | not reached |
+| headspace | verified | 5 chunks | never run | not reached | not reached |
+| intracellular | **stops: mismatch** | refused | not reached | not reached | not reached |
+
+- intracellular stops at page admission with `ProtocolChunkAdmissionError`,
+  "Protocol source text failed independent extraction cross-check" - the five
+  unmapped positions the document does not declare.
+- ANKOM plans eight chunks and reached 4/8 valid in the whole-document run.
+  Merge requires every chunk to validate, so it has never been attempted.
+- in-gel and headspace are admissible and have never been analysed; no call has
+  ever been spent on either.
+
+### Has an ExperimentProtocol ever been assembled?
+
+**Not from a PDF through the claim pipeline.** The live store holds exactly one
+analysis revision, `candidate-a-curated-development-v1`, analysis id
+`curated-...`, `analysis_schema_version: 1`, written by a
+`development_fixture_materialized` event on 2026-08-30. It is the hand-curated
+development fixture over `in-gel-digestion.pdf`, not pipeline output, and its
+own readiness is `analysis_required` for `unresolved_ambiguity` and
+`unsupported_repeat_until`.
+
+The ANKOM protocol was registered in the same store and analysis was requested
+five times, started four, and **failed every time**: once
+`provider_configuration_missing`, then four times
+`protocol_analysis_invalid_evidence`. There is no `protocol_analysis_ready`
+event in the store.
+
+### Is it connected to the voice execution path?
+
+The adapter exists. `ProtocolCatalog.load_executable_fixture` builds a
+`CuratedProtocolFixture` from a stored analysis's `ExperimentProtocol`, and
+`CuratedProtocolSession` consumes that fixture; `curated_protocol.py` never
+references `ExperimentProtocol` directly, so this adapter is the whole seam.
+
+What is missing is not the seam but anything to put through it. The adapter
+requires `entry.available_for_execution`, which requires approval or
+development activation, which requires readiness to be clear - and no
+pipeline-produced analysis has ever existed to clear. So the path has only ever
+carried the curated fixture, and the untested span is precisely: merged
+`ExperimentProtocol` -> `load_executable_fixture` -> `CuratedProtocolSession`.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

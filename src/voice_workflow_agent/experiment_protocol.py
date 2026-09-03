@@ -114,9 +114,24 @@ class ConflictLevel(str, Enum):
 
 @dataclass(frozen=True)
 class SourceEvidence:
+    """Where in the source a statement came from.
+
+    ``evidence_segment_ids`` are canonical segment handles: server-computed
+    identities for spans of text the server already owns.  A handle is a
+    pointer into the document, not anything the provider wrote, so keeping it
+    is not keeping provider content -- it is what makes the evidence
+    re-openable later.  Without them a claim could be read back but the exact
+    span it cited could not, which is how a hazard claim's basis became
+    unrecoverable after the fact.
+
+    Empty on statements assembled before handles were retained, and on
+    hand-built records that never had one.
+    """
+
     source_page_number: int
     source_excerpt: str
     location_detail: str | None = None
+    evidence_segment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1492,8 +1507,13 @@ def declared_safety_warning_count(protocol: ExperimentProtocol) -> int:
     matters, so it does not discharge the execution-time safety obligation.
 
     This counts *our own extracted output*.  It deliberately never inspects the
-    source document for hazard wording: the gate asks whether this Protocol
-    declares a warning, not whether some phrase appears in the PDF.
+    source document for hazard wording: the question is what this Protocol
+    declares, not whether some phrase appears in the PDF.
+
+    It is reported for review and no longer clears any gate.  A count is a
+    record that the provider called something a hazard, which is not evidence
+    that the document declares one, so it cannot stand in for a reviewer -- see
+    the NO_DECLARED_SAFETY_WARNINGS reason in ``assess_readiness``.
     """
 
     total = 0
@@ -1563,16 +1583,31 @@ def assess_readiness(
             )
         )
 
-    if any(section.steps for section in protocol.sections) and (
-        declared_safety_warning_count(protocol) == 0
-    ):
+    if any(section.steps for section in protocol.sections):
+        # The count used to clear this gate on its own, and that was the
+        # gate's own defect: a warning in this Protocol is a warning the
+        # provider produced, so a non-zero count records that a model called
+        # something a hazard -- never that the document declares one.  One such
+        # claim took readiness from analysis_required straight to
+        # guidance_ready, so the model's output waived the human review this
+        # gate exists to compel.  Measured on a real response, the only
+        # warning-shaped text available was a note about analysis software
+        # crashing: no chemical, thermal or physical hazard anywhere on the
+        # pages concerned.
+        #
+        # The gate is now raised whenever there are steps to execute, and only
+        # an audited human acknowledgement clears it.  The count is still
+        # reported for review, as information rather than as authority, and no
+        # hazard wording is inspected anywhere: what counts as a hazard remains
+        # the provider's judgement, and whether this Protocol may execute on it
+        # remains a person's.
         reasons.append(
             ReadinessReason(
                 code=ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
                 message=(
-                    "The structured Protocol declares no step-level safety "
-                    "warning. A reviewer must confirm this is correct before "
-                    "execution."
+                    "A reviewer must confirm this Protocol's safety warnings "
+                    "before execution. Extracted warnings are model judgement "
+                    "and do not discharge the review by themselves."
                 ),
             )
         )

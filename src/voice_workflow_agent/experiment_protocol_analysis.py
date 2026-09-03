@@ -154,6 +154,17 @@ class _DomainResponseSchemaBuilder:
                 record_fields = tuple(
                     field for field in record_fields if field.name != "pdf"
                 )
+            if record_type is domain.SourceEvidence:
+                # Segment handles are server-computed identities for spans the
+                # server already owns.  Asking a provider for one would invite
+                # it to invent an identity, which is the opposite of why they
+                # exist, so this field is withheld exactly as the extraction
+                # record is withheld from ProtocolMetadata above.
+                record_fields = tuple(
+                    field
+                    for field in record_fields
+                    if field.name != "evidence_segment_ids"
+                )
             hints = get_type_hints(record_type)
             properties: dict[str, Any] = {}
             required: list[str] = []

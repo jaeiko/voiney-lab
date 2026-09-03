@@ -46,7 +46,9 @@ def test_fictional_multistep_fixture_preserves_quantities_and_timers() -> None:
         sections=(replace(protocol.sections[0], steps=(first, second)),),
     )
     validated = validate_protocol(protocol)
-    assert assess_readiness(validated).status is ReadinessStatus.GUIDANCE_READY
+    assert assess_readiness(validated).reason_codes == (
+        ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
+    ), assess_readiness(validated).reason_codes
     assert validated.sections[0].steps[0].sub_actions[0].process_timer is not None
     assert validated.sections[0].steps[1].sub_actions[0].quantities[0].source_text == (
         "2 × 100 µL aliquots"

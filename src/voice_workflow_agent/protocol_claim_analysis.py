@@ -2679,6 +2679,68 @@ def validate_whole_protocol_claims(
     return merged
 
 
+def reopen_evidence_span(
+    extraction: ProtocolPdfExtraction,
+    evidence: domain.SourceEvidence,
+    *,
+    source_revision: str,
+) -> str:
+    """Read the exact source text a stored statement's handles point at.
+
+    The round trip the handles exist for: a statement kept in the store names
+    its segments, and this returns the text those segments hold, recomputed
+    from the source rather than from anything that was saved alongside them.
+    Raises if a handle does not belong to that page, because a handle that no
+    longer resolves means the source or the segmentation changed and the stored
+    evidence can no longer be trusted to point anywhere.
+    """
+
+    if not evidence.evidence_segment_ids:
+        raise ProtocolAnalysisEvidenceError(
+            "Stored evidence carries no segment handle to reopen.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="stored_evidence_reopen",
+                reason_code="evidence_segment_unknown",
+                mismatch_class="source_identity_mismatch",
+                evidence_type="source_evidence",
+                page_number=evidence.source_page_number,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    segments = {
+        segment.segment_id: segment
+        for segment in generate_page_evidence_segments(
+            extraction,
+            source_revision=source_revision,
+            page_number=evidence.source_page_number,
+        )
+    }
+    missing = [
+        handle
+        for handle in evidence.evidence_segment_ids
+        if handle not in segments
+    ]
+    if missing:
+        raise ProtocolAnalysisEvidenceError(
+            "Stored evidence handle does not resolve on its source page.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="stored_evidence_reopen",
+                reason_code="evidence_segment_unknown",
+                mismatch_class="source_identity_mismatch",
+                evidence_type="source_evidence",
+                page_number=evidence.source_page_number,
+                expected_count=len(evidence.evidence_segment_ids),
+                actual_count=len(evidence.evidence_segment_ids) - len(missing),
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+    return "".join(
+        segments[handle].text for handle in evidence.evidence_segment_ids
+    )
+
+
 def _domain_evidence(evidence: ClaimSourceEvidence) -> domain.SourceEvidence:
     return domain.SourceEvidence(
         source_page_number=evidence.source_page_number,
@@ -2687,6 +2749,9 @@ def _domain_evidence(evidence: ClaimSourceEvidence) -> domain.SourceEvidence:
             f"source_revision={evidence.source_revision};"
             f"source_sha256={evidence.source_sha256}"
         ),
+        # Handles, not content.  They were dropped here, which is why the span
+        # a claim cited could not be reopened once the response was gone.
+        evidence_segment_ids=evidence.evidence_segment_ids,
     )
 
 

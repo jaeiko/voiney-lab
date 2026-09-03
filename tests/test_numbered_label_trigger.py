@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -194,6 +195,65 @@ class FixtureScopeTests(unittest.TestCase):
         self.assertEqual(result["status"], "fixture out of scope")
         for key in ("action_count", "marker_count", "chunk_count"):
             self.assertNotIn(key, result)
+
+
+class FixtureScopeKnownLimitationTests(unittest.TestCase):
+    """The hole in the scope check, kept as a failing-shape record.
+
+    Monotonicity catches interleaving. It cannot catch a single clean ascending
+    run that is not a procedure, so a document whose steps are all prose and
+    whose reference list is numbered 1. 2. 3. is scored, and the fake execution
+    steps built from the bibliography go into the score.
+
+    This is asserted as the *current* behaviour, not as desired behaviour. It
+    is here so the limitation cannot be forgotten, and so that a future rule
+    which closes it makes this test fail loudly rather than passing silently.
+    """
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+
+    def test_a_prose_body_with_numbered_references_is_wrongly_in_scope(self):
+        from prototype_claim_chunks import fixture_scope
+        from tests.test_protocol_claim_analysis import write_lined_pages
+
+        path = self.root / "prose-with-references.pdf"
+        write_lined_pages(
+            path,
+            (
+                ("Protocol Prose", "Abstract", "This protocol is described in"),
+                (
+                    "We resuspend the pellet in cold solvent and vortex until",
+                    "no visible particles remain, then transfer the supernatant",
+                    "to a clean tube and dry it under nitrogen.",
+                ),
+                (
+                    "References",
+                    "1. Ayotte P and Laliberte C. Analytical chemistry review.",
+                    "2. Bennett B D and Rabinowitz J D. Metabolite profiling.",
+                    "3. Sharma B D and Hon S. Fermentation titers and yields.",
+                ),
+            ),
+        )
+        scope = fixture_scope(extract_protocol_pdf(path))
+        self.assertEqual(scope["duplicate_labels"], 0)
+        self.assertEqual(scope["descents"], [])
+        # Wrongly in scope: these three labels are a bibliography.
+        self.assertTrue(scope["in_scope"])
+        self.assertEqual(scope["fixture_action_labels"], 3)
+
+    def test_the_four_local_sources_do_not_show_that_shape(self):
+        """Labels are spread through the body, not confined to the tail."""
+
+        extraction = extract_protocol_pdf(ANKOM)
+        from prototype_claim_chunks import fixture_step_labels
+
+        pages = {page for page, _ in fixture_step_labels(extraction)}
+        tail_start = extraction.page_count - extraction.page_count // 3 + 1
+        self.assertLess(min(pages), tail_start)
+        self.assertGreater(len(pages), extraction.page_count // 2)
 
 
 if __name__ == "__main__":

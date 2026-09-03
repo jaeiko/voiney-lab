@@ -82,12 +82,31 @@ class DeclaredSafetyWarningReadinessTests(unittest.TestCase):
         self.assertIs(assessment.status, domain.ReadinessStatus.ANALYSIS_REQUIRED)
         self.assertIn(_GATE.value, assessment.reason_codes)
 
-    def test_a_declared_warning_clears_the_gate(self) -> None:
+    def test_a_provider_warning_does_not_clear_the_gate(self) -> None:
+        """The defect this gate had, stated as a test.
+
+        A warning in this Protocol is a warning the provider produced, so a
+        non-zero count records that a model called something a hazard, never
+        that the document declares one. One such claim used to take readiness
+        from analysis_required to guidance_ready, so the model's own output
+        waived the human review the gate exists to compel.
+        """
+
         protocol, _ = build_protocol(self.pdf, "p-1", declare_warning=True)
         assessment = domain.assess_readiness(protocol)
         self.assertEqual(domain.declared_safety_warning_count(protocol), 1)
-        self.assertIs(assessment.status, domain.ReadinessStatus.GUIDANCE_READY)
-        self.assertNotIn(_GATE.value, assessment.reason_codes)
+        self.assertIs(assessment.status, domain.ReadinessStatus.ANALYSIS_REQUIRED)
+        self.assertIn(_GATE.value, assessment.reason_codes)
+
+    def test_the_gate_does_not_depend_on_the_count_either_way(self) -> None:
+        for declared in (False, True):
+            protocol, _ = build_protocol(
+                self.pdf, "p-1", declare_warning=declared
+            )
+            with self.subTest(declared=declared):
+                self.assertIn(
+                    _GATE.value, domain.assess_readiness(protocol).reason_codes
+                )
 
     def test_action_scoped_warning_also_counts(self) -> None:
         protocol, _ = build_protocol(self.pdf, "p-1", declare_warning=False)
@@ -110,8 +129,10 @@ class DeclaredSafetyWarningReadinessTests(unittest.TestCase):
                 ),
             ),
         )
+        # The count still includes action-scoped warnings, because it is
+        # reported for review. It just no longer opens anything.
         self.assertEqual(domain.declared_safety_warning_count(rebuilt), 1)
-        self.assertNotIn(
+        self.assertIn(
             _GATE.value, domain.assess_readiness(rebuilt).reason_codes
         )
 
@@ -152,7 +173,7 @@ class SafetyAcknowledgementTests(unittest.TestCase):
         self.pdf = self.root / "gate.pdf"
         write_text_pdf(self.pdf, _PAGE, title="Protocol Gate")
 
-    def _register(self, *, declare_warning: bool):
+    def _register(self, *, declare_warning: bool, with_steps: bool = True):
         registration = self.catalog.register(
             self.pdf,
             source_filename="gate.pdf",
@@ -162,6 +183,13 @@ class SafetyAcknowledgementTests(unittest.TestCase):
         protocol, _ = build_protocol(
             self.pdf, protocol_id, declare_warning=declare_warning
         )
+        if not with_steps:
+            protocol = domain.validate_protocol(
+                replace(
+                    protocol,
+                    sections=(replace(protocol.sections[0], steps=()),),
+                )
+            )
         self.store.append_analysis_revision(
             protocol_id,
             1,
@@ -255,7 +283,13 @@ class SafetyAcknowledgementTests(unittest.TestCase):
             self._approve(entry)
 
     def test_acknowledging_an_ungated_analysis_is_rejected(self) -> None:
-        entry = self._register(declare_warning=True)
+        """A stepless analysis carries no safety gate, so there is none to clear.
+
+        This used to use a Protocol that declared a warning, because a warning
+        cleared the gate. It no longer does.
+        """
+
+        entry = self._register(declare_warning=True, with_steps=False)
         with self.assertRaises(ProtocolApprovalError):
             self.catalog.acknowledge_readiness_gate(
                 entry.protocol_id,
@@ -360,11 +394,17 @@ class HazardReviewSignalTests(unittest.TestCase):
         self.assertEqual(review["declared_safety_warning_count"], 1)
 
     def test_zero_warnings_is_never_reported_as_passed(self) -> None:
-        """The inverted case: worse extraction must not look safer."""
+        """The inverted case: worse extraction must not look safer.
+
+        Zero warnings used to report a bespoke "not_declared", which read as a
+        finished gate for exactly the case that most needs a reviewer. It now
+        reports the same "review_required" as any other count, because the
+        reviewer's job is the same either way.
+        """
 
         review = self._review(None)
         self.assertEqual(review["declared_safety_warning_count"], 0)
-        self.assertEqual(review["gates"]["hazard_review"], "not_declared")
+        self.assertEqual(review["gates"]["hazard_review"], "review_required")
         self.assertNotEqual(review["gates"]["hazard_review"], "passed")
         self.assertIn(
             _GATE.value,
@@ -383,3 +423,114 @@ class HazardReviewSignalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderClaimsNeverOpenTheGateTests(unittest.TestCase):
+    """Both directions of the fix, through the catalog rather than the domain.
+
+    The measured defect: `warning_hazard` claim -> `step.warnings` ->
+    `declared_safety_warning_count` non-zero -> the gate absent -> readiness
+    `guidance_ready`. One provider claim was enough to waive the human review
+    the gate exists to compel, and on the response actually measured the only
+    warning-shaped text on those pages was a note about analysis software
+    crashing -- no chemical, thermal or physical hazard at all.
+
+    No hazard vocabulary is involved in the fix. What counts as a hazard is
+    still the provider's judgement; whether this Protocol may execute on that
+    judgement is now a person's.
+    """
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+        self.store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, self.root / "catalog")
+        )
+        self.addCleanup(self.store.close)
+        self.catalog = ProtocolCatalog(self.store)
+        self.pdf = self.root / "gate.pdf"
+        write_text_pdf(self.pdf, _PAGE, title="Protocol Gate")
+        registration = self.catalog.register(
+            self.pdf,
+            source_filename="gate.pdf",
+            media_type="application/pdf",
+        )
+        self.protocol_id = registration.entry.protocol_id
+        protocol, _ = build_protocol(
+            self.pdf, self.protocol_id, declare_warning=True
+        )
+        self.protocol = protocol
+        self.store.append_analysis_revision(
+            self.protocol_id,
+            1,
+            "analysis-gate",
+            protocol,
+            domain.assess_readiness(protocol),
+            domain.P1_CAPABILITY_POLICY.profile_id,
+        )
+        self.entry = self.catalog.get_entry(self.protocol_id)
+
+    def test_a_provider_hazard_claim_alone_leaves_the_gate_shut(self) -> None:
+        self.assertEqual(
+            domain.declared_safety_warning_count(self.protocol), 1
+        )
+        review = self.catalog.review(self.entry.protocol_id)
+        codes = [r["code"] for r in review["readiness"]["reasons"]]
+        self.assertIn(_GATE.value, codes)
+        self.assertEqual(review["declared_safety_warning_count"], 1)
+        self.assertTrue(review["hazard_review_required"])
+
+    def test_it_blocks_approval_while_a_warning_is_declared(self) -> None:
+        with self.assertRaises(ProtocolApprovalError):
+            self.catalog.approve(
+                self.entry.protocol_id,
+                self.entry.revision_id,
+                policy=SharedSecretApprovalPolicy("review-secret"),
+                presented_secret="review-secret",
+            )
+
+    def test_an_audited_human_confirmation_opens_it(self) -> None:
+        updated = self.catalog.acknowledge_readiness_gate(
+            self.entry.protocol_id,
+            self.entry.revision_id,
+            reason_code=_GATE.value,
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+            comment="Reviewed the extracted warnings against the source.",
+        )
+        self.assertTrue(updated)
+        review = self.catalog.review(self.entry.protocol_id)
+        codes = [r["code"] for r in review["readiness"]["reasons"]]
+        self.assertIn(_GATE.value, codes)
+        self.assertTrue(
+            self.catalog._readiness_gates_cleared(
+                self.protocol_id,
+                1,
+                self.store.get_analysis_revision(self.protocol_id, 1, 1),
+            )
+        )
+
+    def test_the_confirmation_names_who_gave_it(self) -> None:
+        self.catalog.acknowledge_readiness_gate(
+            self.entry.protocol_id,
+            self.entry.revision_id,
+            reason_code=_GATE.value,
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+        )
+        events = [
+            event
+            for event in self.store.list_events(self.protocol_id)
+            if _GATE.value in str(event)
+        ]
+        self.assertTrue(events)
+        self.assertIn("reviewer@example.org", str(events))
+
+    def test_the_claim_itself_is_untouched(self) -> None:
+        """Only the authority to open the gate moved; the claim is unchanged."""
+
+        step = self.protocol.sections[0].steps[0]
+        self.assertEqual(len(step.warnings), 1)
+        self.assertEqual(step.warnings[0].source_text, "Wear gloves.")
+        self.assertEqual(step.warnings[0].evidence.source_page_number, 1)

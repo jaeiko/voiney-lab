@@ -355,10 +355,13 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
             ),
         )
         readiness = domain.assess_readiness(protocol)
-        # The unchecked source must be the *only* thing left blocking.
+        # The unchecked source and the safety confirmation must be the only
+        # things left blocking. Both are acknowledgeable gates, and both are
+        # cleared by a person rather than by extraction.
         assert readiness.reason_codes == (
             domain.ReadinessReasonCode
             .SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
+            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
         ), readiness.reason_codes
         self.store.append_analysis_revision(
             protocol_id,
@@ -415,6 +418,20 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
             recorded[0].payload["actor_principal_id"], "reviewer@example.org"
         )
         self.assertTrue(recorded[0].recorded_at)
+        # Approval still blocks: the safety confirmation is a separate gate and
+        # clearing one never clears another.
+        with self.assertRaises(ProtocolApprovalError):
+            approve()
+        self.catalog.acknowledge_readiness_gate(
+            entry.protocol_id,
+            entry.revision_id,
+            reason_code=(
+                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+            ),
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+            comment="Warnings reviewed against the source.",
+        )
         approve()
 
     def test_a_proven_mismatch_can_never_be_acknowledged(self) -> None:

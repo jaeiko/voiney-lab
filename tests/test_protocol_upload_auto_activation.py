@@ -76,6 +76,21 @@ class ProtocolUploadAutoActivationTests(unittest.TestCase):
             draft.capability_policy_id,
         )
 
+        # A reviewer must confirm the safety warnings first: extracted
+        # warnings are model judgement and never discharge that review.
+        with self.assertRaises(ProtocolCatalogUnavailableError):
+            self.catalog.activate_development(protocol_id)
+        self.catalog.acknowledge_readiness_gate(
+            protocol_id,
+            "pdf-1-analysis-1",
+            reason_code=(
+                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+            ),
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+            comment="Warnings reviewed against the source.",
+        )
+
         # Now activate development
         activated = self.catalog.activate_development(protocol_id)
         self.assertEqual(activated.protocol_id, protocol_id)

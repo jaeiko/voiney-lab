@@ -161,7 +161,11 @@ def analysis_draft(path: Path, protocol_id: str, title: str) -> ProtocolAnalysis
     )
     domain.validate_protocol(protocol)
     readiness = domain.assess_readiness(protocol)
-    assert readiness.status is domain.ReadinessStatus.GUIDANCE_READY
+    # The safety confirmation is the only gate left open, and only a reviewer
+    # closes it. Nothing structural is blocking.
+    assert readiness.reason_codes == (
+        domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
+    ), readiness.reason_codes
     return ProtocolAnalysisDraft(
         extraction,
         protocol,
@@ -213,6 +217,19 @@ class ProtocolCatalogTests(unittest.TestCase):
             draft.capability_policy_id,
         )
         analyzed = self.catalog.get_entry(registration.entry.protocol_id)
+        # Approval now requires a reviewer to confirm the safety warnings,
+        # whether extraction produced any or not. Extracted warnings are model
+        # judgement and never discharge the review on their own.
+        self.catalog.acknowledge_readiness_gate(
+            analyzed.protocol_id,
+            analyzed.revision_id,
+            reason_code=(
+                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+            ),
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+            comment="Warnings reviewed against the source.",
+        )
         approved = self.catalog.approve(
             analyzed.protocol_id,
             analyzed.revision_id,
@@ -352,7 +369,14 @@ class ProtocolCatalogTests(unittest.TestCase):
         )
         review = self.catalog.review(entry.protocol_id)
         self.assertTrue(review["analysis_available"])
-        self.assertEqual(review["readiness"]["status"], "guidance_ready")
+        # A reviewer must confirm the safety warnings first, so the draft is
+        # not ready on extraction alone. That is the point of this test: a
+        # review projection never makes a draft executable.
+        self.assertEqual(review["readiness"]["status"], "analysis_required")
+        self.assertEqual(
+            [reason["code"] for reason in review["readiness"]["reasons"]],
+            [domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value],
+        )
         self.assertEqual(review["sections"][0]["steps"][0]["source_label"], "1")
         self.assertEqual(
             review["sections"][0]["steps"][0]["evidence"]["source_page_number"],
@@ -385,9 +409,20 @@ class ProtocolCatalogTests(unittest.TestCase):
             draft.readiness,
             draft.capability_policy_id,
         )
+        revision_id = f"pdf-1-analysis-{analysis.analysis_revision_number}"
+        self.catalog.acknowledge_readiness_gate(
+            entry.protocol_id,
+            revision_id,
+            reason_code=(
+                domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+            ),
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+            comment="Warnings reviewed against the source.",
+        )
         approved = self.catalog.approve(
             entry.protocol_id,
-            f"pdf-1-analysis-{analysis.analysis_revision_number}",
+            revision_id,
             policy=SharedSecretApprovalPolicy("secret"),
             presented_secret="secret",
             actor_principal_id="reviewer-approval-context",
@@ -482,7 +517,10 @@ class ProtocolCatalogTests(unittest.TestCase):
             status = get_protocol_analysis_status(entry.protocol_id)
 
         self.assertEqual(status["state"], "review_required")
-        self.assertEqual(status["lifecycle_state"], "review_required")
+        # Blocked, not review_required, because the safety confirmation is
+        # still outstanding: an unacknowledged acknowledgeable gate has always
+        # read as blocked here, and every analysis now carries one.
+        self.assertEqual(status["lifecycle_state"], "blocked")
 
     def test_missing_provider_configuration_is_actionable_persisted_failure(self):
         entry = self.catalog.register(
@@ -1301,6 +1339,18 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 draft.protocol,
                 draft.readiness,
                 draft.capability_policy_id,
+            )
+            # Development activation is still guidance read out to a person, so
+            # the safety confirmation applies to it as it does to approval.
+            catalog.acknowledge_readiness_gate(
+                protocol_id,
+                "pdf-1-analysis-1",
+                reason_code=(
+                    domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
+                ),
+                actor_principal_id="reviewer@example.org",
+                actor_role="reviewer",
+                comment="Warnings reviewed against the source.",
             )
         finally:
             store.close()
