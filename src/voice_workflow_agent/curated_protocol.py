@@ -4134,7 +4134,17 @@ _CONCISE_SUMMARIES_KO = {
 
 
 class CuratedProtocolSession:
-    """Server-owned in-memory state for one validated structured fixture."""
+    """Server-owned in-memory state for one validated structured fixture.
+
+    There are two ways in, and only one is gated. ``ProtocolCatalog``'s
+    ``load_executable_fixture`` builds a fixture from a stored analysis and
+    refuses unless the Protocol is approved or development-activated, which
+    requires readiness to be clear. Direct construction, which the replay
+    harness and the demo path use, has no such check. Nothing produced by the
+    analysis pipeline has ever come through the gated route -- see
+    docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md -- so this is currently the
+    only route that carries anything at all.
+    """
 
     def __init__(self, fixture: CuratedProtocolFixture) -> None:
         self.fixture = fixture

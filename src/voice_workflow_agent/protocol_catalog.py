@@ -55,6 +55,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     ProtocolChunkClaimAnalysis,
+    reopen_evidence_span,
     serialize_chunk_claim_analysis,
 )
 from voice_workflow_agent.protocol_ocr import (
@@ -96,6 +97,16 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
         domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
         domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
     }
+)
+_AMBIGUITY_RESOLUTION_EVENT = "protocol_ambiguity_resolved"
+_AMBIGUITY_REVOCATION_EVENT = "protocol_ambiguity_resolution_revoked"
+# A reviewer's two possible findings about one ambiguity. Only the first can
+# clear anything: deciding that two statements really are different is a
+# finding, not a resolution, and it leaves the Protocol blocked.
+AMBIGUITY_SINGLE_AUTHORITATIVE = "single_statement_is_authoritative"
+AMBIGUITY_STATEMENTS_DISTINCT = "statements_are_distinct"
+_AMBIGUITY_DECISIONS = frozenset(
+    {AMBIGUITY_SINGLE_AUTHORITATIVE, AMBIGUITY_STATEMENTS_DISTINCT}
 )
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
@@ -2102,19 +2113,68 @@ class ProtocolCatalog:
         protocol_revision_number: int,
         analysis: Any,
     ) -> bool:
-        """True when every blocking reason is an acknowledged, clearable gate.
+        """True when a person has cleared every blocking reason.
 
-        Any reason outside ``_ACKNOWLEDGEABLE_GATES`` still blocks, and an
-        acknowledgement clears only the exact gate it names.
+        There are two ways a reason clears, and both need a person. A gate in
+        ``_ACKNOWLEDGEABLE_GATES`` clears when that exact gate is acknowledged.
+        ``unresolved_ambiguity`` clears only when *every* ambiguity the
+        analysis carries has a standing finding that one statement is
+        authoritative -- one settled ambiguity does not clear the reason, and a
+        finding that two statements are genuinely distinct does not clear it at
+        all, because that is a finding rather than a resolution.
+
+        Anything else still blocks, and with nothing recorded the answer is
+        False. Nothing here inspects the ambiguous text.
         """
 
         blocking = set(analysis.readiness.reason_codes)
-        if not blocking or not blocking <= _ACKNOWLEDGEABLE_GATES:
+        if not blocking:
             return False
-        return blocking <= self._acknowledged_gates(
+        acknowledged = self._acknowledged_gates(
             protocol_id,
             protocol_revision_number,
             analysis.analysis_revision_number,
+        )
+        for reason_code in blocking:
+            if reason_code in _ACKNOWLEDGEABLE_GATES:
+                if reason_code not in acknowledged:
+                    return False
+            elif (
+                reason_code
+                == domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value
+            ):
+                if not self._every_ambiguity_resolved(
+                    protocol_id, protocol_revision_number, analysis
+                ):
+                    return False
+            else:
+                return False
+        return True
+
+    def _every_ambiguity_resolved(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis: Any,
+    ) -> bool:
+        """Every ambiguity in this analysis has a standing authoritative finding."""
+
+        outstanding = {
+            construct.ambiguity_id
+            for construct in analysis.protocol.constructs
+            if isinstance(construct, domain.SourceAmbiguity)
+            and not construct.resolved
+        }
+        if not outstanding:
+            return False
+        findings = self._ambiguity_findings(
+            protocol_id,
+            protocol_revision_number,
+            analysis.analysis_revision_number,
+        )
+        return all(
+            findings.get(ambiguity_id) == AMBIGUITY_SINGLE_AUTHORITATIVE
+            for ambiguity_id in outstanding
         )
 
     def acknowledge_readiness_gate(
@@ -2181,6 +2241,252 @@ class ProtocolCatalog:
             analysis_revision_number=analysis_revision_number,
         )
         return self.get_entry(protocol_id)
+
+    def resolve_ambiguity(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        ambiguity_id: str,
+        decision: str,
+        evidence_segment_ids: tuple[str, ...],
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Record one reviewer's finding about one source ambiguity.
+
+        The pipeline stops on an ambiguity a person can settle in seconds --
+        typically a source that states one interval twice, once in prose and
+        once as a timer literal -- and until now there was no way to say so.
+        Acknowledging a readiness gate is too coarse: it would clear every
+        ambiguity in the document at once, including ones nobody had looked at.
+
+        What this does *not* do matters as much. It never edits the source, it
+        never deletes or rewrites a claim, and it never sets ``resolved`` on the
+        stored analysis: the analysis stays exactly as validated, and the
+        finding is appended beside it. Nothing infers whether two statements
+        agree -- no string or numeric comparison decides it, because that would
+        be repairing the document on a guess. Only a person decides, and the
+        default with no decision recorded is still blocked.
+
+        The reviewer must cite the segments they read. Those handles are
+        resolved against the source before the finding is accepted, so a
+        decision cannot rest on a span that does not exist.
+        """
+
+        if decision not in _AMBIGUITY_DECISIONS:
+            raise ProtocolApprovalError("Ambiguity decision is unsupported.")
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            raise ProtocolApprovalError(
+                "A validated analysis revision is required to resolve an "
+                "ambiguity."
+            )
+        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
+        revision = self.store.get_protocol_revision(
+            protocol_id, protocol_revision_number
+        )
+        if revision is None:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        analysis = self.store.get_analysis_revision(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
+        ambiguity = next(
+            (
+                construct
+                for construct in analysis.protocol.constructs
+                if isinstance(construct, domain.SourceAmbiguity)
+                and construct.ambiguity_id == ambiguity_id
+            ),
+            None,
+        )
+        if ambiguity is None:
+            raise ProtocolApprovalError(
+                "This analysis revision has no such ambiguity."
+            )
+        if not evidence_segment_ids:
+            raise ProtocolApprovalError(
+                "An ambiguity decision must cite the segments it rests on."
+            )
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        extraction = extract_protocol_pdf(
+            self.store.file_store.object_path(
+                revision.pdf_checksum, expected_size=pdf_object.byte_size
+            )
+        )
+        try:
+            reopen_evidence_span(
+                extraction,
+                replace(
+                    ambiguity.evidence,
+                    evidence_segment_ids=tuple(evidence_segment_ids),
+                ),
+                source_revision="pdf-1",
+            )
+        except Exception as exc:  # noqa: BLE001 - a citation that will not open
+            raise ProtocolApprovalError(
+                "The cited evidence segments do not resolve on that page."
+            ) from exc
+        ordinal = self._ambiguity_event_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            ambiguity_id,
+        )
+        self.store.append_event(
+            (
+                f"ambiguity-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}-{ambiguity_id[:40]}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _AMBIGUITY_RESOLUTION_EVENT,
+            {
+                "decision": decision,
+                "ambiguity_id": ambiguity_id,
+                "step_id": ambiguity.step_id,
+                "action_id": ambiguity.action_id,
+                "source_page_number": ambiguity.evidence.source_page_number,
+                "evidence_segment_ids": list(evidence_segment_ids),
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer recorded a finding.")[:4000],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def revoke_ambiguity_resolution(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        ambiguity_id: str,
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Withdraw a finding, which blocks the Protocol again.
+
+        A wrong decision has to be undoable, and undoing it must restore the
+        block rather than leave the Protocol open on a withdrawn finding. The
+        earlier decision is not erased -- the ledger is append-only -- so who
+        decided what, and who later withdrew it, both stay readable.
+        """
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            raise ProtocolApprovalError(
+                "A validated analysis revision is required to revoke a "
+                "finding."
+            )
+        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
+        if ambiguity_id not in self._ambiguity_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        ):
+            raise ProtocolApprovalError(
+                "This analysis revision carries no finding to revoke."
+            )
+        ordinal = self._ambiguity_event_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            ambiguity_id,
+        )
+        self.store.append_event(
+            (
+                f"ambiguity-revoke-{protocol_id[-16:]}-"
+                f"{protocol_revision_number}-{analysis_revision_number}-"
+                f"{ambiguity_id[:34]}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _AMBIGUITY_REVOCATION_EVENT,
+            {
+                "decision": "revoked",
+                "ambiguity_id": ambiguity_id,
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer withdrew a finding.")[:4000],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def _ambiguity_event_ordinal(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+        ambiguity_id: str,
+    ) -> int:
+        """How many findings this ambiguity already has, plus one.
+
+        The ledger is append-only and refuses to reuse an identifier for
+        different content, so a reviewer who withdraws a finding and records a
+        different one needs a fresh identifier rather than a collision.
+        """
+
+        return 1 + sum(
+            1
+            for event in self.store.list_events(protocol_id)
+            if event.event_type
+            in (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT)
+            and event.protocol_revision_number == protocol_revision_number
+            and event.analysis_revision_number == analysis_revision_number
+            and isinstance(event.payload, dict)
+            and event.payload.get("ambiguity_id") == ambiguity_id
+        )
+
+    def _ambiguity_findings(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+    ) -> dict[str, str]:
+        """The standing finding per ambiguity: the last event for each wins."""
+
+        findings: dict[str, str] = {}
+        for event in self.store.list_events(protocol_id):
+            if event.protocol_revision_number != protocol_revision_number:
+                continue
+            if event.analysis_revision_number != analysis_revision_number:
+                continue
+            if not isinstance(event.payload, dict):
+                continue
+            ambiguity_id = event.payload.get("ambiguity_id")
+            if not isinstance(ambiguity_id, str):
+                continue
+            if event.event_type == _AMBIGUITY_RESOLUTION_EVENT:
+                findings[ambiguity_id] = str(event.payload.get("decision"))
+            elif event.event_type == _AMBIGUITY_REVOCATION_EVENT:
+                findings.pop(ambiguity_id, None)
+        return findings
+
+    def ambiguity_findings(
+        self,
+        protocol_id: str,
+        revision_id: str,
+    ) -> dict[str, str]:
+        """Read the standing findings, for a reviewer or a projection."""
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            return {}
+        return self._ambiguity_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
 
     def approve(
         self,

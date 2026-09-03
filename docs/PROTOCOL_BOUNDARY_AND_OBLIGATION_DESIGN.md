@@ -2261,6 +2261,175 @@ is the only measurement that exists. Taking p = 0.5 per attempt:
 Two calls of authorized budget remain, which is below the floor of 3. Replaying
 stored responses stays free; only new calls cost.
 
+## 8. A reviewer can settle an ambiguity
+
+The system had acknowledgement but no resolution, so it stopped permanently on
+something a person settles in seconds. Acknowledging a readiness gate is the
+wrong instrument: `unresolved_ambiguity` appears once per ambiguity, and
+clearing the reason code would clear all four at once, including ones nobody
+had looked at.
+
+A finding is now recorded **per ambiguity**, in the append-only ledger:
+
+- **`single_statement_is_authoritative`** - the two statements say the same
+  thing and this is the one to trust. This is the only finding that clears
+  anything.
+- **`statements_are_distinct`** - they really are different and this cannot be
+  settled. That is a finding, not a resolution; the Protocol stays blocked.
+
+Each finding stores the actor, their role, the store's timestamp, the ambiguity
+id, its step and action, the source page, the evidence handles the reviewer
+read, and their comment. The handles are **resolved against the source before
+the finding is accepted**, so a decision cannot rest on a span that does not
+exist - which is what STEP 14's handle work was for.
+
+What it does not do is as important:
+
+- **The source is never edited, no claim is deleted or rewritten, and
+  `resolved` is never flipped on the stored analysis.** The payload's sha256 is
+  unchanged after a finding; the finding is appended beside it. The analysis
+  layer already forbids a draft from arriving pre-resolved, so only a person
+  can ever do this.
+- **Nothing infers whether two statements agree.** No string or numeric
+  comparison decides it. Comparing `15min` with `00:15:00` and merging them
+  would be repairing the document on a guess.
+- **The default is blocked.** With nothing recorded the answer is False, and a
+  withdrawal restores the block.
+- **A finding never touches the safety gate**, and acknowledging the safety
+  gate never settles an ambiguity. Two decisions, two records.
+
+Revocation is real: the earlier finding is not erased, because the ledger is
+append-only, so who decided what and who withdrew it both stay readable. A
+reviewer may withdraw and record a different finding; the identifier carries an
+ordinal so the second decision does not collide with the first.
+
+Measured on the real document, all four directions:
+
+```
+before any finding           : blocked
+all four resolved            : cleared
+one withdrawn                : blocked again
+that one re-decided distinct : blocked
+```
+
+## 8a. The wall after resolution: repeat-until, alone
+
+The walk was rerun through the audited route with nothing stepped around.
+Ambiguities all settled, safety warnings confirmed, and **stage 8 still
+refuses** - now on `unsupported_repeat_until` alone, which no acknowledgement
+or finding clears. Reported as it stands rather than worked around.
+
+| Stage | Before STEP 16 | After |
+| --- | --- | --- |
+| 6 readiness | ambiguity x4 + safety + repeat-until x2 | same |
+| 7 safety confirmation | ok | ok |
+| 7b ambiguity findings | **did not exist** | **4 of 4 settled** |
+| 8 development activation | blocked by all three classes | **blocked by repeat-until only** |
+
+## 8b. The two repeat-until statements, quoted
+
+Facts and options; no policy change is made here.
+
+**First**, page 5, attached to step 7:
+
+> 7 Repeat steps 2-7 until the gel band is fully destained.
+
+Its Expected-result block adds: *"It is really important that the gel bands are
+fully destained before progressing to the next step. This is usually attained
+by the end of two cycles of solution A/B washes."*
+
+**Second**, page 6, attached to step 9. The claim's cited excerpt is:
+
+> 9 Remove and discard the acetonitrile. Your gel band should have a whitish
+> appearance when dry.
+
+The repeat instruction itself is **not in that excerpt** - it is in the
+following Expected-result prose: *"If the band is still transparent then repeat
+steps 8-9 until fully dehydrated."* So the second construct is attached to a
+step whose quoted evidence does not contain the repeat sentence. Recorded as a
+fact.
+
+**What the statements ask an operator to do.** Neither states a repetition
+count. Both stop on a **visual judgement made by a person**: "fully destained"
+(the first, with a hint that two cycles usually suffice) and "still
+transparent / fully dehydrated" (the second). Both name a **range** of steps to
+repeat - 2-7 and 8-9 - while the assembled constructs record
+`repeated_step_ids` as only the enclosing step, `step-7` and `step-9`
+respectively. So the range in the source is not represented.
+
+**Why P1 declines it.** The policy's supported feature set excludes
+repeat-until because the loop has no bound the server can compute and no
+condition the server can evaluate. The stop condition is an unaided human
+observation, so the server cannot know whether another iteration is required,
+cannot know when to stop, and cannot bound the total work. Advancing a step on
+an unevaluable condition would also put the model or the code in the position
+of deciding an execution question, which is the boundary this system exists to
+hold.
+
+**If a reviewer converted it to a bounded repetition plus an observation
+checkpoint** - what would and would not be guaranteed:
+
+- Guaranteed: termination, because an explicit upper bound exists; a recorded
+  human confirmation at each iteration boundary; and an audit trail of who
+  confirmed what.
+- Not guaranteed: that the bound matches the protocol's intent. "Usually
+  attained by the end of two cycles" is a hint, not a limit, and a bound of two
+  would silently stop short on a gel needing three. The operator would then be
+  told the loop is finished when the source's own condition is unmet.
+- Also not guaranteed: that the observation is correct. The system records that
+  a person said "destained"; it cannot verify it. The confirmation moves the
+  judgement onto a named person, which is the intended place for it, but it
+  adds no evidence.
+- Not addressed at all: the step range. A bounded repetition over `step-7`
+  alone is not what "repeat steps 2-7" asks for, and re-running one step in
+  place of six would be wrong in a way the operator might not notice.
+
+**To make an unbounded loop impossible** the following would be needed: an
+explicit maximum iteration count carried on the construct and enforced by the
+server before execution starts; a refusal at assembly when a repeat-until has
+no bound rather than a refusal only at readiness; a recorded human confirmation
+per iteration, with the loop blocked rather than advanced when it is absent;
+and the repeated step range represented correctly, since a bound on the wrong
+steps bounds the wrong thing.
+
+## 8c. Regression: every stored payload is loaded
+
+Adding one field made an analysis written months earlier undecodable, and 1145
+tests missed it - because every one of them wrote its payload with the same
+code that read it back. Only data that predates the change can catch that.
+
+`tests/test_stored_payloads_still_load.py` now reads what is actually on disk:
+it discovers every `*.sqlite` under the runtime directory, opens each read-only
+and immutable, and decodes every row of `analysis_payloads`. The list is
+discovered rather than maintained, so a store added later is picked up
+automatically - it already found a second store, in a backup directory, that no
+hand-written list would have included. Decoding is not enough on its own, so it
+also validates each decoded Protocol and checks the steps carry their evidence.
+
+**Confirmed against the defect**: restoring STEP 14's exact-field-match decoder
+makes it fail, on both stores, naming the payload digest; with the fix it
+passes. It also pins the other half of the rule - a field with no default that
+is missing, or a field the dataclass does not have, is still refused, so
+tolerating an added field does not tolerate a truncated record.
+
+## 8d. The demo does not use the gated route
+
+Recorded in code at both `CuratedProtocolSession` and the replay harness, and
+here. `ProtocolCatalog.load_executable_fixture` builds a fixture from a stored
+analysis and refuses unless the Protocol is approved or development-activated.
+Direct construction, which the replay harness and the demo use, has no such
+check. Nothing produced by the analysis pipeline has ever come through the
+gated route, so direct construction is currently the only route carrying
+anything at all.
+
+**Not moved yet, on purpose.** There is nothing to move it to until one
+executable Protocol exists, and for this document that waits on the
+repeat-until decision above.
+
+The two local protocol sources supplied for measurement are in `.gitignore`
+(24 MB and 5.1 MB). Their sha256 are pinned in tests, which skip with the
+expected hash printed when a file is absent, so a missing source is loud.
+
 
 ## 5. Narrowing `no_relevant_claims`
 

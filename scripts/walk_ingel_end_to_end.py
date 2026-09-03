@@ -25,7 +25,10 @@ from voice_workflow_agent.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+from voice_workflow_agent.protocol_catalog import (
+    AMBIGUITY_SINGLE_AUTHORITATIVE,
+    ProtocolCatalog,
+)
 from voice_workflow_agent.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
@@ -297,6 +300,46 @@ def main() -> int:
                 True,
                 ledger_entries=len(gate_events),
                 actor=gate_events[-1].payload["actor_principal_id"],
+            )
+
+            # 7b) reviewer findings on each ambiguity, through the audited
+            # resolution path. No wall is stepped around here.
+            ambiguities = [
+                construct
+                for construct in stored_protocol.constructs
+                if isinstance(construct, domain.SourceAmbiguity)
+            ]
+            for ambiguity in ambiguities:
+                catalog.resolve_ambiguity(
+                    registered_id,
+                    revision_id,
+                    ambiguity_id=ambiguity.ambiguity_id,
+                    decision=AMBIGUITY_SINGLE_AUTHORITATIVE,
+                    evidence_segment_ids=(
+                        ambiguity.evidence.evidence_segment_ids
+                    ),
+                    actor_principal_id="reviewer@example.org",
+                    actor_role="reviewer",
+                    comment=(
+                        "Prose interval and timer literal state the same "
+                        "interval."
+                    ),
+                )
+            analysis_now = store.get_analysis_revision(registered_id, 1, 1)
+            record(
+                7,
+                "reviewer findings on ambiguities",
+                True,
+                resolved=len(ambiguities),
+                every_ambiguity_resolved=catalog._every_ambiguity_resolved(
+                    registered_id, 1, analysis_now
+                ),
+                all_gates_cleared=catalog._readiness_gates_cleared(
+                    registered_id, 1, analysis_now
+                ),
+                still_blocking=sorted(
+                    set(analysis_now.readiness.reason_codes)
+                ),
             )
 
             # 8) development activation

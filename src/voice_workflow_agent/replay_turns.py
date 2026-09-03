@@ -170,6 +170,14 @@ def replay(args: argparse.Namespace) -> list[dict[str, object]]:
         if args.fixture is not None
         else _demo_fixture()
     )
+    # KNOWN GAP, deliberately not closed yet. This builds a session directly
+    # and never passes through ProtocolCatalog.load_executable_fixture, so it
+    # bypasses the readiness and approval checks that gate the real route. That
+    # is how the demo runs at all: no Protocol produced by the analysis
+    # pipeline has ever reached available_for_execution, because every one so
+    # far carries a blocker no acknowledgement clears. Move this onto the gated
+    # route once one executable Protocol exists; until then there is nothing to
+    # move it to. See docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md.
     workflow = CuratedProtocolSession(fixture)
     workflow.active = True
     workflow.current_index = 0

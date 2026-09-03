@@ -13,3 +13,9 @@ node_modules/
 /playwright-report/
 /test-results/
 .claude/
+
+# Local protocol sources supplied for measurement, not project files: 24 MB
+# and 5.1 MB. Tests pin their sha256 and skip with the hash printed when they
+# are absent, so a missing file is loud rather than silent.
+/intracellularmetaboliteextraction.pdf
+/usingdynamicheadspacecollections.pdf

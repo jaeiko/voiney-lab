@@ -252,6 +252,53 @@ class TheLoopStopsAtExecutionReadinessTests(unittest.TestCase):
         with self.assertRaises(ProtocolCatalogUnavailableError):
             self.catalog.load_executable_fixture(self.protocol_id)
 
+    def test_resolving_the_ambiguities_narrows_the_wall(self) -> None:
+        """Through the audited route, not around it.
+
+        With every ambiguity settled and the safety warnings confirmed, the
+        only reason left is the unsupported repeat-until, which no
+        acknowledgement or finding clears. Stage 8 still refuses, and that is
+        the correct outcome rather than something to work around.
+        """
+
+        from voice_workflow_agent.protocol_catalog import (
+            AMBIGUITY_SINGLE_AUTHORITATIVE,
+        )
+
+        self.catalog.acknowledge_readiness_gate(
+            self.protocol_id,
+            self.revision_id,
+            reason_code=_GATE,
+            actor_principal_id="reviewer@example.org",
+            actor_role="reviewer",
+        )
+        ambiguities = [
+            construct
+            for construct in self.draft.protocol.constructs
+            if isinstance(construct, domain.SourceAmbiguity)
+        ]
+        self.assertEqual(len(ambiguities), 4)
+        for ambiguity in ambiguities:
+            self.catalog.resolve_ambiguity(
+                self.protocol_id,
+                self.revision_id,
+                ambiguity_id=ambiguity.ambiguity_id,
+                decision=AMBIGUITY_SINGLE_AUTHORITATIVE,
+                evidence_segment_ids=ambiguity.evidence.evidence_segment_ids,
+                actor_principal_id="reviewer@example.org",
+                actor_role="reviewer",
+                comment="Prose interval and timer literal agree.",
+            )
+        analysis = self.store.get_analysis_revision(self.protocol_id, 1, 1)
+        self.assertTrue(
+            self.catalog._every_ambiguity_resolved(self.protocol_id, 1, analysis)
+        )
+        self.assertFalse(
+            self.catalog._readiness_gates_cleared(self.protocol_id, 1, analysis)
+        )
+        with self.assertRaises(ProtocolCatalogUnavailableError):
+            self.catalog.activate_development(self.protocol_id)
+
     def test_the_session_runs_on_the_assembled_protocol(self) -> None:
         """Stages 9 and 10 as a diagnostic, with the wall stepped around.
 
