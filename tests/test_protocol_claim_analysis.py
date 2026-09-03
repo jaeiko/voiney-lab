@@ -292,7 +292,7 @@ class RichClaimModel:
         action = (
             "1. Add 10 mL buffer at 5% and incubate at 37 C for 15 min at "
             "800 rpm then hold for 20 min; WARNING hot; observe clear; repeat "
-            "until clear; volume is not specified."
+            "steps 1-1 until clear; volume is not specified."
         )
         claims = [
             ("material-buffer", "material", "Material: buffer 10 mL 5%.", None),
@@ -306,7 +306,7 @@ class RichClaimModel:
             ("speed-1", "agitation_speed", "800 rpm", "action-1"),
             ("warning-1", "warning_hazard", "WARNING hot", "action-1"),
             ("observation-1", "observation_checkpoint", "observe clear", "action-1"),
-            ("repeat-1", "repeat_condition", "repeat until clear", "action-1"),
+            ("repeat-1", "repeat_condition", "repeat steps 1-1 until clear", "action-1"),
             (
                 "missing-1",
                 "explicit_missing_ambiguous_value",
@@ -330,6 +330,11 @@ class RichClaimModel:
                     "target_claim_id": target,
                     "required_for_execution": (
                         category in {"action", "explicit_missing_ambiguous_value"}
+                    ),
+                    # A repeat must declare the range it repeats, and the
+                    # cited excerpt must contain it.
+                    "repeated_step_labels": (
+                        ["1", "1"] if category == "repeat_condition" else None
                     ),
                     "evidence": evidence(excerpt),
                 }
@@ -394,7 +399,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         self.action = (
             "1. Add 10 mL buffer at 5% and incubate at 37 C for 15 min at "
             "800 rpm then hold for 20 min; WARNING hot; observe clear; repeat "
-            "until clear; volume is not specified."
+            "steps 1-1 until clear; volume is not specified."
         )
         write_pages(
             self.source,

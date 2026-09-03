@@ -2430,6 +2430,168 @@ The two local protocol sources supplied for measurement are in `.gitignore`
 (24 MB and 5.1 MB). Their sha256 are pinned in tests, which skip with the
 expected hash printed when a file is absent, so a missing source is loud.
 
+## 9. Repeat policy, recorded and not yet built
+
+The decision, taken by the project owner and recorded here so implementation
+cannot drift from it:
+
+- **A server-set bound is never a completion condition.** Inventing a
+  completion condition the source does not state is forbidden, and "usually
+  attained by the end of two cycles" is a hint, not a specification. A bound of
+  two used as completion would tell an operator "finished" on a gel that needs
+  three - a false completion notice, the worst failure this product can
+  produce.
+- Authority to end a repetition rests on **a person's observation**.
+- A bound exists **only as a runaway guard**.
+- Reaching the bound is **a halt and an escalation, never a completion**.
+- Each iteration records a human confirmation, and progress blocks without one.
+
+Execution of this is deliberately not implemented in this step: the
+preconditions below had to come first, because a bound placed on a wrongly
+recorded range would bound the wrong thing.
+
+## 9a. headspace: the loop still does not close, and why
+
+Same walk as STEP 15, on `usingdynamicheadspacecollections.pdf`, offline, zero
+provider calls, isolated store. **A plumbing check, not a quality
+measurement** - the claim model is the deterministic fixture, which is in scope
+here (62 labels, strictly increasing, no duplicate or descent).
+
+| Stage | Result |
+| --- | --- |
+| 1 extraction | ok - 16 pages, verified |
+| 2 page admission | ok - 5 chunks |
+| 3 chunk analysis | ok - 5/5 |
+| 4 whole-document merge | ok - 93 claims |
+| 5 assembly | ok - 62 steps |
+| 6 readiness | ok - `analysis_required` |
+| 7 safety confirmation | ok |
+| 7b ambiguity findings | **0 ambiguities on this document** |
+| 8 development activation | **STOPS** - `unsupported_repeat_until` x2 |
+
+**The premise that headspace has no conditional repetition is correct, and the
+blockers are misclassifications.** All five repeat mentions in the source are
+unconditional:
+
+```
+p5  step 16 : Repeat steps 12-15 twice more, to wash bacterial cells.
+p5  step 21 : Repeat steps 19-20 for the required number of ... replicates
+p6  step 27 : Repeat steps 23-26 for the metal plates.
+p12 step 42 : repeat steps 36-41 twice more (three conditioning rounds in total)
+p14 step 51 : Repeat steps 43-50 for the required number of treatments
+```
+
+Not one has a conditional stop. Two of them nevertheless became `RepeatUntil`
+constructs - a fixed count ("twice more") and a change of target ("for the metal
+plates").
+
+The cause is the claim vocabulary. `ClaimCategory` has exactly one repetition
+category, `repeat_condition`, and assembly maps it to `RepeatUntil`. P1's
+supported feature set is `{fixed_range_repetition, informational_difference}`,
+so **the policy would accept a bounded repetition and the contract has no way
+to say one.** Every repetition, bounded or not, is forced into the one shape the
+policy refuses.
+
+Nothing was relaxed to get past this, and the gap is not closed here.
+Distinguishing "twice more" from "until destained" is a semantic reading of
+prose; doing it in code would mean a word list, which this design has rejected
+repeatedly. It belongs in the claim vocabulary as a category the provider
+chooses, and that is a contract change to decide, not to slip in.
+
+So **the loop is still not closed by any document.** The nearest miss is
+headspace: one contract gap away, with no conditional repetition and no
+ambiguity in the way.
+
+## 9b. in-gel's third repeat: declined, not lost
+
+The source states three conditional repeats; the pipeline produced two.
+Traced, facts only:
+
+- The p8 sentence *"If the band is still transparent then repeat steps 17-18
+  until fully dehydrated"* lives in one segment, and that segment was
+  **explicitly declined** by the model. Not unaccounted: page 8 has 0
+  unaccounted segments and status `complete`.
+- **So this is not a silent omission.** The all-segment accounting did its job -
+  the segment is on the record as declined and visible to a reviewer, which is
+  exactly what that obligation was built for.
+- No construct was created because the fixture detects a repeat only inside a
+  per-page step-block excerpt, and on page 8 the sentence sits **before the
+  page's first label** (21). Its owning step, 19 or 20, is on page 7, so the
+  sentence falls outside every step block the fixture builds for page 8. On
+  page 6 the equivalent sentence sits inside step 9's block, which is why that
+  one fired.
+
+**Classification: a limitation of the offline fixture model, not a hole in a
+server rule.** The rule that would have caught a silent loss caught it.
+Recorded, not fixed, as instructed.
+
+## 9c. Two preconditions for any repeat bound, fixed
+
+**The range was not represented.** All three in-gel statements name ranges
+(2-7, 8-9, 17-18) and `repeated_step_ids` held only the enclosing step, so
+"repeat steps 2-7" was recorded as repeating step 7 alone. Bound that and an
+operator re-runs one step where the protocol asks for six - a different
+experiment, recorded without anyone being told.
+
+A `repeat_condition` claim must now declare `repeated_step_labels`, the first
+and last step label the source states. The server expands it to every step in
+the range and refuses rather than trimming:
+
+| Fault | Outcome |
+| --- | --- |
+| no declared range | refused, `repeat_range_missing` |
+| range runs backwards | refused, `repeat_range_inverted` |
+| a label no step carries | refused, `repeat_range_step_unknown` |
+| partly resolvable range | refused, never trimmed to the part that resolves |
+
+Measured on in-gel, `repeat-p5-3` now covers `step-2 … step-7`, six steps
+instead of one.
+
+**The evidence did not contain the instruction.** The p6 construct cited *"9
+Remove and discard the acetonitrile…"* while the repeat sentence sat in the
+following prose. A construct asserting a repetition whose evidence contains no
+repetition is an evidence-integrity break.
+
+The enforcement is a shape, not a vocabulary: **the cited excerpt must contain
+the two declared labels written as a range** - two numbers joined by a hyphen or
+dash. Nothing reads the words "repeat" or "steps"; the claim says which range
+it means and the server checks the excerpt for exactly that. Hyphen, non-
+breaking hyphen, en dash, em dash and minus all count, spacing is tolerated,
+and `170-180` does not satisfy a declared `17-18`.
+
+Stated in the prompt and the schema description exactly as enforced, with the
+exemptions named, and bound into the parity audit by five new reason codes so
+the regex and the prompt cannot drift. `CLAIM_SCHEMA_VERSION` moves 6 to 7: a
+response written against 6 carries no `repeated_step_labels` and is refused, so
+declaring 6 would misstate the shape.
+
+The fixture was corrected too, since it must cite what it claims: it now cites
+the segment carrying the repeat sentence and declares the range read from that
+sentence. On in-gel, `repeat-p6-0` now quotes *"…repeat steps 8-9 until fully
+dehydrated"* rather than step 9's instruction.
+
+## 9d. What headspace would cost with a real provider
+
+5 chunks, one call each, so the floor is **5 calls** if every chunk validates
+first time. Merge requires all five, so one unrecovered failure ends the run.
+
+The only measured per-chunk first-attempt rate remains ANKOM's **4 of 8** under
+the current contract - a larger, denser document, so indicative rather than a
+rate for headspace, and still the only measurement that exists. Taking
+p = 0.5:
+
+| Retry budget per chunk | Calls used | P(all 5 validate) | Expected calls |
+| --- | --- | --- | --- |
+| 0 (harness default) | 5 | 3.1% | 5 |
+| 1 | 5-10 | 24% | ~7.5 |
+| 2 | 5-15 | 51% | ~8.8 |
+| 3 | 5-20 | 72% | ~9.5 |
+
+Two calls of authorized budget remain, well below the floor of 5. A further
+consideration that is not a call cost: the claim schema now requires a declared
+repeat range, so a provider run would also be the first test of whether a model
+can state one.
+
 
 ## 5. Narrowing `no_relevant_claims`
 

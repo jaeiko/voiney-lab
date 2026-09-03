@@ -73,6 +73,7 @@ class SegmentAccountingTests(unittest.TestCase):
                 "source_label": "50",
                 "target_claim_id": None,
                 "required_for_execution": True,
+                "repeated_step_labels": None,
                 "evidence": {
                     "source_page_number": 1,
                     "evidence_segment_ids": [self.handles[i] for i in claimed],
@@ -89,6 +90,7 @@ class SegmentAccountingTests(unittest.TestCase):
                 "source_label": None,
                 "target_claim_id": "action-1",
                 "required_for_execution": False,
+                "repeated_step_labels": None,
                 "evidence": {
                     "source_page_number": 1,
                     "evidence_segment_ids": [self.handles[segment]],
@@ -304,7 +306,7 @@ class SegmentAccountingTests(unittest.TestCase):
             self._parse(json.dumps(payload))
 
     def test_schema_version_records_the_new_response_shape(self) -> None:
-        self.assertEqual(CLAIM_SCHEMA_VERSION, 6)
+        self.assertEqual(CLAIM_SCHEMA_VERSION, 7)
 
 
 class StepBlockRangeTests(unittest.TestCase):

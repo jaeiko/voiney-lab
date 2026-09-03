@@ -442,6 +442,7 @@ class ProtocolProviderDiagnosticTests(unittest.TestCase):
                         "source_label": "private-label",
                         "target_claim_id": None,
                         "required_for_execution": True,
+                        "repeated_step_labels": None,
                         "evidence": {
                             "source_page_number": 25,
                             "evidence_segment_ids": ["private-evidence-handle"],
@@ -494,6 +495,7 @@ class ProtocolProviderDiagnosticTests(unittest.TestCase):
             "source_label": "private-label",
             "target_claim_id": "private-target",
             "required_for_execution": True,
+            "repeated_step_labels": None,
             "evidence": {
                 "source_page_number": 25,
                 "evidence_segment_ids": ["private-evidence-handle"],

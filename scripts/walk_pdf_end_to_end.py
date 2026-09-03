@@ -39,7 +39,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
+DEFAULT_SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
 _GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
 
 
@@ -120,7 +120,15 @@ def _probe_9_and_10(draft, stages, record) -> None:
 
 
 def main() -> int:
+    import argparse
     import sys
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source", nargs="?", type=Path, default=DEFAULT_SOURCE)
+    arguments = parser.parse_args()
+    SOURCE = arguments.source
+    if not SOURCE.is_file():
+        raise SystemExit(f"source is not a file: {SOURCE}")
 
     sys.path.insert(0, str(ROOT / "scripts"))
     from prototype_claim_chunks import (

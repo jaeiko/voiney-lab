@@ -36,6 +36,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     _SENTENCE_LINE_END,
+    _STEP_RANGE,
     step_block_ranges,
     segment_carries_unit_bearing_value,
     CLAIM_SCHEMA_VERSION,
@@ -284,6 +285,7 @@ class ExactNumberedStepClaimModel:
                             "source_label": label,
                             "target_claim_id": None,
                             "required_for_execution": True,
+                            "repeated_step_labels": None,
                             "evidence": action_evidence,
                         }
                     )
@@ -317,6 +319,7 @@ class ExactNumberedStepClaimModel:
                                     "source_label": None,
                                     "target_claim_id": action_id,
                                     "required_for_execution": False,
+                                    "repeated_step_labels": None,
                                     "evidence": parameter_evidence,
                                 }
                             )
@@ -325,7 +328,18 @@ class ExactNumberedStepClaimModel:
                         r"(?is)\brepeat\b[^.\n]*(?:\.|$)",
                         excerpt,
                     )
-                    if repeat is not None:
+                    # A repeat claim must cite the sentence that carries the
+                    # repeat instruction and declare the range that sentence
+                    # states.  It used to cite the enclosing step's own
+                    # instruction, which did not contain the instruction being
+                    # claimed, and to declare no range at all.
+                    repeat_range = (
+                        _STEP_RANGE.search(repeat.group(0))
+                        if repeat is not None
+                        else None
+                    )
+                    if repeat is not None and repeat_range is not None:
+                        repeat_start = excerpt_offset + repeat.start()
                         claim_id = f"repeat-p{page_number}-{action_index}"
                         claims.append(
                             {
@@ -337,7 +351,15 @@ class ExactNumberedStepClaimModel:
                                 "source_label": None,
                                 "target_claim_id": action_id,
                                 "required_for_execution": True,
-                                "evidence": action_evidence,
+                                "repeated_step_labels": [
+                                    repeat_range.group(1),
+                                    repeat_range.group(2),
+                                ],
+                                "evidence": self._evidence_span(
+                                    page,
+                                    repeat_start,
+                                    repeat_start + len(repeat.group(0)),
+                                ),
                             }
                         )
                         item_ids.append(claim_id)
@@ -418,6 +440,7 @@ class ExactNumberedStepClaimModel:
                         "source_label": None,
                         "target_claim_id": target_id,
                         "required_for_execution": False,
+                        "repeated_step_labels": None,
                         "evidence": {
                             "source_page_number": page_number,
                             "evidence_segment_ids": [handle],

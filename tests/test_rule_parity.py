@@ -243,6 +243,26 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         _PROMPT,
         ("Never return source_excerpt text.",),
     ),
+    "repeat_range_missing": (
+        _PROMPT,
+        ("must set repeated_step_labels to the first and last",),
+    ),
+    "repeat_range_malformed": (_SCHEMA, ()),
+    "repeat_range_inverted": (
+        _PROMPT,
+        ("The range must run forwards",),
+    ),
+    "repeat_range_not_in_evidence": (
+        _PROMPT,
+        (
+            "cited evidence must contain those two labels written as a range",
+            "cite the segment that carries the repeat instruction itself",
+        ),
+    ),
+    "repeat_range_not_applicable": (
+        _PROMPT,
+        ("every other claim must leave it null",),
+    ),
     "unknown_evidence_handle": (
         _PROMPT,
         ("never calculate,\nderive, normalize, shorten, alter, or invent an identity",),

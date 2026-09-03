@@ -279,10 +279,14 @@ class DocumentLevelClaimTests(unittest.TestCase):
         }
         self.assertIn(f"condition-{claim.claim_id}", identifiers)
 
-    def test_the_response_shape_did_not_change(self) -> None:
-        """No new field, so no schema bump."""
+    def test_the_response_shape_changed_for_the_repeat_range(self) -> None:
+        """7 since a repeat_condition claim must declare its step range.
 
-        self.assertEqual(CLAIM_SCHEMA_VERSION, 6)
+        A response written against 6 carries no repeated_step_labels and is
+        refused, so declaring 6 would be a lie about the shape.
+        """
+
+        self.assertEqual(CLAIM_SCHEMA_VERSION, 7)
 
 
 if __name__ == "__main__":

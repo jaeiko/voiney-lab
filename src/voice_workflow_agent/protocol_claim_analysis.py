@@ -33,7 +33,7 @@ from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSI
 
 # 6: page coverage carries an explicit per-segment declination list, so a
 # page can no longer be exempted wholesale by emitting nothing.
-CLAIM_SCHEMA_VERSION = 6
+CLAIM_SCHEMA_VERSION = 7
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
@@ -280,6 +280,9 @@ class ProtocolClaim:
     target_claim_id: str | None
     required_for_execution: bool
     evidence: ClaimSourceEvidence
+    # First and last step label a repeat_condition claim repeats. None for
+    # every other category, and never inferred for a repeat.
+    repeated_step_labels: tuple[str, str] | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -292,6 +295,11 @@ class ProtocolClaim:
             "source_label": self.source_label,
             "target_claim_id": self.target_claim_id,
             "required_for_execution": self.required_for_execution,
+            "repeated_step_labels": (
+                list(self.repeated_step_labels)
+                if self.repeated_step_labels is not None
+                else None
+            ),
             "evidence": self.evidence.public_dict(),
         }
 
@@ -391,6 +399,30 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
         "evidence_segment_ids",
     ],
 }
+# The two step labels a repeat_condition claim repeats, first and last, exactly
+# as the source writes them.  Null for every other category, and null on a
+# repeat whose range the source does not state -- which the server then
+# refuses rather than filling in.
+_REPEATED_RANGE_SCHEMA: dict[str, object] = {
+    "anyOf": [
+        {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"type": "string", "pattern": r"^[1-9][0-9]{0,2}$"},
+        },
+        {"type": "null"},
+    ],
+    "description": (
+        "For a repeat_condition claim: the first and last step label the"
+        " source says to repeat, as two strings. Null for any other category."
+        " The cited evidence must contain those two labels written as a range,"
+        " two numbers joined by a hyphen or dash, and the server checks the"
+        " excerpt for exactly that. A repeat claim with no range, or one whose"
+        " excerpt does not contain it, is refused rather than narrowed to the"
+        " enclosing step."
+    ),
+}
 CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -483,6 +515,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "source_label": _NULLABLE_STRING_SCHEMA,
                     "target_claim_id": _NULLABLE_IDENTIFIER_SCHEMA,
                     "required_for_execution": {"type": "boolean"},
+                    "repeated_step_labels": _REPEATED_RANGE_SCHEMA,
                     "evidence": _EVIDENCE_SCHEMA,
                 },
                 "required": [
@@ -494,6 +527,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "source_label",
                     "target_claim_id",
                     "required_for_execution",
+                    "repeated_step_labels",
                     "evidence",
                 ],
             },
@@ -751,6 +785,18 @@ unit after it, such as a page number. If such a segment carries nothing you can
 name as an instruction, claim it as a document-level claim of the category that
 fits the value, or as explicit_missing_ambiguous_value, rather than declining
 it. A segment that is only punctuation or whitespace needs no entry.
+
+A repeat_condition claim must set repeated_step_labels to the first and last
+step label the source says to repeat, and every other claim must leave it null.
+The cited evidence must contain those two labels written as a range: two
+numbers joined by a hyphen or dash, such as 2-7. That is the whole test the
+server applies to it -- it does not read the sentence, only whether the excerpt
+contains the range you declared. So cite the segment that carries the repeat
+instruction itself, not the instruction of the step it happens to follow. The
+range must run forwards, and every label from the first to the last must be a
+numbered step you also claimed. If the source does not say which steps to
+repeat, do not guess a range and do not fall back to the enclosing step: emit
+explicit_missing_ambiguous_value instead.
 
 Before returning, count for each core page: the segments you cited plus the
 segments you declined must equal the segments on that page that contain at
@@ -1706,6 +1752,7 @@ def parse_chunk_claim_response(
                 "source_label",
                 "target_claim_id",
                 "required_for_execution",
+                "repeated_step_labels",
                 "evidence",
             },
             "claim",
@@ -1735,6 +1782,16 @@ def parse_chunk_claim_response(
             raise ProtocolAnalysisResponseError(
                 "Chunk claim response has an invalid execution requirement."
             )
+        repeated_labels = _repeated_step_labels(
+            record["repeated_step_labels"],
+            category=category,
+            excerpt=evidence.source_excerpt,
+            item_index=item_index,
+            chunk_id=chunk_id,
+            source_revision=source_revision,
+            source_hash=extraction.sha256,
+            page_number=evidence.source_page_number,
+        )
         claims.append(
             ProtocolClaim(
                 claim_id=_identifier(record["claim_id"], "claim"),
@@ -1753,6 +1810,7 @@ def parse_chunk_claim_response(
                 ),
                 required_for_execution=required,
                 evidence=evidence,
+                repeated_step_labels=repeated_labels,
             )
         )
     identifiers = [item.marker_id for item in markers] + [
@@ -1909,6 +1967,117 @@ _UNIT_BEARING_VALUE = re.compile(
     + r")(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+
+
+# Two numbers joined by a hyphen or dash, which is how a source writes a step
+# range.  This matches a shape, not a word: nothing here reads "repeat" or
+# "steps", and the claim itself says which range it means.
+_STEP_RANGE = re.compile(
+    r"(?<![0-9])([1-9][0-9]{0,2})\s*[-\u2010\u2011\u2012\u2013\u2014\u2212]\s*"
+    r"([1-9][0-9]{0,2})(?![0-9])"
+)
+
+
+def excerpt_states_range(excerpt: str, first: str, last: str) -> bool:
+    """Does this excerpt actually contain the range the claim declares?
+
+    A construct that asserts "repeat steps 2 to 7" must cite text that says so.
+    Measured on a real document, a repeat construct cited the enclosing step's
+    instruction while the repeat sentence sat in the following prose, so the
+    evidence did not contain the instruction the construct asserted -- an
+    evidence-integrity break of the kind this design exists to prevent.
+
+    The test is the range, not the wording: the excerpt must contain those two
+    numbers written as a range. That is checkable, statable to a provider
+    exactly as it is enforced, and needs no vocabulary.
+    """
+
+    return any(
+        match.group(1) == first and match.group(2) == last
+        for match in _STEP_RANGE.finditer(excerpt)
+    )
+
+
+def _repeated_step_labels(
+    raw: object,
+    *,
+    category: ClaimCategory,
+    excerpt: str,
+    item_index: int,
+    chunk_id: str,
+    source_revision: str,
+    source_hash: str,
+    page_number: int,
+) -> tuple[str, str] | None:
+    """Validate a declared repeat range, or refuse the claim.
+
+    Two faults are refused here rather than papered over, both measured on real
+    documents. A repeat construct used to record only its own enclosing step,
+    so "repeat steps 2 to 7" became "repeat step 7" -- a different experiment,
+    recorded silently. And a repeat construct cited the enclosing step's
+    instruction while the repeat sentence sat in the following prose, so its
+    evidence did not contain the instruction it asserted.
+
+    So a repeat must declare its range, the range must run forwards, and the
+    cited excerpt must contain it. Nothing is inferred: a repeat whose range
+    the source does not state is refused, never narrowed to one step.
+    """
+
+    def fail(reason: str, message: str) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            message,
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code=reason,
+                mismatch_class="claim_evidence_mismatch",
+                evidence_index=item_index,
+                evidence_type="claim",
+                category=category.value,
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=source_hash,
+            ),
+        )
+
+    if category is not ClaimCategory.REPEAT_CONDITION:
+        if raw is not None:
+            fail(
+                "repeat_range_not_applicable",
+                "Only a repeat_condition claim may declare a repeated range.",
+            )
+        return None
+    if raw is None:
+        fail(
+            "repeat_range_missing",
+            "A repeat_condition claim must declare the step range it repeats.",
+        )
+    if (
+        not isinstance(raw, list)
+        or len(raw) != 2
+        or not all(isinstance(item, str) for item in raw)
+    ):
+        fail(
+            "repeat_range_malformed",
+            "A declared repeated range must be two source step labels.",
+        )
+    first, last = str(raw[0]), str(raw[1])
+    if not (first.isdecimal() and last.isdecimal()):
+        fail(
+            "repeat_range_malformed",
+            "A declared repeated range must be two numeric step labels.",
+        )
+    if int(first) > int(last):
+        fail(
+            "repeat_range_inverted",
+            "A declared repeated range must not run backwards.",
+        )
+    if not excerpt_states_range(excerpt, first, last):
+        fail(
+            "repeat_range_not_in_evidence",
+            "The cited evidence does not state the declared repeated range.",
+        )
+    return (first, last)
 
 
 def segment_is_substantive(segment_text: str) -> bool:
@@ -2741,6 +2910,36 @@ def reopen_evidence_span(
     )
 
 
+def _repeated_range_step_ids(
+    claim: ProtocolClaim,
+    steps_by_label: Mapping[str, str],
+) -> tuple[str, ...]:
+    """The step ids a repeat covers, from the range the claim declares.
+
+    This used to be the enclosing step alone, so "repeat steps 2 to 7" was
+    recorded as repeating step 7. Put a bound on that and an operator is told
+    to re-run one step where the protocol asks for six -- a different
+    experiment, recorded without anybody being told.
+
+    The range is refused rather than trimmed when it does not fit the document:
+    a label the assembled steps do not contain cannot be repeated, and a
+    partially resolvable range is not silently reduced to the part that
+    resolves.
+    """
+
+    labels = claim.repeated_step_labels
+    if labels is None:
+        raise ProtocolClaimConsistencyError("repeat_range_missing")
+    first, last = int(labels[0]), int(labels[1])
+    if first > last:
+        raise ProtocolClaimConsistencyError("repeat_range_inverted")
+    covered = [str(number) for number in range(first, last + 1)]
+    missing = [label for label in covered if label not in steps_by_label]
+    if missing:
+        raise ProtocolClaimConsistencyError("repeat_range_step_unknown")
+    return tuple(steps_by_label[label] for label in covered)
+
+
 def _domain_evidence(evidence: ClaimSourceEvidence) -> domain.SourceEvidence:
     return domain.SourceEvidence(
         source_page_number=evidence.source_page_number,
@@ -2894,6 +3093,13 @@ def assemble_experiment_protocol(
         if claim.category is ClaimCategory.ACTION:
             assert claim.step_id is not None
             actions_by_step.setdefault(claim.step_id, []).append(claim)
+    # Source label to step id, over the whole document, so a repeat can name
+    # every step in the range it declares rather than only its own.
+    steps_by_label: dict[str, str] = {}
+    for step_id, action_claims in actions_by_step.items():
+        for action_claim in action_claims:
+            if action_claim.source_label is not None:
+                steps_by_label.setdefault(action_claim.source_label, step_id)
     sections: list[domain.ProtocolSection] = []
     for marker in section_markers:
         assert marker.section_id is not None
@@ -2962,7 +3168,9 @@ def assemble_experiment_protocol(
                     domain.RepeatUntil(
                         repetition_id=item.claim_id,
                         condition_source_text=item.source_text,
-                        repeated_step_ids=(step_id,),
+                        repeated_step_ids=_repeated_range_step_ids(
+                            item, steps_by_label
+                        ),
                         evidence=_domain_evidence(item.evidence),
                         section_id=marker.section_id,
                         step_id=step_id,
