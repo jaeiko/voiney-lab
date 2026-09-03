@@ -66,7 +66,7 @@ FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 EXPECTED_FIXTURE_SHA256 = "fb869290f1b52afab91f6f256a85ab5a6d77a27a85e8f36f2ced8a2987a2e8e8"
-EXPECTED_SCHEMA_SHA256 = "3d7970faf5f55cd7ad11abbccffa01cd4f8989bb5932a436740e77bac7f23923"
+EXPECTED_SCHEMA_SHA256 = "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
 
 
 class RecordingCompletions:

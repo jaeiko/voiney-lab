@@ -98,6 +98,10 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
         domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
     }
 )
+_DISPOSITION_CONFIRMATION_EVENT = "protocol_label_disposition_confirmed"
+_DISPOSITION_REVOCATION_EVENT = (
+    "protocol_label_disposition_confirmation_revoked"
+)
 _REPETITION_CONFIRMATION_EVENT = "protocol_fixed_repetition_confirmed"
 _REPETITION_REVOCATION_EVENT = "protocol_fixed_repetition_confirmation_revoked"
 _AMBIGUITY_RESOLUTION_EVENT = "protocol_ambiguity_resolved"
@@ -2160,6 +2164,15 @@ class ProtocolCatalog:
                     protocol_id, protocol_revision_number, analysis
                 ):
                     return False
+            elif (
+                reason_code
+                == domain.ReadinessReasonCode
+                .UNCONFIRMED_LABEL_DISPOSITION.value
+            ):
+                if not self._every_label_disposition_confirmed(
+                    protocol_id, protocol_revision_number, analysis
+                ):
+                    return False
             else:
                 return False
         return True
@@ -2471,6 +2484,204 @@ class ProtocolCatalog:
             and event.analysis_revision_number == analysis_revision_number
             and isinstance(event.payload, dict)
             and event.payload.get(key) == construct_id
+        )
+
+    def confirm_label_disposition(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        source_page_number: int,
+        source_label: str,
+        evidence_segment_ids: tuple[str, ...],
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Record a reviewer agreeing a numbered label is not a step.
+
+        Measured on three of the four local sources, a numbered line is not
+        always an instruction. But the asymmetry runs opposite to the
+        repetition one: turning a description into a step only makes the agent
+        read a description aloud, while disposing of a real step removes it
+        from the protocol entirely. So the disposition is the exception a
+        person confirms, and it blocks until they do.
+        """
+
+        (
+            protocol_revision_number,
+            analysis_revision_number,
+            revision,
+            analysis,
+        ) = self._finding_context(
+            protocol_id, revision_id, actor_principal_id, actor_role
+        )
+        disposition = next(
+            (
+                item
+                for item in analysis.protocol.label_dispositions
+                if item.source_label == source_label
+                and item.source_page_number == source_page_number
+            ),
+            None,
+        )
+        if disposition is None:
+            raise ProtocolApprovalError(
+                "This analysis revision has no such label disposition."
+            )
+        self._check_cited_segments(
+            revision, disposition.evidence, evidence_segment_ids
+        )
+        key = f"{source_page_number}:{source_label}"
+        ordinal = self._finding_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            key,
+            (_DISPOSITION_CONFIRMATION_EVENT, _DISPOSITION_REVOCATION_EVENT),
+            "label_key",
+        )
+        self.store.append_event(
+            (
+                f"disposition-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}-{key}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _DISPOSITION_CONFIRMATION_EVENT,
+            {
+                "decision": "not_an_execution_step",
+                "label_key": key,
+                "source_page_number": source_page_number,
+                "source_label": source_label,
+                "evidence_segment_ids": list(evidence_segment_ids),
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer confirmed a disposition.")[
+                    :4000
+                ],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def revoke_label_disposition_confirmation(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        source_page_number: int,
+        source_label: str,
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Withdraw a disposition confirmation, which blocks again."""
+
+        (
+            protocol_revision_number,
+            analysis_revision_number,
+            _revision,
+            _analysis,
+        ) = self._finding_context(
+            protocol_id, revision_id, actor_principal_id, actor_role
+        )
+        key = f"{source_page_number}:{source_label}"
+        if key not in self._disposition_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        ):
+            raise ProtocolApprovalError(
+                "This analysis revision carries no confirmation to revoke."
+            )
+        ordinal = self._finding_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            key,
+            (_DISPOSITION_CONFIRMATION_EVENT, _DISPOSITION_REVOCATION_EVENT),
+            "label_key",
+        )
+        self.store.append_event(
+            (
+                f"disposition-revoke-{protocol_id[-16:]}-"
+                f"{protocol_revision_number}-{analysis_revision_number}-"
+                f"{key}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _DISPOSITION_REVOCATION_EVENT,
+            {
+                "decision": "revoked",
+                "label_key": key,
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer withdrew a confirmation.")[
+                    :4000
+                ],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def _disposition_findings(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+    ) -> frozenset[str]:
+        """Standing disposition confirmations; the last event per label wins."""
+
+        standing: set[str] = set()
+        for event in self.store.list_events(protocol_id):
+            if event.protocol_revision_number != protocol_revision_number:
+                continue
+            if event.analysis_revision_number != analysis_revision_number:
+                continue
+            if not isinstance(event.payload, dict):
+                continue
+            key = event.payload.get("label_key")
+            if not isinstance(key, str):
+                continue
+            if event.event_type == _DISPOSITION_CONFIRMATION_EVENT:
+                standing.add(key)
+            elif event.event_type == _DISPOSITION_REVOCATION_EVENT:
+                standing.discard(key)
+        return frozenset(standing)
+
+    def label_disposition_findings(
+        self,
+        protocol_id: str,
+        revision_id: str,
+    ) -> frozenset[str]:
+        """Read the standing confirmations, for a reviewer or a projection."""
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            return frozenset()
+        return self._disposition_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
+
+    def _every_label_disposition_confirmed(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis: Any,
+    ) -> bool:
+        """Every disposed label has a standing confirmation."""
+
+        outstanding = {
+            f"{item.source_page_number}:{item.source_label}"
+            for item in analysis.protocol.label_dispositions
+        }
+        if not outstanding:
+            return False
+        return outstanding <= self._disposition_findings(
+            protocol_id,
+            protocol_revision_number,
+            analysis.analysis_revision_number,
         )
 
     def confirm_fixed_repetition(

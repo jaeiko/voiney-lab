@@ -76,6 +76,7 @@ describe it as confirmed, executable, scientifically validated, or approved.
 _CONSTRUCT_TYPES = {
     "conditional_branch": domain.ConditionalBranch,
     "fixed_range_repetition": domain.FixedRangeRepetition,
+    "operator_determined_repetition": domain.OperatorDeterminedRepetition,
     "repeat_until": domain.RepeatUntil,
     "parallel_work": domain.ParallelWork,
     "recurring_action": domain.RecurringAction,
@@ -153,6 +154,18 @@ class _DomainResponseSchemaBuilder:
             if record_type is domain.ProtocolMetadata:
                 record_fields = tuple(
                     field for field in record_fields if field.name != "pdf"
+                )
+            if record_type is domain.ExperimentProtocol:
+                # Label dispositions are page-coverage output of the chunk
+                # contract, which this older path does not have. Asking a
+                # provider here for them would invite disposing of a numbered
+                # step with no obligation to account for it -- withheld for the
+                # same reason the extraction record and the segment handles
+                # are.
+                record_fields = tuple(
+                    field
+                    for field in record_fields
+                    if field.name != "label_dispositions"
                 )
             if record_type is domain.SourceEvidence:
                 # Segment handles are server-computed identities for spans the

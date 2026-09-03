@@ -66,6 +66,7 @@ class ReadinessStatus(str, Enum):
 class FeatureCode(str, Enum):
     CONDITIONAL_BRANCH = "conditional_branch"
     FIXED_RANGE_REPETITION = "fixed_range_repetition"
+    OPERATOR_DETERMINED_REPETITION = "operator_determined_repetition"
     REPEAT_UNTIL = "repeat_until"
     PARALLEL_BACKGROUND_WORK = "parallel_background_work"
     RECURRING_REMINDER = "recurring_reminder"
@@ -85,6 +86,9 @@ class ReadinessReasonCode(str, Enum):
     NO_EXECUTABLE_STEPS = "no_executable_steps"
     UNSUPPORTED_CONDITIONAL_BRANCH = "unsupported_conditional_branch"
     UNSUPPORTED_FIXED_RANGE_REPETITION = "unsupported_fixed_range_repetition"
+    UNSUPPORTED_OPERATOR_DETERMINED_REPETITION = (
+        "unsupported_operator_determined_repetition"
+    )
     UNSUPPORTED_REPEAT_UNTIL = "unsupported_repeat_until"
     UNSUPPORTED_PARALLEL_BACKGROUND_WORK = (
         "unsupported_parallel_background_work"
@@ -99,6 +103,7 @@ class ReadinessReasonCode(str, Enum):
     SAFETY_CRITICAL_CONFLICT = "safety_critical_conflict"
     NO_DECLARED_SAFETY_WARNINGS = "no_declared_safety_warnings"
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
+    UNCONFIRMED_LABEL_DISPOSITION = "unconfirmed_label_disposition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
 
@@ -133,6 +138,53 @@ class SourceEvidence:
     source_excerpt: str
     location_detail: str | None = None
     evidence_segment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OperatorDeterminedRepetition:
+    """A repetition whose count the document hands to the experimenter.
+
+    "Repeat steps 19-20 for the required number of replicates" is not
+    ambiguous: the source is perfectly clear that the operator decides, so
+    calling it an ambiguity would misdescribe it, and a reviewer confirming a
+    fixed count would be inventing one. The shape is fully determined -- which
+    steps, repeated as a unit -- and only the number is open.
+
+    So the protocol can become ready with this in it, because nothing about it
+    is unknown to the protocol. What must not happen is a session starting the
+    repetition without a number: the count is supplied at session start, by a
+    named person, and recorded. Neither the server nor a model may guess it --
+    that is the road to a false completion notice.
+    """
+
+    repetition_id: str
+    start_step_id: str
+    end_step_id: str
+    range_source_text: str
+    evidence: SourceEvidence
+    section_id: str | None = None
+    step_id: str | None = None
+    action_id: str | None = None
+
+
+@dataclass(frozen=True)
+class NonStepLabelDisposition:
+    """One numbered label the provider said is not an execution step.
+
+    Measured on three of the four local sources, a numbered line is not always
+    an instruction: a materials note, a bare section heading, a table of
+    contents. Demanding an action claim for those refused correct responses.
+
+    The asymmetry runs the other way from the repetition one. Turning a
+    description into a step only makes the agent read a description aloud,
+    which is a nuisance. Disposing of a real step makes it disappear from the
+    protocol, which is dangerous. So the default is to claim it as an action,
+    and a disposition is the exception a person confirms.
+    """
+
+    source_page_number: int
+    source_label: str
+    evidence: SourceEvidence
 
 
 @dataclass(frozen=True)
@@ -413,6 +465,7 @@ class ProtocolConflict:
 WorkflowConstruct: TypeAlias = (
     ConditionalBranch
     | FixedRangeRepetition
+    | OperatorDeterminedRepetition
     | RepeatUntil
     | ParallelWork
     | RecurringAction
@@ -431,6 +484,7 @@ class ExperimentProtocol:
     equipment: tuple[Equipment, ...] = ()
     sections: tuple[ProtocolSection, ...] = ()
     constructs: tuple[WorkflowConstruct, ...] = ()
+    label_dispositions: tuple[NonStepLabelDisposition, ...] = ()
     description: SourceStatement | None = None
 
 
@@ -455,6 +509,10 @@ P1_CAPABILITY_POLICY = CapabilityPolicy(
     supported_features=frozenset(
         {
             FeatureCode.FIXED_RANGE_REPETITION,
+            # The shape is fully determined and only the number is open, so
+            # nothing about it is unknown to the protocol. The session refuses
+            # to start it until a named person supplies the count.
+            FeatureCode.OPERATOR_DETERMINED_REPETITION,
             FeatureCode.INFORMATIONAL_DIFFERENCE,
         }
     ),
@@ -719,7 +777,10 @@ def _validate_target(
 def _construct_identity(construct: WorkflowConstruct) -> str:
     if isinstance(construct, ConditionalBranch):
         return construct.branch_id
-    if isinstance(construct, (FixedRangeRepetition, RepeatUntil)):
+    if isinstance(
+        construct,
+        (FixedRangeRepetition, OperatorDeterminedRepetition, RepeatUntil),
+    ):
         return construct.repetition_id
     if isinstance(construct, ParallelWork):
         return construct.parallel_id
@@ -821,6 +882,16 @@ def _validate_construct(
                 step_locations,
                 action_locations,
                 f"{location}.branch_step_ids",
+                dependency=False,
+            )
+    elif isinstance(construct, OperatorDeterminedRepetition):
+        _text(construct.range_source_text, f"{location}.range_source_text")
+        for target in (construct.start_step_id, construct.end_step_id):
+            _validate_target(
+                DependencyTarget(target),
+                step_locations,
+                action_locations,
+                location,
                 dependency=False,
             )
     elif isinstance(construct, FixedRangeRepetition):
@@ -1266,6 +1337,7 @@ _FEATURE_ORDER = {
         (
             FeatureCode.CONDITIONAL_BRANCH,
             FeatureCode.FIXED_RANGE_REPETITION,
+            FeatureCode.OPERATOR_DETERMINED_REPETITION,
             FeatureCode.REPEAT_UNTIL,
             FeatureCode.PARALLEL_BACKGROUND_WORK,
             FeatureCode.RECURRING_REMINDER,
@@ -1373,6 +1445,8 @@ def _detect_features(protocol: ExperimentProtocol) -> tuple[DetectedFeature, ...
             code = FeatureCode.CONDITIONAL_BRANCH
         elif isinstance(construct, FixedRangeRepetition):
             code = FeatureCode.FIXED_RANGE_REPETITION
+        elif isinstance(construct, OperatorDeterminedRepetition):
+            code = FeatureCode.OPERATOR_DETERMINED_REPETITION
         elif isinstance(construct, RepeatUntil):
             code = FeatureCode.REPEAT_UNTIL
         elif isinstance(construct, ParallelWork):
@@ -1454,6 +1528,11 @@ _UNSUPPORTED_REASONS = {
         ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
         "Fixed-range repetition is not executable by this capability profile.",
     ),
+    FeatureCode.OPERATOR_DETERMINED_REPETITION: (
+        ReadinessReasonCode.UNSUPPORTED_OPERATOR_DETERMINED_REPETITION,
+        "Operator-determined repetition is not executable by this capability "
+        "profile.",
+    ),
     FeatureCode.REPEAT_UNTIL: (
         ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
         "Repeat-until execution is not supported by this capability profile.",
@@ -1489,8 +1568,10 @@ _REASON_ORDER = {
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
             ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
+            ReadinessReasonCode.UNCONFIRMED_LABEL_DISPOSITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
+            ReadinessReasonCode.UNSUPPORTED_OPERATOR_DETERMINED_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
             ReadinessReasonCode.UNSUPPORTED_PARALLEL_BACKGROUND_WORK,
             ReadinessReasonCode.UNSUPPORTED_RECURRING_REMINDER,
@@ -1610,6 +1691,21 @@ def assess_readiness(
                     "A reviewer must confirm this Protocol's safety warnings "
                     "before execution. Extracted warnings are model judgement "
                     "and do not discharge the review by themselves."
+                ),
+            )
+        )
+
+    if protocol.label_dispositions:
+        # Asymmetric the other way from a repetition: reading a description
+        # aloud is a nuisance, while disposing of a real step makes it vanish.
+        # So the disposition is the exception, and a person confirms each one.
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.UNCONFIRMED_LABEL_DISPOSITION,
+                message=(
+                    "A reviewer must confirm each numbered label the analysis "
+                    "says is not an execution step. Disposing of a real step "
+                    "would remove it from the protocol."
                 ),
             )
         )

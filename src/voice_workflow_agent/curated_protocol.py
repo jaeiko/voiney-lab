@@ -55,7 +55,7 @@ from voice_workflow_agent.semantic_intent import (
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
 DEVELOPMENT_FIXTURE_MODE = "offline_curated_development_fixture"
 _CANONICAL_SCHEMA_SHA256 = (
-    "3d7970faf5f55cd7ad11abbccffa01cd4f8989bb5932a436740e77bac7f23923"
+    "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
 )
 _PROVENANCE_FIELDS = {
     "candidate_filename",
@@ -4163,6 +4163,7 @@ class CuratedProtocolSession:
         self._pending_transcript_confirmation: PendingTranscriptConfirmation | None = None
         self._workflow_status: str = "preview"
         self._last_semantic_decision: SemanticIntentDecision | None = None
+        self._operator_repetition_counts: dict[str, dict[str, object]] = {}
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
@@ -4482,6 +4483,85 @@ class CuratedProtocolSession:
             )
             return tuple(dict.fromkeys(scientific + step_tokens + control_korean))[:100]
         return tuple(dict.fromkeys(scientific + step_tokens))[:100]
+
+    def operator_repetition_counts(self) -> dict[str, dict[str, object]]:
+        """Counts an experimenter has supplied in this session, with provenance."""
+
+        return {
+            repetition_id: dict(record)
+            for repetition_id, record in self._operator_repetition_counts.items()
+        }
+
+    def provide_operator_repetition_count(
+        self,
+        repetition_id: str,
+        count: int,
+        *,
+        actor_principal_id: str,
+        actor_role: str,
+    ) -> None:
+        """Record the number an experimenter chose for one repetition.
+
+        The document deliberately does not state it -- "for the required number
+        of replicates" hands the choice to the experimenter -- so it is decided
+        here, at session start, and not at approval: the number differs per
+        experimental design. Neither the server nor a model may supply it, and
+        who supplied it and when are recorded with it.
+        """
+
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise ValueError("A supplied repetition count must be positive.")
+        if not actor_principal_id.strip() or not actor_role.strip():
+            raise ValueError("A supplied repetition count needs a named actor.")
+        if repetition_id not in self._operator_determined_repetitions():
+            raise ValueError("This protocol has no such open repetition.")
+        self._operator_repetition_counts[repetition_id] = {
+            "count": count,
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _operator_determined_repetitions(self) -> dict[str, tuple[str, ...]]:
+        """Open repetitions, mapped to the step ids each one covers."""
+
+        found: dict[str, tuple[str, ...]] = {}
+        for construct in self.fixture.draft.protocol.constructs:
+            if type(construct).__name__ != "OperatorDeterminedRepetition":
+                continue
+            found[construct.repetition_id] = (
+                construct.start_step_id,
+                construct.end_step_id,
+            )
+        return found
+
+    def repetitions_awaiting_a_count(self) -> tuple[str, ...]:
+        """Open repetitions with no number yet. Execution must not start these."""
+
+        return tuple(
+            sorted(
+                repetition_id
+                for repetition_id in self._operator_determined_repetitions()
+                if repetition_id not in self._operator_repetition_counts
+            )
+        )
+
+    def may_begin_step(self, step_id: str) -> bool:
+        """False while a repetition covering this step still has no number.
+
+        Guessing the number, or starting the repetition and stopping at some
+        default, would announce completion on work the experimenter never
+        sized. So the step is blocked rather than begun.
+        """
+
+        for repetition_id, bounds in (
+            self._operator_determined_repetitions().items()
+        ):
+            if step_id not in bounds:
+                continue
+            if repetition_id not in self._operator_repetition_counts:
+                return False
+        return True
 
     def current_step_semantic_frame(self) -> StepSemanticFrame:
         return build_step_semantic_frame(self.fixture, self.current_index)

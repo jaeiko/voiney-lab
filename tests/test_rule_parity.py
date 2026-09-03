@@ -261,12 +261,22 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "repetition_count_missing": (
         _PROMPT,
-        ("must also declare repetition_count",),
+        ("declaring repetition_count as the number the source states",),
     ),
     "repetition_count_malformed": (_SCHEMA, ()),
+    "label_disposition_malformed": (_SCHEMA, ()),
+    "label_disposition_unknown_label": (
+        _PROMPT,
+        ("list the label in that page's non_step_labels",),
+    ),
+    "label_disposition_duplicated": (_SCHEMA, ()),
+    "label_disposition_evidence_unknown": (
+        _PROMPT,
+        ("with the segments that show it",),
+    ),
     "repetition_count_not_applicable": (
         _PROMPT,
-        ("leave repetition_count null",),
+        ("must leave repetition_count null",),
     ),
     "repeat_range_not_applicable": (
         _PROMPT,
@@ -280,6 +290,19 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "unsupported_coverage_status": (_SCHEMA, ()),
     "unsupported_structure_marker": (_SCHEMA, ()),
 }
+
+
+# Every field the response schema requires of a claim must be named in the
+# prompt. The three that were missing -- source_order, source_label,
+# required_for_execution -- were found by a pre-flight check before the first
+# real provider run and left alone so as not to confound it. A schema that
+# demands a field the prompt never names is the same defect as a rule enforced
+# but not stated, so this closes that class automatically rather than one
+# field at a time.
+def _required_claim_fields() -> set[str]:
+    return set(
+        CLAIM_RESPONSE_SCHEMA["properties"]["claims"]["items"]["required"]
+    )
 
 
 def _enforced_reason_codes() -> set[str]:
@@ -307,6 +330,25 @@ def _enforced_reason_codes() -> set[str]:
         ):
             codes.add(node.args[0].value)
     return codes
+
+
+class RequiredFieldsAreNamedTests(unittest.TestCase):
+    def test_every_required_claim_field_is_named_in_the_prompt(self) -> None:
+        for field in sorted(_required_claim_fields()):
+            with self.subTest(field=field):
+                self.assertTrue(
+                    _stated(field), f"prompt never names claim.{field}"
+                )
+
+    def test_every_required_coverage_field_is_named_in_the_prompt(self) -> None:
+        required = CLAIM_RESPONSE_SCHEMA["properties"]["page_coverage"][
+            "items"
+        ]["required"]
+        for field in sorted(required):
+            with self.subTest(field=field):
+                self.assertTrue(
+                    _stated(field), f"prompt never names page_coverage.{field}"
+                )
 
 
 class EnforcedRuleParityTests(unittest.TestCase):

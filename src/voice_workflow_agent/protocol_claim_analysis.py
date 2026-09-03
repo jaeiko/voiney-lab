@@ -33,7 +33,7 @@ from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSI
 
 # 6: page coverage carries an explicit per-segment declination list, so a
 # page can no longer be exempted wholesale by emitting nothing.
-CLAIM_SCHEMA_VERSION = 8
+CLAIM_SCHEMA_VERSION = 9
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
@@ -106,6 +106,7 @@ class ClaimCategory(str, Enum):
     OBSERVATION_CHECKPOINT = "observation_checkpoint"
     REPEAT_CONDITION = "repeat_condition"
     FIXED_RANGE_REPETITION = "fixed_range_repetition"
+    OPERATOR_DETERMINED_REPETITION = "operator_determined_repetition"
     EXPLICIT_MISSING_AMBIGUOUS_VALUE = "explicit_missing_ambiguous_value"
 
 
@@ -318,6 +319,10 @@ class ProtocolPageClaimCoverage:
     evidence_item_ids: tuple[str, ...]
     declined_segment_ids: tuple[str, ...] = ()
     unaccounted_segment_ids: tuple[str, ...] = ()
+    # Numbered labels the provider disposed of as not execution steps, each
+    # with the canonical segments it cited. A label reaches here only after the
+    # server has checked it exists on the page and that its citation resolves.
+    non_step_labels: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -326,6 +331,10 @@ class ProtocolPageClaimCoverage:
             "source_page_number": self.source_page_number,
             "page_text_sha256": self.page_text_sha256,
             "status": self.status.value,
+            "non_step_labels": [
+                {"source_label": label, "evidence_segment_ids": list(handles)}
+                for label, handles in self.non_step_labels
+            ],
             "evidence_item_ids": list(self.evidence_item_ids),
             "declined_segment_ids": list(self.declined_segment_ids),
             "unaccounted_segment_ids": list(self.unaccounted_segment_ids),
@@ -466,6 +475,39 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                             " here."
                         ),
                     },
+                    "non_step_labels": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "source_label": {
+                                    "type": "string",
+                                    "pattern": r"^[1-9][0-9]{0,2}$",
+                                },
+                                "evidence_segment_ids": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 16,
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": [
+                                "source_label",
+                                "evidence_segment_ids",
+                            ],
+                        },
+                        "description": (
+                            "Numbered labels on this page that are not"
+                            " execution steps, each citing the segments that"
+                            " show it. Every label must be either an action"
+                            " claim or listed here; a label that is neither is"
+                            " refused. When in doubt claim it as an action:"
+                            " reading out a description is a nuisance, while"
+                            " disposing of a real step makes it disappear."
+                        ),
+                    },
                     "declined_evidence_segment_ids": {
                         "type": "array",
                         "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
@@ -487,6 +529,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "required": [
                     "source_page_number",
                     "analysis_incomplete",
+                    "non_step_labels",
                     "declined_evidence_segment_ids",
                 ],
             },
@@ -752,6 +795,13 @@ Parameter claims must target the action, material, or equipment claim they
 qualify. Use stable identifiers across page boundaries when a context page shows
 the beginning of the same source step.
 
+Every claim carries source_order, source_label and required_for_execution.
+Set source_order to the claim's position in source reading order, counting from
+0. Set source_label to the numbered step label the source prints for an action
+claim, and to null on every claim that is not an action. Set
+required_for_execution true when the claim states something an operator must
+have or do to run the step, and false when it only describes or annotates it.
+
 Every identifier you return - marker_id, claim_id, section_id, step_id and
 target_claim_id - must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$. It may hold
 letters, digits, dot, underscore, colon and hyphen, and must not hold a space.
@@ -779,12 +829,21 @@ and request_handle are opaque, request-scoped server identities. Copy only the
 selected adjacent handles and the exact request_handle; never calculate,
 derive, normalize, shorten, alter, or invent an identity.
 
-Return exactly one coverage record for every core page. Do not report a page
-status: the server derives it from the segment dispositions below, so stating it
+Return exactly one coverage record for every core page, with its one-based
+source_page_number. Do not report a page status: the server derives it from the segment dispositions below, so stating it
 as well would be saying the same thing twice and the two could disagree. Report
 only analysis_incomplete, as a boolean, and set it true when you do not believe
 you finished reading that page. That is a statement about your own reading which
 nothing else can supply, and it can only make the outcome stricter.
+
+Every numbered label on a core page must be accounted for, and there are two
+ways. Either emit an action claim whose source_label is that label, or list the
+label in that page's non_step_labels with the segments that show it. A label
+that is neither is refused. When you are not sure, claim it as an action:
+reading a description aloud is a nuisance, while disposing of a real step
+removes it from the protocol. A numbered line that only names a section, lists
+contents, or describes a material rather than telling an operator to do
+something is what non_step_labels is for.
 
 Account for every segment of every core page. Each segment is either cited by at
 least one claim or marker, or listed in that page's declined_evidence_segment_ids
@@ -807,16 +866,21 @@ it. A segment that is only punctuation or whitespace needs no entry.
 
 A repetition claim must set repeated_step_labels to the first and last step
 label the source says to repeat, and every other claim must leave it null.
-There are two repetition categories and choosing between them is yours, not
-the server's: use fixed_range_repetition when the source states how many times
-to repeat, and repeat_condition when it says to repeat until something is
-observed. A fixed_range_repetition must also declare repetition_count, the
-number of times the source states; every other category must leave
-repetition_count null. The server never reads the sentence to decide which
-category applies or to check the number -- it only checks that a count is a
-positive whole number. If you cannot tell which category a statement is, use
-repeat_condition: that one asks a person, while a wrong fixed count would stop
-the work early and report it finished.
+There are three repetition categories and choosing between them is yours, not
+the server's. Use fixed_range_repetition when the source states how many times
+to repeat, and only then, declaring repetition_count as the number the source
+states. Use operator_determined_repetition when the source says to repeat but
+hands the number to the experimenter rather than stating it - "for the required
+number of replicates" is this, not a fixed count and not an ambiguity, because
+the source is perfectly clear that the operator decides. Use repeat_condition
+when the source says to repeat until something is observed. Only
+fixed_range_repetition carries a repetition_count; the other two, and every
+non-repetition claim, must leave repetition_count null. The server never reads
+the sentence to decide which category applies or to check the number - it only
+checks that a count is a positive whole number and that it appears on the one
+category allowed to have it. If you cannot tell which category a statement is,
+use repeat_condition: that one asks a person, while a wrong fixed count would
+stop the work early and report it finished.
 The cited evidence must contain those two labels written as a range: two
 numbers joined by a hyphen or dash, such as 2-7. That is the whole test the
 server applies to it -- it does not read the sentence, only whether the excerpt
@@ -1875,6 +1939,7 @@ def parse_chunk_claim_response(
             {
                 "source_page_number",
                 "analysis_incomplete",
+                "non_step_labels",
                 "declined_evidence_segment_ids",
             },
             "page coverage",
@@ -1974,6 +2039,15 @@ def parse_chunk_claim_response(
                     page_number=page_number,
                     item_index=item_index,
                 ),
+                non_step_labels=_resolve_non_step_labels(
+                    record["non_step_labels"],
+                    extraction=extraction,
+                    request=request,
+                    page_number=page_number,
+                    item_index=item_index,
+                    chunk_id=chunk_id,
+                    source_revision=source_revision,
+                ),
             )
         )
     analysis = ProtocolChunkClaimAnalysis(
@@ -2042,7 +2116,11 @@ def excerpt_states_range(excerpt: str, first: str, last: str) -> bool:
 # remains the provider's reading: the server never inspects the wording, so
 # nothing here decides that "twice more" is bounded and "until clear" is not.
 _REPETITION_CATEGORIES = frozenset(
-    {ClaimCategory.REPEAT_CONDITION, ClaimCategory.FIXED_RANGE_REPETITION}
+    {
+        ClaimCategory.REPEAT_CONDITION,
+        ClaimCategory.FIXED_RANGE_REPETITION,
+        ClaimCategory.OPERATOR_DETERMINED_REPETITION,
+    }
 )
 
 
@@ -2085,6 +2163,9 @@ def _repetition_count(
         )
 
     if category is not ClaimCategory.FIXED_RANGE_REPETITION:
+        # An operator-determined repetition must leave the count null: the
+        # document deliberately does not state one, so a number here would be
+        # invented rather than read.
         if raw is not None:
             fail(
                 "repetition_count_not_applicable",
@@ -2208,6 +2289,101 @@ def segment_carries_unit_bearing_value(segment_text: str) -> bool:
     """
 
     return bool(_UNIT_BEARING_VALUE.search(segment_text))
+
+
+def _resolve_non_step_labels(
+    raw: object,
+    *,
+    extraction: ProtocolPdfExtraction,
+    request: ProviderClaimRequest,
+    page_number: int,
+    item_index: int,
+    chunk_id: str,
+    source_revision: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Validate the labels a provider says are not execution steps.
+
+    The numbered-action obligation assumed every numbered line is an
+    instruction, and measurement showed that is false: three of the four local
+    sources carry numbered lines that describe rather than instruct -- a
+    materials note, a bare section heading, a table of contents. Demanding an
+    action claim for those refused correct responses.
+
+    A label may now be disposed of instead of claimed, but never silently. The
+    label must exist on the page, the disposition must cite segments that
+    resolve there, and each label may be disposed of once. Whether a line
+    instructs is the provider's reading: nothing here inspects the wording.
+    """
+
+    def fail(reason: str, message: str, count: int | None = None) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            message,
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_page_coverage_validation",
+                reason_code=reason,
+                mismatch_class="claim_coverage_mismatch",
+                evidence_index=item_index,
+                evidence_type="page_coverage",
+                page_number=page_number,
+                actual_count=count,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+            ),
+        )
+
+    if not isinstance(raw, list):
+        fail(
+            "label_disposition_malformed",
+            "Page coverage has a malformed non-step label list.",
+        )
+    page_labels = set(
+        _numbered_step_labels(extraction.pages[page_number - 1].text)
+    )
+    by_handle = {
+        item.handle: item.segment
+        for page in request.pages
+        if page.source_page_number == page_number
+        for item in page.evidence
+    }
+    resolved: list[tuple[str, tuple[str, ...]]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict) or set(entry) != {
+            "source_label",
+            "evidence_segment_ids",
+        }:
+            fail(
+                "label_disposition_malformed",
+                "A non-step label disposition is malformed.",
+            )
+        label = entry["source_label"]
+        handles = entry["evidence_segment_ids"]
+        if not isinstance(label, str) or label not in page_labels:
+            fail(
+                "label_disposition_unknown_label",
+                "A disposed label is not a numbered label on that page.",
+            )
+        if label in seen:
+            fail(
+                "label_disposition_duplicated",
+                "A label was disposed of more than once.",
+            )
+        seen.add(label)
+        if (
+            not isinstance(handles, list)
+            or not handles
+            or any(handle not in by_handle for handle in handles)
+        ):
+            fail(
+                "label_disposition_evidence_unknown",
+                "A label disposition cites a segment that is not on that page.",
+            )
+        resolved.append((label, tuple(handles)))
+    return tuple(
+        (label, tuple(by_handle[handle].segment_id for handle in handles))
+        for label, handles in resolved
+    )
 
 
 def _validate_page_segment_accounting(
@@ -2554,8 +2730,14 @@ def validate_chunk_claim_analysis(
             if claim.category is ClaimCategory.ACTION
             and claim.evidence.source_page_number == page_number
         }
-        if not set(numbered_labels).issubset(action_labels):
-            missing_numbered_actions = set(numbered_labels) - action_labels
+        # A label is accounted for by an action claim or by an explicit
+        # disposition saying it is not an execution step. What is refused is a
+        # label that is neither, so nothing disappears quietly and the
+        # guarantee this obligation exists for is unchanged.
+        disposed_labels = {label for label, _ in coverage.non_step_labels}
+        accounted = action_labels | disposed_labels
+        if not set(numbered_labels).issubset(accounted):
+            missing_numbered_actions = set(numbered_labels) - accounted
             raise ProtocolAnalysisEvidenceError(
                 "Chunk claims omit a numbered source action.",
                 diagnostic=ProtocolEvidenceDiagnostic(
@@ -2618,11 +2800,22 @@ def validate_chunk_claim_analysis(
             chunk_id=chunk_id,
             page_number=page_number,
             coverage=coverage,
+            # A segment a label disposition cites is accounted for. The
+            # disposition is a positive statement on the record about that
+            # text -- "this numbered line is not an execution step" -- which is
+            # what accounting asks for. Demanding a declination as well would
+            # ask for the same fact twice, the defect removed from page status
+            # in an earlier step.
             cited_segment_ids=frozenset(
                 segment_id
                 for item in (*analysis.structure, *analysis.claims)
                 if item.evidence.source_page_number == page_number
                 for segment_id in item.evidence.evidence_segment_ids
+            )
+            | frozenset(
+                segment_id
+                for _label, handles in coverage.non_step_labels
+                for segment_id in handles
             ),
         )
     return replace(
@@ -3017,6 +3210,27 @@ def reopen_evidence_span(
     )
 
 
+def _page_span_text(
+    extraction: ProtocolPdfExtraction,
+    page_number: int,
+    handles: tuple[str, ...],
+) -> str:
+    """The exact source text a disposition's canonical segments hold."""
+
+    segments = {
+        segment.segment_id: segment.text
+        for segment in generate_page_evidence_segments(
+            extraction,
+            source_revision="pdf-1",
+            page_number=page_number,
+        )
+    }
+    missing = [handle for handle in handles if handle not in segments]
+    if missing:
+        raise ProtocolClaimConsistencyError("label_disposition_evidence_unknown")
+    return "".join(segments[handle] for handle in handles)
+
+
 def _fixed_range_repetition(
     claim: ProtocolClaim,
     steps_by_label: Mapping[str, str],
@@ -3308,6 +3522,29 @@ def assemble_experiment_protocol(
                     for item in related
                     if item.category is ClaimCategory.FIXED_RANGE_REPETITION
                 )
+                operator_claims = tuple(
+                    item
+                    for item in related
+                    if item.category
+                    is ClaimCategory.OPERATOR_DETERMINED_REPETITION
+                )
+                constructs.extend(
+                    domain.OperatorDeterminedRepetition(
+                        repetition_id=item.claim_id,
+                        start_step_id=_repeated_range_step_ids(
+                            item, steps_by_label
+                        )[0],
+                        end_step_id=_repeated_range_step_ids(
+                            item, steps_by_label
+                        )[-1],
+                        range_source_text=item.source_text,
+                        evidence=_domain_evidence(item.evidence),
+                        section_id=marker.section_id,
+                        step_id=step_id,
+                        action_id=action_claim.claim_id,
+                    )
+                    for item in operator_claims
+                )
                 constructs.extend(
                     _fixed_range_repetition(
                         item, steps_by_label, marker.section_id, step_id,
@@ -3410,6 +3647,27 @@ def assemble_experiment_protocol(
         equipment=tuple(equipment),
         sections=tuple(sections),
         constructs=tuple(constructs),
+        label_dispositions=tuple(
+            domain.NonStepLabelDisposition(
+                source_page_number=item.source_page_number,
+                source_label=label,
+                evidence=domain.SourceEvidence(
+                    source_page_number=item.source_page_number,
+                    source_excerpt=_page_span_text(
+                        extraction, item.source_page_number, handles
+                    ),
+                    location_detail=(
+                        f"source_revision={item.source_revision};"
+                        f"source_sha256={item.source_sha256}"
+                    ),
+                    evidence_segment_ids=handles,
+                ),
+            )
+            for item in sorted(
+                merged.page_coverage, key=lambda i: i.source_page_number
+            )
+            for label, handles in item.non_step_labels
+        ),
     )
     verified, evidence_count = validate_protocol_analysis_evidence(
         protocol,

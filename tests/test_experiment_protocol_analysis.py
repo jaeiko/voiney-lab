@@ -330,6 +330,13 @@ def reachable_domain_records() -> dict[str, type]:
         for field in fields(expected):
             if expected is domain.ProtocolMetadata and field.name == "pdf":
                 continue
+            if (
+                expected is domain.ExperimentProtocol
+                and field.name == "label_dispositions"
+            ):
+                # Withheld from this older provider-facing schema, so the
+                # record it points at is not reachable through it either.
+                continue
             visit(hints[field.name])
 
     visit(domain.ExperimentProtocol)
@@ -433,6 +440,15 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                         field
                         for field in record_fields
                         if field.name != "pdf"
+                    )
+                if record_type is domain.ExperimentProtocol:
+                    # Page-coverage output of the chunk contract, which this
+                    # older path does not have; withheld for the same reason
+                    # the extraction record is.
+                    record_fields = tuple(
+                        field
+                        for field in record_fields
+                        if field.name != "label_dispositions"
                     )
                 if record_type is domain.SourceEvidence:
                     # Segment handles are server-computed identities. Asking a

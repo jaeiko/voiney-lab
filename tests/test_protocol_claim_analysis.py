@@ -314,6 +314,12 @@ class RichClaimModel:
                 "action-1",
             ),
             (
+                "operator-1",
+                "operator_determined_repetition",
+                "repeat steps 1-1 until clear",
+                "action-1",
+            ),
+            (
                 "missing-1",
                 "explicit_missing_ambiguous_value",
                 "volume is not specified",
@@ -342,7 +348,11 @@ class RichClaimModel:
                     "repeated_step_labels": (
                         ["1", "1"]
                         if category
-                        in {"repeat_condition", "fixed_range_repetition"}
+                        in {
+                            "repeat_condition",
+                            "fixed_range_repetition",
+                            "operator_determined_repetition",
+                        }
                         else None
                     ),
                     # A fixed repetition states how many times; the server
@@ -380,6 +390,7 @@ class RichClaimModel:
                 {
                     "source_page_number": page_number,
                     "analysis_incomplete": False,
+                    "non_step_labels": [],
                     "declined_evidence_segment_ids": declined_handles(
                         page, [*structure, *records]
                     ),
@@ -907,6 +918,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                                 == "analysis_incomplete",
                                 # Claiming nothing now means declining every
                                 # substantive segment, on the record.
+                                "non_step_labels": [],
                                 "declined_evidence_segment_ids": (
                                     declined_handles(page, [])
                                 ),

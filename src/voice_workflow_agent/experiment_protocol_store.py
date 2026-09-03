@@ -314,6 +314,8 @@ class ProtocolEventRecord:
 
 _DOMAIN_DATACLASS_NAMES = (
     "SourceEvidence",
+    "NonStepLabelDisposition",
+    "OperatorDeterminedRepetition",
     "ProtocolMetadata",
     "ScientificValue",
     "SourceStatement",
@@ -529,6 +531,7 @@ _PAGE_COVERAGE_KEYS = frozenset(
         "evidence_item_ids",
         "declined_segment_ids",
         "unaccounted_segment_ids",
+        "non_step_labels",
     }
 )
 

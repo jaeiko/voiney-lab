@@ -2947,6 +2947,170 @@ deliberately - changing the prompt immediately before the calls would have
 confounded what the run was measuring, which is the model against the contract
 as it stood. Recorded as a parity item for a later step.
 
+## 12. Label disposition and deferred counts: 10 of 12 calls
+
+Owner-approved 2026-09-03. **10 calls used, 2 unspent.** Model `grok-4.3`, one
+setting. The loop is **still not closed** and nothing was relaxed to close it.
+
+### The generalisation, checked first on all four sources
+
+Numbered lines that do not instruct are not a symptom of a badly structured
+document. They appear in three of the four:
+
+| Document | Labels | Non-instruction | What they are |
+| --- | --- | --- | --- |
+| ANKOM | 67 | **14** | labels 21-27 and 41-47 are bare `Flush procedure:` headings |
+| in-gel | 25 | **0** | every one an imperative |
+| headspace | 61 | **1** | label 35, a materials description |
+| intracellular | 12 | **12** | section headings and a contents list |
+
+ANKOM is a well-numbered document with fourteen of them, so this is not a
+property of the near-unnumbered case.
+
+### Stage 0: offline proof, zero calls
+
+Constructed responses, **not model output**. The negative controls are what
+make it a proof rather than a demonstration:
+
+```
+chunk 3, label 35 neither claimed nor disposed       -> rejected numbered_action_missing p9
+chunk 3, label 35 disposed as not a step             -> passed
+chunk 1, deferred count declared as fixed            -> rejected repetition_count_missing p5
+chunk 1, deferred count declared operator-determined -> passed
+```
+
+The two rejections are exactly the two walls the previous run hit, reproduced
+on demand; the two passes are the new paths. The three directions -- blocked
+before confirmation, cleared after, blocked again on withdrawal -- are held as
+tests for both mechanisms.
+
+### Stage 1: headspace, five calls, 3 of 5
+
+| Chunk | Result |
+| --- | --- |
+| 0 | passed |
+| 1 | passed - classified 12-15 as `repeat_condition` |
+| 2 | **rejected** `declined_segment_states_a_value` p6 |
+| 3 | **rejected** `repeat_range_missing` p14 |
+| 4 | passed |
+
+No `numbered_action_missing` anywhere in this stage.
+
+### Stage 2: two retries, both failed, and the most important result
+
+The retry was justified before spending: neither cause was our bug, so this
+was a second independent sample of an unchanged contract rather than a
+fix-and-retry, and it recovered a measurement the first refusal had hidden.
+
+**Chunk 3 used both new categories, correctly.**
+
+| Claim | Category | Range | Count |
+| --- | --- | --- | --- |
+| 36-41 | `fixed_range_repetition` | 36-41 | **3** |
+| 43-50 | `operator_determined_repetition` | 43-50 | **null** |
+
+The count of 3 is right: the source says *"repeat steps 36-41 twice more
+(three conditioning rounds in total)"*, so the model read a number written in
+words and stated the total. And 43-50 is *"for the required number of
+treatments"* -- the deferred-count shape that refused the previous run is now
+expressible, and the model chose it unprompted. Both satisfied the evidence
+shape rule. The chunk still failed, on `numbered_action_missing` at page 9 with
+no dispositions at all: the mechanism was available and unused.
+
+**Chunk 2 disposed of six real execution steps.**
+
+```
+p6 label 22: Incubate the Petri dishes in total darkness (48 h at 28 C).
+p7 label 30: Attach the charcoal filter tube to a supply of constant flow of nitrogen
+p7 label 31: Check for a flow of nitrogen by attaching a Teflon tube to the end
+p7 label 32: Place the charcoal filter into a modified heating oven at 170 C
+p8 label 33: After 2 hours, remove the charcoal filter from the oven
+p8 label 34: Once the charcoal filters have cooled, turn off the nitrogen supply
+```
+
+Every one is an imperative. The model declared all six "not execution steps".
+
+**This is the dangerous direction, on the mechanism's first real use.** Had
+that response validated and been approved without review, the protocol would
+have been missing six steps and nothing in the extraction would have said so.
+The reviewer confirmation is the only thing standing in front of it, and this
+is the measurement that justifies keeping it non-optional. The chunk failed for
+an unrelated reason, so the dispositions never reached readiness -- but they
+would have been caught there rather than in the response.
+
+### Stage 3: in-gel recovery, three calls, 2 of 3
+
+Chunk 1 refused `declined_segment_states_a_value` at page 7, where the same
+chunk passed in the previous run. Merge requires all three, so **the three-way
+comparison is still not obtained**, now at a cost of three calls. Two remain,
+which is fewer than the three a fresh in-gel invocation needs, so no further
+call was spent.
+
+That is my earlier harness error compounding: merging within one invocation
+means a single chunk refusal wastes the whole invocation. Retaining validated
+analyses across invocations, keyed to the source and chunk identity, would let
+a retry reuse the chunks that already passed.
+
+## 12a. What the two axes did differently
+
+Across three provider runs the repetition axis never once erred in the
+dangerous direction:
+
+| Statement | STEP 19 | Stage 1 | Stage 2 |
+| --- | --- | --- | --- |
+| `12-15 twice more` | fixed, count 2 | conditional | - |
+| `19-20 for the required number` | fixed, count null (refused) | not claimed | - |
+| `36-41 twice more (three rounds)` | conditional | - | **fixed, count 3** |
+| `43-50 for the required number` | conditional | - | **operator-determined** |
+| `2-7 until destained` (in-gel) | conditional | - | conditional |
+
+Every answer is either correct or safe-direction. Classification of the same
+sentence varies between runs, which is itself worth recording: the safe default
+is doing real work rather than being decorative.
+
+The label axis erred the other way immediately: six real steps disposed of on
+first use. So the two asymmetries are not equally robust in practice, and the
+label one leans harder on its gate. Nothing here changes either default --
+that would be tuning a rule to one sample.
+
+**The most frequent blocker is now neither of the new rules.**
+`declined_segment_states_a_value` accounts for three of the five refusals in
+this step, on two different documents, and once reproducibly on the same chunk.
+That rule predates this work.
+
+## 12b. What this taught, and what it did not
+
+Learned:
+
+- Both new contract paths work, and a real model uses them. The
+  operator-determined category and a count stated in words were both handled
+  correctly and unprompted.
+- The label-disposition asymmetry is not theoretical. It was violated on first
+  real use, in the direction that removes steps, and the gate is what catches
+  it.
+- The repetition asymmetry has now held across three runs and five statements.
+- Classification is not stable run to run, so single-sample conclusions about
+  model capability are unsafe in both directions -- including mine.
+
+Not learned:
+
+- Whether headspace can reach 5 of 5. Two chunks failed, one reproducibly.
+- Whether the loop closes. No document merged in this step.
+- Whether the six wrong dispositions were a one-off or a tendency. One sample.
+- Anything about execution or the voice path beyond what Stage 0 constructed.
+
+**No first-ever completion to report.** The loop is closed by no document.
+
+## 12c. Parity gap closed, and made self-catching
+
+The three fields the schema required but the prompt never named -
+`source_order`, `source_label`, `required_for_execution` - are now stated. More
+usefully, the parity audit now derives the check: every field the response
+schema lists as required, for claims and for page coverage, must be named in
+the prompt. Adding that check immediately found a fourth gap I had not listed,
+`source_page_number`, which is the point of deriving it rather than enumerating
+it.
+
 
 ## 5. Narrowing `no_relevant_claims`
 

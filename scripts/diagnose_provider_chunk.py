@@ -80,6 +80,7 @@ def _observe(payload: dict, request) -> dict:
         if claim.get("category") not in {
             "repeat_condition",
             "fixed_range_repetition",
+            "operator_determined_repetition",
         }:
             continue
         labels = claim.get("repeated_step_labels")
@@ -124,6 +125,21 @@ def _observe(payload: dict, request) -> dict:
             if i.get("analysis_incomplete")
         ],
         "repetition_claims": repetitions,
+        # How each numbered label was accounted for. Without this a refusal
+        # that happens before the label check leaves the disposition
+        # unobservable, which is what made the first Stage 1 run silent about
+        # the label that caused the previous step's failure.
+        "non_step_labels": [
+            {
+                "source_page_number": item.get("source_page_number"),
+                "labels": sorted(
+                    str(entry.get("source_label"))
+                    for entry in (item.get("non_step_labels") or [])
+                ),
+            }
+            for item in payload.get("page_coverage") or []
+            if item.get("non_step_labels")
+        ],
     }
 
 
