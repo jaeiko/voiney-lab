@@ -2771,6 +2771,182 @@ document that could close the loop with a real provider, since its five
 repetitions are all unconditional and it carries no ambiguity. in-gel remains
 the cheaper contract test at 3 chunks against headspace's 5.
 
+## 11. First real provider run: 8 of 10 authorized calls
+
+Owner-approved on 2026-09-03, executed in stages. **8 calls used, 2 unspent.**
+Model `grok-4.3`, reasoning effort none, one setting, one attempt per chunk, no
+retries.
+
+### Stage A: in-gel chunk 1, one call - passed
+
+The hardest single chunk, chosen because it tests all three new requirements at
+once. One correction to the plan: chunk 1's core pages are **4-8**, not 4-6, so
+it contains all three of the document's repeat statements rather than two.
+
+| Measured | |
+| --- | --- |
+| canonical validation | **passed** |
+| repetition kind | **`repeat_condition`** |
+| declared range | **`["2", "7"]`** |
+| declared count | **null** |
+| evidence states the declared range | **true** |
+| claims | 58; 22 action claims, labels 3-24 |
+| declined segments | 7; no page self-reported incomplete |
+| latency / size | 31.6 s / 18,840 bytes; 5,732 + 5,193 tokens |
+
+**My STEP 18 prediction for this chunk was wrong.** I predicted
+`repeat_range_not_in_evidence` or `numbered_action_missing`; it passed on the
+first attempt, meeting all three new requirements. It named the range rather
+than the enclosing step, cited a segment whose text contains that range, and
+classified a conditional repetition as conditional with a null count - the safe
+answer on the axis where error is dangerous.
+
+### Stage B: in-gel chunks 0 and 2, two calls - passed
+
+Both passed. **in-gel is 3 of 3 chunks validated**, the first document to
+validate completely against this contract.
+
+| Chunk | Pages | Claims | Categories | Latency |
+| --- | --- | --- | --- | --- |
+| 0 | 1-3 | 11 | action 2, material 2, quantity 7 | 8.4 s |
+| 2 | 9 | 8 | action 3, duration 1, material 2, quantity 1, temperature 1 | 3.9 s |
+
+**Merge and assembly were not obtained, and that is my error.** The harness
+discarded each response after validating it, so the three validated analyses
+did not survive to be merged. Recovering them costs three fresh calls, which
+would have left four - below Stage C's minimum of five - so Stage C was
+preferred and the in-gel merge left undone rather than spending the budget on
+work already paid for once. The harness now keeps validated analyses for the
+length of one invocation and merges at the end, which is how Stage C ran. The
+three-way comparison against the hand-built fixture and the offline model
+therefore has no real-model column yet; it costs 3 calls to obtain.
+
+### Stage C: headspace, five calls - 3 of 5 passed, loop not closed
+
+| Chunk | Pages | Result | Claims |
+| --- | --- | --- | --- |
+| 0 | 1-2 | passed | 0 claims, 4 declined |
+| 1 | 3-5 | **rejected** `repetition_count_missing`, p5 | 63 |
+| 2 | 6-8 | passed | 33 |
+| 3 | 9-15 | **rejected** `numbered_action_missing`, p9 | 42 |
+| 4 | 16 | passed | 4 |
+
+Merge requires every chunk, so the loop is **not** closed. Nothing was relaxed.
+
+## 11a. What the model did with repetition, across all 8 calls
+
+Five repetition claims were emitted in total. Measured against the source:
+
+| Source statement | Model said | Range | Count | Outcome |
+| --- | --- | --- | --- | --- |
+| `Repeat steps 2-7 until the gel band is fully destained` | `repeat_condition` | 2-7 | null | correct |
+| `Repeat steps 12-15 twice more` | `fixed_range_repetition` | 12-15 | **2** | correct |
+| `Repeat steps 19-20 for the required number of ... replicates` | `fixed_range_repetition` | 19-20 | **null** | **refused** |
+| `repeat steps 36-41 twice more (three conditioning rounds in total)` | `repeat_condition` | 36-41 | null | safe-direction error |
+| `Repeat steps 43-50 for the required number of treatments` | `repeat_condition` | 43-50 | null | safe direction |
+
+`Repeat steps 23-26 for the metal plates` drew no repetition claim at all, from
+the chunk that passed.
+
+Three findings, all measured:
+
+- **Range declaration: 5 of 5 correct.** Every claim named the range the source
+  states, never the enclosing step. This was the requirement I thought most
+  likely to fail.
+- **Evidence shape rule: 5 of 5 satisfied.** Every citation resolved and every
+  cited excerpt contained the declared range, including on in-gel page 6 where
+  the repeat sentence is a different segment from the step it follows.
+- **The dangerous misclassification never happened.** No conditional repetition
+  was called fixed. The two errors were both in the safe direction - a bounded
+  repetition called conditional - which asks a person rather than stopping the
+  work early. The asymmetry the contract was shaped around held on the axis
+  that matters.
+
+## 11b. The two refusals, classified
+
+**Chunk 1, `repetition_count_missing`.** The model classified *"Repeat steps
+19-20 for the required number of bacterial isolates/replicates"* as
+`fixed_range_repetition` and left the count null, because the document states
+no number. The server refused it: a fixed repetition without a count cannot
+execute.
+
+This is **not (가) a model failure and not (나) an unclear prompt.** It is the
+shape recorded in STEP 18 as knowingly unsupported - a count the document
+defers to the experimenter - arriving exactly as predicted there. The rule did
+what it was designed to do; whether the design should represent this shape is
+the open decision, and it is the owner's. Relaxing the rule to admit a fixed
+repetition with no count is precisely the false-completion failure the repeat
+policy forbids, so nothing was changed.
+
+**Chunk 3, `numbered_action_missing` on page 9.** Page 9 carries one label, 35:
+
+> 35 Porapak tubes contain 50 mg of Porapak Q polymer (mesh size 50/80) within
+> a glass tube, held between two plugs of silanised wool.
+
+The model claimed actions 36 through 59 and not 35. That line **describes**
+rather than instructs, and the trigger demands an action claim for every
+line-anchored label.
+
+**I cannot cleanly separate (가) from (다) here, and say so rather than pick.**
+For (다), our rule is too strict: demanding an execution action for a
+descriptive numbered line is the same class of fault as demanding one for a
+figure caption, and it is exactly what D1 - letting a provider dispose of a
+label as "not an execution step" - was designed to fix. D1 is deferred, so this
+run is evidence for it from a properly numbered document rather than a
+near-unnumbered one. For (가), the model could have emitted an action claim
+carrying that descriptive text, since the rule requires an action claim to
+exist rather than to be a good instruction. Both readings fit the measurement,
+and one call cannot distinguish a model that judged the line non-instructional
+from one that overlooked it.
+
+**No retry was spent on either.** The authorization permits a retry when the
+cause is clearly our own bug with a short fix; neither cause is. Chunk 1's is a
+pending design decision and chunk 2's is either a deferred design decision or a
+model choice. Two calls remain unspent.
+
+## 11c. What this run taught, and what it did not
+
+Learned:
+
+- A real model can satisfy all three new contract requirements. Range
+  declaration, the evidence shape rule and the safe-direction default were met
+  in every instance they applied.
+- in-gel validates completely, 3 of 3 chunks. The contract is satisfiable on a
+  whole document.
+- The asymmetric default is load-bearing and worked: the model twice chose the
+  safe classification for a bounded repetition, and never once made the
+  dangerous choice.
+- Two of the shapes recorded as unsupported are not theoretical. The
+  deferred-count repetition arrived on the first real run, and a descriptive
+  numbered line is a real occurrence on a well-numbered document.
+
+Not learned:
+
+- Whether the contract is satisfiable in general. One model, one setting, one
+  attempt per chunk, two documents.
+- Whether chunk 3's refusal is our over-strictness or the model's omission, as
+  above.
+- Anything about execution. No document reached stage 8 in this run: in-gel's
+  repetitions are genuinely conditional and conditional repetition remains
+  unsupported, and headspace did not merge.
+- Whether a retry would pass either failed chunk. Not attempted.
+
+**No first-ever completion to report.** The loop is still closed by no
+document.
+
+## 11d. A parity gap found in pre-flight, not fixed mid-experiment
+
+Three fields the claim schema requires - `source_order`, `source_label`,
+`required_for_execution` - are not named in the prompt. `source_label` and
+ordering are described in substance ("preserves that action's source step
+label", "in source order"); `required_for_execution` has no prompt guidance at
+all.
+
+It is not a blocker: every real response populated all three. It was left alone
+deliberately - changing the prompt immediately before the calls would have
+confounded what the run was measuring, which is the model against the contract
+as it stood. Recorded as a parity item for a later step.
+
 
 ## 5. Narrowing `no_relevant_claims`
 
