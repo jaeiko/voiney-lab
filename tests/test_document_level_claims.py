@@ -280,13 +280,15 @@ class DocumentLevelClaimTests(unittest.TestCase):
         self.assertIn(f"condition-{claim.claim_id}", identifiers)
 
     def test_the_response_shape_changed_for_the_repeat_range(self) -> None:
-        """7 since a repeat_condition claim must declare its step range.
+        """8 since a repetition claim declares its range, kind and count.
 
-        A response written against 6 carries no repeated_step_labels and is
-        refused, so declaring 6 would be a lie about the shape.
+        7 added repeated_step_labels; 8 adds the fixed_range_repetition
+        category and the required repetition_count. A response written against
+        an earlier version omits a required field and is refused, so declaring
+        one would misstate the shape.
         """
 
-        self.assertEqual(CLAIM_SCHEMA_VERSION, 7)
+        self.assertEqual(CLAIM_SCHEMA_VERSION, 8)
 
 
 if __name__ == "__main__":

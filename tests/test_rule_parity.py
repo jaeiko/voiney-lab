@@ -259,6 +259,15 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
             "cite the segment that carries the repeat instruction itself",
         ),
     ),
+    "repetition_count_missing": (
+        _PROMPT,
+        ("must also declare repetition_count",),
+    ),
+    "repetition_count_malformed": (_SCHEMA, ()),
+    "repetition_count_not_applicable": (
+        _PROMPT,
+        ("leave repetition_count null",),
+    ),
     "repeat_range_not_applicable": (
         _PROMPT,
         ("every other claim must leave it null",),

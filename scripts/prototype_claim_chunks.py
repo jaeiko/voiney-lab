@@ -286,6 +286,7 @@ class ExactNumberedStepClaimModel:
                             "target_claim_id": None,
                             "required_for_execution": True,
                             "repeated_step_labels": None,
+                            "repetition_count": None,
                             "evidence": action_evidence,
                         }
                     )
@@ -320,6 +321,7 @@ class ExactNumberedStepClaimModel:
                                     "target_claim_id": action_id,
                                     "required_for_execution": False,
                                     "repeated_step_labels": None,
+                                    "repetition_count": None,
                                     "evidence": parameter_evidence,
                                 }
                             )
@@ -341,6 +343,14 @@ class ExactNumberedStepClaimModel:
                     if repeat is not None and repeat_range is not None:
                         repeat_start = excerpt_offset + repeat.start()
                         claim_id = f"repeat-p{page_number}-{action_index}"
+                        # This fixture is not a model and does not read prose,
+                        # so it cannot tell a bounded repetition from a
+                        # conditional one.  It always says repeat_condition,
+                        # which is the safe direction: that asks a person,
+                        # while a wrong fixed count would stop the work early
+                        # and report it finished.  A real provider makes this
+                        # choice; the fixture declining to is why a document
+                        # whose repetitions are all bounded still blocks here.
                         claims.append(
                             {
                                 "claim_id": claim_id,
@@ -355,6 +365,7 @@ class ExactNumberedStepClaimModel:
                                     repeat_range.group(1),
                                     repeat_range.group(2),
                                 ],
+                                "repetition_count": None,
                                 "evidence": self._evidence_span(
                                     page,
                                     repeat_start,
@@ -441,6 +452,7 @@ class ExactNumberedStepClaimModel:
                         "target_claim_id": target_id,
                         "required_for_execution": False,
                         "repeated_step_labels": None,
+                        "repetition_count": None,
                         "evidence": {
                             "source_page_number": page_number,
                             "evidence_segment_ids": [handle],

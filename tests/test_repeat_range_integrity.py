@@ -332,10 +332,14 @@ class ContractStatesTheRuleTests(unittest.TestCase):
         )
         self.assertEqual(array["minItems"], 2)
         self.assertEqual(array["maxItems"], 2)
-        self.assertIn(
-            "repeated_step_labels",
-            CLAIM_RESPONSE_SCHEMA["properties"]["claims"]["items"]["required"],
-        )
+        for field in ("repeated_step_labels", "repetition_count"):
+            with self.subTest(field=field):
+                self.assertIn(
+                    field,
+                    CLAIM_RESPONSE_SCHEMA["properties"]["claims"]["items"][
+                        "required"
+                    ],
+                )
 
 
 if __name__ == "__main__":

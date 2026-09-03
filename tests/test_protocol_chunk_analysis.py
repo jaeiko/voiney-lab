@@ -208,6 +208,7 @@ class FakeChunkModel:
                         "target_claim_id": None,
                         "required_for_execution": True,
                         "repeated_step_labels": None,
+                        "repetition_count": None,
                         "evidence": evidence(instruction),
                     }
                 )

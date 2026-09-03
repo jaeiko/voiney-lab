@@ -33,7 +33,7 @@ from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSI
 
 # 6: page coverage carries an explicit per-segment declination list, so a
 # page can no longer be exempted wholesale by emitting nothing.
-CLAIM_SCHEMA_VERSION = 7
+CLAIM_SCHEMA_VERSION = 8
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
@@ -105,6 +105,7 @@ class ClaimCategory(str, Enum):
     WARNING_HAZARD = "warning_hazard"
     OBSERVATION_CHECKPOINT = "observation_checkpoint"
     REPEAT_CONDITION = "repeat_condition"
+    FIXED_RANGE_REPETITION = "fixed_range_repetition"
     EXPLICIT_MISSING_AMBIGUOUS_VALUE = "explicit_missing_ambiguous_value"
 
 
@@ -280,9 +281,11 @@ class ProtocolClaim:
     target_claim_id: str | None
     required_for_execution: bool
     evidence: ClaimSourceEvidence
-    # First and last step label a repeat_condition claim repeats. None for
-    # every other category, and never inferred for a repeat.
+    # First and last step label a repetition claim repeats. None for every
+    # other category, and never inferred for a repetition.
     repeated_step_labels: tuple[str, str] | None = None
+    # How many times a fixed_range_repetition repeats. None otherwise.
+    repetition_count: int | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -300,6 +303,7 @@ class ProtocolClaim:
                 if self.repeated_step_labels is not None
                 else None
             ),
+            "repetition_count": self.repetition_count,
             "evidence": self.evidence.public_dict(),
         }
 
@@ -403,6 +407,18 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
 # as the source writes them.  Null for every other category, and null on a
 # repeat whose range the source does not state -- which the server then
 # refuses rather than filling in.
+# How many times a fixed_range_repetition repeats its range, as the source
+# states it.  Null for every other category.  The server does not read the
+# sentence for a number: whether "twice more" means two is the provider's
+# reading, and the count is checked only for being a positive integer.
+_REPETITION_COUNT_SCHEMA: dict[str, object] = {
+    "anyOf": [{"type": "integer", "minimum": 1, "maximum": 999}, {"type": "null"}],
+    "description": (
+        "For a fixed_range_repetition claim: how many times the source says to"
+        " repeat the range. Null for any other category. State the number the"
+        " source states; the server never infers it from the wording."
+    ),
+}
 _REPEATED_RANGE_SCHEMA: dict[str, object] = {
     "anyOf": [
         {
@@ -414,7 +430,8 @@ _REPEATED_RANGE_SCHEMA: dict[str, object] = {
         {"type": "null"},
     ],
     "description": (
-        "For a repeat_condition claim: the first and last step label the"
+        "For a repeat_condition or fixed_range_repetition claim: the first and"
+        " last step label the"
         " source says to repeat, as two strings. Null for any other category."
         " The cited evidence must contain those two labels written as a range,"
         " two numbers joined by a hyphen or dash, and the server checks the"
@@ -516,6 +533,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "target_claim_id": _NULLABLE_IDENTIFIER_SCHEMA,
                     "required_for_execution": {"type": "boolean"},
                     "repeated_step_labels": _REPEATED_RANGE_SCHEMA,
+                    "repetition_count": _REPETITION_COUNT_SCHEMA,
                     "evidence": _EVIDENCE_SCHEMA,
                 },
                 "required": [
@@ -528,6 +546,7 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                     "target_claim_id",
                     "required_for_execution",
                     "repeated_step_labels",
+                    "repetition_count",
                     "evidence",
                 ],
             },
@@ -786,8 +805,18 @@ name as an instruction, claim it as a document-level claim of the category that
 fits the value, or as explicit_missing_ambiguous_value, rather than declining
 it. A segment that is only punctuation or whitespace needs no entry.
 
-A repeat_condition claim must set repeated_step_labels to the first and last
-step label the source says to repeat, and every other claim must leave it null.
+A repetition claim must set repeated_step_labels to the first and last step
+label the source says to repeat, and every other claim must leave it null.
+There are two repetition categories and choosing between them is yours, not
+the server's: use fixed_range_repetition when the source states how many times
+to repeat, and repeat_condition when it says to repeat until something is
+observed. A fixed_range_repetition must also declare repetition_count, the
+number of times the source states; every other category must leave
+repetition_count null. The server never reads the sentence to decide which
+category applies or to check the number -- it only checks that a count is a
+positive whole number. If you cannot tell which category a statement is, use
+repeat_condition: that one asks a person, while a wrong fixed count would stop
+the work early and report it finished.
 The cited evidence must contain those two labels written as a range: two
 numbers joined by a hyphen or dash, such as 2-7. That is the whole test the
 server applies to it -- it does not read the sentence, only whether the excerpt
@@ -1753,6 +1782,7 @@ def parse_chunk_claim_response(
                 "target_claim_id",
                 "required_for_execution",
                 "repeated_step_labels",
+                "repetition_count",
                 "evidence",
             },
             "claim",
@@ -1782,6 +1812,15 @@ def parse_chunk_claim_response(
             raise ProtocolAnalysisResponseError(
                 "Chunk claim response has an invalid execution requirement."
             )
+        repetition_count = _repetition_count(
+            record["repetition_count"],
+            category=category,
+            item_index=item_index,
+            chunk_id=chunk_id,
+            source_revision=source_revision,
+            source_hash=extraction.sha256,
+            page_number=evidence.source_page_number,
+        )
         repeated_labels = _repeated_step_labels(
             record["repeated_step_labels"],
             category=category,
@@ -1811,6 +1850,7 @@ def parse_chunk_claim_response(
                 required_for_execution=required,
                 evidence=evidence,
                 repeated_step_labels=repeated_labels,
+                repetition_count=repetition_count,
             )
         )
     identifiers = [item.marker_id for item in markers] + [
@@ -1998,6 +2038,73 @@ def excerpt_states_range(excerpt: str, first: str, last: str) -> bool:
     )
 
 
+# The two categories that repeat a range of steps.  Which one a statement is
+# remains the provider's reading: the server never inspects the wording, so
+# nothing here decides that "twice more" is bounded and "until clear" is not.
+_REPETITION_CATEGORIES = frozenset(
+    {ClaimCategory.REPEAT_CONDITION, ClaimCategory.FIXED_RANGE_REPETITION}
+)
+
+
+def _repetition_count(
+    raw: object,
+    *,
+    category: ClaimCategory,
+    item_index: int,
+    chunk_id: str,
+    source_revision: str,
+    source_hash: str,
+    page_number: int,
+) -> int | None:
+    """Validate a declared repetition count, or refuse the claim.
+
+    Only the shape is checked -- a positive integer, on exactly the category
+    that repeats a fixed number of times.  The count is *not* looked for in the
+    excerpt, unlike the range: a source writes "twice more" as a word, so
+    requiring the digit would refuse a correct claim.  Reading the wording to
+    confirm the number would be the word list this design has already rejected
+    twice, so the number is the provider's reading and a reviewer confirms it
+    before anything executes.
+    """
+
+    def fail(reason: str, message: str) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            message,
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_evidence_validation",
+                reason_code=reason,
+                mismatch_class="claim_evidence_mismatch",
+                evidence_index=item_index,
+                evidence_type="claim",
+                category=category.value,
+                page_number=page_number,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=source_hash,
+            ),
+        )
+
+    if category is not ClaimCategory.FIXED_RANGE_REPETITION:
+        if raw is not None:
+            fail(
+                "repetition_count_not_applicable",
+                "Only a fixed_range_repetition claim may declare a count.",
+            )
+        return None
+    if raw is None:
+        fail(
+            "repetition_count_missing",
+            "A fixed_range_repetition claim must declare how many times it "
+            "repeats.",
+        )
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        fail(
+            "repetition_count_malformed",
+            "A declared repetition count must be a positive whole number.",
+        )
+    return int(raw)
+
+
 def _repeated_step_labels(
     raw: object,
     *,
@@ -2040,17 +2147,17 @@ def _repeated_step_labels(
             ),
         )
 
-    if category is not ClaimCategory.REPEAT_CONDITION:
+    if category not in _REPETITION_CATEGORIES:
         if raw is not None:
             fail(
                 "repeat_range_not_applicable",
-                "Only a repeat_condition claim may declare a repeated range.",
+                "Only a repetition claim may declare a repeated range.",
             )
         return None
     if raw is None:
         fail(
             "repeat_range_missing",
-            "A repeat_condition claim must declare the step range it repeats.",
+            "A repetition claim must declare the step range it repeats.",
         )
     if (
         not isinstance(raw, list)
@@ -2910,6 +3017,38 @@ def reopen_evidence_span(
     )
 
 
+def _fixed_range_repetition(
+    claim: ProtocolClaim,
+    steps_by_label: Mapping[str, str],
+    section_id: str | None,
+    step_id: str,
+    action_id: str,
+) -> domain.FixedRangeRepetition:
+    """One bounded repetition, from the range and count the claim declares.
+
+    The range is resolved exactly as a repeat-until's is, so the same faults
+    are refused: no range, a backwards range, a label no step carries, and a
+    range only partly resolvable. The count is the provider's reading of the
+    source and is carried through unchanged; a reviewer confirms it before
+    anything executes.
+    """
+
+    covered = _repeated_range_step_ids(claim, steps_by_label)
+    if claim.repetition_count is None:
+        raise ProtocolClaimConsistencyError("repetition_count_missing")
+    return domain.FixedRangeRepetition(
+        repetition_id=claim.claim_id,
+        start_step_id=covered[0],
+        end_step_id=covered[-1],
+        range_source_text=claim.source_text,
+        evidence=_domain_evidence(claim.evidence),
+        repeat_count=claim.repetition_count,
+        section_id=section_id,
+        step_id=step_id,
+        action_id=action_id,
+    )
+
+
 def _repeated_range_step_ids(
     claim: ProtocolClaim,
     steps_by_label: Mapping[str, str],
@@ -3163,6 +3302,18 @@ def assemble_experiment_protocol(
                     item
                     for item in related
                     if item.category is ClaimCategory.REPEAT_CONDITION
+                )
+                fixed_claims = tuple(
+                    item
+                    for item in related
+                    if item.category is ClaimCategory.FIXED_RANGE_REPETITION
+                )
+                constructs.extend(
+                    _fixed_range_repetition(
+                        item, steps_by_label, marker.section_id, step_id,
+                        action_claim.claim_id,
+                    )
+                    for item in fixed_claims
                 )
                 constructs.extend(
                     domain.RepeatUntil(

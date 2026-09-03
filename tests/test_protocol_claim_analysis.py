@@ -308,6 +308,12 @@ class RichClaimModel:
             ("observation-1", "observation_checkpoint", "observe clear", "action-1"),
             ("repeat-1", "repeat_condition", "repeat steps 1-1 until clear", "action-1"),
             (
+                "fixed-1",
+                "fixed_range_repetition",
+                "repeat steps 1-1 until clear",
+                "action-1",
+            ),
+            (
                 "missing-1",
                 "explicit_missing_ambiguous_value",
                 "volume is not specified",
@@ -334,7 +340,15 @@ class RichClaimModel:
                     # A repeat must declare the range it repeats, and the
                     # cited excerpt must contain it.
                     "repeated_step_labels": (
-                        ["1", "1"] if category == "repeat_condition" else None
+                        ["1", "1"]
+                        if category
+                        in {"repeat_condition", "fixed_range_repetition"}
+                        else None
+                    ),
+                    # A fixed repetition states how many times; the server
+                    # never reads the wording to check the number.
+                    "repetition_count": (
+                        2 if category == "fixed_range_repetition" else None
                     ),
                     "evidence": evidence(excerpt),
                 }

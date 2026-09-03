@@ -98,6 +98,7 @@ class ReadinessReasonCode(str, Enum):
     )
     SAFETY_CRITICAL_CONFLICT = "safety_critical_conflict"
     NO_DECLARED_SAFETY_WARNINGS = "no_declared_safety_warnings"
+    UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
 
@@ -1487,6 +1488,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.UNRESOLVED_EXECUTION_VALUE_CONFLICT,
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
+            ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
@@ -1608,6 +1610,34 @@ def assess_readiness(
                     "A reviewer must confirm this Protocol's safety warnings "
                     "before execution. Extracted warnings are model judgement "
                     "and do not discharge the review by themselves."
+                ),
+            )
+        )
+
+    if any(
+        isinstance(construct, FixedRangeRepetition)
+        for construct in protocol.constructs
+    ):
+        # A bounded repetition is only as safe as the bound, and the bound is
+        # the provider's reading of the source. Saying a conditional
+        # repetition is a fixed one is the dangerous direction: the agent
+        # would stop early and announce completion on a step whose own
+        # condition is unmet, which is the false completion notice this
+        # system must never produce. The mistake in the other direction only
+        # makes it ask a person.
+        #
+        # So a fixed repetition does not execute on the model's word. A
+        # reviewer confirms that it really is a fixed count and what that
+        # count is, and until then this blocks. Nothing quietly downgrades an
+        # unconfirmed fixed repetition to a conditional one either: that would
+        # be another guess.
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
+                message=(
+                    "A reviewer must confirm each fixed repetition's count "
+                    "before execution. A declared count is model judgement "
+                    "and does not discharge the review by itself."
                 ),
             )
         )

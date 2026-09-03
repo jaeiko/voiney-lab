@@ -688,9 +688,15 @@ class ExperimentProtocolTests(unittest.TestCase):
             step_id="step-1",
         )
         protocol = replace(minimal_protocol(), constructs=(repetition,))
+        # The construct is represented and the policy supports it, but a
+        # bounded repetition does not execute on a declared count: a reviewer
+        # confirms the bound, so this blocks alongside the safety gate.
         self.assertEqual(
             assess_readiness(protocol).reason_codes,
-            _SAFETY_GATE,
+            (
+                ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
+                ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value,
+            ),
         )
 
         ambiguity = SourceAmbiguity(

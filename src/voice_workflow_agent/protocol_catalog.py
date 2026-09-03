@@ -98,6 +98,8 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
         domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
     }
 )
+_REPETITION_CONFIRMATION_EVENT = "protocol_fixed_repetition_confirmed"
+_REPETITION_REVOCATION_EVENT = "protocol_fixed_repetition_confirmation_revoked"
 _AMBIGUITY_RESOLUTION_EVENT = "protocol_ambiguity_resolved"
 _AMBIGUITY_REVOCATION_EVENT = "protocol_ambiguity_resolution_revoked"
 # A reviewer's two possible findings about one ambiguity. Only the first can
@@ -2122,6 +2124,9 @@ class ProtocolCatalog:
         authoritative -- one settled ambiguity does not clear the reason, and a
         finding that two statements are genuinely distinct does not clear it at
         all, because that is a finding rather than a resolution.
+        ``unconfirmed_fixed_repetition`` clears only when every bounded
+        repetition has a standing confirmation whose count matches the analysed
+        one.
 
         Anything else still blocks, and with nothing recorded the answer is
         False. Nothing here inspects the ambiguous text.
@@ -2144,6 +2149,14 @@ class ProtocolCatalog:
                 == domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value
             ):
                 if not self._every_ambiguity_resolved(
+                    protocol_id, protocol_revision_number, analysis
+                ):
+                    return False
+            elif (
+                reason_code
+                == domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value
+            ):
+                if not self._every_fixed_repetition_confirmed(
                     protocol_id, protocol_revision_number, analysis
                 ):
                     return False
@@ -2334,11 +2347,13 @@ class ProtocolCatalog:
             raise ProtocolApprovalError(
                 "The cited evidence segments do not resolve on that page."
             ) from exc
-        ordinal = self._ambiguity_event_ordinal(
+        ordinal = self._finding_ordinal(
             protocol_id,
             protocol_revision_number,
             analysis_revision_number,
             ambiguity_id,
+            (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT),
+            "ambiguity_id",
         )
         self.store.append_event(
             (
@@ -2362,6 +2377,315 @@ class ProtocolCatalog:
             analysis_revision_number=analysis_revision_number,
         )
         return self.get_entry(protocol_id)
+
+    def _finding_context(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        actor_principal_id: str,
+        actor_role: str,
+    ) -> tuple[int, int, Any, Any]:
+        """Shared preamble for every reviewer finding on one analysis."""
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            raise ProtocolApprovalError(
+                "A validated analysis revision is required to record a "
+                "finding."
+            )
+        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
+        revision = self.store.get_protocol_revision(
+            protocol_id, protocol_revision_number
+        )
+        if revision is None:
+            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
+        analysis = self.store.get_analysis_revision(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
+        return (
+            protocol_revision_number,
+            analysis_revision_number,
+            revision,
+            analysis,
+        )
+
+    def _check_cited_segments(
+        self,
+        revision: Any,
+        evidence: domain.SourceEvidence,
+        evidence_segment_ids: tuple[str, ...],
+    ) -> None:
+        """A finding must cite segments that actually open on that page."""
+
+        if not evidence_segment_ids:
+            raise ProtocolApprovalError(
+                "A reviewer finding must cite the segments it rests on."
+            )
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        extraction = extract_protocol_pdf(
+            self.store.file_store.object_path(
+                revision.pdf_checksum, expected_size=pdf_object.byte_size
+            )
+        )
+        try:
+            reopen_evidence_span(
+                extraction,
+                replace(
+                    evidence,
+                    evidence_segment_ids=tuple(evidence_segment_ids),
+                ),
+                source_revision="pdf-1",
+            )
+        except Exception as exc:  # noqa: BLE001 - a citation that will not open
+            raise ProtocolApprovalError(
+                "The cited evidence segments do not resolve on that page."
+            ) from exc
+
+    def _finding_ordinal(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+        construct_id: str,
+        event_types: tuple[str, ...],
+        key: str,
+    ) -> int:
+        """How many findings this construct already has, plus one.
+
+        The ledger is append-only and refuses to reuse an identifier for
+        different content, so a reviewer who withdraws a finding and records a
+        different one needs a fresh identifier rather than a collision.
+        """
+
+        return 1 + sum(
+            1
+            for event in self.store.list_events(protocol_id)
+            if event.event_type in event_types
+            and event.protocol_revision_number == protocol_revision_number
+            and event.analysis_revision_number == analysis_revision_number
+            and isinstance(event.payload, dict)
+            and event.payload.get(key) == construct_id
+        )
+
+    def confirm_fixed_repetition(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        repetition_id: str,
+        repeat_count: int,
+        evidence_segment_ids: tuple[str, ...],
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Record a reviewer confirming a bounded repetition and its count.
+
+        The two ways of getting a repetition's kind wrong are not symmetric.
+        Calling a conditional repetition fixed makes the agent stop early and
+        announce completion while the source's own condition is unmet -- a
+        false completion notice, the worst outcome this system can produce.
+        Calling a fixed repetition conditional only makes it ask a person. So
+        a declared count does not execute on the model's word: a reviewer
+        confirms both that the repetition really is bounded and what the bound
+        is, citing the source they read.
+
+        The confirmed count must match the count the analysis carries. A
+        reviewer who believes the number is different is not confirming this
+        repetition, and re-analysis rather than an override is the route.
+        """
+
+        if not isinstance(repeat_count, int) or isinstance(repeat_count, bool):
+            raise ProtocolApprovalError("A confirmed count must be a number.")
+        if repeat_count < 1:
+            raise ProtocolApprovalError("A confirmed count must be positive.")
+        (
+            protocol_revision_number,
+            analysis_revision_number,
+            revision,
+            analysis,
+        ) = self._finding_context(protocol_id, revision_id, actor_principal_id, actor_role)
+        repetition = next(
+            (
+                construct
+                for construct in analysis.protocol.constructs
+                if isinstance(construct, domain.FixedRangeRepetition)
+                and construct.repetition_id == repetition_id
+            ),
+            None,
+        )
+        if repetition is None:
+            raise ProtocolApprovalError(
+                "This analysis revision has no such fixed repetition."
+            )
+        if repetition.repeat_count != repeat_count:
+            raise ProtocolApprovalError(
+                "The confirmed count does not match the analysed count."
+            )
+        self._check_cited_segments(
+            revision, repetition.evidence, evidence_segment_ids
+        )
+        ordinal = self._finding_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            repetition_id,
+            (_REPETITION_CONFIRMATION_EVENT, _REPETITION_REVOCATION_EVENT),
+            "repetition_id",
+        )
+        self.store.append_event(
+            (
+                f"repetition-{protocol_id[-16:]}-{protocol_revision_number}-"
+                f"{analysis_revision_number}-{repetition_id[:38]}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _REPETITION_CONFIRMATION_EVENT,
+            {
+                "decision": "fixed_count_confirmed",
+                "repetition_id": repetition_id,
+                "repeat_count": repeat_count,
+                "start_step_id": repetition.start_step_id,
+                "end_step_id": repetition.end_step_id,
+                "source_page_number": repetition.evidence.source_page_number,
+                "evidence_segment_ids": list(evidence_segment_ids),
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer confirmed a fixed count.")[
+                    :4000
+                ],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def revoke_fixed_repetition_confirmation(
+        self,
+        protocol_id: str,
+        revision_id: str,
+        *,
+        repetition_id: str,
+        actor_principal_id: str,
+        actor_role: str,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Withdraw a confirmation, which blocks the Protocol again."""
+
+        (
+            protocol_revision_number,
+            analysis_revision_number,
+            _revision,
+            _analysis,
+        ) = self._finding_context(protocol_id, revision_id, actor_principal_id, actor_role)
+        if repetition_id not in self._repetition_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        ):
+            raise ProtocolApprovalError(
+                "This analysis revision carries no confirmation to revoke."
+            )
+        ordinal = self._finding_ordinal(
+            protocol_id,
+            protocol_revision_number,
+            analysis_revision_number,
+            repetition_id,
+            (_REPETITION_CONFIRMATION_EVENT, _REPETITION_REVOCATION_EVENT),
+            "repetition_id",
+        )
+        self.store.append_event(
+            (
+                f"repetition-revoke-{protocol_id[-16:]}-"
+                f"{protocol_revision_number}-{analysis_revision_number}-"
+                f"{repetition_id[:32]}-{ordinal}"
+            ),
+            protocol_id,
+            protocol_revision_number,
+            _REPETITION_REVOCATION_EVENT,
+            {
+                "decision": "revoked",
+                "repetition_id": repetition_id,
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Reviewer withdrew a confirmation.")[
+                    :4000
+                ],
+            },
+            analysis_revision_number=analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def _repetition_findings(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+    ) -> dict[str, int]:
+        """The standing confirmed count per repetition; the last event wins."""
+
+        findings: dict[str, int] = {}
+        for event in self.store.list_events(protocol_id):
+            if event.protocol_revision_number != protocol_revision_number:
+                continue
+            if event.analysis_revision_number != analysis_revision_number:
+                continue
+            if not isinstance(event.payload, dict):
+                continue
+            repetition_id = event.payload.get("repetition_id")
+            if not isinstance(repetition_id, str):
+                continue
+            if event.event_type == _REPETITION_CONFIRMATION_EVENT:
+                count = event.payload.get("repeat_count")
+                if isinstance(count, int) and not isinstance(count, bool):
+                    findings[repetition_id] = count
+            elif event.event_type == _REPETITION_REVOCATION_EVENT:
+                findings.pop(repetition_id, None)
+        return findings
+
+    def repetition_findings(
+        self,
+        protocol_id: str,
+        revision_id: str,
+    ) -> dict[str, int]:
+        """Read the standing confirmations, for a reviewer or a projection."""
+
+        protocol_revision_number, analysis_revision_number = _parse_revision_id(
+            revision_id
+        )
+        if analysis_revision_number is None:
+            return {}
+        return self._repetition_findings(
+            protocol_id, protocol_revision_number, analysis_revision_number
+        )
+
+    def _every_fixed_repetition_confirmed(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis: Any,
+    ) -> bool:
+        """Every bounded repetition has a standing confirmation of its count."""
+
+        outstanding = {
+            construct.repetition_id: construct.repeat_count
+            for construct in analysis.protocol.constructs
+            if isinstance(construct, domain.FixedRangeRepetition)
+        }
+        if not outstanding:
+            return False
+        findings = self._repetition_findings(
+            protocol_id,
+            protocol_revision_number,
+            analysis.analysis_revision_number,
+        )
+        return all(
+            findings.get(repetition_id) == count
+            for repetition_id, count in outstanding.items()
+        )
 
     def revoke_ambiguity_resolution(
         self,
@@ -2396,11 +2720,13 @@ class ProtocolCatalog:
             raise ProtocolApprovalError(
                 "This analysis revision carries no finding to revoke."
             )
-        ordinal = self._ambiguity_event_ordinal(
+        ordinal = self._finding_ordinal(
             protocol_id,
             protocol_revision_number,
             analysis_revision_number,
             ambiguity_id,
+            (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT),
+            "ambiguity_id",
         )
         self.store.append_event(
             (
@@ -2421,31 +2747,6 @@ class ProtocolCatalog:
             analysis_revision_number=analysis_revision_number,
         )
         return self.get_entry(protocol_id)
-
-    def _ambiguity_event_ordinal(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-        ambiguity_id: str,
-    ) -> int:
-        """How many findings this ambiguity already has, plus one.
-
-        The ledger is append-only and refuses to reuse an identifier for
-        different content, so a reviewer who withdraws a finding and records a
-        different one needs a fresh identifier rather than a collision.
-        """
-
-        return 1 + sum(
-            1
-            for event in self.store.list_events(protocol_id)
-            if event.event_type
-            in (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT)
-            and event.protocol_revision_number == protocol_revision_number
-            and event.analysis_revision_number == analysis_revision_number
-            and isinstance(event.payload, dict)
-            and event.payload.get("ambiguity_id") == ambiguity_id
-        )
 
     def _ambiguity_findings(
         self,

@@ -2592,6 +2592,185 @@ consideration that is not a call cost: the claim schema now requires a declared
 repeat range, so a provider run would also be the first test of whether a model
 can state one.
 
+## 10. Repetition kind is now sayable, and asymmetrically defaulted
+
+`fixed_range_repetition` is a claim category. Which kind a statement is remains
+the provider's reading: **no code reads the wording.** Nothing looks for
+"twice" or "until", because that is the word list this design has rejected
+twice.
+
+The two failure directions are not symmetric, and the contract is shaped around
+that:
+
+- Calling a **conditional** repetition **fixed** makes the agent stop early and
+  announce completion while the source's own condition is unmet. That is a
+  false completion notice - the worst outcome this system can produce.
+- Calling a **fixed** repetition **conditional** only makes it ask a person.
+
+So the safe direction is the default, in three places:
+
+1. The prompt says: if you cannot tell which category a statement is, use
+   `repeat_condition`, because that one asks a person while a wrong fixed count
+   would stop the work early and report it finished.
+2. A `fixed_range_repetition` **blocks readiness until a reviewer confirms it**
+   (`unconfirmed_fixed_repetition`).
+3. The offline fixture, which does not read prose, always says
+   `repeat_condition` - and a comment in it says why.
+
+A `fixed_range_repetition` claim must declare the step range, under the rule
+STEP 17 added unchanged, **and** `repetition_count`. The count is checked only
+for being a positive whole number, and deliberately **not** looked for in the
+excerpt the way the range is: a source writes "twice more" as a word, so
+requiring the digit would refuse a correct claim. Reading the wording to verify
+the number would be the same word list again. Assembly maps the category to
+`FixedRangeRepetition`, which P1 supports, resolving the range exactly as a
+repeat-until's is and refusing the same faults.
+
+Stated in prompt and schema exactly as enforced, with three new reason codes
+bound into the parity audit. `CLAIM_SCHEMA_VERSION` moves 7 to 8: a new
+category and a new required field.
+
+## 10a. A bounded repetition does not execute on the model's word
+
+An unconfirmed fixed repetition blocks. A reviewer confirms both that the
+repetition really is bounded and what the bound is, through the same ledger the
+ambiguity findings use: actor, role, timestamp, the repetition, its step range,
+the source page, the handles they read, and the count. The handles are resolved
+against the source before the confirmation is accepted.
+
+The confirmed count must **match the analysed count**. A reviewer who believes
+the number is different is not confirming this repetition, and re-analysis
+rather than an override is the route. Withdrawal restores the block, and the
+earlier confirmation is not erased.
+
+Nothing downgrades an unconfirmed fixed repetition to a conditional one:
+that would be another guess, so it stays a fixed repetition and stays blocked.
+Conditional repetition (`RepeatUntil`) remains unsupported and untouched.
+
+Measured, all three directions:
+
+```
+before confirmation      : blocked
+confirmed at the right n : cleared
+withdrawn                : blocked again
+confirmed at a wrong n   : refused, still blocked
+```
+
+A confirmation never clears the safety gate and the safety acknowledgement
+never confirms a repetition - separate decisions, separate records.
+
+## 10b. headspace: still not closed, and the gap is now a classifier
+
+Rerun offline. Extraction, admission, 5/5 chunks, merge at 93 claims, 62 steps
+assembled, safety confirmed, no ambiguities - and **stage 8 still stops on
+`unsupported_repeat_until` x2.**
+
+The two blockers were **not** reclassified, and the reason is not a missing
+rule. The offline fixture is not a model: it does not read prose, so it cannot
+tell "twice more" from "until destained", and it therefore says
+`repeat_condition` every time. That is the correct behaviour for it - the safe
+direction - and it is why a document whose five repetitions are all
+unconditional still blocks here.
+
+What *is* proven, offline and without a provider call, is that the path opens
+the moment something classifies: a provider-shaped response declaring
+`fixed_range_repetition` with a range and count assembles into
+`FixedRangeRepetition(repeat_count=2, step-1..step-1)` and readiness then
+carries **only** the safety gate and the confirmation gate -
+`unsupported_repeat_until` is gone. That is held as a test.
+
+So the loop remains unclosed by any document, and the remaining gap is no
+longer a contract gap. **It is a classifier, and the only classifier is a real
+provider, which has never been run against this contract.** Nothing was
+relaxed to get past it.
+
+## 10c. Two repetition shapes still unsupported, recorded only
+
+Both appear in headspace and neither is designed for here.
+
+**(가) A count the document does not state.**
+
+> Repeat steps 19-20 for the required number of bacterial isolates/replicates
+> Repeat steps 43-50 for the required number of treatments/replicates
+> (minimum of four replicates per treatment, ...)
+
+*Currently*: the fixture emits `repeat_condition`, so these land in the
+unsupported conditional shape and block. A provider could not honestly call
+them `fixed_range_repetition` either, because `repetition_count` would have no
+source to state - the document defers the number to the experimenter.
+
+*What is missing*: any way to represent a count supplied at session start
+rather than by the document. This is not ambiguity - the source is perfectly
+clear that the operator decides - so `explicit_missing_ambiguous_value` would
+misdescribe it, and a reviewer confirming a fixed count would be inventing one.
+
+*If handled wrongly*: a count guessed or defaulted becomes a completion
+condition the source never stated. Four replicates when the experimenter
+intended eight, announced as finished. That is the failure the repeat policy
+exists to prevent, arriving by a different door.
+
+**(나) A repetition whose target changes.**
+
+> Repeat steps 23-26 for the metal plates.
+
+*Currently*: `repeat_condition`, blocked. The count appears to be one further
+pass, but the server does not judge that, and the fixture's classification
+carries no such reading.
+
+*What is missing*: any way to say that a repetition applies to a different
+subject. `FixedRangeRepetition` carries a range and a count and nothing about
+what is being operated on, so even a correct count of 1 would lose the fact
+that this pass is over the metal plates rather than the glass chambers.
+
+*If handled wrongly*: recording it as a plain repetition of steps 23-26 would
+have the operator clean the same glass chambers twice and never clean the metal
+plates, while the system reports the protocol complete. The work would be
+silently wrong rather than visibly blocked.
+
+## 10d. Preparing the first real provider run: in-gel, 3 chunks
+
+Not executed. Predictions with their grounds, so that being wrong is
+informative.
+
+**Per-chunk risk.** in-gel plans 3 chunks over 9 pages.
+
+| Chunk | Pages | Most likely refusal | Ground |
+| --- | --- | --- | --- |
+| 0 | 1-3 | `declined_segment_states_a_value` or none | Front matter and materials; the pages carry unit-bearing values in list form, which is where declination has failed before |
+| 1 | 4-6 | `repeat_range_not_in_evidence`, or `numbered_action_missing` | Holds two of the three repeat statements, one of which sits in prose *after* the step it belongs to - the exact shape that broke evidence integrity |
+| 2 | 7-9 | `repeat_range_missing`, or unaccounted segments | Holds the third repeat, whose sentence sits before the page's first label, and page 8 has the Expected-result blocks that the fixture declined |
+
+**Where the new requirements are hardest.** All three are new to any model:
+
+- *The range.* The model must read "repeat steps 2-7" and emit `["2", "7"]`.
+  The likelier error is naming the enclosing step, which is what our own
+  assembly did until STEP 17 - and the server now refuses it rather than
+  recording it.
+- *The evidence shape rule.* The cited excerpt must contain the range. This
+  requires citing the sentence carrying the repeat instruction, not the step it
+  follows. On in-gel page 6 those are different segments, so this is directly
+  tested rather than incidentally satisfied.
+- *The kind.* in-gel's three repeats are all conditional, so the correct answer
+  is `repeat_condition` with `repetition_count` null. A model that reaches for
+  `fixed_range_repetition` here would be making exactly the dangerous
+  misclassification, and would then have to invent a count - so this run tests
+  the asymmetric default on the side where getting it wrong matters most.
+
+**What a failure would and would not teach.** It would show which of the three
+new requirements a model cannot meet, and whether the refusal is precise enough
+to say so - the reason code has to name the fault, or the run is wasted. It
+would not show whether the contract is satisfiable at all, since one model at
+one setting is not the population; nor would it distinguish "cannot" from "was
+not told clearly enough", because prompt wording and model capability are not
+separable in a single run. And it cannot test execution: in-gel does not reach
+stage 8 regardless, because its repetitions are genuinely conditional and
+conditional repetition stays unsupported.
+
+**A fact for the record, not a proposal**: after this step, headspace is the
+document that could close the loop with a real provider, since its five
+repetitions are all unconditional and it carries no ambiguity. in-gel remains
+the cheaper contract test at 3 chunks against headspace's 5.
+
 
 ## 5. Narrowing `no_relevant_claims`
 
