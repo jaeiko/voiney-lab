@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -478,8 +478,28 @@ def _decode_domain(value: Any) -> Any:
             raise ProtocolSerializationError(
                 "Stored Protocol analysis uses an unsupported record type."
             )
-        expected_fields = {field.name for field in fields(record_type)}
-        if set(value["fields"]) != expected_fields:
+        record_fields = fields(record_type)
+        expected_fields = {field.name for field in record_fields}
+        stored_fields = set(value["fields"])
+        if not stored_fields <= expected_fields:
+            raise ProtocolSerializationError(
+                "Stored Protocol analysis record fields are malformed."
+            )
+        # A field added since a payload was written is absent from it, and its
+        # default supplies the value.  Requiring an exact match made every
+        # stored analysis unreadable the moment a field was added: adding
+        # SourceEvidence.evidence_segment_ids stopped the curated development
+        # fixture, written months earlier, from decoding at all.  A field with
+        # no default is still required, so a genuinely truncated record is
+        # still refused.
+        missing_required = {
+            field.name
+            for field in record_fields
+            if field.name not in stored_fields
+            and field.default is MISSING
+            and field.default_factory is MISSING
+        }
+        if missing_required:
             raise ProtocolSerializationError(
                 "Stored Protocol analysis record fields are malformed."
             )

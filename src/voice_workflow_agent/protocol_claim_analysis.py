@@ -2848,11 +2848,22 @@ def assemble_experiment_protocol(
             and claim.target_claim_id is None
         ):
             global_missing.append(claim)
-        elif claim.target_claim_id is None:
+        elif (
+            claim.target_claim_id is None
+            and claim.category is not ClaimCategory.ACTION
+        ):
             # A value or condition stated outside every numbered step. It is a
             # before-start condition rather than a step qualifier, and it must
             # surface somewhere: a claim that reaches no domain object is
             # invisible to a reviewer and to execution.
+            #
+            # An action claim is excluded because it is not a value or a
+            # condition -- it *is* a numbered step, and it is assembled into
+            # sections[].steps further down. Without this it also arrived here,
+            # so every instruction in the document appeared twice: once as an
+            # executable step and once as something to do before starting. On
+            # the first document taken through assembly that was 25 of the 27
+            # before-start entries.
             global_conditions.append(claim)
     prerequisites.extend(
         domain.BeforeStartPrerequisite(

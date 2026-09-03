@@ -2093,6 +2093,174 @@ development activation, which requires readiness to be clear - and no
 pipeline-produced analysis has ever existed to clear. So the path has only ever
 carried the curated fixture, and the untested span is precisely: merged
 `ExperimentProtocol` -> `load_executable_fixture` -> `CuratedProtocolSession`.
+## 7. One PDF taken as far as it goes
+
+`in-gel-digestion.pdf`, offline, zero provider calls, in a temporary catalog.
+The operational store was opened read-only and never written.
+
+**This is a plumbing check, not a quality measurement.** The claim model is the
+deterministic offline fixture, so the analysis fed to every later stage is
+fixed and synthetic, and nothing here says anything about what a real provider
+would produce. What it establishes is whether the stages are connected. The
+fixture is entitled to run on this document: 25 labels, strictly increasing, no
+duplicate and no descent.
+
+| Stage | Result |
+| --- | --- |
+| 1 extraction | ok - 9 pages, verified, 0 glyphs to resolve |
+| 2 page admission | ok - 3 chunks |
+| 3 chunk analysis | ok - 3/3 validated |
+| 4 whole-document merge | **ok - 86 claims, 2 markers. First time attempted.** |
+| 5 ExperimentProtocol assembly | **ok - 25 steps. First time reached.** |
+| 6 readiness | ok - `analysis_required` |
+| 7 audited safety confirmation | ok - ledger entry, actor recorded |
+| 8 development activation | **STOPS** |
+| 9 load_executable_fixture | not reached (blocked by 8) |
+| 10 first step guidance | not reached (blocked by 8) |
+
+Stage 8 refuses with "Protocol readiness (analysis_required) is not ready for
+development execution". The reasons are `unresolved_ambiguity` x4,
+`no_declared_safety_warnings` (acknowledged at stage 7) and
+`unsupported_repeat_until` x2. The last two classes are not acknowledgeable, so
+no confirmation clears them.
+
+Stages 9 and 10 were then probed **with the wall stepped around on purpose**,
+building the fixture directly the way `replay_turns` does. This is a
+diagnostic, not a route: it changes no rule and makes nothing executable, and
+without it a plumbing fault in the last two stages would be indistinguishable
+from the policy wall in front of them. Both work - the session opens on the
+assembled protocol and returns a populated frame for step 1: `step_id=step-1`,
+`step_label=1`, 4 parameters, 1 action. **So the plumbing is continuous from
+PDF to first step guidance; the only wall is the readiness policy.**
+
+### The wall is not something the pipeline introduced
+
+The hand-built fixture over this same document, written on 2026-08-30, carries
+`unresolved_ambiguity` and `unsupported_repeat_until` x2 - the same two
+non-acknowledgeable classes. Its reason codes are not a subset of the
+acknowledgeable gates either, so **it cannot reach `available_for_execution`
+today any more than the pipeline result can.** Stages 8 to 10 have never been
+traversable for this document by any route.
+
+That also explains how the demo runs at all: `replay_turns` constructs a
+`CuratedProtocolSession` directly and never passes through
+`load_executable_fixture`. There are two ways into the session, and the gated
+one has still never carried anything.
+
+## 7a. Two plumbing defects found and fixed
+
+**Every instruction appeared twice.** The assembly branch that routes
+untargeted claims into `before_start` is documented as taking "a value or
+condition stated outside every numbered step", and it was also catching action
+claims. An action claim is not a value or a condition - it *is* the numbered
+step, and it is assembled into `sections[].steps` further down. Measured on
+this document, the catch-all received 25 action claims plus 1 duration and 1
+temperature, so 25 of 27 before-start entries were duplicates of the
+executable steps. Excluding actions restores the branch's own stated intent and
+leaves `before_start` at 2, both genuinely outside the numbered steps: an
+overnight digestion time and a temperature stated after the last step. The two
+stray values still surface, which is the point of the branch.
+
+**A stored analysis had become undecodable, and I caused it.** Adding
+`SourceEvidence.evidence_segment_ids` in STEP 14 broke the store's decoder,
+which required the stored field set to match the dataclass exactly. The curated
+fixture written months earlier no longer loaded at all - the comparison below
+could not be run until this was fixed. A field added since a payload was
+written is now filled from its default, while a field with no default is still
+required, so a genuinely truncated record is still refused. This is the second
+time a schema-shaped change has reached further than intended in this
+programme; the first was the same field leaking into the provider-facing
+schema.
+
+## 7b. Pipeline output against the hand-built fixture
+
+Facts only. This asks whether the assembly path loses information, not whether
+the offline model is any good - it is a fixture and its output is fixed.
+
+| | Hand-built | Pipeline |
+| --- | --- | --- |
+| sections | 5 | 1 |
+| steps | 25 | 25 |
+| step labels | 1-25 | 1-25, **identical set** |
+| values on steps | 1 | 122 |
+| sub-actions | 3 | 25 |
+| warnings (step / action) | 1 / 0 | 0 / 0 |
+| before_start | 1 | 2 |
+| materials | 6 | 0 |
+| equipment | 1 | 0 |
+| constructs | RepeatUntil 2, SourceAmbiguity 1 | SourceAmbiguity 4, RepeatUntil 2 |
+
+**No step label is lost in either direction** - both carry exactly 1 to 25.
+That is the assembly path's core obligation and it holds.
+
+In the hand-built fixture and not in the pipeline result: 6 materials, 1
+equipment item, 1 step warning, and 4 of the 5 sections. Each traces to a claim
+category the offline model never emits - it produced only action,
+agitation_speed, concentration, duration, quantity, repeat_condition and
+temperature claims, and exactly one section marker. So these are absences at
+the model, not losses in assembly.
+
+In the pipeline result and not the hand-built fixture: 121 further values, 22
+further sub-actions, and 3 further ambiguities. The values are the offline
+model's per-occurrence parameter extraction, which the hand-built fixture
+records once at most.
+
+## 7c. Classification of every stop
+
+**(가) Plumbing defect - fixed this step.**
+
+- Action claims duplicated into `before_start`. The catch-all caught a category
+  already materialised as a step.
+- The store decoder refused any payload written before a field existed, which
+  made the pre-existing curated analysis unreadable.
+
+**(나) Rule working - left alone.**
+
+- `unsupported_repeat_until` x2. The source genuinely contains repeat-until
+  constructs and the P1 capability policy does not support them. Corroborated
+  independently: the hand-built fixture over the same document carries the same
+  two. Refusing to execute a construct the policy cannot honour is the rule
+  doing its job.
+- Stage 8's refusal itself, for the same reason.
+
+**(라) Data the offline model cannot supply - reported, not fixed.**
+
+- `unresolved_ambiguity` x4, all `ambiguous-duration-*`. Each is a step whose
+  action carries two duration claims because the source states one duration
+  twice, in prose and again as a timer literal: `Incubate the gel plug for
+  15min at 37C ... 00:15:00`. The model cannot know the two refer to the same
+  interval, and assembly is right to refuse a step with two durations. The
+  hand-built fixture has one ambiguity rather than four, so a person resolved
+  the redundancy; whether a provider does is unmeasured.
+- Missing materials, equipment, warnings and 4 of 5 sections, as above. The
+  fixture emits none of those categories.
+
+**(다) Over-blocking - none found.** Every stop traces either to a construct
+the policy declines to support, or to information the offline model does not
+produce. The hand-built fixture meets the same wall, which is the strongest
+available evidence that the wall is not aimed at the pipeline.
+
+## 7d. What the same run would cost with a real provider
+
+in-gel plans **3 chunks**, one call each, so the floor is **3 calls** if every
+chunk validates first time. Merge requires all three, so one unrecovered chunk
+failure ends the run.
+
+The only measured per-chunk first-attempt rate is ANKOM's **4 of 8** under the
+current contract. ANKOM is a larger and denser document, so this is an
+indicative figure from a different source rather than a rate for in-gel, and it
+is the only measurement that exists. Taking p = 0.5 per attempt:
+
+| Retry budget per chunk | Calls used | P(all 3 chunks validate) | Expected calls |
+| --- | --- | --- | --- |
+| 0 (harness default today) | 3 | 12.5% | 3 |
+| 1 | 3-6 | 42% | ~4.5 |
+| 2 | 3-9 | 67% | ~5.3 |
+| 3 | 3-12 | 82% | ~5.7 |
+
+Two calls of authorized budget remain, which is below the floor of 3. Replaying
+stored responses stays free; only new calls cost.
+
 
 ## 5. Narrowing `no_relevant_claims`
 
