@@ -9,10 +9,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from voice_workflow_agent import experiment_protocol as domain
+from pypdf import PdfReader
+
 from voice_workflow_agent.experiment_protocol_pdf import (
+    ProtocolPdfExtraction,
     TextVerification,
+    _declared_unicode_values,
     canonical_text_census,
     extract_protocol_pdf,
+    resolve_unmapped_page_text,
     unmapped_code_points,
     verify_page_text,
 )
@@ -45,23 +50,24 @@ class CanonicalTextCensusTests(unittest.TestCase):
             canonical_text_census("2-mm screen"),
         )
 
-    def test_a_noncharacter_counts(self) -> None:
-        """It stands in place of a character, so it is not normalized away.
+    def test_unmapped_code_points_are_not_compared_here(self) -> None:
+        """Each engine fails at an unmapped glyph in its own way.
 
-        This census used to drop category Cn alongside the control characters.
-        Combined with dropping the hyphens, that made an engine emitting
-        alpha-amylase and one emitting alpha\ufffeamylase produce identical
-        censuses, so a real disagreement inside a reagent dosing sentence was
-        reported as agreement.
+        pdfium emits U+FFFE, pypdf emits a private-use code point, poppler
+        deletes the character. Comparing placeholders compares the engines'
+        defects, not the document, so those positions are decided one at a
+        time against the PDF's ToUnicode declaration instead, and admitted
+        page text keeps none of them. This census is for the other corruption:
+        a real character silently replaced by another.
         """
 
-        self.assertNotEqual(
+        self.assertEqual(
             canonical_text_census("alpha￾amylase"),
-            canonical_text_census("alpha-amylase"),
+            canonical_text_census("alphaamylase"),
         )
         self.assertNotEqual(
-            canonical_text_census("Dry￾ the bags"),
-            canonical_text_census("Dry the bags"),
+            canonical_text_census("formic acid (50:49:1)"),
+            canonical_text_census("formic acid (50a49b1)"),
         )
 
     def test_order_does_not_count(self) -> None:
@@ -121,21 +127,20 @@ class PrimaryExtractorTests(unittest.TestCase):
         self.assertEqual(extraction.divergent_page_numbers, ())
         self.assertTrue(extraction.text_cross_checked)
 
-    def test_a_source_with_unmapped_glyphs_is_refused(self) -> None:
-        """ANKOM carries nine U+FFFE, one per affected page.
+    def test_a_source_whose_glyphs_the_document_declares_passes(self) -> None:
+        """ANKOM carries nine U+FFFE and the document declares all nine.
 
-        It used to pass, because the census dropped the noncharacter and the
-        hyphen the other engine emitted in the same position. It does not pass
-        now, and the pages it names are the pages the comparison independently
-        finds divergent.
+        Each one is read from the PDF's own ToUnicode map, so the source is
+        admissible and the reagent name reads correctly.
         """
 
         extraction = extract_protocol_pdf(ANKOM)
-        self.assertIs(extraction.text_verification, TextVerification.MISMATCH)
-        self.assertEqual(
-            extraction.divergent_page_numbers,
-            (9, 17, 25, 33, 35, 36, 37, 38, 39),
-        )
+        self.assertIs(extraction.text_verification, TextVerification.VERIFIED)
+        self.assertEqual(extraction.divergent_page_numbers, ())
+        self.assertEqual(len(extraction.glyph_resolutions), 9)
+        self.assertEqual(extraction.unresolved_glyph_reasons, ())
+        self.assertIn("alpha-amylase and enough", extraction.pages[8].text)
+        self.assertNotIn("￾", extraction.pages[8].text)
 
 
 class CrossCheckOutcomeTests(unittest.TestCase):
@@ -436,80 +441,158 @@ if __name__ == "__main__":
 class UnmappedCodePointDecisionTests(unittest.TestCase):
     """What an unmapped code point in extracted text is taken to mean.
 
-    The decision, stated once here and enforced in verify_page_text: a
-    private-use or noncharacter code point means the extractor could not map a
-    glyph, so the character at that position is unknown and the page is
-    refused. It is never substituted, because what it stood for is not
-    recoverable.
+    An unmapped code point -- private use, or a noncharacter such as U+FFFE --
+    means the primary extractor could not map a glyph. It splits into two
+    classes, and the earlier single-class refusal was wrong about the first.
 
-    The evidence for "not recoverable" is measured, not assumed. On ANKOM page
-    9 the primary engine yields ``alpha\ufffeamylase`` and the comparison
-    engine yields ``alphaamylase`` -- the hyphen deleted outright -- so neither
-    engine recovers the character. In a reference DOI the primary engine yields
-    ``978-1\ufffe4939`` where the comparison engine yields ``978-14939``,
-    which is a wrong DOI, so the comparator is not an oracle either. And the
-    right character is not even the same everywhere: ``alpha-amylase`` takes a
-    hyphen while ``Liquid Chromatography--Mass Spectrometry`` conventionally
-    takes an en dash. Any single substitution would be wrong somewhere.
+    Class 1: the PDF declares the character in its own ToUnicode map and an
+    engine reads it. Reading that is not repair; it is reading the source, and
+    the server owning authority over its evidence is exactly this case. On
+    ANKOM page 9 font /F57 declares <B6> -> <002D>, so `alpha\ufffeamylase` is
+    read as `alpha-amylase` from the document's declaration.
 
-    The harm a substitution would do is specific to this design. The affected
-    text on ANKOM page 9 is inside numbered step 11's evidence segment, in a
-    reagent dosing sentence. A guessed character there would be quoted as
-    canonical source_text and then confirmed by exact-evidence validation, so
-    the pipeline would certify a character we invented.
+    Class 2: no engine reads a character the document declares. The document
+    says nothing, so the position is refused. Every intracellular case is here:
+    three where the second engine also emits a private-use placeholder, in a
+    part number, a compound name and a DOI, and two where the engines cannot be
+    aligned at all, both DOIs.
+
+    What stays forbidden is everything that is not the document speaking: no
+    majority vote between placeholders, no "it looks like a hyphen", no
+    inference from surrounding words. Deleting the character says nothing about
+    it, so an engine that joins the words neither resolves nor conflicts; two
+    engines reporting different real characters is a genuine conflict.
     """
 
     def test_a_noncharacter_is_unmapped(self) -> None:
         self.assertEqual(unmapped_code_points("alpha￾amylase"), {"￾": 1})
 
     def test_a_private_use_character_is_unmapped(self) -> None:
-        self.assertEqual(unmapped_code_points("5049"), {"": 1})
+        """Written as a code point: the glyph itself is invisible in a file."""
+
+        pua = chr(0xE081)
+        self.assertEqual(unmapped_code_points(f"50{pua}49"), {pua: 1})
 
     def test_ordinary_text_holds_nothing_unmapped(self) -> None:
         self.assertEqual(unmapped_code_points("Add 8.0 mL of alpha-amylase"), {})
 
     def test_an_en_dash_is_not_unmapped(self) -> None:
-        """It is a real character, and one of the shapes U+FFFE replaces."""
-
         self.assertEqual(unmapped_code_points("Chromatography–Mass"), {})
 
-    def test_extraction_does_not_substitute_the_character(self) -> None:
-        """Refusal, not repair: the noncharacter is still there afterwards."""
+    def test_class_one_is_read_from_the_document(self) -> None:
+        extraction = extract_protocol_pdf(ANKOM)
+        self.assertEqual(len(extraction.glyph_resolutions), 9)
+        for resolution in extraction.glyph_resolutions:
+            with self.subTest(page=resolution.source_page_number):
+                self.assertEqual(resolution.resolved_character, "-")
+                self.assertEqual(resolution.unmapped_code_point, 0xFFFE)
+                self.assertTrue(resolution.declared_by_document)
+                self.assertTrue(resolution.resolved_by)
+
+    def test_the_document_really_declares_that_character(self) -> None:
+        """The mapping the resolution rests on, read from the font itself."""
+
+        page = PdfReader(ANKOM).pages[8]
+        self.assertIn("-", _declared_unicode_values(page))
+
+    def test_admitted_text_never_keeps_an_unmapped_code_point(self) -> None:
+        """The invariant: resolve every one, or refuse the document."""
+
+        for source in (ANKOM, IN_GEL):
+            extraction = extract_protocol_pdf(source)
+            with self.subTest(source=source.name):
+                self.assertIs(
+                    extraction.text_verification, TextVerification.VERIFIED
+                )
+                self.assertEqual(
+                    [
+                        page.source_page_number
+                        for page in extraction.pages
+                        if unmapped_code_points(page.text)
+                    ],
+                    [],
+                )
+
+    def test_a_character_the_document_does_not_declare_is_refused(self) -> None:
+        """Not a vote: agreement between engines is not authority."""
+
+        text, resolutions, failures = resolve_unmapped_page_text(
+            "Add 8.0 mL of alpha￾amylase now",
+            source_page_number=1,
+            candidates={
+                "one": "Add 8.0 mL of alpha-amylase now",
+                "two": "Add 8.0 mL of alpha-amylase now",
+            },
+            declared=frozenset("abcdefghilmnopqrstuvwxyz .0128"),
+        )
+        self.assertEqual(resolutions, ())
+        self.assertIn("does not declare", failures[0])
+        self.assertIn("￾", text)
+
+    def test_two_engines_reading_different_characters_conflict(self) -> None:
+        _, resolutions, failures = resolve_unmapped_page_text(
+            "Add 8.0 mL of alpha￾amylase now",
+            source_page_number=1,
+            candidates={
+                "one": "Add 8.0 mL of alpha-amylase now",
+                "two": "Add 8.0 mL of alpha–amylase now",
+            },
+            declared=frozenset({"-", "–"}),
+        )
+        self.assertEqual(resolutions, ())
+        self.assertIn("different", failures[0])
+
+    def test_deletion_alone_resolves_nothing(self) -> None:
+        """Joining the words says nothing about the character that was there."""
+
+        _, resolutions, failures = resolve_unmapped_page_text(
+            "Add 8.0 mL of alpha￾amylase now",
+            source_page_number=1,
+            candidates={"poppler": "Add 8.0 mL of alphaamylase now"},
+            declared=frozenset({"-"}),
+        )
+        self.assertEqual(resolutions, ())
+        self.assertIn("no engine resolved", failures[0])
+
+    def test_a_declared_character_resolves_and_is_substituted(self) -> None:
+        text, resolutions, failures = resolve_unmapped_page_text(
+            "Add 8.0 mL of alpha￾amylase now",
+            source_page_number=1,
+            candidates={"reader": "Add 8.0 mL of alpha-amylase now"},
+            declared=frozenset({"-"}),
+        )
+        self.assertEqual(failures, ())
+        self.assertEqual(text, "Add 8.0 mL of alpha-amylase now")
+        self.assertEqual(len(resolutions), 1)
+        self.assertEqual(resolutions[0].resolved_by, "reader")
+
+    def test_no_provenance_means_no_resolution(self) -> None:
+        """A position that cannot be recorded is not allowed through."""
 
         extraction = extract_protocol_pdf(ANKOM)
-        self.assertIn("￾", extraction.pages[8].text)
-        self.assertNotIn("alpha-amylase and enough", extraction.pages[8].text)
+        recorded = {
+            (r.source_page_number, r.text_offset)
+            for r in extraction.glyph_resolutions
+        }
+        self.assertEqual(len(recorded), len(extraction.glyph_resolutions))
 
-    def test_it_is_refused_even_with_no_comparator(self) -> None:
+    def test_class_two_is_refused_even_with_no_comparator(self) -> None:
         """The hole this closes.
 
-        Deciding it only by comparison would leave it undetected wherever no
-        comparison engine is installed, and comparator_unavailable is a gate a
-        person may acknowledge, so genuinely unmapped text could be waved
-        through.
+        Deciding an unmapped position only by comparison would leave it
+        undetected wherever no comparison engine is installed, and
+        comparator_unavailable is a gate a person may acknowledge, so
+        unreadable text could be waved through.
         """
 
-        extraction = extract_protocol_pdf(ANKOM)
-        with patch(
-            "voice_workflow_agent.experiment_protocol_pdf.shutil.which",
-            return_value=None,
-        ):
-            verdict, divergent = verify_page_text(ANKOM, extraction.pages)
-        self.assertIs(verdict, TextVerification.MISMATCH)
-        self.assertIn(9, divergent)
-
-    def test_a_clean_source_is_unaffected_by_that_check(self) -> None:
-        extraction = extract_protocol_pdf(IN_GEL)
-        self.assertEqual(
-            [p.source_page_number for p in extraction.pages
-             if unmapped_code_points(p.text)],
-            [],
+        _, resolutions, failures = resolve_unmapped_page_text(
+            "Add 8.0 mL of alpha￾amylase now",
+            source_page_number=1,
+            candidates={},
+            declared=frozenset({"-"}),
         )
-
-    def test_refusal_blocks_admission(self) -> None:
-        extraction = extract_protocol_pdf(ANKOM)
-        with self.assertRaises(ProtocolChunkAdmissionError):
-            plan_protocol_chunks(extraction, "protocol-x", "pdf-1")
+        self.assertEqual(resolutions, ())
+        self.assertTrue(failures)
 
     def test_the_gate_it_raises_is_not_acknowledgeable(self) -> None:
         """A person may wave through "not cross-checked", never "corrupted"."""
@@ -524,3 +607,52 @@ class UnmappedCodePointDecisionTests(unittest.TestCase):
             domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED.value,
             _ACKNOWLEDGEABLE_GATES,
         )
+
+
+# Recorded so absence is loud: a missing source skips with its reason printed,
+# and the hash pins which file the measurement was taken from. The files are
+# 24 MB and 5.1 MB and are deliberately not committed.
+INTRACELLULAR = Path("intracellularmetaboliteextraction.pdf")
+INTRACELLULAR_SHA256 = (
+    "997d020c11ba915621b9705de9c4a92330f843c8feff4e2d1099dca763fdb9f0"
+)
+HEADSPACE = Path("usingdynamicheadspacecollections.pdf")
+HEADSPACE_SHA256 = (
+    "2bf102779364ec2dad517efc5acff7c5b6a5b569465e708f68186d7415c46fa2"
+)
+
+
+def _require(path: Path, digest: str) -> "ProtocolPdfExtraction":
+    if not path.is_file():
+        raise unittest.SkipTest(
+            f"{path.name} is not present in the working tree; it is a "
+            f"{'24 MB' if 'intra' in path.name else '5.1 MB'} source that is "
+            f"deliberately not committed. Expected sha256 {digest}."
+        )
+    extraction = extract_protocol_pdf(path)
+    if extraction.sha256 != digest:
+        raise unittest.SkipTest(
+            f"{path.name} is present but is a different file: sha256 "
+            f"{extraction.sha256}, expected {digest}."
+        )
+    return extraction
+
+
+class UndeclaredGlyphSourceTests(unittest.TestCase):
+    """The document that is refused, and why it stays refused."""
+
+    def test_a_source_with_undeclared_glyphs_is_refused(self) -> None:
+        extraction = _require(INTRACELLULAR, INTRACELLULAR_SHA256)
+        self.assertIs(extraction.text_verification, TextVerification.MISMATCH)
+        self.assertEqual(extraction.divergent_page_numbers, (10, 18, 33))
+        self.assertEqual(len(extraction.unresolved_glyph_reasons), 5)
+
+    def test_its_refusal_blocks_admission(self) -> None:
+        extraction = _require(INTRACELLULAR, INTRACELLULAR_SHA256)
+        with self.assertRaises(ProtocolChunkAdmissionError):
+            plan_protocol_chunks(extraction, "protocol-x", "pdf-1")
+
+    def test_a_source_with_no_unmapped_glyph_needs_no_resolution(self) -> None:
+        extraction = _require(HEADSPACE, HEADSPACE_SHA256)
+        self.assertIs(extraction.text_verification, TextVerification.VERIFIED)
+        self.assertEqual(extraction.glyph_resolutions, ())

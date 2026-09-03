@@ -1683,6 +1683,259 @@ false triggers at no measured cost on any real document, and D1 then answers
 what remains, including intracellular's 12 section and contents numbers, which
 are line-anchored and survive D2.
 
+## 5c. The unmapped-glyph gate splits in two
+
+STEP 12 refused every unmapped code point on the ground that what it stood for
+was not recoverable. That premise was wrong, and it was wrong because I only
+looked at the layout. A PDF declares what its glyphs mean, in each font's
+ToUnicode map, and that declaration is the document speaking about its own
+text.
+
+Verified here, from the font itself rather than from any extractor: ANKOM
+page 9 carries a Type3 subset font whose ToUnicode contains `<B6> <002D>`. The
+engine that applies ToUnicode reads `alpha-amylase`. **U+FFFE is not in the
+document; it is what pdfium emits where it failed to map that glyph.**
+
+So the gate has two classes.
+
+**Class 1 - the document declares the character and an engine reads it.**
+Reading it is not repair. It is reading the source, and "the server owns the
+authority over its evidence" is exactly this case. Admitted.
+
+**Class 2 - no engine reads a character the document declares.** The document
+says nothing about the position. Refused, and here the earlier decision holds.
+
+### Measured, all four sources
+
+| Document | Unmapped | Class 1 | Class 2 | Alignment failed | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| ANKOM | 9 | **9** | 0 | 0 | **verified** |
+| intracellular | 12 | 7 | 3 | 2 | **mismatch**, pages 10, 18, 33 |
+| headspace | 0 | - | - | - | verified |
+| in-gel | 0 | - | - | - | verified |
+
+The three Class 2 cases are all positions where the second engine also emits a
+private-use placeholder, U+E088: a part number, the compound name
+`fructose-1,6-bisphosphate`, and a DOI. The two alignment failures are both
+DOIs on page 33, where no two engines can be lined up around the position.
+
+**ANKOM returns to admissible**, and page 9 now reads `Add 8.0 mL of
+alpha-amylase`. Intracellular stays refused, correctly: it contains five
+positions the document does not settle. Resolution is applied per page and
+all-or-nothing, so of the 7 declared positions in that document only 5 are on
+pages that fully resolve; the other 2 share a page with a Class 2 position and
+are refused with it.
+
+### The rules the resolution obeys
+
+- The interpretation comes **only** from the document's ToUnicode declaration.
+  A character an engine reports is accepted only if the PDF declares it. There
+  is no majority vote between placeholders, no "it looks like a hyphen", no
+  inference from surrounding words. Two engines agreeing on an undeclared
+  character is still refused.
+- Two engines reporting **different real characters** is a genuine conflict and
+  is refused.
+- **Deletion says nothing.** An engine that joins the words around the position
+  neither resolves it nor conflicts with anything. This matters because the
+  comparison engine deletes at every one of these positions.
+- Every resolved position is recorded in `glyph_resolutions` with its page,
+  offset, the code point that was there, the character read, the engine that
+  read it, and that the document declared it. A position that cannot be
+  recorded this way is not admitted.
+- The invariant is checkable and tested: **admitted page text contains no
+  unmapped code point at all.** Either every position resolves from the
+  document, or the source is refused.
+
+### Why the third engine, and what it is not for
+
+The failure modes had to differ for the check to mean anything: pdfium
+substitutes U+FFFE, the ToUnicode reader substitutes a private-use code point,
+the comparison engine deletes and joins. With only the first and third,
+substitution and deletion cancel inside the census -- which is precisely why
+all 21 positions passed.
+
+But the third engine is **not** a census comparator, and measuring that was
+worth the time. Against the primary it reports divergence on **68 of the 99
+pages** across the four sources, including in-gel and headspace, which contain
+no unmapped glyph at all. On in-gel page 2 the difference is four `(`
+characters it silently drops, with nothing offered in return, while the
+comparison engine matches the primary exactly. Promoting it to a comparator
+would refuse everything for its own defects. It is used only to say which
+character stands at one already-identified position, and only the document's
+declaration makes that answer admissible.
+
+So the census itself now compares real characters only, and unmapped positions
+are decided one at a time. That reads like a reversal of the STEP 12 fix and it
+is not: what was wrong before was that dropping them left the position handled
+by **nothing**. It is now handled by a stricter mechanism than the census could
+ever be.
+
+`EVIDENCE_SEGMENT_VERSION` moves 4 to 5. Resolving a glyph changes page text,
+so it changes `page_text_sha256` and every canonical segment id derived from
+it. Any analysis stored against version 4 is invalidated, which is right: it
+was computed over text containing a character the document had declared and we
+had not read.
+
+## 5d. The offline scorer was manufacturing execution steps
+
+The scorer asserts an ACTION claim for every numbered line it matches. On
+intracellular page 4 that produced six action claims from section headings and
+a table of contents -- `1 Intracellular metabolite analysis provides a
+snapshot...`, `2 This protocol is organized into the following key steps:` --
+and validation accepted all six. The real provider, given the same kind of
+page, produced no such claim. **The instrument was less honest than the thing
+it was measuring, and the validator could not tell them apart.** The product's
+most dangerous failure mode, inventing an execution step, was happening inside
+the measuring tool.
+
+The scorer is deliberately **not** made cleverer. A fixture that judged which
+lines were steps would be a model, and there would be no measuring standard
+left. Instead it reports when it is outside its own scope and declines to
+score.
+
+The scope test is arithmetic on the labels, never a judgement about their text:
+a numbered step sequence is an ordered enumeration, so in reading order the
+labels must strictly increase. A repeat or a descent means at least one matched
+line is not a step in that sequence, and the fixture cannot tell which.
+
+| Document | Fixture action labels | Strictly increasing | Duplicates | Descents | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| ANKOM | 67 | yes | 0 | 0 | scored |
+| in-gel | 25 | yes | 0 | 0 | scored |
+| headspace | 62 | yes | 0 | 0 | scored |
+| intracellular | 12 | **no** | **7** | **4** | **fixture out of scope** |
+
+ANKOM, in-gel and headspace are all clean, so **the STEP 9 and STEP 11 numbers
+stand.** Had any of them been non-zero, every figure quoted from them would
+have had to be withdrawn.
+
+Out of scope means no score is emitted at all -- not a score with a caveat
+beside it. A number published next to its own disclaimer gets quoted without
+it.
+
+This is a scope test on a test double, not a server rule. The same
+monotonicity idea was rejected for the server as D3, where it fails parity: a
+provider sees three to five pages and cannot compute a document-global
+predicate. The fixture sees the whole document and enforces nothing on anyone.
+
+## 5e. D2 implemented: the trigger is line-anchored only
+
+`_INLINE_NUMBERED_SOURCE` is no longer part of the numbered-action trigger. A
+numbered step begins its own line; a number inside a sentence is a
+cross-reference or a citation.
+
+| Document | Labels now | Dropped as mid-line | Chunks exposed to the obligation |
+| --- | --- | --- | --- |
+| ANKOM | 67 | **0** | 8/8 (unchanged) |
+| in-gel | 25 | **0** | 3/3 (unchanged) |
+| headspace | 61 | **0** | 4/5 (unchanged) |
+| intracellular | 9 | **24** | **10/12 to 4/12** |
+
+**D2 alone is not the end, and the remaining exposure is the proof.** Nine
+line-anchored labels survive on four chunks, and none is an execution step:
+
+```
+page  4: 1, 2, 3    section headings and a contents list
+page 13: 4          section heading
+page 18: 1          section heading
+page 19: 2          section heading
+page 30: 5, 1, 2    section heading and a contents list
+```
+
+The guarantee is intact where it has actually earned its keep: page 32 of
+ANKOM, where the whole-document run caught a genuine omission, still carries
+line-anchored labels and still demands its action claims.
+
+The narrowing is instrumented rather than silent. `mid_line_numbered_labels`
+returns, per page, the labels the trigger no longer treats as steps, so a
+reviewer can see how much a document depends on the narrowing instead of
+taking it on trust. A count nobody can read is a blocklist.
+
+Fifteen tests failed, and every one was migrated rather than loosened. Their
+fixtures wrote an entire page as a single line, so their numbered steps sat
+mid-sentence and matched only because of the pattern being removed. Several had
+been **written** with newlines in them that the fixture writer was silently
+replacing with spaces -- `"Preparation\n1. Add buffer."` became one line. The
+writer now emits the lines the fixture asked for, and a page with no newline is
+written exactly as before. One test that asserted the old collapsing behaviour
+as a feature was rewritten to record why it was wrong.
+
+## 5f. D1 designed, not implemented
+
+Every label the server derives must be **answered**, not necessarily claimed:
+either an action claim carrying that label, or an explicit per-page list of
+labels declared not to be execution steps, which the server stores and counts.
+
+**Guarantee.** Preserved and strengthened. A numbered line cannot be dropped
+silently; it must be positively judged, on the record, and the judgement is
+countable per document.
+
+**Overlap with all-segment accounting.** Complementary; neither subsumes the
+other. Accounting asks whether the *text* was addressed, D1 asks whether the
+*label* was judged. The authorized call showed both gaps are real: the caption
+text was partly cited by prose claims while the label question went unanswered.
+The converse -- a label declared a non-step whose segment nobody accounts for
+-- is still caught by accounting.
+
+**Parity, which is where the work is.** The prompt must state the trigger as
+the server computes it, or this repeats the STEP 11 error of describing a rule
+semantically and enforcing it syntactically. The server's rule, in full:
+
+```
+A label is a number of one to three digits, starting at 1 to 9, that begins
+its own line, optionally followed by "." or ")", then at least one space or
+tab, then a non-space token. The label is not a step if that following token
+is itself a number, or is one of the fourteen measurement units.
+```
+
+Both halves must be in the prompt: writing "numbered steps" would leave the
+model unable to enumerate the same set, and omitting the number/unit filter
+would make it enumerate a larger one. The schema carries the same statement on
+the new field's description, and the parity audit gains a row binding the
+enforced trigger to those phrases, so the regex and the prompt cannot drift.
+
+**Measurability.** Satisfied by construction: declarations are stored per page,
+so "how often did a label get declared a non-step" always has an answer.
+
+**Cost.** A schema field and a prompt paragraph, and it asks the provider to
+judge nine labels on a document with no steps -- down from thirty-six before
+D2, which is why D2 came first.
+
+Not implemented, awaiting approval. The one remaining question worth a call is
+whether a model that is *told* the trigger's exact shape will dispose of a
+section heading correctly, and that is a single call on the same chunk 8.
+
+## 5g. The hazard claim from the authorized call
+
+Evidence validation runs before the numbered-action check, so every claim in
+that response had already passed exact-evidence validation when the chunk was
+refused. The `warning_hazard` claim therefore quotes a real span of the source.
+
+Reading pages 25 to 28, the only text on them that reads as a warning is a Note
+on page 27:
+
+> Since the software tends to crash frequently, we highly recommend saving your
+> progress after completing peak selection for each compound.
+
+That is a data-loss caution about software stability. There is no chemical,
+thermal or physical hazard anywhere on those four pages, which are about peak
+integration in an analysis tool.
+
+**Which span the claim actually cited was not persisted**, so this cannot be
+confirmed: the harness deliberately records structure only. That is the price
+of not persisting provider output, and it is worth naming rather than papering
+over -- the honest statement is that the claim was substantiated as *some*
+exact source text, that the only warning-like text available is that Note, and
+that the identification is inference rather than measurement.
+
+If it was that Note, the claim is a correctly-evidenced warning that is
+miscategorised as a hazard. That has a consequence worth recording, though
+nothing here acts on it: `declared_safety_warning_count` counts
+`warning_hazard` claims, so a software-crash caution would clear the
+`NO_DECLARED_SAFETY_WARNINGS` readiness gate on a document with no physical
+hazard at all. The gate is not being widened or narrowed here; the observation
+is logged for a step that has a measurement to act on.
+
 ## 5. Narrowing `no_relevant_claims`
 
 `:1857` accepts `NO_RELEVANT_CLAIMS` whenever `expected_ids` is empty. A

@@ -124,6 +124,20 @@ def write_lined_pages(
 
 
 def write_pages(path: Path, page_texts: tuple[str, ...]) -> None:
+    """Write one page per string, honouring any newlines it contains.
+
+    This used to replace every newline with a space, so a fixture written as
+    ``"Preparation\n1. Add buffer."`` silently became one line and its
+    numbered step ended up mid-sentence. Those fixtures only passed because
+    the trigger also matched a number in the middle of a line, which no real
+    document needs. A page with no newline is written exactly as before.
+    """
+
+    if any("\n" in text for text in page_texts):
+        write_lined_pages(
+            path, tuple(tuple(text.split("\n")) for text in page_texts)
+        )
+        return
     writer = PdfWriter()
     font = DictionaryObject(
         {
@@ -386,7 +400,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             self.source,
             (
                 "Protocol Evidence Preparation Before start: thaw sample. "
-                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
                 + self.action,
             ),
         )
@@ -913,7 +927,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         two_page_source = self.root / "exact-coverage.pdf"
         page_text = (
             "Protocol Evidence Preparation Before start: thaw sample. "
-            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
             + self.action
         )
         write_pages(two_page_source, (page_text, page_text))
@@ -1288,7 +1302,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         two_page_source = self.root / "wrong-page-hash.pdf"
         page_text = (
             "Protocol Evidence Preparation Before start: thaw sample. "
-            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
             + self.action
         )
         write_pages(
@@ -1392,7 +1406,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             two_page_source,
             (
                 "Protocol Evidence Preparation Before start: thaw sample. "
-                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
                 + self.action,
                 "Control page without the claimed quantity.",
             ),
@@ -1542,9 +1556,9 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             source,
             (
                 "Protocol Evidence Preparation Before start: thaw sample. "
-                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+                "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
                 + self.action
-                + " 2. Finish processing.",
+                + "\n2. Finish processing.",
             ),
         )
         extraction = extract_protocol_pdf(source)
@@ -1700,9 +1714,9 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         two_page_source = self.root / "selector-diagnostics.pdf"
         page_text = (
             "Protocol Evidence Preparation Before start: thaw sample. "
-            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm. "
+            "Material: buffer 10 mL 5%. Equipment: mixer 800 rpm.\n"
             + self.action
-            + " 2. Finish processing."
+            + "\n2. Finish processing."
         )
         write_pages(two_page_source, (page_text, page_text))
         extraction = extract_protocol_pdf(two_page_source)
@@ -1815,7 +1829,7 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         write_pages(
             source,
             tuple(
-                f"Protocol Large Section {number} {number}. Do action {number}. "
+                f"Protocol Large Section {number}\n{number}. Do action {number}. "
                 + "x" * 700
                 for number in range(1, 10)
             ),

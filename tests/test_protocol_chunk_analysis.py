@@ -69,15 +69,21 @@ def write_pages(path: Path, page_texts: tuple[str | None, ...]) -> None:
         page = writer.add_blank_page(width=_FIXTURE_PAGE_WIDTH, height=792)
         if raw_text is None:
             continue
-        escaped = (
-            raw_text.replace("\\", "\\\\")
-            .replace("(", "\\(")
-            .replace(")", "\\)")
-        )
+        # One positioned show operation per line, so a fixture that writes a
+        # numbered step on its own line really gets one.
+        lines = raw_text.split("\n")
+        operations = []
+        for offset, line in enumerate(lines):
+            escaped = (
+                line.replace("\\", "\\\\")
+                .replace("(", "\\(")
+                .replace(")", "\\)")
+            )
+            operations.append(
+                f"BT /F1 9 Tf 36 {740 - offset * 12} Td ({escaped}) Tj ET"
+            )
         stream = DecodedStreamObject()
-        stream.set_data(
-            f"BT /F1 9 Tf 36 740 Td ({escaped}) Tj ET".encode("ascii")
-        )
+        stream.set_data(" ".join(operations).encode("ascii"))
         page[NameObject("/Resources")] = DictionaryObject(
             {
                 NameObject("/Font"): DictionaryObject(
@@ -257,7 +263,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.pdf = self.root / "large.pdf"
         self.page_texts = tuple(
-            f"Protocol Large Section {number} {number}. Do action {number}. "
+            f"Protocol Large Section {number}\n{number}. Do action {number}. "
             + ("x" * 48)
             for number in range(1, 7)
         )
@@ -413,10 +419,10 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         write_pages(
             overlap_pdf,
             (
-                "Protocol Large Section 1 1. Do action 1. " + "a" * 40,
-                "Protocol Large Section 2 2. Do action 2. " + "b" * 40,
-                "Protocol Large Section 3 3. Do action 3. " + "c" * 130,
-                "Protocol Large Section 4 4. Do action 4. " + "d" * 80,
+                "Protocol Large Section 1\n1. Do action 1. " + "a" * 40,
+                "Protocol Large Section 2\n2. Do action 2. " + "b" * 40,
+                "Protocol Large Section 3\n3. Do action 3. " + "c" * 130,
+                "Protocol Large Section 4\n4. Do action 4. " + "d" * 80,
             ),
         )
         extraction = extract_protocol_pdf(overlap_pdf)

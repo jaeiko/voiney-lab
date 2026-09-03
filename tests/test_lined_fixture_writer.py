@@ -34,14 +34,28 @@ class LinedFixtureWriterTests(unittest.TestCase):
         self.assertEqual(text.count("\n"), len(_PAGE) - 1)
         self.assertEqual(tuple(text.split("\n")), _PAGE)
 
-    def test_the_existing_writer_still_produces_no_line_breaks(self) -> None:
-        """Why this helper had to exist at all."""
+    def test_the_plain_writer_now_honours_newlines_too(self) -> None:
+        """It used to replace every newline with a space.
+
+        That is why this helper had to exist, and it also quietly weakened the
+        fixtures: a page written as "Preparation\n1. Add buffer." became one
+        line, so its numbered step sat mid-sentence and only matched because
+        the trigger accepted a number in the middle of a line. Removing that
+        trigger made the collapse visible, and the writer now emits the lines
+        the fixture asked for.
+        """
 
         path = self.root / "flat.pdf"
         write_pages(path, ("\n".join(_PAGE),))
-        self.assertEqual(
-            extract_protocol_pdf(path).pages[0].text.count("\n"), 0
-        )
+        text = extract_protocol_pdf(path).pages[0].text
+        self.assertEqual(text.count("\n"), len(_PAGE) - 1)
+        self.assertEqual(tuple(text.split("\n")), _PAGE)
+
+    def test_a_page_with_no_newline_is_written_as_one_line(self) -> None:
+        path = self.root / "single.pdf"
+        write_pages(path, ("Preparation 1. Add buffer.",))
+        text = extract_protocol_pdf(path).pages[0].text
+        self.assertEqual(text.count("\n"), 0)
 
     def test_lined_pages_pass_the_extraction_cross_check(self) -> None:
         path = self.root / "lined.pdf"

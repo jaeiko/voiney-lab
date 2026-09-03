@@ -72,7 +72,16 @@ class SentenceLineBoundaryTests(unittest.TestCase):
         )
 
     def test_evidence_segment_version_records_the_new_derivation(self) -> None:
-        self.assertEqual(EVIDENCE_SEGMENT_VERSION, 4)
+        """5 since unmapped glyphs are read from the document's declaration.
+
+        Resolving them changes page text -- ANKOM page 9 now reads
+        alpha-amylase -- which changes page_text_sha256 and therefore every
+        canonical segment id derived from it. Any analysis stored against
+        version 4 is invalidated, which is correct: it was computed over text
+        containing a character the document had declared and we had not read.
+        """
+
+        self.assertEqual(EVIDENCE_SEGMENT_VERSION, 5)
 
     def test_an_unnumbered_hazard_block_becomes_its_own_segment(self) -> None:
         """The hazard leaves the numbered step it used to be absorbed into.

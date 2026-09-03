@@ -484,10 +484,104 @@ def _write_short_protocol(path: Path) -> None:
         writer.write(target)
 
 
+def fixture_step_labels(extraction: ProtocolPdfExtraction) -> tuple[tuple[int, int], ...]:
+    """The (page, label) pairs this fixture would turn into ACTION claims.
+
+    Derived from the same regex and the same filters ``analyze`` applies, so
+    the scope check below describes what the fixture actually does rather than
+    an approximation of it.
+    """
+
+    labels: list[tuple[int, int]] = []
+    for page in extraction.pages:
+        if extraction.page_count > 2 and page.source_page_number <= 2:
+            continue
+        for match in _STEP.finditer(page.text):
+            excerpt = match.group(0).strip()
+            body = match.group("body").lstrip()
+            if (
+                len(excerpt) < 12
+                or "DOI:" in excerpt
+                or re.match(r"^(?:µL|uL|mL|ml|L|g|mg|rpm|°C|C)\b", body)
+            ):
+                continue
+            labels.append(
+                (page.source_page_number, int(match.group("label")))
+            )
+    return tuple(labels)
+
+
+def fixture_scope(extraction: ProtocolPdfExtraction) -> dict[str, object]:
+    """Whether this fixture is entitled to produce a score for this document.
+
+    The fixture asserts an ACTION claim for every numbered line it matches, so
+    it can never fail the numbered-action obligation -- it satisfies that
+    obligation by construction, which means it cannot measure it.  On a
+    document whose numbered lines are really section headings, a table of
+    contents or figure captions, the fixture manufactures execution steps that
+    a real model does not, and validation cannot tell the two apart.  That is
+    the product's most dangerous failure mode occurring inside the measuring
+    instrument.
+
+    The check is arithmetic on the labels, never a judgement about their text:
+    a numbered step sequence is an ordered enumeration, so in reading order the
+    labels must strictly increase.  A repeat or a descent means at least one
+    matched line is not a step in that sequence, and the fixture has no way to
+    tell which.  It is deliberately *not* made cleverer -- a fixture that
+    judged which lines were steps would be a model, and there would be no
+    measuring standard left.  It reports that it is out of scope and declines
+    to score.
+
+    This is a scope test on a test double, not a server rule.  The same
+    monotonicity idea was rejected for the server, where it fails parity: a
+    provider sees three to five pages and cannot compute a document-global
+    predicate.  The fixture sees the whole document and enforces nothing.
+    """
+
+    labels = fixture_step_labels(extraction)
+    sequence = [label for _, label in labels]
+    duplicates = len(sequence) - len(set(sequence))
+    descents = [
+        {
+            "from": {"page": labels[index][0], "label": labels[index][1]},
+            "to": {"page": labels[index + 1][0], "label": labels[index + 1][1]},
+        }
+        for index in range(len(sequence) - 1)
+        if sequence[index + 1] <= sequence[index]
+    ]
+    in_scope = not duplicates and not descents
+    return {
+        "fixture_action_labels": len(sequence),
+        "labels_strictly_increasing": in_scope,
+        "duplicate_labels": duplicates,
+        "descents": descents,
+        "in_scope": in_scope,
+    }
+
+
 def run_source(path: Path, concurrency: int) -> dict[str, object]:
     extraction_started = time.monotonic()
     extraction = extract_protocol_pdf(path)
     extraction_seconds = time.monotonic() - extraction_started
+    scope = fixture_scope(extraction)
+    if not scope["in_scope"]:
+        # No score, not a score with a caveat attached. A number published
+        # beside its own disclaimer gets quoted without it.
+        return {
+            "source": path.name,
+            "source_sha256": extraction.sha256,
+            "page_count": extraction.page_count,
+            "scored": False,
+            "status": "fixture out of scope",
+            "fixture_scope": scope,
+            "reason": (
+                "The fixture asserts an action for every numbered line it "
+                "matches. On this document those labels do not form an "
+                "increasing sequence, so at least one is not an execution "
+                "step and the fixture cannot tell which. It would manufacture "
+                "execution steps a real model does not produce."
+            ),
+        }
     limits = ChunkAnalysisLimits(max_concurrency=concurrency, max_retries=0)
     protocol_id = f"protocol-{extraction.sha256[:32]}"
     plan = plan_protocol_chunks(

@@ -39,7 +39,7 @@ CLAIM_SCHEMA_VERSION = 6
 # comparable with these.
 # 4: a line ending in sentence punctuation also ends a block, so unnumbered
 # content is no longer absorbed into the preceding numbered step.
-EVIDENCE_SEGMENT_VERSION = 4
+EVIDENCE_SEGMENT_VERSION = 5
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024
@@ -57,6 +57,13 @@ _SUBSTANTIVE = re.compile(r"[A-Za-z0-9]")
 _NUMBERED_SOURCE_LINE = re.compile(
     r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,2})(?:[.)])?[ \t]+(?P<next>\S+)"
 )
+# Removed from the numbered-action trigger, and kept only so the count of what
+# it would have matched can be reported.  Measured over the four local sources
+# it contributed 0 labels on the three properly numbered documents (ANKOM
+# 67/67, in-gel 25/25, headspace 61/61 came from the line-anchored pattern) and
+# all 24 false triggers on the near-unnumbered one: 23 figure references and a
+# reference's page number.  A numbered step begins its own line; a number in
+# the middle of a sentence is a cross-reference.
 _INLINE_NUMBERED_SOURCE = re.compile(
     r"(?<!\S)(?P<label>[1-9][0-9]{0,2})\.[ \t]+(?P<next>\S+)"
 )
@@ -776,10 +783,7 @@ def _page_text_sha256(extraction: ProtocolPdfExtraction, page_number: int) -> st
 
 def _numbered_action_matches(page_text: str) -> tuple[re.Match[str], ...]:
     matches = sorted(
-        (
-            *_NUMBERED_SOURCE_LINE.finditer(page_text),
-            *_INLINE_NUMBERED_SOURCE.finditer(page_text),
-        ),
+        _NUMBERED_SOURCE_LINE.finditer(page_text),
         key=lambda match: match.start("label"),
     )
     actions: list[re.Match[str]] = []
@@ -796,6 +800,30 @@ def _numbered_action_matches(page_text: str) -> tuple[re.Match[str], ...]:
         actions.append(match)
         seen_offsets.add(offset)
     return tuple(actions)
+
+
+def mid_line_numbered_labels(page_text: str) -> tuple[str, ...]:
+    """Numbers the narrowed trigger no longer treats as steps, in order.
+
+    A trigger that quietly drops candidates is a silent blocklist.  This makes
+    the drop countable per page, so a reviewer can see how much a document
+    relies on the narrowing instead of taking it on trust.
+    """
+
+    anchored = {
+        match.start("label")
+        for match in _NUMBERED_SOURCE_LINE.finditer(page_text)
+    }
+    dropped: list[tuple[int, str]] = []
+    for match in _INLINE_NUMBERED_SOURCE.finditer(page_text):
+        offset = match.start("label")
+        if offset in anchored:
+            continue
+        following = match.group("next").strip(".,:;()[]{}").casefold()
+        if following.isdecimal() or following in _VALUE_UNITS:
+            continue
+        dropped.append((offset, match.group("label")))
+    return tuple(label for _, label in sorted(dropped))
 
 
 def _bounded_action_block_boundaries(page_text: str) -> tuple[int, ...]:
