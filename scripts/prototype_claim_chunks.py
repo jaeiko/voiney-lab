@@ -466,7 +466,6 @@ class ExactNumberedStepClaimModel:
                 {
                     "source_page_number": page_number,
                     "analysis_incomplete": status == "analysis_incomplete",
-                    "non_step_labels": [],
                     "declined_evidence_segment_ids": declined,
                 }
             )

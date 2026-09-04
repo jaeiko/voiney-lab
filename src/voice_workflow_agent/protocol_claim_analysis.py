@@ -33,7 +33,7 @@ from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSI
 
 # 6: page coverage carries an explicit per-segment declination list, so a
 # page can no longer be exempted wholesale by emitting nothing.
-CLAIM_SCHEMA_VERSION = 9
+CLAIM_SCHEMA_VERSION = 10
 # 3: step labels are at most three digits (a four-digit run is a citation
 # year, not a step), so block boundaries derived under version 2 are not
 # comparable with these.
@@ -319,10 +319,6 @@ class ProtocolPageClaimCoverage:
     evidence_item_ids: tuple[str, ...]
     declined_segment_ids: tuple[str, ...] = ()
     unaccounted_segment_ids: tuple[str, ...] = ()
-    # Numbered labels the provider disposed of as not execution steps, each
-    # with the canonical segments it cited. A label reaches here only after the
-    # server has checked it exists on the page and that its citation resolves.
-    non_step_labels: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -331,10 +327,6 @@ class ProtocolPageClaimCoverage:
             "source_page_number": self.source_page_number,
             "page_text_sha256": self.page_text_sha256,
             "status": self.status.value,
-            "non_step_labels": [
-                {"source_label": label, "evidence_segment_ids": list(handles)}
-                for label, handles in self.non_step_labels
-            ],
             "evidence_item_ids": list(self.evidence_item_ids),
             "declined_segment_ids": list(self.declined_segment_ids),
             "unaccounted_segment_ids": list(self.unaccounted_segment_ids),
@@ -475,39 +467,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                             " here."
                         ),
                     },
-                    "non_step_labels": {
-                        "type": "array",
-                        "maxItems": 64,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "source_label": {
-                                    "type": "string",
-                                    "pattern": r"^[1-9][0-9]{0,2}$",
-                                },
-                                "evidence_segment_ids": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": 16,
-                                    "items": {"type": "string"},
-                                },
-                            },
-                            "required": [
-                                "source_label",
-                                "evidence_segment_ids",
-                            ],
-                        },
-                        "description": (
-                            "Numbered labels on this page that are not"
-                            " execution steps, each citing the segments that"
-                            " show it. Every label must be either an action"
-                            " claim or listed here; a label that is neither is"
-                            " refused. When in doubt claim it as an action:"
-                            " reading out a description is a nuisance, while"
-                            " disposing of a real step makes it disappear."
-                        ),
-                    },
                     "declined_evidence_segment_ids": {
                         "type": "array",
                         "maxItems": _MAX_EVIDENCE_SEGMENTS_PER_SPAN,
@@ -529,7 +488,6 @@ CLAIM_RESPONSE_SCHEMA: dict[str, Any] = {
                 "required": [
                     "source_page_number",
                     "analysis_incomplete",
-                    "non_step_labels",
                     "declined_evidence_segment_ids",
                 ],
             },
@@ -836,14 +794,11 @@ only analysis_incomplete, as a boolean, and set it true when you do not believe
 you finished reading that page. That is a statement about your own reading which
 nothing else can supply, and it can only make the outcome stricter.
 
-Every numbered label on a core page must be accounted for, and there are two
-ways. Either emit an action claim whose source_label is that label, or list the
-label in that page's non_step_labels with the segments that show it. A label
-that is neither is refused. When you are not sure, claim it as an action:
-reading a description aloud is a nuisance, while disposing of a real step
-removes it from the protocol. A numbered line that only names a section, lists
-contents, or describes a material rather than telling an operator to do
-something is what non_step_labels is for.
+Every numbered label on a core page is an execution step, and the only way to
+account for one is to emit an action claim whose source_label is that label. A
+numbered line that reads like a heading, a contents entry or a material
+description is still claimed as an action. You are not asked to judge whether a
+numbered line instructs, and there is no way to report that it does not.
 
 Account for every segment of every core page. Each segment is either cited by at
 least one claim or marker, or listed in that page's declined_evidence_segment_ids
@@ -1934,12 +1889,36 @@ def parse_chunk_claim_response(
         )
     coverage: list[ProtocolPageClaimCoverage] = []
     for item_index, item in enumerate(raw_coverage):
+        if isinstance(item, dict) and "non_step_labels" in item:
+            # Deciding that a numbered line is not an execution step has been
+            # taken out of the provider contract. On its first real use a model
+            # disposed of six numbered lines that were plainly instructions --
+            # Incubate, Attach, Check, Place, remove, turn off -- each carrying
+            # a temperature, a time or a piece of equipment. Approved, the
+            # protocol would have been missing six steps with nothing in the
+            # extraction saying so.
+            #
+            # A model can no longer make that judgement because there is no
+            # field to make it in, so it cannot make it wrongly. Receiving one
+            # is a contract violation and is named as such rather than being
+            # ignored: silently dropping it would leave a provider believing
+            # its disposition had been honoured.
+            raise ProtocolAnalysisResponseError(
+                "Page coverage may not dispose of a numbered label.",
+                diagnostic=ProtocolEvidenceDiagnostic(
+                    validation_stage="chunk_page_coverage_validation",
+                    reason_code="label_disposition_not_accepted",
+                    mismatch_class="semantic_contract_violation",
+                    evidence_index=item_index,
+                    evidence_type="page_coverage",
+                    page_coverage_count=len(raw_coverage),
+                ),
+            )
         record = _expect_record(
             item,
             {
                 "source_page_number",
                 "analysis_incomplete",
-                "non_step_labels",
                 "declined_evidence_segment_ids",
             },
             "page coverage",
@@ -2038,15 +2017,6 @@ def parse_chunk_claim_response(
                     request=request,
                     page_number=page_number,
                     item_index=item_index,
-                ),
-                non_step_labels=_resolve_non_step_labels(
-                    record["non_step_labels"],
-                    extraction=extraction,
-                    request=request,
-                    page_number=page_number,
-                    item_index=item_index,
-                    chunk_id=chunk_id,
-                    source_revision=source_revision,
                 ),
             )
         )
@@ -2291,99 +2261,27 @@ def segment_carries_unit_bearing_value(segment_text: str) -> bool:
     return bool(_UNIT_BEARING_VALUE.search(segment_text))
 
 
-def _resolve_non_step_labels(
-    raw: object,
-    *,
-    extraction: ProtocolPdfExtraction,
-    request: ProviderClaimRequest,
-    page_number: int,
-    item_index: int,
-    chunk_id: str,
-    source_revision: str,
-) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Validate the labels a provider says are not execution steps.
+def _segments_inside_numbered_steps(
+    segments: tuple[ProtocolEvidenceSegment, ...],
+) -> frozenset[str]:
+    """Segment ids that lie wholly inside some numbered step's span.
 
-    The numbered-action obligation assumed every numbered line is an
-    instruction, and measurement showed that is false: three of the four local
-    sources carry numbered lines that describe rather than instruct -- a
-    materials note, a bare section heading, a table of contents. Demanding an
-    action claim for those refused correct responses.
-
-    A label may now be disposed of instead of claimed, but never silently. The
-    label must exist on the page, the disposition must cite segments that
-    resolve there, and each label may be disposed of once. Whether a line
-    instructs is the provider's reading: nothing here inspects the wording.
+    Structural only: the spans come from the same step-block ranges the
+    positional attachment rule uses, so nothing here reads the text.
     """
 
-    def fail(reason: str, message: str, count: int | None = None) -> None:
-        raise ProtocolAnalysisEvidenceError(
-            message,
-            diagnostic=ProtocolEvidenceDiagnostic(
-                validation_stage="chunk_page_coverage_validation",
-                reason_code=reason,
-                mismatch_class="claim_coverage_mismatch",
-                evidence_index=item_index,
-                evidence_type="page_coverage",
-                page_number=page_number,
-                actual_count=count,
-                chunk_id=chunk_id,
-                source_revision=source_revision,
-                source_hash=extraction.sha256,
-            ),
-        )
-
-    if not isinstance(raw, list):
-        fail(
-            "label_disposition_malformed",
-            "Page coverage has a malformed non-step label list.",
-        )
-    page_labels = set(
-        _numbered_step_labels(extraction.pages[page_number - 1].text)
-    )
-    by_handle = {
-        item.handle: item.segment
-        for page in request.pages
-        if page.source_page_number == page_number
-        for item in page.evidence
-    }
-    resolved: list[tuple[str, tuple[str, ...]]] = []
-    seen: set[str] = set()
-    for entry in raw:
-        if not isinstance(entry, dict) or set(entry) != {
-            "source_label",
-            "evidence_segment_ids",
-        }:
-            fail(
-                "label_disposition_malformed",
-                "A non-step label disposition is malformed.",
-            )
-        label = entry["source_label"]
-        handles = entry["evidence_segment_ids"]
-        if not isinstance(label, str) or label not in page_labels:
-            fail(
-                "label_disposition_unknown_label",
-                "A disposed label is not a numbered label on that page.",
-            )
-        if label in seen:
-            fail(
-                "label_disposition_duplicated",
-                "A label was disposed of more than once.",
-            )
-        seen.add(label)
-        if (
-            not isinstance(handles, list)
-            or not handles
-            or any(handle not in by_handle for handle in handles)
-        ):
-            fail(
-                "label_disposition_evidence_unknown",
-                "A label disposition cites a segment that is not on that page.",
-            )
-        resolved.append((label, tuple(handles)))
-    return tuple(
-        (label, tuple(by_handle[handle].segment_id for handle in handles))
-        for label, handles in resolved
-    )
+    page_text = "".join(segment.text for segment in segments)
+    ranges = step_block_ranges(page_text)
+    if not ranges:
+        return frozenset()
+    inside: set[str] = set()
+    offset = 0
+    for segment in segments:
+        start, end = offset, offset + len(segment.text)
+        offset = end
+        if any(low <= start and end <= high for low, high in ranges):
+            inside.add(segment.segment_id)
+    return frozenset(inside)
 
 
 def _validate_page_segment_accounting(
@@ -2447,10 +2345,28 @@ def _validate_page_segment_accounting(
     # is lost: the claim is still validated in full, and a genuinely declined
     # segment is still held to every rule below.
     declined = declined - cited_segment_ids
+    # Value honesty applies to a segment that sits inside a numbered step. A
+    # timer or a quantity belonging to a step is read out to an operator, so
+    # losing it is dangerous and refusing the declination is right.
+    #
+    # Outside every numbered step the same test was refusing correct answers.
+    # headspace page 6 carries a running footer that reads "1h 30m
+    # protocols.io | ... 6/16", where the document's own estimated duration
+    # matches digit-plus-unit. Declining a footer as holding nothing to claim
+    # is the right judgement, and it was costing a seven-page chunk -- the
+    # single most frequent refusal in the last provider run, three of five.
+    #
+    # The narrowing is decided by structure alone, never by wording: does the
+    # segment lie inside a numbered step's span. A footer is not in one, so it
+    # leaves scope without anything having to recognise a domain or a phrase.
+    # Measured over the four local sources this takes the checked set from 96
+    # segments to 77.
+    inside_step = _segments_inside_numbered_steps(segments)
     forced = [
         segment_id
         for segment_id in declined
         if segment_id in substantive
+        and segment_id in inside_step
         and segment_carries_unit_bearing_value(substantive[segment_id])
     ]
     if forced:
@@ -2730,14 +2646,12 @@ def validate_chunk_claim_analysis(
             if claim.category is ClaimCategory.ACTION
             and claim.evidence.source_page_number == page_number
         }
-        # A label is accounted for by an action claim or by an explicit
-        # disposition saying it is not an execution step. What is refused is a
-        # label that is neither, so nothing disappears quietly and the
-        # guarantee this obligation exists for is unchanged.
-        disposed_labels = {label for label, _ in coverage.non_step_labels}
-        accounted = action_labels | disposed_labels
-        if not set(numbered_labels).issubset(accounted):
-            missing_numbered_actions = set(numbered_labels) - accounted
+        # The only way a numbered label is accounted for is that it exists as
+        # a step. The disposition route is gone: it let a model remove a real
+        # step from the protocol, and treating a description as a step only
+        # costs an operator hearing a description read out.
+        if not set(numbered_labels).issubset(action_labels):
+            missing_numbered_actions = set(numbered_labels) - action_labels
             raise ProtocolAnalysisEvidenceError(
                 "Chunk claims omit a numbered source action.",
                 diagnostic=ProtocolEvidenceDiagnostic(
@@ -2800,22 +2714,11 @@ def validate_chunk_claim_analysis(
             chunk_id=chunk_id,
             page_number=page_number,
             coverage=coverage,
-            # A segment a label disposition cites is accounted for. The
-            # disposition is a positive statement on the record about that
-            # text -- "this numbered line is not an execution step" -- which is
-            # what accounting asks for. Demanding a declination as well would
-            # ask for the same fact twice, the defect removed from page status
-            # in an earlier step.
             cited_segment_ids=frozenset(
                 segment_id
                 for item in (*analysis.structure, *analysis.claims)
                 if item.evidence.source_page_number == page_number
                 for segment_id in item.evidence.evidence_segment_ids
-            )
-            | frozenset(
-                segment_id
-                for _label, handles in coverage.non_step_labels
-                for segment_id in handles
             ),
         )
     return replace(
@@ -3208,27 +3111,6 @@ def reopen_evidence_span(
     return "".join(
         segments[handle].text for handle in evidence.evidence_segment_ids
     )
-
-
-def _page_span_text(
-    extraction: ProtocolPdfExtraction,
-    page_number: int,
-    handles: tuple[str, ...],
-) -> str:
-    """The exact source text a disposition's canonical segments hold."""
-
-    segments = {
-        segment.segment_id: segment.text
-        for segment in generate_page_evidence_segments(
-            extraction,
-            source_revision="pdf-1",
-            page_number=page_number,
-        )
-    }
-    missing = [handle for handle in handles if handle not in segments]
-    if missing:
-        raise ProtocolClaimConsistencyError("label_disposition_evidence_unknown")
-    return "".join(segments[handle] for handle in handles)
 
 
 def _fixed_range_repetition(
@@ -3647,27 +3529,6 @@ def assemble_experiment_protocol(
         equipment=tuple(equipment),
         sections=tuple(sections),
         constructs=tuple(constructs),
-        label_dispositions=tuple(
-            domain.NonStepLabelDisposition(
-                source_page_number=item.source_page_number,
-                source_label=label,
-                evidence=domain.SourceEvidence(
-                    source_page_number=item.source_page_number,
-                    source_excerpt=_page_span_text(
-                        extraction, item.source_page_number, handles
-                    ),
-                    location_detail=(
-                        f"source_revision={item.source_revision};"
-                        f"source_sha256={item.source_sha256}"
-                    ),
-                    evidence_segment_ids=handles,
-                ),
-            )
-            for item in sorted(
-                merged.page_coverage, key=lambda i: i.source_page_number
-            )
-            for label, handles in item.non_step_labels
-        ),
     )
     verified, evidence_count = validate_protocol_analysis_evidence(
         protocol,

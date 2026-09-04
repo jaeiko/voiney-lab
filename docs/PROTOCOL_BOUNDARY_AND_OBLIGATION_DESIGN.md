@@ -3111,6 +3111,167 @@ the prompt. Adding that check immediately found a fourth gap I had not listed,
 `source_page_number`, which is the point of deriving it rather than enumerating
 it.
 
+## 13. Shrinking the model's contract. Zero provider calls.
+
+The judgements asked of a model split into three layers: reading a value the
+source prints, following a flow the source states, and deciding something the
+document does not say. Every dangerous incident measured in this project came
+from the third -- six execution steps disposed of, the safety gate opened by a
+count -- and so does the most frequent blocker. Layers one and two have never
+caused one. So third-layer judgement comes out of the output contract while the
+human path for the same judgement stays.
+
+This is not a safety relaxation. Removing the *means* to make a judgement
+removes the possibility of making it wrongly.
+
+### 13a. Where the working UI behaviour comes from: mixed, with a third source
+
+Two things worked when a person ran in-gel through the UI. Traced through the
+code rather than inferred:
+
+**Protocol structure: the hand-built file.** `scripts/run_candidate_a.sh:59`
+exports `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE` pointing at
+`data/development_protocols/candidate_a_curated_analysis.json`, and the session
+selection tries that file **first**, falling through to the protocol catalog
+only if its `protocol_id` does not match the request. It does match
+(`candidate-a-curated-development-v1`, 25 steps). Corroborated independently:
+no provider-produced protocol has ever reached `available_for_execution`, so
+the catalog branch had nothing to offer.
+
+**Images: a second hand-built file, bound to evidence.**
+`candidate_a_curated_analysis.visuals.json`, 3 candidates, 2 selected. The link
+key is `linked_step_id` to `step_id`; the loader *enforces* that the
+candidate's `page_number` equals that step's `evidence.source_page_number`; the
+picture is the PDF's embedded XObject named in `object_name` (`/X125`, `/X135`)
+verified against a 64-hex `source_region_hash`; and the manifest is bound to
+both `document_sha256` and `fixture_sha256`, so it cannot be used with another
+PDF or another fixture. Step 7 maps to page 5, which is what the person saw.
+**So the image link is bound to source evidence** - Task 4-2 answer: bound.
+
+**Timer: neither.** The hand-built fixture contains no `process_timer` at all
+and only one `estimated_duration` across three sub-actions. The duration comes
+from `_CANDIDATE_A_STEP_TIMERS`, a dict hardcoded in `curated_protocol.py`,
+keyed by **step index** 0-24, with hand-written comments naming in-gel's steps.
+Non-zero at indices 2, 4, 7, 11, 15, 16, 18, 21, 22, 23.
+
+**Conclusion: mixed.** Structure and images are (가); the timer is neither (가)
+nor (나). It is document-specific data living in code, keyed by position rather
+than by any page or segment, so it would silently apply to whatever protocol
+were loaded at those indices, and none of its numbers is tied to text in a
+document. It works, and it is exactly the hardcoding this project forbids. It
+is pinned by tests as current behaviour, not endorsed, and not changed here --
+changing it is a design decision about where step timings should come from.
+
+### 13b. Label disposition removed from the model contract
+
+The field is gone from the response schema and the prompt no longer asks the
+question. The prompt now says the opposite: every numbered label on a core page
+is an execution step, a numbered line that reads like a heading or a material
+description is still claimed as an action, and there is no way to report that
+it does not instruct.
+
+Receiving one anyway is a named contract violation,
+`label_disposition_not_accepted`, rather than a silently dropped key -- a
+provider must not be left believing its disposition was honoured.
+
+The obligation is unchanged in force and narrower in escape routes: the only
+way a numbered label is accounted for is that it exists as a step. The
+"accounted for because disposed of" path is gone, and so is the credit a
+disposition's citation used to get in segment accounting.
+
+`ReadinessReasonCode.UNCONFIRMED_LABEL_DISPOSITION` and
+`ExperimentProtocol.label_dispositions` are **removed** rather than moved. The
+gate existed so a person would confirm a model's proposal; with no proposals it
+would stand over a permanently empty collection, and a field assembly never
+populates is a field that misleads. The `NonStepLabelDisposition` record stays,
+as the shape a reviewer's own annotation takes.
+
+The human path stays and is now reviewer-originated. It validates against the
+source directly -- the page must be in the document and the label must be one
+the document actually prints on that page -- records actor, role, timestamp,
+label, page and cited handles with the handles checked against the source, and
+is revocable with the earlier finding preserved. **It deliberately clears
+nothing.** A numbered line missing from the claims is a refused chunk, which
+happens long before a reviewer sees anything, so this cannot become a route
+around the obligation.
+
+`CLAIM_SCHEMA_VERSION` moves 9 to 10. The discovery-based store test that reads
+every `*.sqlite` under the runtime directory passes, so nothing stored earlier
+stopped loading.
+
+**The consequence, stated plainly**: three of the four local sources contain
+numbered lines that do not instruct - ANKOM 14, headspace 1, intracellular 12.
+A model must now claim each of those as an action. On headspace page 9 that
+means claiming *"35 Porapak tubes contain 50 mg of Porapak Q polymer..."* as an
+execution step, or the chunk is refused. That is the trade the layer argument
+makes: an operator may hear a description read out, and no step can vanish.
+
+### 13c. Value honesty narrowed, and the case it does not fix
+
+Scope is now "the segment lies inside a numbered step's span", decided by the
+same step-block ranges the positional attachment rule uses. No phrase, domain
+or pattern list -- two have been rejected in this project and both times the
+apparently trivial category contained safety text.
+
+Measured across all four sources, every page:
+
+| Document | Value-bearing | Inside a step | Out of scope | Reduction |
+| --- | --- | --- | --- | --- |
+| ANKOM | 37 | 34 | 3 | 8% |
+| in-gel | 22 | 20 | 2 | 9% |
+| headspace | 23 | 21 | 2 | 9% |
+| intracellular | 14 | 2 | 12 | **86%** |
+| **total** | **96** | **77** | **19** | **20%** |
+
+**The instruction's premise was wrong, and the motivating case is unchanged.**
+The reasoning was that a footer is not part of a numbered step and so falls out
+of scope automatically. Measured, it does not: `step_block_ranges` gives the
+last label on a page everything to the end of that page - deliberately, so a
+step keeps its own notes and warnings, which is what lets a hazard attach to
+its step. On headspace page 6 the labels run 22 to 29 and label 29's span is
+(572, 814), the page end; the footer occupies (714, 814) and is therefore
+**inside** step 29. It stays in scope, so a response declining it is still
+refused, and the refusal that cost a seven-page chunk twice is not fixed by
+this change.
+
+Nothing further was invented to force it out. The alternatives are a phrase
+list (forbidden), a last-segment-on-the-page heuristic (arbitrary, and it would
+drop real trailing content), or repetition across pages (rejected in an earlier
+step, because repeated text includes hazard text). Which of those is acceptable
+is a design decision, not a fix to slip in.
+
+The check itself is unweakened where it matters: a segment inside a step that
+states a value still cannot be declined.
+
+### 13d. Completion judgement: the path does not exist
+
+Checked rather than assumed. A semantic proposal to complete a step projects to
+`CLARIFY_COMPLETION` with `allows_state_mutation: False` and
+`requires_confirmation: True`, so the model can only *request* a confirmation;
+the only semantic intent that may mutate state at all is resuming. And the sole
+basis for calling a step final is positional, `current_index == len(steps) - 1`
+-- no invented completion criterion anywhere.
+
+So there was nothing to remove. Pinned by tests instead, so it cannot reappear:
+that the completion projection grants no mutation, that resuming is the only
+mutating intent, and that finality is a position.
+
+### 13e. Regression net
+
+The STEP 20 loss is fixed as input. The six labels are asserted to be numbered
+lines the document really prints, and a constructed response disposing of them
+is asserted to fail with `label_disposition_not_accepted` and
+`semantic_contract_violation` -- refused, not ignored. Separately, the same
+response with the dispositions removed still fails, for omitting the numbered
+actions, which is the proof that removing the disposition route did not weaken
+the obligation.
+
+Task 4-3, measured: embedded images per source are in-gel 18, ANKOM 97,
+headspace 13, intracellular 54; step-linked are 2, 0, 0, 0. The feature needs a
+hand-built manifest and only in-gel has one. Cause recorded, not fixed here.
+
+**Provider calls used in this step: 0.**
+
 
 ## 5. Narrowing `no_relevant_claims`
 

@@ -288,7 +288,7 @@ class DocumentLevelClaimTests(unittest.TestCase):
         one would misstate the shape.
         """
 
-        self.assertEqual(CLAIM_SCHEMA_VERSION, 9)
+        self.assertEqual(CLAIM_SCHEMA_VERSION, 10)
 
 
 if __name__ == "__main__":

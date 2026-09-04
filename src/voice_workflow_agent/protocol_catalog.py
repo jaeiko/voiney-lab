@@ -55,6 +55,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
 )
 from voice_workflow_agent.protocol_claim_analysis import (
     ProtocolChunkClaimAnalysis,
+    _numbered_step_labels,
     reopen_evidence_span,
     serialize_chunk_claim_analysis,
 )
@@ -2130,7 +2131,9 @@ class ProtocolCatalog:
         all, because that is a finding rather than a resolution.
         ``unconfirmed_fixed_repetition`` clears only when every bounded
         repetition has a standing confirmation whose count matches the analysed
-        one.
+        one. A reviewer's label-disposition finding clears nothing: extraction
+        no longer proposes one, and a numbered line missing from the claims is
+        refused at the chunk long before readiness.
 
         Anything else still blocks, and with nothing recorded the answer is
         False. Nothing here inspects the ambiguous text.
@@ -2161,15 +2164,6 @@ class ProtocolCatalog:
                 == domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value
             ):
                 if not self._every_fixed_repetition_confirmed(
-                    protocol_id, protocol_revision_number, analysis
-                ):
-                    return False
-            elif (
-                reason_code
-                == domain.ReadinessReasonCode
-                .UNCONFIRMED_LABEL_DISPOSITION.value
-            ):
-                if not self._every_label_disposition_confirmed(
                     protocol_id, protocol_revision_number, analysis
                 ):
                     return False
@@ -2498,14 +2492,22 @@ class ProtocolCatalog:
         actor_role: str,
         comment: str | None = None,
     ) -> ProtocolCatalogEntry:
-        """Record a reviewer agreeing a numbered label is not a step.
+        """Record a reviewer's own finding that a numbered label is not a step.
 
-        Measured on three of the four local sources, a numbered line is not
-        always an instruction. But the asymmetry runs opposite to the
-        repetition one: turning a description into a step only makes the agent
-        read a description aloud, while disposing of a real step removes it
-        from the protocol entirely. So the disposition is the exception a
-        person confirms, and it blocks until they do.
+        This is the human half of a judgement a provider is no longer allowed
+        to make. On its first real use in the provider contract a model
+        disposed of six numbered lines that were plainly instructions, so the
+        field is gone and every numbered line is an execution step as far as
+        extraction is concerned.
+
+        A reviewer may still record the finding, with the same provenance as
+        any other: actor, role, the store's timestamp, the label, its page, and
+        the segments they read, checked against the source before the finding
+        is accepted. It is an annotation on the record and revocable. It
+        deliberately does **not** unblock anything -- a numbered line missing
+        from the claims is still a refused chunk, which happens long before a
+        reviewer sees it -- so this cannot become a route around the
+        obligation.
         """
 
         (
@@ -2516,21 +2518,35 @@ class ProtocolCatalog:
         ) = self._finding_context(
             protocol_id, revision_id, actor_principal_id, actor_role
         )
-        disposition = next(
-            (
-                item
-                for item in analysis.protocol.label_dispositions
-                if item.source_label == source_label
-                and item.source_page_number == source_page_number
-            ),
-            None,
+        # There is no model-proposed disposition to look up any more, so the
+        # label is checked against the source itself: it must be a numbered
+        # label the document actually prints on that page.
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        extraction = extract_protocol_pdf(
+            self.store.file_store.object_path(
+                revision.pdf_checksum, expected_size=pdf_object.byte_size
+            )
         )
-        if disposition is None:
+        if not 1 <= source_page_number <= extraction.page_count:
+            raise ProtocolApprovalError("That page is not in this source.")
+        if source_label not in _numbered_step_labels(
+            extraction.pages[source_page_number - 1].text
+        ):
             raise ProtocolApprovalError(
-                "This analysis revision has no such label disposition."
+                "That label is not a numbered line on that page."
             )
         self._check_cited_segments(
-            revision, disposition.evidence, evidence_segment_ids
+            revision,
+            domain.SourceEvidence(
+                source_page_number=source_page_number,
+                source_excerpt="",
+                evidence_segment_ids=tuple(evidence_segment_ids),
+            ),
+            evidence_segment_ids,
         )
         key = f"{source_page_number}:{source_label}"
         ordinal = self._finding_ordinal(
@@ -2662,26 +2678,6 @@ class ProtocolCatalog:
             return frozenset()
         return self._disposition_findings(
             protocol_id, protocol_revision_number, analysis_revision_number
-        )
-
-    def _every_label_disposition_confirmed(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis: Any,
-    ) -> bool:
-        """Every disposed label has a standing confirmation."""
-
-        outstanding = {
-            f"{item.source_page_number}:{item.source_label}"
-            for item in analysis.protocol.label_dispositions
-        }
-        if not outstanding:
-            return False
-        return outstanding <= self._disposition_findings(
-            protocol_id,
-            protocol_revision_number,
-            analysis.analysis_revision_number,
         )
 
     def confirm_fixed_repetition(

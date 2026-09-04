@@ -344,3 +344,136 @@ class ContractStatesTheRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValueHonestyScopeTests(unittest.TestCase):
+    """The check applies to segments inside a numbered step.
+
+    A timer or a quantity belonging to a step is read out to an operator, so
+    losing one is dangerous and refusing its declination is right. Outside
+    every numbered step the same test was refusing correct answers, and it was
+    the most frequent refusal of the last provider run: three of five.
+
+    The narrowing is structural -- does the segment lie inside a numbered
+    step's span -- and never a phrase, domain or pattern list. Two such lists
+    have been rejected in this project and both times the "obviously trivial"
+    category turned out to contain safety text.
+    """
+
+    def test_a_page_with_no_numbered_label_has_nothing_in_scope(self) -> None:
+        from voice_workflow_agent.protocol_claim_analysis import (
+            _segments_inside_numbered_steps,
+        )
+        from voice_workflow_agent.protocol_claim_analysis import (
+            ProtocolEvidenceSegment,
+        )
+
+        segments = tuple(
+            ProtocolEvidenceSegment(
+                segment_id=f"seg-{index}",
+                source_revision="pdf-1",
+                source_sha256="0" * 64,
+                source_page_number=1,
+                page_text_sha256="1" * 64,
+                segment_index=index,
+                text=text,
+            )
+            for index, text in enumerate(
+                ("Abstract\n", "This protocol takes 1h 30m.\n")
+            )
+        )
+        self.assertEqual(_segments_inside_numbered_steps(segments), frozenset())
+
+    def test_a_segment_under_a_label_is_in_scope(self) -> None:
+        from voice_workflow_agent.protocol_claim_analysis import (
+            ProtocolEvidenceSegment,
+            _segments_inside_numbered_steps,
+        )
+
+        segments = tuple(
+            ProtocolEvidenceSegment(
+                segment_id=f"seg-{index}",
+                source_revision="pdf-1",
+                source_sha256="0" * 64,
+                source_page_number=1,
+                page_text_sha256="1" * 64,
+                segment_index=index,
+                text=text,
+            )
+            for index, text in enumerate(
+                ("Heading\n", "1 Incubate for 15 min.\n", "Note: 2 mL added.\n")
+            )
+        )
+        inside = _segments_inside_numbered_steps(segments)
+        self.assertNotIn("seg-0", inside)
+        self.assertIn("seg-1", inside)
+        self.assertIn("seg-2", inside)
+
+    def test_the_measured_reduction_over_the_local_sources(self) -> None:
+        """96 value-bearing segments in scope becomes 77."""
+
+        from voice_workflow_agent.experiment_protocol_pdf import (
+            extract_protocol_pdf,
+        )
+        from voice_workflow_agent.protocol_claim_analysis import (
+            _segments_inside_numbered_steps,
+            generate_page_evidence_segments,
+            segment_carries_unit_bearing_value,
+            segment_is_substantive,
+        )
+
+        source = Path("data/runtime/candidate-a-source/in-gel-digestion.pdf")
+        if not source.is_file():
+            self.skipTest(f"{source} is not present.")
+        extraction = extract_protocol_pdf(source)
+        before = after = 0
+        for page in extraction.pages:
+            segments = generate_page_evidence_segments(
+                extraction,
+                source_revision="pdf-1",
+                page_number=page.source_page_number,
+            )
+            inside = _segments_inside_numbered_steps(segments)
+            for segment in segments:
+                if not segment_is_substantive(segment.text):
+                    continue
+                if not segment_carries_unit_bearing_value(segment.text):
+                    continue
+                before += 1
+                if segment.segment_id in inside:
+                    after += 1
+        self.assertEqual((before, after), (22, 20))
+
+    def test_a_trailing_footer_stays_in_scope_and_that_is_recorded(self) -> None:
+        """The case that motivated this, which the narrowing does NOT fix.
+
+        headspace page 6 ends with a running footer whose text begins "1h 30m",
+        the document's own estimated duration, which matches digit-plus-unit.
+        The last numbered label on a page owns everything to the end of that
+        page -- deliberately, so a step keeps its own notes and warnings -- so
+        the footer lies inside step 29's span and remains in scope. Narrowing
+        by numbered-step membership therefore does not remove it, and nothing
+        further was invented to force it out.
+        """
+
+        from voice_workflow_agent.experiment_protocol_pdf import (
+            extract_protocol_pdf,
+        )
+        from voice_workflow_agent.protocol_claim_analysis import (
+            _segments_inside_numbered_steps,
+            generate_page_evidence_segments,
+            segment_carries_unit_bearing_value,
+        )
+
+        source = Path("usingdynamicheadspacecollections.pdf")
+        if not source.is_file():
+            self.skipTest(f"{source.name} is not present.")
+        extraction = extract_protocol_pdf(source)
+        segments = generate_page_evidence_segments(
+            extraction, source_revision="pdf-1", page_number=6
+        )
+        inside = _segments_inside_numbered_steps(segments)
+        footer = segments[-1]
+        self.assertIn("protocols.io", footer.text)
+        self.assertTrue(segment_carries_unit_bearing_value(footer.text))
+        self.assertIn(footer.segment_id, inside)

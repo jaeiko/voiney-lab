@@ -449,7 +449,6 @@ class ClassifyingBoundedUnblocksTheUnsupportedShapeTests(unittest.TestCase):
                     {
                         "source_page_number": 1,
                         "analysis_incomplete": False,
-                        "non_step_labels": [],
                         "declined_evidence_segment_ids": [
                             handle
                             for handle in handles.values()

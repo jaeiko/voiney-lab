@@ -109,7 +109,6 @@ class SegmentAccountingTests(unittest.TestCase):
                     {
                         "source_page_number": 1,
                         "analysis_incomplete": status == "analysis_incomplete",
-                        "non_step_labels": [],
                         "declined_evidence_segment_ids": [
                             self.handles[i] for i in declined
                         ],
@@ -309,7 +308,7 @@ class SegmentAccountingTests(unittest.TestCase):
             self._parse(json.dumps(payload))
 
     def test_schema_version_records_the_new_response_shape(self) -> None:
-        self.assertEqual(CLAIM_SCHEMA_VERSION, 9)
+        self.assertEqual(CLAIM_SCHEMA_VERSION, 10)
 
 
 class StepBlockRangeTests(unittest.TestCase):

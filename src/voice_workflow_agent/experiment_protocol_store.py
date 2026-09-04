@@ -531,7 +531,6 @@ _PAGE_COVERAGE_KEYS = frozenset(
         "evidence_item_ids",
         "declined_segment_ids",
         "unaccounted_segment_ids",
-        "non_step_labels",
     }
 )
 

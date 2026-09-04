@@ -103,7 +103,6 @@ class ReadinessReasonCode(str, Enum):
     SAFETY_CRITICAL_CONFLICT = "safety_critical_conflict"
     NO_DECLARED_SAFETY_WARNINGS = "no_declared_safety_warnings"
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
-    UNCONFIRMED_LABEL_DISPOSITION = "unconfirmed_label_disposition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
 
@@ -169,17 +168,20 @@ class OperatorDeterminedRepetition:
 
 @dataclass(frozen=True)
 class NonStepLabelDisposition:
-    """One numbered label the provider said is not an execution step.
+    """One numbered label a **reviewer** says is not an execution step.
 
     Measured on three of the four local sources, a numbered line is not always
     an instruction: a materials note, a bare section heading, a table of
     contents. Demanding an action claim for those refused correct responses.
 
-    The asymmetry runs the other way from the repetition one. Turning a
-    description into a step only makes the agent read a description aloud,
-    which is a nuisance. Disposing of a real step makes it disappear from the
-    protocol, which is dangerous. So the default is to claim it as an action,
-    and a disposition is the exception a person confirms.
+    A provider can no longer say this. On the first real use of that contract
+    a model disposed of six numbered lines that were plainly instructions, each
+    carrying a temperature, a time or a piece of equipment; approved, the
+    protocol would have been missing six steps silently. The asymmetry is why:
+    treating a description as a step costs an operator hearing a description
+    read out, while disposing of a real step removes it. So every numbered line
+    is now a step as far as extraction is concerned, and this record exists
+    only for a reviewer's own annotation, kept in the append-only ledger.
     """
 
     source_page_number: int
@@ -484,7 +486,6 @@ class ExperimentProtocol:
     equipment: tuple[Equipment, ...] = ()
     sections: tuple[ProtocolSection, ...] = ()
     constructs: tuple[WorkflowConstruct, ...] = ()
-    label_dispositions: tuple[NonStepLabelDisposition, ...] = ()
     description: SourceStatement | None = None
 
 
@@ -1568,7 +1569,6 @@ _REASON_ORDER = {
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
             ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
-            ReadinessReasonCode.UNCONFIRMED_LABEL_DISPOSITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_OPERATOR_DETERMINED_REPETITION,
@@ -1691,21 +1691,6 @@ def assess_readiness(
                     "A reviewer must confirm this Protocol's safety warnings "
                     "before execution. Extracted warnings are model judgement "
                     "and do not discharge the review by themselves."
-                ),
-            )
-        )
-
-    if protocol.label_dispositions:
-        # Asymmetric the other way from a repetition: reading a description
-        # aloud is a nuisance, while disposing of a real step makes it vanish.
-        # So the disposition is the exception, and a person confirms each one.
-        reasons.append(
-            ReadinessReason(
-                code=ReadinessReasonCode.UNCONFIRMED_LABEL_DISPOSITION,
-                message=(
-                    "A reviewer must confirm each numbered label the analysis "
-                    "says is not an execution step. Disposing of a real step "
-                    "would remove it from the protocol."
                 ),
             )
         )

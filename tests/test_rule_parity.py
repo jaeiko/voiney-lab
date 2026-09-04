@@ -264,16 +264,11 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("declaring repetition_count as the number the source states",),
     ),
     "repetition_count_malformed": (_SCHEMA, ()),
-    "label_disposition_malformed": (_SCHEMA, ()),
-    "label_disposition_unknown_label": (
-        _PROMPT,
-        ("list the label in that page's non_step_labels",),
-    ),
-    "label_disposition_duplicated": (_SCHEMA, ()),
-    "label_disposition_evidence_unknown": (
-        _PROMPT,
-        ("with the segments that show it",),
-    ),
+    # A provider is no longer asked whether a numbered line is a step, so
+    # there is nothing to state in the prompt: the only code left is the
+    # refusal for sending one anyway, and the schema is what makes it
+    # unsendable.
+    "label_disposition_not_accepted": (_SCHEMA, ()),
     "repetition_count_not_applicable": (
         _PROMPT,
         ("must leave repetition_count null",),

@@ -217,7 +217,6 @@ class FakeChunkModel:
                 {
                     "source_page_number": number,
                     "analysis_incomplete": False,
-                    "non_step_labels": [],
                     "declined_evidence_segment_ids": declined_handles(
                         page, [*structure, *claims]
                     ),

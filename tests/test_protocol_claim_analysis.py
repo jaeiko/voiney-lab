@@ -390,7 +390,6 @@ class RichClaimModel:
                 {
                     "source_page_number": page_number,
                     "analysis_incomplete": False,
-                    "non_step_labels": [],
                     "declined_evidence_segment_ids": declined_handles(
                         page, [*structure, *records]
                     ),
@@ -918,7 +917,6 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
                                 == "analysis_incomplete",
                                 # Claiming nothing now means declining every
                                 # substantive segment, on the record.
-                                "non_step_labels": [],
                                 "declined_evidence_segment_ids": (
                                     declined_handles(page, [])
                                 ),
