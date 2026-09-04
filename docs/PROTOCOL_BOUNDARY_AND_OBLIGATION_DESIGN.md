@@ -3272,6 +3272,172 @@ hand-built manifest and only in-gel has one. Cause recorded, not fixed here.
 
 **Provider calls used in this step: 0.**
 
+## 14. Timers bound to evidence, and a way to measure accuracy. Zero calls.
+
+### 14a. Timer manifest: all ten founded in the source
+
+**No timer was invented.** All ten durations are literals the document prints:
+
+| Step | Seconds | Page | Literal | |
+| --- | --- | --- | --- | --- |
+| 3 | 900 | 4 | `00:15:00` | |
+| 5 | 900 | 5 | `15min` | |
+| 8 | 900 | 5 | `00:15:00` | |
+| 12 | 3600 | 7 | `01:00:00` | |
+| 16 | 2700 | 7 | `00:45:00` | |
+| 17 | 600 | 7 | `00:10:00` | |
+| 19 | 900 | 7 | `00:15:00` | |
+| 22 | 600 | 8 | `10min` | |
+| 23 | 57600 | 8 | `16:00:00` | |
+| 24 | 1800 | **9** | `00:30:00` | continuation page, anchor p8 |
+
+`_CANDIDATE_A_STEP_TIMERS` is deleted. Durations now come from
+`candidate_a_curated_analysis.timers.json`, in the visuals manifest's shape:
+step id link, page, the exact literal, the canonical segment holding it, and
+binding to both `document_sha256` and `fixture_sha256`. The loader verifies
+every field -- the literal must state the claimed number, the cited segment
+must resolve on the cited page, and the segment text must contain the literal
+-- and one bad entry refuses the whole manifest. No manifest means no timers,
+which is how a timing cannot reach another document.
+
+The derivation is a build-time script for human review, not a runtime path.
+Runtime reads a duration only to check that the cited literal states the number
+the manifest claims, and only in the two forms the source uses; anything else
+returns nothing and the entry is refused.
+
+**Instruction 1-4 was not satisfiable as written.** It asked the loader to
+require the manifest page to equal the step's `evidence.source_page_number`,
+as visuals does. in-gel step 24's instruction crosses a page break: its label
+is on page 8 and the duration it states, `00:30:00`, is on page 9. Strict
+equality would have made that timer unrepresentable, so the rule is that the
+cited page lies between this step's anchor and the next step's -- derived from
+the fixture, not assumed, and the anchor is separately asserted. Nine of ten
+entries satisfy equality anyway.
+
+Behaviour is unchanged and pinned: the same ten step labels have timers, with
+the same durations, `start_timer` still returns 900 s on step 3 and refuses on
+step 1, and the status projection reports 3600 s on step 12. Ten refusal cases
+are tested, including a single byte of drift in the committed file.
+
+### 14b. An accuracy measure, separate from rule conformance
+
+Eighteen provider calls have measured whether a response satisfies the rules.
+`protocol_extraction_accuracy` measures whether it is right, and the report
+says on its face that the two are never combined; it carries no readiness or
+validation field and collapses to no single verdict.
+
+It reports step count, order, missing and extra labels, per-step text
+similarity after normalisation, and per-step durations, temperatures and
+volumes. Normalisation ignores case, spacing and punctuation, and treats the
+micro sign variants as one thing, while keeping every number and unit -- a
+separator is dropped only when it is not between digits, so `0.5`, `00:15:00`
+and `2-7` survive.
+
+The case it exists for is tested: a candidate whose wording matches above 0.8
+similarity but states `50min` where the reference says `15min` is reported as a
+value mismatch on that step.
+
+**The reference is audited, not assumed.** `audit_reference` compares the
+hand-built structure against the source: every step's quoted excerpt must
+appear on the page it cites, and every value it states must appear in that
+step's own source text, following the step across a page break. On in-gel it
+reports **0 disagreements** over 25 steps. Its reach is measured rather than
+claimed: the reference states 27 values -- 10 durations, 8 temperatures, 9
+volumes -- across 11 of its 25 steps, against 29 distinct values in the source
+pages. So step count, order and wording are well covered and values are
+covered for 11 steps.
+
+Nothing has been scored yet: no extraction has passed all chunks, and the tool
+was exercised on synthetic inputs.
+
+### 14c. Repeated page elements: measured, falsification did not trigger
+
+Grouping text rects into lines and masking digits, the most-repeated line shape
+appears on **every page of all four documents**, at a bottom-normalised y of
+0.023 to 0.026, with a vertical spread of **0.0000**. Geometry identifies it
+without reading a word.
+
+**The falsification check passed, and it was checked directly.** The bottom 8%
+of every page in all four sources contains only the running footer. ANKOM
+page 30 carries a `Safety information` block: measured, the bottom band does
+**not** contain that wording and the region above it does. The top 8% is not a
+repeated element at all -- 8 to 11 distinct strings across pages, section
+headings rather than furniture.
+
+**But this would not fix the case that motivated it, and the reason is more
+specific than a footer rule.** headspace page 6's failing segment is
+`1h 30m protocols.io | ...`. Measured geometrically, the footer sits at
+y < 0.04 while `1h 30m` sits above y 0.14 -- they are far apart on the page and
+adjacent only in reading order, so segmentation merged a **body** value with
+the footer into one segment. A perfect footer rule would still leave a segment
+containing a real body duration. So the earlier diagnosis, that the footer's
+own duration was in scope, was wrong in a way that matters: the value in scope
+is the protocol's own estimated duration displayed in the body.
+
+No rule was changed, as instructed. What the measurement establishes is that
+the geometric signature is real and safety-free in these four documents, and
+that the specific failure needs the segmentation question answered too.
+
+### 14d. Value honesty narrowed: measured, and the motivating case unchanged
+
+Scope is now "the segment lies inside a numbered step's span". Measured across
+all four sources: 96 value-bearing segments become 77, a 20% reduction, and
+86% on intracellular. The check is unweakened where it matters -- a segment
+inside a step that states a value still cannot be declined.
+
+The headspace page 6 case is unchanged, because the last label on a page owns
+everything to the page end so the segment lies inside step 29. That is
+recorded in a test, alongside the geometric finding above.
+
+### 14e. intracellular is a labelling mismatch, not an extraction failure
+
+**4-1.** Its nine line-anchored labels are section and subsection headings and
+a contents list -- `1 Intracellular metabolite analysis provides a snapshot`,
+`2 This protocol is organized into the following key steps:`,
+`1. Automated Peak Detection`. Not one is a procedure step, and they are **not**
+a numbered reference list either.
+
+**4-2.** The procedure steps exist and are numbered **hierarchically**:
+`3.2 Pipette 1.6 mL of cold metabolite extraction buffer into a petri dish`,
+`3.5 Filter 3 - 5 mL`, `3.7 Gently homogenize`, `3.9 Carefully transfer the
+supernatant`. The values live in those steps, in body prose, not in tables or
+an appendix.
+
+**4-3. Extraction and segmentation are working.** The document yields 230
+segments and the values are present in them. The mismatch is the label
+pattern: `_NUMBERED_SOURCE_LINE` accepts a single integer optionally followed
+by `.` or `)` and then whitespace, so `3.2 Pipette` does not match -- after
+`3` comes `.` then `2`, not a space. The real steps are therefore invisible to
+the numbered-action obligation, which is why only the nine headings are seen
+and why only 2 of 14 value-bearing segments fall inside a step. That fully
+accounts for the 86% outlier.
+
+**4-4. A different cause from the known scope-check hole.** That hole is the
+fixture's monotonicity test being fooled by a clean ascending run, such as a
+numbered bibliography. This is the label regex not recognising hierarchical
+numbering at all. They share only a symptom: a document whose real procedure is
+not seen as numbered steps.
+
+### 14f. The cost of removing label disposition, per chunk
+
+| Document | Chunks | Labels that must be claimed | Non-instruction |
+| --- | --- | --- | --- |
+| ANKOM | 8 | 67 | **14**, all in chunks 3 and 5 (labels 21-27 and 41-47) |
+| in-gel | 3 | 25 | 0 |
+| headspace | 5 | 61 | **1** (label 35, **chunk 3**, pages 9-15) |
+| intracellular | 12 | 9 | **9**, spread over chunks 1, 3, 5 and 9 |
+
+**headspace chunk 3 does contain label 35** (5-3 answer).
+
+One correction to the earlier figure: intracellular is **9** labels here, not
+the 12 reported before. Both are right about different things -- 12 counts raw
+matches including repeats on one page, 9 counts the deduplicated labels the
+obligation actually checks, since page 4 prints `1, 2, 1, 2, 3, 3`.
+
+**No pass rate is estimated.** Nothing was run, so it is not known.
+
+**Provider calls used in this step: 0.**
+
 
 ## 5. Narrowing `no_relevant_claims`
 

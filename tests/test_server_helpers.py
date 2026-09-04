@@ -663,6 +663,8 @@ class ServerTests(unittest.TestCase):
                 ),)
                 self.draft=SimpleNamespace(readiness=SimpleNamespace(
                     status=SimpleNamespace(value="analysis_required")))
+                # No verified timer manifest, so this fixture has no timers.
+                self.timer_manifest={}
             def visual_for_step(self,index): return None
 
         class Socket:

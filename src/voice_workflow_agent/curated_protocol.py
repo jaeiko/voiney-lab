@@ -248,6 +248,10 @@ class CuratedProtocolFixture:
     source_filename: str | None = None
     localizations: dict[str, str] | None = None
     visual_manifest: dict[str, dict[str, Any]] | None = None
+    #: step_id -> duration in seconds, loaded only from a manifest whose every
+    #: entry the loader verified against the source. Empty when no manifest is
+    #: present, which is why one document's timings cannot reach another's.
+    timer_manifest: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -606,6 +610,148 @@ def _load_localizations(
     return translations
 
 
+_TIMER_CLOCK = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})")
+_TIMER_WORDED = re.compile(r"(\d{1,3})\s*(min|h)\b", re.I)
+
+
+def _timer_literal_seconds(literal: str) -> int | None:
+    """The seconds a source literal states, in the two forms the source uses.
+
+    This reads a value the document prints, which is the one thing the server
+    may do with source text. It never infers a duration that is not written,
+    and anything outside those two forms returns None so the manifest entry is
+    refused rather than guessed at.
+    """
+
+    clock = _TIMER_CLOCK.fullmatch(literal.strip())
+    if clock is not None:
+        hours, minutes, seconds = (int(part) for part in clock.groups())
+        return hours * 3600 + minutes * 60 + seconds
+    worded = _TIMER_WORDED.fullmatch(literal.strip())
+    if worded is not None:
+        count, unit = int(worded.group(1)), worded.group(2).lower()
+        return count * 60 if unit == "min" else count * 3600
+    return None
+
+
+def _load_timer_manifest(
+    path: Path,
+    *,
+    fixture_sha256: str,
+    extraction: ProtocolPdfExtraction,
+    steps: tuple[domain.ProtocolSourceStep, ...],
+) -> dict[str, int]:
+    """Step timers, loaded only where the source states the duration.
+
+    This replaces a dict hardcoded in this module and keyed by step *index*.
+    That table was bound to no document, no page and no segment, so it applied
+    to whatever protocol sat at those positions -- and the previous step's work
+    changed how many steps a protocol has, which widened the hazard rather
+    than narrowing it.
+
+    Every entry is verified against the source here, and one bad entry refuses
+    the whole manifest: a timer nobody can point to in the document does not
+    exist as far as execution is concerned. An absent manifest means no timers
+    at all, which is how one document's timings cannot reach another's.
+    """
+
+    if not path.exists():
+        return {}
+    payload, raw = _load_json_object(path)
+    required = {
+        "version", "document_sha256", "fixture_sha256", "status", "candidates",
+    }
+    if _canonical_json_bytes(payload) != raw or set(payload) != required:
+        raise CuratedProtocolFixtureError("Timer manifest has an invalid shape.")
+    if (
+        payload["version"] != 1
+        or payload["document_sha256"] != extraction.sha256
+        or payload["fixture_sha256"] != fixture_sha256
+        or payload["status"] != DEVELOPMENT_FIXTURE_STATUS
+        or not isinstance(payload["candidates"], list)
+    ):
+        raise CuratedProtocolFixtureError("Timer manifest identity is invalid.")
+
+    from voice_workflow_agent.protocol_claim_analysis import (
+        generate_page_evidence_segments,
+    )
+
+    by_step = {step.step_id: step for step in steps}
+    order = [step.step_id for step in steps]
+    expected_fields = {
+        "linked_step_id", "page_number", "step_anchor_page",
+        "duration_seconds", "source_literal", "evidence_segment_ids",
+        "confidence",
+    }
+    resolved: dict[str, int] = {}
+    for item in payload["candidates"]:
+        if not isinstance(item, dict) or set(item) != expected_fields:
+            raise CuratedProtocolFixtureError(
+                "Timer candidate has an invalid shape."
+            )
+        step = by_step.get(item["linked_step_id"])
+        if step is None or item["confidence"] != "verified":
+            raise CuratedProtocolFixtureError(
+                "Timer candidate is unknown or unverified."
+            )
+        if item["linked_step_id"] in resolved:
+            raise CuratedProtocolFixtureError("Timer candidate is duplicated.")
+        anchor = step.evidence.source_page_number
+        if item["step_anchor_page"] != anchor:
+            raise CuratedProtocolFixtureError(
+                "Timer candidate misstates its anchor page."
+            )
+        # A step's own text may cross a page break, so its duration can sit on
+        # a later page than its label -- in-gel step 24 is exactly that. The
+        # cited page must lie between this step's anchor and the next step's,
+        # which is derived from the fixture rather than assumed.
+        position = order.index(step.step_id)
+        last = (
+            by_step[order[position + 1]].evidence.source_page_number
+            if position + 1 < len(order)
+            else extraction.page_count
+        )
+        if not anchor <= item["page_number"] <= last:
+            raise CuratedProtocolFixtureError(
+                "Timer candidate cites a page outside its step."
+            )
+        duration = item["duration_seconds"]
+        if (
+            not isinstance(duration, int)
+            or isinstance(duration, bool)
+            or duration <= 0
+        ):
+            raise CuratedProtocolFixtureError(
+                "Timer duration is not a positive whole number."
+            )
+        if _timer_literal_seconds(str(item["source_literal"])) != duration:
+            raise CuratedProtocolFixtureError(
+                "Timer literal does not state that duration."
+            )
+        handles = item["evidence_segment_ids"]
+        if not isinstance(handles, list) or not handles:
+            raise CuratedProtocolFixtureError("Timer candidate cites no evidence.")
+        segments = {
+            segment.segment_id: segment.text
+            for segment in generate_page_evidence_segments(
+                extraction,
+                source_revision="pdf-1",
+                page_number=item["page_number"],
+            )
+        }
+        if any(handle not in segments for handle in handles):
+            raise CuratedProtocolFixtureError(
+                "Timer evidence does not resolve on that page."
+            )
+        cited = "".join(segments[handle] for handle in handles)
+        if str(item["source_literal"]) not in cited:
+            raise CuratedProtocolFixtureError(
+                "Timer evidence does not contain its literal."
+            )
+        resolved[step.step_id] = duration
+    return resolved
+
+
 def _load_visual_manifest(
     path: Path,
     *,
@@ -831,6 +977,7 @@ def load_curated_protocol_fixture(
         f"{fixture_file.stem}.localization.ko.json"
     )
     visual_path = fixture_file.with_name(f"{fixture_file.stem}.visuals.json")
+    timer_path = fixture_file.with_name(f"{fixture_file.stem}.timers.json")
     return CuratedProtocolFixture(
         draft=draft,
         status=DEVELOPMENT_FIXTURE_STATUS,
@@ -850,6 +997,12 @@ def load_curated_protocol_fixture(
             visual_path,
             fixture_sha256=fixture_sha256,
             source_sha256=extraction.sha256,
+            steps=base_fixture.steps,
+        ),
+        timer_manifest=_load_timer_manifest(
+            timer_path,
+            fixture_sha256=fixture_sha256,
+            extraction=extraction,
             steps=base_fixture.steps,
         ),
     )
@@ -3878,9 +4031,10 @@ def _control_speech(
     development_only: bool = True,
     step_index: int | None = None,
     timer_active: bool = False,
+    step_timer_seconds: int = 0,
 ) -> str:
     timer_hint = ""
-    if step_index is not None and _CANDIDATE_A_STEP_TIMERS.get(step_index, 0) > 0 and not timer_active:
+    if step_index is not None and step_timer_seconds > 0 and not timer_active:
         if language == "ko":
             timer_hint = " 타이머를 시작하려면 말씀해주세요."
         elif language == "en":
@@ -3937,34 +4091,6 @@ def _step_reply(
     noun = ""
     return f"{prefix} {noun}{label}단계: {text}"
 
-
-_CANDIDATE_A_STEP_TIMERS: dict[int, int] = {
-    0: 0,
-    1: 0,
-    2: 900,    # Step 3: 15 min at 37°C
-    3: 0,
-    4: 900,    # Step 5: 15 min at 37°C
-    5: 0,
-    6: 0,
-    7: 900,    # Step 8: 15 min at 22°C
-    8: 0,
-    9: 0,
-    10: 0,
-    11: 3600,  # Step 12: 60 min at 60°C
-    12: 0,
-    13: 0,
-    14: 0,
-    15: 2700,  # Step 16: 45 min RT in dark
-    16: 600,   # Step 17: 10 min at 22°C
-    17: 0,
-    18: 900,   # Step 19: 15 min at 22°C
-    19: 0,
-    20: 0,
-    21: 600,   # Step 22: 10 min in fridge
-    22: 57600, # Step 23: 16 hr at 37°C
-    23: 1800,  # Step 24: 30 min at 37°C
-    24: 0,
-}
 
 CANONICAL_RESEARCH_ENTITIES: dict[str, dict[str, Any]] = {
     "ambic": {
@@ -4211,9 +4337,23 @@ class CuratedProtocolSession:
             bool(self._pending_anomaly),
         ))
 
+    def timer_seconds_for_step(self, index: int) -> int:
+        """The verified duration for one step, or zero when there is none.
+
+        Looked up by step id from a manifest the loader checked against the
+        source. This replaced a dict keyed by step *index* and hardcoded in
+        this module: it was bound to no document, no page and no segment, so it
+        applied to whatever protocol happened to sit at those positions.
+        """
+
+        if not 0 <= index < len(self.fixture.steps):
+            return 0
+        step_id = self.fixture.steps[index].step_id
+        return int((self.fixture.timer_manifest or {}).get(step_id, 0))
+
     def start_timer(self, step_index: int | None = None, now: float | None = None) -> tuple[bool, int, str]:
         idx = self.current_index if step_index is None else step_index
-        duration = _CANDIDATE_A_STEP_TIMERS.get(idx, 0)
+        duration = self.timer_seconds_for_step(idx)
         if duration <= 0:
             return False, 0, "No timer configured for this step"
         current_time = time.time() if now is None else now
@@ -4230,7 +4370,7 @@ class CuratedProtocolSession:
         )
         current_time = time.time() if now is None else now
         if self._timer_started_at is None or self._timer_duration_seconds is None or self._timer_step_index is None:
-            duration = _CANDIDATE_A_STEP_TIMERS.get(self.current_index, 0)
+            duration = self.timer_seconds_for_step(self.current_index)
             return {
                 "state": "not_started",
                 "duration_seconds": duration,
@@ -6691,6 +6831,9 @@ class CuratedProtocolSession:
                 development_only=self.fixture.development_only,
                 step_index=self.current_index,
                 timer_active=timer_active,
+                step_timer_seconds=self.timer_seconds_for_step(
+                    self.current_index
+                ),
             )
             if language == "ko" and not resumed:
                 control_text = (
@@ -7796,6 +7939,9 @@ class CuratedProtocolSession:
                     development_only=self.fixture.development_only,
                     step_index=self.current_index,
                     timer_active=False,
+                    step_timer_seconds=self.timer_seconds_for_step(
+                        self.current_index
+                    ),
                 )
                 response, primary, sources, pages, evidence_ids, translation_status = (
                     _step_presentation(
@@ -7951,6 +8097,9 @@ class CuratedProtocolSession:
                     development_only=self.fixture.development_only,
                     step_index=self.current_index,
                     timer_active=timer_active,
+                    step_timer_seconds=self.timer_seconds_for_step(
+                        self.current_index
+                    ),
                 )
                 response, primary, sources, pages, evidence_ids, translation_status = (
                     _step_presentation(

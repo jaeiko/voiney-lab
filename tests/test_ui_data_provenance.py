@@ -64,43 +64,80 @@ class TheUiIsServedTheHandBuiltFixtureTests(unittest.TestCase):
         self.assertEqual(len(steps), 25)
 
 
-class TheTimerIsHardcodedNotExtractedTests(unittest.TestCase):
-    """Recorded as-is. The fixture carries no timer for the session to read."""
+class TheTimerIsEvidenceBoundTests(unittest.TestCase):
+    """The timer was a dict keyed by step index, hardcoded in the session.
 
-    def test_the_hand_built_fixture_declares_no_process_timer(self) -> None:
-        raw = FIXTURE.read_text()
-        self.assertNotIn("process_timer", raw)
+    It was bound to no document, no page and no segment, so it applied to
+    whatever protocol sat at those positions -- and the previous step changed
+    how many steps a protocol has, which widened that. It is now a manifest in
+    the same shape as the visuals one: linked to a step id, citing the page and
+    the canonical segment that holds the literal, bound to the document and
+    fixture digests, and verified at load.
+    """
 
-    def test_the_duration_comes_from_a_table_keyed_by_step_index(self) -> None:
+    def test_the_index_keyed_table_is_gone(self) -> None:
+        import voice_workflow_agent.curated_protocol as module
+
+        self.assertFalse(hasattr(module, "_CANDIDATE_A_STEP_TIMERS"))
+        self.assertNotIn(
+            "_CANDIDATE_A_STEP_TIMERS",
+            Path("src/voice_workflow_agent/curated_protocol.py").read_text(),
+        )
+
+    def test_the_manifest_exists_and_is_bound_to_both_digests(self) -> None:
+        path = Path(
+            "data/development_protocols/candidate_a_curated_analysis.timers.json"
+        )
+        if not path.exists():
+            self.skipTest(f"{path} is not present.")
+        manifest = json.loads(path.read_text())
+        self.assertEqual(manifest["version"], 1)
+        for key in ("document_sha256", "fixture_sha256", "status"):
+            self.assertIn(key, manifest)
+        self.assertEqual(len(manifest["candidates"]), 10)
+
+    def test_every_entry_cites_a_literal_that_states_its_duration(self) -> None:
         from voice_workflow_agent.curated_protocol import (
-            _CANDIDATE_A_STEP_TIMERS,
+            _timer_literal_seconds,
         )
 
-        self.assertEqual(sorted(_CANDIDATE_A_STEP_TIMERS), list(range(25)))
-        self.assertEqual(
-            sorted(
-                index
-                for index, seconds in _CANDIDATE_A_STEP_TIMERS.items()
-                if seconds
-            ),
-            [2, 4, 7, 11, 15, 16, 18, 21, 22, 23],
+        path = Path(
+            "data/development_protocols/candidate_a_curated_analysis.timers.json"
         )
+        if not path.exists():
+            self.skipTest(f"{path} is not present.")
+        for item in json.loads(path.read_text())["candidates"]:
+            with self.subTest(step=item["linked_step_id"]):
+                self.assertEqual(
+                    _timer_literal_seconds(item["source_literal"]),
+                    item["duration_seconds"],
+                )
+                self.assertTrue(item["evidence_segment_ids"])
 
-    def test_the_table_is_not_bound_to_any_source_evidence(self) -> None:
-        """The gap this pins: an index, not a page or a segment.
+    def test_one_entry_sits_on_a_continuation_page(self) -> None:
+        """Why strict page equality was not the right rule.
 
-        A table keyed by position applies to whatever protocol is loaded at
-        that index, and nothing ties its numbers to text in a document.
+        in-gel step 24's instruction crosses a page break: its label is on
+        page 8 and the duration it states, 00:30:00, is on page 9. Requiring
+        the manifest page to equal the step's evidence page would have made
+        that timer unrepresentable, so the rule is that the cited page lies
+        between this step's anchor and the next step's.
         """
 
-        from voice_workflow_agent.curated_protocol import (
-            _CANDIDATE_A_STEP_TIMERS,
+        path = Path(
+            "data/development_protocols/candidate_a_curated_analysis.timers.json"
         )
-
-        for index, seconds in _CANDIDATE_A_STEP_TIMERS.items():
-            with self.subTest(index=index):
-                self.assertIsInstance(index, int)
-                self.assertIsInstance(seconds, int)
+        if not path.exists():
+            self.skipTest(f"{path} is not present.")
+        crossing = [
+            item
+            for item in json.loads(path.read_text())["candidates"]
+            if item["page_number"] != item["step_anchor_page"]
+        ]
+        self.assertEqual(len(crossing), 1)
+        self.assertEqual(crossing[0]["linked_step_id"], "candidate-a-step-24")
+        self.assertEqual(crossing[0]["step_anchor_page"], 8)
+        self.assertEqual(crossing[0]["page_number"], 9)
 
 
 class TheImageStepLinkTests(unittest.TestCase):
