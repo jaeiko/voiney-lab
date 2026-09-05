@@ -27,8 +27,9 @@ import shutil
 import re
 import stat
 import subprocess
+import threading
 import unicodedata
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -48,6 +49,23 @@ from pypdf.errors import (
 PDF_MEDIA_TYPE = "application/pdf"
 MAX_PROTOCOL_PDF_BYTES = 64 * 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
+# PDFium is not thread-safe, and not in the ordinary "share a document
+# carefully" sense.  pypdfium2 states that no two pdfium calls may run at the
+# same time -- "not even with different documents" -- and that overlapping
+# calls "crash or corrupt the process", naming a mutex as what makes
+# concurrent use legal at all.  FastAPI runs a synchronous endpoint in an
+# AnyIO worker thread, so two reviewers opening the same protocol is enough to
+# overlap two calls, and that is what killed the server on 2026-09-04 and
+# again on 2026-09-05: one abort, one segfault, both inside libpdfium.so on an
+# AnyIO worker thread.  Differing signals on one code path is memory
+# corruption, not a condition anything downstream could have caught.
+#
+# Every pdfium call in this process is serialized here.  The lock is held
+# across the whole document lifetime rather than per call, because a page and
+# its text page belong to a document another thread must not be touching
+# meanwhile.  It is re-entrant so that nesting one extraction inside another
+# would block on nothing; nothing nests today.
+_PDFIUM_LOCK = threading.RLock()
 _METADATA_FIELDS = {
     "title": "/Title",
     "author": "/Author",
@@ -586,32 +604,40 @@ def _open_reader(stream: BinaryIO) -> PdfReader:
 
 
 def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
-    """Read page text with the primary engine; None marks an unreadable page."""
+    """Read page text with the primary engine; None marks an unreadable page.
+
+    This is the only function in the process that touches pdfium, and it does
+    so entirely under ``_PDFIUM_LOCK``.  See that lock's comment for why the
+    library permits no overlap at all.
+    """
 
     texts: list[str | None] = [None] * page_count
-    document = None
-    try:
-        document = pypdfium2.PdfDocument(path)
-        available = min(page_count, len(document))
-        for page_index in range(available):
-            try:
-                page = document[page_index]
-                text = page.get_textpage().get_text_range()
-                # Line-ending convention only.  PDF has no line terminators of
-                # its own; pypdfium2 renders CRLF while every other engine and
-                # every stored excerpt uses LF.  No character of content is
-                # added, removed, or substituted here.
-                texts[page_index] = text.replace("\r\n", "\n").replace("\r", "\n")
-            except Exception:  # noqa: BLE001 - one bad page must not lose the rest
-                texts[page_index] = None
-    except Exception:  # noqa: BLE001 - fall through with every page unreadable
-        pass
-    finally:
-        if document is not None:
-            try:
-                document.close()
-            except Exception:  # noqa: BLE001
-                pass
+    with _PDFIUM_LOCK:
+        document = None
+        try:
+            document = pypdfium2.PdfDocument(path)
+            available = min(page_count, len(document))
+            for page_index in range(available):
+                try:
+                    page = document[page_index]
+                    text = page.get_textpage().get_text_range()
+                    # Line-ending convention only.  PDF has no line terminators
+                    # of its own; pypdfium2 renders CRLF while every other
+                    # engine and every stored excerpt uses LF.  No character of
+                    # content is added, removed, or substituted here.
+                    texts[page_index] = text.replace("\r\n", "\n").replace(
+                        "\r", "\n"
+                    )
+                except Exception:  # noqa: BLE001 - one bad page must not lose the rest
+                    texts[page_index] = None
+        except Exception:  # noqa: BLE001 - fall through with every page unreadable
+            pass
+        finally:
+            if document is not None:
+                try:
+                    document.close()
+                except Exception:  # noqa: BLE001
+                    pass
     return texts
 
 
@@ -698,8 +724,78 @@ def _declared_page_text(reader: PdfReader, page_index: int) -> str | None:
         return None
 
 
+# Extraction is a pure function of the file's bytes, and the catalog asks for
+# the same bytes many times in one request: listing the catalog extracts every
+# entry's source, and one reviewer diff extracts the same source twice (once
+# via get_entry, once via review).  On the 48.9 MB local source that is 1.25 s
+# of pdfium work per extraction, all of it now serialized behind
+# ``_PDFIUM_LOCK``, so repeating it makes every other reader wait.
+#
+# The cache is keyed by the identity the server already owns -- the SHA-256 of
+# the bytes, their length, and the file name the extraction reports -- so a
+# hit is only ever returned for bytes that hashed to the same value.  It
+# decides nothing: readiness, approval and evidence all read the same
+# extraction they would have read without it.  It lives for the life of the
+# process and is never written to disk.
+_EXTRACTION_CACHE_ENTRIES = 8
+_extraction_cache: OrderedDict[
+    tuple[str, int, str], ProtocolPdfExtraction
+] = OrderedDict()
+_extraction_cache_lock = threading.Lock()
+
+
+def _extraction_cache_key(source_path: Path) -> tuple[str, int, str] | None:
+    """Hash the file to name it, or None when it cannot be read as one.
+
+    A file that cannot be identified is not a cache miss to be worked around;
+    it simply takes the uncached path, where the real extractor raises the
+    specific error the caller needs to see.
+    """
+
+    try:
+        with source_path.open("rb") as stream:
+            byte_size, checksum = _read_identity(stream)
+    except (OSError, ProtocolPdfError):
+        return None
+    return checksum, byte_size, source_path.name
+
+
+def clear_protocol_pdf_cache() -> None:
+    """Drop every cached extraction.  Used by tests, never by request paths."""
+
+    with _extraction_cache_lock:
+        _extraction_cache.clear()
+
+
 def extract_protocol_pdf(path: str | Path) -> ProtocolPdfExtraction:
     """Validate and inspect a local PDF without mutating or interpreting it."""
+
+    source_path = Path(path)
+    key = _extraction_cache_key(source_path)
+    if key is not None:
+        with _extraction_cache_lock:
+            cached = _extraction_cache.get(key)
+            if cached is not None:
+                _extraction_cache.move_to_end(key)
+                return cached
+    extraction = _extract_protocol_pdf_uncached(source_path)
+    # Keyed by what the extraction itself measured, never by what was read a
+    # moment earlier: if the file changed in between, this stores the new
+    # bytes under the new identity instead of mislabelling them as the old.
+    with _extraction_cache_lock:
+        _extraction_cache[
+            (extraction.sha256, extraction.byte_size, source_path.name)
+        ] = extraction
+        _extraction_cache.move_to_end(
+            (extraction.sha256, extraction.byte_size, source_path.name)
+        )
+        while len(_extraction_cache) > _EXTRACTION_CACHE_ENTRIES:
+            _extraction_cache.popitem(last=False)
+    return extraction
+
+
+def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
+    """Do the full read, parse, cross-check and census for one exact file."""
 
     source_path = Path(path)
     try:
