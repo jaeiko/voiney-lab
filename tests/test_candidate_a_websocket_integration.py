@@ -29,6 +29,7 @@ from voice_workflow_agent.server import (
 )
 from voice_workflow_agent.semantic_intent import SemanticIntentSettings
 import voice_workflow_agent.server as server_module
+from tests.development_activation import development_activation_recorded
 from voice_workflow_agent.identity import Principal, Role
 from voice_workflow_agent.workspace_store import (
     WorkspaceConflictError,
@@ -97,6 +98,18 @@ class _HoldingSocket(_ScriptedSocket):
 
 
 class CandidateAWebSocketIntegrationTests(unittest.TestCase):
+    """What the session does once a protocol is legitimately running.
+
+    Every test here starts a voice session on the Candidate A fixture, which
+    since STEP 23 is not executable on its own: a configured fixture is a
+    statement about which file was loaded, not about whether anyone judged it
+    fit to run, and its readiness carries two unsupported repeat-untils that
+    no reviewer action can clear.  These tests are about durability, recovery
+    and turn handling *behind* that wall, so they step around exactly one gate
+    and nothing else -- see ``tests/development_activation``.  The gate itself
+    is pinned in ``tests/test_development_activation_gate.py``.
+    """
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
@@ -107,6 +120,11 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             cls.provenance_path,
             cls.pdf_path,
         )
+
+    def setUp(self) -> None:
+        activation = development_activation_recorded()
+        activation.__enter__()
+        self.addCleanup(activation.__exit__, None, None, None)
 
     def test_full_candidate_a_workflow_end_to_end(self) -> None:
         protocol_id = "candidate-a-curated-development-v1"

@@ -869,20 +869,26 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         ]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["revision_id"], self.fixture.revision_id)
+        # Materializing a fixture records what the store holds; it grants no
+        # authority to run it.  Until a person activates it for development
+        # the projection says so, and says why.
+        self.assertEqual(matching[0]["approval_status"], "unapproved")
+        self.assertFalse(matching[0]["available_for_execution"])
         self.assertEqual(
-            matching[0]["approval_status"],
-            "development_only_not_final_acceptance",
+            matching[0]["execution_blocked_reason"],
+            "development_activation_not_recorded",
         )
+        self.assertFalse(matching[0]["development_activation"]["activated"])
         self.assertTrue(matching[0]["development_only"])
         self.assertEqual(
             matching[0]["approval"],
             {
-                "status": "development_only",
+                "status": "review_required",
                 "final_approval": False,
                 "actor_principal_id": None,
                 "actor_role": None,
                 "recorded_at": None,
-                "authority": "development_fixture",
+                "authority": None,
             },
         )
         rendered = "\n".join(logs.output)

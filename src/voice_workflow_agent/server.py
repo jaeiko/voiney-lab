@@ -1279,7 +1279,85 @@ def _configured_candidate_fixture(config:ServerConfig)->CuratedProtocolFixture|N
     )
 
 
+def _candidate_fixture_execution_state(
+    fixture:CuratedProtocolFixture,
+)->dict[str,object]:
+    """Answer whether the configured development fixture may execute right now.
+
+    Until 2026-09-05 this answer was the literal ``True``.  A fixture is
+    configured by a launcher environment variable, so every readiness gate
+    could be blocked -- an unresolved ambiguity, no declared safety warning,
+    two unsupported repeat-untils -- and the UI still offered the protocol as
+    runnable.  Being the configured fixture is a statement about which file
+    the server loaded, and it was standing in for a statement about whether
+    anyone had judged the protocol fit to run.
+
+    The answer now comes from the same place it comes from for every other
+    protocol: the catalog entry materialized from this exact fixture, which is
+    executable only when a recorded development activation stands *and* every
+    blocking readiness reason is either absent or cleared by a person.  It is
+    additionally gated on a non-operational usage scope, which the
+    activate-development endpoint already required and this path did not.
+
+    Anything that cannot be read is a no.  A disabled store, a missing entry,
+    a fixture the store does not match -- none of those are reasons to assume
+    yes, because a fixture whose authority cannot be read has no authority.
+    """
+
+    state:dict[str,object]={
+        "available_for_execution":False,
+        "blocked_reason":"development_activation_not_recorded",
+        "development_activation":{
+            "activated":False,
+            "actor_principal_id":None,
+            "actor_role":None,
+            "recorded_at":None,
+            "authority":None,
+        },
+        "approval":{
+            "status":"review_required",
+            "final_approval":False,
+            "actor_principal_id":None,
+            "actor_role":None,
+            "recorded_at":None,
+            "authority":None,
+        },
+    }
+    if not _development_activation_allowed():
+        state["blocked_reason"]="usage_scope_not_development"
+        return state
+    settings=_protocol_store_settings()
+    if not settings.enabled:
+        state["blocked_reason"]="protocol_store_disabled"
+        return state
+    try:
+        catalog,store=_open_protocol_catalog()
+    except Exception:  # noqa: BLE001 - an unreadable catalog grants nothing
+        state["blocked_reason"]="protocol_catalog_unavailable"
+        return state
+    try:
+        if not catalog.development_fixture_is_materialized(fixture):
+            state["blocked_reason"]="development_fixture_not_materialized"
+            return state
+        entry=catalog.get_entry(fixture.protocol_id)
+        state["development_activation"]=catalog.development_activation_context(
+            fixture.protocol_id)
+        state["approval"]=catalog.approval_context(fixture.protocol_id)
+        state["available_for_execution"]=bool(entry.available_for_execution)
+        if entry.available_for_execution:
+            state["blocked_reason"]=None
+        elif state["development_activation"].get("activated"):
+            state["blocked_reason"]="readiness_gates_blocked"
+    except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
+        state["available_for_execution"]=False
+        state["blocked_reason"]="protocol_catalog_unavailable"
+    finally:
+        store.close()
+    return state
+
+
 def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
+    execution=_candidate_fixture_execution_state(fixture)
     return {
         "protocol_id":fixture.protocol_id,
         "title":fixture.title,
@@ -1287,20 +1365,17 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "source_sha256":fixture.source_pdf_sha256,
         "revision_id":fixture.revision_id,
         "readiness_status":fixture.draft.readiness.status.value,
-        "approval_status":"development_only_not_final_acceptance",
+        "approval_status":(
+            "development_only_not_final_acceptance"
+            if execution["available_for_execution"] else "unapproved"),
         "analysis_status":"validated_curated_fixture",
         "step_count":len(fixture.steps),
         "created_at":None,
-        "available_for_execution":True,
+        "available_for_execution":execution["available_for_execution"],
         "development_only":True,
-        "approval":{
-            "status":"development_only",
-            "final_approval":False,
-            "actor_principal_id":None,
-            "actor_role":None,
-            "recorded_at":None,
-            "authority":"development_fixture",
-        },
+        "development_activation":execution["development_activation"],
+        "execution_blocked_reason":execution["blocked_reason"],
+        "approval":execution["approval"],
     }
 
 
@@ -3789,6 +3864,32 @@ def approve_protocol_revision(
         raise _catalog_http_error(exc) from exc
 
 
+def _development_activation_actor() -> tuple[str | None, str | None]:
+    """Name the person taking a development decision, or refuse to take it.
+
+    An activation is the recorded authority that makes a blocked draft
+    runnable, so "who" is not decoration.  Where a workspace is configured the
+    principal is required and must hold the review permission; where none is
+    configured -- a single-operator development host -- the actor is recorded
+    as unattributed rather than invented.
+    """
+
+    if not _workspace_settings().enabled:
+        return None, None
+    actor = _REQUEST_PRINCIPAL.get()
+    if actor is None:
+        raise AuthenticationRequiredError("Authentication is required.")
+    require_permission(actor, Permission.PROTOCOL_REVIEW)
+    role = next(
+        (
+            item.value for item in actor.roles
+            if item.value in {"reviewer", "lab_admin", "organization_admin"}
+        ),
+        None,
+    )
+    return actor.principal_id, role
+
+
 @app.post("/api/protocols/{protocol_id}/activate-development")
 def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
     """Explicit developer action promoting an analyzed protocol draft to active development execution."""
@@ -3799,15 +3900,60 @@ def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
         )
     try:
         _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _development_activation_actor()
         catalog, store = _open_protocol_catalog()
         try:
-            entry = catalog.activate_development(protocol_id)
+            entry = catalog.activate_development(
+                protocol_id,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+            )
             return {
                 "protocol_id": protocol_id,
                 "status": "active_development",
                 "development_only": True,
                 "available_for_execution": entry.available_for_execution,
+                "development_activation": catalog.development_activation_context(
+                    protocol_id
+                ),
                 "message": "Protocol draft activated for development session.",
+            }
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/deactivate-development")
+def deactivate_protocol_for_development(protocol_id: str) -> dict[str, object]:
+    """Withdraw a development activation; the draft stops being executable."""
+
+    if not _development_activation_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail="development_activation_not_allowed",
+        )
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _development_activation_actor()
+        catalog, store = _open_protocol_catalog()
+        try:
+            entry = catalog.deactivate_development(
+                protocol_id,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+            )
+            return {
+                "protocol_id": protocol_id,
+                "status": "development_activation_withdrawn",
+                "development_only": True,
+                "available_for_execution": entry.available_for_execution,
+                "development_activation": catalog.development_activation_context(
+                    protocol_id
+                ),
+                "message": "Development activation withdrawn.",
             }
         finally:
             store.close()
@@ -8162,10 +8308,23 @@ async def voice_socket(websocket:WebSocket):
                                     trusted_config.curated_protocol_source_pdf_path,
                                 )
                                 if curated_fixture.protocol_id==requested_protocol_id:
-                                    selected_curated_fixture=curated_fixture
-                                    selected_revision_id=getattr(
-                                        curated_fixture,"revision_id",
-                                        f"fixture-{requested_protocol_id}")
+                                    # Being the configured fixture says which
+                                    # file was loaded, not that anyone judged
+                                    # it fit to run.  This branch used to hand
+                                    # the fixture straight to a voice session
+                                    # with every readiness gate blocked; it now
+                                    # asks the same question the catalog branch
+                                    # below asks, and refuses on the same terms.
+                                    if _candidate_fixture_execution_state(
+                                        curated_fixture,
+                                    )["available_for_execution"]:
+                                        selected_curated_fixture=curated_fixture
+                                        selected_revision_id=getattr(
+                                            curated_fixture,"revision_id",
+                                            f"fixture-{requested_protocol_id}")
+                                    else:
+                                        selection_failure=(
+                                            "protocol_selection_unavailable")
                             if selected_curated_fixture is None:
                                 # The shared curated development fixture is not
                                 # tenant-owned and is exempt above; every other
@@ -8210,7 +8369,11 @@ async def voice_socket(websocket:WebSocket):
                                         f"{definitions[requested_protocol_id].version}")
                             if (selected_curated_fixture is None and
                                     selected_procedure_definitions is None):
-                                selection_failure=(
+                                # A refusal already recorded upstream is the
+                                # true one.  Overwriting it made a protocol the
+                                # server knows about, and is declining to run,
+                                # report itself as unknown.
+                                selection_failure=selection_failure or (
                                     "protocol_selection_unknown"
                                     if (trusted_config.curated_protocol_fixture_path or
                                         trusted_config.procedure_catalog_path)

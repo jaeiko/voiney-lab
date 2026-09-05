@@ -130,6 +130,7 @@ _SINGLE_REVIEW_REQUIRED_EVENT = "protocol_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 _DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
+_DEVELOPMENT_DEACTIVATION_EVENT = "protocol_development_deactivated"
 _OCR_REQUESTED_EVENT = "protocol_ocr_requested"
 _OCR_COMPLETED_EVENT = "protocol_ocr_completed"
 _OCR_FAILED_EVENT = "protocol_ocr_failed"
@@ -816,19 +817,45 @@ class ProtocolCatalog:
         revision: ProtocolRevisionRecord,
         analysis: AnalysisRevisionRecord | None,
     ) -> bool:
+        """Whether a recorded authority stands for this exact analysis.
+
+        A development activation can be withdrawn, and a withdrawn one must
+        stop granting execution the moment it is withdrawn -- otherwise
+        "activate" would be a one-way door and the ledger would record a
+        decision nobody could take back.  So development events are read in
+        order and only the last one counts.  A service approval is not
+        withdrawable here and keeps its existing meaning.
+        """
+
         if analysis is None:
             return False
-        return any(
-            event.event_type in (_APPROVAL_EVENT, _DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
-            and event.protocol_revision_number == revision.revision_number
-            and (
+        development_decision: str | None = None
+        for event in self.store.list_events(revision.experiment_id):
+            if event.protocol_revision_number != revision.revision_number:
+                continue
+            if not isinstance(event.payload, dict):
+                continue
+            if not (
                 event.analysis_revision_number is None
-                or event.analysis_revision_number == analysis.analysis_revision_number
-            )
-            and isinstance(event.payload, dict)
-            and event.payload.get("decision") in ("approved", "development_activated", "development_only")
-            for event in self.store.list_events(revision.experiment_id)
-        )
+                or event.analysis_revision_number
+                == analysis.analysis_revision_number
+            ):
+                continue
+            decision = event.payload.get("decision")
+            if (
+                event.event_type == _APPROVAL_EVENT
+                and decision == "approved"
+            ):
+                return True
+            if event.event_type == _DEVELOPMENT_ACTIVATION_EVENT and (
+                decision == "development_activated"
+            ):
+                development_decision = "activated"
+            elif event.event_type == _DEVELOPMENT_DEACTIVATION_EVENT and (
+                decision == "development_deactivated"
+            ):
+                development_decision = "withdrawn"
+        return development_decision == "activated"
 
     def approval_context(self, protocol_id: str) -> dict[str, object]:
         """Return the recorded approval actor and time without adding authority.
@@ -1319,7 +1346,23 @@ class ProtocolCatalog:
         self,
         fixture: CuratedProtocolFixture,
     ) -> bool:
-        """Verify the exact development-only provenance marker in the store."""
+        """Verify the exact development-only provenance marker in the store.
+
+        The question is identity, not uniqueness.  Asking whether the protocol
+        carried exactly one analysis revision made an ordinary event -- editing
+        the fixture, whose hash then names a second analysis at the next
+        bootstrap -- indistinguishable from a corrupted store, and from
+        2026-09-04 the whole catalog listing failed with a 503 for that reason
+        alone.  A second analysis revision is what an append-only ledger is
+        supposed to accumulate.
+
+        What has to hold is that the analysis this exact fixture materializes
+        exists, still carries the fixture's own content, and is the one the
+        catalog would serve.  An analysis that does not match is not tolerated
+        by being ignored: if the latest analysis is not this fixture's, the
+        answer is False, because then the reader and the fixture disagree about
+        what this protocol is.
+        """
 
         if not fixture.development_only:
             return False
@@ -1329,13 +1372,11 @@ class ProtocolCatalog:
         revision = revisions[0]
         if revision.pdf_checksum != fixture.source_pdf_sha256:
             return False
-        analyses = self.store.list_analysis_revisions(
-            fixture.protocol_id,
-            revision.revision_number,
-        )
-        if len(analyses) != 1:
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
             return False
-        analysis = analyses[0]
+        if analysis.analysis_id != f"curated-{fixture.fixture_sha256}":
+            return False
         if (
             analysis.protocol != fixture.draft.protocol
             or analysis.readiness != fixture.draft.readiness
@@ -3052,12 +3093,45 @@ class ProtocolCatalog:
         )
         return self.get_entry(protocol_id)
 
+    def _development_activation_ordinal(
+        self,
+        protocol_id: str,
+        protocol_revision_number: int,
+        analysis_revision_number: int,
+    ) -> int:
+        """How many activation decisions this analysis already has, plus one.
+
+        The ledger refuses to reuse an identifier for different content, so an
+        activation that follows a withdrawal needs a fresh one.
+        """
+
+        return 1 + sum(
+            1
+            for event in self.store.list_events(protocol_id)
+            if event.event_type
+            in (_DEVELOPMENT_ACTIVATION_EVENT, _DEVELOPMENT_DEACTIVATION_EVENT)
+            and event.protocol_revision_number == protocol_revision_number
+            and event.analysis_revision_number == analysis_revision_number
+        )
+
     def activate_development(
         self,
         protocol_id: str,
         *,
         revision_id: str | None = None,
+        actor_principal_id: str | None = None,
+        actor_role: str | None = None,
+        comment: str | None = None,
     ) -> ProtocolCatalogEntry:
+        """Record a person putting one analysed draft into development execution.
+
+        This is the only way a Protocol becomes executable without a service
+        approval, and it is deliberately not a shortcut around readiness: the
+        analysis must already be guidance-ready, or every blocking reason must
+        already carry a person's recorded clearance.  What activation supplies
+        is the missing authority, not a missing judgement.
+        """
+
         revision = self._latest_protocol_revision(protocol_id)
         analysis = self._latest_analysis(revision)
         if analysis is None:
@@ -3071,8 +3145,14 @@ class ProtocolCatalog:
                 raise ProtocolCatalogUnavailableError(
                     f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
                 )
+        ordinal = self._development_activation_ordinal(
+            protocol_id, revision.revision_number, analysis.analysis_revision_number
+        )
         self.store.append_event(
-            f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-{analysis.analysis_revision_number}",
+            (
+                f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-"
+                f"{analysis.analysis_revision_number}-{ordinal}"
+            ),
             protocol_id,
             revision.revision_number,
             _DEVELOPMENT_ACTIVATION_EVENT,
@@ -3080,10 +3160,107 @@ class ProtocolCatalog:
                 "decision": "development_activated",
                 "authority": "development_policy",
                 "readiness": analysis.readiness.status.value,
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Development activation.")[:4000],
             },
             analysis_revision_number=analysis.analysis_revision_number,
         )
         return self.get_entry(protocol_id)
+
+    def deactivate_development(
+        self,
+        protocol_id: str,
+        *,
+        actor_principal_id: str | None = None,
+        actor_role: str | None = None,
+        comment: str | None = None,
+    ) -> ProtocolCatalogEntry:
+        """Withdraw a development activation, which blocks execution again."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol analysis is required before development activation."
+            )
+        if not self._is_approved(revision, analysis):
+            raise ProtocolApprovalError(
+                "This analysis revision carries no development activation to withdraw."
+            )
+        ordinal = self._development_activation_ordinal(
+            protocol_id, revision.revision_number, analysis.analysis_revision_number
+        )
+        self.store.append_event(
+            (
+                f"dev-inactive-{protocol_id[-16:]}-{revision.revision_number}-"
+                f"{analysis.analysis_revision_number}-{ordinal}"
+            ),
+            protocol_id,
+            revision.revision_number,
+            _DEVELOPMENT_DEACTIVATION_EVENT,
+            {
+                "decision": "development_deactivated",
+                "authority": "development_policy",
+                "actor_principal_id": actor_principal_id,
+                "actor_role": actor_role,
+                "comment": (comment or "Development activation withdrawn.")[:4000],
+            },
+            analysis_revision_number=analysis.analysis_revision_number,
+        )
+        return self.get_entry(protocol_id)
+
+    def development_activation_context(
+        self, protocol_id: str
+    ) -> dict[str, object]:
+        """Project who activated this protocol for development, and when.
+
+        Read-only. It adds no authority; it reports the standing decision in
+        the append-only ledger so a reader can see that an executable draft is
+        executable because a named person said so, and when.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        standing = None
+        if analysis is not None:
+            for event in self.store.list_events(protocol_id):
+                if event.protocol_revision_number != revision.revision_number:
+                    continue
+                if (
+                    event.analysis_revision_number
+                    != analysis.analysis_revision_number
+                ):
+                    continue
+                if event.event_type in (
+                    _DEVELOPMENT_ACTIVATION_EVENT,
+                    _DEVELOPMENT_DEACTIVATION_EVENT,
+                ):
+                    standing = event
+        activated = (
+            standing is not None
+            and standing.event_type == _DEVELOPMENT_ACTIVATION_EVENT
+        )
+        payload = (
+            standing.payload
+            if standing is not None and isinstance(standing.payload, dict)
+            else {}
+        )
+        actor_principal_id = payload.get("actor_principal_id")
+        actor_role = payload.get("actor_role")
+        return {
+            "activated": activated,
+            "actor_principal_id": (
+                actor_principal_id
+                if isinstance(actor_principal_id, str) and actor_principal_id
+                else None
+            ),
+            "actor_role": (
+                actor_role if isinstance(actor_role, str) and actor_role else None
+            ),
+            "recorded_at": standing.recorded_at if standing is not None else None,
+            "authority": "development_policy" if activated else None,
+        }
 
     def load_executable_fixture(
         self, protocol_id: str

@@ -21,6 +21,7 @@ from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEve
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
+from tests.development_activation import development_activation_recorded
 
 class FakeResponse:
     def __init__(self,content=b"",status=200,content_type="audio/pcm"):
@@ -692,7 +693,13 @@ class ServerTests(unittest.TestCase):
             "voice_workflow_agent.server.ProcedureStore",
         ) as procedure_store, patch(
             "voice_workflow_agent.server.load_procedure_definitions",
-        ) as procedure_loader:
+        ) as procedure_loader, development_activation_recorded():
+            # "Without persistence" is about the *session* not being written
+            # down, not about the protocol's authority.  Since STEP 23 a
+            # configured fixture is selectable only when a recorded
+            # development activation stands; that gate is asserted in
+            # tests/test_development_activation_gate.py and stepped around
+            # here so this test keeps testing what it is named for.
             asyncio.run(voice_socket(socket))
         ready=next(item for item in socket.sent if item["type"]=="session.ready")
         self.assertEqual({key:ready[key] for key in (

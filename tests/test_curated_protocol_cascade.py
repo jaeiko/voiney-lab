@@ -60,6 +60,8 @@ from voice_workflow_agent.server import (
 from voice_workflow_agent.tools import ToolContext
 from voice_workflow_agent.vad import EndpointDetector, TurnState
 
+from tests.development_activation import development_activation_recorded
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
@@ -4075,6 +4077,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             [(action, fact_id) for action, _, _, _, fact_id in expected],
         )
 
+    maxDiff = None
+
     def test_acknowledged_real_fixture_sequence_stays_inside_curated_boundary(self):
         configuration_id = 71
         config = ServerConfig(
@@ -4204,7 +4208,11 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ), patch(
             "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
-        ):
+        ), development_activation_recorded():
+            # This test is about what the curated boundary does once a session
+            # is running.  Selecting the fixture at all now needs a recorded
+            # development activation, which the in-gel fixture cannot earn:
+            # see tests/development_activation.
             asyncio.run(scenario())
 
         procedure_store.assert_not_called()
@@ -4417,7 +4425,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             side_effect=AssertionError(
                 "legacy procedure catalog must not be loaded when a "
                 "curated protocol was selected"),
-        ) as load_definitions:
+        ) as load_definitions, development_activation_recorded():
+            # The assertion here is that the curated selection wins over the
+            # legacy procedure stack; reaching that selection needs a recorded
+            # development activation, which is stepped around, not weakened.
             asyncio.run(scenario())
 
         procedure_store.assert_not_called()
