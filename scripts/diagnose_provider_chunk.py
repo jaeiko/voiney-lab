@@ -22,6 +22,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from voice_workflow_agent.chunk_analysis_cache import (
+    ChunkAnalysisCache,
+    key_for_chunk,
+)
 from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
 from voice_workflow_agent.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
@@ -63,6 +67,18 @@ def _request(extraction, chunk):
         ordinal=chunk.ordinal,
         core_page_refs=chunk.core_page_refs,
         context_page_refs=chunk.overlap_page_refs,
+    )
+
+
+def _cache_hit(cache, extraction, chunk, scoped, request):
+    """A previously validated chunk, put back through the current rules."""
+
+    if cache is None:
+        return None
+    return cache.load(
+        key_for_chunk(extraction, chunk),
+        extraction=scoped,
+        request=request,
     )
 
 
@@ -155,6 +171,13 @@ def main() -> int:
     # here. Not doing this is why the first in-gel run could not be merged
     # without paying for the calls again.
     parser.add_argument("--walk", action="store_true")
+    # A chunk that already passed validation does not have to be paid for
+    # again. Merge needs every chunk at once, so without this a document with
+    # more chunks than remaining budget could not be closed at any budget --
+    # arithmetic, not model quality. A cached chunk is revalidated under the
+    # current rules before it is used; see chunk_analysis_cache.
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--no-cache", action="store_true")
     arguments = parser.parse_args()
 
     if len(arguments.chunk) > arguments.budget:
@@ -164,6 +187,7 @@ def main() -> int:
         )
 
     extraction, plan = _plan(arguments.source)
+    cache = None if arguments.no_cache else ChunkAnalysisCache(arguments.cache_dir)
     report: dict[str, object] = {
         "source": arguments.source.name,
         "source_sha256": extraction.sha256,
@@ -173,9 +197,13 @@ def main() -> int:
         "chunk_count": len(plan.chunks),
         "requested_chunks": arguments.chunk,
         "calls_sent": 0,
+        "cache_enabled": cache is not None,
+        "cache_root": str(cache.root) if cache is not None else None,
+        "cache_hits": [],
         "results": [],
     }
     validated: list[ValidatedChunkResult] = []
+    from_cache: dict[str, str] = {}
     selected = [c for c in plan.chunks if c.ordinal in set(arguments.chunk)]
     if len(selected) != len(set(arguments.chunk)):
         raise SystemExit("a requested chunk ordinal does not exist")
@@ -220,9 +248,26 @@ def main() -> int:
     ) as client:
         for chunk in selected:
             scoped, request = _request(extraction, chunk)
+            hit = _cache_hit(cache, extraction, chunk, scoped, request)
+            if hit is not None:
+                validated.append(ValidatedChunkResult(chunk, hit.analysis))
+                from_cache[chunk.chunk_id] = hit.key_digest
+                report["cache_hits"].append(
+                    {"chunk": chunk.ordinal, "key_digest": hit.key_digest}
+                )
+                report["results"].append(
+                    {
+                        "chunk": chunk.ordinal,
+                        "core_pages": list(chunk.core_page_refs),
+                        "source": "cache",
+                        "canonical_validation": "revalidated",
+                    }
+                )
+                continue
             entry: dict[str, object] = {
                 "chunk": chunk.ordinal,
                 "core_pages": list(chunk.core_page_refs),
+                "source": "provider",
             }
             started = time.monotonic()
             try:
@@ -295,9 +340,41 @@ def main() -> int:
             else:
                 entry["canonical_validation"] = "passed"
                 validated.append(ValidatedChunkResult(chunk, analysis))
+                if cache is not None:
+                    try:
+                        path = cache.store(
+                            key_for_chunk(extraction, chunk), raw
+                        )
+                    except Exception as error:  # noqa: BLE001 - never fatal
+                        entry["cache_write"] = type(error).__name__
+                    else:
+                        entry["cache_write"] = "stored"
+                        entry["cache_key_digest"] = path.stem
             report["results"].append(entry)
 
+    if cache is not None:
+        have = {result.chunk.chunk_id for result in validated}
+        for chunk in plan.chunks:
+            if chunk.chunk_id in have:
+                continue
+            scoped, request = _request(extraction, chunk)
+            hit = _cache_hit(cache, extraction, chunk, scoped, request)
+            if hit is None:
+                continue
+            validated.append(ValidatedChunkResult(chunk, hit.analysis))
+            from_cache[chunk.chunk_id] = hit.key_digest
+            report["cache_hits"].append(
+                {"chunk": chunk.ordinal, "key_digest": hit.key_digest}
+            )
+    report["validated_chunks"] = sorted(r.chunk.ordinal for r in validated)
+    report["validated_from_cache"] = sorted(
+        r.chunk.ordinal for r in validated if r.chunk.chunk_id in from_cache
+    )
+
     if arguments.walk and len(validated) == len(plan.chunks):
+        # Merge is order-sensitive; a cache fill appends out of plan order.
+        order = {chunk.chunk_id: chunk.ordinal for chunk in plan.chunks}
+        validated.sort(key=lambda result: order[result.chunk.chunk_id])
         report["walk"] = _walk(arguments.source, extraction, plan, validated)
     elif arguments.walk:
         report["walk"] = {

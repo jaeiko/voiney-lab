@@ -100,6 +100,32 @@ class StepComparison:
     def values_match(self) -> bool:
         return self.reference_values == self.candidate_values
 
+    @property
+    def value_outcome(self) -> str:
+        """Whether the values disagree, agree, or cannot be judged here.
+
+        Strict equality alone conflates two different things. A candidate that
+        reads ``50min`` where the reference reads ``15min`` has got a value
+        wrong. A candidate that reads ``1000ul`` on a step the reference is
+        silent about may well be right -- measured on in-gel, the source pages
+        carry three values the reference never states (a 20 minute duration,
+        1000ul and 50ul), so silence there is a gap in the reference, not an
+        error in the candidate.
+
+        Scoring the second as a mismatch would charge a candidate for the
+        reference's own incompleteness, and would move the number in the wrong
+        direction as extraction improves. It is reported as unscorable
+        instead, and counted separately.
+        """
+
+        if self.reference_values == self.candidate_values:
+            return "matching"
+        for kind, values in self.reference_values.items():
+            candidate = self.candidate_values.get(kind, ())
+            if any(value not in candidate for value in values):
+                return "contradicted"
+        return "reference_silent"
+
 
 @dataclass(frozen=True)
 class AccuracyReport:
@@ -129,6 +155,24 @@ class AccuracyReport:
     def steps_with_matching_values(self) -> int:
         return sum(1 for item in self.compared if item.values_match)
 
+    @property
+    def steps_with_contradicted_values(self) -> int:
+        """Steps where a value the reference states is not in the candidate."""
+
+        return sum(
+            1 for item in self.compared if item.value_outcome == "contradicted"
+        )
+
+    @property
+    def steps_unscorable_on_values(self) -> int:
+        """Steps where the candidate states a value the reference does not."""
+
+        return sum(
+            1
+            for item in self.compared
+            if item.value_outcome == "reference_silent"
+        )
+
     def public_dict(self) -> dict[str, object]:
         return {
             "measure": "extraction_accuracy",
@@ -145,6 +189,10 @@ class AccuracyReport:
             "mean_text_similarity": round(self.mean_text_similarity, 4),
             "steps_compared": len(self.compared),
             "steps_with_matching_values": self.steps_with_matching_values,
+            "steps_with_contradicted_values": (
+                self.steps_with_contradicted_values
+            ),
+            "steps_unscorable_on_values": self.steps_unscorable_on_values,
             "reference_notes": list(self.reference_notes),
         }
 

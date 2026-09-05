@@ -21,12 +21,14 @@ allowed to become canonical evidence.  See ``verify_page_text``.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
 import re
 import stat
 import subprocess
+import sys
 import threading
 import unicodedata
 from collections import Counter, OrderedDict
@@ -36,7 +38,6 @@ from enum import Enum
 from pathlib import Path
 from typing import BinaryIO
 
-import pypdfium2
 from pypdf import PdfReader
 from pypdf.errors import (
     FileNotDecryptedError,
@@ -46,26 +47,30 @@ from pypdf.errors import (
 )
 
 
+
 PDF_MEDIA_TYPE = "application/pdf"
 MAX_PROTOCOL_PDF_BYTES = 64 * 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
-# PDFium is not thread-safe, and not in the ordinary "share a document
-# carefully" sense.  pypdfium2 states that no two pdfium calls may run at the
-# same time -- "not even with different documents" -- and that overlapping
-# calls "crash or corrupt the process", naming a mutex as what makes
-# concurrent use legal at all.  FastAPI runs a synchronous endpoint in an
-# AnyIO worker thread, so two reviewers opening the same protocol is enough to
-# overlap two calls, and that is what killed the server on 2026-09-04 and
-# again on 2026-09-05: one abort, one segfault, both inside libpdfium.so on an
-# AnyIO worker thread.  Differing signals on one code path is memory
-# corruption, not a condition anything downstream could have caught.
+# pdfium runs in a child process.  STEP 23 serialized the calls, which
+# removed the one cause there was evidence for -- pypdfium2 states that no two
+# pdfium calls may run at once, "not even with different documents" -- but two
+# crashes with two different signals is memory corruption, and serializing
+# calls does not remove that class.  A build made ``-fno-exceptions`` cannot
+# be made to fail closed from inside; it can only be put where its failure is
+# a failed request.  See pdf_text_worker.
 #
-# Every pdfium call in this process is serialized here.  The lock is held
-# across the whole document lifetime rather than per call, because a page and
-# its text page belong to a document another thread must not be touching
-# meanwhile.  It is re-entrant so that nesting one extraction inside another
-# would block on nothing; nothing nests today.
-_PDFIUM_LOCK = threading.RLock()
+# Timeout: the largest local source (48.9 MB, 40 pages) extracts in 1.25 s, so
+# 30 s is roughly twenty-four times the measured worst case.  It also sits
+# above the 16 s that the one reproduced crash took to die, so a genuinely
+# slow parse is not cut short and mistaken for the fault.
+#
+# Address space: peak RSS for that same document is 108 MB, and it completed
+# under a 200 MB cap when that was measured directly, so 1 GiB leaves roughly
+# nine times the observed need while still killing a runaway long before a
+# 4 GB machine is in trouble.
+PDF_WORKER_TIMEOUT_SECONDS = 30.0
+PDF_WORKER_ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024
+_MAX_WORKER_OUTPUT_BYTES = 96 * 1024 * 1024
 _METADATA_FIELDS = {
     "title": "/Title",
     "author": "/Author",
@@ -105,6 +110,22 @@ class ProtocolPdfMalformedError(ProtocolPdfError):
 
 class ProtocolPdfEncryptedError(ProtocolPdfError):
     code = "protocol_pdf_encrypted"
+
+
+class ProtocolPdfWorkerError(ProtocolPdfError):
+    """The parser process did not come back with a result.
+
+    Deliberately not a ``ProtocolPdfMalformedError``.  A worker that died took
+    the parser with it, and calling that a malformed document would put the
+    blame on the source, hide a library fault behind a document fault, and
+    make the reason a reader is given for a refusal untrue.
+    """
+
+    code = "protocol_pdf_worker_failed"
+
+
+class ProtocolPdfWorkerTimeoutError(ProtocolPdfWorkerError):
+    code = "protocol_pdf_worker_timeout"
 
 
 class ProtocolPdfChangedError(ProtocolPdfError):
@@ -604,41 +625,78 @@ def _open_reader(stream: BinaryIO) -> PdfReader:
 
 
 def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
-    """Read page text with the primary engine; None marks an unreadable page.
+    """Page text from a child process, or a specific error if it died.
 
-    This is the only function in the process that touches pdfium, and it does
-    so entirely under ``_PDFIUM_LOCK``.  See that lock's comment for why the
-    library permits no overlap at all.
+    The child is a fresh interpreter used for exactly one document and then
+    gone, so a heap that one document damaged cannot survive into the next.
+
+    A worker that dies raises.  Returning "every page unreadable" here would
+    turn a crashed parser into a document that simply has no text, and
+    readiness would then be reasoning about a Protocol whose source it never
+    read -- fail dead wearing the clothes of fail closed.
     """
 
-    texts: list[str | None] = [None] * page_count
-    with _PDFIUM_LOCK:
-        document = None
-        try:
-            document = pypdfium2.PdfDocument(path)
-            available = min(page_count, len(document))
-            for page_index in range(available):
-                try:
-                    page = document[page_index]
-                    text = page.get_textpage().get_text_range()
-                    # Line-ending convention only.  PDF has no line terminators
-                    # of its own; pypdfium2 renders CRLF while every other
-                    # engine and every stored excerpt uses LF.  No character of
-                    # content is added, removed, or substituted here.
-                    texts[page_index] = text.replace("\r\n", "\n").replace(
-                        "\r", "\n"
-                    )
-                except Exception:  # noqa: BLE001 - one bad page must not lose the rest
-                    texts[page_index] = None
-        except Exception:  # noqa: BLE001 - fall through with every page unreadable
-            pass
-        finally:
-            if document is not None:
-                try:
-                    document.close()
-                except Exception:  # noqa: BLE001
-                    pass
-    return texts
+    request = json.dumps(
+        {
+            "path": str(path),
+            "page_count": page_count,
+            "address_space_bytes": PDF_WORKER_ADDRESS_SPACE_BYTES,
+        }
+    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "voice_workflow_agent.pdf_text_worker",
+            ],
+            input=request.encode("utf-8"),
+            capture_output=True,
+            timeout=PDF_WORKER_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise _safe_error(
+            ProtocolPdfWorkerTimeoutError,
+            "Protocol PDF text extraction exceeded its time limit.",
+        ) from error
+    except OSError as error:
+        raise _safe_error(
+            ProtocolPdfWorkerError,
+            "Protocol PDF text extraction could not be started.",
+        ) from error
+    if completed.returncode != 0:
+        # A negative return code is a signal: this is the crash the boundary
+        # exists for, and it is reported as itself.
+        raise _safe_error(
+            ProtocolPdfWorkerError,
+            "Protocol PDF text extraction did not complete.",
+        )
+    if len(completed.stdout) > _MAX_WORKER_OUTPUT_BYTES:
+        raise _safe_error(
+            ProtocolPdfWorkerError,
+            "Protocol PDF text extraction returned an unusable result.",
+        )
+    try:
+        payload = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise _safe_error(
+            ProtocolPdfWorkerError,
+            "Protocol PDF text extraction returned an unusable result.",
+        ) from error
+    texts = payload.get("page_texts") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "ok"
+        or not isinstance(texts, list)
+        or len(texts) != page_count
+        or any(item is not None and not isinstance(item, str) for item in texts)
+    ):
+        raise _safe_error(
+            ProtocolPdfWorkerError,
+            "Protocol PDF text extraction returned an unusable result.",
+        )
+    return list(texts)
 
 
 def _extract_pages(

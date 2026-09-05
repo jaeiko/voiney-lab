@@ -20,6 +20,10 @@ ANKOM = Path(
     "/5367ca6bfae9fe9bbaeac9dab2099276a9c2dccf6c698ee36e59c7552e56d18a.pdf"
 )
 INTRACELLULAR = Path("intracellularmetaboliteextraction.pdf")
+HEADSPACE = Path("usingdynamicheadspacecollections.pdf")
+CANDIDATE_A = Path(
+    "data/runtime/candidate-a-source/in-gel-digestion.pdf"
+)
 INTRACELLULAR_SHA256 = (
     "997d020c11ba915621b9705de9c4a92330f843c8feff4e2d1099dca763fdb9f0"
 )
@@ -133,8 +137,16 @@ class LocalSourceTriggerTests(unittest.TestCase):
         )
         self.assertEqual(dropped, 24)
 
-    def test_what_the_narrowing_leaves_behind(self) -> None:
-        """Nine line-anchored labels remain, and none is an execution step."""
+    def test_the_hierarchically_numbered_procedure_is_now_visible(self) -> None:
+        """What this document actually numbers, once "3.2" counts as a label.
+
+        Until STEP 24 the trigger read only a bare integer, so the nine labels
+        it found here were headings and contents entries and the entire
+        procedure was invisible: every instruction begins "3.2", "3.4", "4.1".
+        The bare integers are still here -- they are still headings -- and
+        twenty hierarchical labels have joined them, each one the start of an
+        instruction.
+        """
 
         extraction = _intracellular()
         remaining = {
@@ -146,12 +158,72 @@ class LocalSourceTriggerTests(unittest.TestCase):
             remaining,
             {
                 4: ("1", "2", "3"),
-                13: ("4",),
-                18: ("1",),
-                19: ("2",),
+                5: ("3.2", "3.3"),
+                6: ("3.4",),
+                7: ("3.5", "3.6", "3.7"),
+                8: ("3.8",),
+                9: ("3.9", "3.10"),
+                12: ("3.11",),
+                13: ("3.12", "4"),
+                14: ("4.1", "4.2"),
+                18: ("4.3", "1"),
+                19: ("2", "4.4"),
+                20: ("4.5",),
+                22: ("4.6",),
+                27: ("4.7",),
                 30: ("5", "1", "2"),
+                31: ("5.1",),
+                32: ("5.2",),
             },
         )
+        hierarchical = [
+            label
+            for labels in remaining.values()
+            for label in labels
+            if "." in label
+        ]
+        self.assertEqual(len(hierarchical), 20)
+
+    def test_a_sub_numbered_note_under_its_own_step_is_not_a_step(self) -> None:
+        """headspace numbers notes under the step they belong to.
+
+        "6.1 While we use LB as the primary medium..." sits under "6 Transfer
+        10 mL of autoclaved LB...", and "18.1 Equation for working out dilution
+        volume" under step 18. Both are line-anchored hierarchical numbers and
+        neither is an instruction. They are told apart from a real "3.4" by one
+        structural fact -- whether the parent number is itself a label on this
+        page -- and never by reading the line.
+        """
+
+        if not HEADSPACE.is_file():
+            raise unittest.SkipTest(
+                f"{HEADSPACE.name} is not present in the working tree; it is "
+                f"a 5 MB source that is deliberately not committed."
+            )
+        extraction = extract_protocol_pdf(HEADSPACE)
+        labels = {
+            p.source_page_number: _numbered_step_labels(p.text)
+            for p in extraction.pages
+        }
+        self.assertIn("6", labels[4])
+        self.assertNotIn("6.1", labels[4])
+        self.assertIn("18", labels[5])
+        self.assertNotIn("18.1", labels[5])
+        self.assertEqual(sum(len(v) for v in labels.values()), 61)
+
+    def test_the_documents_with_no_hierarchical_numbering_are_untouched(self):
+        """in-gel is the accuracy reference, so its count must not move."""
+
+        for source, expected in ((ANKOM, 67), (CANDIDATE_A, 25)):
+            with self.subTest(source=source.name):
+                extraction = extract_protocol_pdf(source)
+                labels = [
+                    label
+                    for page in extraction.pages
+                    for label in _numbered_step_labels(page.text)
+                ]
+                self.assertEqual(len(labels), expected)
+                self.assertFalse([label for label in labels if "." in label])
 
 
 class FixtureScopeTests(unittest.TestCase):

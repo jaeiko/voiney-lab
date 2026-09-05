@@ -1,4 +1,4 @@
-"""Every pdfium call in this process is serialized, and nothing routes around it.
+"""pdfium runs in a child process, and nothing routes around that boundary.
 
 pypdfium2 documents that pdfium is "inherently not thread-safe", that no two
 pdfium calls may run at once -- "not even with different documents" -- and that
@@ -7,16 +7,21 @@ endpoint in an AnyIO worker thread, so two reviewers opening the same protocol
 overlapped two calls and the server died twice: SIGABRT on 2026-09-04 and
 SIGSEGV on 2026-09-05, both inside ``libpdfium.so`` on an AnyIO worker thread.
 
-Two things are pinned here.  The first is structural, derived from the module's
-own syntax tree rather than from a grep: pdfium is named in exactly one module,
-inside exactly one function, and that function's body lies entirely inside the
-lock.  The second is behavioural: under real concurrency the lock is actually
-taken, contended, and never held by two threads at once.
+STEP 23 serialized the calls, which removed the one cause there was evidence
+for.  STEP 24 moved the parse out of the server process entirely, because two
+crashes with two different signals is memory corruption and no amount of
+serializing removes that class -- a build made ``-fno-exceptions`` cannot be
+made to fail closed from inside.
 
-The behavioural test measures the *lock*, not a crash.  A memory-safety fault
-is intermittent -- one reproduction in more than a hundred attempts -- so
-asserting "no crash" would pass just as well without the fix and prove nothing.
-What is falsifiable in CI is whether the calls were serialized.
+Three things are pinned here.  pdfium is named in exactly one module, and that
+module is the worker; the server process never imports it.  Every use inside
+the worker sits under its lock, so whichever process ends up running that
+function honours pdfium's "no two calls at once" rule.  And a worker that dies
+produces a specific error rather than a document that appears to have no text.
+
+The concurrency test measures the boundary and the lock, not a crash.  A
+memory-safety fault reproduced once in more than a hundred attempts, so
+asserting "no crash" would pass just as well without any fix.
 """
 
 from __future__ import annotations
@@ -28,15 +33,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import voice_workflow_agent.experiment_protocol_pdf as pdf_module
+import voice_workflow_agent.pdf_text_worker as worker_module
 from voice_workflow_agent.experiment_protocol_pdf import (
+    ProtocolPdfWorkerError,
+    ProtocolPdfWorkerTimeoutError,
     clear_protocol_pdf_cache,
     extract_protocol_pdf,
 )
 
 from tests.test_protocol_catalog import write_text_pdf
 
-MODULE_PATH = Path(pdf_module.__file__)
+MODULE_PATH = Path(worker_module.__file__)
 PACKAGE_ROOT = MODULE_PATH.parent
+SERVER_SIDE_MODULE = Path(pdf_module.__file__)
 LOCK_NAME = "_PDFIUM_LOCK"
 LIBRARY_NAMES = {"pypdfium2", "pdfium"}
 
@@ -59,10 +68,22 @@ def _modules_naming_pdfium() -> set[str]:
 
 
 class PdfiumIsNamedInOnePlaceTests(unittest.TestCase):
-    def test_only_one_module_imports_the_pdfium_binding(self) -> None:
+    def test_only_the_worker_module_imports_the_pdfium_binding(self) -> None:
         self.assertEqual(_modules_naming_pdfium(), {MODULE_PATH.name})
 
+    def test_the_server_side_module_no_longer_names_pdfium(self) -> None:
+        """The boundary is the point: the parser is not in this process."""
+
+        tree = ast.parse(
+            SERVER_SIDE_MODULE.read_text(), filename=str(SERVER_SIDE_MODULE)
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                self.assertNotIn(node.id, LIBRARY_NAMES)
+
     def test_every_use_of_pdfium_sits_inside_the_lock(self) -> None:
+        """Whichever process runs it, the calls are serialized."""
+
         tree = ast.parse(MODULE_PATH.read_text(), filename=str(MODULE_PATH))
 
         using: list[ast.FunctionDef] = []
@@ -75,7 +96,7 @@ class PdfiumIsNamedInOnePlaceTests(unittest.TestCase):
                     break
         self.assertEqual(
             [node.name for node in using],
-            ["_pypdfium_page_texts"],
+            ["read_page_texts"],
             "pdfium is used outside the one function the lock guards",
         )
 
@@ -99,7 +120,7 @@ class PdfiumIsNamedInOnePlaceTests(unittest.TestCase):
                 )
 
     def test_the_lock_is_a_process_wide_singleton(self) -> None:
-        lock = getattr(pdf_module, LOCK_NAME)
+        lock = getattr(worker_module, LOCK_NAME)
         self.assertIsInstance(lock, type(threading.RLock()))
 
 
@@ -158,29 +179,33 @@ class ConcurrentExtractionIsSerializedTests(unittest.TestCase):
         clear_protocol_pdf_cache()
         self.temp.cleanup()
 
-    def test_overlapping_extractions_never_run_two_pdfium_calls_at_once(self):
+    def test_in_process_calls_to_the_worker_function_are_serialized(self):
+        """The lock still matters wherever that function is called directly.
+
+        In the server the boundary makes overlap impossible -- each parse is
+        its own process -- but the function is importable, and pdfium's rule
+        has to hold for whoever calls it. This calls it the way an in-process
+        caller would and measures the lock.
+        """
+
         observer = _ObservingLock()
         errors: list[BaseException] = []
-        results: list[tuple[str, int]] = []
+        pages: list[int] = []
         barrier = threading.Barrier(self.THREADS)
 
-        def extract(index: int) -> None:
+        def read(index: int) -> None:
             source = self.sources[index % len(self.sources)]
             try:
                 barrier.wait(timeout=30)
                 for _ in range(self.CALLS // self.THREADS):
-                    # The cache would answer every call after the first, which
-                    # would leave pdfium untouched and prove nothing, so each
-                    # call goes to the library.
-                    clear_protocol_pdf_cache()
-                    extraction = extract_protocol_pdf(source)
-                    results.append((extraction.sha256, extraction.page_count))
-            except BaseException as error:  # noqa: BLE001 - reported, not swallowed
+                    texts = worker_module.read_page_texts(source, 1)
+                    pages.append(len(texts))
+            except BaseException as error:  # noqa: BLE001 - reported
                 errors.append(error)
 
-        with unittest.mock.patch.object(pdf_module, LOCK_NAME, observer):
+        with unittest.mock.patch.object(worker_module, LOCK_NAME, observer):
             with ThreadPoolExecutor(max_workers=self.THREADS) as pool:
-                list(pool.map(extract, range(self.THREADS)))
+                list(pool.map(read, range(self.THREADS)))
 
         self.assertEqual(errors, [])
         self.assertGreaterEqual(observer.acquisitions, self.CALLS)
@@ -194,10 +219,37 @@ class ConcurrentExtractionIsSerializedTests(unittest.TestCase):
             0,
             "no thread ever waited, so this run did not exercise concurrency",
         )
-        # Same bytes in, same identity out, whichever thread did the work.
-        by_source = {sha for sha, _ in results}
-        self.assertEqual(len(by_source), len(self.sources))
-        self.assertTrue(all(pages >= 1 for _, pages in results))
+        self.assertEqual(set(pages), {1})
+
+    def test_each_extraction_gets_its_own_worker_process(self):
+        """Isolation is per document: a damaged heap cannot reach the next one."""
+
+        import subprocess
+
+        real = subprocess.run
+        started: list[tuple] = []
+
+        def counting_run(command, **kwargs):
+            started.append(tuple(command))
+            return real(command, **kwargs)
+
+        with unittest.mock.patch.object(
+            pdf_module.subprocess, "run", counting_run
+        ):
+            for source in self.sources:
+                clear_protocol_pdf_cache()
+                extract_protocol_pdf(source)
+
+        # pdftotext, the independent cross-check engine, is also a
+        # subprocess; only the pdfium worker is counted here.
+        workers = [
+            command for command in started
+            if command[1:] == ("-m", "voice_workflow_agent.pdf_text_worker")
+        ]
+        self.assertEqual(len(workers), len(self.sources))
+        self.assertEqual(
+            {command[0] for command in workers}, {pdf_module.sys.executable}
+        )
 
     def test_concurrent_extraction_returns_what_serial_extraction_returns(self):
         """Corruption need not crash; it can also hand back wrong text.

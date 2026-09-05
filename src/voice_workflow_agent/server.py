@@ -56,6 +56,7 @@ from voice_workflow_agent.experiment_protocol_pdf import (
     ProtocolPdfError,
     ProtocolPdfMalformedError,
     ProtocolPdfTooLargeError,
+    ProtocolPdfWorkerError,
     ProtocolPdfTypeError,
     extract_protocol_pdf,
 )
@@ -1462,6 +1463,12 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=413,detail="protocol_pdf_too_large")
     if isinstance(exc,ProtocolPdfTypeError):
         return HTTPException(status_code=415,detail="unsupported_pdf_media_type")
+    if isinstance(exc,ProtocolPdfWorkerError):
+        # The parser process died or hung. Not 422: the document is not the
+        # thing that failed, and telling a reader it is invalid would be
+        # untrue. Not a silent empty extraction either -- that is the fail
+        # dead this boundary exists to remove.
+        return HTTPException(status_code=503,detail=exc.code)
     if isinstance(exc,ProtocolPdfMalformedError):
         return HTTPException(status_code=422,detail="invalid_pdf")
     if isinstance(exc,ProtocolPdfEncryptedError):

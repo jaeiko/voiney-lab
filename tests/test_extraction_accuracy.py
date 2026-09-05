@@ -288,3 +288,65 @@ class TheReferenceIsAuditedNotAssumedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValueOutcomeTests(unittest.TestCase):
+    """A gap in the reference is not an error in the candidate.
+
+    Measured on in-gel: the source pages state three values the hand-built
+    reference never does -- a 20 minute duration, 1000ul and 50ul. Strict
+    equality charged the candidate for every one of them, which would have
+    made the score fall as extraction improved.
+    """
+
+    def _compared(self, reference_text, candidate_text):
+        from voice_workflow_agent.protocol_extraction_accuracy import (
+            StepComparison,
+            _values,
+        )
+
+        return StepComparison(
+            source_label="1",
+            text_similarity=1.0,
+            reference_values=_values(reference_text),
+            candidate_values=_values(candidate_text),
+        )
+
+    def test_identical_values_are_matching(self) -> None:
+        item = self._compared("hold for 15 min at 37 C", "hold for 15 min at 37 C")
+        self.assertEqual(item.value_outcome, "matching")
+        self.assertTrue(item.values_match)
+
+    def test_a_different_value_is_contradicted(self) -> None:
+        item = self._compared("hold for 15 min", "hold for 50 min")
+        self.assertEqual(item.value_outcome, "contradicted")
+        self.assertFalse(item.values_match)
+
+    def test_a_missing_value_is_contradicted(self) -> None:
+        item = self._compared("hold for 15 min at 37 C", "hold for 15 min")
+        self.assertEqual(item.value_outcome, "contradicted")
+
+    def test_a_value_the_reference_never_states_is_unscorable(self) -> None:
+        item = self._compared("add the buffer", "add 1000 ul of the buffer")
+        self.assertEqual(item.value_outcome, "reference_silent")
+        self.assertFalse(item.values_match)
+
+    def test_the_report_counts_the_three_outcomes_separately(self) -> None:
+        from voice_workflow_agent.protocol_extraction_accuracy import AccuracyReport
+
+        report = AccuracyReport(
+            reference_steps=3,
+            candidate_steps=3,
+            order_matches=True,
+            compared=(
+                self._compared("hold for 15 min", "hold for 15 min"),
+                self._compared("hold for 15 min", "hold for 50 min"),
+                self._compared("add the buffer", "add 1000 ul of the buffer"),
+            ),
+        )
+        self.assertEqual(report.steps_with_matching_values, 1)
+        self.assertEqual(report.steps_with_contradicted_values, 1)
+        self.assertEqual(report.steps_unscorable_on_values, 1)
+        published = report.public_dict()
+        self.assertEqual(published["steps_unscorable_on_values"], 1)
+        self.assertEqual(published["steps_with_contradicted_values"], 1)

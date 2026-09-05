@@ -54,8 +54,16 @@ _SUBSTANTIVE = re.compile(r"[A-Za-z0-9]")
 # period is a citation year ("Laliberté 2019. Measuring leaf carbon..."), not a
 # step, and admitting it made the completeness invariant demand an action claim
 # for the publication year.
+# A hierarchical label ("3.2", "3.10", "3.1.1") is a step label in documents
+# that number their procedure that way.  Measured on the four local sources,
+# admitting only the bare integer left intracellular's entire procedure
+# invisible: the twelve labels the system saw were headings and contents
+# entries, and every real instruction -- "3.2 Pipette 1.6 mL of cold
+# metabolite extraction buffer" -- began with a number this pattern could not
+# read.
 _NUMBERED_SOURCE_LINE = re.compile(
-    r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,2})(?:[.)])?[ \t]+(?P<next>\S+)"
+    r"(?m)^[ \t]*(?P<label>[1-9][0-9]{0,2}(?:\.[0-9]{1,3}){0,2})"
+    r"(?:[.)])?[ \t]+(?P<next>\S+)"
 )
 # Removed from the numbered-action trigger, and kept only so the count of what
 # it would have matched can be reported.  Measured over the four local sources
@@ -875,11 +883,41 @@ def _page_text_sha256(extraction: ProtocolPdfExtraction, page_number: int) -> st
     ).hexdigest()
 
 
+def _subordinate_to_a_label_on_the_page(
+    matches: list[re.Match[str]],
+) -> set[int]:
+    """Offsets of hierarchical labels that hang off a label already here.
+
+    "3.2" is a step where the procedure is numbered that way, and a note where
+    step 3 is on the same page and 3.2 is written under it.  The two are told
+    apart structurally, by whether the parent number is itself a label on this
+    page, and never by reading the line.
+
+    The measurement that settled the direction: on headspace, "6.1 While we use
+    LB as the primary medium..." sits directly under "6 Transfer 10 mL of
+    autoclaved LB...", and "18.1 Equation for working out dilution volume"
+    directly under step 18 -- a remark and an equation, neither of them an
+    instruction.  On intracellular no page carries both "3" and "3.4", because
+    "3.4 Using stainless steel forceps, place the appropriate filter..." *is*
+    the step.  Admitting the first pair would make the completeness invariant
+    demand an action claim for a note, which is the failure STEP 12 removed.
+    """
+
+    labels = {match.group("label") for match in matches}
+    return {
+        match.start("label")
+        for match in matches
+        if "." in match.group("label")
+        and match.group("label").rsplit(".", 1)[0] in labels
+    }
+
+
 def _numbered_action_matches(page_text: str) -> tuple[re.Match[str], ...]:
     matches = sorted(
         _NUMBERED_SOURCE_LINE.finditer(page_text),
         key=lambda match: match.start("label"),
     )
+    subordinate = _subordinate_to_a_label_on_the_page(matches)
     actions: list[re.Match[str]] = []
     seen_offsets: set[int] = set()
     for match in matches:
@@ -889,6 +927,7 @@ def _numbered_action_matches(page_text: str) -> tuple[re.Match[str], ...]:
             following.isdecimal()
             or following in _VALUE_UNITS
             or offset in seen_offsets
+            or offset in subordinate
         ):
             continue
         actions.append(match)
