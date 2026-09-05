@@ -2396,10 +2396,21 @@ def _validate_page_segment_accounting(
     # single most frequent refusal in the last provider run, three of five.
     #
     # The narrowing is decided by structure alone, never by wording: does the
-    # segment lie inside a numbered step's span. A footer is not in one, so it
-    # leaves scope without anything having to recognise a domain or a phrase.
-    # Measured over the four local sources this takes the checked set from 96
-    # segments to 77.
+    # segment lie inside a numbered step's span.
+    #
+    # CORRECTION, measured 2026-09-05: this comment used to claim "a footer is
+    # not in one, so it leaves scope". It is. ``step_block_ranges`` gives the
+    # last numbered step a span that runs to the end of the page, so the
+    # running footer falls inside it. Measured over the four local sources,
+    # 9 of the 87 segments still in scope contain the footer -- including the
+    # headspace page 6 segment this narrowing was written for, whose
+    # "1h 30m protocols.io | ... 6/16" is still checked and still refusable.
+    # Splitting the footer into its own segment does not help either: the span
+    # is unchanged by where segment boundaries fall. The fix is to end the last
+    # step's span before the repeating bottom band, which is geometry and not
+    # wording, and it has not been done. (The 77 in the original note was
+    # measured before hierarchical labels were read; more labels means more
+    # step spans, hence 87 now.)
     inside_step = _segments_inside_numbered_steps(segments)
     forced = [
         segment_id
