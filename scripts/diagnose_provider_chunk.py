@@ -420,6 +420,35 @@ def main() -> int:
             report["cache_hits"].append(
                 {"chunk": chunk.ordinal, "key_digest": hit.key_digest}
             )
+    # "Validated" is not "done", and reading it that way cost a STEP. A chunk
+    # whose page coverage leaves segments unaccounted passes on its own --
+    # omission is a silence, not a false statement -- and then blocks the
+    # whole-document merge. Say so here rather than reporting five passes and
+    # an unexplained merge refusal.
+    coverage = []
+    for result in validated:
+        for item in result.analysis.page_coverage:
+            coverage.append(
+                {
+                    "chunk": result.chunk.ordinal,
+                    "source_page_number": item.source_page_number,
+                    "status": item.status.value,
+                    "cited": len(item.evidence_item_ids),
+                    "declined": len(item.declined_segment_ids),
+                    "unaccounted": len(item.unaccounted_segment_ids),
+                }
+            )
+    report["page_coverage"] = sorted(
+        coverage, key=lambda item: item["source_page_number"]
+    )
+    report["unaccounted_segment_total"] = sum(
+        item["unaccounted"] for item in coverage
+    )
+    report["pages_blocking_merge"] = sorted(
+        item["source_page_number"]
+        for item in coverage
+        if item["status"] == "analysis_incomplete"
+    )
     report["validated_chunks"] = sorted(r.chunk.ordinal for r in validated)
     report["validated_from_cache"] = sorted(
         r.chunk.ordinal for r in validated if r.chunk.chunk_id in from_cache
