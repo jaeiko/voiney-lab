@@ -22,6 +22,7 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisModel,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
+    _numbered_step_labels,
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     MergedProtocolClaims,
     ProtocolChunkClaimAnalysis,
@@ -49,6 +50,7 @@ _HARD_MAX_CONCURRENCY = 2
 _HARD_MAX_TIMEOUT_SECONDS = 120.0
 _HARD_MAX_RETRIES = 1
 _HARD_MAX_CORE_PAGES_PER_CHUNK = 32
+_HARD_MAX_CORE_LABELS_PER_CHUNK = 256
 _HARD_MAX_CORE_SOURCE_BYTES_PER_CHUNK = 192 * 1024
 
 
@@ -87,6 +89,25 @@ class ChunkAnalysisLimits:
     overlap_pages: int = 1
     max_core_pages_per_chunk: int = 8
     max_core_source_bytes_per_chunk: int = 4 * 1024
+    #: How many numbered source labels one chunk may owe an action claim for.
+    #:
+    #: Source bytes were the proxy for claim cardinality, and measurement says
+    #: they are a poor one. On in-gel, chunk 0 held 3398 bytes and 2 labels and
+    #: passed; chunk 1 held 4007 bytes -- barely more -- and 22 labels, and was
+    #: rejected on three separate attempts. Across the three admissible local
+    #: sources the worst chunk owed 22, 25 and 13 labels while every chunk sat
+    #: inside the same byte bound, so the bound that was supposed to cap the
+    #: work was capping something else.
+    #:
+    #: A label count is what the completeness invariant actually charges a
+    #: chunk for: an action claim per numbered label, plus everything attached
+    #: to it. It is computed by the server from its own page text, so it reads
+    #: no meaning and favours no document.
+    #:
+    #: This is a target, not a ceiling. A page is atomic because provenance is
+    #: page-bound, so a single page carrying more labels than this is admitted
+    #: whole -- in-gel page 7 owes 9 on its own.
+    max_core_labels_per_chunk: int = 12
 
     def __post_init__(self) -> None:
         integer_limits = (
@@ -100,6 +121,7 @@ class ChunkAnalysisLimits:
             self.overlap_pages,
             self.max_core_pages_per_chunk,
             self.max_core_source_bytes_per_chunk,
+            self.max_core_labels_per_chunk,
         )
         if any(
             not isinstance(value, int) or isinstance(value, bool) or value < 0
@@ -118,6 +140,9 @@ class ChunkAnalysisLimits:
             or self.overlap_pages > 1
             or self.max_core_pages_per_chunk < 1
             or self.max_core_source_bytes_per_chunk < 1
+            or self.max_core_labels_per_chunk < 1
+            or self.max_core_labels_per_chunk
+            > _HARD_MAX_CORE_LABELS_PER_CHUNK
             or self.max_pages > _HARD_MAX_PAGES
             or self.max_extracted_text_bytes > _HARD_MAX_EXTRACTED_TEXT_BYTES
             or self.max_chunks > _HARD_MAX_CHUNKS
@@ -336,18 +361,25 @@ def plan_protocol_chunks(
     for legacy_group in legacy_core_groups:
         current = []
         current_bytes = 0
+        current_labels = 0
         for page_number in legacy_group:
             byte_count = page_sizes[page_number - 1]
-            if (
-                current
-                and current_bytes + byte_count
+            label_count = len(
+                _numbered_step_labels(extraction.pages[page_number - 1].text)
+            )
+            if current and (
+                current_bytes + byte_count
                 > limits.max_core_source_bytes_per_chunk
+                or current_labels + label_count
+                > limits.max_core_labels_per_chunk
             ):
                 core_groups.append(tuple(current))
                 current = []
                 current_bytes = 0
+                current_labels = 0
             current.append(page_number)
             current_bytes += byte_count
+            current_labels += label_count
         if current:
             core_groups.append(tuple(current))
     if len(core_groups) > limits.max_chunks:

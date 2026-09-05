@@ -112,6 +112,8 @@
               <summary>업로드 분석 검토 · 원문 근거와 실행 준비 상태</summary>
               <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
               <div id="protocol-review-content" class="protocol-review-content"></div>
+              <div id="protocol-blockers" class="protocol-review-content"></div>
+              <div id="protocol-findings" class="protocol-review-content"></div>
               <div class="protocol-review-actions">
                 <button id="protocol-review-refresh" type="button">검토 새로고침</button>
                 <button id="protocol-ocr-run" type="button" class="btn-ocr-neutral" hidden>OCR 텍스트 추출</button>
@@ -1695,6 +1697,8 @@ async function safeProtocolUploadPayload(response){
  try{const payload=await response.json();return payload&&typeof payload==="object"&&!Array.isArray(payload)?payload:null;}catch(_){return null;}
 }
 let isRegisteringProtocol=false;
+let currentProtocolReviewRevisionId=null;
+let lastProtocolReview=null;
 let currentProtocolReviewId=null;
 let protocolAnalysisPollHandle=null;
 let protocolAnalysisPollBusy=false;
@@ -1711,10 +1715,175 @@ function appendProtocolReviewGroup(title,lines){
  for(const line of lines.filter(value=>typeof value==="string"&&value.trim())){const paragraph=document.createElement("p");paragraph.textContent=line;group.appendChild(paragraph);}
  content.appendChild(group);
 }
+const BLOCKER_KIND_LABEL={reviewer_can_clear:"검토자가 해제 가능",capability_required:"새 능력 필요 · 사람이 해제 불가"};
+const FINDING_KIND_LABEL={gate_acknowledged:"게이트 확인",repetition_confirmed:"고정 반복 확인",repetition_confirmation_revoked:"고정 반복 확인 철회",ambiguity_resolved:"모호성 해소"};
+async function postReviewerFinding(path,body){
+ const protocolId=currentProtocolReviewId,revisionId=currentProtocolReviewRevisionId,status=$("protocol-review-status");
+ if(!protocolId||!revisionId||typeof fetch!=="function")return null;
+ try{
+  const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/revisions/${encodeURIComponent(revisionId)}/findings/${path}`,
+   {method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(body),redirect:"error"});
+  const payload=await safeProtocolUploadPayload(response);
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=`기록하지 못했습니다 · ${code}`;return null;}
+  await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);
+  return payload;
+ }catch(_){if(status)status.textContent="네트워크 오류 · 기록되지 않았습니다.";return null;}
+}
+function appendCitationChoices(group,candidates,key){
+ // A finding that must cite evidence needs candidates to choose from. The
+ // fixture's own constructs carry none, so these come from the page the
+ // blocker points at, computed by the server from its source bytes.
+ const boxes=[];
+ if(!Array.isArray(candidates)||!candidates.length){
+  const none=document.createElement("p");none.className="protocol-review-status";
+  none.textContent="선택할 근거 세그먼트가 없습니다 · 이 항목은 UI 에서 해소할 수 없습니다.";
+  group.appendChild(none);return boxes;
+ }
+ for(const candidate of candidates){
+  const wrapper=document.createElement("label"),box=document.createElement("input");
+  box.type="checkbox";box.value=candidate.segment_id;
+  wrapper.appendChild(box);
+  wrapper.append(` p.${candidate.source_page_number} #${candidate.segment_index} · ${String(candidate.excerpt||"").slice(0,90)}`);
+  wrapper.setAttribute("data-citation",key);
+  group.appendChild(wrapper);boxes.push(box);
+ }
+ return boxes;
+}
+function ambiguityIdFor(item){
+ if(typeof item.ambiguity_id==="string"&&item.ambiguity_id)return item.ambiguity_id;
+ const review=lastProtocolReview,constructs=Array.isArray(review?.constructs)?review.constructs:[];
+ const match=constructs.find(entry=>entry?.construct_type==="SourceAmbiguity"&&(!item.step_id||entry.step_id===item.step_id));
+ return match?.ambiguity_id||"";
+}
+function renderProtocolBlockers(review){
+ const host=$("protocol-blockers");if(!host)return;
+ host.replaceChildren();
+ const blockers=Array.isArray(review?.outstanding_blockers)?review.outstanding_blockers:[];
+ if(!blockers.length)return;
+ const group=document.createElement("section"),heading=document.createElement("h4");
+ group.className="protocol-review-group";
+ heading.textContent=`남은 차단 사유 ${blockers.length}건`;group.appendChild(heading);
+ // Every reason, not the one a status mapping happened to reach. A reviewer
+ // who is shown one of four cannot tell whether their work will finish.
+ for(const item of blockers){
+  const row=document.createElement("p");
+  row.textContent=`${item.code} · ${BLOCKER_KIND_LABEL[item.kind]||item.kind}`
+   +(item.already_acknowledged?" · 확인됨":"")
+   +(item.source_page_number?` · p.${item.source_page_number}`:"");
+  group.appendChild(row);
+  if(typeof item.source_excerpt==="string"&&item.source_excerpt.trim()){
+   const quote=document.createElement("p");quote.className="protocol-review-status";
+   quote.textContent=item.source_excerpt.slice(0,400);group.appendChild(quote);
+  }
+  if(item.reviewer_action==="acknowledge_gate"&&!item.already_acknowledged){
+   const button=document.createElement("button");button.type="button";
+   button.textContent="안전 경고 확인 처리";
+   button.addEventListener("click",()=>{void postReviewerFinding("acknowledge-gate",{reason_code:item.code,comment:"원문과 대조해 확인했습니다."});});
+   group.appendChild(button);
+  }
+  if(item.reviewer_action==="resolve_ambiguity"&&!item.already_acknowledged){
+   const label=document.createElement("p");label.className="protocol-review-status";
+   label.textContent="어느 진술이 정본인지 적고, 그 판단의 근거가 된 원문 세그먼트를 선택해 주세요. 근거 없는 해소는 서버가 거부합니다.";
+   group.appendChild(label);
+   // Two sayable answers, and only one of them clears the reason. Finding
+   // that the statements are genuinely distinct is a finding, not a
+   // resolution, and the server treats it that way.
+   const decision=document.createElement("select");
+   for(const option of (Array.isArray(item.decision_options)?item.decision_options:[])){
+    const choice=document.createElement("option");choice.value=option;
+    choice.textContent=option===item.clearing_decision?`${option} · 이 판단이 사유를 해제합니다`:`${option} · 기록되지만 해제하지 않습니다`;
+    decision.appendChild(choice);
+   }
+   decision.value=item.clearing_decision||decision.value;
+   decision.setAttribute("aria-label",`${item.code} 정본 판단`);
+   group.appendChild(decision);
+   const boxes=appendCitationChoices(group,item.citable_segments,item.code);
+   const resolve=document.createElement("button");resolve.type="button";
+   resolve.textContent="이 모호성을 해소";
+   resolve.addEventListener("click",()=>{void postReviewerFinding("resolve-ambiguity",{
+    ambiguity_id:ambiguityIdFor(item),decision:decision.value,
+    evidence_segment_ids:boxes.filter(box=>box.checked).map(box=>box.value),
+    comment:"원문을 대조해 판단했습니다."});});
+   group.appendChild(resolve);
+  }
+ }
+ host.appendChild(group);
+ renderProtocolRepetitions(review,host);
+}
+function renderProtocolRepetitions(review,host){
+ const constructs=Array.isArray(review?.constructs)?review.constructs:[];
+ const fixed=constructs.filter(item=>item?.construct_type==="FixedRangeRepetition");
+ if(!fixed.length)return;
+ const group=document.createElement("section"),heading=document.createElement("h4");
+ group.className="protocol-review-group";heading.textContent=`고정 반복 확인 ${fixed.length}건`;group.appendChild(heading);
+ for(const item of fixed){
+  const row=document.createElement("p");
+  row.textContent=`${item.repetition_id} · 분석이 읽은 횟수 ${item.repeat_count??"—"}`;
+  group.appendChild(row);
+  const quote=document.createElement("p");quote.className="protocol-review-status";
+  quote.textContent=(item.source_text||item.condition_source_text||"").slice(0,400);
+  group.appendChild(quote);
+  // The citation is the point of the confirmation: a reviewer says which
+  // words they counted from, and the server refuses a confirmation that
+  // cites nothing. The checkboxes are that affordance, not decoration.
+  const handles=Array.isArray(item.evidence_segment_ids)?item.evidence_segment_ids:[];
+  const boxes=[];
+  for(const handle of handles){
+   const wrapper=document.createElement("label"),box=document.createElement("input");
+   box.type="checkbox";box.value=handle;box.checked=true;
+   wrapper.appendChild(box);wrapper.append(` 근거 세그먼트 ${handle.slice(0,14)}…`);
+   group.appendChild(wrapper);boxes.push(box);
+  }
+  if(!boxes.length){
+   const blocker=(Array.isArray(review?.outstanding_blockers)?review.outstanding_blockers:[])
+    .find(entry=>entry.reviewer_action==="confirm_repetition");
+   boxes.push(...appendCitationChoices(group,blocker?.citable_segments,item.repetition_id));
+  }
+  const count=document.createElement("input");
+  count.type="number";count.min="1";count.value=String(item.repeat_count??1);
+  count.setAttribute("aria-label",`${item.repetition_id} 확인 횟수`);
+  group.appendChild(count);
+  const confirm=document.createElement("button");confirm.type="button";
+  confirm.textContent="이 반복 횟수를 확인";
+  confirm.addEventListener("click",()=>{void postReviewerFinding("confirm-repetition",{
+   repetition_id:item.repetition_id,repeat_count:Number(count.value),
+   evidence_segment_ids:boxes.filter(box=>box.checked).map(box=>box.value),
+   comment:"원문에서 횟수를 세었습니다."});});
+  group.appendChild(confirm);
+  const revoke=document.createElement("button");revoke.type="button";
+  revoke.textContent="확인 철회";
+  revoke.addEventListener("click",()=>{void postReviewerFinding("revoke-repetition",{
+   repetition_id:item.repetition_id,comment:"다시 세어야 합니다."});});
+  group.appendChild(revoke);
+ }
+ host.appendChild(group);
+}
+function renderProtocolFindings(review){
+ const host=$("protocol-findings");if(!host)return;
+ host.replaceChildren();
+ const findings=Array.isArray(review?.reviewer_findings)?review.reviewer_findings:[];
+ if(!findings.length)return;
+ const group=document.createElement("section"),heading=document.createElement("h4");
+ group.className="protocol-review-group";
+ heading.textContent=`기록된 검토 ${findings.length}건`;group.appendChild(heading);
+ for(const item of findings){
+  const row=document.createElement("p");
+  row.textContent=`${FINDING_KIND_LABEL[item.kind]||item.kind}`
+   +(item.reason_code?` · ${item.reason_code}`:"")
+   +(item.repetition_id?` · ${item.repetition_id}`:"")
+   +(item.repeat_count!=null?` · ${item.repeat_count}회`:"")
+   +` · ${item.actor_principal_id||"미기록"} (${item.actor_role||"역할 미기록"})`
+   +` · ${item.recorded_at||""}`;
+  group.appendChild(row);
+ }
+ host.appendChild(group);
+}
 function renderProtocolReview(review){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),activate=$("protocol-development-activate"),ocrRun=$("protocol-ocr-run"),ocrAccept=$("protocol-ocr-accept"),ocrReject=$("protocol-ocr-reject");
  if(!panel||!content||!status)return false;
  panel.hidden=false;panel.open=true;content.replaceChildren();
+ currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
+ lastProtocolReview=review;renderProtocolBlockers(review);renderProtocolFindings(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
  status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
  appendProtocolReviewGroup("원문과 분석 리비전",[

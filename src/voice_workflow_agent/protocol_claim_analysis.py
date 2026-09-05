@@ -668,6 +668,28 @@ def claim_response_schema(request: ProviderClaimRequest) -> dict[str, Any]:
 
     handles_by_core_page = _request_core_page_handles(request)
     schema = _claim_response_schema_for_core_pages(request.core_page_refs)
+    # The identities the response must echo are pinned to this request, so a
+    # wrong one is not a valid response rather than a rejected one.
+    #
+    # They were free-form strings, and the request handle is 24 characters of
+    # entropy that the provider had to transcribe by hand. Measured on in-gel
+    # chunk 3 it got them wrong twice in a row -- request_handle_mismatch,
+    # both times -- while four other chunks of the same document transcribed
+    # theirs correctly. That is a dice roll this code created: we asked for an
+    # exact copy and then declined to say what it had to be. Under a strict
+    # schema a const leaves the correct value as the only thing sayable.
+    #
+    # The server still checks every one of these after parsing. A schema is
+    # the provider's constraint; the check is ours, and neither stands in for
+    # the other.
+    schema["properties"]["request_handle"] = {
+        "type": "string",
+        "const": request.request_handle,
+    }
+    schema["properties"]["capability_policy_id"] = {
+        "type": "string",
+        "const": request.capability_policy_id,
+    }
     page_local_branches: list[dict[str, Any]] = []
     for page_number, handles in handles_by_core_page:
         if not handles:
@@ -2359,7 +2381,9 @@ def _validate_page_segment_accounting(
     }
     known = {segment.segment_id for segment in segments}
 
-    def fail(reason: str, count: int) -> None:
+    def fail(
+        reason: str, count: int, offending: tuple[str, ...] = ()
+    ) -> None:
         raise ProtocolAnalysisEvidenceError(
             "Chunk page coverage does not account for every source segment.",
             diagnostic=ProtocolEvidenceDiagnostic(
@@ -2373,11 +2397,19 @@ def _validate_page_segment_accounting(
                 chunk_id=chunk_id,
                 source_revision=source_revision,
                 source_hash=extraction.sha256,
+                # Which segments, not just how many. A segment id is a hash of
+                # the server's own source bytes, so this names the unit of
+                # evidence without quoting any of it.
+                offending_segment_ids=tuple(sorted(offending))[:8],
             ),
         )
 
     if not declined <= known:
-        fail("declined_segment_not_on_page", len(declined - known))
+        fail(
+            "declined_segment_not_on_page",
+            len(declined - known),
+            tuple(declined - known),
+        )
     # A segment both cited and declined used to be refused as a contradiction.
     # The citation is positive evidence and the declination adds nothing, so
     # the claim simply wins and the redundant declination is dropped. Nothing
@@ -2420,7 +2452,7 @@ def _validate_page_segment_accounting(
         and segment_carries_unit_bearing_value(substantive[segment_id])
     ]
     if forced:
-        fail("declined_segment_states_a_value", len(forced))
+        fail("declined_segment_states_a_value", len(forced), tuple(forced))
     # An omission is not the same fault as a contradiction. Claiming and
     # declining the same segment, or declining one that states a value, is an
     # active false statement and still fails closed here. Leaving a segment out

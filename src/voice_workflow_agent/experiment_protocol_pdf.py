@@ -68,6 +68,31 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 # under a 200 MB cap when that was measured directly, so 1 GiB leaves roughly
 # nine times the observed need while still killing a runaway long before a
 # 4 GB machine is in trouble.
+def _worker_timeout_seconds() -> float:
+    """30 s, unless the host says its machine needs longer.
+
+    The bound exists to catch a hung parser. Measured on this machine a worker
+    round trip on a one-page source is 0.11-0.41 s and the largest local
+    source is 1.25 s, so 30 s is roughly seventy times the typical cost and
+    twenty-four times the worst -- and it sits above the 16 s that the one
+    reproduced crash took to die, so a slow parse is not cut short and
+    mistaken for the fault.
+
+    It can still be exceeded by a machine that cannot schedule a subprocess:
+    running the whole test suite on two cores with under 200 MB free tripped
+    it once. That is the host failing, not the parser hanging, and the two
+    want different numbers -- so the number is settable rather than raised for
+    everyone, which would make a genuinely hung parse hold a request longer.
+    """
+
+    raw = os.environ.get("VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 30.0
+    return value if 1.0 <= value <= 600.0 else 30.0
+
+
 PDF_WORKER_TIMEOUT_SECONDS = 30.0
 PDF_WORKER_ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024
 _MAX_WORKER_OUTPUT_BYTES = 96 * 1024 * 1024
@@ -652,7 +677,7 @@ def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
             ],
             input=request.encode("utf-8"),
             capture_output=True,
-            timeout=PDF_WORKER_TIMEOUT_SECONDS,
+            timeout=_worker_timeout_seconds(),
             check=False,
         )
     except subprocess.TimeoutExpired as error:

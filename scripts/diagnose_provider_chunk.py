@@ -70,6 +70,51 @@ def _request(extraction, chunk):
     )
 
 
+def _describe_segments(extraction, page_number, source_revision, segment_ids):
+    """Say what shape each named segment has, without quoting the document.
+
+    STEP 25 had to re-derive by hand which segment a refusal was about, and
+    the answer mattered: in-gel page 6's offender was a Note carrying the only
+    volume step 11 needs, not the running footer everyone assumed. The shape
+    facts here -- index, length, whether it sits inside a numbered step, which
+    labels are on the page -- are all computed by the server from its own
+    bytes, so they identify the unit without reproducing its text.
+    """
+
+    if not segment_ids or not page_number:
+        return []
+    from voice_workflow_agent.protocol_claim_analysis import (
+        _numbered_step_labels,
+        _segments_inside_numbered_steps,
+        generate_page_evidence_segments,
+        segment_carries_unit_bearing_value,
+    )
+
+    segments = generate_page_evidence_segments(
+        extraction, source_revision=source_revision, page_number=page_number
+    )
+    inside = _segments_inside_numbered_steps(segments)
+    wanted = set(segment_ids)
+    return [
+        {
+            "segment_id": segment.segment_id,
+            "segment_index": segment.segment_index,
+            "character_length": len(segment.text),
+            "inside_a_numbered_step": segment.segment_id in inside,
+            "states_a_unit_bearing_value": segment_carries_unit_bearing_value(
+                segment.text
+            ),
+            "page_labels": list(
+                _numbered_step_labels(
+                    extraction.pages[page_number - 1].text
+                )
+            ),
+        }
+        for segment in segments
+        if segment.segment_id in wanted
+    ]
+
+
 def _cache_hit(cache, extraction, chunk, scoped, request):
     """A previously validated chunk, put back through the current rules."""
 
@@ -326,6 +371,9 @@ def main() -> int:
             except Exception as error:  # noqa: BLE001 - classify, never retry
                 diagnostic = getattr(error, "diagnostic", None)
                 entry["canonical_validation"] = "rejected"
+                offending = tuple(
+                    getattr(diagnostic, "offending_segment_ids", ()) or ()
+                )
                 entry["failure"] = {
                     "error": type(error).__name__,
                     "reason_code": getattr(diagnostic, "reason_code", None),
@@ -335,6 +383,12 @@ def main() -> int:
                     "page_number": getattr(diagnostic, "page_number", None),
                     "mismatch_class": getattr(
                         diagnostic, "mismatch_class", None
+                    ),
+                    # Identities, not content: which segment was mishandled.
+                    "offending_segment_ids": list(offending),
+                    "offending_segments": _describe_segments(
+                        extraction, getattr(diagnostic, "page_number", None),
+                        chunk.candidate_revision_id, offending,
                     ),
                 }
             else:

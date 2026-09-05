@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -1308,6 +1308,7 @@ def _candidate_fixture_execution_state(
     state:dict[str,object]={
         "available_for_execution":False,
         "blocked_reason":"development_activation_not_recorded",
+        "outstanding_blockers":[],
         "development_activation":{
             "activated":False,
             "actor_principal_id":None,
@@ -1345,8 +1346,15 @@ def _candidate_fixture_execution_state(
             fixture.protocol_id)
         state["approval"]=catalog.approval_context(fixture.protocol_id)
         state["available_for_execution"]=bool(entry.available_for_execution)
+        review=catalog.review(fixture.protocol_id)
+        state["outstanding_blockers"]=review.get("outstanding_blockers") or []
         if entry.available_for_execution:
             state["blocked_reason"]=None
+        elif review.get("readiness_gates_cleared") is not True:
+            # Readiness comes first in the truth of it. Reporting a missing
+            # activation while two capability blockers stand tells a reviewer
+            # to press activate, which is what the STEP 26 screen did.
+            state["blocked_reason"]="readiness_gates_blocked"
         elif state["development_activation"].get("activated"):
             state["blocked_reason"]="readiness_gates_blocked"
     except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
@@ -1376,6 +1384,7 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "development_only":True,
         "development_activation":execution["development_activation"],
         "execution_blocked_reason":execution["blocked_reason"],
+        "outstanding_blockers":execution.get("outstanding_blockers") or [],
         "approval":execution["approval"],
     }
 
@@ -3895,6 +3904,231 @@ def _development_activation_actor() -> tuple[str | None, str | None]:
         None,
     )
     return actor.principal_id, role
+
+
+def _reviewer_finding_actor() -> tuple[str, str]:
+    """Name the person recording a finding, or refuse to record one.
+
+    A finding clears a readiness gate. It is the whole of the human judgement
+    this system insists on, so it is never recorded for nobody: unlike a
+    development activation, which may be attributed to the host on a
+    single-operator machine, a finding without an actor is refused outright.
+
+    Where a workspace is configured the principal is required and must hold
+    PROTOCOL_REVIEW. Where none is configured the operator identity the host
+    already resolved is used, and if the host cannot name one the request
+    fails closed rather than inventing "local".
+    """
+
+    if _workspace_settings().enabled:
+        actor = _REQUEST_PRINCIPAL.get()
+        if actor is None:
+            raise AuthenticationRequiredError("Authentication is required.")
+        require_permission(actor, Permission.PROTOCOL_REVIEW)
+        role = next(
+            (
+                item.value for item in actor.roles
+                if item.value in {"reviewer", "lab_admin", "organization_admin"}
+            ),
+            None,
+        )
+        if not role:
+            raise AuthorizationDeniedError(
+                "A reviewing role is required to record a finding."
+            )
+        return actor.principal_id, role
+    actor = _REQUEST_PRINCIPAL.get()
+    if actor is None or not getattr(actor, "principal_id", ""):
+        raise AuthenticationRequiredError(
+            "A named reviewer is required to record a finding."
+        )
+    role = next(
+        (
+            item.value for item in actor.roles
+            if item.value in {"reviewer", "lab_admin", "organization_admin"}
+        ),
+        None,
+    )
+    if not role:
+        raise AuthorizationDeniedError(
+            "A reviewing role is required to record a finding."
+        )
+    return actor.principal_id, role
+
+
+def _finding_segment_ids(payload: dict[str, object]) -> tuple[str, ...]:
+    """Read the citation a finding must carry, without repairing it.
+
+    An empty or malformed list is passed through as empty and the catalog
+    refuses it there. Filling one in here would be the server citing evidence
+    on the reviewer's behalf, which is the one thing this citation exists to
+    prevent.
+    """
+
+    raw = payload.get("evidence_segment_ids")
+    if not isinstance(raw, list) or any(
+        not isinstance(item, str) for item in raw
+    ):
+        return ()
+    return tuple(raw[:64])
+
+
+def _finding_comment(payload: dict[str, object]) -> str | None:
+    comment = payload.get("comment")
+    return comment if isinstance(comment, str) and comment.strip() else None
+
+
+def _finding_response(
+    catalog: ProtocolCatalog, protocol_id: str, entry: ProtocolCatalogEntry,
+) -> dict[str, object]:
+    review = catalog.review(protocol_id)
+    return {
+        "protocol_id": protocol_id,
+        "revision_id": entry.revision_id,
+        "readiness_status": entry.readiness_status,
+        "readiness_gates_cleared": review.get("readiness_gates_cleared"),
+        "available_for_execution": entry.available_for_execution,
+        "outstanding_blockers": review.get("outstanding_blockers"),
+        "reviewer_findings": review.get("reviewer_findings"),
+    }
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/acknowledge-gate")
+def acknowledge_protocol_readiness_gate(
+    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
+) -> dict[str, object]:
+    """Record a reviewer confirming this Protocol's safety warnings."""
+
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _reviewer_finding_actor()
+        reason_code = body.get("reason_code")
+        if not isinstance(reason_code, str) or not reason_code:
+            raise HTTPException(status_code=400, detail="reason_code_required")
+        catalog, store = _open_protocol_catalog()
+        try:
+            entry = catalog.acknowledge_readiness_gate(
+                protocol_id,
+                revision_id,
+                reason_code=reason_code,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                comment=_finding_comment(body),
+            )
+            return _finding_response(catalog, protocol_id, entry)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/confirm-repetition")
+def confirm_protocol_fixed_repetition(
+    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
+) -> dict[str, object]:
+    """Record a reviewer confirming one bounded repetition and its count."""
+
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _reviewer_finding_actor()
+        repetition_id = body.get("repetition_id")
+        repeat_count = body.get("repeat_count")
+        if not isinstance(repetition_id, str) or not repetition_id:
+            raise HTTPException(status_code=400, detail="repetition_id_required")
+        if isinstance(repeat_count, bool) or not isinstance(repeat_count, int):
+            raise HTTPException(status_code=400, detail="repeat_count_required")
+        catalog, store = _open_protocol_catalog()
+        try:
+            entry = catalog.confirm_fixed_repetition(
+                protocol_id,
+                revision_id,
+                repetition_id=repetition_id,
+                repeat_count=repeat_count,
+                evidence_segment_ids=_finding_segment_ids(body),
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                comment=_finding_comment(body),
+            )
+            return _finding_response(catalog, protocol_id, entry)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/revoke-repetition")
+def revoke_protocol_fixed_repetition(
+    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
+) -> dict[str, object]:
+    """Withdraw a repetition confirmation; the Protocol blocks again."""
+
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _reviewer_finding_actor()
+        repetition_id = body.get("repetition_id")
+        if not isinstance(repetition_id, str) or not repetition_id:
+            raise HTTPException(status_code=400, detail="repetition_id_required")
+        catalog, store = _open_protocol_catalog()
+        try:
+            entry = catalog.revoke_fixed_repetition_confirmation(
+                protocol_id,
+                revision_id,
+                repetition_id=repetition_id,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                comment=_finding_comment(body),
+            )
+            return _finding_response(catalog, protocol_id, entry)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/resolve-ambiguity")
+def resolve_protocol_ambiguity(
+    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
+) -> dict[str, object]:
+    """Record which of two source statements a reviewer read as authoritative."""
+
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        _scope_catalog_resource(protocol_id)
+        actor_principal_id, actor_role = _reviewer_finding_actor()
+        ambiguity_id = body.get("ambiguity_id")
+        decision = body.get("decision")
+        if not isinstance(ambiguity_id, str) or not ambiguity_id:
+            raise HTTPException(status_code=400, detail="ambiguity_id_required")
+        if not isinstance(decision, str) or not decision:
+            raise HTTPException(status_code=400, detail="decision_required")
+        catalog, store = _open_protocol_catalog()
+        try:
+            entry = catalog.resolve_ambiguity(
+                protocol_id,
+                revision_id,
+                ambiguity_id=ambiguity_id,
+                decision=decision,
+                evidence_segment_ids=_finding_segment_ids(body),
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                comment=_finding_comment(body),
+            )
+            return _finding_response(catalog, protocol_id, entry)
+        finally:
+            store.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
 
 
 @app.post("/api/protocols/{protocol_id}/activate-development")

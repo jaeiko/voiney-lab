@@ -874,10 +874,14 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         # the projection says so, and says why.
         self.assertEqual(matching[0]["approval_status"], "unapproved")
         self.assertFalse(matching[0]["available_for_execution"])
+        # Readiness first: a fixture whose gates are not cleared is blocked
+        # by that, and saying "no activation recorded" while readiness stands
+        # tells a reviewer to press activate and wonder why nothing happens.
         self.assertEqual(
             matching[0]["execution_blocked_reason"],
-            "development_activation_not_recorded",
+            "readiness_gates_blocked",
         )
+        self.assertTrue(matching[0]["outstanding_blockers"])
         self.assertFalse(matching[0]["development_activation"]["activated"])
         self.assertTrue(matching[0]["development_only"])
         self.assertEqual(

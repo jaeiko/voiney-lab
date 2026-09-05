@@ -91,7 +91,7 @@ class WorkerDeathTests(unittest.TestCase):
                 extract_protocol_pdf(self.source)
 
     def test_a_worker_that_hangs_is_killed_and_raises_a_timeout(self) -> None:
-        with patch.object(pdf_module, "PDF_WORKER_TIMEOUT_SECONDS", 1.0):
+        with patch.object(pdf_module, "_worker_timeout_seconds", lambda: 1.0):
             with self._worker_replaced_by("import time; time.sleep(30)"):
                 with self.assertRaises(ProtocolPdfWorkerTimeoutError) as caught:
                     extract_protocol_pdf(self.source)
@@ -204,6 +204,26 @@ class WorkerContractTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
 
     def test_the_limits_are_stated_with_the_measurements_behind_them(self):
+        import os
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(
+                "VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS", None
+            )
+            self.assertEqual(pdf_module._worker_timeout_seconds(), 30.0)
+        # A host may say its machine needs longer; nonsense is ignored rather
+        # than obeyed, so a typo cannot silently remove the bound.
+        for raw, expected in (
+            ("120", 120.0), ("0.5", 30.0), ("100000", 30.0), ("soon", 30.0),
+        ):
+            with self.subTest(raw=raw):
+                with patch.dict(
+                    os.environ,
+                    {"VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS": raw},
+                ):
+                    self.assertEqual(
+                        pdf_module._worker_timeout_seconds(), expected
+                    )
         self.assertEqual(pdf_module.PDF_WORKER_TIMEOUT_SECONDS, 30.0)
         self.assertEqual(
             pdf_module.PDF_WORKER_ADDRESS_SPACE_BYTES, 1024 * 1024 * 1024

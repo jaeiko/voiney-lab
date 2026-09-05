@@ -292,6 +292,14 @@ class ProtocolEvidenceDiagnostic:
     actual_length: int | None = None
     missing_numbered_action_count: int | None = None
     page_coverage_count: int | None = None
+    #: Segment identities the refusal is about, at most a handful. A segment id
+    #: is a hash the server computed from its own source bytes -- an identity,
+    #: not content -- so naming one says which unit of evidence was mishandled
+    #: without quoting a word of the document. Without it a reader is told a
+    #: page number and has to re-derive the rest by hand, which is what STEP 25
+    #: had to do to find that in-gel page 6's offender was a Note and not the
+    #: running footer.
+    offending_segment_ids: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, object]:
         """Return only bounded identities and reason codes, never source text."""
@@ -331,6 +339,8 @@ class ProtocolEvidenceDiagnostic:
             values["matching_source_pages"] = list(
                 self.matching_source_pages
             )
+        if self.offending_segment_ids:
+            values["offending_segment_ids"] = list(self.offending_segment_ids)
         return values
 
     def privacy_safe_dict(self) -> dict[str, object]:

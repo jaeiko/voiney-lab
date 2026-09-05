@@ -54,6 +54,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
+    generate_page_evidence_segments,
     ProtocolChunkClaimAnalysis,
     _numbered_step_labels,
     reopen_evidence_span,
@@ -1591,14 +1592,249 @@ class ProtocolCatalog:
                         else "blocked"
                     ),
                 },
-                "reviewer_actions": (
-                    ["review_hazards", "approve", "reject"]
-                    if hazard_review_required
-                    else ["approve", "reject"]
+                # Every reason still blocking, each said to be a person's to
+                # clear or not. The panel used to show whichever single label
+                # its own status mapping happened to reach, so in-gel -- held
+                # by four reasons, two of which nobody can clear -- read as
+                # "no development activation recorded", which invites a
+                # reviewer to press activate and wonder why nothing happens.
+                "outstanding_blockers": self._outstanding_blockers(
+                    revision, analysis
+                ),
+                # What a person can actually do here, not what the domain has
+                # names for. STEP 25 measured the old list: of
+                # review_hazards / approve / reject, the UI could reach none.
+                "reviewer_actions": self._available_reviewer_actions(
+                    revision, analysis
+                ),
+                "reviewer_findings": self._recorded_findings(
+                    revision, analysis
                 ),
             }
         )
         return base
+
+    #: Which blocking reasons a person can clear, and with what.
+    #: ``kind`` is the split a reviewer needs: is this mine to settle, or is
+    #: the system simply unable to run this protocol?
+    _BLOCKER_RESOLUTION: dict[str, dict[str, str]] = {
+        domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value: {
+            "kind": "reviewer_can_clear",
+            "action": "resolve_ambiguity",
+        },
+        domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value: {
+            "kind": "reviewer_can_clear",
+            "action": "confirm_repetition",
+        },
+    }
+
+    def _outstanding_blockers(
+        self, revision: ProtocolRevisionRecord, analysis: Any
+    ) -> list[dict[str, object]]:
+        """Every blocking reason, with who can clear it and how."""
+
+        if analysis is None:
+            return []
+        cleared = self._acknowledged_gates(
+            revision.experiment_id,
+            revision.revision_number,
+            analysis.analysis_revision_number,
+        )
+        blockers: list[dict[str, object]] = []
+        for reason in analysis.readiness.reasons:
+            code = reason.code.value
+            resolution = self._BLOCKER_RESOLUTION.get(code)
+            blockers.append(
+                {
+                    "code": code,
+                    "message": reason.message,
+                    # A capability this profile does not have is not a
+                    # judgement anyone is withholding. Saying so is the
+                    # difference between "fetch a reviewer" and "wait for a
+                    # release".
+                    "kind": (
+                        resolution["kind"] if resolution
+                        else "capability_required"
+                    ),
+                    "reviewer_action": (
+                        resolution["action"] if resolution else None
+                    ),
+                    # "Has a person already settled this one?" -- asked of
+                    # the same check that clears the reason, not only of the
+                    # acknowledgement ledger. Reading acknowledgements alone
+                    # left a resolved ambiguity showing as untouched, which is
+                    # the misleading-display defect this field exists to fix.
+                    "already_acknowledged": self._reason_is_settled(
+                        revision, analysis, code, cleared
+                    ),
+                    "source_page_number": (
+                        reason.evidence.source_page_number
+                        if reason.evidence else None
+                    ),
+                    "source_excerpt": (
+                        reason.evidence.source_excerpt
+                        if reason.evidence else None
+                    ),
+                    "step_id": reason.step_id,
+                    # A finding that must cite evidence needs something to
+                    # cite. Measured on the curated fixture: its constructs
+                    # carry no segment ids at all, so a reviewer had nothing
+                    # to select and resolve-ambiguity refused every attempt.
+                    # The segments of the page the reason points at are
+                    # computed here from the server's own source bytes, which
+                    # is where a citation has to come from anyway.
+                    # The decision is a choice from a fixed vocabulary, not
+                    # prose: only one of these two sentences is sayable, and
+                    # only the first clears the reason. A UI that offers a
+                    # text box offers a refusal.
+                    "decision_options": (
+                        sorted(_AMBIGUITY_DECISIONS)
+                        if resolution
+                        and resolution["action"] == "resolve_ambiguity"
+                        else []
+                    ),
+                    "clearing_decision": (
+                        AMBIGUITY_SINGLE_AUTHORITATIVE
+                        if resolution
+                        and resolution["action"] == "resolve_ambiguity"
+                        else None
+                    ),
+                    "citable_segments": (
+                        self._citable_segments(revision, reason)
+                        if resolution
+                        and resolution["action"]
+                        in {"resolve_ambiguity", "confirm_repetition"}
+                        else []
+                    ),
+                }
+            )
+        return blockers
+
+    def _reason_is_settled(
+        self,
+        revision: ProtocolRevisionRecord,
+        analysis: Any,
+        code: str,
+        acknowledged: frozenset[str] | set[str],
+    ) -> bool:
+        """Whether a person's standing decision already covers this reason."""
+
+        if code in _ACKNOWLEDGEABLE_GATES:
+            return code in acknowledged
+        if code == domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value:
+            return self._every_ambiguity_resolved(
+                revision.experiment_id, revision.revision_number, analysis
+            )
+        if (
+            code
+            == domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value
+        ):
+            return self._every_fixed_repetition_confirmed(
+                revision.experiment_id, revision.revision_number, analysis
+            )
+        return False
+
+    def _citable_segments(
+        self, revision: ProtocolRevisionRecord, reason: Any
+    ) -> list[dict[str, object]]:
+        """Every segment on the page this reason cites, as choosable evidence."""
+
+        page_number = (
+            reason.evidence.source_page_number if reason.evidence else None
+        )
+        if not page_number:
+            return []
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            return []
+        try:
+            extraction = extract_protocol_pdf(
+                self.store.file_store.object_path(
+                    revision.pdf_checksum, expected_size=pdf_object.byte_size
+                )
+            )
+            segments = generate_page_evidence_segments(
+                extraction,
+                source_revision=_revision_id(revision.revision_number),
+                page_number=page_number,
+            )
+        except Exception:  # noqa: BLE001 - no citations rather than a guess
+            return []
+        return [
+            {
+                "segment_id": segment.segment_id,
+                "segment_index": segment.segment_index,
+                "source_page_number": segment.source_page_number,
+                "excerpt": segment.text[:400],
+            }
+            for segment in segments
+            if segment.text.strip()
+        ]
+
+    def _available_reviewer_actions(
+        self, revision: ProtocolRevisionRecord, analysis: Any
+    ) -> list[str]:
+        """Only operations this build can actually perform from a request."""
+
+        if analysis is None:
+            return []
+        actions = {
+            item["reviewer_action"]
+            for item in self._outstanding_blockers(revision, analysis)
+            if item["reviewer_action"] and not item["already_acknowledged"]
+        }
+        if self._recorded_findings(revision, analysis):
+            actions.add("revoke_finding")
+        return sorted(actions)
+
+    def _recorded_findings(
+        self, revision: ProtocolRevisionRecord, analysis: Any
+    ) -> list[dict[str, object]]:
+        """Who decided what, and when, for this exact analysis revision."""
+
+        if analysis is None:
+            return []
+        kinds = {
+            _GATE_ACKNOWLEDGEMENT_EVENT: "gate_acknowledged",
+            _REPETITION_CONFIRMATION_EVENT: "repetition_confirmed",
+            _REPETITION_REVOCATION_EVENT: "repetition_confirmation_revoked",
+            _AMBIGUITY_RESOLUTION_EVENT: "ambiguity_resolved",
+        }
+        findings = []
+        for event in self.store.list_events(revision.experiment_id):
+            if event.event_type not in kinds:
+                continue
+            if event.protocol_revision_number != revision.revision_number:
+                continue
+            if (
+                event.analysis_revision_number
+                != analysis.analysis_revision_number
+            ):
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            findings.append(
+                {
+                    "kind": kinds[event.event_type],
+                    "decision": payload.get("decision"),
+                    "reason_code": payload.get("reason_code"),
+                    "repetition_id": payload.get("repetition_id"),
+                    "ambiguity_id": payload.get("ambiguity_id"),
+                    "repeat_count": payload.get("repeat_count"),
+                    "actor_principal_id": payload.get("actor_principal_id"),
+                    "actor_role": payload.get("actor_role"),
+                    "recorded_at": event.recorded_at,
+                    "comment": payload.get("comment"),
+                }
+            )
+        return findings
 
     def register(
         self,

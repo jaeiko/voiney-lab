@@ -486,3 +486,80 @@ class CrossInvocationChunkByChunkTests(unittest.TestCase):
         self.assertEqual(
             len(merged.page_coverage), self.extraction.page_count
         )
+
+
+class EchoedIdentitiesArePinnedTests(unittest.TestCase):
+    """What the response must copy back is stated, not left to transcription.
+
+    in-gel chunk 3 was rejected twice in a row for request_handle_mismatch
+    while four other chunks of the same document echoed theirs correctly. The
+    handle is 24 characters of entropy and the schema described it as "string",
+    so a strict provider had no way to know what it had to be and the server
+    had no way to accept anything else. That is a failure this code created.
+    """
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.fixture = _Fixture(Path(self.temp.name))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_the_schema_pins_every_identity_the_server_checks(self) -> None:
+        schema = claim_response_schema(self.fixture.request)
+        properties = schema["properties"]
+        self.assertEqual(
+            properties["request_handle"],
+            {"type": "string", "const": self.fixture.request.request_handle},
+        )
+        self.assertEqual(
+            properties["capability_policy_id"],
+            {
+                "type": "string",
+                "const": self.fixture.request.capability_policy_id,
+            },
+        )
+        self.assertEqual(
+            properties["claim_schema_version"],
+            {"type": "integer", "const": CLAIM_SCHEMA_VERSION},
+        )
+
+    def test_the_server_still_refuses_a_wrong_handle_on_its_own(self) -> None:
+        """A pinned schema is the provider's constraint, not the server's."""
+
+        payload = json.loads(self.fixture.raw)
+        payload["request_handle"] = "r-" + "0" * 22
+        with self.assertRaises(Exception) as caught:
+            self.fixture.validate(json.dumps(payload))
+        diagnostic = getattr(caught.exception, "diagnostic", None)
+        self.assertEqual(
+            getattr(diagnostic, "reason_code", None), "chunk_identity_mismatch"
+        )
+        self.assertEqual(
+            getattr(diagnostic, "mismatch_class", None),
+            "request_handle_mismatch",
+        )
+
+    def test_a_refusal_names_the_segments_it_is_about(self) -> None:
+        """STEP 25 had to re-derive by hand which segment a refusal meant."""
+
+        from voice_workflow_agent.experiment_protocol_analysis import (
+            ProtocolEvidenceDiagnostic,
+        )
+
+        diagnostic = ProtocolEvidenceDiagnostic(
+            validation_stage="chunk_page_coverage_validation",
+            reason_code="declined_segment_states_a_value",
+            mismatch_class="segment_accounting_mismatch",
+            offending_segment_ids=("seg-b", "seg-a"),
+        )
+        self.assertEqual(
+            diagnostic.public_dict()["offending_segment_ids"],
+            ["seg-b", "seg-a"],
+        )
+        self.assertNotIn(
+            "offending_segment_ids",
+            ProtocolEvidenceDiagnostic(
+                validation_stage="s", reason_code="r", mismatch_class="m"
+            ).public_dict(),
+        )

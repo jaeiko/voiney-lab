@@ -95,7 +95,26 @@ class PipelineReachesAssemblyTests(unittest.TestCase):
     def test_extraction_and_admission(self) -> None:
         self.assertEqual(self.extraction.page_count, 9)
         self.assertTrue(self.extraction.text_cross_checked)
-        self.assertEqual(len(self.plan.chunks), 3)
+        # Five since STEP 26, not three. The planner used to bound a chunk by
+        # source bytes as a proxy for how many claims it would owe, and
+        # measurement said the proxy was wrong: this document's chunk 0 held
+        # 3398 bytes and 2 numbered labels and passed a real provider three
+        # times over, while chunk 1 held 4007 bytes -- barely more -- and 22
+        # labels, and was rejected on every attempt. Bounding the labels
+        # instead takes the worst chunk here from 22 to 9.
+        self.assertEqual(len(self.plan.chunks), 5)
+        from voice_workflow_agent.protocol_claim_analysis import (
+            _numbered_step_labels,
+        )
+
+        owed = [
+            sum(
+                len(_numbered_step_labels(self.extraction.pages[page - 1].text))
+                for page in chunk.core_page_refs
+            )
+            for chunk in self.plan.chunks
+        ]
+        self.assertEqual(owed, [2, 9, 9, 4, 1])
 
     def test_every_chunk_validates_and_merges(self) -> None:
         self.assertEqual(len(self.merged.claims), 86)
