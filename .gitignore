@@ -19,3 +19,4 @@ node_modules/
 # are absent, so a missing file is loud rather than silent.
 /intracellularmetaboliteextraction.pdf
 /usingdynamicheadspacecollections.pdf
+data/development_cache/
