@@ -195,7 +195,11 @@ class ReplayCheckTests(unittest.TestCase):
 # checked that a phrase was *present*, not that the phrase said what the server
 # enforces. Both misses let declined_segment_states_a_value through. This table
 # is checked against the codes derived from the module source, so a new rule
-# cannot land without an entry, and a deleted one cannot leave a stale entry.
+# cannot land without an entry, and a deleted one cannot leave a stale entry --
+# which is how that code's own entry left, in STEP 35, when declining a stated
+# value stopped ending the chunk and became a reviewer's blocker instead. The
+# prompt still tells a model not to do it, which is stricter than the server
+# and therefore safe.
 #
 # PROMPT: the provider avoids it by following a stated instruction.
 # SCHEMA: the response schema makes it unrepresentable.
@@ -213,14 +217,6 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "declined_segment_not_on_page": (
         _PROMPT,
         ("listed in that page's declined_evidence_segment_ids",),
-    ),
-    "declined_segment_states_a_value": (
-        _PROMPT,
-        (
-            "decided by shape, not by meaning",
-            "digit immediately followed by one of",
-            "none of them may be declined",
-        ),
     ),
     "duplicate_declined_segment": (
         _PROMPT,

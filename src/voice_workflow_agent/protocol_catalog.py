@@ -104,6 +104,17 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
         # can settle it. What they cannot do is make the value accounted for,
         # so the acknowledgement is audited and the segments stay addressable.
         domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
+        # A declined value is a judgement the reviewer may agree with -- the
+        # heading really does instruct nobody -- or may not. Either way it is
+        # theirs to make, and the acknowledgement is audited.
+        domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
+        # Deliberately clearable too. A skimmed page is not made read by a
+        # signature, but refusing to let anyone say "I checked these" would
+        # leave the Protocol permanently unrunnable with no route back, which
+        # is how a gate stops being a gate and becomes a dead end. The
+        # separate reason code is what tells a reviewer this is the serious
+        # one.
+        domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
     }
 )
 _DISPOSITION_CONFIRMATION_EVENT = "protocol_label_disposition_confirmed"
@@ -1633,6 +1644,14 @@ class ProtocolCatalog:
             "action": "acknowledge_gate",
         },
         domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value: {
             "kind": "reviewer_can_clear",
             "action": "acknowledge_gate",
         },

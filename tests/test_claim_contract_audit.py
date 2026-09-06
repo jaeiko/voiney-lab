@@ -89,6 +89,7 @@ class ContractAuditTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.schema, cls._temp = _example_schema()
         cls.codes = collect_refusal_codes()
+        cls.prompt = _flat_prompt()
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -139,17 +140,34 @@ class ContractAuditTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertGreater(len(evidence.detail.split()), 3)
 
-    def test_the_three_defects_this_audit_exists_for_are_covered(self) -> None:
+    def test_the_defects_this_audit_exists_for_are_covered(self) -> None:
         """The regressions that motivated it, named."""
 
         for code, kind in (
             ("chunk_identity_mismatch", SCHEMA),
             ("protocol_title_missing_or_conflicting", PROMPT),
-            ("declined_segment_states_a_value", PROMPT),
         ):
             with self.subTest(code=code):
                 self.assertIn(code, CONTRACT_EVIDENCE)
                 self.assertEqual(CONTRACT_EVIDENCE[code].kind, kind)
+
+    def test_the_declination_refusal_is_gone_and_stays_gone(self) -> None:
+        """The third motivating defect, resolved rather than documented.
+
+        ``declined_segment_states_a_value`` was the audit's own example of a
+        rule the model was told and still fell foul of. STEP 35 removed the
+        refusal: declining a stated value now registers a blocker a reviewer
+        clears, so no chunk is discarded for it. The audit's rule is that the
+        table holds no entry for a refusal that does not exist, and this is
+        that rule applied to itself.
+        """
+
+        self.assertNotIn("declined_segment_states_a_value", self.codes)
+        self.assertNotIn("declined_segment_states_a_value", CONTRACT_EVIDENCE)
+        # The prompt still says it, which is stricter than the server and so
+        # is safe -- but it must remain *stated*, or the rule table below
+        # would be recording a phrase nobody is shown.
+        self.assertIn("none of them may be declined", self.prompt)
 
     def test_the_audit_reads_across_file_boundaries(self) -> None:
         """The title refusal lives in a different module from most of them."""

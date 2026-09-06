@@ -433,5 +433,247 @@ class TheProductionPathTests(unittest.TestCase):
         self.assertIsNone(fixture.unread_pages)
 
 
+class ADeclinedValueBlocksWithoutDiscardingTests(unittest.TestCase):
+    """STEP 35: being right about a heading no longer costs a provider call.
+
+    ``declined_segment_states_a_value`` discarded the whole chunk. Measured on
+    in-gel that cost two of five chunks over one segment each -- "Reduction and
+    alkylation of cysteines 1h", a section heading with its own time estimate,
+    and a column of four durations -- and took with them four correct claims
+    including a repetition over steps 2-7 that had been derived correctly.
+
+    Safety is "not executed before a person has looked". Both designs achieve
+    it. Only one of them also throws away the evidence.
+    """
+
+    def test_the_refusal_no_longer_exists(self) -> None:
+        from voice_workflow_agent.claim_contract_audit import (
+            collect_refusal_codes,
+        )
+
+        self.assertNotIn(
+            "declined_segment_states_a_value", collect_refusal_codes()
+        )
+
+    def test_a_declined_value_inside_a_step_blocks_execution(self) -> None:
+        assessment = domain.assess_readiness(
+            _synthetic_protocol(self), pages_declining_stated_values=(5,)
+        )
+        self.assertIn(
+            domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
+            assessment.reason_codes,
+        )
+        self.assertEqual(
+            assessment.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
+        )
+
+    def test_it_is_a_separate_reason_from_an_omission(self) -> None:
+        """A silence and a judgement are different faults and read differently."""
+
+        both = domain.assess_readiness(
+            _synthetic_protocol(self),
+            pages_stating_unaccounted_values=(8,),
+            pages_declining_stated_values=(5,),
+        )
+        self.assertIn(
+            domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
+            both.reason_codes,
+        )
+        self.assertIn(
+            domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
+            both.reason_codes,
+        )
+
+    def test_the_allowance_has_a_floor_that_the_old_proposal_lacked(self):
+        """min(2, count//10) was measured to be 0 for two paid chunks."""
+
+        from voice_workflow_agent.protocol_claim_analysis import (
+            declined_value_allowance,
+        )
+
+        # The floor is what stops a small chunk being held to a stricter
+        # standard than a large one. ord3 has nine substantive segments and
+        # ord4 four; under the earlier proposal both had an allowance of zero,
+        # so a single declination would have exceeded it.
+        self.assertEqual(declined_value_allowance(4), 2)
+        self.assertEqual(declined_value_allowance(9), 3)
+        self.assertEqual(declined_value_allowance(25), 7)
+        self.assertEqual(declined_value_allowance(0), 2)
+        # Monotonic, so a bigger chunk is never allowed less.
+        allowances = [declined_value_allowance(n) for n in range(0, 120)]
+        self.assertEqual(allowances, sorted(allowances))
+
+    def test_exceeding_the_allowance_signals_and_does_not_destroy(self) -> None:
+        crowded = domain.assess_readiness(
+            _synthetic_protocol(self), pages_declining_excessive_values=(7,)
+        )
+        self.assertIn(
+            domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
+            crowded.reason_codes,
+        )
+        self.assertEqual(
+            crowded.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
+        )
+
+    def test_both_new_reasons_are_gates_a_reviewer_can_clear(self) -> None:
+        from voice_workflow_agent.protocol_catalog import (
+            _ACKNOWLEDGEABLE_GATES,
+            ProtocolCatalog,
+        )
+
+        for code in (
+            domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
+            domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, _ACKNOWLEDGEABLE_GATES)
+                self.assertEqual(
+                    ProtocolCatalog._BLOCKER_RESOLUTION[code]["action"],
+                    "acknowledge_gate",
+                )
+
+
+class TheRealRefusalScenarioTests(unittest.TestCase):
+    """The two segments that refused the two chunks, run through the validator.
+
+    Not argued from the rules. A contract-satisfying response is generated
+    offline for ord1 and ord2, edited to decline exactly the segment that
+    refused the real run -- in-gel page 5 segment 7 and page 7 segment 10 --
+    and pushed through ``parse_chunk_claim_response``.
+
+    This is the check that says whether collecting is worth calls again. If it
+    ever fails, the known blocker is back and a collection would buy nothing.
+    """
+
+    TARGETS = {1: (5, 7), 2: (7, 10)}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not IN_GEL.is_file():
+            raise unittest.SkipTest(f"{IN_GEL} is not present.")
+        import sys
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+
+    def _accept_with_declination(self, ordinal):
+        import json
+
+        from voice_workflow_agent.experiment_protocol_pdf import (
+            extract_protocol_pdf,
+        )
+        from voice_workflow_agent.protocol_chunk_analysis import (
+            ChunkAnalysisLimits,
+            extraction_for_chunk,
+            plan_protocol_chunks,
+        )
+        from voice_workflow_agent.protocol_claim_analysis import (
+            CLAIM_ANALYSIS_SYSTEM_PROMPT,
+            claim_response_schema,
+            generate_page_evidence_segments,
+            parse_chunk_claim_response,
+            prepare_chunk_claim_request_context,
+        )
+
+        from prototype_claim_chunks import ExactNumberedStepClaimModel
+
+        page, index = self.TARGETS[ordinal]
+        extraction = extract_protocol_pdf(IN_GEL)
+        plan = plan_protocol_chunks(
+            extraction,
+            f"protocol-{extraction.sha256[:32]}",
+            "pdf-1",
+            limits=ChunkAnalysisLimits(max_concurrency=1, max_retries=0),
+        )
+        chunk = next(item for item in plan.chunks if item.ordinal == ordinal)
+        scoped = extraction_for_chunk(extraction, chunk)
+        request = prepare_chunk_claim_request_context(
+            scoped,
+            source_revision=chunk.candidate_revision_id,
+            chunk_id=chunk.chunk_id,
+            ordinal=chunk.ordinal,
+            core_page_refs=chunk.core_page_refs,
+            context_page_refs=chunk.overlap_page_refs,
+        )
+        payload = json.loads(
+            ExactNumberedStepClaimModel(extraction).analyze(
+                system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
+                input_json=request.input_json(),
+                response_schema=claim_response_schema(request),
+            )
+        )
+        segment = generate_page_evidence_segments(
+            extraction,
+            source_revision=chunk.candidate_revision_id,
+            page_number=page,
+        )[index]
+        handle = next(
+            item.handle
+            for item in request.pages
+            for item in item.evidence
+            if item.segment.segment_id == segment.segment_id
+        )
+        payload["claims"] = [
+            claim
+            for claim in payload["claims"]
+            if handle
+            not in (claim.get("evidence") or {}).get("evidence_segment_ids", [])
+        ]
+        for coverage in payload["page_coverage"]:
+            if coverage["source_page_number"] == page:
+                coverage["declined_evidence_segment_ids"] = sorted(
+                    set(coverage.get("declined_evidence_segment_ids") or [])
+                    | {handle}
+                )
+        analysis = parse_chunk_claim_response(
+            json.dumps(payload),
+            extraction=scoped,
+            source_revision=chunk.candidate_revision_id,
+            chunk_id=chunk.chunk_id,
+            core_page_refs=chunk.core_page_refs,
+            request=request,
+        )
+        return extraction, chunk, analysis, page
+
+    def test_ord1_and_ord2_are_no_longer_discarded_for_them(self) -> None:
+        from voice_workflow_agent.protocol_claim_analysis import (
+            pages_declining_excessive_values,
+            pages_declining_stated_values,
+        )
+
+        for ordinal in (1, 2):
+            with self.subTest(ordinal=ordinal):
+                extraction, chunk, analysis, page = (
+                    self._accept_with_declination(ordinal)
+                )
+                # Accepted, and the claims that were right are still here.
+                self.assertGreater(len(analysis.claims), 20)
+                # And it is not waved through: the declination is a blocker.
+                self.assertEqual(
+                    pages_declining_stated_values(
+                        extraction,
+                        analysis.page_coverage,
+                        source_revision=chunk.candidate_revision_id,
+                    ),
+                    (page,),
+                )
+                # One declination is nowhere near "this page was not read".
+                self.assertEqual(
+                    pages_declining_excessive_values(
+                        extraction,
+                        analysis.page_coverage,
+                        source_revision=chunk.candidate_revision_id,
+                    ),
+                    (),
+                )
+
+
+def _synthetic_protocol(case):
+    if not IN_GEL.is_file():
+        case.skipTest(f"{IN_GEL} is not present.")
+    from tests.test_pdf_to_session_walkthrough import _pipeline
+
+    return _pipeline()[3].protocol
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

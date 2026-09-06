@@ -18,6 +18,8 @@ from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
+    _segments_inside_numbered_steps,
+    generate_page_evidence_segments,
     segment_carries_unit_bearing_value,
     segment_is_substantive,
     step_block_ranges,
@@ -234,24 +236,58 @@ class SegmentAccountingTests(unittest.TestCase):
         self.assertEqual(coverage.unaccounted_segment_ids, ())
         self.assertEqual(coverage.status, PageCoverageStatus.COMPLETE)
 
-    def test_a_segment_stating_a_value_cannot_be_declined(self) -> None:
-        """The unit cross-check: units are notation, not vocabulary."""
+    def test_a_declined_value_is_recorded_and_no_longer_ends_the_chunk(self):
+        """STEP 35: the same detection, a different consequence.
+
+        Declining a stated value used to raise
+        ``declined_segment_states_a_value`` and destroy the chunk. Measured on
+        in-gel, that cost two of five chunks over two segments -- a section
+        heading with a time estimate and a column of durations, neither of
+        which instructs anybody -- and took four correct claims with them.
+
+        The detection is unchanged and the declination is still not accepted
+        as settled: it stays on the record, where
+        ``pages_declining_stated_values`` turns it into a readiness blocker a
+        reviewer must clear. What no longer happens is the chunk being thrown
+        away for it.
+        """
+
+        from voice_workflow_agent.protocol_claim_analysis import (
+            pages_declining_stated_values,
+        )
 
         substantive = sorted(self._substantive())
         value = next(
             i for i in substantive if segment_carries_unit_bearing_value(self.texts[i])
         )
         others = [i for i in substantive if i != value]
-        with self.assertRaises(ProtocolAnalysisEvidenceError) as caught:
-            self._parse(
-                self._response(
-                    claimed=[substantive[0]],
-                    declined=[value, *others[1:]],
-                )
+        analysis = self._parse(
+            self._response(
+                claimed=[substantive[0]],
+                declined=[value, *others[1:]],
             )
+        )
+        declined_id = self.request.pages[0].evidence[value].segment.segment_id
+        coverage = analysis.page_coverage[0]
+        self.assertIn(declined_id, coverage.declined_segment_ids)
+        # And the claims that were right are still here.
+        self.assertTrue(analysis.claims)
+        # Whether it blocks depends on position, exactly as the refusal did:
+        # the rule only ever applied inside a numbered step.
+        gating = pages_declining_stated_values(
+            self.extraction, analysis.page_coverage, source_revision=REVISION
+        )
         self.assertEqual(
-            caught.exception.diagnostic.reason_code,
-            "declined_segment_states_a_value",
+            bool(gating),
+            declined_id
+            in _segments_inside_numbered_steps(
+                generate_page_evidence_segments(
+                    self.extraction,
+                    source_revision=REVISION,
+                    page_number=1,
+                ),
+                self.extraction.pages[0].bottom_band_offset,
+            ),
         )
 
     def test_a_declined_handle_must_belong_to_the_page(self) -> None:

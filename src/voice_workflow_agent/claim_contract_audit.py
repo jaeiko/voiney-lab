@@ -10,6 +10,12 @@ had never stated:
 * STEP 28 -- the chunk's ordinal, which assembly depends on, was not in the
   request at all.
 
+``declined_segment_states_a_value`` was here until STEP 35, when declining a
+stated value stopped ending the chunk and became a blocker a reviewer clears.
+Its entry is gone because the refusal is gone; the prompt still tells a model
+not to decline such a segment, which is now stricter than the server, and that
+direction is safe -- a model that obeys gives up a move it did not need.
+
 Each cost provider calls to discover, and together they are why no document
 merged for four steps. None of them was a model failure: a model cannot obey
 a rule nobody wrote down.
@@ -136,9 +142,6 @@ CONTRACT_EVIDENCE: dict[str, ContractEvidence] = {
     "declined_segment_not_on_page": _prompt(
         "Each segment is either cited by at least one claim or marker, or"
         " listed in that page's declined_evidence_segment_ids"
-    ),
-    "declined_segment_states_a_value": _prompt(
-        "none of them may be declined"
     ),
     "unsupported_coverage_status": _schema(
         "properties.page_coverage.items.properties.analysis_incomplete"
@@ -394,8 +397,12 @@ def server_accepts(position: SegmentPosition) -> frozenset[str]:
     if not position.substantive:
         return EVERY_MOVE
     moves = set()
-    if not (position.inside_a_step and position.carries_value):
-        moves.add(DECLINE)
+    # Since STEP 35 the server accepts a declination of a stated value inside a
+    # step: it registers a blocker instead of ending the chunk. The prompt
+    # still forbids it, which is stricter than the server and therefore safe --
+    # see the note above. The condition is kept rather than deleted because it
+    # is what the *prompt* narrows on, and prompt_permits is what it feeds.
+    moves.add(DECLINE)
     if position.outside_every_step:
         moves.add(CITE_DOCUMENT_LEVEL)
     if position.inside_a_step and position.enclosing_step_label_on_this_page:

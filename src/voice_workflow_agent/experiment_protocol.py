@@ -118,6 +118,28 @@ class ReadinessReasonCode(str, Enum):
     #: but the value that went missing keeps the Protocol out of execution
     #: until a person has looked at it.
     SOURCE_PAGE_NOT_FULLY_READ = "source_page_not_fully_read"
+    #: The analysis declined a segment that states a value inside a numbered
+    #: step -- it read the segment and recorded that it holds no claim.
+    #:
+    #: This used to discard the whole chunk. That was one defensible reading of
+    #: fail closed and it turned out to be the expensive one: two of in-gel's
+    #: five chunks were thrown away over two segments, and both segments were a
+    #: heading and a table of durations that genuinely are not instructions.
+    #: The model's judgement was right and the refusal destroyed the four
+    #: correct claims that travelled with it.
+    #:
+    #: Safety here means "not executed before a person has looked", not
+    #: "evidence destroyed". So the declination stands as a record, the rest of
+    #: the chunk survives, and the Protocol does not run until a reviewer has
+    #: decided whether that value was an instruction.
+    DECLINED_VALUE_NOT_RESOLVED = "declined_value_not_resolved"
+    #: So many values declined that the page is unlikely to have been read.
+    #:
+    #: A few headings and tables state values that instruct nobody. A quarter
+    #: of a chunk doing so is not that; it is a chunk that was skimmed. This is
+    #: the difference between the ordinary case above and a failure, and it is
+    #: a separate reason so a reviewer can tell them apart.
+    EXCESSIVE_DECLINED_VALUES = "excessive_declined_values"
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
@@ -1585,6 +1607,8 @@ _REASON_ORDER = {
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
             ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ,
+            ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED,
+            ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES,
             ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
@@ -1677,6 +1701,8 @@ def assess_readiness(
     capability_policy: CapabilityPolicy = P1_CAPABILITY_POLICY,
     source_lineage: SourceLineage = SourceLineage.UNKNOWN,
     pages_stating_unaccounted_values: tuple[int, ...] = (),
+    pages_declining_stated_values: tuple[int, ...] = (),
+    pages_declining_excessive_values: tuple[int, ...] = (),
 ) -> ReadinessAssessment:
     """Fail closed with two public outcomes and stable, sanitized reasons.
 
@@ -1688,6 +1714,14 @@ def assess_readiness(
     analysis neither claimed nor declined. It is derived from the merge's own
     page coverage, never from anything a provider asserts, and an empty tuple
     is the ordinary case rather than a claim that every page was read.
+
+    ``pages_declining_stated_values`` names the pages where a value inside a
+    numbered step was declined -- read, and recorded as holding no claim. The
+    two are kept apart because they are different faults: one is a silence, the
+    other is a judgement a person may disagree with.
+
+    ``pages_declining_excessive_values`` names pages that declined so many
+    values the page is unlikely to have been read at all.
     """
 
     try:
@@ -1789,6 +1823,24 @@ def assess_readiness(
             }
         )
     )
+    declined_pages = tuple(
+        sorted(
+            {
+                page
+                for page in pages_declining_stated_values
+                if isinstance(page, int) and not isinstance(page, bool)
+            }
+        )
+    )
+    crowded = tuple(
+        sorted(
+            {
+                page
+                for page in pages_declining_excessive_values
+                if isinstance(page, int) and not isinstance(page, bool)
+            }
+        )
+    )
     if pages:
         reasons.append(
             ReadinessReason(
@@ -1798,6 +1850,30 @@ def assess_readiness(
                     f"{len(pages)} source page(s). A reviewer must read those "
                     "pages before execution; the value may be an instruction "
                     "nobody would otherwise be given."
+                ),
+            )
+        )
+
+    if declined_pages:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED,
+                message=(
+                    "The analysis recorded that a stated value holds no claim "
+                    f"on {len(declined_pages)} source page(s). A reviewer must "
+                    "decide whether it was an instruction; the analysis is not "
+                    "trusted to settle that alone."
+                ),
+            )
+        )
+    if crowded:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES,
+                message=(
+                    f"{len(crowded)} source page(s) declined more stated "
+                    "values than a page of headings and tables can account "
+                    "for. Those pages were probably not read."
                 ),
             )
         )

@@ -2493,39 +2493,35 @@ def _validate_page_segment_accounting(
     inside_step = _segments_inside_numbered_steps(
         segments, extraction.pages[page_number - 1].bottom_band_offset
     )
-    forced = [
-        segment_id
-        for segment_id in declined
-        if segment_id in substantive
-        and segment_id in inside_step
-        and segment_carries_unit_bearing_value(substantive[segment_id])
-    ]
-    if forced:
-        fail("declined_segment_states_a_value", len(forced), tuple(forced))
-    # An omission is not the same fault as a contradiction. Claiming and
-    # declining the same segment, or declining one that states a value, is an
-    # active false statement and still fails closed here. Leaving a segment out
-    # is a silence: it is recorded against the exact segments and forces the
-    # page to analysis_incomplete, while keeping the claims that were correct
-    # available for review instead of discarding the chunk.
+    # A declination of a stated value used to end the chunk here. It no longer
+    # does, and the reason is measured rather than theoretical: in-gel's two
+    # refused chunks were refused over one segment each, a section heading
+    # carrying its own time estimate and a column of four durations. Neither
+    # instructs anybody, the model was right to say so, and the refusal
+    # destroyed the correct claims that travelled with them -- including a
+    # repetition over steps 2-7 that had been derived correctly.
     #
-    # This comment used to end "which blocks the whole-document merge just as
-    # firmly". That described the world before STEP 28, which removed the merge
-    # veto for an incomplete page -- see ``validate_whole_protocol_claims``,
-    # where only a page missing outright is still refused. The sentence was left
-    # behind and for six steps it read as an assurance that nothing enforced,
-    # so an omitted value was the one dishonesty with no consequence at all.
-    #
-    # The consequence now lives where the fault belongs. An omission does not
-    # discard a chunk, but a value left unaccounted raises
-    # ``source_page_not_fully_read`` and keeps the Protocol out of execution
-    # until a person has read those pages -- see
-    # ``pages_stating_unaccounted_values`` below and ``assess_readiness``.
+    # Safety here is "not executed before a person has looked", not "evidence
+    # destroyed". The declination stays on the record, where
+    # ``pages_declining_stated_values`` finds it and readiness turns it into a
+    # blocker a reviewer must clear. Nothing is trusted that was not trusted
+    # before; what changes is that being right no longer costs a provider call.
     return (
         tuple(sorted(set(substantive) - cited_segment_ids - declined)),
         tuple(sorted(declined)),
         bool(substantive),
     )
+    # Neither disposition ends the chunk any more, and both are still
+    # answered for. An omission is a silence and raises
+    # ``source_page_not_fully_read``; a declination of a stated value is a
+    # judgement and raises ``declined_value_not_resolved``. Both keep the
+    # Protocol out of execution until a person has looked.
+    #
+    # This comment used to end "which blocks the whole-document merge just as
+    # firmly", describing the world before STEP 28 removed that veto -- see
+    # ``validate_whole_protocol_claims``, where only a page missing outright is
+    # still refused. The sentence outlived the mechanism by six steps and read
+    # as an assurance that nothing enforced.
 
 
 def unaccounted_segments_by_page(
@@ -2559,6 +2555,147 @@ def unaccounted_segments_by_page(
             continue
         pages[number] = omitted
     return dict(sorted(pages.items()))
+
+
+#: How many stated values a chunk may decline before the reading itself is in
+#: doubt, as a fraction of the chunk's substantive segments, with a floor.
+#:
+#: This is not derived from any document, and it deliberately is not a small
+#: number. Its job is to separate two situations that look alike in a count and
+#: are nothing alike in kind: a page with a few headings and tables whose
+#: numbers instruct nobody, and a page that was skimmed. The first is ordinary
+#: and is handled by ``declined_value_not_resolved``, one blocker per page. The
+#: second is a failure of reading, and no amount of reviewer attention makes a
+#: skimmed page into a read one.
+#:
+#: A quarter is the point past which "most of the values here are not
+#: instructions" stops being a reading of the page and becomes a claim about
+#: it. The floor of two exists so a four-segment chunk is not held to a
+#: stricter standard than a forty-segment one, which a bare fraction would do:
+#: ``substantive // 10`` -- an earlier proposal -- yields zero for any chunk
+#: under ten segments, so a single declination would have exceeded it.
+#:
+#: Measured against the four local sources afterwards as a sanity check, never
+#: to choose the number: nine of six hundred substantive segments are
+#: confidently not instructions, and twenty-nine at the outer bound. Both are
+#: far below a quarter, which is what a threshold for "this was not read"
+#: should look like.
+EXCESSIVE_DECLINED_VALUE_FRACTION = 0.25
+EXCESSIVE_DECLINED_VALUE_FLOOR = 2
+
+
+def declined_value_allowance(substantive_segment_count: int) -> int:
+    """How many stated values this chunk may decline before it is doubted."""
+
+    import math
+
+    return max(
+        EXCESSIVE_DECLINED_VALUE_FLOOR,
+        math.ceil(
+            max(0, substantive_segment_count) * EXCESSIVE_DECLINED_VALUE_FRACTION
+        ),
+    )
+
+
+def _declined_values_on_page(
+    extraction: ProtocolPdfExtraction,
+    record: Any,
+    *,
+    source_revision: str,
+) -> tuple[int | None, int]:
+    """(page number, how many declined segments state a value inside a step).
+
+    The condition is exactly the one the refusal used to test, so nothing about
+    which segments matter has changed -- only what happens to them.
+    """
+
+    def field(name):
+        if isinstance(record, dict):
+            return record.get(name)
+        return getattr(record, name, None)
+
+    number = field("source_page_number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None, 0
+    declined = set(field("declined_segment_ids") or ())
+    if not declined:
+        return number, 0
+    try:
+        segments = generate_page_evidence_segments(
+            extraction, source_revision=source_revision, page_number=number
+        )
+    except Exception:  # noqa: BLE001 - an unreadable page declines nothing
+        return number, 0
+    inside = _segments_inside_numbered_steps(
+        segments, extraction.pages[number - 1].bottom_band_offset
+    )
+    return number, sum(
+        1
+        for segment in segments
+        if segment.segment_id in declined
+        and segment.segment_id in inside
+        and segment_carries_unit_bearing_value(segment.text)
+    )
+
+
+def pages_declining_stated_values(
+    extraction: ProtocolPdfExtraction,
+    page_coverage: Sequence[Any],
+    *,
+    source_revision: str,
+) -> tuple[int, ...]:
+    """Pages where a value inside a numbered step was recorded as no claim.
+
+    Read, and judged to hold nothing. That judgement is often right -- a
+    section heading with a time estimate beside it instructs nobody -- and it
+    is not the analysis's to make alone, because the same shape covers a
+    duration that belongs to the step it sits in.
+    """
+
+    found = []
+    for record in page_coverage:
+        number, count = _declined_values_on_page(
+            extraction, record, source_revision=source_revision
+        )
+        if number is not None and count:
+            found.append(number)
+    return tuple(sorted(set(found)))
+
+
+def pages_declining_excessive_values(
+    extraction: ProtocolPdfExtraction,
+    page_coverage: Sequence[Any],
+    *,
+    source_revision: str,
+) -> tuple[int, ...]:
+    """Pages whose declined values outrun what headings and tables can explain.
+
+    Counted per page rather than per chunk, because a page is the unit the
+    evidence ledger records and the only unit available wherever the merge is.
+    A chunk-level count would need chunk identity threaded through the merge to
+    reach readiness, and would answer a slightly different question -- whether
+    the *run* was careless rather than whether *this page* was read.
+    """
+
+    crowded: list[int] = []
+    for record in page_coverage:
+        number, declined = _declined_values_on_page(
+            extraction, record, source_revision=source_revision
+        )
+        if number is None or not declined:
+            continue
+        try:
+            segments = generate_page_evidence_segments(
+                extraction, source_revision=source_revision, page_number=number
+            )
+        except Exception:  # noqa: BLE001 - an unreadable page declines nothing
+            continue
+        substantive = sum(
+            1 for item in segments if segment_is_substantive(item.text)
+        )
+        if declined > declined_value_allowance(substantive):
+            crowded.append(number)
+    return tuple(sorted(set(crowded)))
 
 
 def pages_stating_unaccounted_values(
@@ -3774,6 +3911,12 @@ def assemble_experiment_protocol(
     readiness = domain.assess_readiness(
         verified,
         pages_stating_unaccounted_values=pages_stating_unaccounted_values(
+            extraction, merged.page_coverage, source_revision=merged.source_revision
+        ),
+        pages_declining_stated_values=pages_declining_stated_values(
+            extraction, merged.page_coverage, source_revision=merged.source_revision
+        ),
+        pages_declining_excessive_values=pages_declining_excessive_values(
             extraction, merged.page_coverage, source_revision=merged.source_revision
         ),
     )
