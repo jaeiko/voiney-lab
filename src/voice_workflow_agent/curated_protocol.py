@@ -4306,6 +4306,10 @@ class CuratedProtocolSession:
         # with the rest of the session, and never written to the approval
         # ledger.
         self._acknowledged_unread_pages: dict[int, dict[str, object]] = {}
+        #: Step indices whose source warning text has been read out on this
+        #: run. Not an acknowledgement: nobody agrees to anything by hearing a
+        #: warning, and nothing here clears a readiness gate.
+        self._disclosed_safety_warnings: dict[int, dict[str, object]] = {}
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
@@ -4808,6 +4812,97 @@ class CuratedProtocolSession:
         page = self.fixture.steps[index].evidence.source_page_number
         return page in self._acknowledged_unread_pages
 
+    def step_declares_safety_warnings(self, index: int) -> bool:
+        """Whether the source states a hazard at this step."""
+
+        return bool(self._safety_warning_statements(index))
+
+    def _safety_warning_statements(self, index: int) -> tuple[Any, ...]:
+        """This step's warnings, its sub-actions' included, in source order."""
+
+        if not 0 <= index < len(self.fixture.steps):
+            return ()
+        step = self.fixture.steps[index]
+        statements = list(step.warnings)
+        for action in step.sub_actions:
+            statements.extend(action.warnings)
+        return tuple(statements)
+
+    def safety_warning_disclosure(self, index: int) -> dict[str, object] | None:
+        """What must be read out at this step, in the source's own words.
+
+        The provider chose which passage is a hazard; it did not write the
+        passage. What is returned here is ``evidence.source_excerpt``, which
+        the server reconstructed from the document's own bytes, so a
+        disclosure carries the source's wording even when the model's
+        reasoning about it was poor. A summary would put the model between an
+        operator and a hazard, which is the one place it must never be.
+
+        None means the source states no hazard at this step. That is not the
+        same as a safe step, and nothing here says it is.
+        """
+
+        statements = self._safety_warning_statements(index)
+        if not statements:
+            return None
+        record = self._disclosed_safety_warnings.get(index)
+        return {
+            "step_index": index,
+            "step_id": self.fixture.steps[index].step_id,
+            "notice": (
+                "이 단계에는 원문에 기재된 안전 경고가 있습니다. "
+                "원문 그대로 읽어 드립니다."
+            ),
+            "warnings": [
+                {
+                    "statement_id": statement.statement_id,
+                    "source_page_number": statement.evidence.source_page_number,
+                    # The document's words, not ours.
+                    "source_text": statement.evidence.source_excerpt,
+                    "evidence_segment_ids": list(
+                        statement.evidence.evidence_segment_ids
+                    ),
+                }
+                for statement in statements
+            ],
+            "disclosed": record is not None,
+            "disclosed_by": record,
+        }
+
+    def record_safety_warning_disclosure(
+        self,
+        index: int,
+        *,
+        actor_principal_id: str,
+        actor_role: str,
+    ) -> None:
+        """Record that this step's warning text was read out on this run.
+
+        An experiment-session fact, like an unread-page acknowledgement and for
+        the same reason: it says what happened at the bench. It is not an
+        approval, it settles no reviewer finding, and it clears no readiness
+        gate -- a hazard that was read out is still a hazard.
+        """
+
+        if not self._safety_warning_statements(index):
+            raise ValueError("That step declares no safety warning.")
+        if not str(actor_principal_id).strip() or not str(actor_role).strip():
+            raise ValueError("A safety warning disclosure needs an actor.")
+        self._disclosed_safety_warnings[index] = {
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+        }
+
+    def steps_awaiting_a_safety_disclosure(self) -> tuple[int, ...]:
+        """Steps whose warnings the source states and this run has not read."""
+
+        return tuple(
+            index
+            for index in range(len(self.fixture.steps))
+            if self._safety_warning_statements(index)
+            and index not in self._disclosed_safety_warnings
+        )
+
     def repetitions_awaiting_a_count(self) -> tuple[str, ...]:
         """Open repetitions with no number yet. Execution must not start these."""
 
@@ -4822,11 +4917,15 @@ class CuratedProtocolSession:
     def may_begin_step(self, step_id: str) -> bool:
         """False while something this step depends on is still unsettled.
 
-        Two reasons, and both are the same shape: the agent would otherwise
+        Three reasons. Two are the same shape: the agent would otherwise
         proceed past a thing only a person can settle. A repetition with no
         number would be run to some default and announced complete on work
         the experimenter never sized. A page the machine did not finish
         reading would be executed from a partial reading of it.
+
+        The third is not something a person settles but something the system
+        owes: a step whose source states a hazard does not begin until that
+        hazard's own words have been read out on this run.
         """
 
         for index, step in enumerate(self.fixture.steps):
@@ -4834,6 +4933,15 @@ class CuratedProtocolSession:
                 continue
             if self.step_is_on_an_unread_page(index) and not (
                 self.may_report_step_complete(index)
+            ):
+                return False
+            # A warning the source states is read before the step it governs,
+            # not after. This is the duty that replaced the reviewer gate for
+            # a document as registered, so it has to bind on the run rather
+            # than be available to it.
+            if (
+                self._safety_warning_statements(index)
+                and index not in self._disclosed_safety_warnings
             ):
                 return False
         for repetition_id, bounds in (
@@ -5620,6 +5728,9 @@ class CuratedProtocolSession:
         # acknowledgement is a fact about one experimenter at one bench,
         # not a property of the document, so it does not carry over.
         self._acknowledged_unread_pages.clear()
+        # A new run owes the warnings again. The duty is per execution, not
+        # per protocol: the person at the bench this time has not heard them.
+        self._disclosed_safety_warnings.clear()
         self._pending_clarification = None
         self._last_related_query = None
         self._last_related_entities = ()

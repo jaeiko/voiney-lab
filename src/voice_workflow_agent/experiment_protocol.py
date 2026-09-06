@@ -1582,6 +1582,35 @@ _REASON_ORDER = {
 }
 
 
+class SourceLineage(str, Enum):
+    """Whether this Protocol is a document as registered, or a change to one.
+
+    The safety gate asks a reviewer to confirm a Protocol's hazards before it
+    executes. For a revision that is exactly the right question -- somebody
+    altered a procedure people run, and a person should look at what they
+    altered before anyone runs it.
+
+    For a document as registered it is a question with no answer. There is no
+    earlier version to compare against, and the only thing a reviewer could
+    confirm is that our extraction found the hazards the PDF states -- which
+    is a claim about our own reading, made by someone reading the same PDF we
+    did. The gate collected an acknowledgement that asserted more than anybody
+    could know: "safety review complete". What replaces it is not a weaker
+    gate but a different obligation, discharged by the system rather than by
+    the reviewer -- the source's own warning text is read out at the step it
+    belongs to, every time, and the reading is recorded on the session. See
+    CuratedProtocolSession.safety_warning_disclosure.
+
+    UNKNOWN is not a third case. It is the absence of an answer, and it is
+    treated as REVISION, because a caller that has not said which of the two
+    this is has not established that the gate can be skipped.
+    """
+
+    ORIGINAL_REGISTRATION = "original_registration"
+    REVISION = "revision"
+    UNKNOWN = "unknown"
+
+
 def declared_safety_warning_count(protocol: ExperimentProtocol) -> int:
     """Count safety warnings this Protocol would surface during execution.
 
@@ -1612,8 +1641,14 @@ def assess_readiness(
     protocol: ExperimentProtocol,
     *,
     capability_policy: CapabilityPolicy = P1_CAPABILITY_POLICY,
+    source_lineage: SourceLineage = SourceLineage.UNKNOWN,
 ) -> ReadinessAssessment:
-    """Fail closed with two public outcomes and stable, sanitized reasons."""
+    """Fail closed with two public outcomes and stable, sanitized reasons.
+
+    ``source_lineage`` decides one gate and nothing else. It defaults to
+    UNKNOWN, which is treated as a revision, so a caller that says nothing
+    gets the stricter of the two outcomes.
+    """
 
     try:
         validate_protocol(protocol)
@@ -1666,7 +1701,10 @@ def assess_readiness(
             )
         )
 
-    if any(section.steps for section in protocol.sections):
+    if (
+        any(section.steps for section in protocol.sections)
+        and source_lineage is not SourceLineage.ORIGINAL_REGISTRATION
+    ):
         # The count used to clear this gate on its own, and that was the
         # gate's own defect: a warning in this Protocol is a warning the
         # provider produced, so a non-zero count records that a model called
@@ -1684,6 +1722,13 @@ def assess_readiness(
         # hazard wording is inspected anywhere: what counts as a hazard remains
         # the provider's judgement, and whether this Protocol may execute on it
         # remains a person's.
+        #
+        # The gate is raised for a revision and for a lineage nobody has
+        # stated. It is not raised for a document as registered, where the
+        # question has no answerable form -- see SourceLineage. That is not
+        # the obligation being dropped: an original owes the source's own
+        # warning text at the step it belongs to, on every run, which is a
+        # duty the system discharges rather than one a reviewer signs off.
         reasons.append(
             ReadinessReason(
                 code=ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,

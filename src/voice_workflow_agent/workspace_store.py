@@ -2318,20 +2318,46 @@ class WorkspaceStore:
                         now,
                     ),
                 )
-            change_kind = "new" if revision_number == 1 else "changed"
-            item_id = f"inbox-{hashlib.sha256(revision_id.encode()).hexdigest()[:32]}"
-            self._connection.execute(
-                "INSERT INTO source_inbox VALUES(?,?,?,?,?,?,?)",
-                (
-                    item_id,
-                    principal.organization_id,
-                    source_id,
-                    revision_id,
-                    change_kind,
-                    "unread",
-                    now,
-                ),
+            # Review attaches to a change, not to an arrival.
+            #
+            # Registering a source document used to raise a review request
+            # saying "Imported from local_pdf", which names no change and asks
+            # no question: the person who registered it had already decided to
+            # use it, and there is no earlier version to compare it against. A
+            # reviewer opening that request could only agree that the document
+            # was the document. Meanwhile the request that matters -- someone
+            # revised a protocol people are running, or adapted it for this lab
+            # -- sat in the same list looking the same.
+            #
+            # A revision with a parent is a change to something that existed. An
+            # adaptation is a change by construction. Everything else is a first
+            # registration, and re-registering identical bytes never reaches
+            # here at all: ProtocolSourceHub.ingest returns the existing
+            # revision unchanged when the source hash matches.
+            #
+            # Nothing is unblocked by this. The inbox is read in exactly one
+            # place -- the reviewer listing -- and no execution path consults
+            # it; approval, readiness and available_for_execution are decided
+            # elsewhere and are untouched.
+            review_is_about_a_change = (
+                parent_revision_id is not None or adaptation_id is not None
             )
+            if review_is_about_a_change:
+                item_id = (
+                    f"inbox-{hashlib.sha256(revision_id.encode()).hexdigest()[:32]}"
+                )
+                self._connection.execute(
+                    "INSERT INTO source_inbox VALUES(?,?,?,?,?,?,?)",
+                    (
+                        item_id,
+                        principal.organization_id,
+                        source_id,
+                        revision_id,
+                        "changed",
+                        "unread",
+                        now,
+                    ),
+                )
             self._connection.commit()
         except sqlite3.Error as exc:
             self._connection.rollback()
@@ -2702,12 +2728,16 @@ class WorkspaceStore:
             s.connector_kind,s.external_id,s.version_identity,s.canonical_url,
             s.metadata_json,r.revision_id,r.family_id,r.revision_number,
             r.author_principal_id,r.change_summary,f.title AS protocol_title,
-            p.display_name AS requester_display_name
+            p.display_name AS requester_display_name,
+            r.parent_revision_id AS compared_against_revision_id,
+            a.adaptation_id AS adaptation_id
             FROM source_inbox i
             JOIN protocol_sources s ON s.source_id=i.source_id
             LEFT JOIN protocol_lineage_revisions r ON r.revision_id=i.revision_id
             LEFT JOIN protocol_families f ON f.family_id=r.family_id
             LEFT JOIN principals p ON p.principal_id=r.author_principal_id
+            LEFT JOIN protocol_adaptation_revisions a
+              ON a.adapted_revision_id=i.revision_id
             WHERE i.organization_id=? ORDER BY i.created_at DESC""",
             (principal.organization_id,),
         ).fetchall()
@@ -2745,8 +2775,21 @@ class WorkspaceStore:
                     or "No change reason was recorded.",
                     "risk_level": "not_assessed",
                     "source_risk_signal": risk_signal,
+                    # What this is a change *to*. A review request that cannot
+                    # name its baseline cannot show a difference, and every row
+                    # here is now a change to something.
+                    "change_is_against": item.get("compared_against_revision_id"),
+                    "change_kind_detail": (
+                        "lab_adaptation"
+                        if item.get("adaptation_id")
+                        else "protocol_revision"
+                    ),
                 }
             )
+            # Raw join columns leave once they have been read: the two fields
+            # above are the ones a caller is meant to use.
+            item.pop("adaptation_id", None)
+            item.pop("compared_against_revision_id", None)
             items.append(item)
         return tuple(items)
 

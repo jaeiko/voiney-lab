@@ -96,7 +96,15 @@ async def _request(
         )
 
 
-def _create_revision(tmp_path, *, source_status="Published"):
+def _create_revision(tmp_path, *, source_status="Published", reviewable=False):
+    """A revision, optionally one that a reviewer is actually asked about.
+
+    A first registration raises no review request any more -- there is nothing
+    it changed. A test about the reviewer's own path therefore has to be about
+    a revision of something, which is what ``reviewable`` produces: a base is
+    written first and the revision returned is its child.
+    """
+
     store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
     admin = _principal("admin-a")
     reviewer = _principal("reviewer-a")
@@ -118,8 +126,24 @@ def _create_revision(tmp_path, *, source_status="Published"):
         family_id=family.family_id,
         source_id=source.source_id,
         content={"steps": ["Use 72% sulfuric acid"], "warnings": ["Acid"]},
-        change_summary="Exact source import",
+        change_summary=(
+            "Registered from the source document"
+            if reviewable
+            else "Exact source import"
+        ),
     )
+    if reviewable:
+        revision = store.add_protocol_revision(
+            admin,
+            family_id=family.family_id,
+            source_id=source.source_id,
+            parent_revision_id=revision.revision_id,
+            content={
+                "steps": ["Use 72% sulfuric acid", "Rinse twice"],
+                "warnings": ["Acid"],
+            },
+            change_summary="Exact source import",
+        )
     store.close()
     return revision
 
@@ -1079,7 +1103,7 @@ def test_connector_configuration_failure_is_visible_and_keeps_connector_disabled
 
 def test_reviewer_diff_approval_analytics_and_cross_tenant_idor(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
-    revision = _create_revision(tmp_path)
+    revision = _create_revision(tmp_path, reviewable=True)
     inbox = asyncio.run(
         _request("GET", "/api/workspace/reviewer/inbox", profile="reviewer-a")
     )
@@ -1090,7 +1114,10 @@ def test_reviewer_diff_approval_analytics_and_cross_tenant_idor(monkeypatch, tmp
         if item["revision_id"] == revision.revision_id
     )
     assert request_item["protocol_title"] == "ANKOM Fiber Analysis"
-    assert request_item["version_label"] == "v1"
+    assert request_item["version_label"] == "v2"
+    # The request names what it is a change to, or it cannot show a difference.
+    assert isinstance(request_item["change_is_against"], str)
+    assert request_item["change_kind_detail"] == "protocol_revision"
     assert request_item["requester_display_name"] == "Admin A"
     assert request_item["request_reason"] == "Exact source import"
     assert request_item["risk_level"] == "not_assessed"
@@ -1163,7 +1190,7 @@ def test_reviewer_diff_approval_analytics_and_cross_tenant_idor(monkeypatch, tmp
     assert approved_packet["decision_state"]["allowed_actions"] == ["revoked"]
     assert approved_packet["history"][0]["actor_display_name"] == "Reviewer A"
     assert approved_packet["history"][0]["action"] == "approved"
-    assert approved_packet["history"][0]["affected_version"] == "v1"
+    assert approved_packet["history"][0]["affected_version"] == "v2"
     researcher_library = asyncio.run(
         _request("GET", "/api/workspace/protocol-library", profile="researcher-a")
     )

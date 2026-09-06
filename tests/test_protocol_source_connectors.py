@@ -301,6 +301,106 @@ def test_source_hub_creates_new_draft_revision_for_changed_source(tmp_path):
         assert changed.changed is True and changed.inbox_state == "changed"
         assert changed.revision.revision_number == 2
         assert changed.revision.parent_revision_id == first.revision.revision_id
-        assert len(store.source_inbox(principal)) == 2
+
+        # One review request, not two. The first import created a protocol
+        # nobody had before, and a reviewer asked to look at it can only
+        # confirm that the document is the document -- there is no earlier
+        # version to hold it against. The second changed something people may
+        # already be running, and that is the request worth raising.
+        inbox = store.source_inbox(principal)
+        assert [item["revision_id"] for item in inbox] == [
+            changed.revision.revision_id
+        ]
+        assert inbox[0]["change_kind_detail"] == "protocol_revision"
+        assert inbox[0]["change_is_against"] == first.revision.revision_id
+        assert "review required" in str(inbox[0]["request_reason"])
+    finally:
+        store.close()
+
+
+def test_review_is_raised_for_a_change_and_not_for_an_arrival(tmp_path):
+    """The four cases of the trigger, as a table.
+
+    A review request is a question put to a person, and the question is always
+    "what changed, and is it safe to run". Registering a source document
+    answers that before it is asked: the person who registered it decided to
+    use it, and there is no earlier version to hold it against. The request the
+    UI used to raise said "Imported from local_pdf", which is not a change and
+    not a question, and it sat in the same queue as the requests that are.
+
+    Nothing here is a safety relaxation. The inbox is read in one place, the
+    reviewer listing, and no execution path consults it -- approval, readiness
+    and availability are decided elsewhere and are untouched by this. What
+    changes is which requests a reviewer is shown.
+    """
+
+    store = initialize_workspace_store(WorkspaceSettings(True, tmp_path))
+    principal = _admin()
+    store.bootstrap_principal(principal)
+    try:
+        family = store.create_protocol_family(principal, title="In-gel digestion")
+        source = store.register_source(
+            principal,
+            connector_kind="local_pdf",
+            external_id="in-gel-digestion.pdf",
+            version_identity="v1",
+            source_hash=hashlib.sha256(b"in-gel").hexdigest(),
+            canonical_url=None,
+            metadata={},
+        )
+
+        # 1. A source document arrives for the first time: not a change.
+        original = store.add_protocol_revision(
+            principal,
+            family_id=family.family_id,
+            source_id=source.source_id,
+            content={"steps": ["Excise the band"]},
+            change_summary="Registered from the source document",
+        )
+        assert store.source_inbox(principal) == ()
+
+        # 2. A revision of it: a change, and the request names its baseline.
+        revised = store.add_protocol_revision(
+            principal,
+            family_id=family.family_id,
+            source_id=source.source_id,
+            parent_revision_id=original.revision_id,
+            content={"steps": ["Excise the band", "Destain twice"]},
+            change_summary="Destaining repeated",
+        )
+        inbox = store.source_inbox(principal)
+        assert [item["revision_id"] for item in inbox] == [revised.revision_id]
+        assert inbox[0]["change_is_against"] == original.revision_id
+        assert inbox[0]["change_kind_detail"] == "protocol_revision"
+
+        # 3. A lab adaptation: a change by construction.
+        adapted = store.create_lab_adaptation(
+            principal,
+            base_revision_id=revised.revision_id,
+            changes=(
+                {
+                    "kind": "equipment_difference",
+                    "protocol_step_id": "step-4",
+                    "summary": "Centrifuge substituted",
+                    "original_value": "microcentrifuge",
+                    "adapted_value": "qualified local centrifuge",
+                    "rationale": "The listed model is not in this lab.",
+                },
+            ),
+            change_summary="Use the qualified local centrifuge",
+        )
+        adapted_revision_id = str(adapted["adapted_revision_id"])
+        inbox = store.source_inbox(principal)
+        by_revision = {item["revision_id"]: item for item in inbox}
+        assert set(by_revision) == {revised.revision_id, adapted_revision_id}
+        assert by_revision[adapted_revision_id]["change_kind_detail"] == (
+            "lab_adaptation"
+        )
+        assert by_revision[adapted_revision_id]["change_is_against"] == (
+            revised.revision_id
+        )
+
+        # 4. Every request in the queue is about a change to something.
+        assert all(item["change_is_against"] for item in inbox)
     finally:
         store.close()
