@@ -889,10 +889,15 @@ numbers joined by a hyphen or dash, such as 2-7. That is the whole test the
 server applies to it -- it does not read the sentence, only whether the excerpt
 contains the range you declared. So cite the segment that carries the repeat
 instruction itself, not the instruction of the step it happens to follow. The
-range must run forwards, and every label from the first to the last must be a
-numbered step you also claimed. If the source does not say which steps to
-repeat, do not guess a range and do not fall back to the enclosing step: emit
-explicit_missing_ambiguous_value instead.
+range must run forwards. Declare the range the source states even when it
+begins before the pages you were given: the labels are resolved against the
+whole assembled document, not against your chunk, so a first label you cannot
+see is expected and is not a reason to withhold the claim. Withholding it is
+worse than being refused for it, because nothing refuses a repeat that was
+never claimed - the instruction is simply gone, and an operator destains once
+where the source says to repeat six steps. If the source does not say which
+steps to repeat, do not guess a range and do not fall back to the enclosing
+step: emit explicit_missing_ambiguous_value instead.
 
 Before returning, count for each core page: the segments you cited plus the
 segments you declined must equal the segments on that page that contain at

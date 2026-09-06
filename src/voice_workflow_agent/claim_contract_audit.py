@@ -245,3 +245,237 @@ def collect_refusal_codes() -> dict[str, tuple[str, ...]]:
             if code:
                 found.setdefault(code, set()).add(path.name)
     return {code: tuple(sorted(paths)) for code, paths in sorted(found.items())}
+
+
+# ---------------------------------------------------------------------------
+# Rules that forbid a move and name another one
+# ---------------------------------------------------------------------------
+#
+# The table above answers "was this rule stated at all". It cannot see the
+# defect STEP 30 spent five provider calls on, where every rule was stated and
+# two of them disagreed:
+#
+#   the value-honesty escape hatch  "claim it as a document-level claim ..."
+#   the positional attachment rule  "Only a claim whose evidence lies outside
+#                                    every numbered step is document-level"
+#
+# For a value-bearing segment inside a numbered step both applied, the first
+# named the one move the second forbade, and there was no third. The model was
+# refused for doing what it was told and refused for not doing it. No amount of
+# reading the prompt for missing rules finds that; it is found by asking, for
+# a real segment, whether anything the prompt permits is something the server
+# accepts.
+#
+# So each rule of the form "you may not do X, do Y instead" is recorded here
+# with the verbatim phrase that states it and the moves it leaves open. The
+# moves a segment has are the intersection across every rule that applies to
+# it, and that intersection must contain something the server will take.
+
+from collections.abc import Callable  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, types only
+    from .experiment_protocol_pdf import ProtocolPdfExtraction
+
+#: The three things that can be done with a segment. There is no fourth: the
+#: coverage rule is "cited or declined, never both and never neither", and a
+#: citation either targets the step it sits in or is document-level.
+DECLINE = "decline"
+CITE_AT_STEP = "cite_targeting_the_enclosing_step"
+CITE_DOCUMENT_LEVEL = "cite_as_document_level"
+EVERY_MOVE = frozenset({DECLINE, CITE_AT_STEP, CITE_DOCUMENT_LEVEL})
+
+
+@dataclass(frozen=True)
+class SegmentPosition:
+    """What the server knows about one segment without reading a word of it.
+
+    Every field is structural. The value test is the shape test the prompt
+    states -- a digit followed by a unit -- not a judgement about whether the
+    number instructs anyone.
+    """
+
+    page_number: int
+    segment_index: int
+    substantive: bool
+    carries_value: bool
+    inside_a_step: bool
+    outside_every_step: bool
+    enclosing_step_label_on_this_page: bool
+
+    @property
+    def straddles_a_step_boundary(self) -> bool:
+        """Neither wholly inside a step nor clear of every step.
+
+        Such a segment could be declined but never cited: it has no enclosing
+        block to target and is not outside every block either. Segment
+        boundaries are cut at every step label, so this should be impossible;
+        it is computed rather than assumed.
+        """
+
+        return self.substantive and not (
+            self.inside_a_step or self.outside_every_step
+        )
+
+
+@dataclass(frozen=True)
+class StatedAlternative:
+    """One "you may not do X, do Y instead" rule, and the moves it leaves."""
+
+    name: str
+    #: Verbatim from the system prompt. If the prompt stops saying this, the
+    #: rule recorded here is no longer the rule in force and the audit fails.
+    phrase: str
+    applies: Callable[[SegmentPosition], bool]
+    permits: frozenset[str]
+    why: str
+
+
+ALTERNATIVE_RULES: tuple[StatedAlternative, ...] = (
+    StatedAlternative(
+        name="every_segment_is_cited_or_declined",
+        phrase=(
+            "Each segment is either cited by at least one claim or marker, or"
+            " listed in that page's declined_evidence_segment_ids"
+        ),
+        applies=lambda position: position.substantive,
+        permits=EVERY_MOVE,
+        why="the coverage rule opens all three moves and closes none",
+    ),
+    StatedAlternative(
+        name="a_value_bearing_segment_may_not_be_declined",
+        phrase="none of them may be declined",
+        applies=lambda position: position.substantive and position.carries_value,
+        permits=frozenset({CITE_AT_STEP, CITE_DOCUMENT_LEVEL}),
+        why=(
+            "declining is withdrawn for a segment whose shape says it states a"
+            " value, so a citation is the only thing left"
+        ),
+    ),
+    StatedAlternative(
+        name="evidence_inside_a_step_belongs_to_that_step",
+        phrase=(
+            "evidence inside a numbered step's span targets that step's action"
+            " claim, and only evidence outside every numbered step is"
+            " document-level"
+        ),
+        applies=lambda position: position.substantive and position.inside_a_step,
+        permits=frozenset({DECLINE, CITE_AT_STEP}),
+        why=(
+            "this is the sentence STEP 30 had to write: the escape hatch used"
+            " to name document-level here, which the attachment rule forbids"
+        ),
+    ),
+    StatedAlternative(
+        name="only_evidence_outside_every_step_is_document_level",
+        phrase=(
+            "Only a claim whose evidence lies outside every numbered step is"
+            " document-level"
+        ),
+        applies=lambda position: (
+            position.substantive and not position.outside_every_step
+        ),
+        permits=frozenset({DECLINE, CITE_AT_STEP}),
+        why="the same boundary stated once more where the claim rules are set out",
+    ),
+)
+
+
+def server_accepts(position: SegmentPosition) -> frozenset[str]:
+    """The moves the server's own validators would let through.
+
+    Deliberately built from what those validators check rather than by calling
+    them: this has to answer for a segment nobody has claimed yet, which is
+    before there is a response to validate. The three conditions mirror
+    ``declined_segment_states_a_value``, ``_outside_every_step_block`` and
+    ``action_claim_scope_conflict`` respectively.
+    """
+
+    if not position.substantive:
+        return EVERY_MOVE
+    moves = set()
+    if not (position.inside_a_step and position.carries_value):
+        moves.add(DECLINE)
+    if position.outside_every_step:
+        moves.add(CITE_DOCUMENT_LEVEL)
+    if position.inside_a_step and position.enclosing_step_label_on_this_page:
+        # A parameter claim must sit on the same page as the action it targets,
+        # so the enclosing step's label being on this page is what makes the
+        # target exist.
+        moves.add(CITE_AT_STEP)
+    return frozenset(moves)
+
+
+def prompt_permits(
+    position: SegmentPosition,
+    rules: tuple[StatedAlternative, ...] = ALTERNATIVE_RULES,
+) -> frozenset[str]:
+    """The moves left open once every rule that applies has had its say."""
+
+    moves = EVERY_MOVE
+    for rule in rules:
+        if rule.applies(position):
+            moves &= rule.permits
+    return moves
+
+
+def segment_positions(
+    extraction: "ProtocolPdfExtraction", *, source_revision: str = "pdf-1"
+) -> tuple[SegmentPosition, ...]:
+    """Where every segment of every page sits, structurally."""
+
+    from .protocol_claim_analysis import (
+        generate_page_evidence_segments,
+        segment_carries_unit_bearing_value,
+        step_block_ranges,
+    )
+
+    positions: list[SegmentPosition] = []
+    for page_number in range(1, extraction.page_count + 1):
+        page = extraction.pages[page_number - 1]
+        ranges = step_block_ranges(page.text, page.bottom_band_offset)
+        offset = 0
+        for segment in generate_page_evidence_segments(
+            extraction, source_revision=source_revision, page_number=page_number
+        ):
+            start, end = offset, offset + len(segment.text)
+            offset = end
+            inside = any(low <= start and end <= high for low, high in ranges)
+            positions.append(
+                SegmentPosition(
+                    page_number=page_number,
+                    segment_index=segment.segment_index,
+                    substantive=any(ch.isalnum() for ch in segment.text),
+                    carries_value=segment_carries_unit_bearing_value(segment.text),
+                    inside_a_step=inside,
+                    outside_every_step=all(
+                        end <= low or high <= start for low, high in ranges
+                    ),
+                    # A step block begins at a label match on this page's own
+                    # text, so an enclosing block implies the label is here.
+                    enclosing_step_label_on_this_page=inside,
+                )
+            )
+    return tuple(positions)
+
+
+def cornered_segments(
+    positions: tuple[SegmentPosition, ...],
+    rules: tuple[StatedAlternative, ...] = ALTERNATIVE_RULES,
+) -> tuple[tuple[SegmentPosition, frozenset[str], frozenset[str]], ...]:
+    """Segments with nothing to do: obeying the prompt means being refused.
+
+    Returns the position together with what the prompt left it and what the
+    server would have taken, because a bare count of contradictions is not
+    something anyone can act on.
+    """
+
+    cornered = []
+    for position in positions:
+        if not position.substantive:
+            continue
+        permitted = prompt_permits(position, rules)
+        accepted = server_accepts(position)
+        if not (permitted & accepted):
+            cornered.append((position, permitted, accepted))
+    return tuple(cornered)
