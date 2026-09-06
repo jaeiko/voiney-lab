@@ -36,6 +36,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
     EVIDENCE_SEGMENT_VERSION,
     claim_response_schema,
+    generate_page_evidence_segments,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
@@ -98,7 +99,7 @@ class _Fixture:
         )
 
     def key(self) -> ChunkCacheKey:
-        return key_for_chunk(self.extraction, self.chunk)
+        return key_for_chunk(self.extraction, self.chunk, self.request)
 
     def load(self, cache: ChunkAnalysisCache, key: ChunkCacheKey | None = None):
         return cache.load(
@@ -161,6 +162,7 @@ class ChunkAnalysisCacheTests(unittest.TestCase):
             ("claim_schema_version", CLAIM_SCHEMA_VERSION + 1),
             ("evidence_segment_version", EVIDENCE_SEGMENT_VERSION + 1),
             ("prompt_sha256", "1" * 64),
+            ("request_sha256", "2" * 64),
         ):
             with self.subTest(changed=field):
                 moved = replace(key, **{field: value})
@@ -187,6 +189,110 @@ class ChunkAnalysisCacheTests(unittest.TestCase):
             evidence_segment_version=EVIDENCE_SEGMENT_VERSION + 1,
         )
         self.assertIsNone(self.fixture.load(self.cache, future))
+
+    def test_the_same_question_asked_twice_lands_on_the_same_key(self) -> None:
+        """The request hash has to be derived, not incidental.
+
+        It is only usable as a key field because every part of it is computed
+        from the source and the chunk -- the request handle included. If any of
+        it were per-invocation the key would move on every run and the cache
+        would never hit at all, which is the failure mode opposite to the one
+        this field exists to prevent.
+        """
+
+        again = prepare_chunk_claim_request_context(
+            self.fixture.scoped,
+            source_revision=self.fixture.chunk.candidate_revision_id,
+            chunk_id=self.fixture.chunk.chunk_id,
+            ordinal=self.fixture.chunk.ordinal,
+            core_page_refs=self.fixture.chunk.core_page_refs,
+            context_page_refs=self.fixture.chunk.overlap_page_refs,
+        )
+        self.assertEqual(again.input_json(), self.fixture.request.input_json())
+        self.assertEqual(
+            key_for_chunk(
+                self.fixture.extraction, self.fixture.chunk, again
+            ).digest(),
+            self.fixture.key().digest(),
+        )
+
+    def test_segments_can_change_without_a_version_bump_and_the_key_moves(self):
+        """STEP 30's near miss, pinned.
+
+        The bottom-band rule changed what a segment is and did not change
+        ``EVIDENCE_SEGMENT_VERSION``. Every other field of the key -- the
+        source hash above all, since the file's bytes did not move -- was
+        identical before and after. Revalidation would still have refused the
+        stale payload, because the handles are derived from the segment ids,
+        but the key would have reported a hit and left the refusal to a later
+        check. A key is supposed to be the thing that does not need the later
+        check.
+
+        Here the band is moved into the middle of the page, which is what a
+        segmentation change looks like from the cache's side: same document,
+        same version constants, different segments.
+        """
+
+        from dataclasses import replace as _replace
+
+        page = self.fixture.extraction.pages[0]
+        moved = _replace(page, bottom_band_offset=len(page.text) // 2)
+        resegmented = _replace(
+            self.fixture.extraction,
+            pages=(moved,) + tuple(self.fixture.extraction.pages[1:]),
+        )
+        self.assertEqual(resegmented.sha256, self.fixture.extraction.sha256)
+        before = generate_page_evidence_segments(
+            self.fixture.extraction,
+            source_revision=self.fixture.chunk.candidate_revision_id,
+            page_number=1,
+        )
+        after = generate_page_evidence_segments(
+            resegmented,
+            source_revision=self.fixture.chunk.candidate_revision_id,
+            page_number=1,
+        )
+        self.assertNotEqual(
+            [item.segment_id for item in before],
+            [item.segment_id for item in after],
+            "the fixture no longer exercises a segmentation change",
+        )
+
+        scoped = extraction_for_chunk(resegmented, self.fixture.chunk)
+        request = prepare_chunk_claim_request_context(
+            scoped,
+            source_revision=self.fixture.chunk.candidate_revision_id,
+            chunk_id=self.fixture.chunk.chunk_id,
+            ordinal=self.fixture.chunk.ordinal,
+            core_page_refs=self.fixture.chunk.core_page_refs,
+            context_page_refs=self.fixture.chunk.overlap_page_refs,
+        )
+        key = self.fixture.key()
+        moved_key = key_for_chunk(resegmented, self.fixture.chunk, request)
+
+        # Nothing else in the key noticed. That is the whole point.
+        self.assertEqual(
+            {k: v for k, v in key.identity().items() if k != "request_sha256"},
+            {
+                k: v
+                for k, v in moved_key.identity().items()
+                if k != "request_sha256"
+            },
+        )
+        self.assertNotEqual(moved_key.digest(), key.digest())
+
+        self.cache.store(key, self.fixture.raw)
+        self.assertIsNotNone(self.fixture.load(self.cache))
+        self.assertIsNone(
+            self.cache.load(moved_key, extraction=scoped, request=request),
+            "a re-segmented chunk was served an entry from before the change",
+        )
+
+    def test_the_key_cannot_be_built_without_the_question(self) -> None:
+        """No default: a caller cannot omit it by writing less code."""
+
+        with self.assertRaises(TypeError):
+            key_for_chunk(self.fixture.extraction, self.fixture.chunk)
 
     # --- 2-3: what comes out is checked again ---------------------------
 
@@ -409,7 +515,7 @@ class CrossInvocationChunkByChunkTests(unittest.TestCase):
         for chunk in self.plan.chunks:
             scoped, request = self._context(chunk)
             hit = self.cache.load(
-                key_for_chunk(self.extraction, chunk),
+                key_for_chunk(self.extraction, chunk, request),
                 extraction=scoped,
                 request=request,
             )
@@ -432,7 +538,9 @@ class CrossInvocationChunkByChunkTests(unittest.TestCase):
                 core_page_refs=chunk.core_page_refs,
                 request=request,
             )
-            self.cache.store(key_for_chunk(self.extraction, chunk), raw)
+            self.cache.store(
+                key_for_chunk(self.extraction, chunk, request), raw
+            )
             validated[chunk.ordinal] = ("provider", analysis)
         return validated
 

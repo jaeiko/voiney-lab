@@ -39,7 +39,13 @@ CLAIM_SCHEMA_VERSION = 10
 # comparable with these.
 # 4: a line ending in sentence punctuation also ends a block, so unnumbered
 # content is no longer absorbed into the preceding numbered step.
-EVIDENCE_SEGMENT_VERSION = 5
+# 6 since STEP 30: the running footer became a segment of its own, so the last
+# segment of 35 of the 99 local pages lost its footer and changed identity. The
+# leading segments of every page were untouched, which is why the ten cited
+# timer handles and the reviewer's one cited handle still resolve -- but "most
+# ids survived" is not the same as "the scheme is unchanged", and this number
+# names the scheme.
+EVIDENCE_SEGMENT_VERSION = 6
 MAX_CHUNK_CLAIM_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_CLAIMS_PER_CHUNK = 4096
 _MAX_MARKERS_PER_CHUNK = 1024

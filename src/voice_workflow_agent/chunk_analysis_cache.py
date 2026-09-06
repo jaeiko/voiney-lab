@@ -30,6 +30,9 @@ Miss any of them and a stale entry would be served as a fresh one:
 * the system prompt's hash -- different instructions
 * ``EVIDENCE_SEGMENT_VERSION`` -- different segment boundaries, so different
   evidence handles, so every cited id in a stored payload becomes meaningless
+* the SHA-256 of the request body itself -- the only field that names the
+  question rather than the contract, and so the only one that still holds when
+  a version constant is forgotten
 
 Entries live under a development cache directory. Nothing here touches the
 protocol store or any runtime database.
@@ -87,6 +90,17 @@ class ChunkCacheKey:
     evidence_segment_version: int = EVIDENCE_SEGMENT_VERSION
     prompt_sha256: str = ""
     capability_policy_id: str = ""
+    #: SHA-256 of the exact request body the provider was sent.
+    #:
+    #: The other fields name the contract in the abstract; this one names the
+    #: question. STEP 30 changed what a segment is without changing
+    #: EVIDENCE_SEGMENT_VERSION, and the key would have looked identical while
+    #: the provider was being shown different pages. Revalidation would still
+    #: have refused the stale answer -- the provider handles are derived from
+    #: the segment ids -- but the key would have claimed a hit and relied on a
+    #: later check to take it back. A key that cannot see the question is a key
+    #: that reports hits it cannot honour.
+    request_sha256: str = ""
 
     def identity(self) -> dict[str, Any]:
         return {
@@ -101,6 +115,7 @@ class ChunkCacheKey:
             "evidence_segment_version": self.evidence_segment_version,
             "prompt_sha256": self.prompt_sha256 or prompt_sha256(),
             "capability_policy_id": self.capability_policy_id,
+            "request_sha256": self.request_sha256,
         }
 
     def digest(self) -> str:
@@ -114,10 +129,17 @@ class ChunkCacheKey:
 def key_for_chunk(
     extraction: ProtocolPdfExtraction,
     chunk: Any,
+    request: ProviderClaimRequest,
     *,
     capability_policy_id: str = "",
 ) -> ChunkCacheKey:
-    """Name one chunk of one document under the current contract."""
+    """Name one chunk of one document under the current contract.
+
+    The request is not optional. Every other field names the contract in the
+    abstract, and a key built without the question is a key that cannot notice
+    the question changing; making it defaultable would make that the easy call
+    to write.
+    """
 
     return ChunkCacheKey(
         source_sha256=extraction.sha256,
@@ -128,6 +150,9 @@ def key_for_chunk(
         source_revision=chunk.candidate_revision_id,
         prompt_sha256=prompt_sha256(),
         capability_policy_id=capability_policy_id,
+        request_sha256=hashlib.sha256(
+            request.input_json().encode("utf-8")
+        ).hexdigest(),
     )
 
 

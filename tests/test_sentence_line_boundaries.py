@@ -72,16 +72,148 @@ class SentenceLineBoundaryTests(unittest.TestCase):
         )
 
     def test_evidence_segment_version_records_the_new_derivation(self) -> None:
-        """5 since unmapped glyphs are read from the document's declaration.
+        """6 since the running footer is a segment of its own.
 
-        Resolving them changes page text -- ANKOM page 9 now reads
-        alpha-amylase -- which changes page_text_sha256 and therefore every
-        canonical segment id derived from it. Any analysis stored against
-        version 4 is invalidated, which is correct: it was computed over text
-        containing a character the document had declared and we had not read.
+        Version 5 was the glyph fix: unmapped characters read from the
+        document's own declaration, so ANKOM page 9 says alpha-amylase and the
+        page hash moved with it. Version 6 is STEP 30's bottom band, which
+        changed where the last segment of a page ends on 35 of the 99 local
+        pages.
+
+        Bumping this number is not free and is not meant to be. It is inside
+        every canonical segment id, so every recorded citation in the
+        repository stops resolving and has to be recomputed -- the ten timer
+        candidates in the development manifest were migrated with this bump.
+        That is the intended cost: a citation made under one segmentation
+        scheme must fail loudly under another rather than quietly point
+        somewhere else.
         """
 
-        self.assertEqual(EVIDENCE_SEGMENT_VERSION, 5)
+        self.assertEqual(EVIDENCE_SEGMENT_VERSION, 6)
+
+    _COMPOSITION_CORPUS = (
+        _HAZARD_PAGE,
+        (
+            "Protocol for in-gel digestion",
+            "1. Excise the band with a clean scalpel.",
+            "1.1 A note that belongs to step 1, not beside it.",
+            "2. Add 100 ul of buffer and vortex briefly.",
+            "Note: keep the tube on ice.",
+            "3. Incubate 15 min at room temperature.",
+            "Page 2 of 9",
+        ),
+        (
+            "4 Centrifuge at 800 rpm",
+            "for 10 min, then discard the supernatant.",
+            "Critical: do not disturb the pellet",
+            "5 Repeat steps 2 to 4 twice.",
+        ),
+        # The band's own case: the last instruction ends without a terminator,
+        # so without the band rule the running footer is absorbed into it and
+        # the footer's page number becomes part of a step's text.
+        (
+            "7 Transfer the supernatant to a fresh tube",
+            "and store it at minus 20 C",
+            "In-gel digestion protocol v3   Page 4 of 9",
+        ),
+    )
+
+    def _composition_fingerprint(self, extraction) -> str:
+        """Every segment's page, index and exact text, hashed in source order.
+
+        Text, not ids: ids move whenever the version constant moves, so a
+        fingerprint over ids would agree with itself for the wrong reason.
+        """
+
+        import hashlib
+
+        parts = []
+        for number in range(1, extraction.page_count + 1):
+            for segment in generate_page_evidence_segments(
+                extraction, source_revision=REVISION, page_number=number
+            ):
+                parts.append(
+                    f"{number}:{segment.segment_index}:{segment.text}"
+                )
+        return hashlib.sha256(
+            "\u0000".join(parts).encode("utf-8")
+        ).hexdigest()
+
+    def test_a_changed_segment_composition_forces_the_version_to_move(self):
+        """The check the last two bumps were made without.
+
+        Both were noticed by hand. STEP 30 changed segment composition and
+        left this constant alone, and nothing failed -- the leading segments
+        of every page kept their ids, so the damage was invisible until
+        someone counted. This fingerprint is what counting looks like as a
+        test: it is over segment *text*, which is what composition means, and
+        it is pinned beside the version number so the two can only move
+        together.
+
+        The bottom band is applied here explicitly rather than left to the
+        page geometry. A synthetic PDF has no running footer, so a corpus
+        built only from one would be blind to exactly the change that made
+        version 6 necessary.
+
+        If this fails, the question is not how to update the fingerprint. It
+        is whether the segmentation was meant to change; if it was, the
+        version constant moves too and every stored citation is migrated with
+        it.
+        """
+
+        from dataclasses import replace
+
+        extraction, _ = self._segments(self._COMPOSITION_CORPUS, page_number=1)
+        banded = replace(
+            extraction,
+            pages=tuple(
+                # No band on the first page, a band on the rest: both sides of
+                # the rule are inside the one fingerprint.
+                replace(
+                    page,
+                    bottom_band_offset=(
+                        None
+                        if index == 0
+                        else page.text.rfind("\n", 0, len(page.text) - 1) + 1
+                    ),
+                )
+                for index, page in enumerate(extraction.pages)
+            ),
+        )
+        self.assertEqual(
+            (EVIDENCE_SEGMENT_VERSION, self._composition_fingerprint(banded)),
+            (
+                6,
+                "f51173d64140c3d47bddd40dc77fcaf891190db607bfcb0a1370dd9b63b04e8c",
+            ),
+            "segment composition changed; see this test's docstring",
+        )
+
+    def test_the_real_document_composition_is_pinned_too(self) -> None:
+        """The synthetic corpus cannot see the band being *measured* wrongly.
+
+        The fingerprint above fixes the band by hand, which pins how a band is
+        used but not how one is found. In-gel has real running footers, so its
+        composition also covers the worker's geometry -- the 0.08 fraction, the
+        character boxes, the snap to a line start.
+        """
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
+        )
+        if not source.is_file():
+            self.skipTest(f"{source} is not present.")
+        extraction = extract_protocol_pdf(source)
+        self.assertEqual(extraction.page_count, 9)
+        self.assertEqual(
+            (EVIDENCE_SEGMENT_VERSION, self._composition_fingerprint(extraction)),
+            (
+                6,
+                "e1aa0a4c2498e376d19f0e0a71be30b65118a1eedefe9f0aac6f26e23ab4854c",
+            ),
+            "segment composition changed; see the previous test's docstring",
+        )
 
     def test_an_unnumbered_hazard_block_becomes_its_own_segment(self) -> None:
         """The hazard leaves the numbered step it used to be absorbed into.

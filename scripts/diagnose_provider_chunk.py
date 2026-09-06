@@ -121,7 +121,7 @@ def _cache_hit(cache, extraction, chunk, scoped, request):
     if cache is None:
         return None
     return cache.load(
-        key_for_chunk(extraction, chunk),
+        key_for_chunk(extraction, chunk, request),
         extraction=scoped,
         request=request,
     )
@@ -397,7 +397,8 @@ def main() -> int:
                 if cache is not None:
                     try:
                         path = cache.store(
-                            key_for_chunk(extraction, chunk), raw
+                            key_for_chunk(extraction, chunk, request),
+                            raw,
                         )
                     except Exception as error:  # noqa: BLE001 - never fatal
                         entry["cache_write"] = type(error).__name__
