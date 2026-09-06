@@ -198,8 +198,9 @@ class ConcurrentExtractionIsSerializedTests(unittest.TestCase):
             try:
                 barrier.wait(timeout=30)
                 for _ in range(self.CALLS // self.THREADS):
-                    texts = worker_module.read_page_texts(source, 1)
+                    texts, bands = worker_module.read_page_texts(source, 1)
                     pages.append(len(texts))
+                    assert len(bands) == len(texts)
             except BaseException as error:  # noqa: BLE001 - reported
                 errors.append(error)
 

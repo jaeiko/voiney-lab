@@ -853,9 +853,13 @@ size, or a value you already claimed from an identical segment on another page
 all count, and none of them may be declined. A digit that continues a
 hyphenated code, as in I1149-5G, is not a value, and neither is a digit with no
 unit after it, such as a page number. If such a segment carries nothing you can
-name as an instruction, claim it as a document-level claim of the category that
-fits the value, or as explicit_missing_ambiguous_value, rather than declining
-it. A segment that is only punctuation or whitespace needs no entry.
+name as an instruction, claim it anyway rather than declining it, as the
+category that fits the value or as explicit_missing_ambiguous_value. Attach it
+the way every other claim is attached: evidence inside a numbered step's span
+targets that step's action claim, and only evidence outside every numbered step
+is document-level. A note that states a volume beside the step it belongs to is
+that step's quantity, not a document-level one. A segment that is only
+punctuation or whitespace needs no entry.
 
 A repetition claim must set repeated_step_labels to the first and last step
 label the source says to repeat, and every other claim must leave it null.
@@ -989,13 +993,24 @@ def mid_line_numbered_labels(page_text: str) -> tuple[str, ...]:
     return tuple(label for _, label in sorted(dropped))
 
 
-def _bounded_action_block_boundaries(page_text: str) -> tuple[int, ...]:
-    """Return exact action-block boundaries with a deterministic size ceiling."""
+def _bounded_action_block_boundaries(
+    page_text: str, bottom_band_offset: int | None = None
+) -> tuple[int, ...]:
+    """Return exact action-block boundaries with a deterministic size ceiling.
+
+    The running footer is a boundary of its own. Measured across the four local
+    sources, the footer was merged into whatever preceded it on 31 segments, so
+    a timer badge and a page number became one unit of evidence: headspace page
+    6's "1h 30m" arrived glued to "protocols.io | ... 6/16", and a claim citing
+    the duration cited the page number with it. The split is geometric -- see
+    ProtocolPdfPage.bottom_band_offset -- and reads no words.
+    """
 
     coarse = sorted(
         {
             0,
             len(page_text),
+            *((bottom_band_offset,) if bottom_band_offset else ()),
             *(match.start("label") for match in _numbered_action_matches(page_text)),
             *(match.end() for match in _SENTENCE_LINE_END.finditer(page_text)),
         }
@@ -1032,7 +1047,9 @@ def generate_page_evidence_segments(
     ):
         raise ValueError("Evidence segment source identity is invalid.")
     page_text = extraction.pages[page_number - 1].text
-    ordered_boundaries = _bounded_action_block_boundaries(page_text)
+    ordered_boundaries = _bounded_action_block_boundaries(
+        page_text, extraction.pages[page_number - 1].bottom_band_offset
+    )
     segment_texts = tuple(
         page_text[start:end]
         for start, end in zip(ordered_boundaries, ordered_boundaries[1:])
@@ -1146,7 +1163,9 @@ def _claim_page_span(
     return (min(start for start, _ in spans), max(end for _, end in spans))
 
 
-def step_block_ranges(page_text: str) -> tuple[tuple[int, int], ...]:
+def step_block_ranges(
+    page_text: str, bottom_band_offset: int | None = None
+) -> tuple[tuple[int, int], ...]:
     """One half-open range per numbered action: label start to next label.
 
     A numbered step owns everything up to the next numbered step, including the
@@ -1154,6 +1173,16 @@ def step_block_ranges(page_text: str) -> tuple[tuple[int, int], ...]:
     segment inside that territory while still belonging to the step, which is
     what lets an action quote only its own instruction and a warning quote only
     itself.
+
+    The last step's territory stops at the running footer rather than at the
+    end of the page. The footer is not part of any step, and treating it as
+    part of the last one had a measured cost: STEP 21 narrowed the
+    value-honesty rule to segments inside a numbered step precisely so that a
+    footer carrying "1h 30m" could be declined, and the narrowing never worked,
+    because the footer was inside the last step's span. Nine of the eighty-seven
+    segments still in scope across the four sources were footers, and in-gel
+    page 7's cost a provider call in STEP 30. Splitting the footer into its own
+    segment does not help on its own: the span is what decides scope.
     """
 
     starts = [
@@ -1161,7 +1190,10 @@ def step_block_ranges(page_text: str) -> tuple[tuple[int, int], ...]:
     ]
     if not starts:
         return ()
-    bounds = [*starts, len(page_text)]
+    end = len(page_text)
+    if bottom_band_offset and starts[0] < bottom_band_offset < end:
+        end = bottom_band_offset
+    bounds = [*starts, end]
     return tuple(
         (bounds[index], bounds[index + 1]) for index in range(len(starts))
     )
@@ -1170,8 +1202,9 @@ def step_block_ranges(page_text: str) -> tuple[tuple[int, int], ...]:
 def _enclosing_step_block(
     page_text: str,
     span: tuple[int, int],
+    bottom_band_offset: int | None = None,
 ) -> tuple[int, int] | None:
-    for start, end in step_block_ranges(page_text):
+    for start, end in step_block_ranges(page_text, bottom_band_offset):
         if start <= span[0] and span[1] <= end:
             return (start, end)
     return None
@@ -2332,6 +2365,7 @@ def segment_carries_unit_bearing_value(segment_text: str) -> bool:
 
 def _segments_inside_numbered_steps(
     segments: tuple[ProtocolEvidenceSegment, ...],
+    bottom_band_offset: int | None = None,
 ) -> frozenset[str]:
     """Segment ids that lie wholly inside some numbered step's span.
 
@@ -2340,7 +2374,7 @@ def _segments_inside_numbered_steps(
     """
 
     page_text = "".join(segment.text for segment in segments)
-    ranges = step_block_ranges(page_text)
+    ranges = step_block_ranges(page_text, bottom_band_offset)
     if not ranges:
         return frozenset()
     inside: set[str] = set()
@@ -2438,20 +2472,16 @@ def _validate_page_segment_accounting(
     # The narrowing is decided by structure alone, never by wording: does the
     # segment lie inside a numbered step's span.
     #
-    # CORRECTION, measured 2026-09-05: this comment used to claim "a footer is
-    # not in one, so it leaves scope". It is. ``step_block_ranges`` gives the
-    # last numbered step a span that runs to the end of the page, so the
-    # running footer falls inside it. Measured over the four local sources,
-    # 9 of the 87 segments still in scope contain the footer -- including the
-    # headspace page 6 segment this narrowing was written for, whose
-    # "1h 30m protocols.io | ... 6/16" is still checked and still refusable.
-    # Splitting the footer into its own segment does not help either: the span
-    # is unchanged by where segment boundaries fall. The fix is to end the last
-    # step's span before the repeating bottom band, which is geometry and not
-    # wording, and it has not been done. (The 77 in the original note was
-    # measured before hierarchical labels were read; more labels means more
-    # step spans, hence 87 now.)
-    inside_step = _segments_inside_numbered_steps(segments)
+    # This narrowing did not work until STEP 30. ``step_block_ranges`` gave
+    # the last numbered step a span running to the end of the page, so the
+    # running footer -- the very segment the narrowing was written for -- was
+    # inside it. Measured: nine of the eighty-seven segments in scope across
+    # the four sources were footers, and in-gel page 7's cost a provider call.
+    # The band is now outside every step's span, so a footer leaves scope by
+    # geometry, without anything recognising a domain or a phrase.
+    inside_step = _segments_inside_numbered_steps(
+        segments, extraction.pages[page_number - 1].bottom_band_offset
+    )
     forced = [
         segment_id
         for segment_id in declined
@@ -2907,10 +2937,10 @@ def _outside_every_step_block(
     span = _claim_page_span(claim.evidence, offsets)
     if span is None:
         return False
-    page_text = extraction.pages[page_number - 1].text
+    page = extraction.pages[page_number - 1]
     return all(
         span[1] <= start or end <= span[0]
-        for start, end in step_block_ranges(page_text)
+        for start, end in step_block_ranges(page.text, page.bottom_band_offset)
     )
 
 
@@ -2944,8 +2974,10 @@ def _within_target_step_block(
     claim_span = _claim_page_span(claim.evidence, offsets)
     if target_span is None or claim_span is None:
         return False
-    page_text = extraction.pages[page_number - 1].text
-    block = _enclosing_step_block(page_text, target_span)
+    page = extraction.pages[page_number - 1]
+    block = _enclosing_step_block(
+        page.text, target_span, page.bottom_band_offset
+    )
     if block is None:
         return False
     return block[0] <= claim_span[0] and claim_span[1] <= block[1]

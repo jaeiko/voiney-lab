@@ -521,6 +521,11 @@ class ProtocolPdfPage:
     text: str
     text_empty: bool
     warning: str | None = None
+    #: Text offset where this page's trailing running-footer band begins, or
+    #: None where the page has no separable one. Geometry, measured in the
+    #: worker from character boxes; nothing here reads a word. See
+    #: pdf_text_worker.BOTTOM_BAND_FRACTION for the measurement behind it.
+    bottom_band_offset: int | None = None
 
 
 @dataclass(frozen=True)
@@ -649,7 +654,9 @@ def _open_reader(stream: BinaryIO) -> PdfReader:
         ) from exc
 
 
-def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
+def _pypdfium_page_texts(
+    path: Path, page_count: int
+) -> tuple[list[str | None], list[int | None]]:
     """Page text from a child process, or a specific error if it died.
 
     The child is a fresh interpreter used for exactly one document and then
@@ -710,18 +717,26 @@ def _pypdfium_page_texts(path: Path, page_count: int) -> list[str | None]:
             "Protocol PDF text extraction returned an unusable result.",
         ) from error
     texts = payload.get("page_texts") if isinstance(payload, dict) else None
+    bands = payload.get("bottom_band_offsets") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
         or payload.get("status") != "ok"
         or not isinstance(texts, list)
         or len(texts) != page_count
         or any(item is not None and not isinstance(item, str) for item in texts)
+        or not isinstance(bands, list)
+        or len(bands) != page_count
+        or any(
+            item is not None
+            and (not isinstance(item, int) or isinstance(item, bool) or item < 0)
+            for item in bands
+        )
     ):
         raise _safe_error(
             ProtocolPdfWorkerError,
             "Protocol PDF text extraction returned an unusable result.",
         )
-    return list(texts)
+    return list(texts), list(bands)
 
 
 def _extract_pages(
@@ -740,7 +755,7 @@ def _extract_pages(
             "Protocol PDF page structure could not be opened.",
         ) from exc
 
-    primary = _pypdfium_page_texts(source_path, page_count)
+    primary, band_offsets = _pypdfium_page_texts(source_path, page_count)
     pages: list[ProtocolPdfPage] = []
     resolutions: list[GlyphResolution] = []
     failures: list[str] = []
@@ -779,12 +794,26 @@ def _extract_pages(
             )
             resolutions.extend(resolved)
             failures.extend(page_failures)
+        band = band_offsets[page_index] if page_index < len(band_offsets) else None
+        if band is not None and 0 < band <= len(text):
+            # Snap to the start of the line the boundary lands in. Measured on
+            # ANKOM page 3 the band cut two characters into "protocols.io"
+            # because the first two glyphs sit a hair above it, and a boundary
+            # inside a word is not a boundary between units of evidence. A line
+            # is itself a geometric unit, so this reads nothing.
+            band = text.rfind("\n", 0, band) + 1
+        if band is not None and (band > len(text) or not text[band:].strip()):
+            # The offsets describe the text the worker returned. If glyph
+            # resolution changed this page's text the two no longer line up,
+            # and a boundary in the wrong place is worse than none.
+            band = None
         pages.append(
             ProtocolPdfPage(
                 source_page_number=page_index + 1,
                 text=text,
                 text_empty=not text.strip(),
                 warning=warning,
+                bottom_band_offset=band,
             )
         )
     return tuple(pages), tuple(resolutions), tuple(failures)

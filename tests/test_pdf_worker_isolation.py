@@ -176,7 +176,11 @@ class WorkerContractTests(unittest.TestCase):
         """A document fault stays a document fault, not a worker fault."""
 
         missing = Path(self.temp.name) / "absent.pdf"
-        self.assertEqual(read_page_texts(missing, 3), [None, None, None])
+        texts, bands = read_page_texts(missing, 3)
+        self.assertEqual(texts, [None, None, None])
+        # No text means no geometry either: a band offset without the text it
+        # indexes into would be a boundary in a document nobody read.
+        self.assertEqual(bands, [None, None, None])
 
     def test_the_child_reports_a_capped_address_space_without_crashing(self):
         """The cap is real: with an impossible one the child fails cleanly."""

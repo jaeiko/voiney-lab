@@ -444,16 +444,21 @@ class ValueHonestyScopeTests(unittest.TestCase):
                     after += 1
         self.assertEqual((before, after), (22, 20))
 
-    def test_a_trailing_footer_stays_in_scope_and_that_is_recorded(self) -> None:
-        """The case that motivated this, which the narrowing does NOT fix.
+    def test_a_trailing_footer_leaves_scope_by_geometry(self) -> None:
+        """The case that motivated the narrowing, and finally fixed in STEP 30.
 
         headspace page 6 ends with a running footer whose text begins "1h 30m",
         the document's own estimated duration, which matches digit-plus-unit.
-        The last numbered label on a page owns everything to the end of that
-        page -- deliberately, so a step keeps its own notes and warnings -- so
-        the footer lies inside step 29's span and remains in scope. Narrowing
-        by numbered-step membership therefore does not remove it, and nothing
-        further was invented to force it out.
+        The narrowing by numbered-step membership did not remove it for nine
+        steps: the last label on a page owned everything to the end of that
+        page, deliberately, so a step keeps its own notes and warnings -- and
+        the footer sat inside that territory. In-gel page 7's footer cost a
+        provider call in STEP 30 for exactly this.
+
+        Two geometric facts fix it, and both are needed. The band is a segment
+        boundary, so the duration badge is no longer glued to the page number;
+        and the band lies outside every step's span, so the footer leaves scope
+        without anything recognising a domain or a phrase.
         """
 
         from voice_workflow_agent.experiment_protocol_pdf import (
@@ -469,11 +474,73 @@ class ValueHonestyScopeTests(unittest.TestCase):
         if not source.is_file():
             self.skipTest(f"{source.name} is not present.")
         extraction = extract_protocol_pdf(source)
+        page = extraction.pages[5]
         segments = generate_page_evidence_segments(
             extraction, source_revision="pdf-1", page_number=6
         )
-        inside = _segments_inside_numbered_steps(segments)
+        inside = _segments_inside_numbered_steps(
+            segments, page.bottom_band_offset
+        )
         footer = segments[-1]
         self.assertIn("protocols.io", footer.text)
-        self.assertTrue(segment_carries_unit_bearing_value(footer.text))
-        self.assertIn(footer.segment_id, inside)
+        # The footer is now its own segment, and it is out of scope.
+        self.assertNotIn(footer.segment_id, inside)
+        self.assertFalse(segment_carries_unit_bearing_value(footer.text))
+
+        # The duration it used to be glued to is a segment of its own, still
+        # in scope, because it really is that step's duration.
+        badge = segments[-2]
+        self.assertEqual(badge.text.strip(), "1h 30m")
+        self.assertTrue(segment_carries_unit_bearing_value(badge.text))
+        self.assertIn(badge.segment_id, inside)
+
+    def test_no_running_footer_is_left_in_scope_on_any_local_source(self) -> None:
+        """Nine were, across the four sources. The measurement is the test."""
+
+        from voice_workflow_agent.experiment_protocol_pdf import (
+            extract_protocol_pdf,
+        )
+        from voice_workflow_agent.protocol_claim_analysis import (
+            _segments_inside_numbered_steps,
+            generate_page_evidence_segments,
+            segment_carries_unit_bearing_value,
+            segment_is_substantive,
+        )
+
+        sources = [
+            Path("data/runtime/candidate-a-source/in-gel-digestion.pdf"),
+            Path("usingdynamicheadspacecollections.pdf"),
+            Path("intracellularmetaboliteextraction.pdf"),
+            Path(
+                "data/runtime/candidate-a-live-acceptance/objects/sha256/53"
+                "/5367ca6bfae9fe9bbaeac9dab2099276a9c2dccf6c698ee36e59c7552e56d18a.pdf"
+            ),
+        ]
+        checked = 0
+        for source in sources:
+            if not source.is_file():
+                continue
+            extraction = extract_protocol_pdf(source)
+            for number in range(1, extraction.page_count + 1):
+                page = extraction.pages[number - 1]
+                segments = generate_page_evidence_segments(
+                    extraction, source_revision="pdf-1", page_number=number
+                )
+                inside = _segments_inside_numbered_steps(
+                    segments, page.bottom_band_offset
+                )
+                for segment in segments:
+                    if (
+                        segment_is_substantive(segment.text)
+                        and segment.segment_id in inside
+                        and segment_carries_unit_bearing_value(segment.text)
+                    ):
+                        checked += 1
+                        self.assertNotIn(
+                            "protocols.io |",
+                            segment.text,
+                            f"{source.name} page {number}: a running footer is "
+                            f"still in the value-honesty scope",
+                        )
+        if not checked:
+            self.skipTest("no local source is present")
