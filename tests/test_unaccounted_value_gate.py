@@ -166,16 +166,48 @@ class DerivedFromTheMergeTests(unittest.TestCase):
             self.assertIn(page, incomplete)
 
     def test_a_page_that_omitted_a_value_is_named(self) -> None:
+        """Named exactly, and only where a value actually went missing.
+
+        Not pinned to a literal page list: the list grows as chunks are
+        collected, and it did -- page 6 joined page 8 when ord1 arrived, which
+        is new data rather than a regression. What is invariant is that every
+        page named really does hold an unaccounted segment stating a value, and
+        that page 8 does, which is the case STEP 34 measured by hand.
+        """
+
         from voice_workflow_agent.protocol_claim_analysis import (
+            generate_page_evidence_segments,
             pages_stating_unaccounted_values,
+            segment_carries_unit_bearing_value,
+            unaccounted_segments_by_page,
         )
 
-        self.assertEqual(
-            pages_stating_unaccounted_values(
-                self.extraction, self.coverage, source_revision="pdf-1"
-            ),
-            (8,),
+        named = pages_stating_unaccounted_values(
+            self.extraction, self.coverage, source_revision="pdf-1"
         )
+        self.assertIn(8, named)
+        omitted = unaccounted_segments_by_page(
+            self.extraction, self.coverage, source_revision="pdf-1"
+        )
+        for page in named:
+            with self.subTest(page=page):
+                wanted = set(omitted[page])
+                self.assertTrue(
+                    any(
+                        segment.segment_id in wanted
+                        and segment_carries_unit_bearing_value(segment.text)
+                        for segment in generate_page_evidence_segments(
+                            self.extraction,
+                            source_revision="pdf-1",
+                            page_number=page,
+                        )
+                    )
+                )
+        # And a page whose omissions state no value is not named. Pages 1 and 2
+        # are the title block and the abstract: no numbered label at all, every
+        # segment unaccounted, and nothing measurable lost.
+        self.assertNotIn(1, named)
+        self.assertNotIn(2, named)
 
     def test_a_dict_shaped_coverage_record_reads_the_same(self) -> None:
         """The catalog stores coverage as dicts; both shapes must agree."""
