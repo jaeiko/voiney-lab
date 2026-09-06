@@ -54,11 +54,12 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
-    generate_page_evidence_segments,
     ProtocolChunkClaimAnalysis,
     _numbered_step_labels,
+    generate_page_evidence_segments,
     reopen_evidence_span,
     serialize_chunk_claim_analysis,
+    unaccounted_segments_by_page,
 )
 from voice_workflow_agent.protocol_ocr import (
     OcrResult,
@@ -98,6 +99,11 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
     {
         domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
         domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
+        # "We did not account for a value on this page" is precisely a case of
+        # the machine reporting its own limit, and a person reading the page
+        # can settle it. What they cannot do is make the value accounted for,
+        # so the acknowledgement is audited and the segments stay addressable.
+        domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
     }
 )
 _DISPOSITION_CONFIRMATION_EVENT = "protocol_label_disposition_confirmed"
@@ -1623,6 +1629,10 @@ class ProtocolCatalog:
             "action": "acknowledge_gate",
         },
         domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value: {
             "kind": "reviewer_can_clear",
             "action": "acknowledge_gate",
         },
@@ -3530,6 +3540,17 @@ class ProtocolCatalog:
             for section in analysis.protocol.sections
             for step in section.steps
         )
+        # Which pages the analysis could not finish accounting for. STEP 28
+        # built the execution-time disclosure for exactly this and then left it
+        # unfed: until now the only assignment to unread_pages in the whole
+        # tree was in a test, so on a real Protocol the disclosure could never
+        # fire. The coverage records travel with the stored analysis, so the
+        # answer was already here and simply not being read.
+        unread = unaccounted_segments_by_page(
+            extraction,
+            analysis.page_coverage,
+            source_revision=entry.revision_id,
+        )
         return CuratedProtocolFixture(
             draft=draft,
             status="approved_revision",
@@ -3540,6 +3561,7 @@ class ProtocolCatalog:
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,
+            unread_pages=unread or None,
         )
 
     def resolve_asset(

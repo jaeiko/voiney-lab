@@ -9,10 +9,18 @@ the ordinals named and the arithmetic stated -- when it does not hold enough.
 It sends nothing. There is no provider client in this file and no --execute
 flag: if a chunk is missing, the answer is a message, never a call.
 
-The reference is a hand-built fixture, so it is not ground truth and is not
-treated as such. ``audit_reference`` reports where the reference itself
-disagrees with the source, and those notes travel with the score rather than
-being folded into it.
+The reference is a hand-built fixture. It is a **regression baseline**, not a
+measure of absolute accuracy, and the difference is not academic: in-gel's
+reference carries two RepeatUntil constructs where the document states three.
+Page 8 segment 0 says "If the band is still transparent then repeat steps 17-18
+until fully dehydrated", the server's own range test confirms it, and the
+reference has nothing there. An extraction that finds all three would be
+reported as having invented one.
+
+So this tool never reports a single accuracy figure. Differences are reported
+per side -- ``in_reference_only`` and ``in_candidate_only`` -- rather than
+netted, ``audit_reference`` notes travel beside the score instead of being
+folded into it, and every payload says which of the two it is.
 
     scripts/score_extraction.py SOURCE.pdf \\
         --reference   data/development_protocols/<name>.json \\
@@ -239,6 +247,7 @@ def main() -> int:
                     "chunks_cached": len(validated),
                     "missing_ordinals": missing,
                     "provider_calls_needed": len(missing),
+                    "standing": "regression_baseline_not_absolute_accuracy",
                     "note": (
                         "A merge needs every chunk. Nothing was sent; collect "
                         "the missing ordinals and run this again."
@@ -281,6 +290,17 @@ def main() -> int:
     ]
     payload = {
         "scored": True,
+        # Said in the output, not only in the docstring: a number read out of
+        # this file is a comparison against one person's reading of the
+        # document, and that reading is known to be incomplete in at least one
+        # place. Treat a change as a signal; do not treat the level as a score.
+        "standing": "regression_baseline_not_absolute_accuracy",
+        "baseline_caveat": (
+            "The reference is hand-built and is not ground truth. A difference "
+            "may be the extraction's fault or the reference's. See "
+            "reference_notes, and in_reference_only/in_candidate_only under "
+            "repetitions, which are reported per side and never netted."
+        ),
         "source": arguments.source.name,
         "source_sha256": extraction.sha256,
         "reference": arguments.reference.name,

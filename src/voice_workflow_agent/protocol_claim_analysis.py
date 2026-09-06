@@ -15,7 +15,7 @@ from base64 import urlsafe_b64encode
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from voice_workflow_agent import experiment_protocol as domain
 from voice_workflow_agent.experiment_protocol_analysis import (
@@ -2506,14 +2506,101 @@ def _validate_page_segment_accounting(
     # declining the same segment, or declining one that states a value, is an
     # active false statement and still fails closed here. Leaving a segment out
     # is a silence: it is recorded against the exact segments and forces the
-    # page to analysis_incomplete, which blocks the whole-document merge just
-    # as firmly, while keeping the claims that were correct available for
-    # review instead of discarding the chunk.
+    # page to analysis_incomplete, while keeping the claims that were correct
+    # available for review instead of discarding the chunk.
+    #
+    # This comment used to end "which blocks the whole-document merge just as
+    # firmly". That described the world before STEP 28, which removed the merge
+    # veto for an incomplete page -- see ``validate_whole_protocol_claims``,
+    # where only a page missing outright is still refused. The sentence was left
+    # behind and for six steps it read as an assurance that nothing enforced,
+    # so an omitted value was the one dishonesty with no consequence at all.
+    #
+    # The consequence now lives where the fault belongs. An omission does not
+    # discard a chunk, but a value left unaccounted raises
+    # ``source_page_not_fully_read`` and keeps the Protocol out of execution
+    # until a person has read those pages -- see
+    # ``pages_stating_unaccounted_values`` below and ``assess_readiness``.
     return (
         tuple(sorted(set(substantive) - cited_segment_ids - declined)),
         tuple(sorted(declined)),
         bool(substantive),
     )
+
+
+def unaccounted_segments_by_page(
+    extraction: ProtocolPdfExtraction,
+    page_coverage: Sequence[Any],
+    *,
+    source_revision: str,
+) -> dict[int, tuple[str, ...]]:
+    """Page number -> the segment ids the analysis neither cited nor declined.
+
+    Derived from the merge's own coverage records and the server's own
+    segmentation. Nothing a provider asserts is consulted, and a page whose
+    segments cannot be recomputed contributes nothing rather than a guess.
+    """
+
+    pages: dict[int, tuple[str, ...]] = {}
+    for record in page_coverage:
+        omitted = tuple(
+            getattr(record, "unaccounted_segment_ids", None)
+            or (record.get("unaccounted_segment_ids") if isinstance(record, dict) else ())
+            or ()
+        )
+        if not omitted:
+            continue
+        number = (
+            getattr(record, "source_page_number", None)
+            if not isinstance(record, dict)
+            else record.get("source_page_number")
+        )
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        pages[number] = omitted
+    return dict(sorted(pages.items()))
+
+
+def pages_stating_unaccounted_values(
+    extraction: ProtocolPdfExtraction,
+    page_coverage: Sequence[Any],
+    *,
+    source_revision: str,
+) -> tuple[int, ...]:
+    """Pages where something the analysis skipped states a value.
+
+    The same shape test the value-honesty rule applies to a declination, asked
+    of a silence instead. A segment nobody claimed and nobody declined, which
+    the document writes as a number with a unit, is a value the operator will
+    not be told; whether it was meant as an instruction is exactly what a
+    person has to decide, and this is how they are made to.
+
+    Position is deliberately not narrowed here the way the declination rule
+    narrows it. Declining is an explicit judgement that a segment holds no
+    claim, and outside a numbered step that judgement is the model's to make.
+    Saying nothing is not a judgement, so it does not earn the same latitude.
+    """
+
+    found: list[int] = []
+    for number, omitted in unaccounted_segments_by_page(
+        extraction, page_coverage, source_revision=source_revision
+    ).items():
+        try:
+            segments = generate_page_evidence_segments(
+                extraction,
+                source_revision=source_revision,
+                page_number=number,
+            )
+        except Exception:  # noqa: BLE001 - an unreadable page states nothing
+            continue
+        wanted = set(omitted)
+        if any(
+            segment.segment_id in wanted
+            and segment_carries_unit_bearing_value(segment.text)
+            for segment in segments
+        ):
+            found.append(number)
+    return tuple(sorted(found))
 
 
 def _derived_coverage(
@@ -3680,7 +3767,16 @@ def assemble_experiment_protocol(
         protocol,
         extraction,
     )
-    readiness = domain.assess_readiness(verified)
+    # The merge knows which pages it could not finish accounting for, and this
+    # is the only place that holds both that and the assembled Protocol. Derive
+    # it here, so the readiness the catalog stores already carries the reason
+    # rather than depending on a later caller to remember.
+    readiness = domain.assess_readiness(
+        verified,
+        pages_stating_unaccounted_values=pages_stating_unaccounted_values(
+            extraction, merged.page_coverage, source_revision=merged.source_revision
+        ),
+    )
     return ProtocolAnalysisDraft(
         extraction=extraction,
         protocol=verified,

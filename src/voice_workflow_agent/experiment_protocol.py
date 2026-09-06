@@ -102,6 +102,22 @@ class ReadinessReasonCode(str, Enum):
     )
     SAFETY_CRITICAL_CONFLICT = "safety_critical_conflict"
     NO_DECLARED_SAFETY_WARNINGS = "no_declared_safety_warnings"
+    #: A page states a value the analysis neither claimed nor declined.
+    #:
+    #: Declining such a segment has always been refused outright -- see
+    #: ``declined_segment_states_a_value`` -- on the ground that a value
+    #: belonging to a step is read out to an operator and losing it is
+    #: dangerous. Leaving the same segment out raised nothing at all, and the
+    #: comment that justified the silence claimed the merge would refuse it,
+    #: which stopped being true when STEP 28 removed that veto. So for six
+    #: steps a model could lose a value by saying nothing about it, and only
+    #: by saying something about it could it be caught.
+    #:
+    #: This is the other half. An omission is still not treated as a false
+    #: statement -- the chunk survives, and so do the claims that were right --
+    #: but the value that went missing keeps the Protocol out of execution
+    #: until a person has looked at it.
+    SOURCE_PAGE_NOT_FULLY_READ = "source_page_not_fully_read"
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
@@ -1568,6 +1584,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.UNRESOLVED_EXECUTION_VALUE_CONFLICT,
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
+            ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ,
             ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
@@ -1604,6 +1621,23 @@ class SourceLineage(str, Enum):
     UNKNOWN is not a third case. It is the absence of an answer, and it is
     treated as REVISION, because a caller that has not said which of the two
     this is has not established that the gate can be skipped.
+
+    No production caller passes this yet, which is deliberate and is why the
+    default is the strict one. Wiring it needs a decision, because the catalog
+    and the workspace lineage live in separate databases -- ``protocol_revisions``
+    in protocol_workspace.sqlite has no parent column, and
+    ``protocol_lineage_revisions`` in commercial_workspace.sqlite is where
+    ``parent_revision_id`` lives -- and the workspace can be switched off
+    entirely, in which case there is no lineage to consult at all.
+
+    One answer is permanently excluded. The catalog's own ``revision_number``
+    must never be used to decide this. That number counts how many times a PDF
+    has been registered under one experiment, not where the document sits in a
+    protocol's lineage: uploading an edited document for the first time creates
+    revision 1 of a new experiment, which this rule would call an original and
+    wave past the safety gate -- the one direction the mistake must never go.
+    It is cheap, it is one expression, and it is wrong; it is written down here
+    so it is not rediscovered as a good idea.
     """
 
     ORIGINAL_REGISTRATION = "original_registration"
@@ -1642,12 +1676,18 @@ def assess_readiness(
     *,
     capability_policy: CapabilityPolicy = P1_CAPABILITY_POLICY,
     source_lineage: SourceLineage = SourceLineage.UNKNOWN,
+    pages_stating_unaccounted_values: tuple[int, ...] = (),
 ) -> ReadinessAssessment:
     """Fail closed with two public outcomes and stable, sanitized reasons.
 
     ``source_lineage`` decides one gate and nothing else. It defaults to
     UNKNOWN, which is treated as a revision, so a caller that says nothing
     gets the stricter of the two outcomes.
+
+    ``pages_stating_unaccounted_values`` names the pages carrying a value the
+    analysis neither claimed nor declined. It is derived from the merge's own
+    page coverage, never from anything a provider asserts, and an empty tuple
+    is the ordinary case rather than a claim that every page was read.
     """
 
     try:
@@ -1736,6 +1776,28 @@ def assess_readiness(
                     "A reviewer must confirm this Protocol's safety warnings "
                     "before execution. Extracted warnings are model judgement "
                     "and do not discharge the review by themselves."
+                ),
+            )
+        )
+
+    pages = tuple(
+        sorted(
+            {
+                page
+                for page in pages_stating_unaccounted_values
+                if isinstance(page, int) and not isinstance(page, bool)
+            }
+        )
+    )
+    if pages:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ,
+                message=(
+                    "The analysis left a stated value unaccounted on "
+                    f"{len(pages)} source page(s). A reviewer must read those "
+                    "pages before execution; the value may be an instruction "
+                    "nobody would otherwise be given."
                 ),
             )
         )
