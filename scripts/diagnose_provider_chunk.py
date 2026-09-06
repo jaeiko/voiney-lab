@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -223,6 +224,21 @@ def main() -> int:
     # current rules before it is used; see chunk_analysis_cache.
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--no-cache", action="store_true")
+    # A refusal that exists only in somebody's terminal is a refusal nobody can
+    # act on later. STEP 31's collection had to be run by hand, two of five
+    # chunks were refused, and by the time anyone looked the reason codes were
+    # gone -- the run had left three cache entries and no account of itself.
+    #
+    # The report is safe to keep: it is counts, identifiers, reason codes and
+    # latencies. No provider prose and no protocol text passes through it --
+    # offending segments are described by id, index, length and position, never
+    # by their words -- so persisting it does not persist content.
+    parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("data/development_cache/provider_diagnostics"),
+        help="where the run's JSON report is written; '-' to write none",
+    )
     arguments = parser.parse_args()
 
     if len(arguments.chunk) > arguments.budget:
@@ -276,14 +292,14 @@ def main() -> int:
                 }
             )
         report["note"] = "dry run; nothing sent"
-        print(json.dumps(report, indent=2, sort_keys=True))
+        _emit(report, arguments.report_dir)
         return 0
 
     load_dotenv()
     api_key = os.environ.get("XAI_API_KEY", "").strip()
     if not api_key:
         report["note"] = "XAI_API_KEY absent; nothing sent"
-        print(json.dumps(report, indent=2, sort_keys=True))
+        _emit(report, arguments.report_dir)
         return 1
 
     with OpenAI(
@@ -469,8 +485,31 @@ def main() -> int:
             ),
         }
 
-    print(json.dumps(report, indent=2, sort_keys=True))
+    _emit(report, arguments.report_dir)
     return 0
+
+
+def _emit(report: dict, report_dir: Path | None) -> None:
+    """Print the report, and keep a copy unless asked not to."""
+
+    body = json.dumps(report, indent=2, sort_keys=True)
+    print(body)
+    if report_dir is None or str(report_dir) == "-":
+        return
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        chunks = "-".join(
+            str(item.get("chunk"))
+            for item in report.get("results", [])
+            if item.get("chunk") is not None
+        )
+        path = report_dir / f"{stamp}-chunks-{chunks or 'none'}.json"
+        path.write_text(body + "\n", encoding="utf-8")
+    except OSError as error:  # noqa: BLE001 - a report is never fatal
+        print(f"(report not written: {type(error).__name__})", file=sys.stderr)
+    else:
+        print(f"(report written to {path})", file=sys.stderr)
 
 
 def _walk(source, extraction, plan, validated):
