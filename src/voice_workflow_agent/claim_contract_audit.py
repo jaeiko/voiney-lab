@@ -192,7 +192,21 @@ CONTRACT_EVIDENCE: dict[str, ContractEvidence] = {
     "orphan_execution_claim": _prompt("target_claim_id"),
     "action_claim_scope_conflict": _prompt("section identity"),
     "resource_claim_scope_conflict": _prompt("section identity"),
-    "top_level_claim_scope_invalid": _prompt("target_claim_id"),
+    # Measured in STEP 37: the prompt says "top-level" zero times and never
+    # states that a material, a piece of equipment or a prerequisite may carry
+    # no step. The recorded phrase below is about target_claim_id in general
+    # and does not state this rule, so this entry is SERVER_ONLY rather than
+    # PROMPT -- the honest label for a rule the provider was never told.
+    #
+    # It is not stated in the prompt on purpose. Saying it would move
+    # prompt_sha256 and cost every cached chunk, and the model's observation is
+    # no longer discarded anyway: the claim is scoped as the domain requires
+    # and what the model said is kept in
+    # MergedProtocolClaims.unverified_step_attributions, marked unverified.
+    "top_level_claim_scope_invalid": _server(
+        "a domain scoping rule the prompt has never stated; the model's own"
+        " attribution is preserved rather than refused"
+    ),
     "document_level_claim_scope_invalid": _prompt("target_claim_id"),
     "missing_value_scope_invalid": _prompt("target_claim_id"),
     "warning_must_attach_to_enclosing_step": _prompt("step identity"),
@@ -209,6 +223,16 @@ CONTRACT_EVIDENCE: dict[str, ContractEvidence] = {
     "repetition_count_malformed": _prompt("repetition_count"),
     "repetition_count_not_applicable": _prompt("repetition_count"),
     # --- not about a provider response at all ------------------------------
+    # --- one passage, two incompatible readings -----------------------------
+    "contradictory_repetition_claims": _prompt(
+        "A repetition claim must set repeated_step_labels to the first and last"
+        " step label the source says to repeat"
+    ),
+    "contradictory_execution_requirement": _prompt(
+        "Set required_for_execution true when the claim states something an"
+        " operator must have or do to run the step"
+    ),
+    # --- not about a provider response at all --------------------------------
     "semantic_running_timer_read_only": _server(
         "a runtime intent guard in the voice path, not a claim contract"
     ),

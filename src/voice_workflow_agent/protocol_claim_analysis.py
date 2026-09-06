@@ -388,6 +388,18 @@ class MergedProtocolClaims:
     #: True when the document's title came from the file's own metadata rather
     #: than from any chunk's marker.
     title_taken_from_the_file: bool = False
+    #: What a chunk said about where a material, a piece of equipment or a
+    #: prerequisite belongs, when the domain has no place to put it.
+    #:
+    #: The model wrote "this trypsin is step 21's". The domain keeps those
+    #: categories at document level and the server refused the whole document
+    #: for the disagreement, which threw the observation away to enforce a rule
+    #: the prompt never stated -- "top-level" appears in it zero times. The
+    #: claim is now scoped the way the domain requires and what the model said
+    #: is kept here instead, verbatim and marked unverified. Nothing asserts
+    #: the opposite and nothing is deleted; it is moved to where it can be
+    #: read without being mistaken for a checked fact.
+    unverified_step_attributions: tuple[dict[str, object], ...] = ()
 
 
 # The pattern is _STABLE_ID. Every identifier the server validates with it is
@@ -2791,6 +2803,119 @@ _CHUNK_LOCAL_PARAMETER_TARGETS = {
 }
 
 
+#: The three ways a source can say "do this more than once". They describe one
+#: repeat, so two of them about one passage must agree about what it repeats.
+_REPETITION_CATEGORIES = {
+    ClaimCategory.REPEAT_CONDITION,
+    ClaimCategory.FIXED_RANGE_REPETITION,
+    ClaimCategory.OPERATOR_DETERMINED_REPETITION,
+}
+
+
+def _refuse_contradictory_claims(
+    analysis: ProtocolChunkClaimAnalysis,
+    chunk_id: str,
+    source_revision: str,
+    extraction: ProtocolPdfExtraction,
+) -> None:
+    """Refuse two claims about one passage that assert different things.
+
+    Until STEP 38 this fault was caught only by accident. Two chunks reusing a
+    handle was refused as ``claim_identity_conflict``, which looked like a
+    contradiction guard and was not: it fired on strangers picking the same
+    word and stayed silent on one chunk saying two incompatible things about
+    one sentence. Extending the rename without putting this in its place would
+    have removed the wrong watchman and posted no other.
+
+    Sharing an evidence address is ordinary and is not the fault. "Solution A:
+    2 parts of 25mM ammonium bicarbonate and 1 part acetonitrile" is one
+    segment and two quantities; a repeat sentence is an action and a
+    repetition. Measured across in-gel's five chunks, 18 addresses carry more
+    than one claim and every one of them is a case like that.
+
+    What is refused is disagreement about the same passage:
+
+    * two repetition claims declaring different ranges or different counts. One
+      sentence cannot say to repeat 2-7 and also 8-9, and an operator told the
+      wrong one runs a different experiment.
+    * two claims of one category disagreeing about whether the passage is
+      something an operator must do. Same words, opposite obligation.
+
+    Chunk-local by construction: a claim's evidence page must be a core page of
+    its own chunk and core pages are disjoint across chunks -- verified on all
+    three local documents -- so two claims from different chunks can never
+    share an address.
+    """
+
+    def fail(reason: str, count: int, offending: tuple[str, ...]) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claims contradict each other about one passage.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_claim_contradiction_validation",
+                reason_code=reason,
+                mismatch_class="claim_relationship_mismatch",
+                evidence_type="claim",
+                expected_count=1,
+                actual_count=count,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+                offending_segment_ids=tuple(sorted(offending))[:8],
+            ),
+        )
+
+    by_address: dict[tuple, list[ProtocolClaim]] = {}
+    for claim in analysis.claims:
+        address = (
+            claim.evidence.source_page_number,
+            tuple(claim.evidence.evidence_segment_ids),
+        )
+        by_address.setdefault(address, []).append(claim)
+
+    for claims in by_address.values():
+        if len(claims) < 2:
+            continue
+        repetitions = [
+            claim for claim in claims if claim.category in _REPETITION_CATEGORIES
+        ]
+        ranges = {
+            claim.repeated_step_labels
+            for claim in repetitions
+            if claim.repeated_step_labels is not None
+        }
+        counts = {
+            claim.repetition_count
+            for claim in repetitions
+            if claim.repetition_count is not None
+        }
+        if len(ranges) > 1 or len(counts) > 1:
+            fail(
+                "contradictory_repetition_claims",
+                len(repetitions),
+                tuple(claim.claim_id for claim in repetitions),
+            )
+        by_category: dict[object, set[bool]] = {}
+        for claim in claims:
+            by_category.setdefault(claim.category, set()).add(
+                claim.required_for_execution
+            )
+        disputed = [
+            category
+            for category, values in by_category.items()
+            if len(values) > 1
+        ]
+        if disputed:
+            fail(
+                "contradictory_execution_requirement",
+                len(claims),
+                tuple(
+                    claim.claim_id
+                    for claim in claims
+                    if claim.category in disputed
+                ),
+            )
+
+
 def _refuse_chunk_local_inconsistency(
     analysis: ProtocolChunkClaimAnalysis,
     chunk_id: str,
@@ -3181,6 +3306,7 @@ def validate_chunk_claim_analysis(
             ),
         )
     _refuse_chunk_local_inconsistency(analysis, chunk_id, source_revision, extraction)
+    _refuse_contradictory_claims(analysis, chunk_id, source_revision, extraction)
     return replace(
         analysis,
         page_coverage=tuple(
@@ -3767,9 +3893,9 @@ def assemble_experiment_protocol(
         ),
         None,
     )
+    title_taken_from_the_file = title is None
     if title is None:
         title = _title_from_the_file(extraction, merged)
-        merged = replace(merged, title_taken_from_the_file=True)
     section_markers = tuple(
         item
         for item in merged.structure
@@ -4108,4 +4234,5 @@ def assemble_experiment_protocol(
         capability_policy=domain.P1_CAPABILITY_POLICY,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
         verified_evidence_count=evidence_count,
+        title_taken_from_the_file=title_taken_from_the_file,
     )

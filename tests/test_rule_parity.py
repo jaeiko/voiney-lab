@@ -232,6 +232,22 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "claim_target_invalid": (_PROMPT, ("target_claim_id",)),
+    # STEP 38: the guard that replaces what a name collision used to catch by
+    # accident. Two claims about one passage asserting different things.
+    "contradictory_repetition_claims": (
+        _PROMPT,
+        (
+            "A repetition claim must set repeated_step_labels to the first and"
+            " last step label the source says to repeat",
+        ),
+    ),
+    "contradictory_execution_requirement": (
+        _PROMPT,
+        (
+            "Set required_for_execution true when the claim states something an"
+            " operator must have or do to run the step",
+        ),
+    ),
     "missing_value_scope_invalid": (_PROMPT, ("target_claim_id",)),
     "duplicate_declined_segment": (
         _PROMPT,

@@ -22,11 +22,12 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolAnalysisModel,
 )
 from voice_workflow_agent.protocol_claim_analysis import (
-    _numbered_step_labels,
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     MergedProtocolClaims,
     ProtocolChunkClaimAnalysis,
     ProtocolClaimConsistencyError,
+    ProtocolStructureMarker,
+    _numbered_step_labels,
     analyze_chunk_claims,
     assemble_experiment_protocol,
     prepare_chunk_claim_request,
@@ -575,6 +576,70 @@ def validate_chunk_result(
         ) from exc
 
 
+#: Categories the domain keeps at document level, with no step of their own.
+_DOCUMENT_LEVEL_CATEGORIES = frozenset({"material", "equipment", "prerequisite"})
+
+
+def _keep_unverified_step_attribution(
+    claims: tuple[Any, ...],
+) -> tuple[tuple[Any, ...], tuple[dict[str, object], ...]]:
+    """Scope a document-level claim as the domain requires, keeping what was said.
+
+    A model wrote that a material belongs to a step -- "Promega trypsin" at
+    step 21, wash solutions at step 2 -- and the server refused the entire
+    document because materials, equipment and prerequisites may carry no step.
+    That rule is real but it was never stated: "top-level" appears in the
+    system prompt zero times, so this is STEP 26's request handle and STEP 28's
+    missing ordinal a third time.
+
+    Refusing threw the observation away. Silently blanking the fields would
+    throw it away just as thoroughly and more quietly. So the claim is scoped
+    the way the domain requires *and* what the model said is written down
+    beside it, marked as the model's word and unchecked.
+
+    This overturns nothing. The model's assertion is not contradicted, not
+    corrected and not deleted; it is recorded in the one place that can hold it
+    without it being read as a verified fact. Nothing downstream may treat it
+    as one -- see the readiness tests -- and a reader can always tell it apart,
+    because it is the only place these attributions live.
+    """
+
+    kept: list[dict[str, object]] = []
+    scoped: list[Any] = []
+    for claim in claims:
+        category = getattr(getattr(claim, "category", None), "value", None)
+        if category not in _DOCUMENT_LEVEL_CATEGORIES:
+            scoped.append(claim)
+            continue
+        stated = {
+            field: getattr(claim, field)
+            for field in ("section_id", "step_id", "source_label", "target_claim_id")
+            if getattr(claim, field) is not None
+        }
+        if not stated:
+            scoped.append(claim)
+            continue
+        kept.append(
+            {
+                "claim_id": claim.claim_id,
+                "category": category,
+                "source_page_number": claim.evidence.source_page_number,
+                "stated_by_the_model": dict(sorted(stated.items())),
+                "status": "model_claim_unverified",
+            }
+        )
+        scoped.append(
+            replace(
+                claim,
+                section_id=None,
+                step_id=None,
+                source_label=None,
+                target_claim_id=None,
+            )
+        )
+    return tuple(scoped), tuple(kept)
+
+
 def _inherit_declared_section(
     structure: tuple[Any, ...], claims: tuple[Any, ...]
 ) -> tuple[tuple[Any, ...], tuple[str, ...]]:
@@ -625,6 +690,7 @@ def _inherit_declared_section(
         return carried
 
     inherited: list[str] = []
+    filled_actions: dict[str, str] = {}
     updated = []
     for claim in claims:
         is_action = (
@@ -634,15 +700,35 @@ def _inherit_declared_section(
             carried = declared_before(claim)
             if carried is not None:
                 updated.append(replace(claim, section_id=carried))
+                filled_actions[claim.claim_id] = carried
                 if claim.step_id is not None:
                     inherited.append(claim.step_id)
                 continue
         updated.append(claim)
+
+    # A claim that qualifies a step is in that step's section by definition, and
+    # the server checks the two agree. Chunks 2 and 3 of in-gel returned both
+    # the action and its parameters with no section, so filling only the action
+    # would leave them disagreeing -- the inheritance has to reach everything
+    # scoped to the step, not just the step's own line.
+    if filled_actions:
+        updated = [
+            replace(claim, section_id=filled_actions[claim.target_claim_id])
+            if (
+                getattr(claim, "target_claim_id", None) in filled_actions
+                and claim.section_id is None
+            )
+            else claim
+            for claim in updated
+        ]
     return tuple(updated), tuple(sorted(set(inherited)))
 
 
 def _cited_the_same_place(left: object, right: object) -> bool:
     """Whether two items point at the same passage of the source.
+
+    Used by the contradiction guard rather than by the rename: two claims about
+    one passage are the case where disagreeing about it means something.
 
     The comparison is the citation and the text it stands for -- the page, the
     exact segment ids, the reconstructed excerpt, and the item's own
@@ -677,14 +763,32 @@ def _resolve_name_overlaps(
     page boundary within a step, but it does not say -- and could not usefully
     say -- that identifiers must be unique across chunks the model cannot see.
 
-    Not every reuse is the same thing, so they are told apart by the citation:
+    A *claim* id reused across chunks is renamed, whichever passages are
+    involved. The worry it used to answer -- one handle standing for two
+    places, so a reference to it is ambiguous -- cannot arise: a reference
+    never leaves its chunk, because a model cannot name a claim in a chunk it
+    never saw. Measured on in-gel at 45 of 45. Renaming per chunk and
+    rewriting that chunk's own references in step therefore leaves every
+    reference resolving exactly where it did.
 
-    * the same passage under the same name is a name overlap. Two chunks
-      describing one place chose the same handle for it, nothing about the
-      document is in doubt, and the second one is given a document-unique name.
-    * a different passage under the same name is a conflict, and it still fails
-      closed. One handle standing for two places in the source is exactly the
-      ambiguity the merge exists to refuse, and no rename makes it unambiguous.
+    A *marker* id is different and is not renamed. A marker declares part of
+    the document's shape, and two chunks declaring one differently are
+    disagreeing about the document rather than colliding over a word. That
+    stays fail closed, which is also why the two tests that prove a marker
+    conflict fails closed needed no change: measured on in-gel, every
+    collision was a claim id and no marker was reused at all.
+
+    Two guards keep this from becoming a way to wave real faults through, and
+    neither is relaxed here:
+
+    * a duplicate identifier *within one chunk* still fails closed, in
+      ``duplicate_evidence_item_identifier``. There the model saw both claims
+      and named them the same anyway, which is self-contradiction rather than
+      two strangers reaching for the same word.
+    * two claims citing the same passage and asserting different things fails
+      closed in ``_refuse_contradictory_claims``. That is the fault this rule
+      was mistaken for, and it is now checked directly instead of being caught
+      by accident through a name.
 
     Identical items are left to the ordinary merge, which deduplicates them --
     that is what a step spanning a page boundary needs.
@@ -707,10 +811,14 @@ def _resolve_name_overlaps(
             if prior is None or prior == item:
                 seen.setdefault(identifier, item)
                 continue
-            if _cited_the_same_place(prior, item):
-                rename[identifier] = f"{result.chunk.chunk_id}.{identifier}"
-            # A different passage under the same name is left alone, so the
-            # merge refuses it exactly as it did before.
+            if isinstance(item, ProtocolStructureMarker):
+                # A marker is not a private handle. It declares part of the
+                # document's shape -- a section, or the title -- and two chunks
+                # declaring the same marker differently are disagreeing about
+                # the document itself. That is not a name collision and it is
+                # left to fail closed.
+                continue
+            rename[identifier] = f"{result.chunk.chunk_id}.{identifier}"
         if not rename:
             resolved.append(result)
             continue
@@ -816,6 +924,9 @@ def merge_validated_chunk_results(
     claims, inherited_sections = _inherit_declared_section(
         tuple(structure), tuple(claims)
     )
+    claims, unverified_attributions = _keep_unverified_step_attribution(
+        tuple(claims)
+    )
     merged = MergedProtocolClaims(
         protocol_id=plan.protocol_id,
         source_revision=plan.candidate_revision_id,
@@ -846,6 +957,7 @@ def merge_validated_chunk_results(
             )
         ),
         inferred_section_step_ids=inherited_sections,
+        unverified_step_attributions=unverified_attributions,
     )
     try:
         return validate_whole_protocol_claims(extraction, merged)

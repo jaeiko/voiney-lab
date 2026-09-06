@@ -108,9 +108,11 @@ class SectionInheritanceTests(unittest.TestCase):
             section_id: object
             source_order: int
             evidence: Evidence
+            claim_id: str
+            target_claim_id: object = None
             category: object = ClaimCategory.ACTION
 
-        return Action(step_id, section_id, order, Evidence(page))
+        return Action(step_id, section_id, order, Evidence(page), f"claim-{step_id}")
 
     def test_a_step_below_a_heading_inherits_it(self) -> None:
         from voice_workflow_agent.protocol_chunk_analysis import (

@@ -468,6 +468,10 @@ class ProtocolAnalysisDraft:
     capability_policy: domain.CapabilityPolicy
     analysis_schema_version: int
     verified_evidence_count: int
+    #: True when the document's title was read out of the file rather than
+    #: asserted by a chunk. A reviewer must be able to tell the two apart, so
+    #: this travels with the draft rather than being inferred from the text.
+    title_taken_from_the_file: bool = False
 
     @property
     def capability_policy_id(self) -> str:
