@@ -67,7 +67,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
-EXPECTED_FIXTURE_SHA256 = "f91fbd70e3f8fbe3aa0b12ecf13724c8ecdeaf472d1224655fd3e9fe7979d2d4"
+EXPECTED_FIXTURE_SHA256 = "69517f0fe629d0e4dc356c78ff3d407ed0f510de24d325e1575b0adff998ee3c"
 EXPECTED_SCHEMA_SHA256 = "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
 
 
