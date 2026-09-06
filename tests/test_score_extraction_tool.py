@@ -112,7 +112,10 @@ class ScoringToolTests(unittest.TestCase):
             _labels(self.reference),
             _labels(self.draft.protocol),
         )
-        self.assertEqual(comparison["reference_count"], 2)
+        # Three since STEP 35, when the reference was corrected: the document
+        # states a third repeat on page 8 ("repeat steps 17-18 until fully
+        # dehydrated") that the hand-built reference had been missing.
+        self.assertEqual(comparison["reference_count"], 3)
         matched = {
             tuple(item["reference"]["labels"]) for item in comparison["matched"]
         }
@@ -122,7 +125,7 @@ class ScoringToolTests(unittest.TestCase):
         self.assertIn("in_reference_only", comparison)
         self.assertIn("in_candidate_only", comparison)
         self.assertEqual(
-            len(_repeats(self.reference, _labels(self.reference))), 2
+            len(_repeats(self.reference, _labels(self.reference))), 3
         )
 
     def test_a_broken_evidence_address_is_caught(self) -> None:
