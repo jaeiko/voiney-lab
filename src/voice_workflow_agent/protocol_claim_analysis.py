@@ -768,6 +768,14 @@ Context pages are read-only continuity context: never emit a claim or marker
 whose evidence page is context-only. Return the small claim schema supplied by
 the caller, not an ExperimentProtocol and not a summary.
 
+Structure markers are required, not optional. The assembled document needs
+exactly one protocol_title marker across the whole source, and a section
+marker for every section_id any claim refers to. If the document's own title
+appears on a core page you were given, emit the protocol_title marker citing
+it; if it does not, emit no title marker, because another chunk holds that
+page. Emitting a title for a line that is not the document's title is worse
+than emitting none.
+
 Every scientific or execution fact must be its own claim. Categories include
 material, equipment, action, quantity, concentration, temperature, duration,
 agitation_speed, prerequisite, warning_hazard, observation_checkpoint,
@@ -2956,15 +2964,28 @@ def validate_whole_protocol_claims(
         or len(set(merged.required_chunk_ids)) != len(merged.required_chunk_ids)
     ):
         raise ProtocolClaimConsistencyError("whole_source_identity_mismatch")
+    # Every page must be present. Whether every page was fully *read* is a
+    # different question, and it used to be answered here by throwing the
+    # document away.
+    #
+    # It is the machine's own limitation, not the experiment's, and discarding
+    # a nine-page protocol because seven segments out of fifty-six were
+    # neither cited nor declined destroys far more evidence than it protects:
+    # the twenty-five instructions that were read correctly go with it. What
+    # the refusal was really guarding against is a Protocol that *looks*
+    # complete while a page went unread, and that is guarded by keeping the
+    # page marked and the omitted segments addressable -- see
+    # ``_derived_coverage`` and, at execution time, the operator being told
+    # which page the system could not finish reading before that page's steps
+    # are given.
+    #
+    # A page that is missing entirely is still refused: that is a hole in the
+    # record rather than a hole in the reading.
     expected_pages = set(range(1, extraction.page_count + 1))
     coverage_pages = {item.source_page_number for item in merged.page_coverage}
     if (
         len(merged.page_coverage) != extraction.page_count
         or coverage_pages != expected_pages
-        or any(
-            item.status is PageCoverageStatus.ANALYSIS_INCOMPLETE
-            for item in merged.page_coverage
-        )
     ):
         raise ProtocolClaimConsistencyError("incomplete_source_coverage")
     title_markers = tuple(

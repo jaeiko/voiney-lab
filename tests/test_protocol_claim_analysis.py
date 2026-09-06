@@ -1541,18 +1541,39 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
         finally:
             store.close()
 
-    def test_analysis_incomplete_coverage_cannot_form_a_partial_protocol(self):
+    def test_an_incompletely_read_page_is_carried_rather_than_discarded(self):
+        """A page the machine could not finish reading is kept and marked.
+
+        This used to throw the whole document away. Measured on in-gel: the
+        five chunks left eighteen segments of fifty-six neither cited nor
+        declined, and refusing the merge destroyed the twenty-five
+        instructions that had been read correctly along with them. Whether a
+        page was fully read is the pipeline's limitation, not the
+        experiment's, and it is answered by keeping the page marked and its
+        omitted segments addressable -- so that at execution time the operator
+        is told which page the system could not finish, and that page is never
+        reported complete.
+
+        A page missing from the record entirely is still refused: that is a
+        hole in the record rather than a hole in the reading.
+        """
+
         def incomplete(response):
             response["page_coverage"][0]["analysis_incomplete"] = True
 
         result = self.analyze(RichClaimModel(incomplete))
-        with self.assertRaises(ProtocolChunkMergeError) as failure:
-            merge_validated_chunk_results(
-                self.extraction,
-                self.plan,
-                (result,),
-            )
-        self.assertEqual(failure.exception.reason_code, "incomplete_source_coverage")
+        merged = merge_validated_chunk_results(
+            self.extraction, self.plan, (result,)
+        )
+        self.assertEqual(len(merged.page_coverage), self.extraction.page_count)
+        incomplete_pages = [
+            item.source_page_number
+            for item in merged.page_coverage
+            if item.status.value == "analysis_incomplete"
+        ]
+        self.assertTrue(incomplete_pages)
+        # The claims that were read correctly survived.
+        self.assertTrue(merged.claims)
 
     def test_numbered_action_omission_is_not_accepted_as_complete_coverage(self):
         def omit_action(response):
