@@ -218,6 +218,21 @@ _RULE_DECLARATIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         _PROMPT,
         ("listed in that page's declined_evidence_segment_ids",),
     ),
+    # These three moved into chunk validation in STEP 37. They were enforced
+    # only at merge, so a chunk could pass, be cached and be paid for, and the
+    # document be refused afterwards -- which is how in-gel spent five calls
+    # and then hit four merge refusals in a row. They are decidable from one
+    # chunk because a reference never leaves its chunk: a model cannot name a
+    # claim in a chunk it never saw, measured at 45 of 45.
+    "action_structure_invalid": (
+        _PROMPT,
+        (
+            "preserves that action's source step label, step identity, section"
+            " identity, and direct evidence",
+        ),
+    ),
+    "claim_target_invalid": (_PROMPT, ("target_claim_id",)),
+    "missing_value_scope_invalid": (_PROMPT, ("target_claim_id",)),
     "duplicate_declined_segment": (
         _PROMPT,
         ("Never both, and never neither.",),

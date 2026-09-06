@@ -575,6 +575,176 @@ def validate_chunk_result(
         ) from exc
 
 
+def _inherit_declared_section(
+    structure: tuple[Any, ...], claims: tuple[Any, ...]
+) -> tuple[tuple[Any, ...], tuple[str, ...]]:
+    """Carry a declared section forward to the steps that follow it.
+
+    A section heading is printed once, on the page that introduces it. A chunk
+    whose pages hold no heading cannot name the section it is inside: in-gel's
+    pages 7, 8 and 9 are all mid-section and those three chunks returned
+    actions with no section identity at all. That was the honest answer --
+    inventing a section would be worse -- and the whole document was refused
+    for it.
+
+    So a step with no section of its own inherits the last section *declared
+    before it* in document order. This is inheritance, not inference from
+    position: the section must actually have been declared, by a marker, on an
+    earlier page or earlier in the same page. A step that precedes every
+    declared section inherits nothing and is left as it was, so the merge still
+    fails closed on it -- there is no section to carry forward and the server
+    does not invent one.
+
+    Every step filled this way is returned by id, so the assembled record can
+    say which sections the source printed and which the server carried.
+    """
+
+    markers = sorted(
+        (
+            item
+            for item in structure
+            if getattr(item, "section_id", None)
+            and getattr(getattr(item, "kind", None), "value", None) == "section"
+        ),
+        key=lambda item: (item.evidence.source_page_number, item.source_order),
+    )
+    if not markers:
+        return claims, ()
+
+    def declared_before(claim) -> str | None:
+        position = (claim.evidence.source_page_number, claim.source_order)
+        carried = None
+        for marker in markers:
+            if (
+                marker.evidence.source_page_number,
+                marker.source_order,
+            ) <= position:
+                carried = marker.section_id
+            else:
+                break
+        return carried
+
+    inherited: list[str] = []
+    updated = []
+    for claim in claims:
+        is_action = (
+            getattr(getattr(claim, "category", None), "value", None) == "action"
+        )
+        if is_action and claim.section_id is None:
+            carried = declared_before(claim)
+            if carried is not None:
+                updated.append(replace(claim, section_id=carried))
+                if claim.step_id is not None:
+                    inherited.append(claim.step_id)
+                continue
+        updated.append(claim)
+    return tuple(updated), tuple(sorted(set(inherited)))
+
+
+def _cited_the_same_place(left: object, right: object) -> bool:
+    """Whether two items point at the same passage of the source.
+
+    The comparison is the citation and the text it stands for -- the page, the
+    exact segment ids, the reconstructed excerpt, and the item's own
+    source_text. All of these are server-owned: the segment ids are hashes of
+    the file's bytes and the excerpt is rebuilt from them, so this asks a
+    question about the document rather than about what a model asserted.
+    """
+
+    def citation(item: object):
+        evidence = getattr(item, "evidence", None)
+        if evidence is None:
+            return None
+        return (
+            evidence.source_page_number,
+            tuple(evidence.evidence_segment_ids),
+            evidence.source_excerpt,
+            getattr(item, "source_text", None),
+        )
+
+    return citation(left) is not None and citation(left) == citation(right)
+
+
+def _resolve_name_overlaps(
+    ordered: tuple[ValidatedChunkResult, ...],
+) -> tuple[ValidatedChunkResult, ...]:
+    """Rename where two chunks named the same passage, refuse where they did not.
+
+    A chunk is analysed alone. The model sees its pages and nothing else, so
+    when it needs a handle for its first claim it writes ``c1``, and so does
+    every other chunk. The prompt never asked for anything else: it states the
+    character set an identifier must match and says to keep one stable across a
+    page boundary within a step, but it does not say -- and could not usefully
+    say -- that identifiers must be unique across chunks the model cannot see.
+
+    Not every reuse is the same thing, so they are told apart by the citation:
+
+    * the same passage under the same name is a name overlap. Two chunks
+      describing one place chose the same handle for it, nothing about the
+      document is in doubt, and the second one is given a document-unique name.
+    * a different passage under the same name is a conflict, and it still fails
+      closed. One handle standing for two places in the source is exactly the
+      ambiguity the merge exists to refuse, and no rename makes it unambiguous.
+
+    Identical items are left to the ordinary merge, which deduplicates them --
+    that is what a step spanning a page boundary needs.
+
+    ``step_id`` and ``section_id`` are never touched: the prompt does ask for
+    those to be stable across a page boundary, and cross-chunk step continuity
+    depends on two chunks agreeing about them.
+    """
+
+    seen: dict[str, object] = {}
+    resolved: list[ValidatedChunkResult] = []
+    for result in ordered:
+        analysis = result.analysis
+        rename: dict[str, str] = {}
+        for item in tuple(analysis.structure) + tuple(analysis.claims):
+            identifier = getattr(item, "marker_id", None) or getattr(
+                item, "claim_id", None
+            )
+            prior = seen.get(identifier)
+            if prior is None or prior == item:
+                seen.setdefault(identifier, item)
+                continue
+            if _cited_the_same_place(prior, item):
+                rename[identifier] = f"{result.chunk.chunk_id}.{identifier}"
+            # A different passage under the same name is left alone, so the
+            # merge refuses it exactly as it did before.
+        if not rename:
+            resolved.append(result)
+            continue
+        claims = tuple(
+            replace(
+                claim,
+                claim_id=rename.get(claim.claim_id, claim.claim_id),
+                target_claim_id=(
+                    rename.get(claim.target_claim_id, claim.target_claim_id)
+                    if claim.target_claim_id is not None
+                    else None
+                ),
+            )
+            for claim in analysis.claims
+        )
+        structure = tuple(
+            replace(
+                marker, marker_id=rename.get(marker.marker_id, marker.marker_id)
+            )
+            for marker in analysis.structure
+        )
+        for item in structure + claims:
+            identifier = getattr(item, "marker_id", None) or getattr(
+                item, "claim_id", None
+            )
+            seen.setdefault(identifier, item)
+        resolved.append(
+            ValidatedChunkResult(
+                result.chunk, replace(analysis, claims=claims, structure=structure)
+            )
+        )
+    return tuple(resolved)
+
+
 def _merge_by_identifier(
     values: Iterable[object],
     *,
@@ -609,7 +779,9 @@ def merge_validated_chunk_results(
     expected_ids = {chunk.chunk_id for chunk in plan.chunks}
     if set(by_id) != expected_ids:
         raise ProtocolChunkMergeError("missing_chunk_result")
-    ordered = tuple(by_id[chunk.chunk_id] for chunk in plan.chunks)
+    ordered = _resolve_name_overlaps(
+        tuple(by_id[chunk.chunk_id] for chunk in plan.chunks)
+    )
     if sum(
         len(_canonical_json(result.chunk.public_dict()).encode("utf-8"))
         for result in ordered
@@ -638,6 +810,11 @@ def merge_validated_chunk_results(
         ),
         identifier_name="claim_id",
         conflict_code="claim_identity_conflict",
+    )
+    # Only now, with every chunk's markers in one place, can a mid-section
+    # chunk be told which section had already been declared above it.
+    claims, inherited_sections = _inherit_declared_section(
+        tuple(structure), tuple(claims)
     )
     merged = MergedProtocolClaims(
         protocol_id=plan.protocol_id,
@@ -668,6 +845,7 @@ def merge_validated_chunk_results(
                 ),
             )
         ),
+        inferred_section_step_ids=inherited_sections,
     )
     try:
         return validate_whole_protocol_claims(extraction, merged)

@@ -381,6 +381,13 @@ class MergedProtocolClaims:
     page_coverage: tuple[ProtocolPageClaimCoverage, ...]
     structure: tuple[ProtocolStructureMarker, ...]
     claims: tuple[ProtocolClaim, ...]
+    #: Steps whose section the server carried forward because no chunk could
+    #: see the heading. Kept beside the claims so a reader can tell a section
+    #: the source printed from one the server supplied.
+    inferred_section_step_ids: tuple[str, ...] = ()
+    #: True when the document's title came from the file's own metadata rather
+    #: than from any chunk's marker.
+    title_taken_from_the_file: bool = False
 
 
 # The pattern is _STABLE_ID. Every identifier the server validates with it is
@@ -2771,6 +2778,103 @@ def _derived_coverage(
     )
 
 
+#: Categories whose target the server constrains. Mirrors ``parameter_targets``
+#: in ``validate_whole_protocol_claims``; the two must not drift.
+_CHUNK_LOCAL_PARAMETER_TARGETS = {
+    ClaimCategory.QUANTITY: {ClaimCategory.ACTION, ClaimCategory.MATERIAL},
+    ClaimCategory.CONCENTRATION: {ClaimCategory.ACTION, ClaimCategory.MATERIAL},
+    ClaimCategory.TEMPERATURE: {ClaimCategory.ACTION, ClaimCategory.EQUIPMENT},
+    ClaimCategory.DURATION: {ClaimCategory.ACTION},
+    ClaimCategory.AGITATION_SPEED: {ClaimCategory.ACTION, ClaimCategory.EQUIPMENT},
+    ClaimCategory.OBSERVATION_CHECKPOINT: {ClaimCategory.ACTION},
+    ClaimCategory.REPEAT_CONDITION: {ClaimCategory.ACTION},
+}
+
+
+def _refuse_chunk_local_inconsistency(
+    analysis: ProtocolChunkClaimAnalysis,
+    chunk_id: str,
+    source_revision: str,
+    extraction: ProtocolPdfExtraction,
+) -> None:
+    """Refuse a chunk for what can be judged from the chunk alone.
+
+    Sixteen consistency rules were enforced only at merge time and none of them
+    here, so a chunk could pass validation, be cached, be paid for, and the
+    document be refused afterwards on any of the sixteen. In-gel hit four of
+    them in a row after five calls had already been spent.
+
+    What can move is what a chunk can answer on its own. A reference inside a
+    chunk resolves inside that chunk -- a model cannot name a claim in a chunk
+    it never saw, measured at 45 of 45 -- so target rules are decidable here.
+    What cannot move stays at the merge and is listed in the report: anything
+    comparing two chunks (identifier reuse, section and step identity across
+    chunks) or asking about the whole document (every page present, exactly one
+    title).
+
+    ``top_level_claim_scope_invalid`` is deliberately absent. It is the rule
+    STEP 36 raised as defect (4) and its disposition is an open decision:
+    whether a material the source states at a step may carry that step. Adding
+    it here would settle that question by deleting the two paid chunks that
+    depend on the answer, which is not a way to decide anything.
+    """
+
+    def fail(reason: str, count: int, offending: tuple[str, ...]) -> None:
+        raise ProtocolAnalysisEvidenceError(
+            "Chunk claims are inconsistent within the chunk.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="chunk_local_consistency_validation",
+                reason_code=reason,
+                mismatch_class="claim_relationship_mismatch",
+                evidence_type="claim",
+                expected_count=0,
+                actual_count=count,
+                chunk_id=chunk_id,
+                source_revision=source_revision,
+                source_hash=extraction.sha256,
+                offending_segment_ids=tuple(sorted(offending))[:8],
+            ),
+        )
+
+    by_id = {claim.claim_id: claim for claim in analysis.claims}
+    broken_actions: list[str] = []
+    broken_targets: list[str] = []
+    broken_missing: list[str] = []
+    for claim in analysis.claims:
+        if claim.category is ClaimCategory.ACTION:
+            # The section a chunk cannot see is not judged here -- that is what
+            # section inheritance is for -- but everything else about an action
+            # is the chunk's own business.
+            if (
+                claim.step_id is None
+                or claim.source_label is None
+                or claim.target_claim_id is not None
+                or not claim.required_for_execution
+            ):
+                broken_actions.append(claim.claim_id)
+            continue
+        allowed = _CHUNK_LOCAL_PARAMETER_TARGETS.get(claim.category)
+        if allowed is not None and claim.target_claim_id is not None:
+            target = by_id.get(claim.target_claim_id)
+            if target is None or target.category not in allowed:
+                broken_targets.append(claim.claim_id)
+        if (
+            claim.category is ClaimCategory.EXPLICIT_MISSING_AMBIGUOUS_VALUE
+            and not claim.required_for_execution
+        ):
+            broken_missing.append(claim.claim_id)
+    if broken_actions:
+        fail("action_structure_invalid", len(broken_actions), tuple(broken_actions))
+    if broken_targets:
+        fail("claim_target_invalid", len(broken_targets), tuple(broken_targets))
+    if broken_missing:
+        fail(
+            "missing_value_scope_invalid",
+            len(broken_missing),
+            tuple(broken_missing),
+        )
+
+
 def validate_chunk_claim_analysis(
     analysis: ProtocolChunkClaimAnalysis,
     extraction: ProtocolPdfExtraction,
@@ -3076,6 +3180,7 @@ def validate_chunk_claim_analysis(
                 for segment_id in item.evidence.evidence_segment_ids
             ),
         )
+    _refuse_chunk_local_inconsistency(analysis, chunk_id, source_revision, extraction)
     return replace(
         analysis,
         page_coverage=tuple(
@@ -3260,7 +3365,22 @@ def validate_whole_protocol_claims(
         for item in merged.structure
         if item.kind is StructureMarkerKind.PROTOCOL_TITLE
     )
-    if len(title_markers) != 1:
+    # Two chunks each declaring the document's title is a disagreement the
+    # server cannot settle, and it still fails closed.
+    #
+    # None is a different situation and used to be treated the same, which cost
+    # the whole document. In-gel's five chunks supplied no title marker, and
+    # the reason is in the segmentation rather than in the model: the title
+    # sits inside a 1143-character front-matter segment with the date, DOI and
+    # licence, so there is nothing precise to cite. Meanwhile the server has
+    # already read the title out of the file's own metadata, independently and
+    # more exactly. Refusing here made the title the one field a document could
+    # not be assembled without, while the server held a better copy of it.
+    #
+    # Nothing about a missing title is dangerous, and the pages a chunk did not
+    # read are answered for by ``source_page_not_fully_read``, which keeps the
+    # Protocol out of execution either way. See ``_title_from_the_file``.
+    if len(title_markers) > 1:
         raise ProtocolClaimConsistencyError("protocol_title_missing_or_conflicting")
     sections: dict[str, ProtocolStructureMarker] = {}
     for marker in merged.structure:
@@ -3577,6 +3697,61 @@ def _children_by_target(
     return {key: tuple(value) for key, value in grouped.items()}
 
 
+def _title_from_the_file(
+    extraction: ProtocolPdfExtraction,
+    merged: MergedProtocolClaims,
+) -> ProtocolStructureMarker:
+    """The document's title as the server read it out of the file.
+
+    Used only when no chunk supplied one. The text is the extraction's, taken
+    from the file rather than asserted by a model, and the citation points at
+    the segment on the earliest page whose text actually contains it -- so it
+    resolves against the same immutable bytes every other citation does. If no
+    segment contains it, the citation names the first page and claims no
+    segment, which is the honest position: the file says this is its title and
+    the pages do not print it anywhere that can be pointed at.
+
+    Nothing is read for meaning and nothing is invented. A file that states no
+    title produces an empty title, never a guess, and the marker id says where
+    the value came from so a reviewer is never shown a model's word and a
+    file's word as though they were the same kind of thing.
+    """
+
+    text = (extraction.metadata.title or "").strip()
+    page_number = 1
+    segment_ids: tuple[str, ...] = ()
+    if text:
+        for candidate in range(1, extraction.page_count + 1):
+            try:
+                segments = generate_page_evidence_segments(
+                    extraction,
+                    source_revision=merged.source_revision,
+                    page_number=candidate,
+                )
+            except Exception:  # noqa: BLE001 - an unreadable page cites nothing
+                continue
+            match = next((item for item in segments if text in item.text), None)
+            if match is not None:
+                page_number = candidate
+                segment_ids = (match.segment_id,)
+                break
+    return ProtocolStructureMarker(
+        marker_id="title-read-from-the-source-file",
+        kind=StructureMarkerKind.PROTOCOL_TITLE,
+        source_order=0,
+        source_text=text,
+        section_id=None,
+        evidence=ClaimSourceEvidence(
+            source_revision=merged.source_revision,
+            source_sha256=extraction.sha256,
+            source_page_number=page_number,
+            page_text_sha256=_page_text_sha256(extraction, page_number),
+            evidence_segment_ids=segment_ids,
+            source_excerpt=text,
+        ),
+    )
+
+
 def assemble_experiment_protocol(
     extraction: ProtocolPdfExtraction,
     merged: MergedProtocolClaims,
@@ -3585,10 +3760,16 @@ def assemble_experiment_protocol(
 
     validate_whole_protocol_claims(extraction, merged)
     title = next(
-        item
-        for item in merged.structure
-        if item.kind is StructureMarkerKind.PROTOCOL_TITLE
+        (
+            item
+            for item in merged.structure
+            if item.kind is StructureMarkerKind.PROTOCOL_TITLE
+        ),
+        None,
     )
+    if title is None:
+        title = _title_from_the_file(extraction, merged)
+        merged = replace(merged, title_taken_from_the_file=True)
     section_markers = tuple(
         item
         for item in merged.structure
