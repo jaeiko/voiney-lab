@@ -248,6 +248,18 @@ class CuratedProtocolFixture:
     source_filename: str | None = None
     localizations: dict[str, str] | None = None
     visual_manifest: dict[str, dict[str, Any]] | None = None
+    #: source page number -> the evidence segment ids on that page that the
+    #: analysis neither cited nor declined.
+    #:
+    #: STEP 28 stopped throwing a document away because a page was not fully
+    #: read, which is right -- discarding twenty-five correct instructions to
+    #: punish eighteen unaccounted segments protects nobody. It also means a
+    #: Protocol can now reach an experimenter with a page the machine did not
+    #: finish reading, and that is only safe if the experimenter is told so at
+    #: the moment it matters, shown the page's own words, and never told the
+    #: page is complete on the system's authority. Empty means every page was
+    #: fully accounted for, which is the ordinary case.
+    unread_pages: dict[int, tuple[str, ...]] | None = None
     #: step_id -> duration in seconds, loaded only from a manifest whose every
     #: entry the loader verified against the source. Empty when no manifest is
     #: present, which is why one document's timings cannot reach another's.
@@ -4290,6 +4302,10 @@ class CuratedProtocolSession:
         self._workflow_status: str = "preview"
         self._last_semantic_decision: SemanticIntentDecision | None = None
         self._operator_repetition_counts: dict[str, dict[str, object]] = {}
+        # Experiment-session facts, not reviewer findings: cleared on reset
+        # with the rest of the session, and never written to the approval
+        # ledger.
+        self._acknowledged_unread_pages: dict[int, dict[str, object]] = {}
         self._timer_started_at: float | None = None
         self._timer_duration_seconds: int | None = None
         self._timer_step_index: int | None = None
@@ -4675,6 +4691,123 @@ class CuratedProtocolSession:
             )
         return found
 
+    # --- pages the machine did not finish reading ------------------------
+
+    def _unread_pages(self) -> dict[int, tuple[str, ...]]:
+        return dict(getattr(self.fixture, "unread_pages", None) or {})
+
+    def step_is_on_an_unread_page(self, index: int) -> bool:
+        """Whether this step's own evidence page was not fully accounted for."""
+
+        if not 0 <= index < len(self.fixture.steps):
+            return False
+        page = self.fixture.steps[index].evidence.source_page_number
+        return page in self._unread_pages()
+
+    def unread_page_disclosure(self, index: int) -> dict[str, object] | None:
+        """What the experimenter must be told before this step, verbatim.
+
+        The page's own text, and the text of every segment the analysis left
+        unaccounted, are returned as they are in the source. No summary and no
+        paraphrase: the reason this disclosure exists is that the system's
+        reading of the page is not trustworthy, so a reading of it is the one
+        thing that must not be offered in its place.
+        """
+
+        if not self.step_is_on_an_unread_page(index):
+            return None
+        page = self.fixture.steps[index].evidence.source_page_number
+        extraction = self.fixture.draft.extraction
+        segment_ids = self._unread_pages().get(page, ())
+        page_text = ""
+        if 1 <= page <= extraction.page_count:
+            page_text = extraction.pages[page - 1].text
+        omitted: list[dict[str, object]] = []
+        if segment_ids:
+            from .protocol_claim_analysis import (
+                generate_page_evidence_segments,
+            )
+
+            try:
+                segments = generate_page_evidence_segments(
+                    extraction,
+                    source_revision=self.fixture.revision_id or "pdf-1",
+                    page_number=page,
+                )
+            except Exception:  # noqa: BLE001 - no text rather than a guess
+                segments = ()
+            wanted = set(segment_ids)
+            omitted = [
+                {
+                    "segment_id": segment.segment_id,
+                    "segment_index": segment.segment_index,
+                    "source_text": segment.text,
+                }
+                for segment in segments
+                if segment.segment_id in wanted
+            ]
+        return {
+            "source_page_number": page,
+            "reading_status": "incomplete",
+            "notice": (
+                "이 페이지는 시스템이 완전히 읽지 못했습니다. "
+                "원문을 직접 확인해 주세요."
+            ),
+            "source_page_text": page_text,
+            "unaccounted_segments": omitted,
+            "acknowledged": page in self._acknowledged_unread_pages,
+        }
+
+    def acknowledge_unread_page(
+        self,
+        page_number: int,
+        *,
+        actor_principal_id: str,
+        actor_role: str,
+    ) -> None:
+        """Record that the experimenter read the page's own words themselves.
+
+        This is an experiment-session fact -- who was standing there and what
+        they looked at -- and it is deliberately not a reviewer finding: it
+        clears no readiness gate and appears in no approval ledger. It is
+        sayable, because the hands it belongs to are in gloves.
+        """
+
+        if (
+            not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number not in self._unread_pages()
+        ):
+            raise ValueError("That page is not recorded as incompletely read.")
+        if not str(actor_principal_id).strip() or not str(actor_role).strip():
+            raise ValueError("An unread-page acknowledgement needs an actor.")
+        self._acknowledged_unread_pages[page_number] = {
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+        }
+
+    def unread_pages_awaiting_acknowledgement(self) -> tuple[int, ...]:
+        return tuple(
+            sorted(
+                page
+                for page in self._unread_pages()
+                if page not in self._acknowledged_unread_pages
+            )
+        )
+
+    def may_report_step_complete(self, index: int) -> bool:
+        """False on a page the system did not finish reading.
+
+        Completion is the one claim this system must never make on its own
+        authority about text it did not read. The experimenter may still say
+        the step is done; what is refused is the agent saying so.
+        """
+
+        if not self.step_is_on_an_unread_page(index):
+            return True
+        page = self.fixture.steps[index].evidence.source_page_number
+        return page in self._acknowledged_unread_pages
+
     def repetitions_awaiting_a_count(self) -> tuple[str, ...]:
         """Open repetitions with no number yet. Execution must not start these."""
 
@@ -4687,13 +4820,22 @@ class CuratedProtocolSession:
         )
 
     def may_begin_step(self, step_id: str) -> bool:
-        """False while a repetition covering this step still has no number.
+        """False while something this step depends on is still unsettled.
 
-        Guessing the number, or starting the repetition and stopping at some
-        default, would announce completion on work the experimenter never
-        sized. So the step is blocked rather than begun.
+        Two reasons, and both are the same shape: the agent would otherwise
+        proceed past a thing only a person can settle. A repetition with no
+        number would be run to some default and announced complete on work
+        the experimenter never sized. A page the machine did not finish
+        reading would be executed from a partial reading of it.
         """
 
+        for index, step in enumerate(self.fixture.steps):
+            if step.step_id != step_id:
+                continue
+            if self.step_is_on_an_unread_page(index) and not (
+                self.may_report_step_complete(index)
+            ):
+                return False
         for repetition_id, bounds in (
             self._operator_determined_repetitions().items()
         ):
@@ -5474,6 +5616,10 @@ class CuratedProtocolSession:
         self._block_reason = None
         self._replay.clear()
         self._recent_verified_entities.clear()
+        # A new run re-reads the pages the machine could not finish. The
+        # acknowledgement is a fact about one experimenter at one bench,
+        # not a property of the document, so it does not carry over.
+        self._acknowledged_unread_pages.clear()
         self._pending_clarification = None
         self._last_related_query = None
         self._last_related_entities = ()
