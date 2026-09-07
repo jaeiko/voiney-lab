@@ -2717,6 +2717,99 @@ def pages_declining_excessive_values(
     return tuple(sorted(set(crowded)))
 
 
+#: "repeat step(s) N-M" as a source writes it. Shape only: the word repeat, the
+#: word step, and two numbers joined by a hyphen, dash or the word "to". It
+#: reads no other vocabulary and decides nothing about what the repeat means.
+_EXPLICIT_REPEAT_INSTRUCTION = re.compile(
+    r"repeat[^.\n]{0,40}?steps?\s*"
+    r"(?P<first>[1-9][0-9]{0,2})\s*(?:[-\u2010-\u2015]|to)\s*"
+    r"(?P<last>[1-9][0-9]{0,2})",
+    re.IGNORECASE,
+)
+
+
+def explicit_repeat_instructions(
+    extraction: ProtocolPdfExtraction,
+    *,
+    source_revision: str,
+) -> tuple[dict[str, object], ...]:
+    """Every place the source itself says to repeat a numbered range.
+
+    Read out of the server's own page text, so this is what the document says
+    rather than what an analysis noticed. It finds a shape -- repeat, step, two
+    numbers with a hyphen or "to" between them -- and nothing else: it does not
+    decide what the repeat is for, whether the range is sensible, or which step
+    owns the sentence.
+
+    STEP 38 measured three such sentences in in-gel and one repetition claim.
+    Two repeats the document states plainly were simply absent, and nothing
+    downstream knew they were missing, so the assembled Protocol looked
+    complete. This is how the server notices.
+    """
+
+    found: list[dict[str, object]] = []
+    for page_number in range(1, extraction.page_count + 1):
+        try:
+            segments = generate_page_evidence_segments(
+                extraction,
+                source_revision=source_revision,
+                page_number=page_number,
+            )
+        except Exception:  # noqa: BLE001 - an unreadable page states nothing
+            continue
+        for segment in segments:
+            for match in _EXPLICIT_REPEAT_INSTRUCTION.finditer(segment.text):
+                first, last = match.group("first"), match.group("last")
+                if int(first) > int(last):
+                    continue
+                found.append(
+                    {
+                        "source_page_number": page_number,
+                        "segment_index": segment.segment_index,
+                        "segment_id": segment.segment_id,
+                        "declared_range": (first, last),
+                    }
+                )
+    return tuple(found)
+
+
+def uncaptured_repeat_instructions(
+    extraction: ProtocolPdfExtraction,
+    claims: Sequence[Any],
+    *,
+    source_revision: str,
+) -> tuple[dict[str, object], ...]:
+    """Repeat instructions the source states and the analysis did not claim.
+
+    Matched on the citation and the range, both of which are already recorded:
+    a repetition claim citing that segment and declaring that range answers
+    that sentence. Anything left over is a repeat the document asks for and the
+    Protocol does not carry.
+
+    This creates nothing. It does not build a repetition, does not infer a
+    range, and does not attach anything to a step -- the range it reports is
+    the one the source printed, character for character. All it produces is a
+    reason for a person to look, because an agent that walks past a stated
+    repeat will reach the end of the steps and have nothing to say except that
+    they are done.
+    """
+
+    claimed: set[tuple[str, tuple[str, str]]] = set()
+    for claim in claims:
+        labels = getattr(claim, "repeated_step_labels", None)
+        if labels is None:
+            continue
+        for segment_id in claim.evidence.evidence_segment_ids:
+            claimed.add((segment_id, (str(labels[0]), str(labels[1]))))
+    return tuple(
+        item
+        for item in explicit_repeat_instructions(
+            extraction, source_revision=source_revision
+        )
+        if (item["segment_id"], item["declared_range"]) not in claimed
+    )
+
+
 def pages_stating_unaccounted_values(
     extraction: ProtocolPdfExtraction,
     page_coverage: Sequence[Any],
@@ -4225,6 +4318,12 @@ def assemble_experiment_protocol(
         ),
         pages_declining_excessive_values=pages_declining_excessive_values(
             extraction, merged.page_coverage, source_revision=merged.source_revision
+        ),
+        uncaptured_repeat_instructions=tuple(
+            item["declared_range"]
+            for item in uncaptured_repeat_instructions(
+                extraction, merged.claims, source_revision=merged.source_revision
+            )
         ),
     )
     return ProtocolAnalysisDraft(

@@ -140,6 +140,23 @@ class ReadinessReasonCode(str, Enum):
     #: the difference between the ordinary case above and a failure, and it is
     #: a separate reason so a reviewer can tell them apart.
     EXCESSIVE_DECLINED_VALUES = "excessive_declined_values"
+    #: The source says to repeat a numbered range and the analysis has no
+    #: repetition for it.
+    #:
+    #: in-gel states three such sentences and the analysis carried one. The
+    #: other two were simply absent, and nothing knew: the assembled Protocol
+    #: looked complete, so an agent would have walked the steps once and said
+    #: they were done -- which is the false completion notice this system is
+    #: built to never produce.
+    #:
+    #: Nothing is inferred to raise this. The server reads the range the
+    #: document printed and asks whether any repetition claim cites that
+    #: passage with that range. It does not build the repeat, does not guess
+    #: what it is for, and does not attach it to a step. It says a person must
+    #: look.
+    SOURCE_STATES_AN_UNCAPTURED_REPETITION = (
+        "source_states_an_uncaptured_repetition"
+    )
     UNCONFIRMED_FIXED_REPETITION = "unconfirmed_fixed_repetition"
     MISSING_EXECUTION_CRITICAL_VALUE = "missing_execution_critical_value"
 
@@ -1609,6 +1626,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ,
             ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED,
             ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES,
+            ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION,
             ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION,
             ReadinessReasonCode.UNSUPPORTED_CONDITIONAL_BRANCH,
             ReadinessReasonCode.UNSUPPORTED_FIXED_RANGE_REPETITION,
@@ -1703,6 +1721,7 @@ def assess_readiness(
     pages_stating_unaccounted_values: tuple[int, ...] = (),
     pages_declining_stated_values: tuple[int, ...] = (),
     pages_declining_excessive_values: tuple[int, ...] = (),
+    uncaptured_repeat_instructions: tuple[tuple[str, str], ...] = (),
 ) -> ReadinessAssessment:
     """Fail closed with two public outcomes and stable, sanitized reasons.
 
@@ -1722,6 +1741,10 @@ def assess_readiness(
 
     ``pages_declining_excessive_values`` names pages that declined so many
     values the page is unlikely to have been read at all.
+
+    ``uncaptured_repeat_instructions`` names ranges the source says to repeat
+    and the analysis has no repetition for. Read from the document's own text,
+    never inferred.
     """
 
     try:
@@ -1863,6 +1886,29 @@ def assess_readiness(
                     f"on {len(declined_pages)} source page(s). A reviewer must "
                     "decide whether it was an instruction; the analysis is not "
                     "trusted to settle that alone."
+                ),
+            )
+        )
+    uncaptured = tuple(
+        sorted(
+            {
+                tuple(item)
+                for item in uncaptured_repeat_instructions
+                if isinstance(item, (tuple, list)) and len(item) == 2
+            }
+        )
+    )
+    if uncaptured:
+        reasons.append(
+            ReadinessReason(
+                code=(
+                    ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION
+                ),
+                message=(
+                    f"The source states {len(uncaptured)} repeat instruction(s) "
+                    "the analysis did not capture. A reviewer must read those "
+                    "passages; an agent that walks past a stated repeat would "
+                    "reach the last step and report the work finished."
                 ),
             )
         )

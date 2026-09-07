@@ -79,6 +79,51 @@ def _plain(value):
     return value
 
 
+def _declared_step_values(protocol):
+    """Per step, the values the extraction actually *claims*, by kind.
+
+    The existing scorer reads values out of a step's text, and STEP 38 showed
+    what that costs. In-gel's step 24 was reported as claiming a 16-hour
+    duration and contradicting the reference's 30 minutes. It claims no
+    duration at all: the "16h" is the next section's time estimate, fused into
+    step 24's segment by the segmenter, and the text-reading scorer found the
+    digits and attributed them.
+
+    So the two are reported side by side. Text-derived values say what an
+    operator would be read out; claimed values say what the extraction
+    asserts. When they disagree, the disagreement is the finding.
+    """
+
+    declared = {}
+    for section in protocol.sections:
+        for step in section.steps:
+            kinds = {"durations": set(), "temperatures": set(), "volumes": set()}
+            declared[step.source_label] = kinds
+    return declared
+
+
+def _claimed_values_by_step(merged, label_of_step):
+    """Values the merge claims, grouped by the step each one qualifies."""
+
+    from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+
+    kind_of = {
+        ClaimCategory.DURATION: "durations",
+        ClaimCategory.TEMPERATURE: "temperatures",
+        ClaimCategory.QUANTITY: "volumes",
+    }
+    by_step: dict[str, dict[str, list[str]]] = {}
+    for claim in merged.claims:
+        kind = kind_of.get(claim.category)
+        if kind is None or claim.step_id is None:
+            continue
+        label = label_of_step.get(claim.step_id)
+        if label is None:
+            continue
+        by_step.setdefault(label, {}).setdefault(kind, []).append(claim.claim_id)
+    return by_step
+
+
 def _repeats(protocol, label_of):
     """Every repetition construct, as (kind, first label, last label, page)."""
 
@@ -288,6 +333,12 @@ def main() -> int:
         for item in merged.page_coverage
         if item.status.value == "analysis_incomplete"
     ]
+    label_of_step = {
+        step.step_id: step.source_label
+        for section in candidate.sections
+        for step in section.steps
+    }
+    claimed = _claimed_values_by_step(merged, label_of_step)
     payload = {
         "scored": True,
         # Said in the output, not only in the docstring: a number read out of
@@ -328,6 +379,10 @@ def main() -> int:
             ],
         },
         "values": {
+            # Read out of each step's text. Kept because it is what an operator
+            # would hear, but it is not what the extraction claims -- see
+            # values_claimed below, and _declared_step_values for why.
+            "derived_from_step_text": True,
             "outcomes": outcomes,
             "per_step": [
                 {
@@ -340,6 +395,22 @@ def main() -> int:
                 if item.value_outcome != "matching"
             ],
         },
+        # What the extraction actually asserts, per step, as claim ids by kind.
+        # A step that appears here with no duration claims nothing about time,
+        # whatever digits its text happens to contain.
+        "values_claimed": {
+            label: {kind: len(ids) for kind, ids in sorted(kinds.items())}
+            for label, kinds in sorted(claimed.items())
+        },
+        "steps_claiming_no_value": sorted(
+            label
+            for label in (
+                step.source_label
+                for section in candidate.sections
+                for step in section.steps
+            )
+            if label not in claimed
+        ),
         "repetitions": _repeat_comparison(
             reference, candidate, label_of(reference), label_of(candidate)
         ),

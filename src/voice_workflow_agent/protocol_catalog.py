@@ -115,6 +115,11 @@ _ACKNOWLEDGEABLE_GATES = frozenset(
         # separate reason code is what tells a reviewer this is the serious
         # one.
         domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
+        # A reviewer reads the passage and decides. They cannot make the
+        # analysis contain the repeat, which is why this is an acknowledgement
+        # rather than a resolution: it records that a person looked at a repeat
+        # the machine did not carry.
+        domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value,
     }
 )
 _DISPOSITION_CONFIRMATION_EVENT = "protocol_label_disposition_confirmed"
@@ -1652,6 +1657,10 @@ class ProtocolCatalog:
             "action": "acknowledge_gate",
         },
         domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value: {
+            "kind": "reviewer_can_clear",
+            "action": "acknowledge_gate",
+        },
+        domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value: {
             "kind": "reviewer_can_clear",
             "action": "acknowledge_gate",
         },
