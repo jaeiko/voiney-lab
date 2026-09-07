@@ -3497,7 +3497,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.state()["revision"], 0)
         self.assertIn("문서에 명시된 이 단계의 확인 기준", spoken)
         self.assertIn(expected, spoken)
-        self.assertIn("반복 종료 확인 방식은 아직 검토가 필요합니다", spoken)
+        # Premise updated: P1 supports REPEAT_UNTIL, so this step's caveat no
+        # longer comes from unsupported_repeat_until and no longer describes a
+        # review. The property is that the answer still refuses completion and
+        # says why -- and the why is better than it was, because it is the
+        # document's own endpoint sentence and it names the person who can
+        # settle it. Held independently by
+        # test_repeat_until_declaration_properties.TheOperatorIsStillToldTests.
+        self.assertIn("관찰 결과가 충족될 때까지 반복하는 단계", spoken)
+        self.assertIn(
+            "Repeat steps 2-7 until the gel band is fully destained", spoken
+        )
+        self.assertIn("완료 처리하지 마세요", spoken)
         self.assertNotIn("서버", spoken)
         self.assertNotIn("상태를 변경", spoken)
         reply = next(item for item in socket.text if item["type"] == "reply.delta")

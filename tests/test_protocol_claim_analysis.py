@@ -1375,7 +1375,19 @@ class ProtocolClaimAnalysisTests(unittest.TestCase):
             domain.ReadinessReasonCode.MISSING_EXECUTION_CRITICAL_VALUE.value,
             draft.readiness.reason_codes,
         )
-        self.assertIn(
+        # Premise updated: P1 supports REPEAT_UNTIL, so the reason a
+        # repeat_condition claim used to raise is gone. What this line was
+        # standing in for is that such a claim survives merge and assembly as
+        # a real construct rather than being dropped, so that is asserted
+        # directly now -- a stronger check than reading it off readiness.
+        self.assertTrue(
+            [
+                construct
+                for construct in draft.protocol.constructs
+                if isinstance(construct, domain.RepeatUntil)
+            ]
+        )
+        self.assertNotIn(
             domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL.value,
             draft.readiness.reason_codes,
         )

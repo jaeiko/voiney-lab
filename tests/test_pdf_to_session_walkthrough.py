@@ -133,6 +133,16 @@ class PipelineReachesAssemblyTests(unittest.TestCase):
         )
 
     def test_readiness_is_reached_and_names_its_blockers(self) -> None:
+        """Premise updated: P1 supports REPEAT_UNTIL, so that reason is gone.
+
+        The property is the exact set -- the pipeline reaches a verdict and
+        names every blocking reason its content implies, with nothing extra
+        and nothing missing. That is unchanged; only the expected members
+        are. The repeat constructs themselves are still assembled and still
+        gate execution at the bench; see
+        tests/test_repeat_until_declaration_properties.py.
+        """
+
         readiness = domain.assess_readiness(self.draft.protocol)
         self.assertIs(
             readiness.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
@@ -142,8 +152,15 @@ class PipelineReachesAssemblyTests(unittest.TestCase):
             [
                 _GATE,
                 domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value,
-                domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL.value,
             ],
+        )
+        # The construct did not disappear with its reason.
+        self.assertTrue(
+            [
+                construct
+                for construct in self.draft.protocol.constructs
+                if isinstance(construct, domain.RepeatUntil)
+            ]
         )
 
 
@@ -274,10 +291,29 @@ class TheLoopStopsAtExecutionReadinessTests(unittest.TestCase):
     def test_resolving_the_ambiguities_narrows_the_wall(self) -> None:
         """Through the audited route, not around it.
 
-        With every ambiguity settled and the safety warnings confirmed, the
-        only reason left is the unsupported repeat-until, which no
-        acknowledgement or finding clears. Stage 8 still refuses, and that is
-        the correct outcome rather than something to work around.
+        Premise updated: P1 supports REPEAT_UNTIL, so the reason that no
+        acknowledgement or finding could clear is gone, and the audited route
+        now reaches the end of the wall instead of stopping one reason short.
+        Both remaining reasons are cleared here the way a reviewer clears
+        them -- the safety gate acknowledged, every ambiguity resolved with a
+        decision and cited evidence -- and only then does activation succeed.
+
+        The property this test held is that a *subset* of cleared reasons
+        never activates anything, and it is still held, in two halves that
+        together cover both remaining reasons:
+
+        * safety gate acknowledged, ambiguities untouched ->
+          ``test_activation_still_refuses_on_reasons_nobody_may_clear``, in
+          this class, unchanged.
+        * every ambiguity resolved, safety gate untouched ->
+          ``test_resolving_every_ambiguity_alone_does_not_clear_the_wall`` in
+          tests/test_repeat_until_declaration_properties.py, which was added
+          before this premise moved precisely because nothing else held it.
+
+        What the wall coming down does *not* do is release the repeat steps.
+        Steps 7, 9 and 20 are still refused at the bench until the
+        experimenter reports the endpoint the document states, and the report
+        is refused unless it reached an experiment record.
         """
 
         from voice_workflow_agent.protocol_catalog import (
@@ -312,11 +348,29 @@ class TheLoopStopsAtExecutionReadinessTests(unittest.TestCase):
         self.assertTrue(
             self.catalog._every_ambiguity_resolved(self.protocol_id, 1, analysis)
         )
-        self.assertFalse(
+        self.assertEqual(
+            sorted(set(analysis.readiness.reason_codes)),
+            [_GATE, domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value],
+        )
+        self.assertTrue(
             self.catalog._readiness_gates_cleared(self.protocol_id, 1, analysis)
         )
-        with self.assertRaises(ProtocolCatalogUnavailableError):
-            self.catalog.activate_development(self.protocol_id)
+        self.catalog.activate_development(self.protocol_id)
+        fixture = self.catalog.load_executable_fixture(self.protocol_id)
+
+        # Selectable, and still gated where the source states a repeat.
+        session = CuratedProtocolSession(fixture)
+        session.active = True
+        session._workflow_status = "active"
+        anchors = [
+            index
+            for index, step in enumerate(fixture.steps)
+            if session.endpoint_observation_outstanding(index)
+        ]
+        self.assertTrue(anchors)
+        for index in anchors:
+            session.current_index = index
+            self.assertTrue(session.endpoint_observation_outstanding(index))
 
     def test_the_session_runs_on_the_assembled_protocol(self) -> None:
         """Stages 9 and 10 as a diagnostic, with the wall stepped around.

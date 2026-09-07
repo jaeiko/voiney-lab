@@ -4,17 +4,28 @@ Since STEP 23 the configured curated fixture is not executable merely because
 it is configured.  A voice session may select it only when the catalog entry
 materialized from that exact fixture is executable, which needs both a
 recorded development activation and a readiness that a person has cleared.
-The Candidate A in-gel fixture cannot satisfy the second half: two of its
-blocking reasons are ``unsupported_repeat_until``, and no reviewer action
-clears an unsupported capability.  So it is, correctly, not runnable.
 
-That leaves the tests that exercise what happens *behind* the wall -- session
-durability, recovery, turn handling, reporting -- with nothing to run.  They
-step around the one gate in front of them, in the open, the way
-``test_pdf_to_session_walkthrough`` already steps around the same wall to
-diagnose the last two pipeline stages.  Nothing here changes a rule or a
-readiness verdict; it only asserts, for the duration of one test, the answer
-an activated protocol would have given.
+Until the REPEAT_UNTIL declaration the Candidate A in-gel fixture could not
+satisfy the second half at all: three of its blocking reasons were
+``unsupported_repeat_until``, and no reviewer action clears an unsupported
+capability.  That is no longer the wall.  Both reasons it has left --
+``no_declared_safety_warnings`` and one ``unresolved_ambiguity`` -- are
+reviewer-clearable, so the document is reachable through the audited route
+(``test_pdf_to_session_walkthrough.test_resolving_the_ambiguities_narrows_the_wall``
+walks it end to end).  What remains in front of these tests is the route
+itself: a reviewer's acknowledgement, four resolutions, and a recorded
+activation, none of which a unit test of turn handling has any business
+performing.
+
+So this still exists, for the same reason and with a smaller claim.  The
+tests that exercise what happens *behind* the wall -- session durability,
+recovery, turn handling, reporting -- step around the gate in front of them,
+in the open.  Nothing here changes a rule or a readiness verdict; it only
+asserts, for the duration of one test, the answer an activated protocol would
+have given.  It does not step around the endpoint-observation gate: that one
+is not readiness and is not clearable by anybody but the experimenter, and
+tests about it must go through it (see
+``tests/test_repeat_until_declaration_properties.py``).
 
 Tests that are *about* the gate must not use this.  See
 ``tests/test_development_activation_gate.py``.

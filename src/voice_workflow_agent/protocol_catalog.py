@@ -1317,6 +1317,43 @@ class ProtocolCatalog:
             "final_approval": False,
         }
 
+    @staticmethod
+    def _development_analysis_identity(
+        fixture: CuratedProtocolFixture,
+    ) -> tuple[str, str]:
+        """Name this fixture's analysis by everything the analysis contains.
+
+        The id used to be the fixture's own SHA-256 and nothing else, which
+        held for as long as the fixture's bytes decided the analysis. They do
+        not. Readiness is assessed when the fixture is loaded, against the
+        capability policy, so declaring a capability changes the stored
+        analysis while leaving the fixture byte-identical -- and the id could
+        not see it. The store then found an id it already held whose payload
+        had changed and refused, correctly, at server start, which is the
+        worst moment to learn it: the pilot catalog holds
+        ``curated-69517f0f...`` with payload ``47df9633...`` and the declared
+        policy produces ``824e9b54...``.
+
+        Same lesson as the chunk cache key before STEP 31. A key that cannot
+        see the question reports a hit it cannot honour -- or, here, a
+        collision that is really a new analysis. The payload digest is part of
+        the identity now, so a changed analysis is a different analysis and is
+        appended as the next revision. Nothing is overwritten and nothing is
+        deleted: the earlier revisions stay exactly where they are, and so do
+        the findings recorded against them, which belong to those revisions
+        and not to this one.
+        """
+
+        _, payload_sha256 = serialize_analysis(
+            fixture.draft.protocol,
+            fixture.draft.readiness,
+            fixture.draft.capability_policy_id,
+        )
+        return (
+            f"curated-{fixture.fixture_sha256}-{payload_sha256[:16]}",
+            payload_sha256,
+        )
+
     def bootstrap_development_fixture(
         self,
         fixture: CuratedProtocolFixture,
@@ -1339,10 +1376,13 @@ class ProtocolCatalog:
                 "Development fixture is not eligible for materialization."
             )
         existing = self.store.get_experiment(fixture.protocol_id)
+        analysis_id, payload_sha256 = self._development_analysis_identity(
+            fixture
+        )
         analysis = self.store.create_experiment_with_analysis(
             fixture.protocol_id,
             fixture.source_pdf_path,
-            f"curated-{fixture.fixture_sha256}",
+            analysis_id,
             fixture.draft.protocol,
             fixture.draft.readiness,
             fixture.draft.capability_policy_id,
@@ -1353,7 +1393,11 @@ class ProtocolCatalog:
                 "Development fixture revision is unavailable."
             )
         self.store.append_event(
-            f"development-fixture-{fixture.fixture_sha256[:48]}",
+            # The event names the analysis it materialized, for the reason
+            # above: keyed on the fixture alone it collided with its own
+            # earlier record as soon as the analysis changed.
+            f"development-fixture-{fixture.fixture_sha256[:48]}"
+            f"-{payload_sha256[:16]}",
             fixture.protocol_id,
             revision.revision_number,
             _DEVELOPMENT_FIXTURE_EVENT,
@@ -1398,7 +1442,9 @@ class ProtocolCatalog:
         analysis = self._latest_analysis(revision)
         if analysis is None:
             return False
-        if analysis.analysis_id != f"curated-{fixture.fixture_sha256}":
+        if analysis.analysis_id != self._development_analysis_identity(
+            fixture
+        )[0]:
             return False
         if (
             analysis.protocol != fixture.draft.protocol

@@ -648,6 +648,28 @@ class ExperimentProtocolTests(unittest.TestCase):
         )
 
     def test_repeat_until_remains_explicit_and_policy_can_evolve(self):
+        """The policy evolved, which is what the second half was written for.
+
+        Premise updated: P1 now supports REPEAT_UNTIL. The three properties
+        this test holds are unchanged and all three are still asserted --
+        a "repeat until" sentence is detected as REPEAT_UNTIL and is never
+        quietly downgraded to a bounded shape; readiness is a function of the
+        policy handed to it; and a feature the policy does *not* support
+        raises its matching unsupported_* reason. Only the third one had to
+        move, because P1 is no longer a policy that refuses this feature: it
+        is asserted against a policy that does refuse it, so the mapping is
+        still under test rather than assumed. The same mapping is
+        independently held for six other feature codes elsewhere in this
+        file and in test_commercial_protocol_fixtures /
+        test_operator_determined_repetition.
+
+        Why the policy changed at all: a repeat-until step's endpoint is the
+        experimenter's to report, so calling it unsupported asked a reviewer
+        to resolve something no reviewer can resolve. The execution gate did
+        not leave with the reason -- see
+        tests/test_repeat_until_declaration_properties.py.
+        """
+
         construct = RepeatUntil(
             "neutral-ph",
             "Repeat until the pH is neutral.",
@@ -659,22 +681,32 @@ class ExperimentProtocolTests(unittest.TestCase):
 
         features = detect_features(protocol)
         self.assertEqual(features[0].code, FeatureCode.REPEAT_UNTIL)
-        self.assert_analysis_required(
-            protocol,
-            ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL,
-        )
 
-        future_policy = CapabilityPolicy(
-            "repeat-until-capable",
-            P1_CAPABILITY_POLICY.supported_features
-            | {FeatureCode.REPEAT_UNTIL},
+        # Supported now, so the only reason left is the safety gate.
+        self.assertEqual(
+            assess_readiness(protocol).reason_codes, _SAFETY_GATE
         )
         self.assertEqual(
             assess_readiness(
                 protocol,
-                capability_policy=future_policy,
+                capability_policy=P1_CAPABILITY_POLICY,
             ).reason_codes,
             _SAFETY_GATE,
+        )
+
+        # A policy that does not support it still raises its own reason: the
+        # feature-to-reason mapping is what this half now guards.
+        restricted = CapabilityPolicy(
+            "repeat-until-incapable",
+            P1_CAPABILITY_POLICY.supported_features
+            - {FeatureCode.REPEAT_UNTIL},
+        )
+        self.assertIn(
+            ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL.value,
+            assess_readiness(
+                protocol,
+                capability_policy=restricted,
+            ).reason_codes,
         )
 
     def test_fixed_range_is_represented_but_ambiguity_still_blocks(self):

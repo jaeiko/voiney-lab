@@ -471,5 +471,123 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
                 self.assertIn(code, set(ProtocolCatalog._BLOCKER_RESOLUTION))
 
 
+class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
+    """A catalog already materialized under the old policy must survive.
+
+    The declaration changes the fixture's readiness without changing one byte
+    of the fixture, and the analysis id named only the fixture. The store then
+    found an id it already held whose payload had changed and refused --
+    at server start, from ``scripts/run_candidate_a.sh``, on any catalog that
+    had already materialized this fixture. The pilot catalog is one: it holds
+    ``curated-69517f0f...`` with payload ``47df9633...`` while the declared
+    policy produces ``824e9b54...``.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not (FIXTURE.is_file() and PROVENANCE.is_file() and IN_GEL_PDF.is_file()):
+            raise unittest.SkipTest("The curated in-gel fixture is not present.")
+        cls.fixture = _curated_fixture()
+
+    def _as_of(self, policy):
+        return replace(
+            self.fixture,
+            draft=replace(
+                self.fixture.draft,
+                readiness=domain.assess_readiness(
+                    self.fixture.draft.protocol, capability_policy=policy
+                ),
+                capability_policy=policy,
+            ),
+        )
+
+    def _catalog(self, directory):
+        from voice_workflow_agent.experiment_protocol_store import (
+            ProtocolPersistenceSettings,
+            initialize_protocol_store,
+        )
+        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+
+        store = initialize_protocol_store(
+            ProtocolPersistenceSettings(True, Path(directory) / "catalog")
+        )
+        self.addCleanup(store.close)
+        return ProtocolCatalog(store), store
+
+    def test_a_changed_analysis_is_appended_rather_than_refused(self) -> None:
+        before = self._as_of(
+            domain.CapabilityPolicy(
+                "p1-conservative",
+                domain.P1_CAPABILITY_POLICY.supported_features
+                - {domain.FeatureCode.REPEAT_UNTIL},
+            )
+        )
+        after = self._as_of(domain.P1_CAPABILITY_POLICY)
+        self.assertIn(_UNSUPPORTED, before.draft.readiness.reason_codes)
+        self.assertEqual(before.fixture_sha256, after.fixture_sha256)
+        self.assertEqual(before.revision_id, after.revision_id)
+
+        with tempfile.TemporaryDirectory() as directory:
+            catalog, store = self._catalog(directory)
+            catalog.bootstrap_development_fixture(before)
+            self.assertTrue(catalog.development_fixture_is_materialized(before))
+            self.assertFalse(catalog.development_fixture_is_materialized(after))
+
+            # This is what used to raise DuplicateProtocolIdentifierError.
+            catalog.bootstrap_development_fixture(after)
+            self.assertTrue(catalog.development_fixture_is_materialized(after))
+
+            revisions = store.list_protocol_revisions(after.protocol_id)
+            self.assertEqual(len(revisions), 1)
+            # Append-only: the earlier analysis is still there.
+            first = store.get_analysis_revision(after.protocol_id, 1, 1)
+            second = store.get_analysis_revision(after.protocol_id, 1, 2)
+            self.assertIn(_UNSUPPORTED, first.readiness.reason_codes)
+            self.assertNotIn(_UNSUPPORTED, second.readiness.reason_codes)
+            self.assertNotEqual(first.analysis_id, second.analysis_id)
+
+    def test_a_finding_on_the_earlier_analysis_does_not_clear_the_later_one(self):
+        """Findings belong to the analysis they were recorded against.
+
+        The same trap in a second shape: a reviewer who cleared this fixture
+        before the declaration has cleared the analysis that existed then, and
+        the screen must ask again rather than treat the old finding as
+        standing.
+        """
+
+        from voice_workflow_agent.protocol_catalog import (
+            ProtocolCatalogUnavailableError,
+        )
+
+        before = self._as_of(
+            domain.CapabilityPolicy(
+                "p1-conservative",
+                domain.P1_CAPABILITY_POLICY.supported_features
+                - {domain.FeatureCode.REPEAT_UNTIL},
+            )
+        )
+        after = self._as_of(domain.P1_CAPABILITY_POLICY)
+        with tempfile.TemporaryDirectory() as directory:
+            catalog, store = self._catalog(directory)
+            catalog.bootstrap_development_fixture(before)
+            catalog.acknowledge_readiness_gate(
+                before.protocol_id,
+                "pdf-1-analysis-1",
+                reason_code=(
+                    domain.ReadinessReasonCode
+                    .NO_DECLARED_SAFETY_WARNINGS.value
+                ),
+                actor_principal_id="reviewer@example.org",
+                actor_role="reviewer",
+            )
+            catalog.bootstrap_development_fixture(after)
+            later = store.get_analysis_revision(after.protocol_id, 1, 2)
+            self.assertFalse(
+                catalog._readiness_gates_cleared(after.protocol_id, 1, later)
+            )
+            with self.assertRaises(ProtocolCatalogUnavailableError):
+                catalog.activate_development(after.protocol_id)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

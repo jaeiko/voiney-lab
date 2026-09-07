@@ -569,6 +569,31 @@ P1_CAPABILITY_POLICY = CapabilityPolicy(
             # nothing about it is unknown to the protocol. The session refuses
             # to start it until a named person supplies the count.
             FeatureCode.OPERATOR_DETERMINED_REPETITION,
+            # A repeat-until step has a stated endpoint and no stated count,
+            # and it is supported the only way that shape can be: the person
+            # at the bench reports the endpoint the document states, in their
+            # own words, and that report is written down with the step, the
+            # time and the actor before the step is left. Nothing about the
+            # loop runs on model output -- the session neither counts rounds
+            # nor decides that one was enough.
+            #
+            # The gate this reason used to raise did not leave with it. It
+            # stands on the document instead: at a step the analysis anchors a
+            # repetition to, CuratedProtocolSession refuses the transition
+            # until an endpoint observation is on record for that step
+            # (``endpoint_observation_outstanding``), the server refuses the
+            # turn unless that observation reached the experiment record, and
+            # the preview and completion-criteria answers say the step is held
+            # for that reason rather than for this one. What changed is the
+            # reason, not the obligation: the endpoint was always the
+            # experimenter's to report, and calling it "unsupported" asked a
+            # reviewer to resolve something no reviewer can resolve.
+            #
+            # ``profile_id`` deliberately does not change. It is written into
+            # cached claim payloads and validated against them, so renaming it
+            # would discard every cached chunk and spend provider calls to
+            # re-earn them.
+            FeatureCode.REPEAT_UNTIL,
             FeatureCode.INFORMATIONAL_DIFFERENCE,
         }
     ),
