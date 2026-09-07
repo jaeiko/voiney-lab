@@ -4002,6 +4002,7 @@ def assemble_experiment_protocol(
     global_missing: list[ProtocolClaim] = []
     global_warnings: list[ProtocolClaim] = []
     global_conditions: list[ProtocolClaim] = []
+    global_repetitions: list[ProtocolClaim] = []
     for claim in merged.claims:
         if claim.category is ClaimCategory.MATERIAL:
             related = children.get(claim.claim_id, ())
@@ -4055,6 +4056,28 @@ def assemble_experiment_protocol(
         elif (
             claim.target_claim_id is None
             and claim.category is not ClaimCategory.ACTION
+            and claim.repeated_step_labels is not None
+        ):
+            # A repeat stated outside every numbered step. This used to fall
+            # into the branch below and come out a before-start note: the
+            # declared range was dropped, the repetition never existed, and
+            # the result looked handled. in-gel's page 8 is exactly that
+            # sentence -- the page's first segment, inside no step's block, so
+            # it cannot target an action and document level was the only thing
+            # left. Validation accepted it and assembly could not represent
+            # it, which is the quietest way to lose an instruction.
+            #
+            # A repetition carries a range, and a range is the whole point of
+            # it. RepeatUntil and both bounded forms take section_id, step_id
+            # and action_id as None, so a document-level repeat is
+            # representable as what it is. If the range cannot be resolved
+            # against the assembled steps, _repeated_range_step_ids refuses
+            # rather than trimming -- so this either stays a repetition or
+            # fails closed, and never turns into something else.
+            global_repetitions.append(claim)
+        elif (
+            claim.target_claim_id is None
+            and claim.category is not ClaimCategory.ACTION
         ):
             # A value or condition stated outside every numbered step. It is a
             # before-start condition rather than a step qualifier, and it must
@@ -4105,6 +4128,47 @@ def assemble_experiment_protocol(
         for action_claim in action_claims:
             if action_claim.source_label is not None:
                 steps_by_label.setdefault(action_claim.source_label, step_id)
+    # Document-level repeats, now that every step's label is known. Built here
+    # rather than where they were collected because resolving a range needs the
+    # whole document's labels.
+    for claim in global_repetitions:
+        covered = _repeated_range_step_ids(claim, steps_by_label)
+        if claim.category is ClaimCategory.REPEAT_CONDITION:
+            constructs.append(
+                domain.RepeatUntil(
+                    repetition_id=claim.claim_id,
+                    condition_source_text=claim.source_text,
+                    repeated_step_ids=covered,
+                    evidence=_domain_evidence(claim.evidence),
+                )
+            )
+        elif claim.category is ClaimCategory.OPERATOR_DETERMINED_REPETITION:
+            constructs.append(
+                domain.OperatorDeterminedRepetition(
+                    repetition_id=claim.claim_id,
+                    start_step_id=covered[0],
+                    end_step_id=covered[-1],
+                    range_source_text=claim.source_text,
+                    evidence=_domain_evidence(claim.evidence),
+                )
+            )
+        elif claim.category is ClaimCategory.FIXED_RANGE_REPETITION:
+            if claim.repetition_count is None:
+                raise ProtocolClaimConsistencyError("repetition_count_missing")
+            constructs.append(
+                domain.FixedRangeRepetition(
+                    repetition_id=claim.claim_id,
+                    start_step_id=covered[0],
+                    end_step_id=covered[-1],
+                    range_source_text=claim.source_text,
+                    evidence=_domain_evidence(claim.evidence),
+                    repeat_count=claim.repetition_count,
+                )
+            )
+        else:
+            # A range on a category that is not a repetition is not something
+            # this can represent, and it is refused rather than reshaped.
+            raise ProtocolClaimConsistencyError("repeat_range_not_applicable")
     sections: list[domain.ProtocolSection] = []
     for marker in section_markers:
         assert marker.section_id is not None

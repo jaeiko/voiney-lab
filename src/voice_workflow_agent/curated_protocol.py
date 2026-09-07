@@ -4306,6 +4306,11 @@ class CuratedProtocolSession:
         # with the rest of the session, and never written to the approval
         # ledger.
         self._acknowledged_unread_pages: dict[int, dict[str, object]] = {}
+        #: repetition_id -> what happened at a human-led repeat interval on
+        #: this run: when the agent handed it over, and when a person said it
+        #: was finished. The number of rounds is deliberately absent -- the
+        #: agent does not count them, so it has nothing truthful to record.
+        self._repeat_intervals: dict[str, dict[str, object]] = {}
         #: Step indices whose source warning text has been read out on this
         #: run. Not an acknowledgement: nobody agrees to anything by hearing a
         #: warning, and nothing here clears a readiness gate.
@@ -4695,6 +4700,198 @@ class CuratedProtocolSession:
             )
         return found
 
+    # --- repeat intervals a person leads ---------------------------------
+
+    def _repeat_intervals_by_id(self) -> dict[str, dict[str, object]]:
+        """Every repetition the analysis carries, as a range of step ids.
+
+        Read off the assembled constructs, which is where the server put what
+        it resolved. Repeats the analysis never captured are absent by
+        construction -- they cannot be led from data that does not exist, and
+        ``source_states_an_uncaptured_repetition`` is what keeps a document
+        with any of those out of execution.
+        """
+
+        order = [step.step_id for step in self.fixture.steps]
+        found: dict[str, dict[str, object]] = {}
+        for construct in self.fixture.draft.protocol.constructs:
+            covered = getattr(construct, "repeated_step_ids", None)
+            if covered is None:
+                start = getattr(construct, "start_step_id", None)
+                end = getattr(construct, "end_step_id", None)
+                if start is None or end is None:
+                    continue
+                if start in order and end in order:
+                    covered = tuple(
+                        order[index]
+                        for index in range(order.index(start), order.index(end) + 1)
+                    )
+                else:
+                    covered = tuple(item for item in (start, end) if item)
+            if not covered:
+                continue
+            found[construct.repetition_id] = {
+                "repetition_id": construct.repetition_id,
+                "kind": type(construct).__name__,
+                "repeated_step_ids": tuple(covered),
+                # The document's own sentence. Whichever construct this is, the
+                # text is the source's, reconstructed from its bytes.
+                "source_text": (
+                    getattr(construct, "condition_source_text", None)
+                    or getattr(construct, "range_source_text", "")
+                ),
+                "source_page_number": getattr(
+                    getattr(construct, "evidence", None), "source_page_number", None
+                ),
+            }
+        return found
+
+    def repeat_interval_starting_at(self, index: int) -> dict[str, object] | None:
+        """The interval this step opens, if it opens one."""
+
+        if not 0 <= index < len(self.fixture.steps):
+            return None
+        step_id = self.fixture.steps[index].step_id
+        for interval in self._repeat_intervals_by_id().values():
+            if interval["repeated_step_ids"][0] == step_id:
+                return interval
+        return None
+
+    def human_led_repeat_disclosure(self, index: int) -> dict[str, object] | None:
+        """What the agent says when a repeat interval opens, and nothing more.
+
+        Four things: that this is a repeat interval, which steps it covers,
+        the document's own sentence read exactly as written, and that the
+        person decides when it is done. There is no fifth thing. The agent
+        does not say how many rounds to run, does not say a round was enough,
+        and does not report an observation -- all three would be a completion
+        criterion the source never gave.
+        """
+
+        interval = self.repeat_interval_starting_at(index)
+        if interval is None:
+            return None
+        labels = {step.step_id: step.source_label for step in self.fixture.steps}
+        covered = [
+            labels.get(step_id, step_id)
+            for step_id in interval["repeated_step_ids"]
+        ]
+        record = self._repeat_intervals.get(str(interval["repetition_id"]))
+        return {
+            "repetition_id": interval["repetition_id"],
+            "kind": interval["kind"],
+            "repeated_step_labels": covered,
+            "source_page_number": interval["source_page_number"],
+            # Read aloud verbatim. Never summarized, never paraphrased.
+            "source_text": interval["source_text"],
+            "notice": (
+                f"{covered[0]}번부터 {covered[-1]}번까지는 반복 구간입니다. "
+                "원문 조건을 그대로 읽어 드립니다. 언제 끝낼지는 원문을 보고 "
+                "직접 판단해 주시고, 끝나면 말씀해 주세요."
+            ),
+            "who_decides_completion": "operator",
+            "handed_over_at": None if record is None else record.get("handed_over_at"),
+            "completed": bool(record and record.get("completed_at")),
+        }
+
+    def enter_repeat_interval(
+        self,
+        index: int,
+        *,
+        at: str,
+    ) -> dict[str, object] | None:
+        """Record that the agent handed an interval over, and return the words."""
+
+        disclosure = self.human_led_repeat_disclosure(index)
+        if disclosure is None:
+            return None
+        if not str(at).strip():
+            raise ValueError("A repeat interval hand-over needs a timestamp.")
+        identifier = str(disclosure["repetition_id"])
+        record = self._repeat_intervals.setdefault(identifier, {})
+        record.setdefault("handed_over_at", at)
+        disclosure["handed_over_at"] = record["handed_over_at"]
+        return disclosure
+
+    def declare_repeat_interval_complete(
+        self,
+        repetition_id: str,
+        *,
+        at: str,
+        actor_principal_id: str,
+        actor_role: str,
+    ) -> None:
+        """Record that a person said the interval is finished.
+
+        Only a person may say this. The agent has no view on it, and the
+        number of rounds is not recorded because the agent did not count them
+        -- a figure it inferred would be a guess in an experiment record.
+        """
+
+        if repetition_id not in self._repeat_intervals_by_id():
+            raise ValueError("That repetition is not part of this Protocol.")
+        if not str(at).strip():
+            raise ValueError("A completion declaration needs a timestamp.")
+        if not str(actor_principal_id).strip() or not str(actor_role).strip():
+            raise ValueError("A completion declaration needs an actor.")
+        record = self._repeat_intervals.setdefault(str(repetition_id), {})
+        record["completed_at"] = at
+        record["declared_by_principal_id"] = actor_principal_id
+        record["declared_by_role"] = actor_role
+
+    def repeat_intervals_awaiting_completion(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                identifier
+                for identifier, interval in self._repeat_intervals_by_id().items()
+                if not (
+                    self._repeat_intervals.get(identifier, {}).get("completed_at")
+                )
+            )
+        )
+
+    def repeat_interval_record(self, repetition_id: str) -> dict[str, object]:
+        """What the session recorded: hand-over, declaration, and who."""
+
+        return dict(self._repeat_intervals.get(str(repetition_id), {}))
+
+    def may_leave_repeat_interval(self, step_id: str) -> bool:
+        """False while a step sits past a repeat nobody has closed.
+
+        Its own predicate rather than a clause inside ``may_begin_step``: the
+        question is not whether this step can start but whether the run may
+        walk out of a repeat, and only a person answers that.
+
+        Neither this nor ``may_begin_step`` is consulted by the turn handler
+        today -- the advance is a bare ``current_index += 1`` -- so this states
+        the rule without yet enforcing it. That gap is why the capability
+        profile still does not declare repeat-until support.
+        """
+
+        for index, step in enumerate(self.fixture.steps):
+            if step.step_id == step_id:
+                return not self._step_is_after_an_open_interval(index)
+        return True
+
+    def _step_is_after_an_open_interval(self, index: int) -> bool:
+        """True when a step follows a repeat nobody has declared finished."""
+
+        if not 0 <= index < len(self.fixture.steps):
+            return False
+        order = [step.step_id for step in self.fixture.steps]
+        step_id = order[index]
+        for identifier, interval in self._repeat_intervals_by_id().items():
+            covered = interval["repeated_step_ids"]
+            if step_id in covered:
+                continue
+            last = covered[-1]
+            if last in order and order.index(last) < index:
+                if not self._repeat_intervals.get(identifier, {}).get(
+                    "completed_at"
+                ):
+                    return True
+        return False
+
     # --- pages the machine did not finish reading ------------------------
 
     def _unread_pages(self) -> dict[int, tuple[str, ...]]:
@@ -4926,6 +5123,14 @@ class CuratedProtocolSession:
         The third is not something a person settles but something the system
         owes: a step whose source states a hazard does not begin until that
         hazard's own words have been read out on this run.
+
+        The repeat interval is deliberately *not* one of them. Leaving a
+        repeat is a person's judgement too, but it is a different question
+        from anything above and it has its own predicate --
+        ``may_leave_repeat_interval`` -- rather than being folded in here.
+        Folding it in made a test that proves the unread-page rule leaves a
+        clean document alone fail for a reason that has nothing to do with
+        unread pages, which is a sign the two do not belong in one answer.
         """
 
         for index, step in enumerate(self.fixture.steps):
@@ -5731,6 +5936,9 @@ class CuratedProtocolSession:
         # A new run owes the warnings again. The duty is per execution, not
         # per protocol: the person at the bench this time has not heard them.
         self._disclosed_safety_warnings.clear()
+        # A new run re-enters every repeat interval. Whether the last
+        # person judged one finished says nothing about this one.
+        self._repeat_intervals.clear()
         self._pending_clarification = None
         self._last_related_query = None
         self._last_related_entities = ()

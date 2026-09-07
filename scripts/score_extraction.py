@@ -79,6 +79,54 @@ def _plain(value):
     return value
 
 
+def _step_text_of(protocol, label: str) -> str:
+    """One step's instruction plus its sub-actions, as the scorer reads it."""
+
+    for section in protocol.sections:
+        for step in section.steps:
+            if step.source_label != label:
+                continue
+            parts = [step.instruction_source_text]
+            parts.extend(
+                action.instruction_source_text for action in step.sub_actions
+            )
+            return " ".join(part for part in parts if part)
+    return ""
+
+
+def _containment(reference_text: str, candidate_text: str) -> str:
+    """Whether the two texts differ by inclusion or by disagreement.
+
+    Text similarity conflates them, and STEP 39 measured the cost: of in-gel's
+    five lowest-scoring steps, four had a candidate that contained every word
+    of the reference and was marked down for the words it added. One of those
+    additions was a section heading the segmenter had fused in; the others were
+    notes and catalogue lines the reference chose to leave out. Only step 24
+    was missing anything.
+
+    So the two are separated. "candidate_contains_reference" is a step where
+    nothing the reference says is absent -- the difference is what to include,
+    which is a judgement, not an error. "differs" is a step where each side
+    says something the other does not, and that is where an error lives.
+    """
+
+    reference_words = " ".join(reference_text.split())
+    candidate_words = " ".join(candidate_text.split())
+    if reference_words == candidate_words:
+        return "identical"
+    if reference_words and reference_words in candidate_words:
+        return "candidate_contains_reference"
+    if candidate_words and candidate_words in reference_words:
+        return "reference_contains_candidate"
+    left = set(reference_words.split())
+    right = set(candidate_words.split())
+    if left and left <= right:
+        return "candidate_contains_reference"
+    if right and right <= left:
+        return "reference_contains_candidate"
+    return "differs"
+
+
 def _declared_step_values(protocol):
     """Per step, the values the extraction actually *claims*, by kind.
 
@@ -361,6 +409,27 @@ def main() -> int:
             "order_matches": report.order_matches,
             "missing_labels": list(report.missing_labels),
             "extra_labels": list(report.extra_labels),
+        },
+        # Inclusion and disagreement, kept apart. A step whose candidate
+        # contains the whole reference has no missing content, whatever its
+        # similarity score says; a step under "differs" is where each side has
+        # something the other lacks, and that is where to look.
+        "text_containment": {
+            outcome: sorted(
+                item.source_label
+                for item in report.compared
+                if _containment(
+                    _step_text_of(reference, item.source_label),
+                    _step_text_of(candidate, item.source_label),
+                )
+                == outcome
+            )
+            for outcome in (
+                "identical",
+                "candidate_contains_reference",
+                "reference_contains_candidate",
+                "differs",
+            )
         },
         "text_similarity": {
             "minimum": similarities[0] if similarities else None,
