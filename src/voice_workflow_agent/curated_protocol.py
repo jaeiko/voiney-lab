@@ -2435,6 +2435,36 @@ def _target_from_text(text: str) -> str | None:
     return None
 
 
+def steps_anchoring_a_repetition(
+    fixture: CuratedProtocolFixture,
+) -> frozenset[str]:
+    """Step ids the source states a repeat at, read off the analysis.
+
+    The anchor rather than the last step of the range: a repeat sentence can
+    sit in a later step's text than the range it names -- in-gel's page 8 says
+    "repeat steps 17-18" inside step 20's block -- and an operator meets the
+    instruction where it is written, not where the range ends.
+
+    A construct that names neither a repeated set nor a start is not a
+    repetition -- a source ambiguity, say -- and contributes nothing. A
+    document whose analysis carries no repetition yields an empty set, which
+    is the fail-closed answer: no step gets an endpoint predicate, so no
+    utterance is read as an endpoint observation.
+    """
+
+    found = set()
+    for construct in getattr(fixture.draft.protocol, "constructs", ()) or ():
+        if (
+            getattr(construct, "repeated_step_ids", None) is None
+            and getattr(construct, "start_step_id", None) is None
+        ):
+            continue
+        anchor = getattr(construct, "step_id", None)
+        if isinstance(anchor, str) and anchor:
+            found.add(anchor)
+    return frozenset(found)
+
+
 def build_step_semantic_frame(
     fixture: CuratedProtocolFixture,
     step_index: int,
@@ -2488,9 +2518,16 @@ def build_step_semantic_frame(
                 evidence_id=fact.fact_id,
                 source_page=fact.source_page,
             ))
+    # Which steps have a visible endpoint to report is the document's
+    # statement, not this module's: the labels {"7", "9", "20"} that stood
+    # here were in-gel's own numbering, so the predicate -- and the gate that
+    # depends on it -- existed for that one PDF and for nothing else
+    # (principle 1). A step the source states a repeat at is the step whose
+    # continuation depends on an observation, so that is the step that gets a
+    # predicate id. The id's shape is unchanged; only its condition is.
     predicate = (
         f"candidate_a_step_{step.source_label}_endpoint"
-        if step.source_label in {"7", "9", "20"} else None
+        if step.step_id in steps_anchoring_a_repetition(fixture) else None
     )
     deduplicated: dict[tuple[str, str, str], StepParameterBinding] = {}
     for item in parameters:
@@ -4306,6 +4343,18 @@ class CuratedProtocolSession:
         # with the rest of the session, and never written to the approval
         # ledger.
         self._acknowledged_unread_pages: dict[int, dict[str, object]] = {}
+        #: step_id -> the endpoint observation that released that step's gate.
+        #:
+        #: A repeat-until step waits on a visible endpoint the source states,
+        #: and only the person at the bench can report it. Until STEP 41 that
+        #: report was a one-turn authorisation: it satisfied the gate inside
+        #: the turn that carried it and left nothing behind, so the gate could
+        #: only ever rest on readiness saying the construct was unsupported.
+        #: Written down, the report becomes the gate's own footing -- which is
+        #: what lets the capability be declared without the gate falling with
+        #: it. What is stored is what was said and who said it, never a count
+        #: of rounds run: the source states no number and neither does this.
+        self._endpoint_observations: dict[str, dict[str, object]] = {}
         #: repetition_id -> what happened at a human-led repeat interval on
         #: this run: when the agent handed it over, and when a person said it
         #: was finished. The number of rounds is deliberately absent -- the
@@ -4734,6 +4783,10 @@ class CuratedProtocolSession:
                 "repetition_id": construct.repetition_id,
                 "kind": type(construct).__name__,
                 "repeated_step_ids": tuple(covered),
+                # The step whose text carries the repeat sentence, which is
+                # not always the last step of the range: in-gel's page 8
+                # writes "repeat steps 17-18" inside step 20's block.
+                "anchor_step_id": getattr(construct, "step_id", None),
                 # The document's own sentence. Whichever construct this is, the
                 # text is the source's, reconstructed from its bytes.
                 "source_text": (
@@ -4745,6 +4798,24 @@ class CuratedProtocolSession:
                 ),
             }
         return found
+
+    def repetition_anchored_at(self, step_id: str) -> dict[str, object] | None:
+        """The repetition whose sentence is written in this step's text."""
+
+        for interval in self._repeat_intervals_by_id().values():
+            if interval.get("anchor_step_id") == step_id:
+                return interval
+        return None
+
+    def _range_labels(self, interval: dict[str, object]) -> tuple[str, str]:
+        """The first and last source labels of a repeated range."""
+
+        labels = {step.step_id: step.source_label for step in self.fixture.steps}
+        covered = tuple(interval["repeated_step_ids"])  # type: ignore[arg-type]
+        return (
+            labels.get(covered[0], str(covered[0])),
+            labels.get(covered[-1], str(covered[-1])),
+        )
 
     def repeat_interval_starting_at(self, index: int) -> dict[str, object] | None:
         """The interval this step opens, if it opens one."""
@@ -5939,6 +6010,9 @@ class CuratedProtocolSession:
         # A new run re-enters every repeat interval. Whether the last
         # person judged one finished says nothing about this one.
         self._repeat_intervals.clear()
+        # A new run owes its own observations. That the last operator saw the
+        # gel go transparent is not a fact about this run's gel.
+        self._endpoint_observations.clear()
         self._pending_clarification = None
         self._last_related_query = None
         self._last_related_entities = ()
@@ -6195,6 +6269,7 @@ class CuratedProtocolSession:
             self._experiment_ended_at,
             self._pending_anomaly,
             self._pending_note_capture,
+            dict(self._endpoint_observations),
         )
 
     def _restore(
@@ -6226,6 +6301,11 @@ class CuratedProtocolSession:
             self._pending_note_capture = (
                 checkpoint[19] if len(checkpoint) >= 20 else None
             )
+            # A turn whose persistence failed is rolled back whole. An
+            # observation left behind would open the gate on the retry with
+            # nothing durable behind it, which is the hole this closes.
+            if len(checkpoint) >= 21:
+                self._endpoint_observations = dict(checkpoint[20])
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -6878,18 +6958,167 @@ class CuratedProtocolSession:
             ),
             None,
         )
-        step_label = self.fixture.steps[self.current_index].source_label
-        if observation_predicate == "positive" and (
-            step_label in {"7", "9"}
-            and blocker is domain.ReadinessReasonCode.UNSUPPORTED_REPEAT_UNTIL
-            or step_label == "20"
-            and blocker is domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY
+        if (
+            observation_predicate == "positive"
+            and blocker is not None
+            and step_id in self._steps_anchoring_a_repetition()
         ):
             # This is a user-reported, source-defined observation. It does not
             # claim machine vision or model approval; the normal transactional
             # completion/report path still owns the single mutation.
+            #
+            # Which steps it may release used to be written here as the labels
+            # {"7", "9"} and "20", paired with a blocker kind each. Those are
+            # in-gel's numbers. The gate worked on in-gel and on nothing else,
+            # and a second document would have found no gate at all where its
+            # own source states a repeat -- a rule that reads a document's page
+            # numbers is not a rule, and principle 1 says so.
+            #
+            # The steps come from the document now: a repetition construct is
+            # anchored to the step whose text carries the repeat instruction,
+            # and that is where an operator meets it and where the judgement
+            # belongs. On in-gel this derives {"7", "9", "20"} exactly -- the
+            # same three, for a reason rather than by name.
+            #
+            # The blocker *kind* is no longer paired either. At a step the
+            # source states a repeat for, the reason readiness raises is about
+            # that repeat whichever code it carries: step 20 holds both
+            # unsupported_repeat_until and unresolved_ambiguity, and the
+            # ambiguity is literally the repeat's range. A document with no
+            # repeat has no such step, so it has no gate to release.
             return None
         return blocker
+
+    def _steps_anchoring_a_repetition(self) -> frozenset[str]:
+        """This session's fixture, through the one module-level derivation."""
+
+        return steps_anchoring_a_repetition(self.fixture)
+
+    def record_endpoint_observation(
+        self,
+        index: int,
+        *,
+        predicate: str,
+        utterance: str,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> dict[str, object]:
+        """Write down the observation a repeat step's gate is released on.
+
+        Six things, and not a seventh: which protocol and which revision, the
+        step it was reported at, the words the person used, when they said
+        them, and who said them. The wording is kept as spoken -- only
+        whitespace is collapsed -- because a paraphrase of an endpoint report
+        is the system's reading of the bench rather than the bench's own.
+
+        What is deliberately absent is any count. The source says "repeat
+        until", never how many times, so a round number here would be a
+        completion criterion the document does not state (principle 8). The
+        record answers "was the stated endpoint reported, by whom, when", and
+        that is the only question the gate asks it.
+
+        ``actor_principal_id`` may be None, and is not filled in when it is:
+        where no workspace is configured there is no principal to name, and
+        writing "local" would be an identity nobody holds (principle 7). The
+        attributed row is the experiment-session observation the same turn
+        writes; see ``_record_workspace_observation`` in the server, which the
+        release now requires rather than merely attempts.
+        """
+
+        if not 0 <= index < len(self.fixture.steps):
+            raise ValueError("That step index is not in this protocol.")
+        if predicate != "positive":
+            raise ValueError("Only a reported endpoint releases the gate.")
+        spoken = " ".join(str(utterance).split())
+        if not spoken:
+            raise ValueError("An endpoint observation needs the user's words.")
+        if not str(actor_role).strip():
+            raise ValueError("An endpoint observation needs a declaring role.")
+        step = self.fixture.steps[index]
+        record = {
+            "protocol_id": self.fixture.draft.protocol.protocol_id,
+            "protocol_revision_id": self.fixture.revision_id,
+            "step_id": step.step_id,
+            "step_label": step.source_label,
+            "observation_predicate": predicate,
+            "utterance": spoken,
+            "declared_at": datetime.now(timezone.utc).isoformat(),
+            "declared_by_principal_id": (
+                actor_principal_id if actor_principal_id else None
+            ),
+            "declared_by_role": str(actor_role).strip(),
+        }
+        self._endpoint_observations[step.step_id] = record
+        return dict(record)
+
+    def endpoint_observations(self) -> dict[str, dict[str, object]]:
+        """Every endpoint observation this run has on record, by step id."""
+
+        return {
+            step_id: dict(record)
+            for step_id, record in self._endpoint_observations.items()
+        }
+
+    def _record_release_if_reported(
+        self,
+        intent: CuratedControlIntent,
+        transcript: str,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> None:
+        """Write the gate down at the moment it opens, and only then.
+
+        Called immediately before the single forward-progression control
+        point, on the two branches that reach it. Earlier would record a
+        release for a turn some other gate then refused; later would leave
+        the transition already made with nothing behind it.
+        """
+
+        if not (
+            intent.reported_observation
+            and intent.observation_predicate == "positive"
+            and self.fixture.steps[self.current_index].step_id
+            in self._steps_anchoring_a_repetition()
+        ):
+            return
+        self.record_endpoint_observation(
+            self.current_index,
+            predicate="positive",
+            # The user's own words for this turn. observation_outcome is the
+            # normalized form the confirmation machinery compares against;
+            # where a bare "네" answered the prompt that form is all there is,
+            # and it is still what was said.
+            utterance=(transcript or intent.observation_outcome or ""),
+            actor_principal_id=actor_principal_id,
+            actor_role=actor_role,
+        )
+
+    def endpoint_observation_outstanding(
+        self,
+        index: int,
+        observation_predicate: str | None = None,
+    ) -> bool:
+        """True while a repeat step's stated endpoint has not been reported.
+
+        The gate, on its own footing. It stands where the source states a
+        repeat -- read off the analysis, not off a label list -- and it comes
+        down for one reason: somebody reported the endpoint the document
+        states. A report arriving in this very turn counts, which is what the
+        predicate argument is; a report already written down counts too, so
+        the gate does not re-close behind an experimenter who answered it.
+
+        A step the source states no repeat at has no such gate, so a document
+        with no repetition is unaffected by any of this.
+        """
+
+        if not 0 <= index < len(self.fixture.steps):
+            return False
+        step_id = self.fixture.steps[index].step_id
+        if step_id not in self._steps_anchoring_a_repetition():
+            return False
+        if observation_predicate == "positive":
+            return False
+        return step_id not in self._endpoint_observations
 
     def plan(
         self,
@@ -6903,6 +7132,12 @@ class CuratedProtocolSession:
         arbitration: RequestArbitration | None = None,
         semantic_proposal: SemanticIntentProposal | None = None,
         semantic_settings: SemanticIntentSettings | None = None,
+        #: Who is speaking, for the endpoint-observation record. Optional
+        #: because a session may run with no workspace and therefore no
+        #: principal; the record then names the role and leaves the identity
+        #: empty rather than inventing one.
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
     ) -> CuratedProtocolTurnPlan:
         if turn_id in self._replay:
             return self._replay[turn_id]
@@ -7283,9 +7518,19 @@ class CuratedProtocolSession:
                     allows_state_mutation=False,
                     requires_confirmation=True,
                 )
+        # Same derivation as the predicate id above, for the same reason: an
+        # utterance is only read as an endpoint observation at a step the
+        # source states a repeat at. Where the phrase families below do not
+        # recognise the wording -- which is every document but in-gel, since
+        # those phrases are in-gel's endpoints -- the elif falls through to
+        # observation_confirmation_required, and the operator's "네" answers
+        # it. That path is label-agnostic, so the gate is releasable on a
+        # document this module has never seen, by confirmation rather than by
+        # phrase recognition.
         if (
             self.active
-            and self.fixture.steps[self.current_index].source_label in {"7", "9", "20"}
+            and self.fixture.steps[self.current_index].step_id
+            in self._steps_anchoring_a_repetition()
             and not intent.reported_observation
             and not stale_observation_reply
         ):
@@ -8421,27 +8666,47 @@ class CuratedProtocolSession:
                 and intent.observation_predicate == "negative"
             ):
                 step = steps[self.current_index]
+                # What this step's endpoint is, and which steps repeat, are the
+                # document's statements. Both were written here as in-gel's own
+                # phrases and ranges chosen by label -- "fully destained",
+                # "Steps 2-7", "Steps 17-18" -- so on any other source this
+                # sentence would have told an experimenter to repeat steps 17-18 of
+                # a document that never mentions them. That is principle 1, and a
+                # fabricated source instruction is principle 8 as well. Both come
+                # from the repetition construct the analysis anchored at this step
+                # now, and the endpoint is quoted instead of paraphrased.
+                interval = self.repetition_anchored_at(step.step_id)
                 endpoint = (
-                    "fully destained and transparent"
-                    if step.source_label == "7" else
-                    "white/whitish and dehydrated"
+                    " ".join(str(interval["source_text"]).split())
+                    if interval is not None else ""
                 )
-                if step.source_label == "7":
-                    followup_en = "Continue the source-authorized Steps 2–7 repeat cycle, then report the visible endpoint again."
-                    followup_ko = "원문이 지시한 2–7단계 반복 주기를 계속한 뒤 관찰 결과를 다시 말씀해 주세요."
-                elif step.source_label == "9":
-                    followup_en = "Continue the source-authorized Steps 8–9 repeat cycle, then report the visible endpoint again."
-                    followup_ko = "원문이 지시한 8–9단계 반복 주기를 계속한 뒤 관찰 결과를 다시 말씀해 주세요."
+                unresolved = any(
+                    reason.step_id == step.step_id
+                    and reason.code
+                    is domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY
+                    for reason in self.fixture.draft.readiness.reasons
+                )
+                if interval is None:
+                    # Nothing captured to name. The report is still honoured and
+                    # the step still held; no range is invented to fill the gap.
+                    followup_en = ""
+                    followup_ko = ""
                 else:
-                    followup_en = "The source mentions repeating Steps 17–18, but that sequence remains unresolved in Candidate A; no loop transition was executed."
-                    followup_ko = "원문에는 17–18단계 반복이 적혀 있지만 Candidate A에서는 그 순서가 미해결이므로 반복 이동을 실행하지 않습니다."
+                    first, last = self._range_labels(interval)
+                    if unresolved:
+                        followup_en = f"The source mentions repeating Steps {first}–{last}, but that sequence remains unresolved here; no loop transition was executed."
+                        followup_ko = f"원문에는 {first}–{last}단계 반복이 적혀 있지만 그 순서가 미해결이므로 반복 이동을 실행하지 않습니다."
+                    else:
+                        followup_en = f"Continue the source-authorized Steps {first}–{last} repeat cycle, then report the visible endpoint again."
+                        followup_ko = f"원문이 지시한 {first}–{last}단계 반복 주기를 계속한 뒤 관찰 결과를 다시 말씀해 주세요."
+                stated = f' (\u201c{endpoint}\u201d)' if endpoint else ""
                 response = (
-                    f"Your report means the source-defined endpoint ({endpoint}) is not yet satisfied for Step {step.source_label}. "
+                    f"Your report means the source-defined endpoint{stated} is not yet satisfied for Step {step.source_label}. "
                     f"The step remains current and no transition was made. {followup_en}"
                     if language == "en" else
                     f"말씀한 결과는 {step.source_label}단계의 원문 관찰 기준이 아직 충족되지 않았다는 뜻입니다. "
                     f"현재 단계를 유지하며 다음 단계로 이동하지 않습니다. {followup_ko}"
-                )
+                ).strip()
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.NEXT,
                     display_text=response,
@@ -8457,6 +8722,64 @@ class CuratedProtocolSession:
                     observation_outcome=intent.observation_outcome,
                     requested_transition=None,
                     target_step=intent.target_step,
+                )
+            elif self.endpoint_observation_outstanding(
+                self.current_index, intent.observation_predicate
+            ):
+                # The gate, standing on the document rather than on the
+                # capability profile. It used to be reached only because
+                # readiness carried unsupported_repeat_until for this step,
+                # which meant declaring the capability would have taken the
+                # gate with it. The reason the step is held is the source's
+                # own sentence, so that is what is read out, and the sentence
+                # comes from the construct anchored here.
+                self._block_reason = "endpoint_observation_not_reported"
+                step = steps[self.current_index]
+                interval = self.repetition_anchored_at(step.step_id)
+                stated = (
+                    " ".join(str(interval["source_text"]).split())
+                    if interval is not None else ""
+                )
+                quoted_en = f' The source states: “{stated}”' if stated else ""
+                quoted_ko = f' 원문은 이렇게 적고 있습니다: “{stated}”' if stated else ""
+                response = {
+                    "en": (
+                        f"Step {step.source_label} repeats until an observed endpoint is reached, "
+                        "and only you can report that."
+                        f"{quoted_en} The step has not been marked complete, and no transition was made. "
+                        "Tell me what you see when you have checked it."
+                    ),
+                    "vi": (
+                        f"Bước {step.source_label} lặp lại cho đến khi đạt điểm kết thúc quan sát, "
+                        "và chỉ bạn có thể báo điều đó. Bước vẫn chưa hoàn thành."
+                    ),
+                    "ko": (
+                        f"{step.source_label}단계는 관찰 결과가 충족될 때까지 반복하는 단계이고, "
+                        "그 결과는 사용자만 확인할 수 있습니다."
+                        f"{quoted_ko} 완료 처리하지 않았고 단계 이동도 하지 않았습니다. "
+                        "확인하신 상태를 말씀해 주세요."
+                    ),
+                }.get(
+                    language,
+                    "관찰 결과가 보고되지 않아 이 단계를 완료 처리하지 않았습니다.",
+                )
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.NEXT,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    intent_kind=intent.intent_kind,
+                    reported_completion=intent.reported_completion,
+                    requested_transition=intent.requested_transition,
+                    requested_followup=intent.requested_followup,
+                    target_step=intent.target_step,
+                    reported_observation=intent.reported_observation,
+                    observation_predicate=intent.observation_predicate,
+                    observation_outcome=intent.observation_outcome,
                 )
             elif blocker is not None:
                 self._block_reason = blocker.value
@@ -8535,6 +8858,9 @@ class CuratedProtocolSession:
                     observation_outcome=intent.observation_outcome,
                 )
             elif self.current_index < len(steps) - 1:
+                self._record_release_if_reported(
+                    intent, transcript, actor_principal_id, actor_role
+                )
                 early_exit = self._record_early_step_timer_exit()
                 self._clear_step_timer()
                 if self.advance_one_step() is not None:
@@ -8594,6 +8920,9 @@ class CuratedProtocolSession:
                     ),
                 )
             else:
+                self._record_release_if_reported(
+                    intent, transcript, actor_principal_id, actor_role
+                )
                 early_exit = self._record_early_step_timer_exit()
                 self._clear_step_timer()
                 self._stop_experiment_clock()
@@ -9004,17 +9333,34 @@ class CuratedProtocolSession:
                     question_dimensions=intent.question_dimensions,
                 )
             elif intent.intent_kind == "observation_confirmation_required":
-                if step.source_label == "7":
+                # The endpoint the agent asks about is the document's, quoted.
+                # Selecting between two hand-written questions by label meant
+                # every step that was not in-gel's step 7 was asked whether
+                # the gel had dehydrated -- on a source with no gel, and no
+                # such endpoint, and no sentence saying so. Asking about a
+                # criterion the document does not state is principle 8 at the
+                # one moment the operator is being asked to judge.
+                interval = self.repetition_anchored_at(step.step_id)
+                stated = (
+                    " ".join(str(interval["source_text"]).split())
+                    if interval is not None else ""
+                )
+                if stated:
                     response = (
-                        "Is the gel fully destained and transparent? I will not record completion until you report that observation."
+                        f"The source states this step's endpoint as: “{stated}” "
+                        "Has it been reached? I will not record completion until "
+                        "you report that observation."
                         if language == "en" else
-                        "젤이 완전히 탈색되어 투명한가요? 그 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
+                        f"원문은 이 단계의 종점을 이렇게 적고 있습니다: “{stated}” "
+                        "그 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
                     )
                 else:
                     response = (
-                        "Has the gel turned white or whitish and reached the dehydrated endpoint? I will not record completion until you report that observation."
+                        "This step repeats until an observed endpoint is reached. "
+                        "I will not record completion until you report what you see."
                         if language == "en" else
-                        "젤이 흰색 또는 흰빛으로 변하고 탈수 종점에 도달했나요? 그 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
+                        "이 단계는 관찰 결과가 충족될 때까지 반복하는 단계입니다. "
+                        "확인하신 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
                     )
             else:
                 response = ({

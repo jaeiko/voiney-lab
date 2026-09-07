@@ -111,6 +111,8 @@ def route_curated_runtime_turn(
     semantic_proposal: SemanticIntentProposal | None = None,
     semantic_settings: SemanticIntentSettings | None = None,
     semantic_outcome: SemanticIntentOutcome | None = None,
+    actor_principal_id: str | None = None,
+    actor_role: str = "voice_operator",
 ) -> CuratedRuntimeRoute:
     """Use the exact arbitration/planning boundary called by Cascade runtime."""
 
@@ -125,6 +127,8 @@ def route_curated_runtime_turn(
         arbitration=arbitration,
         semantic_proposal=semantic_proposal,
         semantic_settings=semantic_settings,
+        actor_principal_id=actor_principal_id,
+        actor_role=actor_role,
     )
     ruling = session.last_semantic_decision
     if ruling is not None:
@@ -154,6 +158,8 @@ async def route_curated_runtime_turn_with_semantics(
     arbitration: RequestArbitration | None = None,
     resolver: SemanticIntentResolver | None = None,
     semantic_settings: SemanticIntentSettings | None = None,
+    actor_principal_id: str | None = None,
+    actor_role: str = "voice_operator",
 ) -> CuratedRuntimeRoute:
     """Route one turn, consulting the semantic fallback only when warranted.
 
@@ -193,4 +199,6 @@ async def route_curated_runtime_turn_with_semantics(
         semantic_proposal=proposal,
         semantic_settings=settings,
         semantic_outcome=outcome,
+        actor_principal_id=actor_principal_id,
+        actor_role=actor_role,
     )

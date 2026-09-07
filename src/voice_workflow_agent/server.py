@@ -428,6 +428,32 @@ def _commercial_workspace()->tuple[Principal,object]:
     return principal,store
 
 
+def _voice_turn_actor()->tuple[str|None,str]:
+    """Name the person whose voice this turn is, or say that nobody is named.
+
+    A gate-releasing endpoint observation is written down with an actor. Where
+    a workspace is configured the authenticated principal is that actor. Where
+    none is, this is a single-operator host and there is no principal to name,
+    so the record carries the role and leaves the identity empty -- an unclear
+    identity is written as unclear, not filled in with "local".
+
+    This never raises. Refusing a turn because identity is unavailable is a
+    decision for the caller that needs the identity, and the turn path has
+    one such caller: the observation write, which the release requires.
+    """
+
+    try:
+        if not _workspace_settings().enabled:
+            return None,"voice_operator"
+        actor=_REQUEST_PRINCIPAL.get()
+    except Exception:  # noqa: BLE001 - an unreadable setting names nobody
+        return None,"voice_operator"
+    if actor is None:
+        return None,"voice_operator"
+    role=next(iter(sorted(item.value for item in actor.roles)),"voice_operator")
+    return actor.principal_id,role
+
+
 def _scope_catalog_resource(
     protocol_id:str,*,bind:bool=False
 )->None:
@@ -6790,6 +6816,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
             pre_transition_index=curated.current_index
+            turn_actor_principal_id,turn_actor_role=_voice_turn_actor()
             routed_turn=await route_curated_runtime_turn_with_semantics(
                 curated,
                 transcript,turn_id=turn_id,language=turn_language,
@@ -6799,7 +6826,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 arbitration=request_arbitration,
                 resolver=semantic_intent_resolver(
                     session.semantic_intent_settings),
-                semantic_settings=session.semantic_intent_settings)
+                semantic_settings=session.semantic_intent_settings,
+                actor_principal_id=turn_actor_principal_id,
+                actor_role=turn_actor_role)
             plan=routed_turn.plan
             semantic_outcome=(
                 routed_turn.semantic.public_payload()
@@ -7283,12 +7312,36 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 plan.reported_observation or plan.reported_anomaly
             )
             workspace_observation_required=bool(
-                plan.action is CuratedProtocolAction.RECORD_OBSERVATION
-                and plan.reported_observation
+                (
+                    plan.action is CuratedProtocolAction.RECORD_OBSERVATION
+                    and plan.reported_observation
+                )
+                # An endpoint observation that released a repeat step's gate
+                # is the one report this system moves the workflow on, so it
+                # is the one report that may not go unrecorded. Persisting it
+                # was previously attempted and skipped in silence whenever no
+                # experiment-session record was open -- the gate opened, the
+                # step advanced, and nothing was written down. Required here,
+                # the missing record blocks the turn instead, and the branch
+                # below rolls the advance back.
+                or (
+                    plan.state_changed
+                    and plan.reported_observation
+                    and plan.observation_predicate=="positive"
+                    and bool(curated.endpoint_observations())
+                )
             )
             if workspace_observation_requested:
                 if session.experiment_state_version is None:
                     if workspace_observation_required:
+                        # Said state_changed=False, so make it false. The
+                        # gate-releasing case advances a step before this
+                        # point, and a plan that reports no change over a
+                        # session that moved is the one outcome worse than
+                        # either. The rollback also drops the endpoint
+                        # observation, so the retry meets the gate again.
+                        if plan.state_changed:
+                            curated._restore(checkpoint)
                         failed=(
                             "실험 세션 기록이 활성화되지 않아 관찰 내용을 저장하지 못했습니다. 프로토콜 상태는 변경하지 않았습니다."
                             if turn_language=="ko" else
