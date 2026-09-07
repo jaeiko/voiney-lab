@@ -8432,12 +8432,20 @@ class CuratedProtocolSession:
                 next_step = steps[next_index]
                 localized = self._localized_fact(next_step.step_id, "current_step")
                 instruction = localized if language == "ko" and localized else next_step.instruction_source_text
-                blocker = self._current_step_readiness_blocker()
+                # An open endpoint gate counts as an open execution gate
+                # here. It used to be visible only through
+                # unsupported_repeat_until, so declaring the capability would
+                # have taken this notice away while the gate itself stayed
+                # shut -- the preview would have read as an authorisation.
+                held = (
+                    self._current_step_readiness_blocker() is not None
+                    or self.endpoint_observation_outstanding(self.current_index)
+                )
                 blocker_text = (
                     " The current step has an unresolved execution gate, so this preview does not authorize entry."
-                    if blocker is not None and language == "en" else
+                    if held and language == "en" else
                     " 현재 단계의 실행 제어가 미해결이므로 이 미리보기는 진입 승인이 아닙니다."
-                    if blocker is not None else ""
+                    if held else ""
                 )
                 response = (
                     f"Preview only — Step {next_step.source_label}: {instruction} "
@@ -8512,6 +8520,43 @@ class CuratedProtocolSession:
                         "이 단계에는 별도의 완료 기준이 문서에 명시되어 있지 않습니다. "
                         f"현재 해야 할 작업은 {current_task}입니다. 다만 {review_reason} "
                         "검토가 끝날 때까지 이 단계를 완료 처리하지 마세요."
+                    )
+            elif self.endpoint_observation_outstanding(self.current_index):
+                # The caveat above was reached at a repeat step only because
+                # readiness carried unsupported_repeat_until for it. The
+                # step's completion waits on the operator's observation
+                # whatever readiness says, so the answer states that on its
+                # own footing rather than losing the caveat along with the
+                # reason. Unlike the branch above there is no review to wait
+                # for: the person at the bench resolves this by looking.
+                interval = self.repetition_anchored_at(step.step_id)
+                stated = (
+                    " ".join(str(interval["source_text"]).split())
+                    if interval is not None else ""
+                )
+                quoted_en = f' The source states its endpoint as: “{stated}”' if stated else ""
+                quoted_ko = f' 원문이 적은 종점은 “{stated}”입니다.' if stated else ""
+                if language == "en":
+                    response = (
+                        f"The documented check for this step is: {expected_text} "
+                        "This step repeats until an observed endpoint is reached."
+                        f"{quoted_en} Do not mark it complete until you report that observation."
+                        if expected else
+                        "The document does not state a separate completion criterion for this step. "
+                        f"The current task is: {current_task} This step repeats until an "
+                        "observed endpoint is reached."
+                        f"{quoted_en} Do not mark it complete until you report that observation."
+                    )
+                else:
+                    response = (
+                        f"문서에 명시된 이 단계의 확인 기준은 다음과 같습니다: {expected_text} "
+                        "다만 이 단계는 관찰 결과가 충족될 때까지 반복하는 단계입니다."
+                        f"{quoted_ko} 그 관찰 결과를 말씀하기 전에는 이 단계를 완료 처리하지 마세요."
+                        if expected else
+                        "이 단계에는 별도의 완료 기준이 문서에 명시되어 있지 않습니다. "
+                        f"현재 해야 할 작업은 {current_task}입니다. 다만 이 단계는 "
+                        "관찰 결과가 충족될 때까지 반복하는 단계입니다."
+                        f"{quoted_ko} 그 관찰 결과를 말씀하기 전에는 이 단계를 완료 처리하지 마세요."
                     )
             elif expected:
                 response = (
