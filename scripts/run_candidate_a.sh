@@ -59,6 +59,15 @@ echo "[OK] Candidate A PDF SHA-256 verified"
 export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
 export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
 export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
+# Registering a PDF in the browser POSTs /api/protocols/{id}/analysis straight
+# away, which spends a provider call with no confirmation. This launcher walks
+# the pre-analysed curated fixture and needs no analysis of its own, so the
+# model name is cleared here: require_env treats an empty value as unset, the
+# route answers provider_configuration_missing, and an accidental upload during
+# a walkthrough cannot reach the budget. Registration and the source record are
+# unaffected. To analyse a new document, run the server without this launcher
+# (or export PROTOCOL_ANALYSIS_MODEL after it) so the call is a deliberate act.
+export PROTOCOL_ANALYSIS_MODEL=""
 export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"
 export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
 export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"

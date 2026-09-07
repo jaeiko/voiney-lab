@@ -6745,6 +6745,122 @@ class CuratedProtocolSession:
             },
         }
 
+    #: Why a forward move was refused, as a short code. The turn layer turns
+    #: these into one sentence; nothing here writes prose.
+    ADVANCE_REFUSED_REPEAT_INTERVAL_OPEN = "repeat_interval_open"
+    ADVANCE_REFUSED_STEP_NOT_STARTABLE = "next_step_not_startable"
+    ADVANCE_REFUSED_AT_FINAL_STEP = "already_at_final_step"
+    ADVANCE_REFUSED_NOT_ACTIVE = "run_not_active"
+
+    def _peek_advance_refusal(self) -> str | None:
+        """Would a forward move be refused right now, without moving?
+
+        Separate from ``advance_one_step`` so the turn layer can ask before it
+        commits to a branch, and so the answer cannot be obtained by trying.
+        """
+
+        if not self.active:
+            return self.ADVANCE_REFUSED_NOT_ACTIVE
+        steps = self.fixture.steps
+        if not 0 <= self.current_index < len(steps) - 1:
+            return self.ADVANCE_REFUSED_AT_FINAL_STEP
+        following = steps[self.current_index + 1]
+        if not self.may_begin_step(following.step_id):
+            return self.ADVANCE_REFUSED_STEP_NOT_STARTABLE
+        return None
+
+    def _advance_refusal_sentence(self, refusal: str, step, language: str) -> str:
+        """One sentence: what stopped, and what is needed. Not the rulebook.
+
+        Deliberately short. The whole rule set belongs in the system prompt;
+        what belongs here is the one thing that is true right now.
+        """
+
+        if refusal == self.ADVANCE_REFUSED_REPEAT_INTERVAL_OPEN:
+            interval = None
+            for candidate in self._repeat_intervals_by_id().values():
+                if step.step_id in candidate["repeated_step_ids"]:
+                    interval = candidate
+                    break
+            labels = {item.step_id: item.source_label for item in self.fixture.steps}
+            covered = (
+                [labels.get(item, item) for item in interval["repeated_step_ids"]]
+                if interval
+                else []
+            )
+            span = f"{covered[0]}~{covered[-1]}번" if covered else "이 반복 구간"
+            return {
+                "en": (
+                    f"{span} is a repeat interval. It stays open until you say it is "
+                    "finished, so nothing has advanced."
+                ),
+                "ko": (
+                    f"{span}은 반복 구간입니다. 끝났다고 말씀해 주실 때까지 열려 "
+                    "있으므로 단계를 넘기지 않았습니다."
+                ),
+            }.get(language, f"{span}은 반복 구간입니다. 끝났다고 말씀해 주세요.")
+        if refusal == self.ADVANCE_REFUSED_STEP_NOT_STARTABLE:
+            return {
+                "en": (
+                    "The next step is not startable yet: something on it needs a "
+                    "person. Nothing has advanced."
+                ),
+                "ko": (
+                    "다음 단계는 아직 시작할 수 없습니다. 사람이 확인해야 할 것이 "
+                    "남아 있어 단계를 넘기지 않았습니다."
+                ),
+            }.get(language, "다음 단계는 아직 시작할 수 없습니다.")
+        return {
+            "en": "Nothing has advanced.",
+            "ko": "단계를 넘기지 않았습니다.",
+        }.get(language, "단계를 넘기지 않았습니다.")
+
+    def advance_one_step(self) -> str | None:
+        """Move the run forward by one step, or refuse and say why.
+
+        The only place ``current_index`` moves forward. It used to be a bare
+        ``current_index += 1`` inside the turn handler, with the gates that
+        were supposed to guard it -- ``may_begin_step``,
+        ``may_leave_repeat_interval`` -- sitting beside it as methods nobody
+        called. A rule enforced nowhere is a rule the model is trusted to
+        follow, and this system's whole premise is that it must not have to be.
+
+        Returns None when the move happened, or a short refusal code when it
+        did not. A refusal moves nothing and changes nothing: it does not
+        advance, does not mark the step complete, and does not decide what the
+        run should do instead. The person's next words are still theirs -- this
+        closes a door, it does not open a different one.
+        """
+
+        if not self.active:
+            return self.ADVANCE_REFUSED_NOT_ACTIVE
+        steps = self.fixture.steps
+        if not 0 <= self.current_index < len(steps):
+            return self.ADVANCE_REFUSED_AT_FINAL_STEP
+        if self.current_index >= len(steps) - 1:
+            return self.ADVANCE_REFUSED_AT_FINAL_STEP
+        following = steps[self.current_index + 1]
+        # Everything may_begin_step already answered for: an unread page
+        # nobody acknowledged, a hazard whose words have not been read out, a
+        # repetition with no count. Consulted here rather than left unused
+        # beside the advance, which is what it was.
+        #
+        # may_leave_repeat_interval is deliberately *not* consulted here, and
+        # the reason is a measurement rather than a preference. A repeat-until
+        # step is already gated: readiness carries
+        # UNSUPPORTED_REPEAT_UNTIL for it, the turn handler refuses the
+        # transition, and only a user-reported positive observation releases
+        # it. Adding a second gate over the same transition failed fourteen
+        # tests that prove that path works, because the observation satisfies
+        # the existing gate and not this one. Two mechanisms for one judgement
+        # need reconciling, not stacking, and the observation is recorded as a
+        # one-turn authorisation rather than a durable fact, so there is
+        # nothing here for this predicate to read yet.
+        if not self.may_begin_step(following.step_id):
+            return self.ADVANCE_REFUSED_STEP_NOT_STARTABLE
+        self.current_index += 1
+        return None
+
     def _current_step_readiness_blocker(
         self,
         observation_predicate: str | None = None,
@@ -8389,10 +8505,42 @@ class CuratedProtocolSession:
                     observation_predicate=intent.observation_predicate,
                     observation_outcome=intent.observation_outcome,
                 )
+            elif (
+                self.current_index < len(steps) - 1
+                and (advance_refusal := self._peek_advance_refusal()) is not None
+            ):
+                # A gate said no. Say which one, in one sentence, and stop.
+                # Nothing is advanced and nothing is marked complete.
+                self._block_reason = advance_refusal
+                step = steps[self.current_index]
+                response = self._advance_refusal_sentence(
+                    advance_refusal, step, language
+                )
+                plan = CuratedProtocolTurnPlan(
+                    action=CuratedProtocolAction.NEXT,
+                    display_text=response,
+                    speech_text=response,
+                    speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                    facts=self.fixture.facts_for_step(self.current_index),
+                    step_label=step.source_label,
+                    final_step=self.current_index == len(steps) - 1,
+                    state_changed=False,
+                    intent_kind=intent.intent_kind,
+                    reported_completion=intent.reported_completion,
+                    requested_transition=intent.requested_transition,
+                    requested_followup=intent.requested_followup,
+                    target_step=intent.target_step,
+                    reported_observation=intent.reported_observation,
+                    observation_predicate=intent.observation_predicate,
+                    observation_outcome=intent.observation_outcome,
+                )
             elif self.current_index < len(steps) - 1:
                 early_exit = self._record_early_step_timer_exit()
                 self._clear_step_timer()
-                self.current_index += 1
+                if self.advance_one_step() is not None:
+                    raise CuratedProtocolFixtureError(
+                        "Step advance was refused after its gates had passed."
+                    )
                 self._block_reason = None
                 changed = True
                 prefix = "Advanced once."
