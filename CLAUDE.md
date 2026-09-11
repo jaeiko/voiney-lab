@@ -12,15 +12,20 @@ system). This repository root **is** the project — there is no nested
 `voice-workflow-agent/` wrapper directory; develop directly from here.
 
 Authoritative docs, in order of precedence: `README.md` (current runnable
-contract) → `docs/ARCHITECTURE_MAP.md` and
-`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md` (architecture and phase
-evidence) → `docs/COMMERCIALIZATION_PASS4_REPORT.md` (current handoff of
-record) → `docs/MIGRATION_NOTES.md` (schema history) → `AGENTS.md` and
-`.agent/*.md` (contributor design constraints). Older phase-numbered or
+contract) → `AGENTS.md` and `.agent/*.md` (contributor design constraints),
+where `.agent/architecture.md` is the primary source for the current
+architecture → `docs/ARCHITECTURE_MAP.md` (supporting architecture
+snapshot) → `docs/MIGRATION_NOTES.md` (schema history). Older phase-numbered or
 `CODEX_*`-prefixed documents under `docs/` are historical evidence; they
 cannot override the documents above. `docs/course-archive/` holds the
 original course materials this repository grew out of — leave them as
 historical record, not something to build against.
+
+## Historical archive
+
+`docs/archive/` holds superseded phase reports. They are historical
+record only. Do not read, cite, or base decisions on them unless the
+user explicitly asks about a specific past decision.
 
 ## Mandatory preflight
 
