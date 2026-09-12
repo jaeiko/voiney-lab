@@ -54,6 +54,10 @@ from voice_workflow_agent.semantic_intent import (
 
 DEVELOPMENT_FIXTURE_STATUS = "development_only_not_final_acceptance"
 DEVELOPMENT_FIXTURE_MODE = "offline_curated_development_fixture"
+#: The one protocol whose curated prose answers were human-reviewed against the
+#: source. Curated text keyed by a reagent name is only true of the document it
+#: was reviewed against, so every block of it is gated on this identity.
+CANDIDATE_A_PROTOCOL_ID = "candidate-a-curated-development-v1"
 _CANONICAL_SCHEMA_SHA256 = (
     "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
 )
@@ -5252,7 +5256,7 @@ class CuratedProtocolSession:
         frame = self.current_step_semantic_frame()
         facts = self.related_facts(transcript)
         knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
-        candidate_a = self.fixture.protocol_id == "candidate-a-curated-development-v1"
+        candidate_a = self.fixture.protocol_id == CANDIDATE_A_PROTOCOL_ID
         claims: list[ClaimRequest] = []
 
         def add(
@@ -6405,6 +6409,7 @@ class CuratedProtocolSession:
         entities = plan.requested_entities or (
             (plan.requested_entity,) if plan.requested_entity else ()
         )
+        candidate_a = self.fixture.protocol_id == CANDIDATE_A_PROTOCOL_ID
         if plan.claim_requests:
             admitted = tuple(
                 claim for claim in plan.claim_requests
@@ -6610,6 +6615,15 @@ class CuratedProtocolSession:
             ),
         }
         explanations = explanations_ko if language == "ko" else explanations_en
+        if not candidate_a:
+            # These curated explanations were reviewed only for Candidate A.
+            # Arbitrary PDFs may share entity names but not context or authority.
+            # Every entry states what *this protocol* does with the reagent, so
+            # on any other document it would be a fabricated protocol claim.
+            # Emptying the map routes every entity down the already-existing
+            # unknown-entity branch below, which points at approved references
+            # instead of answering.
+            explanations = {}
         for entity in entities:
             if entity in explanations:
                 sections.append(explanations[entity])
@@ -6622,7 +6636,7 @@ class CuratedProtocolSession:
                 )
                 sections.append((fallback_label, fallback_text))
         relation = ""
-        if {"hplc_water", "ambic"}.issubset(entities):
+        if candidate_a and {"hplc_water", "ambic"}.issubset(entities):
             relation = (
                 "이 프로토콜에서는 HPLC water에 AMBIC를 녹여 "
                 "Solution A와 B의 기본 용액을 만듭니다."
@@ -6652,7 +6666,11 @@ class CuratedProtocolSession:
             if relation:
                 rel_title = "프로토콜 내 관계" if language == "ko" else "Protocol Relationship"
                 formatted_blocks.append(f"### {rel_title}\n{relation}")
-            if "difference" in plan.question_dimensions and "hplc_water" in entities:
+            if (
+                candidate_a
+                and "difference" in plan.question_dimensions
+                and "hplc_water" in entities
+            ):
                 limitation = (
                     "활성 프로토콜은 HPLC water와 일반 물의 품질 차이를 정의하지 않으므로 그 차이는 별도 권위 자료가 필요합니다."
                     if language == "ko" else
@@ -6673,7 +6691,7 @@ class CuratedProtocolSession:
                         "In this protocol, it is the water used to prepare the AMBIC solution."
                     ),
                 }
-                if entities and entities[0] in role_notes:
+                if candidate_a and entities and entities[0] in role_notes:
                     role_title = "역할" if language == "ko" else "Role"
                     formatted_blocks.append(f"### {role_title}\n{role_notes[entities[0]]}")
             direct = "\n\n".join(formatted_blocks)
@@ -6699,7 +6717,10 @@ class CuratedProtocolSession:
             locally_supported.add("role")
         if any(fact.kind == "warning" for fact in facts):
             locally_supported.add("safety")
-        if {"hplc_water", "ambic"}.issubset(entities):
+        if candidate_a and {"hplc_water", "ambic"}.issubset(entities):
+            # Kept in step with the gate on ``relation`` above: claiming the
+            # relationship is locally supported while emitting no relationship
+            # text would strand the dimension instead of escalating it.
             locally_supported.add("relationship")
         if any(entity in {"solution_a", "solution_b"} for entity in entities):
             locally_supported.add("composition")
