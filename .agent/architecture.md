@@ -26,6 +26,20 @@ Only the Cascade path exists. The server advertises `pipelines:["cascade"]` and 
 non-secret voice profile. `TTS_VOICE` defaults to `leo`; there is no active
 Realtime/Native configuration or transport.
 
+Where the 16 kHz above comes from: one module constant, `SAMPLE_RATE` in
+`audio.py`, which the rest of the pipeline follows. `SAMPLES_PER_FRAME` and
+`FRAME_BYTES` are derived from it, `vad.py` passes it to `is_speech`, and
+`pcm_to_wav` defaults its header to it. It is not a value the VAD forces:
+`webrtcvad` accepts 8000, 16000, 32000, and 48000 (measured against the
+library's own `valid_rate_and_frame_length`; 22050 and 44100 are refused).
+Whether a specific provider requires it is **not** something this repository
+records — no xAI STT rate specification is present here, so do not state one.
+The browser resamples to it once, in `resamplePcm16`, from whatever rate its
+`AudioContext` chose. Note that the input and output paths each hold their own
+`16000` literals — the server's `ready` event and STT diagnostic records on one
+side, the TTS `output_format` and the browser's `createBuffer` calls on the
+other — so changing capture and changing playback are separate edits.
+
 ## Turn lifecycle and ownership
 
 `ListenerSession` owns configuration ID, protocol/revision attachment, current
