@@ -649,10 +649,20 @@ adds `pytest` and `httpx`):
 
 ```bash
 python -m pip install -e '.[test]'
+VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
+VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
+VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
 ```
+
+Pass those three flags in **both** baselines below. `server.py` calls
+`load_dotenv`, so a repo-root `.env` that enables the workspace or experiment
+reports silently changes the result; forcing the flags off per command
+reproduces the documented numbers without editing `.env`. In a tree with no
+`.env` in scope (CI, a fresh worktree) they are a no-op, so passing them is
+always safe and never wrong.
 
 Browser acceptance coverage for the researcher/reviewer/admin workspaces (desktop
 and mobile viewports) lives under `tests/e2e/` and runs separately via
@@ -678,9 +688,88 @@ source-identity checks and both `scripts/evaluate_candidate_a_*.py`
 evaluators. `tests/conftest.py` skips those modules (with an explicit reason)
 whenever the PDF is absent, and the CI workflow does the same for the
 evaluator scripts, rather than faking the file or hiding a real failure
-behind it. Everything else - the full non-PDF-dependent test suite, the
-Playwright browser suite, and `python scripts/replay_turns.py` - runs
-identically in CI and locally.
+behind it. The Playwright browser suite and `python scripts/replay_turns.py`
+run identically in CI and locally; the pytest suite does **not** — see the two
+baselines below.
+
+### Two pytest baselines
+
+The pass count depends on whether the externally licensed source PDFs are
+present, so **a reported pass count is meaningless without saying which
+condition produced it.** Always name the condition when quoting a number.
+
+Both conditions use the same command, including the three flags above.
+
+**Condition A — licensed sources present** (the maintainer's tree;
+`data/runtime/candidate-a-source/in-gel-digestion.pdf` plus the ANKOM,
+intracellular-metabolite and dynamic-headspace PDFs):
+
+```
+1521 passed, 1293 subtests passed in 84.91s
+```
+
+Zero skipped, exit code 0. Measured 2026-09-11 at `bfc292b`.
+
+**Condition B — licensed sources absent** (CI, or any fresh clone or
+worktree, since `/data/runtime/` is git-ignored):
+
+```
+11 failed, 1035 passed, 477 skipped, 724 subtests passed in 40.08s
+```
+
+Measured 2026-09-12 at `bfc292b` in a detached `git worktree`, which is the
+non-destructive way to reproduce this condition: never move, rename, or delete
+the real PDF to simulate its absence.
+
+The two totals are not directly comparable — collection is partly dynamic
+(`test_stored_payloads_still_load.py` discovers stores under `data/runtime`,
+finding none in condition B).
+
+**Condition B is not green, and that is a real gap, not an expected skip.**
+All 11 failures raise `ProtocolPdfNotFoundError` from three modules that need
+a local PDF but are *not* in the `conftest.py` skip list and whose own
+per-test guards are incomplete:
+
+- `tests/test_extraction_cross_check.py` — 4 failures in
+  `UnmappedCodePointDecisionTests` (sibling classes in the same file do guard
+  on `IN_GEL.exists()`; these do not)
+- `tests/test_numbered_label_trigger.py` — 5 failures and 2 subtest failures
+  across `LocalSourceTriggerTests`, `FixtureScopeTests`, and
+  `FixtureScopeKnownLimitationTests`
+- `tests/test_protocol_provider_diagnostics.py` — 1 failure in
+  `test_diagnostic_is_read_only_for_server_owned_protocol_state`
+
+All three modules were last changed on 2026-09-03/05, which is after the most
+recent recorded CI run (2026-08-30), so no CI run has yet exercised them in
+this state. Closing the gap means extending the guards or the skip list, which
+is a test change and is deliberately **not** made here.
+
+The 14 modules `tests/conftest.py` does skip when the PDF is absent:
+
+```
+tests/test_candidate_a_acceptance_phase2.py
+tests/test_candidate_a_final_hardening.py
+tests/test_candidate_a_live_voice_generalization.py
+tests/test_candidate_a_research_hardening.py
+tests/test_candidate_a_websocket_integration.py
+tests/test_curated_protocol_cascade.py
+tests/test_experiment_reports.py
+tests/test_phase3_acceptance.py
+tests/test_protocol_catalog.py
+tests/test_runtime_intent_routing.py
+tests/test_safety_pack.py
+tests/test_semantic_intent_fallback.py
+tests/test_stability_and_semantic_hardening.py
+tests/test_transcript_admission.py
+```
+
+Two of these carry weight out of proportion to their number:
+`test_protocol_catalog.py` holds the only active test of the
+"registration requires `application/pdf`" premise, and
+`test_curated_protocol_cascade.py` is the largest test module in the
+repository. Work that changes either premise should be verified under
+condition A, because under condition B the tests that defend them are not
+running.
 
 Tests are provider-free unless explicitly marked otherwise. Connector and
 eLabFTW contracts use fakes; the real adapters remain in the production code
