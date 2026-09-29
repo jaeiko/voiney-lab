@@ -127,10 +127,12 @@ instead of discarding it.
 
 ## Branch workflow
 
-Work happens on feature/refactor branches off `main`; do not push directly
-to `main`. Commit each phase of multi-phase work separately with a
-descriptive message, and confirm with the user before pushing to a shared
-remote branch or renaming/transferring the GitHub repository itself.
+Branch from `dev` and open pull requests into `dev`. `main` is the version
+deployed to pilot labs and only receives merges from `dev`; never push
+directly to `main`. Branch naming, the pre-PR checks, and file ownership are
+in `docs/GIT_WORKFLOW.md`. Commit each phase of multi-phase work separately
+with a descriptive message, and confirm with the user before pushing to a
+shared remote branch or renaming/transferring the GitHub repository itself.
 
 ## Historical archive
 

@@ -85,9 +85,7 @@ The current component, authority, and persistence design is documented in
 [`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md) is a labeled
 pre-extension snapshot. Current capabilities and documentation authority are
 indexed in [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
-Implementation and phase evidence are tracked in
-[`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`](docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md),
-with forward-only storage details in
+Forward-only storage details are in
 [`docs/MIGRATION_NOTES.md`](docs/MIGRATION_NOTES.md).
 
 For operators and pilot participants, start with the
@@ -773,10 +771,8 @@ running.
 
 Tests are provider-free unless explicitly marked otherwise. Connector and
 eLabFTW contracts use fakes; the real adapters remain in the production code
-path. The current integration classification and exact historical live-test
-evidence are in
-[`docs/COMMERCIALIZATION_PASS4_REPORT.md`](docs/COMMERCIALIZATION_PASS4_REPORT.md)
-and the current [`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
+path. The current integration classification is in the
+[`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
 
 ## Security and privacy boundaries
 
