@@ -28,7 +28,7 @@ source-linked protocol evidence.
 
 ## Current architecture map
 
-- `src/voice_workflow_agent/server.py`: FastAPI, WebSocket, Cascade voice loop,
+- `src/voiney_lab/server.py`: FastAPI, WebSocket, Cascade voice loop,
   protocol APIs, external visual jobs, admin boundary.
 - `intent_arbitration.py`: shared deterministic request classifier.
 - `runtime_routing.py`: production curated-protocol routing boundary.

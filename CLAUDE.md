@@ -68,7 +68,7 @@ rule 2–3 for the full boundary. (A pre-existing, older `procedures.py` /
 `procedure_store.py` workflow stack runs alongside the production
 `ExperimentSession` / `CuratedProtocolSession` stack. It is explicitly
 config-gated off by default — the module docstring at the top of
-`src/voice_workflow_agent/procedures.py` states the two environment variables
+`src/voiney_lab/procedures.py` states the two environment variables
 that must both be set and why the commercial launcher sets neither. Mutual
 exclusivity is regression-tested by
 `test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists`
