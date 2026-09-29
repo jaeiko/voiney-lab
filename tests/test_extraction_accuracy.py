@@ -25,7 +25,7 @@ from voiney_lab.protocol_extraction_accuracy import (
 )
 
 IN_GEL = Path("data/runtime/candidate-a-source/in-gel-digestion.pdf")
-DEV = Path("data/development_protocols")
+DEV = Path("data/fixtures/development_protocols")
 
 
 def _protocol(steps: tuple[tuple[str, str], ...], *, page: int = 1):

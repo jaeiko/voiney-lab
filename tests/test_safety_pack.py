@@ -35,9 +35,9 @@ from voiney_lab.safety_pack import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
-PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
-SOURCE_PDF = ROOT / "data/development_protocols/candidate_a_source_in_gel_digestion.pdf"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
+SOURCE_PDF = ROOT / "data/fixtures/development_protocols/candidate_a_source_in_gel_digestion.pdf"
 if not SOURCE_PDF.exists():
     SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 

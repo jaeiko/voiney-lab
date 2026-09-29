@@ -36,12 +36,12 @@ def main() -> int:
         default=ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf",
     )
     args = parser.parse_args()
-    fixture_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+    fixture_path = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
     fixture = load_curated_protocol_fixture(
         fixture_path, fixture_path.with_suffix(".provenance.json"), args.source_pdf
     )
     corpus = json.loads((
-        ROOT / "tests/fixtures/candidate_a_grounded_voice_eval.json"
+        ROOT / "data/fixtures/evaluation/candidate_a_grounded_voice_eval.json"
     ).read_text(encoding="utf-8"))
     route_total = route_passed = whole_total = whole_passed = 0
     stop_total = stop_passed = noise_total = noise_passed = 0

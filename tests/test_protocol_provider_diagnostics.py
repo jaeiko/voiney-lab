@@ -26,7 +26,7 @@ from voiney_lab.protocol_provider_diagnostics import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CURATED_FIXTURE = (
-    ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+    ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 )
 CURATED_PROVENANCE = CURATED_FIXTURE.with_suffix(".provenance.json")
 CURATED_SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"

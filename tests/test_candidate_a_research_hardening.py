@@ -38,8 +38,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class CandidateAResearchHardeningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.fixture_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
-        cls.provenance_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+        cls.fixture_path = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+        cls.provenance_path = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
         cls.pdf_path = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         cls.fixture = load_curated_protocol_fixture(
             cls.fixture_path,

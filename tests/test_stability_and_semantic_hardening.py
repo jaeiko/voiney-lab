@@ -27,7 +27,7 @@ from voiney_lab.vad import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data" / "development_protocols"
+DATA = ROOT / "data" / "fixtures" / "development_protocols"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 

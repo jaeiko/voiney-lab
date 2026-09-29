@@ -781,9 +781,9 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[1]
         self.fixture = load_curated_protocol_fixture(
             repository
-            / "data/development_protocols/candidate_a_curated_analysis.json",
+            / "data/fixtures/development_protocols/candidate_a_curated_analysis.json",
             repository
-            / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
+            / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json",
             (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"),
         )
         self.settings = ProtocolPersistenceSettings(

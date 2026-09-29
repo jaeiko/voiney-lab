@@ -40,9 +40,9 @@ from voiney_lab.curated_protocol import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = (
-    ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+    ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 )
 IN_GEL = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
 HEADSPACE = ROOT / "usingdynamicheadspacecollections.pdf"

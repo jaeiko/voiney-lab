@@ -275,8 +275,8 @@ class ExperimentReportStoreTests(unittest.TestCase):
         from voiney_lab.curated_protocol import load_curated_protocol_fixture
         from voiney_lab.experiment_reports import build_grounded_report_context, ReportWriterBrain
 
-        fixture_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.json"
-        provenance_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+        fixture_path = Path(__file__).resolve().parents[1] / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+        provenance_path = Path(__file__).resolve().parents[1] / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
         pdf_path = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         fixture = load_curated_protocol_fixture(fixture_path, provenance_path, pdf_path)
         protocol = fixture.draft.protocol
