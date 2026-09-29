@@ -39,12 +39,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     fixture = load_curated_protocol_fixture(
-        ROOT / "data/development_protocols/candidate_a_curated_analysis.json",
-        ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
+        ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json",
+        ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json",
         args.source_pdf,
     )
     dataset = json.loads((
-        ROOT / "data/evaluation/candidate_a_real_voice_hardening.json"
+        ROOT / "data/fixtures/evaluation/candidate_a_real_voice_hardening.json"
     ).read_text(encoding="utf-8"))
     correct = 0
     mutation_false_positives = 0

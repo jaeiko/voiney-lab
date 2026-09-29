@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
 REFERENCE = (
-    ROOT / "data" / "development_protocols" / "candidate_a_curated_analysis.json"
+    ROOT / "data" / "fixtures" / "development_protocols" / "candidate_a_curated_analysis.json"
 )
 PROVENANCE = REFERENCE.with_name(
     "candidate_a_curated_analysis.provenance.json"

@@ -490,8 +490,8 @@ def resolve_safety_pack(
                 status="unavailable",
             )
 
-        # In demo/test scope, fall back to demo safety manual fixture in data/
-        demo_json_path = Path(__file__).resolve().parents[2] / "data" / "approved_safety_manual.demo.json"
+        # In demo/test scope, fall back to demo safety manual fixture in data/fixtures/
+        demo_json_path = Path(__file__).resolve().parents[2] / "data" / "fixtures" / "approved_safety_manual.demo.json"
         if demo_json_path.is_file():
             try:
                 demo_records = json.loads(demo_json_path.read_text(encoding="utf-8"))

@@ -23,8 +23,8 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = load_curated_protocol_fixture(
-            ROOT / "data/development_protocols/candidate_a_curated_analysis.json",
-            ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
+            ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json",
+            ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json",
             (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"),
         )
 

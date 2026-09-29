@@ -24,9 +24,9 @@ from voiney_lab.protocol_claim_analysis import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
-OUT = ROOT / "data/development_protocols/candidate_a_curated_analysis.timers.json"
+OUT = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json"
 STATUS = "development_only_not_final_acceptance"
 _CLOCK = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})")
 _WORDED = re.compile(r"(\d{1,3})\s*(min|h)\b", re.I)

@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
-PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"
+FIXTURE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF="${CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
 PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"
 

@@ -23,8 +23,8 @@ netted, ``audit_reference`` notes travel beside the score instead of being
 folded into it, and every payload says which of the two it is.
 
     scripts/score_extraction.py SOURCE.pdf \\
-        --reference   data/development_protocols/<name>.json \\
-        --provenance  data/development_protocols/<name>.provenance.json
+        --reference   data/fixtures/development_protocols/<name>.json \\
+        --provenance  data/fixtures/development_protocols/<name>.provenance.json
 
 Nothing here is specific to one document: the source, the reference and the
 chunk plan all come from the arguments and from the planner.

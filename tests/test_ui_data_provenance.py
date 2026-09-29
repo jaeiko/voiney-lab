@@ -18,8 +18,8 @@ import json
 import unittest
 from pathlib import Path
 
-FIXTURE = Path("data/development_protocols/candidate_a_curated_analysis.json")
-VISUALS = Path("data/development_protocols/candidate_a_curated_analysis.visuals.json")
+FIXTURE = Path("data/fixtures/development_protocols/candidate_a_curated_analysis.json")
+VISUALS = Path("data/fixtures/development_protocols/candidate_a_curated_analysis.visuals.json")
 LAUNCHER = Path("scripts/run_candidate_a.sh")
 
 
@@ -86,7 +86,7 @@ class TheTimerIsEvidenceBoundTests(unittest.TestCase):
 
     def test_the_manifest_exists_and_is_bound_to_both_digests(self) -> None:
         path = Path(
-            "data/development_protocols/candidate_a_curated_analysis.timers.json"
+            "data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json"
         )
         if not path.exists():
             self.skipTest(f"{path} is not present.")
@@ -102,7 +102,7 @@ class TheTimerIsEvidenceBoundTests(unittest.TestCase):
         )
 
         path = Path(
-            "data/development_protocols/candidate_a_curated_analysis.timers.json"
+            "data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json"
         )
         if not path.exists():
             self.skipTest(f"{path} is not present.")
@@ -125,7 +125,7 @@ class TheTimerIsEvidenceBoundTests(unittest.TestCase):
         """
 
         path = Path(
-            "data/development_protocols/candidate_a_curated_analysis.timers.json"
+            "data/fixtures/development_protocols/candidate_a_curated_analysis.timers.json"
         )
         if not path.exists():
             self.skipTest(f"{path} is not present.")
@@ -206,7 +206,7 @@ class TheImageStepLinkTests(unittest.TestCase):
 
         manifests = sorted(
             path.name
-            for path in Path("data/development_protocols").glob("*visuals*")
+            for path in Path("data/fixtures/development_protocols").glob("*visuals*")
         )
         self.assertEqual(
             manifests, ["candidate_a_curated_analysis.visuals.json"]

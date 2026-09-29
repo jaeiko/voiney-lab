@@ -52,9 +52,9 @@ from voiney_lab.vad import TurnState
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = (
-    ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+    ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 )
 SOURCE_PDF = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
 
