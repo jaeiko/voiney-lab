@@ -7,7 +7,7 @@ import math
 import os
 from collections.abc import Mapping
 
-from voice_workflow_agent.audio import FRAME_MS
+from voiney_lab.audio import FRAME_MS
 
 
 class ConfigurationError(ValueError):

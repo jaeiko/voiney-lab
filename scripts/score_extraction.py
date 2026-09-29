@@ -39,13 +39,13 @@ from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
 
-from voice_workflow_agent.chunk_analysis_cache import (
+from voiney_lab.chunk_analysis_cache import (
     ChunkAnalysisCache,
     key_for_chunk,
 )
-from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.curated_protocol import load_curated_protocol_fixture
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     assemble_validated_protocol_claims,
@@ -53,11 +53,11 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     generate_page_evidence_segments,
     prepare_chunk_claim_request_context,
 )
-from voice_workflow_agent.protocol_extraction_accuracy import (
+from voiney_lab.protocol_extraction_accuracy import (
     audit_reference,
     score_extraction,
 )
@@ -153,7 +153,7 @@ def _declared_step_values(protocol):
 def _claimed_values_by_step(merged, label_of_step):
     """Values the merge claims, grouped by the step each one qualifies."""
 
-    from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+    from voiney_lab.protocol_claim_analysis import ClaimCategory
 
     kind_of = {
         ClaimCategory.DURATION: "durations",

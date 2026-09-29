@@ -5,8 +5,8 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 
-from voice_workflow_agent.document_store import SCHEMA
-from voice_workflow_agent.procedure_definitions import (
+from voiney_lab.document_store import SCHEMA
+from voiney_lab.procedure_definitions import (
     ProcedureDefinitionError,
     load_procedure_definitions,
 )

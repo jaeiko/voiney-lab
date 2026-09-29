@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from voice_workflow_agent.report_projection import project_protocol_for_report, project_step_for_report
+from voiney_lab.report_projection import project_protocol_for_report, project_step_for_report
 
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -859,7 +859,7 @@ def build_grounded_report_context(
     stored_protocol = None
     protocol_revision = str(report_data.get("protocol_revision") or "1")
     try:
-        from voice_workflow_agent.server import _open_protocol_catalog, _configured_candidate_fixture, server_config
+        from voiney_lab.server import _open_protocol_catalog, _configured_candidate_fixture, server_config
         cfg = server_config()
         candidate = _configured_candidate_fixture(cfg)
         if candidate is not None and candidate.protocol_id == protocol_id:

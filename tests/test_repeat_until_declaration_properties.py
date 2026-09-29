@@ -41,8 +41,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
@@ -296,11 +296,11 @@ class ObservationWithoutARecordTests(unittest.TestCase):
         cls.fixture = _curated_fixture()
 
     def test_a_release_with_no_experiment_record_is_refused_and_rolled_back(self):
-        from voice_workflow_agent.experiment_reports import ExperimentReportStore
-        from voice_workflow_agent.language import Transcription
-        from voice_workflow_agent.server import ListenerSession, run_turn
-        from voice_workflow_agent.tools import ToolContext
-        from voice_workflow_agent.vad import TurnState
+        from voiney_lab.experiment_reports import ExperimentReportStore
+        from voiney_lab.language import Transcription
+        from voiney_lab.server import ListenerSession, run_turn
+        from voiney_lab.tools import ToolContext
+        from voiney_lab.vad import TurnState
 
         from tests.test_curated_protocol_cascade import Socket
 
@@ -347,13 +347,13 @@ class ObservationWithoutARecordTests(unittest.TestCase):
                 session.detector.state = TurnState.PROCESSING
                 socket = Socket()
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=Transcription(observation, "ko"),
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ) as tts, patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 2, 1))
@@ -383,11 +383,11 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
 
         if not IN_GEL.is_file():
             self.skipTest(f"{IN_GEL} is not present.")
-        from voice_workflow_agent.experiment_protocol_store import (
+        from voiney_lab.experiment_protocol_store import (
             ProtocolPersistenceSettings,
             initialize_protocol_store,
         )
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
@@ -417,7 +417,7 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
         self.revision_id = "pdf-1-analysis-1"
 
     def test_resolving_every_ambiguity_alone_does_not_clear_the_wall(self) -> None:
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             AMBIGUITY_SINGLE_AUTHORITATIVE,
             ProtocolCatalogUnavailableError,
         )
@@ -455,7 +455,7 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
             self.catalog.load_executable_fixture(self.protocol_id)
 
     def test_the_two_remaining_reasons_are_both_reviewer_clearable(self) -> None:
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         analysis = self.store.get_analysis_revision(self.protocol_id, 1, 1)
         remaining = sorted(set(analysis.readiness.reason_codes))
@@ -502,11 +502,11 @@ class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
         )
 
     def _catalog(self, directory):
-        from voice_workflow_agent.experiment_protocol_store import (
+        from voiney_lab.experiment_protocol_store import (
             ProtocolPersistenceSettings,
             initialize_protocol_store,
         )
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, Path(directory) / "catalog")
@@ -555,7 +555,7 @@ class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
         standing.
         """
 
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             ProtocolCatalogUnavailableError,
         )
 

@@ -10,16 +10,16 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
 )
-from voice_workflow_agent.server import (
+from voiney_lab.server import (
     ListenerSession,
     ServerConfig,
     Transcription,
@@ -27,11 +27,11 @@ from voice_workflow_agent.server import (
     run_turn,
     voice_socket,
 )
-from voice_workflow_agent.semantic_intent import SemanticIntentSettings
-import voice_workflow_agent.server as server_module
+from voiney_lab.semantic_intent import SemanticIntentSettings
+import voiney_lab.server as server_module
 from tests.development_activation import development_activation_recorded
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceSettings,
     initialize_workspace_store,
@@ -189,23 +189,23 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             socket = Socket()
 
             with patch(
-                "voice_workflow_agent.server.server_config",
+                "voiney_lab.server.server_config",
                 return_value=config,
             ), patch(
-                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                "voiney_lab.server.ExperimentReportSettings.from_environment",
                 return_value=report_settings,
             ), patch(
-                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ), patch(
-                "voice_workflow_agent.server.ProcedureStore",
+                "voiney_lab.server.ProcedureStore",
             ), patch(
-                "voice_workflow_agent.server.load_procedure_definitions",
+                "voiney_lab.server.load_procedure_definitions",
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 return_value=b"\x00\x00" * 320,
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate_to_thread,
             ):
                 asyncio.run(voice_socket(socket))
@@ -302,12 +302,12 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             }
             first = Socket(initial)
             with patch.dict("os.environ", environment, clear=False), patch(
-                "voice_workflow_agent.server.server_config", return_value=config
+                "voiney_lab.server.server_config", return_value=config
             ), patch(
-                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                "voiney_lab.server.ExperimentReportSettings.from_environment",
                 return_value=ExperimentReportSettings(False),
             ), patch(
-                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ):
                 asyncio.run(voice_socket(first))
@@ -329,12 +329,12 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             }
             second = Socket(recovery)
             with patch.dict("os.environ", environment, clear=False), patch(
-                "voice_workflow_agent.server.server_config", return_value=config
+                "voiney_lab.server.server_config", return_value=config
             ), patch(
-                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                "voiney_lab.server.ExperimentReportSettings.from_environment",
                 return_value=ExperimentReportSettings(False),
             ), patch(
-                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ):
                 asyncio.run(voice_socket(second))
@@ -417,15 +417,15 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             }
             patches = (
                 patch(
-                    "voice_workflow_agent.server.server_config",
+                    "voiney_lab.server.server_config",
                     return_value=config,
                 ),
                 patch(
-                    "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                    "voiney_lab.server.ExperimentReportSettings.from_environment",
                     return_value=ExperimentReportSettings(False),
                 ),
                 patch(
-                    "voice_workflow_agent.server.load_curated_protocol_fixture",
+                    "voiney_lab.server.load_curated_protocol_fixture",
                     return_value=self.fixture,
                 ),
             )
@@ -675,16 +675,16 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 return listener
 
             listener_context = patch(
-                "voice_workflow_agent.server.ListenerSession",
+                "voiney_lab.server.ListenerSession",
                 side_effect=listener_factory,
             )
         with patch.dict("os.environ", environment, clear=False), patch(
-            "voice_workflow_agent.server.server_config", return_value=config
+            "voiney_lab.server.server_config", return_value=config
         ), patch(
-            "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+            "voiney_lab.server.ExperimentReportSettings.from_environment",
             return_value=ExperimentReportSettings(False),
         ), patch(
-            "voice_workflow_agent.server.load_curated_protocol_fixture",
+            "voiney_lab.server.load_curated_protocol_fixture",
             return_value=self.fixture,
         ), listener_context:
             asyncio.run(voice_socket(socket))
@@ -731,13 +731,13 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         listener.active_turn_id = turn_id
         listener.detector.state = TurnState.PROCESSING
         with patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=client_factory,
         ):
             asyncio.run(run_turn(
@@ -886,13 +886,13 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                     return function(*args, **kwargs)
 
                 with patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ), patch(
-                    "voice_workflow_agent.server.AsyncOpenAI",
+                    "voiney_lab.server.AsyncOpenAI",
                     side_effect=AssertionError(
                         "LLM must not run for current-step control"
                     ),
@@ -908,15 +908,15 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 await task
 
             with patch.dict("os.environ", environment, clear=False), patch(
-                "voice_workflow_agent.server.server_config", return_value=config
+                "voiney_lab.server.server_config", return_value=config
             ), patch(
-                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                "voiney_lab.server.ExperimentReportSettings.from_environment",
                 return_value=ExperimentReportSettings(False),
             ), patch(
-                "voice_workflow_agent.server.load_curated_protocol_fixture",
+                "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ), patch(
-                "voice_workflow_agent.server.ListenerSession",
+                "voiney_lab.server.ListenerSession",
                 side_effect=listener_factory,
             ):
                 asyncio.run(recovered_current_step_scenario())
@@ -1027,10 +1027,10 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     new=blocked_synthesize,
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=controlled_thread,
                 ):
                     asyncio.run(cancel_after_durable_start())
@@ -1102,7 +1102,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.server._record_workspace_experiment_progress",
+                    "voiney_lab.server._record_workspace_experiment_progress",
                     side_effect=WorkspaceConflictError("synthetic stale version"),
                 ):
                     self._run_curated_turn(
@@ -1144,7 +1144,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.curated_protocol.time.time",
+                    "voiney_lab.curated_protocol.time.time",
                     return_value=current_time,
                 ):
                     self._run_curated_turn(
@@ -1213,7 +1213,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.curated_protocol.time.time",
+                    "voiney_lab.curated_protocol.time.time",
                     return_value=current_time,
                 ):
                     self._run_curated_turn(
@@ -1244,7 +1244,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.curated_protocol.time.time",
+                    "voiney_lab.curated_protocol.time.time",
                     return_value=current_time + 120,
                 ):
                     self._run_curated_turn(
@@ -1338,7 +1338,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.curated_protocol.time.time",
+                    "voiney_lab.curated_protocol.time.time",
                     return_value=current_time,
                 ):
                     self._run_curated_turn(
@@ -1412,7 +1412,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             token = server_module._REQUEST_PRINCIPAL.set(principal)
             try:
                 with patch.dict("os.environ", environment, clear=False), patch(
-                    "voice_workflow_agent.curated_protocol.time.time",
+                    "voiney_lab.curated_protocol.time.time",
                     return_value=current_time + 120,
                 ):
                     self._run_curated_turn(

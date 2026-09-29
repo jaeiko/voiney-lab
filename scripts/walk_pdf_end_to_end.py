@@ -19,17 +19,17 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     AMBIGUITY_SINGLE_AUTHORITATIVE,
     ProtocolCatalog,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     analyze_protocol_chunk,
@@ -68,7 +68,7 @@ def _probe_9_and_10(draft, stages, record) -> None:
 
     import hashlib
 
-    from voice_workflow_agent.curated_protocol import (
+    from voiney_lab.curated_protocol import (
         CuratedProtocolFixture,
         CuratedProtocolSession,
     )
@@ -382,7 +382,7 @@ def main() -> int:
             )
 
             # 10) open a session and ask for the first step
-            from voice_workflow_agent.curated_protocol import (
+            from voiney_lab.curated_protocol import (
                 CuratedProtocolSession,
             )
 

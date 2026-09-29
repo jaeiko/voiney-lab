@@ -6,12 +6,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from voice_workflow_agent.external_references import ExternalReferenceSettings
-from voice_workflow_agent.web_visuals import (
+from voiney_lab.external_references import ExternalReferenceSettings
+from voiney_lab.web_visuals import (
     WebVisualSettings,
     XaiAuthoritativeImageSearch,
 )
-from voice_workflow_agent.server import (
+from voiney_lab.server import (
     _prepare_external_visual_candidate,
     _queue_curated_web_visual,
 )
@@ -93,7 +93,7 @@ class WebVisualTests(unittest.IsolatedAsyncioTestCase):
         registry.obtain_or_register.return_value = SimpleNamespace(
             asset_id="a" * 64)
         with patch(
-            "voice_workflow_agent.server.WEB_VISUAL_REGISTRY", registry
+            "voiney_lab.server.WEB_VISUAL_REGISTRY", registry
         ):
             proxied = await _prepare_external_visual_candidate(candidate)
         self.assertEqual(proxied["image_url"], "/api/web-visuals/" + "a" * 64)
@@ -140,20 +140,20 @@ class WebVisualTests(unittest.IsolatedAsyncioTestCase):
             "rights": "Public domain",
         }
         with patch(
-            "voice_workflow_agent.server.WikimediaVisualAdapter.lookup",
+            "voiney_lab.server.WikimediaVisualAdapter.lookup",
             new=AsyncMock(return_value=None),
         ), patch(
-            "voice_workflow_agent.server.XaiAuthoritativeImageSearch.search",
+            "voiney_lab.server.XaiAuthoritativeImageSearch.search",
             new=AsyncMock(return_value={
                 "status": "success", "matches": [candidate],
                 "image_search_enabled": True, "web_search_count": 1,
                 "image_search_count": 1,
             }),
         ), patch(
-            "voice_workflow_agent.server.WEB_VISUAL_REGISTRY.obtain_or_register",
+            "voiney_lab.server.WEB_VISUAL_REGISTRY.obtain_or_register",
             new=AsyncMock(return_value=SimpleNamespace(asset_id="c" * 64)),
         ), patch(
-            "voice_workflow_agent.server.require_env", return_value="test-value"
+            "voiney_lab.server.require_env", return_value="test-value"
         ):
             await _queue_curated_web_visual(
                 session=session, sender=sender, turn_id=3, generation=4,

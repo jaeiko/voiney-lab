@@ -21,11 +21,11 @@ from typing import Any
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     analyze_protocol_chunk,
@@ -34,7 +34,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     _SENTENCE_LINE_END,
     _STEP_RANGE,
     step_block_ranges,

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-from voice_workflow_agent.document_store import SCHEMA, CATALOG_SCHEMA_VERSION
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.curated_protocol import load_curated_protocol_fixture
+from voiney_lab.document_store import SCHEMA, CATALOG_SCHEMA_VERSION
+from voiney_lab.experiment_protocol import (
     Equipment,
     ExperimentProtocol,
     Material,
@@ -18,12 +18,12 @@ from voice_workflow_agent.experiment_protocol import (
     SourceEvidence,
     SourceStatement,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
 )
-from voice_workflow_agent.safety_pack import (
+from voiney_lab.safety_pack import (
     ProtocolSafetySubjects,
     SafetyDocumentRef,
     SafetyPack,

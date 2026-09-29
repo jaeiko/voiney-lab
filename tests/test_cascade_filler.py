@@ -7,8 +7,8 @@ import concurrent.futures
 import threading
 import unittest
 
-from voice_workflow_agent.cascade_filler import CascadeFiller
-from voice_workflow_agent.configuration import cascade_filler_delay_ms
+from voiney_lab.cascade_filler import CascadeFiller
+from voiney_lab.configuration import cascade_filler_delay_ms
 
 
 class FakeClock:

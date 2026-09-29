@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from voice_workflow_agent.claim_contract_audit import (
+from voiney_lab.claim_contract_audit import (
     ALTERNATIVE_RULES,
     CITE_DOCUMENT_LEVEL,
     CONTRACT_EVIDENCE,
@@ -22,13 +22,13 @@ from voice_workflow_agent.claim_contract_audit import (
     segment_positions,
     server_accepts,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     extraction_for_chunk,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     claim_response_schema,
     prepare_chunk_claim_request_context,
@@ -430,7 +430,7 @@ class ARepeatMayReachBackPastItsChunkTests(unittest.TestCase):
             for page in chunk.core_page_refs
         }
         label_pages = {}
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _numbered_action_matches,
         )
 

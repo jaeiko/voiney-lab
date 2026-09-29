@@ -1,6 +1,6 @@
 import unittest
 
-from voice_workflow_agent.emergency import (
+from voiney_lab.emergency import (
     ENGLISH_EMERGENCY_RESPONSE,
     KOREAN_EMERGENCY_RESPONSE,
     normalize_emergency_text,

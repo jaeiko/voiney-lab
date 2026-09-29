@@ -5,8 +5,8 @@ import sqlite3
 
 import pytest
 
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.workspace_store import (
     MIGRATION_1_TO_2,
     MIGRATION_2_TO_3,
     SCHEMA,

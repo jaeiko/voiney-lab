@@ -9,9 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from tests.test_protocol_claim_analysis import write_lined_pages
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
     ClaimCategory,
     ClaimSourceEvidence,

@@ -17,8 +17,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisModel,
@@ -27,8 +27,8 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     ProtocolEvidenceDiagnostic,
     validate_protocol_analysis_evidence,
 )
-from voice_workflow_agent.experiment_protocol_pdf import ProtocolPdfExtraction
-from voice_workflow_agent.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
+from voiney_lab.experiment_protocol_pdf import ProtocolPdfExtraction
+from voiney_lab.experiment_protocol_store import ANALYSIS_SCHEMA_VERSION
 
 
 # 6: page coverage carries an explicit per-segment declination list, so a

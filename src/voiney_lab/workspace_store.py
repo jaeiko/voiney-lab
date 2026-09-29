@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from voice_workflow_agent.identity import (
+from voiney_lab.identity import (
     AuthorizationDeniedError,
     Permission,
     Principal,

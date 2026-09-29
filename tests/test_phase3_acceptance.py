@@ -15,20 +15,20 @@ import os
 from pathlib import Path
 from docx import Document
 
-from voice_workflow_agent.language import clean_speech_text
-from voice_workflow_agent.external_references import (
+from voiney_lab.language import clean_speech_text
+from voiney_lab.external_references import (
     CircuitBreaker,
     PubChemSearchProvider,
     WikimediaSearchProvider,
     SearchResult,
     VisualSearchResult,
 )
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.experiment_reports import (
     ExperimentReportStore,
     ReportDraftState,
     ReportWriterBrain,
 )
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     load_curated_protocol_fixture,
     CuratedProtocolTurnPlan,
     CuratedProtocolSession,

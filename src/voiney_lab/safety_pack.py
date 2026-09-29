@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION, connect
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.document_store import CATALOG_SCHEMA_VERSION, connect
+from voiney_lab.experiment_protocol import (
     Equipment,
     ExperimentProtocol,
     Material,
@@ -27,7 +27,7 @@ from voice_workflow_agent.experiment_protocol import (
     ProtocolSubAction,
 )
 
-log = logging.getLogger("voice_workflow_agent.safety_pack")
+log = logging.getLogger("voiney_lab.safety_pack")
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 

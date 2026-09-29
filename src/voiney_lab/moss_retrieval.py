@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .document_store import CATALOG_SCHEMA_VERSION, connect
 
 
-log = logging.getLogger("voice_workflow_agent.moss")
+log = logging.getLogger("voiney_lab.moss")
 
 MOSS_CAPABLE_SCOPES = frozenset({"operational", "demo", "reference_only"})
 DEFAULT_ALLOWED_SCOPES = frozenset({"demo", "reference_only"})
@@ -253,6 +253,7 @@ def catalog_sections_for_moss(
                 id=key,
                 text="\n".join(part for part in text_parts if part).strip(),
                 metadata={
+                    # Stored in the external Moss index under this name; do not rename.
                     "voice_workflow_agent_key": key,
                     "document_id": row["document_id"],
                     "version": row["version"],
@@ -343,7 +344,7 @@ class MossRuntime:
         if self._thread is None:
             self._thread = threading.Thread(
                 target=self._run_loop,
-                name="voice_workflow_agent-moss-runtime",
+                name="voiney_lab-moss-runtime",
                 daemon=True,
             )
             self._thread.start()
@@ -369,7 +370,7 @@ class MossRuntime:
             from moss import MossClient, QueryOptions
         except ImportError as exc:
             raise RuntimeError(
-                "Moss SDK is not installed; install voice-workflow-agent[moss]"
+                "Moss SDK is not installed; install voiney-lab[moss]"
             ) from exc
         return self._client_factory or MossClient, self._query_options_factory or QueryOptions
 

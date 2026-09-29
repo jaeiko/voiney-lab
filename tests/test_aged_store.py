@@ -15,18 +15,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     ANALYSIS_SCHEMA_VERSION,
     ProtocolSerializationError,
     deserialize_analysis,
     initialize_protocol_store,
     serialize_analysis,
 )
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
-import voice_workflow_agent.server as server_module
+from voiney_lab.protocol_catalog import ProtocolCatalog
+import voiney_lab.server as server_module
 
 from tests.aged_store import (
     CORPUS_ANALYSIS_SCHEMA_VERSION,

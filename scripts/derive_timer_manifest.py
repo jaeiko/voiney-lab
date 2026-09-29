@@ -18,8 +18,8 @@ import json
 import re
 from pathlib import Path
 
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_claim_analysis import (
     generate_page_evidence_segments,
 )
 
@@ -47,7 +47,7 @@ def duration_seconds(literal: str) -> int | None:
 
 
 def main() -> int:
-    from voice_workflow_agent.curated_protocol import (
+    from voiney_lab.curated_protocol import (
         _CANDIDATE_A_STEP_TIMERS as table,
     )
 
@@ -135,7 +135,7 @@ def main() -> int:
     }
     # Written in exactly the canonical form the loader recomputes, so a byte
     # of drift in the committed file is itself a load failure.
-    from voice_workflow_agent.curated_protocol import _canonical_json_bytes
+    from voiney_lab.curated_protocol import _canonical_json_bytes
 
     OUT.write_bytes(_canonical_json_bytes(manifest))
     print(f"wrote {OUT.name}: {len(candidates)} verified, {len(unfounded)} unfounded")

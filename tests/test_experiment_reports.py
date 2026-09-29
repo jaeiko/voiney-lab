@@ -12,7 +12,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from voice_workflow_agent.experiment_reports import ExperimentReportStore
+from voiney_lab.experiment_reports import ExperimentReportStore
 
 
 class ExperimentReportStoreTests(unittest.TestCase):
@@ -177,7 +177,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertNotIn("chain_of_thought", text)
 
     def test_grounded_report_context_and_scientific_narrative_integrity(self):
-        from voice_workflow_agent.experiment_reports import (
+        from voiney_lab.experiment_reports import (
             StepExecutionContext,
             GroundedReportContext,
             ReportWriterBrain,
@@ -272,8 +272,8 @@ class ExperimentReportStoreTests(unittest.TestCase):
 
     def test_grounded_report_with_candidate_a_domain_protocol_rehydration(self):
         """Test build_grounded_report_context with real domain ExperimentProtocol instance."""
-        from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-        from voice_workflow_agent.experiment_reports import build_grounded_report_context, ReportWriterBrain
+        from voiney_lab.curated_protocol import load_curated_protocol_fixture
+        from voiney_lab.experiment_reports import build_grounded_report_context, ReportWriterBrain
 
         fixture_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.json"
         provenance_path = Path(__file__).resolve().parents[1] / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
@@ -293,7 +293,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
         doc = self.store.get_report(report["report_id"])
 
         # Patch candidate fixture lookup to return the real candidate fixture
-        with unittest.mock.patch("voice_workflow_agent.server._configured_candidate_fixture", return_value=fixture):
+        with unittest.mock.patch("voiney_lab.server._configured_candidate_fixture", return_value=fixture):
             ctx = build_grounded_report_context(doc)
             self.assertIsNotNone(ctx)
             self.assertEqual(ctx.protocol_id, "candidate-a-curated-development-v1")
@@ -312,7 +312,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
     def test_http_docx_export_returns_200_and_valid_document(self):
         """Direct HTTP test for GET /api/experiment-reports/{report_id}.docx."""
         import httpx
-        from voice_workflow_agent.server import app
+        from voiney_lab.server import app
 
         async def run_inline(function, *args, **kwargs):
             return function(*args, **kwargs)

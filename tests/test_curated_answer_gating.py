@@ -20,14 +20,14 @@ from __future__ import annotations
 import hashlib
 import unittest
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CANDIDATE_A_PROTOCOL_ID,
     CuratedProtocolFixture,
     CuratedProtocolSession,
 )
-from voice_workflow_agent.experiment_protocol_analysis import ProtocolAnalysisDraft
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisDraft
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,

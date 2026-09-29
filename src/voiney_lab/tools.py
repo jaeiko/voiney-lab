@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from voice_workflow_agent.retrieval import TOPICS
+from voiney_lab.retrieval import TOPICS
 
-log = logging.getLogger("voice_workflow_agent.tools")
+log = logging.getLogger("voiney_lab.tools")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = PROJECT_ROOT / "reports"
@@ -619,8 +619,8 @@ def search_approved_safety_manual(
     topic: Any = None,
 ) -> dict[str, Any]:
     """Search the approved catalog, optionally reranking safe candidates in Moss."""
-    from voice_workflow_agent.retrieval import search_safety_documents
-    from voice_workflow_agent.moss_retrieval import get_moss_runtime
+    from voiney_lab.retrieval import search_safety_documents
+    from voiney_lab.moss_retrieval import get_moss_runtime
 
     blocked = _search_failure("invalid_arguments")
     if (not isinstance(query, str) or not query.strip() or context is None or
@@ -693,8 +693,8 @@ def search_approved_lab_references(
 ) -> dict[str, Any]:
     """Search approved read-only lab references for one protocol-related turn."""
 
-    from voice_workflow_agent.moss_retrieval import get_moss_runtime
-    from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
+    from voiney_lab.moss_retrieval import get_moss_runtime
+    from voiney_lab.retrieval import retrieve_approved_lab_documents
 
     if (
         not isinstance(query, str) or not query.strip()

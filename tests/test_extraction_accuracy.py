@@ -16,9 +16,9 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_extraction_accuracy import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_extraction_accuracy import (
     audit_reference,
     normalize,
     score_extraction,
@@ -188,7 +188,7 @@ class TheReferenceIsAuditedNotAssumedTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.exists():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             load_curated_protocol_fixture,
         )
 
@@ -207,7 +207,7 @@ class TheReferenceIsAuditedNotAssumedTests(unittest.TestCase):
     def test_the_reference_carries_enough_values_to_be_useful(self) -> None:
         """Measured: 27 values across 11 of its 25 steps."""
 
-        from voice_workflow_agent.protocol_extraction_accuracy import (
+        from voiney_lab.protocol_extraction_accuracy import (
             _step_text,
             _steps,
             _values,
@@ -300,7 +300,7 @@ class ValueOutcomeTests(unittest.TestCase):
     """
 
     def _compared(self, reference_text, candidate_text):
-        from voice_workflow_agent.protocol_extraction_accuracy import (
+        from voiney_lab.protocol_extraction_accuracy import (
             StepComparison,
             _values,
         )
@@ -332,7 +332,7 @@ class ValueOutcomeTests(unittest.TestCase):
         self.assertFalse(item.values_match)
 
     def test_the_report_counts_the_three_outcomes_separately(self) -> None:
-        from voice_workflow_agent.protocol_extraction_accuracy import AccuracyReport
+        from voiney_lab.protocol_extraction_accuracy import AccuracyReport
 
         report = AccuracyReport(
             reference_steps=3,

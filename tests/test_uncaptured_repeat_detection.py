@@ -28,14 +28,14 @@ class WhatTheSourceStatesTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
 
         cls.extraction = extract_protocol_pdf(IN_GEL)
 
     def test_all_three_of_in_gel_s_repeat_ranges_are_found(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             explicit_repeat_instructions,
         )
 
@@ -55,7 +55,7 @@ class WhatTheSourceStatesTests(unittest.TestCase):
         the detector reports 17-18 because that is what the page says.
         """
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             explicit_repeat_instructions,
         )
 
@@ -71,7 +71,7 @@ class WhatTheSourceStatesTests(unittest.TestCase):
     def test_an_inverted_range_is_not_reported(self) -> None:
         """Shape only, and a backwards range is not a range."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _EXPLICIT_REPEAT_INSTRUCTION,
         )
 
@@ -81,7 +81,7 @@ class WhatTheSourceStatesTests(unittest.TestCase):
         self.assertEqual(match.group("first"), "9")
 
     def test_it_reads_case_and_dash_variants(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _EXPLICIT_REPEAT_INSTRUCTION,
         )
 
@@ -99,7 +99,7 @@ class WhatTheSourceStatesTests(unittest.TestCase):
                 )
 
     def test_prose_that_is_not_a_repeat_instruction_is_not_matched(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _EXPLICIT_REPEAT_INSTRUCTION,
         )
 
@@ -125,7 +125,7 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
         cls.extraction, cls.plan, cls.merged, cls.draft = built
 
     def test_the_two_that_were_missed_are_named(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             uncaptured_repeat_instructions,
         )
 
@@ -142,7 +142,7 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
     def test_the_one_that_was_captured_is_not_named(self) -> None:
         """A repeat the analysis carries must not be reported as missing."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             uncaptured_repeat_instructions,
         )
 
@@ -157,8 +157,8 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
         )
 
     def test_it_blocks_execution_and_a_reviewer_can_clear_it(self) -> None:
-        from voice_workflow_agent import experiment_protocol as domain
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab import experiment_protocol as domain
+        from voiney_lab.protocol_catalog import (
             _ACKNOWLEDGEABLE_GATES,
             ProtocolCatalog,
         )
@@ -178,7 +178,7 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
     def test_a_complete_analysis_raises_nothing(self) -> None:
         """The gate must be silent when every stated repeat is carried."""
 
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
 
         assessment = domain.assess_readiness(
             self.draft.protocol, uncaptured_repeat_instructions=()
@@ -197,7 +197,7 @@ class WhatTheAnalysisMissedTests(unittest.TestCase):
 
         import inspect
 
-        from voice_workflow_agent import protocol_claim_analysis
+        from voiney_lab import protocol_claim_analysis
 
         for name in (
             "explicit_repeat_instructions",

@@ -8,15 +8,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     ProtocolKnowledgeView,
     load_curated_protocol_fixture,
     normalize_scientific_request,
 )
-from voice_workflow_agent.multi_brain import activation_for
-from voice_workflow_agent.server import (
+from voiney_lab.multi_brain import activation_for
+from voiney_lab.server import (
     SttDiagnosticSettings,
     _stt_multipart,
     persist_stt_diagnostic,
