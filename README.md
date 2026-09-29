@@ -1,8 +1,8 @@
 # Voice Workflow Agent
 
-[![CI](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-Canonical repository: [`jaeiko/voice-workflow-agent`](https://github.com/jaeiko/voice-workflow-agent).
+Canonical repository: [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab).
 This project originated inside the course repository
 [`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) (a fork
 of `civiliangame/voice-ai-course`); that repository is preserved as historical
@@ -70,7 +70,7 @@ Canonical workflow events
 ```
 
 The main runtime routing boundary is
-`src/voice_workflow_agent/runtime_routing.py`. An optional, disabled-by-default
+`src/voiney_lab/runtime_routing.py`. An optional, disabled-by-default
 semantic intent fallback (`semantic_intent.py`) sits behind it: when
 deterministic routing returns a catch-all, it may *propose* one of the existing
 bounded workflow actions, and server-owned policy in the same boundary decides
@@ -182,7 +182,7 @@ No OCR engine is bundled or selected by a client. A deployment that needs scan
 support must inject an adapter as `app.state.protocol_ocr_provider`; without one,
 the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
 PDF. The adapter contract is defined in
-`src/voice_workflow_agent/protocol_ocr.py`. This keeps local binaries, cloud OCR
+`src/voiney_lab/protocol_ocr.py`. This keeps local binaries, cloud OCR
 credentials, and provider choice outside HTTP input and the voice execution
 path.
 
@@ -498,14 +498,14 @@ Create the approved safety catalog and choose absolute, ignored runtime data
 directories. Configure `.env`, then start:
 
 ```bash
-uvicorn voice_workflow_agent.server:app --host 127.0.0.1 --port 8000
+uvicorn voiney_lab.server:app --host 127.0.0.1 --port 8000
 ```
 
 The optional safety-handoff worker remains separate from the low-latency voice
 loop:
 
 ```bash
-python -m voice_workflow_agent.worker
+python -m voiney_lab.worker
 ```
 
 ### Core configuration
@@ -625,7 +625,7 @@ The A–G replay no longer relies on an ad-hoc `PYTHONPATH`:
 ```bash
 voice-workflow-replay
 # Equivalent project-native invocation:
-python -m voice_workflow_agent.replay_turns
+python -m voiney_lab.replay_turns
 # The historical script remains a thin compatibility wrapper:
 python scripts/replay_turns.py
 ```
