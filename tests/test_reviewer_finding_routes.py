@@ -24,16 +24,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     initialize_protocol_store,
 )
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
-import voice_workflow_agent.server as server_module
+from voiney_lab.identity import Principal, Role
+from voiney_lab.protocol_catalog import ProtocolCatalog
+import voiney_lab.server as server_module
 
 from tests.test_protocol_catalog import write_text_pdf, analysis_draft
 

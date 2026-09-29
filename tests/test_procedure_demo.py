@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.procedure_definitions import load_procedure_definitions
+from voiney_lab.procedure_definitions import load_procedure_definitions
 
 ROOT=Path(__file__).resolve().parents[1]
 

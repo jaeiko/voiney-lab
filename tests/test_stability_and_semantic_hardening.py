@@ -3,7 +3,7 @@
 from pathlib import Path
 import unittest
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
@@ -13,21 +13,21 @@ from voice_workflow_agent.curated_protocol import (
     classify_curated_control_intent,
     resolve_question_focus,
 )
-from voice_workflow_agent.external_references import _canonical_url
-from voice_workflow_agent.language import (
+from voiney_lab.external_references import _canonical_url
+from voiney_lab.language import (
     Transcription,
     classify_input_event,
     _is_keyterm_echo,
 )
-from voice_workflow_agent.server import ListenerSession
-from voice_workflow_agent.vad import (
+from voiney_lab.server import ListenerSession
+from voiney_lab.vad import (
     EndpointDetector,
     TurnState,
     VadConfig,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data" / "development_protocols"
+DATA = ROOT / "data" / "fixtures" / "development_protocols"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 
@@ -449,7 +449,7 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
 
     def test_step_safety_guidance_korean_localization(self) -> None:
         """StepSafetyGuidance builds Korean localized display bullets while preserving raw English data."""
-        from voice_workflow_agent.safety_pack import (
+        from voiney_lab.safety_pack import (
             resolve_safety_pack,
         )
 
@@ -477,7 +477,7 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
 
     def test_web_visual_asset_registry(self) -> None:
         """WebVisualAssetRegistry stores and retrieves validated assets with same-origin IDs."""
-        from voice_workflow_agent.web_visuals import WebVisualAsset, WebVisualAssetRegistry
+        from voiney_lab.web_visuals import WebVisualAsset, WebVisualAssetRegistry
 
         registry = WebVisualAssetRegistry()
         dummy_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x40\x00\x00\x00\x40\x08\x06\x00\x00\x00\xaa"

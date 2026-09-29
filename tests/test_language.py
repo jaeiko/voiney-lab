@@ -1,6 +1,6 @@
 import unittest
 
-from voice_workflow_agent.language import (
+from voiney_lab.language import (
     Transcription,
     normalize_provider_language,
     resolve_turn_language,

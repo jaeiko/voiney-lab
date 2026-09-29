@@ -8,11 +8,11 @@ from types import SimpleNamespace
 
 import httpx
 
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.experiment_reports import ExperimentReportStore
-from voice_workflow_agent.server import app
-from voice_workflow_agent import server as server_module
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.experiment_reports import ExperimentReportStore
+from voiney_lab.server import app
+from voiney_lab import server as server_module
+from voiney_lab.workspace_store import (
     WorkspaceSettings,
     initialize_workspace_store,
 )

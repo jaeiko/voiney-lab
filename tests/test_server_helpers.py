@@ -3,23 +3,23 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from collections import deque
 import httpx
-from voice_workflow_agent.audio import FRAME_BYTES
-from voice_workflow_agent.brain import (
+from voiney_lab.audio import FRAME_BYTES
+from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     BrainResult,
     SentenceSegment,
 )
-from voice_workflow_agent.document_store import ingest_manifest
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.document_store import ingest_manifest
+from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
 )
 from pathlib import Path
-from voice_workflow_agent.language import Transcription
-from voice_workflow_agent.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
-from voice_workflow_agent.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, app, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
-from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
+from voiney_lab.language import Transcription
+from voiney_lab.emergency import ENGLISH_EMERGENCY_RESPONSE, KOREAN_EMERGENCY_RESPONSE
+from voiney_lab.server import CascadeTranscriptionContext, ListenerEvent, ListenerSession, ServerConfig, ServerConfigurationError, _tts_voice, app, cancel_cascade_generation, cascade_transcription_context, export_experiment_report, frame_complete_audio, get_admin_metrics, normalize_session_language, run_barge_in_stt_failure_turn, run_turn, server_config, server_tool_context, transcribe, transcribe_cascade_audio, validate_tts_pcm, voice_socket
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from tests.test_retrieval import operational_document
 from tests.development_activation import development_activation_recorded
 
@@ -41,7 +41,7 @@ class ServerTests(unittest.TestCase):
         # scheduling. Keep asyncio.run() bounded and leave thread ownership to
         # the dedicated protocol-catalog concurrency tests.
         self._to_thread = patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=lambda function, *args: function(*args),
         )
         self._to_thread.start()
@@ -78,15 +78,15 @@ class ServerTests(unittest.TestCase):
             async def send_bytes(self,value): self.binary.append(value)
         session=session or self.emergency_session()
         socket=Socket()
-        tts_patch=(patch("voice_workflow_agent.server.synthesize",side_effect=tts_result)
+        tts_patch=(patch("voiney_lab.server.synthesize",side_effect=tts_result)
                    if isinstance(tts_result,BaseException)
-                   else patch("voice_workflow_agent.server.synthesize",return_value=tts_result))
-        with patch("voice_workflow_agent.server.transcribe",return_value=transcription), \
+                   else patch("voiney_lab.server.synthesize",return_value=tts_result))
+        with patch("voiney_lab.server.transcribe",return_value=transcription), \
              tts_patch as tts, \
-             patch("voice_workflow_agent.server.stream_brain_turn") as brain, \
-             patch("voice_workflow_agent.tools.search_approved_safety_manual") as retrieval, \
-             patch("voice_workflow_agent.brain.execute_tool") as execute, \
-             patch("voice_workflow_agent.server.AsyncOpenAI") as llm:
+             patch("voiney_lab.server.stream_brain_turn") as brain, \
+             patch("voiney_lab.tools.search_approved_safety_manual") as retrieval, \
+             patch("voiney_lab.brain.execute_tool") as execute, \
+             patch("voiney_lab.server.AsyncOpenAI") as llm:
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         return session,socket,tts,brain,retrieval,execute,llm
 
@@ -130,13 +130,13 @@ class ServerTests(unittest.TestCase):
                     await on_tool_event("tool.result",{"tool":"start_procedure",**fields})
                     await on_sentence(SentenceSegment(0,"가상 응답입니다."))
                     return BrainResult([],"가상 응답입니다.",0,["start_procedure"])
-                with patch("voice_workflow_agent.server.transcribe",
+                with patch("voiney_lab.server.transcribe",
                            return_value=Transcription("가상 데모를 시작해 주세요","ko")), \
-                     patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0"), \
-                     patch("voice_workflow_agent.server.stream_brain_turn",
+                     patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
+                     patch("voiney_lab.server.stream_brain_turn",
                            side_effect=fake_brain), \
-                     patch("voice_workflow_agent.server.AsyncOpenAI"), \
-                     patch("voice_workflow_agent.server.require_env",return_value="test"):
+                     patch("voiney_lab.server.AsyncOpenAI"), \
+                     patch("voiney_lab.server.require_env",return_value="test"):
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
                 procedure_events=[
                     item["type"] for item in socket.text
@@ -156,7 +156,7 @@ class ServerTests(unittest.TestCase):
         )
         for transcription,language,response in cases:
             with self.subTest(transcription=transcription):
-                with patch("voice_workflow_agent.server.resolve_turn_language") as resolver:
+                with patch("voiney_lab.server.resolve_turn_language") as resolver:
                     session,socket,tts,brain,retrieval,execute,llm=self.run_emergency(transcription)
                 resolver.assert_not_called()
                 self.assertEqual(tts.call_args.args,(response,language))
@@ -245,8 +245,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(english.history.groups,[])
 
     def test_emergency_tts_failure_keeps_fixed_text_response(self):
-        with patch("voice_workflow_agent.server.resolve_turn_language") as resolver, \
-             patch("voice_workflow_agent.server.log.exception"):
+        with patch("voiney_lab.server.resolve_turn_language") as resolver, \
+             patch("voiney_lab.server.log.exception"):
             session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
                 Transcription("Emergency!",None),
                 tts_result=RuntimeError("synthetic TTS failure"))
@@ -267,7 +267,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(session.state,TurnState.COOLDOWN)
 
     def test_language_clarification_tts_failure_has_no_first_audio_timing(self):
-        with patch("voice_workflow_agent.server.log.exception"):
+        with patch("voiney_lab.server.log.exception"):
             session,socket,_,brain,retrieval,execute,llm=self.run_emergency(
                 Transcription("Please show the approved procedure.",None),
                 tts_result=RuntimeError("synthetic TTS failure"))
@@ -300,16 +300,16 @@ class ServerTests(unittest.TestCase):
                 session.last_confirmed_language="en"
                 session.history.pending_report=dict(pending)
                 socket=Socket()
-                with patch("voice_workflow_agent.server.transcribe",
+                with patch("voiney_lab.server.transcribe",
                            return_value=transcription), \
-                     patch("voice_workflow_agent.server.resolve_turn_language") as resolver, \
-                     patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0") as tts, \
-                     patch("voice_workflow_agent.brain.execute_tool",return_value={
+                     patch("voiney_lab.server.resolve_turn_language") as resolver, \
+                     patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
+                     patch("voiney_lab.brain.execute_tool",return_value={
                          "status":"success",
                          "report_id":"SR-20260724-A1B2C3",
                          "report_status":"queued_for_handoff",
                      }) as execute, \
-                     patch("voice_workflow_agent.server.AsyncOpenAI"), \
+                     patch("voiney_lab.server.AsyncOpenAI"), \
                      patch.dict("os.environ",{
                          "XAI_API_KEY":"test",
                          "CHAT_MODEL":"test",
@@ -355,12 +355,12 @@ class ServerTests(unittest.TestCase):
         session.active_turn_id=1; session.detector.state=TurnState.PROCESSING
         session.history.pending_report=dict(pending)
         socket=Socket()
-        with patch("voice_workflow_agent.server.transcribe",
+        with patch("voiney_lab.server.transcribe",
                    return_value=Transcription("보고서를 취소해 주세요.","en")), \
-             patch("voice_workflow_agent.server.resolve_turn_language") as resolver, \
-             patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0") as tts, \
-             patch("voice_workflow_agent.brain.execute_tool") as execute, \
-             patch("voice_workflow_agent.server.AsyncOpenAI"), \
+             patch("voiney_lab.server.resolve_turn_language") as resolver, \
+             patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
+             patch("voiney_lab.brain.execute_tool") as execute, \
+             patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
                  "CHAT_MODEL":"test",
@@ -402,12 +402,12 @@ class ServerTests(unittest.TestCase):
                 "수정 내용을 다시 확인하겠습니다.",None,[],
             )
 
-        with patch("voice_workflow_agent.server.transcribe",return_value=Transcription(
+        with patch("voiney_lab.server.transcribe",return_value=Transcription(
                  "네, 하지만 아세톤이 아니라 메탄올이에요.","ko")), \
-             patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0"), \
-             patch("voice_workflow_agent.server.stream_brain_turn",
+             patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
+             patch("voiney_lab.server.stream_brain_turn",
                    side_effect=fake_brain) as brain, \
-             patch("voice_workflow_agent.server.AsyncOpenAI"), \
+             patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
                  "CHAT_MODEL":"test",
@@ -434,12 +434,12 @@ class ServerTests(unittest.TestCase):
                  {"role":"assistant","content":"Approved answer."}],
                 "Approved answer.",None,[],
             )
-        with patch("voice_workflow_agent.server.transcribe",
+        with patch("voiney_lab.server.transcribe",
                    return_value=Transcription("Approved information please.","en")), \
-             patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0"), \
-             patch("voice_workflow_agent.server.stream_brain_turn",side_effect=fake_brain), \
-             patch("voice_workflow_agent.server.AsyncOpenAI"), \
-             patch("voice_workflow_agent.server.require_env",return_value="test"):
+             patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
+             patch("voiney_lab.server.stream_brain_turn",side_effect=fake_brain), \
+             patch("voiney_lab.server.AsyncOpenAI"), \
+             patch("voiney_lab.server.require_env",return_value="test"):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         done=next(item for item in socket.text if item["type"]=="turn.done")
         self.assertEqual(done["route"],"brain")
@@ -470,17 +470,17 @@ class ServerTests(unittest.TestCase):
                 ["search_approved_safety_manual"],
             )
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("승인된 정보를 알려 주세요","ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.stream_brain_turn",
+            "voiney_lab.server.stream_brain_turn",
             side_effect=fake_brain,
         ), patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
         ), patch(
-            "voice_workflow_agent.server.require_env",return_value="test",
+            "voiney_lab.server.require_env",return_value="test",
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         progress=[item for item in socket.text if item["type"]=="turn.state"]
@@ -583,7 +583,7 @@ class ServerTests(unittest.TestCase):
                 "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(missing),
                 "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
             },clear=True),patch(
-                "voice_workflow_agent.server.log.warning",
+                "voiney_lab.server.log.warning",
             ) as warning:
                 asyncio.run(voice_socket(socket))
             rendered=warning.call_args.args[0] % warning.call_args.args[1:]
@@ -685,14 +685,14 @@ class ServerTests(unittest.TestCase):
 
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.server_config",return_value=config,
+            "voiney_lab.server.server_config",return_value=config,
         ), patch(
-            "voice_workflow_agent.server.load_curated_protocol_fixture",
+            "voiney_lab.server.load_curated_protocol_fixture",
             return_value=Fixture(),
         ) as fixture_loader, patch(
-            "voice_workflow_agent.server.ProcedureStore",
+            "voiney_lab.server.ProcedureStore",
         ) as procedure_store, patch(
-            "voice_workflow_agent.server.load_procedure_definitions",
+            "voiney_lab.server.load_procedure_definitions",
         ) as procedure_loader, development_activation_recorded():
             # "Without persistence" is about the *session* not being written
             # down, not about the protocol's authority.  Since STEP 23 a
@@ -758,14 +758,14 @@ class ServerTests(unittest.TestCase):
 
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.server_config",return_value=config,
+            "voiney_lab.server.server_config",return_value=config,
         ), patch(
-            "voice_workflow_agent.server.load_curated_protocol_fixture",
+            "voiney_lab.server.load_curated_protocol_fixture",
             side_effect=ValueError("private malformed-fixture detail"),
         ), patch(
-            "voice_workflow_agent.server.ProcedureStore",
+            "voiney_lab.server.ProcedureStore",
         ) as procedure_store, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ):
             asyncio.run(voice_socket(socket))
@@ -813,13 +813,13 @@ class ServerTests(unittest.TestCase):
 
                 socket=Socket()
                 with patch(
-                    "voice_workflow_agent.server.server_config",
+                    "voiney_lab.server.server_config",
                     return_value=config,
                 ), patch(
-                    "voice_workflow_agent.server.load_curated_protocol_fixture",
+                    "voiney_lab.server.load_curated_protocol_fixture",
                     return_value=Fixture(),
                 ), patch(
-                    "voice_workflow_agent.server.ProcedureStore",
+                    "voiney_lab.server.ProcedureStore",
                 ) as procedure_store:
                     asyncio.run(voice_socket(socket))
                 required=next(
@@ -856,7 +856,7 @@ class ServerTests(unittest.TestCase):
         }
         socket=Socket()
         with patch.dict("os.environ",legacy_environment,clear=True), \
-             patch("voice_workflow_agent.server.log.warning") as warning:
+             patch("voiney_lab.server.log.warning") as warning:
             asyncio.run(voice_socket(socket))
         error=next(item for item in socket.sent if item["type"]=="error")
         self.assertEqual(error["message"],"invalid session configuration")
@@ -881,7 +881,7 @@ class ServerTests(unittest.TestCase):
         )
 
     def test_rest_stt_preserves_optional_provider_quality_without_inventing_it(self):
-        with patch("voice_workflow_agent.server.requests.post",return_value=FakeResponse()) as post, \
+        with patch("voiney_lab.server.requests.post",return_value=FakeResponse()) as post, \
              patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
             result=transcribe(b"\0\0")
         self.assertEqual((result.text,result.detected_language),
@@ -892,7 +892,7 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(post.call_args.args[0].endswith("/stt"))
 
         with patch(
-            "voice_workflow_agent.server.requests.post",
+            "voiney_lab.server.requests.post",
             return_value=FakeResponse(),
         ) as biased_post,patch.dict(
             "os.environ",{"XAI_API_KEY":"test"},clear=True,
@@ -918,7 +918,7 @@ class ServerTests(unittest.TestCase):
             "alternatives":["대안 하나","대안 둘",7,"대안 셋","ignored"],
         }
         with patch(
-            "voice_workflow_agent.server.requests.post",
+            "voiney_lab.server.requests.post",
             return_value=quality_response,
         ),patch.dict("os.environ",{"XAI_API_KEY":"test"},clear=True):
             quality=transcribe(b"\0\0")
@@ -1000,11 +1000,11 @@ class ServerTests(unittest.TestCase):
                 session.history.pending_report=dict(pending)
                 session.history.source_references=list(references)
                 socket=Socket()
-                with patch("voice_workflow_agent.server.transcribe",return_value=transcription), \
-                     patch("voice_workflow_agent.server.synthesize",return_value=b"\0\0") as tts, \
-                     patch("voice_workflow_agent.server.stream_brain_turn") as brain, \
-                     patch("voice_workflow_agent.tools.search_approved_safety_manual") as retrieval, \
-                     patch("voice_workflow_agent.server.AsyncOpenAI") as llm:
+                with patch("voiney_lab.server.transcribe",return_value=transcription), \
+                     patch("voiney_lab.server.synthesize",return_value=b"\0\0") as tts, \
+                     patch("voiney_lab.server.stream_brain_turn") as brain, \
+                     patch("voiney_lab.tools.search_approved_safety_manual") as retrieval, \
+                     patch("voiney_lab.server.AsyncOpenAI") as llm:
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
                 brain.assert_not_called(); retrieval.assert_not_called(); llm.assert_not_called()
                 self.assertEqual(session.history.pending_report,pending)
@@ -1131,15 +1131,15 @@ class ServerTests(unittest.TestCase):
             async def close(self,**kwargs): return None
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.ListenerSession",return_value=session,
+            "voiney_lab.server.ListenerSession",return_value=session,
         ), patch(
-            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            "voiney_lab.server.VoiceVadSettings.from_environment",
             return_value=SimpleNamespace(cascade=object()),
         ), patch(
-            "voice_workflow_agent.server.VadConfig.from_settings",
+            "voiney_lab.server.VadConfig.from_settings",
             return_value=config,
         ), patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
         ) as transcription:
             asyncio.run(voice_socket(socket))
         transcription.assert_not_called()
@@ -1341,13 +1341,13 @@ class ServerTests(unittest.TestCase):
             async def close(self,**kwargs): return None
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.ListenerSession",
+            "voiney_lab.server.ListenerSession",
             return_value=session,
         ), patch(
-            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            "voiney_lab.server.VoiceVadSettings.from_environment",
             return_value=SimpleNamespace(cascade=object()),
         ), patch(
-            "voice_workflow_agent.server.VadConfig.from_settings",
+            "voiney_lab.server.VadConfig.from_settings",
             return_value=config,
         ):
             asyncio.run(voice_socket(socket))
@@ -1391,12 +1391,12 @@ class ServerTests(unittest.TestCase):
             async def close(self,**kwargs): return None
         socket=Socket(); now[0]=10.5
         with patch(
-            "voice_workflow_agent.server.ListenerSession",return_value=session,
+            "voiney_lab.server.ListenerSession",return_value=session,
         ), patch(
-            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            "voiney_lab.server.VoiceVadSettings.from_environment",
             return_value=SimpleNamespace(cascade=object()),
         ), patch(
-            "voice_workflow_agent.server.VadConfig.from_settings",
+            "voiney_lab.server.VadConfig.from_settings",
             return_value=config,
         ):
             asyncio.run(voice_socket(socket))
@@ -1566,16 +1566,16 @@ class ServerTests(unittest.TestCase):
             async def close(self,**kwargs): return None
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.ListenerSession",
+            "voiney_lab.server.ListenerSession",
             return_value=session,
         ), patch(
-            "voice_workflow_agent.server.VoiceVadSettings.from_environment",
+            "voiney_lab.server.VoiceVadSettings.from_environment",
             return_value=SimpleNamespace(cascade=object()),
         ), patch(
-            "voice_workflow_agent.server.VadConfig.from_settings",
+            "voiney_lab.server.VadConfig.from_settings",
             return_value=config,
         ), patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("", "ko"),
         ) as transcription:
             asyncio.run(voice_socket(socket))
@@ -1621,7 +1621,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(ordinary.audio_origin,"ordinary")
         self.assertEqual(barge.audio_origin,"barge_in")
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("네","ko"),
         ) as provider:
             transcribe_cascade_audio(b"\0\0",ordinary)
@@ -1651,7 +1651,7 @@ class ServerTests(unittest.TestCase):
             )
             socket=Socket()
             with patch(
-                "voice_workflow_agent.server.synthesize",return_value=b"\0\0"
+                "voiney_lab.server.synthesize",return_value=b"\0\0"
             ) as tts:
                 await run_barge_in_stt_failure_turn(
                     socket,session,turn_id=turn_id,generation=generation,
@@ -1687,7 +1687,7 @@ class ServerTests(unittest.TestCase):
                 if self.receives>1: raise AssertionError("receive called after disconnect")
                 return {"type":"websocket.disconnect","code":1000}
         socket=Socket()
-        with patch("voice_workflow_agent.server.log.exception") as logged:
+        with patch("voiney_lab.server.log.exception") as logged:
             asyncio.run(voice_socket(socket))
         self.assertEqual(socket.receives,1); logged.assert_not_called()
 
@@ -1707,7 +1707,7 @@ class ServerTests(unittest.TestCase):
             async def receive(self): return next(self.messages)
         socket=Socket()
         with patch(
-            "voice_workflow_agent.server.check_safety_report_status",
+            "voiney_lab.server.check_safety_report_status",
             return_value={
                 "status":"success","report_id":"SR-20260722-A1B2C3",
                 "report_status":"handoff_ready","attempts":1,
@@ -1735,7 +1735,7 @@ class ServerTests(unittest.TestCase):
                 event_type="session_started",step_id="step-1",step_label="1",
             )
             with patch(
-                "voice_workflow_agent.server.ExperimentReportSettings.from_environment",
+                "voiney_lab.server.ExperimentReportSettings.from_environment",
                 return_value=ExperimentReportSettings(True,path),
             ):
                 for format_name,media_type,prefix in (
@@ -1782,7 +1782,7 @@ class ServerTests(unittest.TestCase):
                 "TTS_VOICE": "leo",
             }
             with patch.dict("os.environ", environment, clear=True), patch(
-                "voice_workflow_agent.server._public_protocol_catalog_entries",
+                "voiney_lab.server._public_protocol_catalog_entries",
                 return_value=([], SimpleNamespace(), False),
             ):
                 with self.assertRaises(HTTPException) as denied:
@@ -1799,9 +1799,9 @@ class ServerTests(unittest.TestCase):
             self.assertNotIn("private", encoded.casefold())
 
     def test_curated_protocol_action_operation_labels_are_exhaustive(self):
-        from voice_workflow_agent.curated_protocol import CuratedProtocolAction
+        from voiney_lab.curated_protocol import CuratedProtocolAction
         root = Path(__file__).resolve().parents[1]
-        server_py = (root / "src" / "voice_workflow_agent" / "server.py").read_text(encoding="utf-8")
+        server_py = (root / "src" / "voiney_lab" / "server.py").read_text(encoding="utf-8")
         for action in CuratedProtocolAction:
             with self.subTest(action=action.name):
                 self.assertIn(

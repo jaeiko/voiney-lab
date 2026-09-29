@@ -24,24 +24,24 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogUnavailableError,
 )
-from voice_workflow_agent.server import (
+from voiney_lab.server import (
     ServerConfig,
     _candidate_fixture_execution_state,
     voice_socket,
 )
-import voice_workflow_agent.server as server_module
+import voiney_lab.server as server_module
 
 from tests.test_protocol_catalog import write_text_pdf, analysis_draft
 

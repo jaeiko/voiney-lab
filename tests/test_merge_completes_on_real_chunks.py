@@ -25,12 +25,12 @@ IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pd
 def _merge_from_cache():
     """Merge whatever the cache holds for in-gel. No provider call."""
 
-    from voice_workflow_agent.chunk_analysis_cache import (
+    from voiney_lab.chunk_analysis_cache import (
         ChunkAnalysisCache,
         key_for_chunk,
     )
-    from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-    from voice_workflow_agent.protocol_chunk_analysis import (
+    from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+    from voiney_lab.protocol_chunk_analysis import (
         ChunkAnalysisLimits,
         ValidatedChunkResult,
         assemble_validated_protocol_claims,
@@ -38,7 +38,7 @@ def _merge_from_cache():
         merge_validated_chunk_results,
         plan_protocol_chunks,
     )
-    from voice_workflow_agent.protocol_claim_analysis import (
+    from voiney_lab.protocol_claim_analysis import (
         prepare_chunk_claim_request_context,
     )
 
@@ -122,7 +122,7 @@ class TheRealDocumentMergesTests(unittest.TestCase):
         )
 
     def test_every_cited_address_still_resolves(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             generate_page_evidence_segments,
         )
 
@@ -156,7 +156,7 @@ class ConditionATests(unittest.TestCase):
         import ast
         import inspect
 
-        from voice_workflow_agent import protocol_claim_analysis
+        from voiney_lab import protocol_claim_analysis
 
         source = inspect.getsource(protocol_claim_analysis)
         self.assertIn("duplicate_evidence_item_identifier", source)
@@ -185,7 +185,7 @@ class ConditionBTests(unittest.TestCase):
     """The guard that replaces what the rename used to catch by accident."""
 
     def _analysis(self, claims):
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ProtocolChunkClaimAnalysis,
         )
 
@@ -202,7 +202,7 @@ class ConditionBTests(unittest.TestCase):
 
     def _claim(self, claim_id, category, *, segments=("seg-a",), labels=None,
                count=None, required=True):
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ClaimSourceEvidence,
             ProtocolClaim,
         )
@@ -230,10 +230,10 @@ class ConditionBTests(unittest.TestCase):
         )
 
     def _check(self, claims):
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _refuse_contradictory_claims,
         )
 
@@ -247,7 +247,7 @@ class ConditionBTests(unittest.TestCase):
         )
 
     def test_two_repeats_on_one_sentence_declaring_different_ranges_fail(self):
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ClaimCategory,
             ProtocolAnalysisEvidenceError,
         )
@@ -265,7 +265,7 @@ class ConditionBTests(unittest.TestCase):
         )
 
     def test_one_passage_that_must_and_need_not_be_done_fails(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ClaimCategory,
             ProtocolAnalysisEvidenceError,
         )
@@ -290,7 +290,7 @@ class ConditionBTests(unittest.TestCase):
         refuse the document for being written normally.
         """
 
-        from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+        from voiney_lab.protocol_claim_analysis import ClaimCategory
 
         self._check(
             [
@@ -302,7 +302,7 @@ class ConditionBTests(unittest.TestCase):
         )
 
     def test_different_passages_are_never_compared(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+        from voiney_lab.protocol_claim_analysis import ClaimCategory
 
         self._check(
             [
@@ -336,7 +336,7 @@ class ConditionCTests(unittest.TestCase):
                 self.assertIn("step_id", item["stated_by_the_model"])
 
     def test_the_claim_itself_carries_no_step_scoping(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+        from voiney_lab.protocol_claim_analysis import ClaimCategory
 
         kept = {item["claim_id"] for item in self.merged.unverified_step_attributions}
         for claim in self.merged.claims:
@@ -358,7 +358,7 @@ class ConditionCTests(unittest.TestCase):
     def test_a_preserved_attribution_makes_nothing_executable(self) -> None:
         """Condition C: it is a record, never a readiness input."""
 
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
 
         self.assertIs(
             self.draft.readiness.status, domain.ReadinessStatus.ANALYSIS_REQUIRED
@@ -376,7 +376,7 @@ class ConditionCTests(unittest.TestCase):
 
         from dataclasses import fields
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             MergedProtocolClaims,
         )
 

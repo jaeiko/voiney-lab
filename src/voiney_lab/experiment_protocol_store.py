@@ -12,20 +12,20 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_config import (
     ProtocolConfigurationError,
     ProtocolFeatureDisabledError,
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_files import (
+from voiney_lab.experiment_protocol_files import (
     ProtocolFileStore,
     ProtocolFileStoreError,
     ProtocolObjectIntegrityError,
     ProtocolPdfObject,
     StoredProtocolPdf,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,

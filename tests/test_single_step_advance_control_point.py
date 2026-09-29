@@ -21,7 +21,7 @@ import ast
 import pathlib
 import unittest
 
-import voice_workflow_agent.curated_protocol as module
+import voiney_lab.curated_protocol as module
 
 SOURCE = pathlib.Path(module.__file__)
 
@@ -116,7 +116,7 @@ class ARefusalSaysWhyAndDoesNothingElseTests(unittest.TestCase):
 
     def _session(self, *, unread=True):
         from tests.test_pdf_to_session_walkthrough import _pipeline
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             CuratedProtocolFixture,
             CuratedProtocolSession,
         )

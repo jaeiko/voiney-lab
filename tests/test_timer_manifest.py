@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixtureError,
     CuratedProtocolSession,
     _canonical_json_bytes,
@@ -26,7 +26,7 @@ from voice_workflow_agent.curated_protocol import (
     load_curated_protocol_fixture,
 )
 
-DEV = Path("data/development_protocols")
+DEV = Path("data/fixtures/development_protocols")
 FIXTURE = DEV / "candidate_a_curated_analysis.json"
 PROVENANCE = DEV / "candidate_a_curated_analysis.provenance.json"
 VISUALS = DEV / "candidate_a_curated_analysis.visuals.json"

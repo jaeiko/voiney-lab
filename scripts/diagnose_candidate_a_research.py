@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from voice_workflow_agent.external_references import (
+from voiney_lab.external_references import (
     ExternalReferenceSettings,
     XaiAuthoritativeWebSearch,
 )

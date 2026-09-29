@@ -9,11 +9,11 @@ import statistics
 import time
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.multi_brain import activation_for
+from voiney_lab.multi_brain import activation_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,12 +39,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     fixture = load_curated_protocol_fixture(
-        ROOT / "data/development_protocols/candidate_a_curated_analysis.json",
-        ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json",
+        ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json",
+        ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json",
         args.source_pdf,
     )
     dataset = json.loads((
-        ROOT / "data/evaluation/candidate_a_real_voice_hardening.json"
+        ROOT / "data/fixtures/evaluation/candidate_a_real_voice_hardening.json"
     ).read_text(encoding="utf-8"))
     correct = 0
     mutation_false_positives = 0

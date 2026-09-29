@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.document_store import connect, ingest_manifest
-from voice_workflow_agent.safety_documents import ManifestValidationError
+from voiney_lab.document_store import connect, ingest_manifest
+from voiney_lab.safety_documents import ManifestValidationError
 
 
 def synthetic_document(**overrides):

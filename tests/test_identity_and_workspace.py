@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from voice_workflow_agent.identity import (
+from voiney_lab.identity import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
     DevIdentityProvider,
@@ -18,7 +18,7 @@ from voice_workflow_agent.identity import (
     principal_from_oidc_claims,
     require_permission,
 )
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.workspace_store import (
     ApprovalReplayError,
     TranslationIntegrityError,
     WorkspaceConflictError,

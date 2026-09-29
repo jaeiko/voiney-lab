@@ -22,13 +22,13 @@ from typing import Any, Literal
 
 from openai import APITimeoutError
 
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     build_protocol_analysis_chat_request,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
 )
-from voice_workflow_agent.protocol_claim_stream_telemetry import (
+from voiney_lab.protocol_claim_stream_telemetry import (
     IncrementalProtocolClaimTelemetry,
     ProtocolClaimStructuralTelemetry,
 )

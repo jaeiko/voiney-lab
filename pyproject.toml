@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "voice-workflow-agent"
+name = "voiney-lab"
 version = "0.1.0"
 description = "Trusted laboratory protocol knowledge, voice execution, and auditable integration layer"
 readme = "README.md"
@@ -28,8 +28,8 @@ dependencies = [
 ]
 
 [project.scripts]
-voice-workflow-replay = "voice_workflow_agent.replay_turns:main"
-voice-workflow-evaluate = "voice_workflow_agent.voice_evaluation:main"
+voice-workflow-replay = "voiney_lab.replay_turns:main"
+voice-workflow-evaluate = "voiney_lab.voice_evaluation:main"
 
 [project.optional-dependencies]
 moss = [
@@ -48,4 +48,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-voice_workflow_agent = ["static/*.html", "static/*.js", "static/*.css"]
+voiney_lab = ["static/*.html", "static/*.js", "static/*.css"]

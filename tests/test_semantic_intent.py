@@ -10,7 +10,7 @@ import asyncio
 import time
 import unittest
 
-from voice_workflow_agent.semantic_intent import (
+from voiney_lab.semantic_intent import (
     PROPOSABLE_INTENTS,
     SEMANTIC_INTENT_TIERS,
     SemanticIntent,

@@ -20,22 +20,22 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     ProtocolCatalog,
     ProtocolCatalogUnavailableError,
 )
-from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_claim_analysis import ClaimCategory
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     analyze_protocol_chunk,
@@ -103,7 +103,7 @@ class PipelineReachesAssemblyTests(unittest.TestCase):
         # labels, and was rejected on every attempt. Bounding the labels
         # instead takes the worst chunk here from 22 to 9.
         self.assertEqual(len(self.plan.chunks), 5)
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _numbered_step_labels,
         )
 
@@ -316,7 +316,7 @@ class TheLoopStopsAtExecutionReadinessTests(unittest.TestCase):
         is refused unless it reached an experiment record.
         """
 
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             AMBIGUITY_SINGLE_AUTHORITATIVE,
         )
 

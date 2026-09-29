@@ -1,6 +1,6 @@
 import unittest
-from voice_workflow_agent.completion_intent import classify_korean_completion_command
-from voice_workflow_agent.curated_protocol import classify_curated_control_intent, CuratedProtocolAction
+from voiney_lab.completion_intent import classify_korean_completion_command
+from voiney_lab.curated_protocol import classify_curated_control_intent, CuratedProtocolAction
 
 
 class CompletionIntentTests(unittest.TestCase):

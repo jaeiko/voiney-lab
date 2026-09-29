@@ -15,7 +15,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
 
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     ClaimCategory,
     PageCoverageStatus,
     StructureMarkerKind,

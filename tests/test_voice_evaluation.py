@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from voice_workflow_agent.voice_evaluation import (
+from voiney_lab.voice_evaluation import (
     EvaluationCase,
     EvaluationCondition,
     VoiceEvaluationError,

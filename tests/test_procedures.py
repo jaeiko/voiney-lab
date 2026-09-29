@@ -2,17 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.procedure_definitions import (
+from voiney_lab.procedure_definitions import (
     ProcedureDefinition, ProcedureStep, SourceReference,
 )
-from voice_workflow_agent.procedure_store import ProcedureStore
-from voice_workflow_agent.procedures import (
+from voiney_lab.procedure_store import ProcedureStore
+from voiney_lab.procedures import (
     KOREAN_COMPLETION_PHRASES, KOREAN_TIMER_START_PHRASES,
     ProcedureController, authorized_completion_step_id,
     authorized_observation_arguments,
     authorized_timer_start_step_id,
 )
-from voice_workflow_agent.tools import (
+from voiney_lab.tools import (
     COMPLETE_CURRENT_STEP_TOOL_NAME, GET_CURRENT_STEP_TOOL_NAME,
     GET_WORKFLOW_SUMMARY_TOOL_NAME, RECORD_STEP_OBSERVATION_TOOL_NAME,
     START_PROCEDURE_TOOL_NAME, START_STEP_TIMER_TOOL_NAME, ToolContext, execute_tool,

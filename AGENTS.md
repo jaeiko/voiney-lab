@@ -28,7 +28,7 @@ source-linked protocol evidence.
 
 ## Current architecture map
 
-- `src/voice_workflow_agent/server.py`: FastAPI, WebSocket, Cascade voice loop,
+- `src/voiney_lab/server.py`: FastAPI, WebSocket, Cascade voice loop,
   protocol APIs, external visual jobs, admin boundary.
 - `intent_arbitration.py`: shared deterministic request classifier.
 - `runtime_routing.py`: production curated-protocol routing boundary.
@@ -76,24 +76,16 @@ claim is not exercised by code and tests, mark it historical or future work.
 
 ## Documentation authority
 
-- `README.md`: current runnable product contract.
-- `docs/CODEX_COMMERCIALIZATION_AUDIT.md`: finding/fix/evidence/remaining-risk
-  ledger.
-- `docs/CODEX_FINAL_COMMERCIALIZATION_REPORT.md`: final verification and product
-  handoff for the pre-Pass-2 baseline.
-- `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`: current phase-by-phase
-  validation ledger and external integration classification.
-- `docs/PRODUCTIZATION_FINAL_REPORT.md`: current productization and controlled-
-  pilot handoff of record (role UX, workflow trust, operations, metrics,
-  backup/recovery, evidence, documentation, and remaining commercial gates).
-  `docs/COMMERCIALIZATION_PASS4_REPORT.md` retains the prior independent
-  repository/CI, workflow-authority, live-integration, and deployment evidence;
-  it is superseded but not invalidated. `docs/COMMERCIALIZATION_PASS3_REPORT.md`
-  (Product Experience, repository
-  re-rooting, pilot acceptance hardening, repository-identity cleanup) is the
-  prior handoff, superseded but not invalidated.
-- `.agent/architecture.md`, `product_context.md`, `evaluation_strategy.md`,
-  `security_rules.md`, and `roadmap.md`: contributor design constraints.
+In order of precedence, the same list as `CLAUDE.md`:
 
-Older phase-numbered documents are historical evidence and cannot override current
-code, tests, or the documents above.
+- `README.md`: current runnable product contract.
+- `AGENTS.md` (this file) and `.agent/*.md`: contributor design constraints.
+  `.agent/architecture.md` is the primary source for the current architecture.
+- `docs/CURRENT_ARCHITECTURE.md`: the docs-side component, state-authority,
+  persistence, and failure view.
+- `docs/MIGRATION_NOTES.md`: schema history.
+
+The ledgers and handoff reports this section used to list were superseded and
+moved to `docs/archive/`; nothing under `docs/` has taken over their roles.
+Older phase-numbered or `CODEX_*`-prefixed documents are historical evidence
+and cannot override current code, tests, or the documents above.

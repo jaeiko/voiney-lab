@@ -6,15 +6,15 @@ import ast
 import pathlib
 import unittest
 
-from voice_workflow_agent import protocol_claim_analysis
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab import protocol_claim_analysis
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_RESPONSE_SCHEMA,
     _STABLE_ID,
     _VALUE_UNITS,
     segment_carries_unit_bearing_value,
 )
-from voice_workflow_agent.replay_turns import check
+from voiney_lab.replay_turns import check
 
 # Fields the server validates with _STABLE_ID. A rule enforced here but absent
 # from the schema cannot be satisfied by a provider: it was exactly this gap on
@@ -178,7 +178,7 @@ class ReplayCheckTests(unittest.TestCase):
         self.assertEqual(check([broken], 1), ["turn 1 is missing ['action']"])
 
     def test_the_real_demo_replay_passes_its_own_check(self) -> None:
-        from voice_workflow_agent.replay_turns import (
+        from voiney_lab.replay_turns import (
             DEFAULT_TURNS,
             parse_args,
             replay,
