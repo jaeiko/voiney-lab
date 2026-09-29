@@ -15,8 +15,8 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, We
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
-from voice_workflow_agent.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
-from voice_workflow_agent.brain import (
+from voiney_lab.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
+from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
     SentenceSegment,
@@ -25,14 +25,14 @@ from voice_workflow_agent.brain import (
     confirmation_intent,
     stream_brain_turn,
 )
-from voice_workflow_agent.configuration import (
+from voiney_lab.configuration import (
     CascadeSttSettings,
     ConfigurationError,
     VoiceVadSettings,
     cascade_filler_delay_ms,
 )
-from voice_workflow_agent.cascade_filler import CascadeFiller
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.cascade_filler import CascadeFiller
+from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     CuratedProtocolAction,
     CuratedProtocolFixture,
@@ -41,15 +41,15 @@ from voice_workflow_agent.curated_protocol import (
     ProtocolVisualKind,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolConfigurationError,
     ProtocolFeatureDisabledError,
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
     ProtocolPdfEncryptedError,
@@ -60,11 +60,11 @@ from voice_workflow_agent.experiment_protocol_pdf import (
     ProtocolPdfTypeError,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
     initialize_protocol_store,
 )
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
     ReportNarrative,
@@ -72,7 +72,7 @@ from voice_workflow_agent.experiment_reports import (
     ReportWriterSettings,
     new_session_id,
 )
-from voice_workflow_agent.external_references import (
+from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
     XaiAuthoritativeWebSearch,
@@ -80,20 +80,20 @@ from voice_workflow_agent.external_references import (
     plan_research_query,
     supplemental_knowledge_allowed,
 )
-from voice_workflow_agent.generated_visuals import (
+from voiney_lab.generated_visuals import (
     GENERATED_VISUALS,
     GeneratedVisualSettings,
     VisualSpecification,
     XaiImageGenerator,
 )
-from voice_workflow_agent.web_visuals import (
+from voiney_lab.web_visuals import (
     PubChemChemistryAdapter,
     WEB_VISUAL_REGISTRY,
     WebVisualSettings,
     WikimediaVisualAdapter,
     XaiAuthoritativeImageSearch,
 )
-from voice_workflow_agent.notifications import (
+from voiney_lab.notifications import (
     HandoffContact,
     NotificationProvider,
     NotificationResult,
@@ -101,8 +101,8 @@ from voice_workflow_agent.notifications import (
     FakeNotificationProvider,
     resolve_handoff_recipient,
 )
-from voice_workflow_agent.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
@@ -113,14 +113,14 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
-from voice_workflow_agent.protocol_ocr import (
+from voiney_lab.protocol_ocr import (
     ProtocolOcrError,
     ProtocolOcrProvider,
     ProtocolOcrUnavailableError,
 )
-from voice_workflow_agent.document_store import CATALOG_SCHEMA_VERSION
-from voice_workflow_agent.emergency import recognize_emergency
-from voice_workflow_agent.language import (
+from voiney_lab.document_store import CATALOG_SCHEMA_VERSION
+from voiney_lab.emergency import recognize_emergency
+from voiney_lab.language import (
     CLARIFICATION_TEXT, InputLanguagePreference, ServerVoicePolicy,
     Transcription, classify_input_event, classify_transcription_language,
     clean_speech_text,
@@ -128,14 +128,14 @@ from voice_workflow_agent.language import (
     normalize_provider_language,
     resolve_turn_language, transcription_quality_issue,
 )
-from voice_workflow_agent.intent_arbitration import arbitrate_request
-from voice_workflow_agent.runtime_metrics import RUNTIME_METRICS
-from voice_workflow_agent.moss_retrieval import (
+from voiney_lab.intent_arbitration import arbitrate_request
+from voiney_lab.runtime_metrics import RUNTIME_METRICS
+from voiney_lab.moss_retrieval import (
     get_moss_runtime,
     start_moss_runtime_from_environment,
     stop_moss_runtime,
 )
-from voice_workflow_agent.multi_brain import (
+from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainClaim,
     BrainFact,
@@ -146,7 +146,7 @@ from voice_workflow_agent.multi_brain import (
     VisualBrainOutput,
     activation_for,
 )
-from voice_workflow_agent.tools import (
+from voiney_lab.tools import (
     APPROVED_LAB_REFERENCE_TOOL_NAME,
     COMPLETE_CURRENT_STEP_TOOL_NAME,
     CREATE_REPORT_TOOL_NAME,
@@ -159,27 +159,27 @@ from voice_workflow_agent.tools import (
     execute_tool,
     search_approved_lab_references,
 )
-from voice_workflow_agent.procedure_definitions import load_procedure_definitions
-from voice_workflow_agent.procedure_store import ProcedureStore
-from voice_workflow_agent.procedures import (
+from voiney_lab.procedure_definitions import load_procedure_definitions
+from voiney_lab.procedure_store import ProcedureStore
+from voiney_lab.procedures import (
     ProcedureController, authorized_completion_step_id,
     authorized_observation_arguments,
     authorized_timer_start_step_id,
     deterministic_procedure_text, korean_timer_status_question,
     unattached_procedure_state,
 )
-from voice_workflow_agent.protocol import ProtocolError, audio_segment_start, event, parse_control
-from voice_workflow_agent.runtime_routing import (
+from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
+from voiney_lab.runtime_routing import (
     route_curated_runtime_turn_with_semantics,
 )
-from voice_workflow_agent.semantic_intent import (
+from voiney_lab.semantic_intent import (
     SemanticIntentContext,
     SemanticIntentProposal,
     SemanticIntentSettings,
     propose_semantic_intent,
 )
-from voice_workflow_agent.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
-from voice_workflow_agent.identity import (
+from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
+from voiney_lab.identity import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
     DevIdentityProvider,
@@ -192,7 +192,7 @@ from voice_workflow_agent.identity import (
     permissions_for_roles,
     require_permission,
 )
-from voice_workflow_agent.protocol_sources import (
+from voiney_lab.protocol_sources import (
     GitHubConnector,
     GoogleDriveConnector,
     ProtocolSourceHub,
@@ -202,19 +202,19 @@ from voice_workflow_agent.protocol_sources import (
     normalize_protocols_io_identifier,
     verify_github_webhook_signature,
 )
-from voice_workflow_agent.drylab_workflows import (
+from voiney_lab.drylab_workflows import (
     DryLabWorkflowRegistry,
     inspect_nextflow_snapshot,
     inspect_snakemake_snapshot,
 )
-from voice_workflow_agent.eln_connectors import (
+from voiney_lab.eln_connectors import (
     CompletedStep,
     ELabFtwConnector,
     ElnConnectorError,
     ExperimentWriteback,
     Observation as ElnObservation,
 )
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.workspace_store import (
     ApprovalReplayError,
     TranslationIntegrityError,
     WorkspaceConflictError,
@@ -235,7 +235,7 @@ def _load_project_environment(path:Path|None=None)->bool:
 
 _load_project_environment()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
-log=logging.getLogger("voice_workflow_agent")
+log=logging.getLogger("voiney_lab")
 
 
 def log_effective_vad_configuration(settings:VoiceVadSettings)->None:

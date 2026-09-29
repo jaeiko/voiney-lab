@@ -36,7 +36,7 @@ _FORBIDDEN = (
 
 def _session():
     from tests.test_merge_completes_on_real_chunks import _merge_from_cache
-    from voice_workflow_agent.curated_protocol import (
+    from voiney_lab.curated_protocol import (
         CuratedProtocolFixture,
         CuratedProtocolSession,
     )
@@ -242,7 +242,7 @@ class OnlyAPersonClosesItTests(unittest.TestCase):
         )
 
     def test_a_declaration_clears_no_readiness_gate(self) -> None:
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
 
         before = domain.assess_readiness(self.session.fixture.draft.protocol)
         self.session.declare_repeat_interval_complete(
@@ -288,7 +288,7 @@ class AnUncapturedRepeatIsNotLedTests(unittest.TestCase):
     def test_the_document_is_kept_out_of_execution_instead(self) -> None:
         """The uncaptured ones are answered for by a readiness gate."""
 
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
 
         self.assertIn(
             domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value,

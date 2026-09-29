@@ -680,7 +680,7 @@ def _pypdfium_page_texts(
             [
                 sys.executable,
                 "-m",
-                "voice_workflow_agent.pdf_text_worker",
+                "voiney_lab.pdf_text_worker",
             ],
             input=request.encode("utf-8"),
             capture_output=True,

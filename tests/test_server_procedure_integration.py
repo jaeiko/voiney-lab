@@ -9,20 +9,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.brain import (
+from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
 )
-from voice_workflow_agent.document_store import ingest_manifest, ingest_manifest_file
-from voice_workflow_agent.language import Transcription
-from voice_workflow_agent.procedure_definitions import load_procedure_definitions
-from voice_workflow_agent.procedure_store import ProcedureStore
-from voice_workflow_agent.procedures import ProcedureController
-from voice_workflow_agent.server import (
+from voiney_lab.document_store import ingest_manifest, ingest_manifest_file
+from voiney_lab.language import Transcription
+from voiney_lab.procedure_definitions import load_procedure_definitions
+from voiney_lab.procedure_store import ProcedureStore
+from voiney_lab.procedures import ProcedureController
+from voiney_lab.server import (
     ListenerSession, ServerConfig, run_turn, voice_socket,
 )
-from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import TurnState
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import TurnState
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "data" / "procedure_demo"
@@ -128,13 +128,13 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         client = ForcedClient(name, arguments, answer)
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
-        with patch("voice_workflow_agent.server.transcribe",
+        with patch("voiney_lab.server.transcribe",
                    return_value=Transcription(transcript, "ko")), \
-             patch("voice_workflow_agent.server.synthesize", return_value=b"\0\0"), \
-             patch("voice_workflow_agent.server.asyncio.to_thread",
+             patch("voiney_lab.server.synthesize", return_value=b"\0\0"), \
+             patch("voiney_lab.server.asyncio.to_thread",
                    side_effect=immediate), \
-             patch("voice_workflow_agent.server.AsyncOpenAI", return_value=client), \
-             patch("voice_workflow_agent.server.require_env", return_value="test"):
+             patch("voiney_lab.server.AsyncOpenAI", return_value=client), \
+             patch("voiney_lab.server.require_env", return_value="test"):
             asyncio.run(run_turn(socket, self.session, b"\0\0", turn_id, 1))
         routes = [item["route"] for item in socket.text if item["type"] == "turn.done"]
         self.assertTrue(set(routes).issubset(ROUTES))
@@ -422,7 +422,7 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
         # Approval exercises the real approval path; only report submission is external.
         self.session.history.pending_report = dict(pending)
-        with patch("voice_workflow_agent.brain.execute_tool", return_value={
+        with patch("voiney_lab.brain.execute_tool", return_value={
             "status": "success", "report_id": "SR-20260725-A1B2C3",
             "report_status": "queued_for_handoff",
         }):
@@ -461,7 +461,7 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
         }
         self.session.history.pending_report=dict(pending)
         with patch(
-            "voice_workflow_agent.tools.create_safety_report",
+            "voiney_lab.tools.create_safety_report",
             return_value={
                 "status":"success","report_id":"SR-20260725-A1B2C3",
                 "report_status":"queued_for_handoff",
@@ -606,8 +606,8 @@ class ProcedureServerIntegrationTests(unittest.TestCase):
             captured.append(controller)
             return controller
 
-        with patch("voice_workflow_agent.server.server_config", return_value=config), \
-             patch("voice_workflow_agent.server.ProcedureController", side_effect=construct):
+        with patch("voiney_lab.server.server_config", return_value=config), \
+             patch("voiney_lab.server.ProcedureController", side_effect=construct):
             asyncio.run(voice_socket(socket))
         self.assertEqual(len(captured), 1)
         self.assertIsNone(captured[0].attached_session_id)

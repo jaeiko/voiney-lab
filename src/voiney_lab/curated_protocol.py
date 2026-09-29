@@ -23,24 +23,24 @@ from urllib.parse import quote
 
 from pypdf import PdfReader
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_analysis import (
     ANALYSIS_RESPONSE_SCHEMA,
     ProtocolAnalysisDraft,
     parse_protocol_analysis_response,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.completion_intent import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.completion_intent import (
     CompletionIntentDecision,
     classify_korean_completion_command,
     resolve_korean_completion_decision,
 )
-from voice_workflow_agent.intent_arbitration import (
+from voiney_lab.intent_arbitration import (
     RequestArbitration,
     RequestIntent,
     arbitrate_request,
 )
-from voice_workflow_agent.semantic_intent import (
+from voiney_lab.semantic_intent import (
     SemanticIntent,
     SemanticIntentContext,
     SemanticIntentDecision,
@@ -688,7 +688,7 @@ def _load_timer_manifest(
     ):
         raise CuratedProtocolFixtureError("Timer manifest identity is invalid.")
 
-    from voice_workflow_agent.protocol_claim_analysis import (
+    from voiney_lab.protocol_claim_analysis import (
         generate_page_evidence_segments,
     )
 
@@ -864,6 +864,7 @@ def load_curated_protocol_fixture(
     if (
         provenance["status"] != DEVELOPMENT_FIXTURE_STATUS
         or provenance["fixture_creation_mode"] != DEVELOPMENT_FIXTURE_MODE
+        # Stored provenance value, not an import path: it keeps the old package name.
         or provenance["extraction_method"]
         != "voice_workflow_agent.experiment_protocol_pdf.extract_protocol_pdf"
     ):

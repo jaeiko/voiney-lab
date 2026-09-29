@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     TextVerification,

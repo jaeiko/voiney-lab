@@ -37,7 +37,7 @@ class TheUiIsServedTheHandBuiltFixtureTests(unittest.TestCase):
         match the request.
         """
 
-        server = Path("src/voice_workflow_agent/server.py").read_text()
+        server = Path("src/voiney_lab/server.py").read_text()
         block_start = server.index("selected_curated_fixture=None")
         block = server[block_start : server.index(
             "session.set_curated_protocol_fixture(", block_start
@@ -76,12 +76,12 @@ class TheTimerIsEvidenceBoundTests(unittest.TestCase):
     """
 
     def test_the_index_keyed_table_is_gone(self) -> None:
-        import voice_workflow_agent.curated_protocol as module
+        import voiney_lab.curated_protocol as module
 
         self.assertFalse(hasattr(module, "_CANDIDATE_A_STEP_TIMERS"))
         self.assertNotIn(
             "_CANDIDATE_A_STEP_TIMERS",
-            Path("src/voice_workflow_agent/curated_protocol.py").read_text(),
+            Path("src/voiney_lab/curated_protocol.py").read_text(),
         )
 
     def test_the_manifest_exists_and_is_bound_to_both_digests(self) -> None:
@@ -97,7 +97,7 @@ class TheTimerIsEvidenceBoundTests(unittest.TestCase):
         self.assertEqual(len(manifest["candidates"]), 10)
 
     def test_every_entry_cites_a_literal_that_states_its_duration(self) -> None:
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             _timer_literal_seconds,
         )
 
@@ -187,13 +187,13 @@ class TheImageStepLinkTests(unittest.TestCase):
     def test_the_loader_refuses_a_page_that_disagrees(self) -> None:
         """The cross-check is enforced, not merely present in the data."""
 
-        loader = Path("src/voice_workflow_agent/curated_protocol.py").read_text()
+        loader = Path("src/voiney_lab/curated_protocol.py").read_text()
         self.assertIn(
             'item["page_number"] == step.evidence.source_page_number', loader
         )
 
     def test_only_selected_candidates_are_served(self) -> None:
-        loader = Path("src/voice_workflow_agent/curated_protocol.py").read_text()
+        loader = Path("src/voiney_lab/curated_protocol.py").read_text()
         self.assertIn('candidate.get("selected") is True', loader)
 
     def test_no_other_document_has_a_manifest(self) -> None:
@@ -222,7 +222,7 @@ class CompletionIsPositionalOnlyTests(unittest.TestCase):
     """
 
     def test_completing_a_step_grants_no_mutation(self) -> None:
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             _SEMANTIC_INTENT_PROJECTION,
             SemanticIntent,
         )
@@ -237,7 +237,7 @@ class CompletionIsPositionalOnlyTests(unittest.TestCase):
         )
 
     def test_only_resuming_may_mutate_from_a_semantic_proposal(self) -> None:
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             _SEMANTIC_INTENT_PROJECTION,
             SemanticIntent,
         )
@@ -250,7 +250,7 @@ class CompletionIsPositionalOnlyTests(unittest.TestCase):
         self.assertEqual(mutating, {SemanticIntent.RESUME})
 
     def test_final_step_is_a_position_not_a_judgement(self) -> None:
-        session = Path("src/voice_workflow_agent/curated_protocol.py").read_text()
+        session = Path("src/voiney_lab/curated_protocol.py").read_text()
         self.assertIn("self.current_index == len(steps) - 1", session)
         self.assertIn(
             "self.current_index == len(self.fixture.steps) - 1", session

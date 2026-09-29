@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from voice_workflow_agent.runtime_metrics import RuntimeMetrics
+from voiney_lab.runtime_metrics import RuntimeMetrics
 
 
 def test_runtime_metrics_aggregate_canonical_events_without_content() -> None:

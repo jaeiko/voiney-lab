@@ -18,12 +18,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     ANALYSIS_SCHEMA_VERSION,
     AnalysisRevisionRecord,
     ProtocolSerializationError,

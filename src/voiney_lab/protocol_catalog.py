@@ -19,9 +19,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import CuratedProtocolFixture
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import CuratedProtocolFixture
+from voiney_lab.experiment_protocol_analysis import (
     MAX_SINGLE_PASS_INPUT_BYTES,
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
@@ -30,19 +30,19 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     analyze_protocol_extraction,
     prepare_protocol_analysis_request,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
     ProtocolPdfPage,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     AnalysisRevisionRecord,
     ProtocolRevisionRecord,
     ProtocolStore,
     serialize_analysis,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ProtocolChunkAdmissionError,
     ProtocolChunkMergeError,
@@ -53,7 +53,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     ProtocolChunkClaimAnalysis,
     _numbered_step_labels,
     generate_page_evidence_segments,
@@ -61,7 +61,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     serialize_chunk_claim_analysis,
     unaccounted_segments_by_page,
 )
-from voice_workflow_agent.protocol_ocr import (
+from voiney_lab.protocol_ocr import (
     OcrResult,
     ProtocolOcrProvider,
     ocr_result_payload,

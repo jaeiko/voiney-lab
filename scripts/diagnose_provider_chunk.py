@@ -23,18 +23,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from voice_workflow_agent.chunk_analysis_cache import (
+from voiney_lab.chunk_analysis_cache import (
     ChunkAnalysisCache,
     key_for_chunk,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     extraction_for_chunk,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_SCHEMA_VERSION,
     claim_response_schema,
@@ -84,7 +84,7 @@ def _describe_segments(extraction, page_number, source_revision, segment_ids):
 
     if not segment_ids or not page_number:
         return []
-    from voice_workflow_agent.protocol_claim_analysis import (
+    from voiney_lab.protocol_claim_analysis import (
         _numbered_step_labels,
         _segments_inside_numbered_steps,
         generate_page_evidence_segments,
@@ -518,17 +518,17 @@ def _walk(source, extraction, plan, validated):
     import tempfile
     from dataclasses import replace
 
-    from voice_workflow_agent import experiment_protocol as domain
-    from voice_workflow_agent.curated_protocol import CuratedProtocolSession
-    from voice_workflow_agent.experiment_protocol_store import (
+    from voiney_lab import experiment_protocol as domain
+    from voiney_lab.curated_protocol import CuratedProtocolSession
+    from voiney_lab.experiment_protocol_store import (
         ProtocolPersistenceSettings,
         initialize_protocol_store,
     )
-    from voice_workflow_agent.protocol_catalog import (
+    from voiney_lab.protocol_catalog import (
         AMBIGUITY_SINGLE_AUTHORITATIVE,
         ProtocolCatalog,
     )
-    from voice_workflow_agent.protocol_chunk_analysis import (
+    from voiney_lab.protocol_chunk_analysis import (
         assemble_validated_protocol_claims,
         merge_validated_chunk_results,
     )

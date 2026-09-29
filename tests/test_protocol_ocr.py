@@ -5,19 +5,19 @@ import sqlite3
 import pytest
 from pypdf import PdfWriter
 
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     ProtocolCatalog,
     ProtocolOcrRequiredError,
     ProtocolOcrReviewError,
     SharedSecretApprovalPolicy,
 )
-from voice_workflow_agent.protocol_ocr import (
+from voiney_lab.protocol_ocr import (
     OcrPage,
     OcrResult,
     ProtocolOcrResultError,

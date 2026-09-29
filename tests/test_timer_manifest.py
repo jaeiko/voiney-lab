@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixtureError,
     CuratedProtocolSession,
     _canonical_json_bytes,

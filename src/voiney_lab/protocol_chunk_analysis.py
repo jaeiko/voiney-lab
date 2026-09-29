@@ -14,14 +14,14 @@ import math
 from dataclasses import dataclass, fields, replace
 from typing import Iterable
 
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     MAX_SINGLE_PASS_INPUT_BYTES,
     ProtocolAnalysisDraft,
     ProtocolAnalysisError,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisModel,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     MAX_CHUNK_CLAIM_RESPONSE_BYTES,
     MergedProtocolClaims,
     ProtocolChunkClaimAnalysis,
@@ -34,7 +34,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     validate_chunk_claim_analysis,
     validate_whole_protocol_claims,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     TextVerification,
     ProtocolPdfPage,

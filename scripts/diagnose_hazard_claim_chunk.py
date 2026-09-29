@@ -24,13 +24,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     extraction_for_chunk,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     ClaimCategory,
     claim_response_schema,

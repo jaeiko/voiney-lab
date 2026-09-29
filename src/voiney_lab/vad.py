@@ -10,14 +10,14 @@ import logging
 
 import webrtcvad
 
-from voice_workflow_agent.audio import FRAME_BYTES, FRAME_MS, SAMPLE_RATE
-from voice_workflow_agent.configuration import (
+from voiney_lab.audio import FRAME_BYTES, FRAME_MS, SAMPLE_RATE
+from voiney_lab.configuration import (
     CascadeVadSettings,
     milliseconds_to_frames,
 )
 
 VAD_END_SILENCE_MS = 1000
-log = logging.getLogger("voice_workflow_agent.vad")
+log = logging.getLogger("voiney_lab.vad")
 
 
 class TurnState(str, Enum):

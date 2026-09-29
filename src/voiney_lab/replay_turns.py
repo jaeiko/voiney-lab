@@ -8,19 +8,19 @@ import json
 import sys
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_protocol_analysis import ProtocolAnalysisDraft
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisDraft
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
 )
-from voice_workflow_agent.runtime_routing import route_curated_runtime_turn
+from voiney_lab.runtime_routing import route_curated_runtime_turn
 
 
 DEFAULT_TURNS = (

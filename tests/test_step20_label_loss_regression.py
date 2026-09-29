@@ -22,17 +22,17 @@ import json
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisResponseError,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
     _numbered_step_labels,
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     extraction_for_chunk,
     plan_protocol_chunks,

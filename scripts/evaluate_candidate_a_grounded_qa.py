@@ -9,12 +9,12 @@ import statistics
 import time
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.language import Transcription, classify_input_event
+from voiney_lab.language import Transcription, classify_input_event
 
 
 ROOT = Path(__file__).resolve().parents[1]

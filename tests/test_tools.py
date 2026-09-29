@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.tools import (
+from voiney_lab.tools import (
     CHECK_REPORT_TOOL,
     CREATE_REPORT_TOOL,
     INTERNAL_SERVICE_OPERATIONS,
@@ -18,7 +18,7 @@ from voice_workflow_agent.tools import (
     execute_tool,
     search_approved_safety_manual,
 )
-from voice_workflow_agent.document_store import ingest_manifest
+from voiney_lab.document_store import ingest_manifest
 from tests.test_retrieval import operational_document
 
 
@@ -150,7 +150,7 @@ class ToolTests(unittest.TestCase):
 
     def test_trusted_language_facility_and_scope_reach_retrieval(self):
         context = ToolContext(Path("trusted.sqlite"), "TRUSTED-FACILITY", "vi", "reference_only")
-        with patch("voice_workflow_agent.retrieval.search_safety_documents",
+        with patch("voiney_lab.retrieval.search_safety_documents",
                    return_value={"status":"not_found","answerable":False,"matches":[]}) as search:
             result = execute_tool("search_approved_safety_manual",
                                   {"query":"FICTIONAL","topic":"first_aid"}, context)
@@ -181,7 +181,7 @@ class ToolTests(unittest.TestCase):
                 "language": "ko",
                 "material_or_equipment": "아세톤",
             }
-            with patch("voice_workflow_agent.tools._new_report_id", return_value="SR-20260722-A1B2C3"):
+            with patch("voiney_lab.tools._new_report_id", return_value="SR-20260722-A1B2C3"):
                 first = create_safety_report(**arguments, inbox_path=inbox, now_epoch=1000)
                 second = create_safety_report(**arguments, inbox_path=inbox, now_epoch=1001)
             self.assertEqual(first["status"], "success")
@@ -204,7 +204,7 @@ class ToolTests(unittest.TestCase):
                 "step_number":3,
             }
             with patch(
-                "voice_workflow_agent.tools._new_report_id",
+                "voiney_lab.tools._new_report_id",
                 return_value="SR-20260722-A1B2C3",
             ):
                 result=create_safety_report(
@@ -242,7 +242,7 @@ class ToolTests(unittest.TestCase):
             "urgency":"urgent","exposure_status":"unknown","language":"ko",
         }
         with patch(
-            "voice_workflow_agent.tools.create_safety_report",
+            "voiney_lab.tools.create_safety_report",
             return_value={
                 "status":"success","report_id":"SR-20260722-A1B2C3",
                 "report_status":"queued_for_handoff",
@@ -278,7 +278,7 @@ class ToolTests(unittest.TestCase):
             processed = root / "reports" / "processed.txt"
             status_dir = root / "reports" / "status"
             outbox = root / "outbox"
-            with patch("voice_workflow_agent.tools._new_report_id", return_value="SR-20260722-A1B2C3"):
+            with patch("voiney_lab.tools._new_report_id", return_value="SR-20260722-A1B2C3"):
                 created = create_safety_report(
                     "Lab A",
                     "small spill",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import fields, replace
 
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.experiment_protocol import (
     ANALYSIS_REQUIRED_LABEL,
     GUIDANCE_READY_LABEL,
     ActualElapsedTime,
@@ -48,7 +48,7 @@ from voice_workflow_agent.experiment_protocol import (
     detect_features,
     validate_protocol,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     TextVerification,
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,

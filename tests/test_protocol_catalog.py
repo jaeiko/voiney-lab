@@ -16,27 +16,27 @@ import httpx
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent import server as server_module
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab import server as server_module
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolFixtureError,
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisDraft,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisInputTooLargeError,
     ProtocolEvidenceDiagnostic,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolFeatureDisabledError,
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import initialize_protocol_store
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogNotFoundError,
@@ -46,7 +46,7 @@ from voice_workflow_agent.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
-from voice_workflow_agent.protocol_ocr import (
+from voiney_lab.protocol_ocr import (
     OcrPage,
     OcrResult,
     ProtocolOcrUnavailableError,
@@ -77,7 +77,7 @@ async def _dedicated_to_thread(function, *args, **kwargs):
     if errors:
         raise errors[0]
     return result[0]
-from voice_workflow_agent.server import (
+from voiney_lab.server import (
     ServerConfig,
     get_protocol_analysis_status,
     get_protocol_source_page,
@@ -341,7 +341,7 @@ class ProtocolCatalogTests(unittest.TestCase):
         fake_model.analyze.assert_not_called()
         draft = analysis_draft(self.alpha, entry.protocol_id, "Protocol Alpha")
         with patch(
-            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            "voiney_lab.protocol_catalog.analyze_protocol_extraction",
             return_value=draft,
         ) as analyze:
             self.catalog.analyze(
@@ -457,16 +457,16 @@ class ProtocolCatalogTests(unittest.TestCase):
 
         model = Mock()
         with patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             side_effect=open_catalog,
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=_dedicated_to_thread,
         ), patch(
-            "voice_workflow_agent.server._protocol_analysis_model",
+            "voiney_lab.server._protocol_analysis_model",
             return_value=model,
         ), patch(
-            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            "voiney_lab.protocol_catalog.analyze_protocol_extraction",
             return_value=draft,
         ) as analyze:
             response = asyncio.run(
@@ -501,16 +501,16 @@ class ProtocolCatalogTests(unittest.TestCase):
             await asyncio.sleep(0)
 
         with patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             side_effect=open_catalog,
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=_dedicated_to_thread,
         ), patch(
-            "voice_workflow_agent.server._protocol_analysis_model",
+            "voiney_lab.server._protocol_analysis_model",
             return_value=Mock(),
         ), patch(
-            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            "voiney_lab.protocol_catalog.analyze_protocol_extraction",
             return_value=draft,
         ):
             asyncio.run(scenario())
@@ -539,13 +539,13 @@ class ProtocolCatalogTests(unittest.TestCase):
             await asyncio.sleep(0)
 
         with patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             side_effect=open_catalog,
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=_dedicated_to_thread,
         ), patch(
-            "voice_workflow_agent.server._protocol_analysis_model",
+            "voiney_lab.server._protocol_analysis_model",
             side_effect=RuntimeError("XAI_API_KEY is required"),
         ):
             asyncio.run(scenario())
@@ -560,7 +560,7 @@ class ProtocolCatalogTests(unittest.TestCase):
             self.alpha, source_filename="alpha.pdf", media_type="application/pdf"
         ).entry
         with patch(
-            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            "voiney_lab.protocol_catalog.analyze_protocol_extraction",
             side_effect=RuntimeError("sensitive fake provider response"),
         ):
             with self.assertRaises(RuntimeError):
@@ -602,7 +602,7 @@ class ProtocolCatalogTests(unittest.TestCase):
             ),
         )
         with patch(
-            "voice_workflow_agent.protocol_catalog.analyze_protocol_extraction",
+            "voiney_lab.protocol_catalog.analyze_protocol_extraction",
             side_effect=error,
         ):
             with self.assertRaises(ProtocolAnalysisEvidenceError):
@@ -631,7 +631,7 @@ class ProtocolCatalogTests(unittest.TestCase):
     def test_large_single_pass_input_is_deferred_without_model_call(self):
         model = Mock()
         with patch(
-            "voice_workflow_agent.protocol_catalog.prepare_protocol_analysis_request",
+            "voiney_lab.protocol_catalog.prepare_protocol_analysis_request",
             side_effect=ProtocolAnalysisInputTooLargeError("bounded fake input"),
         ):
             entry = self.catalog.register(
@@ -663,13 +663,13 @@ class ProtocolCatalogTests(unittest.TestCase):
 
         source_store_handle = Mock()
         with patch(
-            "voice_workflow_agent.server.server_config",
+            "voiney_lab.server.server_config",
             return_value=SimpleNamespace(),
         ), patch(
-            "voice_workflow_agent.server._configured_candidate_fixture",
+            "voiney_lab.server._configured_candidate_fixture",
             return_value=None,
         ), patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             return_value=(self.catalog, source_store_handle),
         ):
             source_page = get_protocol_source_page(
@@ -682,13 +682,13 @@ class ProtocolCatalogTests(unittest.TestCase):
         )
         source_store_handle.close.assert_called_once()
         with patch(
-            "voice_workflow_agent.server.server_config",
+            "voiney_lab.server.server_config",
             return_value=SimpleNamespace(),
         ), patch(
-            "voice_workflow_agent.server._configured_candidate_fixture",
+            "voiney_lab.server._configured_candidate_fixture",
             return_value=None,
         ), patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             return_value=(self.catalog, Mock()),
         ):
             with self.assertRaises(Exception) as unknown:
@@ -740,20 +740,20 @@ class ProtocolCatalogTests(unittest.TestCase):
         socket = Socket()
         store_handle = Mock()
         with patch(
-            "voice_workflow_agent.server.server_config", return_value=config
+            "voiney_lab.server.server_config", return_value=config
         ), patch(
-            "voice_workflow_agent.server.server_tool_context",
+            "voiney_lab.server.server_tool_context",
             return_value=SimpleNamespace(language="ko"),
         ), patch(
-            "voice_workflow_agent.server._protocol_store_settings",
+            "voiney_lab.server._protocol_store_settings",
             return_value=SimpleNamespace(enabled=True),
         ), patch(
-            "voice_workflow_agent.server._open_protocol_catalog",
+            "voiney_lab.server._open_protocol_catalog",
             return_value=(self.catalog, store_handle),
         ), patch(
-            "voice_workflow_agent.server.ProcedureStore"
+            "voiney_lab.server.ProcedureStore"
         ) as procedure_store, patch(
-            "voice_workflow_agent.server.OpenAICompatibleProtocolAnalysisModel"
+            "voiney_lab.server.OpenAICompatibleProtocolAnalysisModel"
         ) as analysis_model:
             asyncio.run(voice_socket(socket))
 
@@ -859,7 +859,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             server_module, "ProcedureStore"
         ) as procedure_store:
             payload = list_protocol_catalog()
-            with self.assertLogs("voice_workflow_agent", level="INFO") as logs:
+            with self.assertLogs("voiney_lab", level="INFO") as logs:
                 log_protocol_catalog_runtime_configuration()
 
         matching = [

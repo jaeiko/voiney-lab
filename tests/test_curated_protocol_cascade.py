@@ -13,15 +13,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.audio import FRAME_BYTES, pcm_to_wav
-from voice_workflow_agent.brain import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.audio import FRAME_BYTES, pcm_to_wav
+from voiney_lab.brain import (
     BrainResult,
     SentenceSegment,
     answer_curated_protocol_question,
     select_curated_protocol_answer,
 )
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     DEVELOPMENT_FIXTURE_STATUS,
     CuratedProtocolAction,
     CuratedProtocolFixtureError,
@@ -31,20 +31,20 @@ from voice_workflow_agent.curated_protocol import (
     load_curated_protocol_fixture,
     normalize_scientific_query,
 )
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ANALYSIS_RESPONSE_SCHEMA,
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisResponseError,
     parse_protocol_analysis_response,
 )
-from voice_workflow_agent.experiment_reports import ExperimentReportStore
-from voice_workflow_agent.external_references import (
+from voiney_lab.experiment_reports import ExperimentReportStore
+from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
-from voice_workflow_agent.language import InputLanguagePreference, Transcription
-from voice_workflow_agent.multi_brain import MultiBrainSettings
-from voice_workflow_agent.server import (
+from voiney_lab.language import InputLanguagePreference, Transcription
+from voiney_lab.multi_brain import MultiBrainSettings
+from voiney_lab.server import (
     ListenerSession,
     LockedSender,
     ServerConfig,
@@ -57,8 +57,8 @@ from voice_workflow_agent.server import (
     run_turn_safely,
     voice_socket,
 )
-from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import EndpointDetector, TurnState
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import EndpointDetector, TurnState
 
 from tests.development_activation import development_activation_recorded
 
@@ -397,10 +397,10 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
 
     def test_candidate_visual_endpoints_serve_exact_assets_and_secondary_pages(self):
         with patch(
-            "voice_workflow_agent.server.server_config",
+            "voiney_lab.server.server_config",
             return_value=SimpleNamespace(),
         ), patch(
-            "voice_workflow_agent.server._configured_candidate_fixture",
+            "voiney_lab.server._configured_candidate_fixture",
             return_value=self.fixture,
         ):
             for index in (6, 8):
@@ -804,13 +804,13 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         canonical = self.fixture.steps[0].instruction_source_text
 
         with patch(
-            "voice_workflow_agent.curated_protocol.extract_protocol_pdf",
+            "voiney_lab.curated_protocol.extract_protocol_pdf",
             side_effect=AssertionError("runtime PDF verification must not run"),
         ), patch(
-            "voice_workflow_agent.curated_protocol._load_json_object",
+            "voiney_lab.curated_protocol._load_json_object",
             side_effect=AssertionError("runtime provenance lookup must not run"),
         ), patch(
-            "voice_workflow_agent.curated_protocol._sha256",
+            "voiney_lab.curated_protocol._sha256",
             side_effect=AssertionError("runtime hash verification must not run"),
         ), patch.object(
             domain,
@@ -1261,7 +1261,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             "프로토콜 종료해줘",
         )
         with patch(
-            "voice_workflow_agent.curated_protocol._select_verified_fact",
+            "voiney_lab.curated_protocol._select_verified_fact",
             side_effect=AssertionError("commands must precede fact selection"),
         ):
             for turn_id, transcript in enumerate(reviewed_commands, 1):
@@ -1654,16 +1654,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "현재 단계 알려줘", "ko", duration_seconds=0.02,
                 words=({"word": "현재", "start": 0.0, "end": 0.02},),
                 response_status=200,
             ),
         ), patch(
-            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+            "voiney_lab.server.synthesize", return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(
@@ -1719,21 +1719,21 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("현재 단계를 완료했어요.", "ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+            "voiney_lab.server.synthesize", return_value=b"\0\0"
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("provider must not be constructed"),
         ), patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             side_effect=AssertionError("retrieval must not run"),
         ), patch(
-            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",
+            "voiney_lab.server.XaiAuthoritativeWebSearch",
             side_effect=AssertionError("web search must not run"),
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -1766,9 +1766,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             await _send_session_greeting(sender, session, language="ko")
 
         with patch(
-            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+            "voiney_lab.server.synthesize", return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.asyncio.to_thread", side_effect=immediate,
+            "voiney_lab.server.asyncio.to_thread", side_effect=immediate,
         ):
             asyncio.run(scenario())
 
@@ -1841,25 +1841,25 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "HPLC water와 일반 물의 차이를 설명하고 관련 그림도 보여줘.",
                 "ko",
             ),
         ), patch(
-            "voice_workflow_agent.server.synthesize", return_value=b"\0\0",
+            "voiney_lab.server.synthesize", return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI", return_value=client,
+            "voiney_lab.server.AsyncOpenAI", return_value=client,
         ), patch(
-            "voice_workflow_agent.server.require_env", return_value="offline",
+            "voiney_lab.server.require_env", return_value="offline",
         ), patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status": "no_admissible_evidence", "answerable": False,
                 "matches": [], "retrieval": {"backend": "sqlite"},
             },
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -1897,15 +1897,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 return function(*args, **kwargs)
 
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("다음 단계로 안내해 줘.", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+                "voiney_lab.server.synthesize", return_value=b"\0\0"
             ) as tts, patch(
-                "voice_workflow_agent.server.AsyncOpenAI",
+                "voiney_lab.server.AsyncOpenAI",
                 side_effect=AssertionError("provider must not be constructed"),
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -1954,15 +1954,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 return b"\0\0"
 
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("현재 단계를 완료했어요.", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize", side_effect=tts,
+                "voiney_lab.server.synthesize", side_effect=tts,
             ), patch(
-                "voice_workflow_agent.server._record_experiment_report_plan",
+                "voiney_lab.server._record_experiment_report_plan",
                 side_effect=persist,
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -1996,15 +1996,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 return function(*args, **kwargs)
 
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("현재 단계를 완료했어요.", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+                "voiney_lab.server.synthesize", return_value=b"\0\0"
             ) as tts, patch(
-                "voice_workflow_agent.server._record_experiment_report_plan",
+                "voiney_lab.server._record_experiment_report_plan",
                 side_effect=RuntimeError("synthetic persistence failure"),
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -2036,15 +2036,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 return function(*args, **kwargs)
 
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("프로토콜 시작해줘", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+                "voiney_lab.server.synthesize", return_value=b"\0\0"
             ) as tts, patch(
-                "voice_workflow_agent.server._record_experiment_report_plan",
+                "voiney_lab.server._record_experiment_report_plan",
                 side_effect=RuntimeError("synthetic persistence failure"),
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -2181,16 +2181,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 session.detector.state = TurnState.PROCESSING
                 socket = Socket()
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=Transcription(observation, "ko"),
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ) as tts, patch(
-                    "voice_workflow_agent.server._record_experiment_report_plan",
+                    "voiney_lab.server._record_experiment_report_plan",
                     side_effect=RuntimeError("synthetic persistence failure"),
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 2, 1))
@@ -2215,18 +2215,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                     "side_effect": _record_experiment_report_plan
                 }
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=Transcription(
                         "예상과 다르게 색이 남아 있어.", "ko"
                     ),
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ) as tts, patch(
-                    "voice_workflow_agent.server._record_experiment_report_plan",
+                    "voiney_lab.server._record_experiment_report_plan",
                     **patches,
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -2253,13 +2253,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             async def immediate(function, *args, **kwargs):
                 return function(*args, **kwargs)
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("현재 단계를 완료했어요.", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=RuntimeError("synthetic TTS failure"),
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 with self.assertRaisesRegex(RuntimeError, "synthetic TTS"):
@@ -2302,16 +2302,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             async def immediate(function, *args, **kwargs):
                 return function(*args, **kwargs)
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("[Coughing]", "en"),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=AssertionError("noise must not reach TTS"),
             ), patch(
-                "voice_workflow_agent.server.search_approved_lab_references",
+                "voiney_lab.server.search_approved_lab_references",
                 side_effect=AssertionError("noise must not reach retrieval"),
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -2390,27 +2390,27 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                     }],"backend":"xai_responses_web_search",
                 }
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("H PLC water가 뭐야?","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.answer_curated_protocol_question",
+            "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status":"no_admissible_evidence","answerable":False,
                 "matches":[],"retrieval":{"backend":"sqlite"},
             },
         ),patch(
-            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
         ),patch(
-            "voice_workflow_agent.server.require_env",return_value="offline",
+            "voiney_lab.server.require_env",return_value="offline",
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         self.assertEqual(Web.calls,1)
@@ -2456,27 +2456,27 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 Web.calls+=1
                 return {"status":"error","matches":[]}
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("HPLC water가 뭐야?","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.answer_curated_protocol_question",
+            "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status":"no_admissible_evidence","answerable":False,
                 "matches":[],"retrieval":{"backend":"sqlite"},
             },
         ),patch(
-            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
         ),patch(
-            "voice_workflow_agent.server.require_env",return_value="offline",
+            "voiney_lab.server.require_env",return_value="offline",
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         self.assertEqual(Web.calls,1)
@@ -2532,28 +2532,28 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 }
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "AMBIC에서 bicarbonate는 왜 중요한 거야?","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.answer_curated_protocol_question",
+            "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status":"no_admissible_evidence","answerable":False,
                 "matches":[],"retrieval":{"backend":"sqlite"},
             },
         ),patch(
-            "voice_workflow_agent.server.XaiSupplementalKnowledge",Supplement,
+            "voiney_lab.server.XaiSupplementalKnowledge",Supplement,
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
         ),patch(
-            "voice_workflow_agent.server.require_env",return_value="offline",
+            "voiney_lab.server.require_env",return_value="offline",
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
 
@@ -2589,27 +2589,27 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             )
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "HPLC water 대신 일반 증류수를 써도 돼?","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.answer_curated_protocol_question",
+            "voiney_lab.server.answer_curated_protocol_question",
             side_effect=unsupported,
         ),patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status":"no_admissible_evidence","answerable":False,
                 "matches":[],"retrieval":{"backend":"sqlite"},
             },
         ),patch(
-            "voice_workflow_agent.server.XaiSupplementalKnowledge",
+            "voiney_lab.server.XaiSupplementalKnowledge",
             side_effect=AssertionError("operational supplement must not run"),
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",return_value=SimpleNamespace(),
+            "voiney_lab.server.AsyncOpenAI",return_value=SimpleNamespace(),
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",side_effect=immediate,
+            "voiney_lab.server.asyncio.to_thread",side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         # Operational deviations terminate at the deterministic authority gate:
@@ -2644,18 +2644,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                     return function(*args, **kwargs)
 
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=transcription,
                 ), patch(
-                    "voice_workflow_agent.server.synthesize", return_value=b"\0\0"
+                    "voiney_lab.server.synthesize", return_value=b"\0\0"
                 ), patch(
-                    "voice_workflow_agent.server.AsyncOpenAI",
+                    "voiney_lab.server.AsyncOpenAI",
                     side_effect=AssertionError("provider must not be constructed"),
                 ), patch(
-                    "voice_workflow_agent.server.search_approved_lab_references",
+                    "voiney_lab.server.search_approved_lab_references",
                     side_effect=AssertionError("retrieval must not run"),
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", turn_id, 1))
@@ -2680,23 +2680,23 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(transcript, "ko"),
         ) as stt, patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
             side_effect=tts_side_effect,
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             return_value=client,
         ) as llm, patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             return_value="offline-test-value",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
+            "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -2713,15 +2713,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args,**kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("현재 단계 알려줘","ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ):
             asyncio.run(run_turn(
@@ -2758,8 +2758,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             1,session.generation,"error"))
 
     def test_generated_visual_is_queued_after_answer_audio_and_patches_same_turn(self):
-        from voice_workflow_agent.curated_protocol import _png_rgb
-        from voice_workflow_agent.generated_visuals import (
+        from voiney_lab.curated_protocol import _png_rgb
+        from voiney_lab.generated_visuals import (
             GeneratedVisualAsset, GeneratedVisualSettings,
         )
 
@@ -2806,25 +2806,25 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED":"true",
             "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL":"offline-test-model",
         },clear=False),patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "이 단계를 이해하기 쉽게 그림으로 보여줘.", "ko"
             ),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",return_value=fake_client,
+            "voiney_lab.server.AsyncOpenAI",return_value=fake_client,
         ),patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             return_value="offline-test-value",
         ),patch(
-            "voice_workflow_agent.server.XaiImageGenerator.generate",
+            "voiney_lab.server.XaiImageGenerator.generate",
             new=fake_image_generate,
         ),patch(
-            "voice_workflow_agent.server.GENERATED_VISUALS.obtain",
+            "voiney_lab.server.GENERATED_VISUALS.obtain",
             side_effect=fake_obtain,
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             session.generated_visual_settings=GeneratedVisualSettings(
@@ -2858,7 +2858,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(kinds.count("tool.result"),1)
 
     def test_entity_visual_is_queued_before_slow_explanatory_research(self):
-        from voice_workflow_agent.generated_visuals import GeneratedVisualSettings
+        from voiney_lab.generated_visuals import GeneratedVisualSettings
 
         session=self.make_session(index=0)
         session.tool_context=None
@@ -2884,24 +2884,24 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 return {"status":"not_found","matches":[]}
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "염색된 단백질 밴드가 어떤 걸 의미해? 그림도 보여줘.","ko"
             ),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server._queue_curated_generated_visual",
+            "voiney_lab.server._queue_curated_generated_visual",
             side_effect=queued_visual,
         ),patch(
-            "voice_workflow_agent.server.XaiAuthoritativeWebSearch",Web,
+            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
         ),patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             return_value=SimpleNamespace(),
         ),patch(
-            "voice_workflow_agent.server.require_env",return_value="offline",
+            "voiney_lab.server.require_env",return_value="offline",
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
@@ -2930,12 +2930,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def immediate(function,*args,**kwargs):
             return function(*args,**kwargs)
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("젤 플러그 이미지를 보여줘.","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
@@ -2950,7 +2950,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertFalse(any(item["type"]=="tool.call" for item in socket.text))
 
     def test_verified_source_crop_suppresses_generated_visual_specification(self):
-        from voice_workflow_agent.server import _curated_visual_specification
+        from voiney_lab.server import _curated_visual_specification
 
         source_session=CuratedProtocolSession(self.fixture)
         source_session.active=True
@@ -2986,30 +2986,30 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args,**kwargs)
 
         with patch.dict(os.environ,{},clear=True),patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("2단계 할 때 주의사항 같은 거 있어?","ko"),
         ),patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ) as tts,patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             return_value=SimpleNamespace(model="offline"),
         ),patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             return_value="offline-test-value",
         ),patch(
-            "voice_workflow_agent.server.answer_curated_protocol_question",
+            "voiney_lab.server.answer_curated_protocol_question",
             return_value=grounded,
         ),patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             return_value={
                 "status":"success","answerable":True,"matches":[match],
                 "retrieval":{"backend":"sqlite"},
             },
         ) as retrieval,patch(
-            "voice_workflow_agent.server.answer_approved_reference_question",
+            "voiney_lab.server.answer_approved_reference_question",
             return_value=approved,
         ),patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
@@ -3048,19 +3048,19 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("실험을 진행해 줘.", "ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ), patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             return_value="offline-test-value",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3130,16 +3130,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 )
                 socket.text.append({"type": "turn.state", **listening})
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=Transcription(transcript, "ko"),
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ), patch(
-                    "voice_workflow_agent.server.AsyncOpenAI",
+                    "voiney_lab.server.AsyncOpenAI",
                     side_effect=AssertionError("LLM must not run"),
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ):
                     asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3279,7 +3279,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ),
         )
         with patch(
-            "voice_workflow_agent.server.search_approved_lab_references",
+            "voiney_lab.server.search_approved_lab_references",
             side_effect=AssertionError("deterministic Tier 0 route must not retrieve"),
         ):
             for transcript, index, result_kind, closing_index, fact_id in cases:
@@ -3336,17 +3336,17 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args,**kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "현재 단계를 완료했어. 다음 단계로 넘어가 줘", "ko"
             ),
         ), patch(
-            "voice_workflow_agent.server.synthesize",return_value=b"\0\0",
+            "voiney_lab.server.synthesize",return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
@@ -3388,18 +3388,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args,**kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("다음","ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             side_effect=RuntimeError("private synthetic detail"),
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.log.exception",
+            "voiney_lab.server.log.exception",
         ), patch(
-            "voice_workflow_agent.server._record_workspace_metric",
+            "voiney_lab.server._record_workspace_metric",
         ) as metric:
             asyncio.run(run_turn_safely(socket,session,b"\0\0",1,1))
         self.assertEqual(session.curated_protocol_session.current_index,0)
@@ -3606,19 +3606,19 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 async def immediate(function, *args, **kwargs):
                     return function(*args, **kwargs)
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     side_effect=transcription if isinstance(transcription, Exception) else None,
                     return_value=transcription if not isinstance(transcription, Exception) else None,
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                 ) as tts, patch(
-                    "voice_workflow_agent.server.AsyncOpenAI",
+                    "voiney_lab.server.AsyncOpenAI",
                     return_value=client,
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ), patch(
-                    "voice_workflow_agent.server._record_workspace_metric",
+                    "voiney_lab.server._record_workspace_metric",
                 ) as metric:
                     if mode == "failure":
                         with self.assertRaises(RuntimeError):
@@ -3652,19 +3652,19 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with self.assertRaises(RuntimeError):
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("이 작업의 온도는?", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=RuntimeError("offline TTS failure"),
             ), patch(
-                "voice_workflow_agent.server.AsyncOpenAI",
+                "voiney_lab.server.AsyncOpenAI",
                 return_value=client,
             ), patch(
-                "voice_workflow_agent.server.require_env",
+                "voiney_lab.server.require_env",
                 return_value="offline-test",
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3679,18 +3679,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with self.assertRaises(RuntimeError):
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription(
                     "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
                 ),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=RuntimeError("offline TTS failure"),
             ), patch(
-                "voice_workflow_agent.server.AsyncOpenAI",
+                "voiney_lab.server.AsyncOpenAI",
                 return_value=client,
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3712,15 +3712,15 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def scenario():
             workflow = session.curated_protocol_session
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription(
                     "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
                 ),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 return_value=b"\0\0",
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=controlled_thread,
             ), patch.object(
                 workflow, "_restore", wraps=workflow._restore,
@@ -3764,7 +3764,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             side_effect=[
                 Transcription(
                     "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
@@ -3772,16 +3772,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 Transcription("현재 단계 알려줘", "ko"),
             ],
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ), patch(
-            "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
+            "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3850,19 +3850,19 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 session = self.make_session(index=index)
                 socket = Socket()
                 with patch(
-                    "voice_workflow_agent.server.transcribe",
+                    "voiney_lab.server.transcribe",
                     return_value=Transcription(transcript, "ko"),
                 ), patch(
-                    "voice_workflow_agent.server.synthesize",
+                    "voiney_lab.server.synthesize",
                     return_value=b"\0\0",
                 ), patch(
-                    "voice_workflow_agent.server.asyncio.to_thread",
+                    "voiney_lab.server.asyncio.to_thread",
                     side_effect=immediate,
                 ), patch(
-                    "voice_workflow_agent.server.AsyncOpenAI",
+                    "voiney_lab.server.AsyncOpenAI",
                     side_effect=AssertionError("LLM must not run"),
                 ), patch(
-                    "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
+                    "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
                     side_effect=AssertionError("persistence is forbidden"),
                 ):
                     asyncio.run(run_turn(
@@ -3904,16 +3904,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with self.assertRaises(RuntimeError):
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("프로토콜 시작", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=RuntimeError("offline TTS failure"),
             ), patch(
-                "voice_workflow_agent.server.AsyncOpenAI",
+                "voiney_lab.server.AsyncOpenAI",
                 return_value=client,
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3930,16 +3930,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
         with self.assertRaises(RuntimeError):
             with patch(
-                "voice_workflow_agent.server.transcribe",
+                "voiney_lab.server.transcribe",
                 return_value=Transcription("중지해 줘.", "ko"),
             ), patch(
-                "voice_workflow_agent.server.synthesize",
+                "voiney_lab.server.synthesize",
                 side_effect=RuntimeError("offline TTS failure"),
             ), patch(
-                "voice_workflow_agent.server.AsyncOpenAI",
+                "voiney_lab.server.AsyncOpenAI",
                 return_value=client,
             ), patch(
-                "voice_workflow_agent.server.asyncio.to_thread",
+                "voiney_lab.server.asyncio.to_thread",
                 side_effect=immediate,
             ):
                 asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -3954,18 +3954,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "현재 단계를 완료했어. 다음 단계를 진행해 줘.", "ko"
             ),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             return_value=client,
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -4035,25 +4035,25 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             side_effect=[Transcription(value, "ko") for value in transcripts],
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ), patch(
-            "voice_workflow_agent.server.stream_brain_turn",
+            "voiney_lab.server.stream_brain_turn",
             side_effect=AssertionError("brain must not run"),
         ) as brain, patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             side_effect=AssertionError("Provider configuration must not be read"),
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
+            "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
         ):
             for turn_id in range(1, len(transcripts) + 1):
@@ -4187,37 +4187,37 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             await server_task
 
         with patch(
-            "voice_workflow_agent.server.server_config",
+            "voiney_lab.server.server_config",
             return_value=config,
         ), patch(
-            "voice_workflow_agent.server.ListenerSession",
+            "voiney_lab.server.ListenerSession",
             side_effect=listener_factory,
         ), patch(
-            "voice_workflow_agent.server.ProcedureStore",
+            "voiney_lab.server.ProcedureStore",
             side_effect=AssertionError("ProcedureStore must not be constructed"),
         ) as procedure_store, patch(
-            "voice_workflow_agent.server.load_procedure_definitions",
+            "voiney_lab.server.load_procedure_definitions",
             side_effect=AssertionError("procedure catalog must not be loaded"),
         ), patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             side_effect=[Transcription(value, "ko") for value in transcripts],
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not be constructed"),
         ), patch(
-            "voice_workflow_agent.server.stream_brain_turn",
+            "voiney_lab.server.stream_brain_turn",
             side_effect=AssertionError("generic brain must not run"),
         ), patch(
-            "voice_workflow_agent.server.require_env",
+            "voiney_lab.server.require_env",
             side_effect=AssertionError("Provider configuration must not be read"),
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.experiment_protocol_analysis.save_protocol_analysis",
+            "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
         ), development_activation_recorded():
             # This test is about what the curated boundary does once a session
@@ -4419,20 +4419,20 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             await server_task
 
         with patch(
-            "voice_workflow_agent.server.server_config",
+            "voiney_lab.server.server_config",
             return_value=config,
         ), patch(
-            "voice_workflow_agent.server.ProcedureStore",
+            "voiney_lab.server.ProcedureStore",
             side_effect=AssertionError(
                 "legacy ProcedureStore must not be constructed when a "
                 "curated protocol was selected"),
         ) as procedure_store, patch(
-            "voice_workflow_agent.server.ProcedureController",
+            "voiney_lab.server.ProcedureController",
             side_effect=AssertionError(
                 "legacy ProcedureController must not be constructed when a "
                 "curated protocol was selected"),
         ) as procedure_controller, patch(
-            "voice_workflow_agent.server.load_procedure_definitions",
+            "voiney_lab.server.load_procedure_definitions",
             side_effect=AssertionError(
                 "legacy procedure catalog must not be loaded when a "
                 "curated protocol was selected"),
@@ -4456,18 +4456,18 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription(
                 "현재 단계를 완료했어. 다음 단계로 안내해 줘", "ko"
             ),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ) as tts, patch(
-            "voice_workflow_agent.server.AsyncOpenAI",
+            "voiney_lab.server.AsyncOpenAI",
             return_value=client,
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))

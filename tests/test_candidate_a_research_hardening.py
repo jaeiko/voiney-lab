@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CANONICAL_RESEARCH_ENTITIES,
     CuratedProtocolAction,
     CuratedProtocolSession,
@@ -16,18 +16,18 @@ from voice_workflow_agent.curated_protocol import (
     classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
 )
-from voice_workflow_agent.notifications import (
+from voiney_lab.notifications import (
     FakeNotificationProvider,
     HandoffContact,
     NotificationResult,
     SMTPEmailProvider,
     resolve_handoff_recipient,
 )
-from voice_workflow_agent.web_visuals import (
+from voiney_lab.web_visuals import (
     PubChemChemistryAdapter,
     _KNOWN_PUBCHEM_COMPOUNDS,
 )

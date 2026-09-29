@@ -19,13 +19,13 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from voice_workflow_agent.tools import INBOX_PATH, OUTBOX_DIR, PROCESSED_PATH, STATUS_DIR
+from voiney_lab.tools import INBOX_PATH, OUTBOX_DIR, PROCESSED_PATH, STATUS_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("voice_workflow_agent.worker")
+log = logging.getLogger("voiney_lab.worker")
 
 POLL_SECONDS = 2
 MAX_ATTEMPTS = 3

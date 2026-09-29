@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from pypdf import PdfWriter
 
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.experiment_protocol import (
     ANALYSIS_REQUIRED_LABEL,
     BranchKind,
     ConditionalBranch,
@@ -36,16 +36,16 @@ from voice_workflow_agent.experiment_protocol import (
     SourceEvidence,
     assess_readiness,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolConfigurationError,
     ProtocolFeatureDisabledError,
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfPage,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     ANALYSIS_SCHEMA_VERSION,
     PROTOCOL_DATABASE_FILENAME,
     PROTOCOL_SCHEMA_VERSION,
@@ -122,7 +122,7 @@ def structured_protocol(source_pdf: Path):
         sub_actions=(action,),
     )
     protocol = __import__(
-        "voice_workflow_agent.experiment_protocol",
+        "voiney_lab.experiment_protocol",
         fromlist=["ExperimentProtocol"],
     ).ExperimentProtocol(
         "storage-fixture",

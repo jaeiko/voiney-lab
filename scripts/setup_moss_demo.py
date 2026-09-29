@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from voice_workflow_agent.document_store import ingest_manifest_file  # noqa: E402
+from voiney_lab.document_store import ingest_manifest_file  # noqa: E402
 
 
 def main() -> int:

@@ -9,11 +9,11 @@ import statistics
 import time
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.multi_brain import activation_for
+from voiney_lab.multi_brain import activation_for
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_claim_analysis import (
     _numbered_step_labels,
     mid_line_numbered_labels,
 )
