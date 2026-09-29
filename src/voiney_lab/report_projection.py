@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.experiment_protocol import (
     BeforeStartPrerequisite,
     Equipment,
     ExperimentProtocol,

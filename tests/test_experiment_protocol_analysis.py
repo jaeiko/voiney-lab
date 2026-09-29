@@ -14,14 +14,14 @@ from pathlib import Path
 from typing import Union, get_args, get_origin, get_type_hints
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent import experiment_protocol_analysis as analysis_module
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab import experiment_protocol_analysis as analysis_module
+from voiney_lab.experiment_protocol import (
     FeatureCode,
     ReadinessReasonCode,
     ReadinessStatus,
 )
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ANALYSIS_RESPONSE_SCHEMA,
     ANALYSIS_RESPONSE_SCHEMA_NAME,
     ANALYSIS_SYSTEM_PROMPT,
@@ -36,16 +36,16 @@ from voice_workflow_agent.experiment_protocol_analysis import (
     parse_protocol_analysis_response,
     save_protocol_analysis,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_store import (
     PROTOCOL_DATABASE_FILENAME,
     ProtocolTransactionError,
     initialize_protocol_store,

@@ -32,9 +32,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import voice_workflow_agent.experiment_protocol_pdf as pdf_module
-import voice_workflow_agent.pdf_text_worker as worker_module
-from voice_workflow_agent.experiment_protocol_pdf import (
+import voiney_lab.experiment_protocol_pdf as pdf_module
+import voiney_lab.pdf_text_worker as worker_module
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfWorkerError,
     ProtocolPdfWorkerTimeoutError,
     clear_protocol_pdf_cache,
@@ -245,7 +245,7 @@ class ConcurrentExtractionIsSerializedTests(unittest.TestCase):
         # subprocess; only the pdfium worker is counted here.
         workers = [
             command for command in started
-            if command[1:] == ("-m", "voice_workflow_agent.pdf_text_worker")
+            if command[1:] == ("-m", "voiney_lab.pdf_text_worker")
         ]
         self.assertEqual(len(workers), len(self.sources))
         self.assertEqual(

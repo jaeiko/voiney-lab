@@ -7,26 +7,26 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
     ProtocolEvidenceDiagnostic,
 )
-from voice_workflow_agent.protocol_claim_stream_telemetry import (
+from voiney_lab.protocol_claim_stream_telemetry import (
     IncrementalProtocolClaimTelemetry,
     measure_protocol_claim_json_telemetry,
 )
-from voice_workflow_agent.protocol_provider_diagnostics import (
+from voiney_lab.protocol_provider_diagnostics import (
     run_protocol_provider_stream_diagnostic,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CURATED_FIXTURE = (
-    ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+    ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 )
 CURATED_PROVENANCE = CURATED_FIXTURE.with_suffix(".provenance.json")
 CURATED_SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"

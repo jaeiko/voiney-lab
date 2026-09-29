@@ -6,7 +6,7 @@ from email.parser import BytesParser
 from pathlib import Path
 from types import SimpleNamespace
 
-from voice_workflow_agent.worker import MAX_ATTEMPTS, load_status, pending_reports, process_once
+from voiney_lab.worker import MAX_ATTEMPTS, load_status, pending_reports, process_once
 
 
 class FakeCompletions:

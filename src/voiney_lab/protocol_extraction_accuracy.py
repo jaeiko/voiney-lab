@@ -20,7 +20,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-from voice_workflow_agent import experiment_protocol as domain
+from voiney_lab import experiment_protocol as domain
 
 _CLOCK = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})")
 _WORDED = re.compile(r"(?<![0-9])(\d{1,3})\s*(min|h|hr)\b", re.I)

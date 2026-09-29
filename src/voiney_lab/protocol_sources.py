@@ -14,8 +14,8 @@ from urllib.parse import quote, urlparse
 
 import requests
 
-from voice_workflow_agent.identity import Principal
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal
+from voiney_lab.workspace_store import (
     ProtocolLineageRevision,
     WorkspaceError,
     WorkspaceStore,

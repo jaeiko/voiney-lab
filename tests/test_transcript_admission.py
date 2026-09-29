@@ -1,11 +1,11 @@
 from pathlib import Path
 import unittest
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.language import (
+from voiney_lab.language import (
     InputLanguagePreference,
     Transcription,
     classify_transcription_language,
@@ -14,7 +14,7 @@ from voice_workflow_agent.language import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data" / "development_protocols"
+DATA = ROOT / "data" / "fixtures" / "development_protocols"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 

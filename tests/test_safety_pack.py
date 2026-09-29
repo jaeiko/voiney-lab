@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-from voice_workflow_agent.document_store import SCHEMA, CATALOG_SCHEMA_VERSION
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.curated_protocol import load_curated_protocol_fixture
+from voiney_lab.document_store import SCHEMA, CATALOG_SCHEMA_VERSION
+from voiney_lab.experiment_protocol import (
     Equipment,
     ExperimentProtocol,
     Material,
@@ -18,12 +18,12 @@ from voice_workflow_agent.experiment_protocol import (
     SourceEvidence,
     SourceStatement,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     ProtocolPdfMetadata,
     ProtocolPdfPage,
 )
-from voice_workflow_agent.safety_pack import (
+from voiney_lab.safety_pack import (
     ProtocolSafetySubjects,
     SafetyDocumentRef,
     SafetyPack,
@@ -35,9 +35,9 @@ from voice_workflow_agent.safety_pack import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
-PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
-SOURCE_PDF = ROOT / "data/development_protocols/candidate_a_source_in_gel_digestion.pdf"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
+SOURCE_PDF = ROOT / "data/fixtures/development_protocols/candidate_a_source_in_gel_digestion.pdf"
 if not SOURCE_PDF.exists():
     SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 

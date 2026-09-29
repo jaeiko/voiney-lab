@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CANONICAL_RESEARCH_ENTITIES,
     CuratedProtocolAction,
     CuratedProtocolSession,
@@ -16,18 +16,18 @@ from voice_workflow_agent.curated_protocol import (
     classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.experiment_reports import (
+from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
 )
-from voice_workflow_agent.notifications import (
+from voiney_lab.notifications import (
     FakeNotificationProvider,
     HandoffContact,
     NotificationResult,
     SMTPEmailProvider,
     resolve_handoff_recipient,
 )
-from voice_workflow_agent.web_visuals import (
+from voiney_lab.web_visuals import (
     PubChemChemistryAdapter,
     _KNOWN_PUBCHEM_COMPOUNDS,
 )
@@ -38,8 +38,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class CandidateAResearchHardeningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.fixture_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
-        cls.provenance_path = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+        cls.fixture_path = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+        cls.provenance_path = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
         cls.pdf_path = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
         cls.fixture = load_curated_protocol_fixture(
             cls.fixture_path,

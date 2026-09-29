@@ -36,7 +36,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import patch
 
-import voice_workflow_agent.server as server_module
+import voiney_lab.server as server_module
 
 ACTIVATED_STATE: dict[str, object] = {
     "available_for_execution": True,

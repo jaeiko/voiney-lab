@@ -23,7 +23,7 @@ Type=simple
 User=voice-workflow-agent
 WorkingDirectory=/opt/voice-workflow-agent
 EnvironmentFile=/opt/voice-workflow-agent/.env
-ExecStart=/opt/voice-workflow-agent/.venv/bin/uvicorn voice_workflow_agent.server:app --host 0.0.0.0 --port 8000
+ExecStart=/opt/voice-workflow-agent/.venv/bin/uvicorn voiney_lab.server:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 

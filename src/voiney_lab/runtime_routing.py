@@ -5,15 +5,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     CuratedProtocolTurnPlan,
 )
-from voice_workflow_agent.intent_arbitration import (
+from voiney_lab.intent_arbitration import (
     RequestArbitration,
     arbitrate_request,
 )
-from voice_workflow_agent.semantic_intent import (
+from voiney_lab.semantic_intent import (
     SemanticIntentContext,
     SemanticIntentOutcome,
     SemanticIntentProposal,

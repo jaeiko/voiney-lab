@@ -10,9 +10,9 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
-from voice_workflow_agent.identity import Principal
-from voice_workflow_agent.protocol_sources import SourceSnapshot
-from voice_workflow_agent.workspace_store import WorkspaceError, WorkspaceStore
+from voiney_lab.identity import Principal
+from voiney_lab.protocol_sources import SourceSnapshot
+from voiney_lab.workspace_store import WorkspaceError, WorkspaceStore
 
 
 class DryLabWorkflowError(WorkspaceError):

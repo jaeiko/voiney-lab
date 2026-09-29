@@ -3,16 +3,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from voice_workflow_agent import server
-from voice_workflow_agent.configuration import (
+from voiney_lab import server
+from voiney_lab.configuration import (
     CascadeVadSettings,
     ConfigurationError,
     VoiceVadSettings,
     milliseconds_to_frames,
 )
-from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import VadConfig
-from voice_workflow_agent.semantic_intent import SemanticIntentSettings
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import VadConfig
+from voiney_lab.semantic_intent import SemanticIntentSettings
 from pathlib import Path
 
 
@@ -174,7 +174,7 @@ class VadStartupTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda function, *args: function(*args),
             ),
             patch.dict(os.environ,{},clear=True),
-            self.assertLogs("voice_workflow_agent",level="INFO") as captured,
+            self.assertLogs("voiney_lab",level="INFO") as captured,
         ):
             async with server.lifespan(server.app):
                 pass

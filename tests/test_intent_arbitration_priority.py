@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from voice_workflow_agent.brain import ConversationHistory, stream_brain_turn
-from voice_workflow_agent.completion_intent import (
+from voiney_lab.brain import ConversationHistory, stream_brain_turn
+from voiney_lab.completion_intent import (
     is_learning_question,
     is_version_question,
     is_history_or_continuation_intent,
@@ -25,14 +25,14 @@ from voice_workflow_agent.completion_intent import (
     is_speculative_or_uncertainty_question,
     resolve_korean_completion_decision,
 )
-from voice_workflow_agent.document_store import SCHEMA as DOC_SCHEMA
-from voice_workflow_agent.procedure_definitions import (
+from voiney_lab.document_store import SCHEMA as DOC_SCHEMA
+from voiney_lab.procedure_definitions import (
     ProcedureDefinition,
     load_procedure_definitions,
 )
-from voice_workflow_agent.procedure_store import ProcedureStore
-from voice_workflow_agent.procedures import ProcedureController
-from voice_workflow_agent.tools import (
+from voiney_lab.procedure_store import ProcedureStore
+from voiney_lab.procedures import ProcedureController
+from voiney_lab.tools import (
     ToolContext,
     GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
     GET_PROTOCOL_VERSION_INFO_TOOL_NAME,

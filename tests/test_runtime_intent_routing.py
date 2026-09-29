@@ -8,23 +8,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     classify_curated_control_intent,
     load_curated_protocol_fixture,
 )
-from voice_workflow_agent.intent_arbitration import RequestIntent
-from voice_workflow_agent.language import Transcription
-from voice_workflow_agent.runtime_routing import route_curated_runtime_turn
-from voice_workflow_agent.server import ListenerSession, run_turn
-from voice_workflow_agent.tools import ToolContext
-from voice_workflow_agent.vad import TurnState
+from voiney_lab.intent_arbitration import RequestIntent
+from voiney_lab.language import Transcription
+from voiney_lab.runtime_routing import route_curated_runtime_turn
+from voiney_lab.server import ListenerSession, run_turn
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import TurnState
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
-PROVENANCE = ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 
@@ -228,16 +228,16 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("왜 해야 돼?", "ko"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.stream_brain_turn",
+            "voiney_lab.server.stream_brain_turn",
             side_effect=AssertionError("curated production routing must win"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))
@@ -272,16 +272,16 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         with patch(
-            "voice_workflow_agent.server.transcribe",
+            "voiney_lab.server.transcribe",
             return_value=Transcription("Current step complete.", "en"),
         ), patch(
-            "voice_workflow_agent.server.synthesize",
+            "voiney_lab.server.synthesize",
             return_value=b"\0\0",
         ), patch(
-            "voice_workflow_agent.server.asyncio.to_thread",
+            "voiney_lab.server.asyncio.to_thread",
             side_effect=immediate,
         ), patch(
-            "voice_workflow_agent.server.route_curated_runtime_turn_with_semantics",
+            "voiney_lab.server.route_curated_runtime_turn_with_semantics",
             side_effect=AssertionError("language mismatch must stop before routing"),
         ):
             asyncio.run(run_turn(socket, session, b"\0\0", 1, 1))

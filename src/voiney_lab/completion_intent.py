@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from voice_workflow_agent.intent_arbitration import (
+from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
 )

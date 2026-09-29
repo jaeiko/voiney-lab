@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable
 
-from voice_workflow_agent.tools import (
+from voiney_lab.tools import (
     CREATE_REPORT_TOOL_NAME,
     REPORT_ID_PATTERN,
     PROCEDURE_TOOL_NAMES,
@@ -23,7 +23,7 @@ from voice_workflow_agent.tools import (
     execute_tool,
     normalize_report_arguments,
 )
-from voice_workflow_agent.intent_arbitration import (
+from voiney_lab.intent_arbitration import (
     RequestArbitration,
     RequestIntent,
     arbitrate_request,

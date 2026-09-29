@@ -26,8 +26,8 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
 )
@@ -225,7 +225,7 @@ class TheWarningIsReadOutTests(unittest.TestCase):
             domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
             after.reason_codes,
         )
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         self.assertNotIn(
             "safety_warning_disclosure",

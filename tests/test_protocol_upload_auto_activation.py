@@ -4,18 +4,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_analysis import ProtocolAnalysisDraft
-from voice_workflow_agent.experiment_protocol_config import ProtocolPersistenceSettings
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisDraft
+from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import initialize_protocol_store
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
 )
-from voice_workflow_agent.server import _auto_activate_ready_uploads_enabled
+from voiney_lab.server import _auto_activate_ready_uploads_enabled
 from tests.test_protocol_catalog import write_text_pdf, analysis_draft
 
 ROOT = Path(__file__).resolve().parents[1]

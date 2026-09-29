@@ -7,8 +7,8 @@ import base64
 import unittest
 from types import SimpleNamespace
 
-from voice_workflow_agent.curated_protocol import _png_rgb
-from voice_workflow_agent.generated_visuals import (
+from voiney_lab.curated_protocol import _png_rgb
+from voiney_lab.generated_visuals import (
     GeneratedVisualRegistry,
     GeneratedVisualSettings,
     VisualSpecification,
