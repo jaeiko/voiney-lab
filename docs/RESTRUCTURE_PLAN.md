@@ -1,6 +1,8 @@
 # 저장소 구조 정리 계획 — 패키지 이름 변경과 데이터 재배치
 
-- 상태: **1단계 조사 결과. 승인 대기.** 사람이 "진행"이라고 답하기 전에는 2단계를 시작하지 않는다.
+- 상태: **실행 완료 (2026-09-29).** 1~5단계를 `feature/jaejun-restructure` 에 커밋 5개로 했다. 결과는 §10.
+- §0~§9 는 실행 전 `46a0b90` 에서 쓴 조사와 계획을 그대로 둔 기록이다. 그 안의 경로는 옮기기 전
+  위치다. 지금 위치와 확인 결과는 §10 에 있다.
 - 기준: 브랜치 `feature/jaejun-restructure`, 커밋 `46a0b90`, 2026-09-29 측정.
 - 범위: 이름과 위치만 바꾼다. 동작 변경, 버그 수정, 큰 파일 분리, 의존성 변경, 테스트 로직 변경은 하지 않는다.
   작업 중 찾은 문제는 고치지 않고 §9 에 적었다.
@@ -11,9 +13,9 @@
 
 ---
 
-## 먼저 답이 필요한 것
+## 실행 전에 물은 것
 
-"진행"이라고만 답하면 아래 **권장안**대로 2~4단계를 진행한다. 다르게 하려면 번호로 알려 달라.
+아래는 실행 전에 물은 질문과 권장안이다. 사람의 답은 §10-1 에 있다.
 
 | # | 질문 | 권장안 | 이유 |
 |---|---|---|---|
@@ -545,7 +547,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
    `data/runtime/candidate-a-source/` 에 있다. 같은 단계의 주석(`ci.yml:45`)은 archive 로 옮겨진 문서를 가리킨다.
 3. **CI 가 팀 브랜치에서 돌지 않는다.** `ci.yml:4-7` 은 `main`, `refactor/**` 의 push 와 `main` 으로 가는
    PR 에서만 돈다. `GIT_WORKFLOW.md` 가 쓰는 `dev`, `feature/*`, `fix/*` 와 `dev` 로 가는 PR 에서는 돌지 않는다.
-4. **CLAUDE.md 와 `GIT_WORKFLOW.md` 의 분기 기준이 다르다** (`main` 대 `dev`). 위 "먼저 답이 필요한 것" 참고.
+4. **CLAUDE.md 와 `GIT_WORKFLOW.md` 의 분기 기준이 다르다** (`main` 대 `dev`). 위 "실행 전에 물은 것" 참고.
 5. **현행 문서의 끊어진 참조 23곳** (이번 작업 전부터 있음). `AGENTS.md:80-91` 의 "Documentation
    authority" 는 archive 로 옮겨진 문서 6개를 아직 권위 문서로 적고 있다. `README.md:89,778`,
    `PILOT_READINESS_PACKAGE.md:23,131,167`, `PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md:64` 도 옮겨진
@@ -562,3 +564,139 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
    버그가 아니라 환경 차이다.
 10. `experiment_reports.py:862` 가 `server` 를 거꾸로 import 한다 (§4).
 11. 작업 지시문이 가리킨 `docs/GIT_WORKFLOW.md` 는 없다. 실제 파일은 루트에 있고 추적되지 않는다 (Q7).
+
+---
+
+## 10. 실행 결과 (2~5단계)
+
+### 10-1. 사람의 결정 (2026-09-29)
+
+- Q1~Q4, Q6, Q8~Q10: 권장안대로.
+- Q5: 사람이 확인했다. `.env` 는 바뀌는 경로를 가리키지 않는다.
+- Q7: 5단계를 새로 두어 처리했다.
+- 분기 기준은 `dev` 다. `docs/GIT_WORKFLOW.md` 의 규칙을 따른다.
+- 루트의 라이선스 PDF 2개(intracellular, headspace)는 서버에서도 찾지 못했다. 기준선은 0-2 를 그대로 쓴다.
+
+### 10-2. 커밋
+
+| 단계 | 커밋 | 메시지 | 바뀐 파일 | pytest |
+|---|---|---|---:|---|
+| 1 | `3abae05` | Record the repository restructure plan | 1 | 1513 passed, 13 skipped, 1283 subtests passed |
+| 2 | `4572358` | Rename the Python package voice_workflow_agent to voiney_lab | 188 | 같음 |
+| 3 | `56b0d15` | Move the hand-curated fixtures under data/fixtures | 35 | 같음 |
+| 4 | `40e2f78` | Point the current docs at voiney_lab and jaeiko/voiney-lab | 5 | 같음 |
+| 5 | 이 커밋 | Adopt the dev-based branch workflow and align agent docs | 5 | 같음 |
+
+모든 커밋 뒤에 `python scripts/replay_turns.py` exit 0, `python -m compileall -q src tests scripts` exit 0,
+`git diff --check` 깨끗함을 확인했다. `data/runtime/` 하위 32개 항목도 목록·크기·수정 시각이 모두
+그대로였다. 커밋은 로컬 브랜치에만 있고 push 하지 않았다.
+
+### 10-3. §5 확인 결과
+
+**2단계**
+
+- `git mv` 뒤 옛 디렉터리는 남지 않았다 (`__pycache__` 까지 함께 옮겨졌다). 옛 디렉터리가 남았다면
+  `src/` 가 경로에 있으므로 이름공간 패키지로 import 되었을 것이다.
+- 156개 파일에서 1,154건을 바꿨다 (계획과 같음). B-2 는 줄 번호가 아니라 내용으로 제외했고, 코드 쪽
+  7줄이 그대로 남은 것을 출력으로 확인했다.
+- `python -c "import voice_workflow_agent"`: 저장소 루트와 `/tmp` 모두 `ModuleNotFoundError`, exit 1.
+- `import voiney_lab.server`: 성공. `voice-workflow-replay` exit 0, `voice-workflow-evaluate --help` exit 0.
+- 패키지 파일 60개가 모두 이름 변경으로 잡혔다 (R100 32개, R097~R099 28개). `git log --follow` 가 이어진다.
+- 남은 옛 이름은 **정확히 39건**이었다 (B-2 10, 현행 문서 27, `docs/course-archive/` 2). 이 계획서 안의
+  31건은 따로 셌다. 계획서는 이름 변경 자체를 기록하는 문서라 옛 이름을 담고, 39건 규칙을 정할 때는
+  아직 없었다.
+- 재설치: `pip uninstall -y voice-workflow-agent`, 옛 egg-info 삭제, `pip install -e '.[test]'`.
+  build isolation 을 쓴 기본 설치가 그대로 성공해서 `--no-build-isolation` 은 필요 없었다. 결과는
+  `voiney-lab 0.1.0`, `.venv` 의 `__editable__.voiney_lab-0.1.0.pth`, `src/voiney_lab.egg-info/` 다.
+  옛 배포 정보는 남지 않았다.
+- 서버 기동 확인: `run_ci_server.sh` 와 같은 환경변수에 데이터 디렉터리만 scratchpad 로 바꿔
+  `python -m uvicorn voiney_lab.server:app --port 8123` 을 띄웠다. `/healthz` 200, `/readyz` 200
+  (workspace·protocol catalog·experiment reports 켜짐, MOSS 꺼짐), `/` 200 (static 파일도 새 패키지에서
+  나온다).
+- `replay_turns.py` 출력이 기준과 같았다 (지연 시간 줄 제외).
+
+**3단계**
+
+- `git mv` 8개가 모두 `R100` 이고 sha256 도 옮기기 전과 같다.
+- provenance 의 `fixture_sha256` (`69517f0f…`) 이 옮긴 fixture 와 일치한다. 사이드카 3개의
+  `fixture_sha256` 도 일치하고, `document_sha256` 은 모두 `63d81102…` 그대로다.
+- 새 경로(`data/fixtures/development_protocols/`)로 `load_curated_protocol_fixture` 를 부르면 성공한다:
+  `candidate-a-curated-development-v1`, 25단계.
+- 평가 스크립트 두 개의 출력이 0-3 과 같다 (지연 시간 필드 제외). `evaluate_candidate_a_hardening.py` 의
+  exit 1 은 기준과 같은 기존 실패 2건이다.
+- 참조는 27개 파일 51곳을 고쳤다. 옛 위치를 가리키는 코드·테스트·스크립트는 0곳이다.
+- 파일을 옮긴 뒤 비어 버린 옛 평가 디렉터리(`data` 아래 `evaluation`)는 `rmdir` 로 지웠다. Q8 로 옮긴 뒤
+  `tests/fixtures/` 에는 `fictional_ingestion_manifest.json` 하나만 남았다.
+
+**4단계**
+
+- 5개 파일 13곳을 고쳤다. 고친 줄이 가리키는 경로·모듈·명령은 모두 있다.
+  `python -m voiney_lab.replay_turns` exit 0, `python -m voiney_lab.voice_evaluation --help` exit 0.
+  `git ls-remote https://github.com/jaeiko/voiney-lab.git` 가 응답했다 (exit 0).
+- 새로 끊어진 참조는 Q6 로 남긴 날짜 기록(`ANALYSIS_2026_09_11.md` 9곳,
+  `PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` 6곳, `PILOT_READINESS_PACKAGE.md` 2곳)과 이 계획서
+  §0~§9 에만 있다.
+- 남은 옛 이름은 **정확히 30건**이다 (10-5).
+
+**5단계**
+
+- 루트의 `GIT_WORKFLOW.md` 를 `docs/GIT_WORKFLOW.md` 로 옮기고 `git add` 했다. sha256 (`476635fc…`)
+  이 옮기기 전과 같다.
+- `CLAUDE.md` 의 Branch workflow: `dev` 에서 분기하고 `dev` 로 PR 한다. `main` 은 파일럿 배포용이며
+  `dev` 에서만 합친다. 자세한 규칙은 `docs/GIT_WORKFLOW.md` 를 가리킨다.
+- `AGENTS.md` 의 Documentation authority: `docs/archive/` 로 옮겨진 문서 6개를 빼고 `CLAUDE.md` 의
+  목록과 같게 맞췄다 (`README.md` → `AGENTS.md` 와 `.agent/*.md` → `docs/CURRENT_ARCHITECTURE.md` →
+  `docs/MIGRATION_NOTES.md`). 새 문서를 지목하지 않았다.
+- `README.md:89`: 옮겨진 단계별 증거 문서를 가리키던 구절을 지우고, 같은 문장에 있던
+  `docs/MIGRATION_NOTES.md` 안내만 남겼다. 그 역할을 이어받은 현행 문서는 없다.
+- `README.md:778`: 옮겨진 PASS4 보고서 참조를 지우고, 같은 문장에 이미 있던 `docs/CAPABILITY_MATRIX.md`
+  만 남겼다. 이 문서가 연동별 분류(Contract-tested, Live-tested historically 등)를 담고 있다.
+- 5-6 확인: 0-3 의 끊어진 참조 23곳 중 10곳이 해결됐다 (`AGENTS.md` 6, `README.md` 4). 이번에 고친
+  문서(`README.md`, `CLAUDE.md`, `AGENTS.md`, `docs/GIT_WORKFLOW.md`, 이 계획서 §10)에 새로 끊어진
+  참조는 없다. 남은 것은 `CLAUDE.md:48` 한 곳인데, 사용자 소유의 추적 안 된 데모 스크립트를 가리키는
+  규칙 문장이라 그대로 둔다.
+
+### 10-4. 계획과 달랐던 점
+
+- 4단계는 계획의 6개가 아니라 5개 파일을 바꿨다. 계획서 결과 기록은 지시에 따라 5단계로 옮겼다.
+- 2-4 의 39건은 이 계획서를 빼고 센 수다 (10-3).
+- 4단계에서 `git grep` 의 경로 지정 `docs/*.md` 가 `docs/archive/` 아래까지 맞아, archive 파일의 몇 줄이
+  출력됐다. 그 내용은 판단에 쓰지 않았다. 1단계에서 파일 이름 목록을 출력한 것과 같은 종류의 실수다.
+  이후 검색은 `docs/archive` 와 `docs/course-archive` 를 명시적으로 뺐다.
+
+### 10-5. 남은 옛 이름 (소문자 `voice_workflow_agent`, 30건)
+
+| 묶음 | 파일 (건수) |
+|---|---|
+| B-2 (10) | `.env.example` (2), `data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json` (1), `scripts/sync_moss_index.py` (1), `src/voiney_lab/curated_protocol.py` (1), `src/voiney_lab/moss_retrieval.py` (2), `src/voiney_lab/worker.py` (1), `tests/test_moss_retrieval.py` (2) |
+| 날짜가 박힌 기록 (18) | `docs/ANALYSIS_2026_09_11.md` (9), `docs/PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md` (5), `docs/PILOT_READINESS_PACKAGE.md` (2), `docs/MOSS_RETRIEVAL.md` (2, B-2 색인 이름) |
+| 과정 기록 (2) | `docs/course-archive/README.md` |
+
+이 밖에 `docs/archive/` 와 이 계획서가 옛 이름을 담고 있다.
+
+### 10-6. §9 목록의 현재 상태
+
+- 해결: §9-4 (분기 기준은 `dev`), §9-5 중 `AGENTS.md` 와 `README.md` 부분, §9-11 (`docs/GIT_WORKFLOW.md`).
+- 남음: §9-1, §9-2, §9-3 (CI 는 별도 작업), §9-5 중 `PILOT_READINESS_PACKAGE.md:23,131,167` 과
+  `PROTOCOL_BOUNDARY_AND_OBLIGATION_DESIGN.md:64`, §9-6, §9-7 (경로 문자열은 새 위치로 바뀌었지만 그 파일은
+  여전히 없다), §9-8, §9-9, §9-10.
+
+### 10-7. 사람이 할 후속 작업
+
+- **파일럿 서버와 다른 체크아웃**: 코드를 받은 뒤 그 venv 에서 `pip uninstall -y voice-workflow-agent` 를
+  하고, `src/` 아래 옛 이름의 egg-info 디렉터리를 지우고, `pip install -e .` 를 다시 한다. 편집 설치의
+  entry point 는 다시 설치하기 전까지 옛 모듈을 가리킨다.
+- **서버 실행 명령**: `uvicorn voiney_lab.server:app ...`. systemd 를 쓰면 `ExecStart` 도 바꾼다
+  (`docs/DEPLOYMENT_RUNBOOK.md:26` 예시). 워커는 `python -m voiney_lab.worker`. 지금 떠 있는 서버는 옛
+  모듈을 메모리에 들고 있으므로, 코드를 받은 뒤에는 새 명령으로 다시 켜야 한다.
+- `scripts/run_candidate_a.sh`, `scripts/run_ci_server.sh` 는 저장소 안에서 이미 바뀌었다. 코드를 받으면
+  그대로 쓸 수 있다.
+- **저장소 밖에서 옛 이름을 쓰는 곳**: 로그 수집·필터가 로거 이름 `voice_workflow_agent*` 에 기대면
+  `voiney_lab*` 로 바꾼다 (로그 한 줄의 형식에는 로거 이름이 없다). IDE 실행 설정, 개인 스크립트,
+  cron 도 확인한다. 3단계에서 옮긴 fixture 경로를 저장소 밖에서 쓰는 곳이 있으면 `data/fixtures/` 로
+  바꾼다.
+- **로컬 디렉터리 이름 변경** (사람이 한다): `.pth` 파일과 `.venv` 안의 실행 파일이 저장소의 절대 경로를
+  담고 있다. 디렉터리를 옮기면 venv 를 다시 만들고 편집 설치를 다시 하는 편이 안전하다.
+- **push 와 PR**: 사람이 한다. PR 은 `dev` 로 연다 (`docs/GIT_WORKFLOW.md`).
+- **이번에 하지 않은 것**: CI 복구 (§9-2, §9-3), `data/development_cache/` 이동, 루트 라이선스 PDF 위치,
+  환경변수 접두어, 명령 이름, 추적 중인 fixture 의 원문 발췌 라이선스 확인 (A-4).
