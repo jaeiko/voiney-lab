@@ -525,6 +525,20 @@ python -m voiney_lab.worker
 | `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
+| `VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
+
+`VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
+Protocol be development-activated and run while readiness gates are still
+outstanding. It is honoured only in the `demo`, `reference_only` and
+`test_only` scopes; under `operational` it is ignored and the startup log says
+so. It does not change any readiness verdict, the outstanding-gate list, the
+source-evidence validation, or service approval, and a Protocol with no
+analysis, or a failed one, still cannot run. While it is on, the startup log
+and a page-top banner read "테스트 모드: 실행 준비 게이트를 건너뜀", an
+activation made through it carries `test_mode_readiness_gates_skipped` in the
+ledger, and each experiment report opened in such a session starts with a
+`test_mode_readiness_gates_skipped` event. No launcher sets it; set it by hand
+before starting the server.
 
 `PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the

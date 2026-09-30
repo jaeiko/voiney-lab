@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+  <div id="test-mode-banner" class="test-mode-banner" role="alert" hidden>테스트 모드: 실행 준비 게이트를 건너뜀 · 개발 전용 · 남은 차단 사유는 그대로 표시됩니다</div>
   <!-- Hidden Screen Reader Live Announcer for Key Milestones -->
   <div id="screen-reader-announcer" class="visually-hidden-file-input" aria-live="polite" role="status"></div>
 
@@ -1651,6 +1652,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
+  const testModeBanner=$("test-mode-banner");if(testModeBanner)testModeBanner.hidden=payload.test_mode?.readiness_gates_skipped!==true;
   protocolCatalog.clear();selector.replaceChildren();
   const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);
   for(const item of entries){

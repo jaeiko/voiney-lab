@@ -478,8 +478,21 @@ def _worker_analyze_chunk(
 class ProtocolCatalog:
     """Catalog facade over immutable source, analysis, and approval records."""
 
-    def __init__(self, store: ProtocolStore) -> None:
+    def __init__(
+        self, store: ProtocolStore, *, skip_readiness_gates: bool = False
+    ) -> None:
+        """``skip_readiness_gates`` is the development test-mode switch.
+
+        It does not change a readiness verdict. It lets an analysed protocol
+        with outstanding readiness gates be activated for development and then
+        executed; the gates are still computed, listed and reported exactly as
+        before. No analysis still means no execution, and service approval
+        still requires cleared gates. The server decides when to pass it (see
+        ``_test_mode_skips_readiness_gates``); every other caller gets False.
+        """
+
         self.store = store
+        self.skip_readiness_gates = skip_readiness_gates
 
     def _latest_protocol_revision(self, protocol_id: str) -> ProtocolRevisionRecord:
         if not _STABLE_PROTOCOL_ID.fullmatch(protocol_id):
@@ -1265,7 +1278,12 @@ class ProtocolCatalog:
         )
         if analysis is not None and not approved:
             lifecycle_state = "review_required" if execution_ready else "blocked"
-        available = bool(approved and execution_ready)
+        # Test mode applies here and not to execution_ready, so the verdict and
+        # the lifecycle label above still say what the gates say. ``approved``
+        # already requires an analysis, so a missing or failed one stays out.
+        available = bool(
+            approved and (execution_ready or self.skip_readiness_gates)
+        )
         title = (
             analysis.protocol.metadata.title
             if analysis is not None
@@ -3449,7 +3467,9 @@ class ProtocolCatalog:
         approval, and it is deliberately not a shortcut around readiness: the
         analysis must already be guidance-ready, or every blocking reason must
         already carry a person's recorded clearance.  What activation supplies
-        is the missing authority, not a missing judgement.
+        is the missing authority, not a missing judgement.  The one exception
+        is ``skip_readiness_gates`` (development test mode), and an activation
+        made through it is marked as such in the ledger.
         """
 
         revision = self._latest_protocol_revision(protocol_id)
@@ -3458,16 +3478,30 @@ class ProtocolCatalog:
             raise ProtocolCatalogUnavailableError(
                 "Protocol analysis is required before development activation."
             )
+        gates_skipped = False
         if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
             if not self._readiness_gates_cleared(
                 protocol_id, revision.revision_number, analysis
             ):
-                raise ProtocolCatalogUnavailableError(
-                    f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
-                )
+                if not self.skip_readiness_gates:
+                    raise ProtocolCatalogUnavailableError(
+                        f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
+                    )
+                gates_skipped = True
         ordinal = self._development_activation_ordinal(
             protocol_id, revision.revision_number, analysis.analysis_revision_number
         )
+        payload: dict[str, object] = {
+            "decision": "development_activated",
+            "authority": "development_policy",
+            "readiness": analysis.readiness.status.value,
+            "actor_principal_id": actor_principal_id,
+            "actor_role": actor_role,
+            "comment": (comment or "Development activation.")[:4000],
+        }
+        if gates_skipped:
+            # The ledger says this activation did not pass the readiness gates.
+            payload["test_mode_readiness_gates_skipped"] = True
         self.store.append_event(
             (
                 f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-"
@@ -3476,14 +3510,7 @@ class ProtocolCatalog:
             protocol_id,
             revision.revision_number,
             _DEVELOPMENT_ACTIVATION_EVENT,
-            {
-                "decision": "development_activated",
-                "authority": "development_policy",
-                "readiness": analysis.readiness.status.value,
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Development activation.")[:4000],
-            },
+            payload,
             analysis_revision_number=analysis.analysis_revision_number,
         )
         return self.get_entry(protocol_id)

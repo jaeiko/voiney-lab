@@ -26,6 +26,13 @@
       --radius-pill:9999px;
     }
     *{box-sizing:border-box}
+    .test-mode-banner{
+      padding:10px 16px;
+      background:var(--amber);color:#1a1300;
+      font-weight:800;text-align:center;
+      border-bottom:3px solid var(--red);
+    }
+    .test-mode-banner[hidden]{display:none}
     body{
       margin:0;
       background:
