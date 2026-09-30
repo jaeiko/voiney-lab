@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI-safe server launcher for browser acceptance tests (Playwright).
 #
-# Unlike scripts/run_candidate_a.sh, this does not load the curated "Candidate
+# Unlike scripts/run_dev.sh, this does not load the curated "Candidate
 # A" fixture: that fixture's integrity model requires the exact, externally
 # licensed source PDF (byte size, SHA-256, and page count all checked against
 # recorded provenance) which is not and should not be committed to the repo.
@@ -37,7 +37,7 @@ export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
 export WEB_VISUAL_SEARCH_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
 
-echo "=== Starting Voice Workflow Agent (CI, empty protocol catalog) ==="
+echo "=== Starting Voiney Lab (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \
   voiney_lab.server:app \
   --host 127.0.0.1 \

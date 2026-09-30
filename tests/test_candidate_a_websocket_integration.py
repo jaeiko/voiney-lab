@@ -224,7 +224,9 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             # Verify greeting was sent
             greeting = next((item for item in socket.sent if item["type"] == "session.greeting"), None)
             self.assertIsNotNone(greeting)
-            self.assertIn("Voice Workflow Agent", greeting["text"])
+            # Property: the greeting introduces the assistant by name rather
+            # than arriving empty or generic. Only the name literal moved.
+            self.assertIn("Voiney Lab", greeting["text"])
 
             # Verify experiment.report.state was returned without error
             report_state = next((item for item in socket.sent if item["type"] == "experiment.report.state"), None)

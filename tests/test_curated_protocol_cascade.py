@@ -4263,8 +4263,12 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         step_one = self.fixture.steps[0].instruction_source_text
         step_two = self.fixture.steps[1].instruction_source_text
         spoken = [call.args[0] for call in tts.call_args_list]
+        # Property: the exact sequence of spoken control lines, the greeting
+        # first and verbatim, with no source step text among the first five.
+        # Only the greeting's name literal moved; the ordering and the
+        # assertNotIn leak checks below do not mention a name.
         self.assertEqual(spoken, [
-            f"Voice Workflow Agent입니다. 선택한 {self.fixture.title} "
+            f"Voiney Lab입니다. 선택한 {self.fixture.title} "
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
             "실험을 시작합니다. 현재 1단계입니다. "
             "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "

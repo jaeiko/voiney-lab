@@ -105,7 +105,7 @@ CREATE_REPORT_TOOL = {
             "facts the worker stated; ask for any missing required fact instead of "
             "guessing. The runtime stages the normalized report and requires "
             "explicit user confirmation before it is actually queued. A confirmed "
-            "submission returns a Voice Workflow Agent report id and, when a workflow is "
+            "submission returns a Voiney Lab report id and, when a workflow is "
             "attached, links the report to the current step and blocks further "
             "progress for manager handoff. A draft awaiting confirmation is not "
             "submitted and must not be described as submitted or blocked. This "
@@ -187,7 +187,7 @@ CHECK_REPORT_TOOL = {
         "name": CHECK_REPORT_TOOL_NAME,
         "description": (
             "Call this only when the worker asks for the processing or handoff "
-            "status of a previously submitted Voice Workflow Agent report and a valid report "
+            "status of a previously submitted Voiney Lab report and a valid report "
             "id is available from conversation memory or the worker. It can show "
             "whether the report is queued for handoff, being processed or retried, "
             "or has a manager handoff artifact. This is a read-only status check: "
@@ -202,7 +202,7 @@ CHECK_REPORT_TOOL = {
                 "report_id": {
                     "type": "string",
                     "description": (
-                        "The exact Voice Workflow Agent report id returned by a confirmed "
+                        "The exact Voiney Lab report id returned by a confirmed "
                         "submission, in the form SR-YYYYMMDD-XXXXXX, for example "
                         "SR-20260722-A1B2C3. Preserve every character; do not invent "
                         "or reconstruct a missing id."
