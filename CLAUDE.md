@@ -68,7 +68,7 @@ rule 2–3 for the full boundary. (A pre-existing, older `procedures.py` /
 `procedure_store.py` workflow stack runs alongside the production
 `ExperimentSession` / `CuratedProtocolSession` stack. It is explicitly
 config-gated off by default — the module docstring at the top of
-`src/voice_workflow_agent/procedures.py` states the two environment variables
+`src/voiney_lab/procedures.py` states the two environment variables
 that must both be set and why the commercial launcher sets neither. Mutual
 exclusivity is regression-tested by
 `test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists`
@@ -127,10 +127,12 @@ instead of discarding it.
 
 ## Branch workflow
 
-Work happens on feature/refactor branches off `main`; do not push directly
-to `main`. Commit each phase of multi-phase work separately with a
-descriptive message, and confirm with the user before pushing to a shared
-remote branch or renaming/transferring the GitHub repository itself.
+Branch from `dev` and open pull requests into `dev`. `main` is the version
+deployed to pilot labs and only receives merges from `dev`; never push
+directly to `main`. Branch naming, the pre-PR checks, and file ownership are
+in `docs/GIT_WORKFLOW.md`. Commit each phase of multi-phase work separately
+with a descriptive message, and confirm with the user before pushing to a
+shared remote branch or renaming/transferring the GitHub repository itself.
 
 ## Historical archive
 

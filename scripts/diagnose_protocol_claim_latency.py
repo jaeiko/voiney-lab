@@ -17,21 +17,21 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     build_protocol_analysis_chat_request,
 )
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     extraction_for_chunk,
     plan_protocol_chunks,
     validate_chunk_result,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     MAX_EVIDENCE_ITEM_REFS_PER_PAGE,
     MAX_PAGE_COVERAGE_RECORDS,
@@ -43,11 +43,11 @@ from voice_workflow_agent.protocol_claim_analysis import (
     parse_chunk_claim_response,
     prepare_chunk_claim_request_context,
 )
-from voice_workflow_agent.protocol_provider_diagnostics import (
+from voiney_lab.protocol_provider_diagnostics import (
     ProtocolProviderStreamDiagnostic,
     run_protocol_provider_stream_diagnostic,
 )
-from voice_workflow_agent.protocol_claim_stream_telemetry import (
+from voiney_lab.protocol_claim_stream_telemetry import (
     measure_protocol_claim_json_telemetry,
 )
 

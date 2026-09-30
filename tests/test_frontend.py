@@ -14,7 +14,7 @@ def run_node_harness(harness: str):
 class FrontendSessionTests(unittest.TestCase):
     def test_researcher_errors_are_actionable_and_do_not_expose_raw_codes(self):
         html = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+            ROOT / "src" / "voiney_lab" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         block = html.split(
             "const RESEARCHER_ERROR_MESSAGES", 1
@@ -40,7 +40,7 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
 
     def test_experiment_timeline_workspace_is_present_and_safely_rendered(self):
         html = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+            ROOT / "src" / "voiney_lab" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         for required in (
             'id="experiment-session-ledger"',
@@ -113,7 +113,7 @@ assert(alreadySafe===conflict,"safe mapped message was not stable through a catc
 
     def test_reviewer_packet_is_decision_first_and_decisions_require_confirmation(self):
         html = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+            ROOT / "src" / "voiney_lab" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         for required in (
             'id="reviewer-protocol"',
@@ -185,7 +185,7 @@ assert(ids["reviewer-approve"].disabled&&!ids["reviewer-reject"].disabled&&ids["
 
     def test_admin_workspace_uses_guided_safe_connection_and_permission_language(self):
         html = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+            ROOT / "src" / "voiney_lab" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         admin_markup = html.split(
             '<section id="admin-workspace"', 1
@@ -252,10 +252,10 @@ assert(ready.children[2].children[0].textContent==="연결 활성화","enable ac
 
     def test_chat_viewport_and_late_visual_use_production_handlers(self):
         html = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "index.html"
+            ROOT / "src" / "voiney_lab" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         css = (
-            ROOT / "src" / "voice_workflow_agent" / "static" / "app.css"
+            ROOT / "src" / "voiney_lab" / "static" / "app.css"
         ).read_text(encoding="utf-8")
         self.assertIn("align-items:start", css)
         self.assertIn("position:sticky", css)
@@ -287,7 +287,7 @@ await onMessage({data:JSON.stringify({type:"speech.start",turn_id:5,generation:9
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_session_restart_and_stale_event_isolation(self):
-        html = (ROOT / "src" / "voice_workflow_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        html = (ROOT / "src" / "voiney_lab" / "static" / "index.html").read_text(encoding="utf-8")
         script = html.split("<script>", 1)[1].split("</script>", 1)[0]
         self.assertNotIn("create"+"ScriptProcessor", script)
         self.assertNotIn("Script"+"ProcessorNode", script)
@@ -374,7 +374,7 @@ for(let i=0;i<3;i++){socket=new WS();ids["pipeline-mode"].value="cascade";ids["p
 
     def test_cascade_generation_clear_and_provisional_turn_cleanup(self):
         html=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
+            ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
         script=html.split("<script>",1)[1].split("</script>",1)[0]
         for forbidden in (
@@ -448,7 +448,7 @@ globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{med
 
     def test_turn_card_applies_server_revisions_monotonically(self):
         html=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
+            ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
         script=html.split("<script>",1)[1].split("</script>",1)[0]
         harness=r"""
@@ -492,7 +492,7 @@ globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{med
 
     def test_audio_worklet_accumulates_twenty_ms_transferable_blocks(self):
         worklet=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"mic-capture-worklet.js"
+            ROOT/"src"/"voiney_lab"/"static"/"mic-capture-worklet.js"
         ).read_text(encoding="utf-8")
         harness=r"""
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
@@ -514,7 +514,7 @@ assert(processor.process([ [block] ])===false,"stopped processor remained active
 
     def test_protocol_visual_and_filler_use_production_handlers(self):
         html=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
+            ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
         script=html.split("<script>",1)[1].split("</script>",1)[0]
         harness=r"""
@@ -569,10 +569,10 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
 
     def test_protocol_workspace_is_responsive_and_accessible(self):
         html=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"index.html"
+            ROOT/"src"/"voiney_lab"/"static"/"index.html"
         ).read_text(encoding="utf-8")
         css=(
-            ROOT/"src"/"voice_workflow_agent"/"static"/"app.css"
+            ROOT/"src"/"voiney_lab"/"static"/"app.css"
         ).read_text(encoding="utf-8")
         for control_id in (
             "protocol-ocr-run",
@@ -652,7 +652,7 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertNotIn("답변 다시 듣기", html)
 
     def test_audio_worklet_module_is_in_the_fastapi_static_mount(self):
-        from voice_workflow_agent.server import app
+        from voiney_lab.server import app
 
         static_mount=next(
             route for route in app.routes
@@ -663,7 +663,7 @@ let successCalls=0;fetch=async(url,options={})=>{successCalls++;if(successCalls=
         self.assertIsNotNone(stat_result)
 
     def test_app_css_is_in_the_fastapi_static_mount(self):
-        from voice_workflow_agent.server import app
+        from voiney_lab.server import app
 
         static_mount=next(
             route for route in app.routes

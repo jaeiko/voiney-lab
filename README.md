@@ -1,8 +1,8 @@
 # Voice Workflow Agent
 
-[![CI](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voice-workflow-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-Canonical repository: [`jaeiko/voice-workflow-agent`](https://github.com/jaeiko/voice-workflow-agent).
+Canonical repository: [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab).
 This project originated inside the course repository
 [`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) (a fork
 of `civiliangame/voice-ai-course`); that repository is preserved as historical
@@ -70,7 +70,7 @@ Canonical workflow events
 ```
 
 The main runtime routing boundary is
-`src/voice_workflow_agent/runtime_routing.py`. An optional, disabled-by-default
+`src/voiney_lab/runtime_routing.py`. An optional, disabled-by-default
 semantic intent fallback (`semantic_intent.py`) sits behind it: when
 deterministic routing returns a catch-all, it may *propose* one of the existing
 bounded workflow actions, and server-owned policy in the same boundary decides
@@ -85,9 +85,7 @@ The current component, authority, and persistence design is documented in
 [`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md) is a labeled
 pre-extension snapshot. Current capabilities and documentation authority are
 indexed in [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md).
-Implementation and phase evidence are tracked in
-[`docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`](docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md),
-with forward-only storage details in
+Forward-only storage details are in
 [`docs/MIGRATION_NOTES.md`](docs/MIGRATION_NOTES.md).
 
 For operators and pilot participants, start with the
@@ -182,7 +180,7 @@ No OCR engine is bundled or selected by a client. A deployment that needs scan
 support must inject an adapter as `app.state.protocol_ocr_provider`; without one,
 the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
 PDF. The adapter contract is defined in
-`src/voice_workflow_agent/protocol_ocr.py`. This keeps local binaries, cloud OCR
+`src/voiney_lab/protocol_ocr.py`. This keeps local binaries, cloud OCR
 credentials, and provider choice outside HTTP input and the voice execution
 path.
 
@@ -498,14 +496,14 @@ Create the approved safety catalog and choose absolute, ignored runtime data
 directories. Configure `.env`, then start:
 
 ```bash
-uvicorn voice_workflow_agent.server:app --host 127.0.0.1 --port 8000
+uvicorn voiney_lab.server:app --host 127.0.0.1 --port 8000
 ```
 
 The optional safety-handoff worker remains separate from the low-latency voice
 loop:
 
 ```bash
-python -m voice_workflow_agent.worker
+python -m voiney_lab.worker
 ```
 
 ### Core configuration
@@ -527,6 +525,20 @@ python -m voice_workflow_agent.worker
 | `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
 | `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
+| `VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
+
+`VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
+Protocol be development-activated and run while readiness gates are still
+outstanding. It is honoured only in the `demo`, `reference_only` and
+`test_only` scopes; under `operational` it is ignored and the startup log says
+so. It does not change any readiness verdict, the outstanding-gate list, the
+source-evidence validation, or service approval, and a Protocol with no
+analysis, or a failed one, still cannot run. While it is on, the startup log
+and a page-top banner read "테스트 모드: 실행 준비 게이트를 건너뜀", an
+activation made through it carries `test_mode_readiness_gates_skipped` in the
+ledger, and each experiment report opened in such a session starts with a
+`test_mode_readiness_gates_skipped` event. No launcher sets it; set it by hand
+before starting the server.
 
 `PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
@@ -625,7 +637,7 @@ The A–G replay no longer relies on an ad-hoc `PYTHONPATH`:
 ```bash
 voice-workflow-replay
 # Equivalent project-native invocation:
-python -m voice_workflow_agent.replay_turns
+python -m voiney_lab.replay_turns
 # The historical script remains a thin compatibility wrapper:
 python scripts/replay_turns.py
 ```
@@ -773,10 +785,8 @@ running.
 
 Tests are provider-free unless explicitly marked otherwise. Connector and
 eLabFTW contracts use fakes; the real adapters remain in the production code
-path. The current integration classification and exact historical live-test
-evidence are in
-[`docs/COMMERCIALIZATION_PASS4_REPORT.md`](docs/COMMERCIALIZATION_PASS4_REPORT.md)
-and the current [`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
+path. The current integration classification is in the
+[`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
 
 ## Security and privacy boundaries
 

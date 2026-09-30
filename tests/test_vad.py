@@ -1,8 +1,8 @@
 import unittest
 from collections import deque
 
-from voice_workflow_agent.audio import FRAME_BYTES
-from voice_workflow_agent.vad import EndpointDetector, TurnState, VadConfig, WebRtcVadClassifier
+from voiney_lab.audio import FRAME_BYTES
+from voiney_lab.vad import EndpointDetector, TurnState, VadConfig, WebRtcVadClassifier
 
 
 def frame(number):
@@ -105,7 +105,7 @@ class EndpointDetectorTests(unittest.TestCase):
         detector = EndpointDetector(config,classifier=Decisions(
             decisions + [False] * 12))
         with self.assertLogs(
-            "voice_workflow_agent.vad",level="INFO",
+            "voiney_lab.vad",level="INFO",
         ) as captured:
             results = feed(
                 detector,[frame(i) for i in range(len(decisions) + 12)])
@@ -133,7 +133,7 @@ class EndpointDetectorTests(unittest.TestCase):
         detector = EndpointDetector(
             config,classifier=Decisions([True] * 3 + grace + [False] * 2))
         with self.assertLogs(
-            "voice_workflow_agent.vad",level="INFO",
+            "voiney_lab.vad",level="INFO",
         ) as captured:
             before_endpoint = feed(
                 detector,[frame(i) for i in range(3 + len(grace))])

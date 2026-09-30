@@ -17,17 +17,17 @@ from unittest.mock import patch
 
 import httpx
 
-from voice_workflow_agent.brain import answer_approved_reference_question
-from voice_workflow_agent.document_store import ingest_manifest
-from voice_workflow_agent.external_references import (
+from voiney_lab.brain import answer_approved_reference_question
+from voiney_lab.document_store import ingest_manifest
+from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
     XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
     sanitize_external_search_answer,
 )
-from voice_workflow_agent.retrieval import retrieve_approved_lab_documents
-from voice_workflow_agent.tools import ToolContext, search_approved_lab_references
+from voiney_lab.retrieval import retrieve_approved_lab_documents
+from voiney_lab.tools import ToolContext, search_approved_lab_references
 
 from tests.test_retrieval import operational_document
 
@@ -112,7 +112,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         ingest_manifest({"documents": [reference_document()]}, self.db)
         context = ToolContext(self.db, None, "ko", "reference_only")
         with patch(
-            "voice_workflow_agent.moss_retrieval.get_moss_runtime",
+            "voiney_lab.moss_retrieval.get_moss_runtime",
             return_value=None,
         ):
             result = search_approved_lab_references(

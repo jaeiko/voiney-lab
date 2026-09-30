@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from voice_workflow_agent.moss_retrieval import (  # noqa: E402
+from voiney_lab.moss_retrieval import (  # noqa: E402
     MOSS_CAPABLE_SCOPES,
     catalog_sections_for_moss,
 )

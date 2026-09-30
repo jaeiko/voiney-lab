@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FIXTURE="$ROOT/data/development_protocols/candidate_a_curated_analysis.json"
-PROVENANCE="$ROOT/data/development_protocols/candidate_a_curated_analysis.provenance.json"
+FIXTURE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.json"
+PROVENANCE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF="${CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
 PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"
 
@@ -114,13 +114,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from voice_workflow_agent.external_references import (
+from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
-from voice_workflow_agent.generated_visuals import GeneratedVisualSettings
-from voice_workflow_agent.multi_brain import MultiBrainSettings
-from voice_workflow_agent.web_visuals import WebVisualSettings
+from voiney_lab.generated_visuals import GeneratedVisualSettings
+from voiney_lab.multi_brain import MultiBrainSettings
+from voiney_lab.web_visuals import WebVisualSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
 references = ExternalReferenceSettings.from_environment()
@@ -166,10 +166,10 @@ python -B - <<'PY'
 import os
 from pathlib import Path
 
-from voice_workflow_agent.curated_protocol import load_curated_protocol_fixture
-from voice_workflow_agent.experiment_protocol_config import ProtocolPersistenceSettings
-from voice_workflow_agent.experiment_protocol_store import initialize_protocol_store
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+from voiney_lab.curated_protocol import load_curated_protocol_fixture
+from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
+from voiney_lab.experiment_protocol_store import initialize_protocol_store
+from voiney_lab.protocol_catalog import ProtocolCatalog
 
 fixture = load_curated_protocol_fixture(
     Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE"]),
@@ -202,6 +202,6 @@ echo
 echo "=== Starting Voice Workflow Agent ==="
 
 exec python -B -m uvicorn \
-  voice_workflow_agent.server:app \
+  voiney_lab.server:app \
   --host 0.0.0.0 \
   --port 8000

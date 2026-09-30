@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
 REFERENCE = (
-    ROOT / "data" / "development_protocols" / "candidate_a_curated_analysis.json"
+    ROOT / "data" / "fixtures" / "development_protocols" / "candidate_a_curated_analysis.json"
 )
 PROVENANCE = REFERENCE.with_name(
     "candidate_a_curated_analysis.provenance.json"
@@ -38,7 +38,7 @@ class ScoringToolTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file() or not REFERENCE.is_file():
             raise unittest.SkipTest("the local source or reference is absent.")
-        from voice_workflow_agent.curated_protocol import (
+        from voiney_lab.curated_protocol import (
             load_curated_protocol_fixture,
         )
 

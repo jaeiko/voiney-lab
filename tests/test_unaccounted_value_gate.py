@@ -23,7 +23,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
+from voiney_lab import experiment_protocol as domain
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
@@ -80,7 +80,7 @@ class TheGateItselfTests(unittest.TestCase):
         self.assertIn("2 source page(s)", reason.message)
 
     def test_it_is_a_gate_a_reviewer_can_clear(self) -> None:
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             _ACKNOWLEDGEABLE_GATES,
             ProtocolCatalog,
         )
@@ -100,19 +100,19 @@ class DerivedFromTheMergeTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not IN_GEL.is_file():
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
-        from voice_workflow_agent.chunk_analysis_cache import (
+        from voiney_lab.chunk_analysis_cache import (
             ChunkAnalysisCache,
             key_for_chunk,
         )
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             ChunkAnalysisLimits,
             extraction_for_chunk,
             plan_protocol_chunks,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             prepare_chunk_claim_request_context,
         )
 
@@ -148,7 +148,7 @@ class DerivedFromTheMergeTests(unittest.TestCase):
     def test_a_page_with_no_value_omitted_does_not_gate(self) -> None:
         """Most incomplete pages are incomplete about nothing measurable."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             pages_stating_unaccounted_values,
             unaccounted_segments_by_page,
         )
@@ -175,7 +175,7 @@ class DerivedFromTheMergeTests(unittest.TestCase):
         that page 8 does, which is the case STEP 34 measured by hand.
         """
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             generate_page_evidence_segments,
             pages_stating_unaccounted_values,
             segment_carries_unit_bearing_value,
@@ -212,7 +212,7 @@ class DerivedFromTheMergeTests(unittest.TestCase):
     def test_a_dict_shaped_coverage_record_reads_the_same(self) -> None:
         """The catalog stores coverage as dicts; both shapes must agree."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             pages_stating_unaccounted_values,
         )
 
@@ -231,8 +231,8 @@ class TheCacheIsNotDisturbedTests(unittest.TestCase):
     """1-3: this change is server-side only, so nothing paid for is lost."""
 
     def test_the_contract_identities_are_untouched(self) -> None:
-        from voice_workflow_agent.chunk_analysis_cache import prompt_sha256
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.chunk_analysis_cache import prompt_sha256
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_SCHEMA_VERSION,
             EVIDENCE_SEGMENT_VERSION,
         )
@@ -251,7 +251,7 @@ class TheCacheIsNotDisturbedTests(unittest.TestCase):
 
         from dataclasses import fields
 
-        from voice_workflow_agent.chunk_analysis_cache import ChunkCacheKey
+        from voiney_lab.chunk_analysis_cache import ChunkCacheKey
 
         names = {item.name for item in fields(ChunkCacheKey)}
         self.assertEqual(
@@ -271,13 +271,13 @@ class TheProductionPathTests(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
 
-        from voice_workflow_agent.experiment_protocol_config import (
+        from voiney_lab.experiment_protocol_config import (
             ProtocolPersistenceSettings,
         )
-        from voice_workflow_agent.experiment_protocol_store import (
+        from voiney_lab.experiment_protocol_store import (
             initialize_protocol_store,
         )
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             ProtocolCatalog,
             SharedSecretApprovalPolicy,
         )
@@ -310,7 +310,7 @@ class TheProductionPathTests(unittest.TestCase):
     def _register_with_coverage(self, *, omit_a_value: bool):
         """Analyse the document, optionally leaving a stated value unaccounted."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             generate_page_evidence_segments,
             pages_stating_unaccounted_values,
             segment_carries_unit_bearing_value,
@@ -434,7 +434,7 @@ class TheProductionPathTests(unittest.TestCase):
         self.assertTrue(fixture.unread_pages[1])
 
         # And the session's disclosure duty now has something to fire on.
-        from voice_workflow_agent.curated_protocol import CuratedProtocolSession
+        from voiney_lab.curated_protocol import CuratedProtocolSession
 
         session = CuratedProtocolSession(fixture)
         session.active = True
@@ -479,7 +479,7 @@ class ADeclinedValueBlocksWithoutDiscardingTests(unittest.TestCase):
     """
 
     def test_the_refusal_no_longer_exists(self) -> None:
-        from voice_workflow_agent.claim_contract_audit import (
+        from voiney_lab.claim_contract_audit import (
             collect_refusal_codes,
         )
 
@@ -519,7 +519,7 @@ class ADeclinedValueBlocksWithoutDiscardingTests(unittest.TestCase):
     def test_the_allowance_has_a_floor_that_the_old_proposal_lacked(self):
         """min(2, count//10) was measured to be 0 for two paid chunks."""
 
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             declined_value_allowance,
         )
 
@@ -548,7 +548,7 @@ class ADeclinedValueBlocksWithoutDiscardingTests(unittest.TestCase):
         )
 
     def test_both_new_reasons_are_gates_a_reviewer_can_clear(self) -> None:
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             _ACKNOWLEDGEABLE_GATES,
             ProtocolCatalog,
         )
@@ -590,15 +590,15 @@ class TheRealRefusalScenarioTests(unittest.TestCase):
     def _accept_with_declination(self, ordinal):
         import json
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             ChunkAnalysisLimits,
             extraction_for_chunk,
             plan_protocol_chunks,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_ANALYSIS_SYSTEM_PROMPT,
             claim_response_schema,
             generate_page_evidence_segments,
@@ -667,7 +667,7 @@ class TheRealRefusalScenarioTests(unittest.TestCase):
         return extraction, chunk, analysis, page
 
     def test_ord1_and_ord2_are_no_longer_discarded_for_them(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             pages_declining_excessive_values,
             pages_declining_stated_values,
         )

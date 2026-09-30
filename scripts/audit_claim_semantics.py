@@ -16,8 +16,8 @@ import argparse
 import json
 from pathlib import Path
 
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ProtocolChunkMergeError,
     ValidatedChunkResult,
@@ -26,11 +26,11 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     MergedProtocolClaims,
     degraded_segmentation_pages,
 )
-from voice_workflow_agent.protocol_claim_semantic_audit import (
+from voiney_lab.protocol_claim_semantic_audit import (
     audit_assembly_preservation,
     audit_chunk_semantics,
     audit_merged_semantics,

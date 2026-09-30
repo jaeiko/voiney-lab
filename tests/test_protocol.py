@@ -1,5 +1,5 @@
 import json, unittest
-from voice_workflow_agent.protocol import ProtocolError, audio_segment_start, event, parse_control
+from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 
 class ProtocolTests(unittest.TestCase):
     def test_controls(self):

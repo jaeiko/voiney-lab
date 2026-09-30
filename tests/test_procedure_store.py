@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.procedure_store import ProcedureStore, ProcedureTransitionError
+from voiney_lab.procedure_store import ProcedureStore, ProcedureTransitionError
 
 
 class ProcedureStoreTests(unittest.TestCase):

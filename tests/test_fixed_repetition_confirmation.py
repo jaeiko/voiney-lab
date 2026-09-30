@@ -20,17 +20,17 @@ from dataclasses import replace
 from pathlib import Path
 
 from tests.test_protocol_catalog import write_text_pdf
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     generate_page_evidence_segments,
 )
 
@@ -332,12 +332,12 @@ class ClassifyingBoundedUnblocksTheUnsupportedShapeTests(unittest.TestCase):
         import json
 
         from tests.test_protocol_claim_analysis import write_lined_pages
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_SCHEMA_VERSION,
             parse_chunk_claim_response,
             prepare_chunk_claim_request_context,
         )
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             ChunkAnalysisLimits,
             ValidatedChunkResult,
             assemble_validated_protocol_claims,

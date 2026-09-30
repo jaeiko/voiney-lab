@@ -7,8 +7,8 @@ from dataclasses import replace
 
 import pytest
 
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.protocol_sources import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.protocol_sources import (
     GOOGLE_DRIVE_API_ROOT,
     GITHUB_API_ROOT,
     PROTOCOLS_IO_API_ROOT,
@@ -22,7 +22,7 @@ from voice_workflow_agent.protocol_sources import (
     normalize_protocols_io_identifier,
     verify_github_webhook_signature,
 )
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.workspace_store import (
     WorkspaceSettings,
     initialize_workspace_store,
 )

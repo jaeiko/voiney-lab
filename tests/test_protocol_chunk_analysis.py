@@ -14,25 +14,25 @@ from unittest.mock import Mock, patch
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
 from tests.test_protocol_claim_analysis import declined_handles
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     CLAIM_CHUNK_ANALYSIS_ENABLED_ENV,
     ProtocolCatalog,
     ProtocolChunkAnalysisFailedError,
     ProtocolChunkMergeConflictError,
     ProtocolCatalogUnavailableError,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ProtocolChunkAdmissionError,
     ProtocolChunkMergeError,
@@ -45,7 +45,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     plan_protocol_chunks,
     validate_chunk_result,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_SCHEMA_VERSION,
 )
 
@@ -585,7 +585,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -649,7 +649,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -688,7 +688,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -712,7 +712,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -749,7 +749,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -789,7 +789,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -842,7 +842,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -877,7 +877,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(store)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -910,7 +910,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         catalog = ProtocolCatalog(store)
         try:
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -946,7 +946,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             )
             model = Mock()
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 recovered.analyze(
@@ -971,7 +971,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
         try:
             catalog = ProtocolCatalog(initial)
             with patch(
-                "voice_workflow_agent.protocol_catalog._analysis_state",
+                "voiney_lab.protocol_catalog._analysis_state",
                 return_value="chunked_analysis_required",
             ):
                 entry = catalog.register(
@@ -1002,7 +1002,7 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             worker_store = initialize_protocol_store(settings)
             try:
                 with patch(
-                    "voice_workflow_agent.protocol_catalog._analysis_state",
+                    "voiney_lab.protocol_catalog._analysis_state",
                     return_value="chunked_analysis_required",
                 ):
                     ProtocolCatalog(worker_store).analyze(

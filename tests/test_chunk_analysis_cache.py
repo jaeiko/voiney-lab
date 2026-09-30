@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.chunk_analysis_cache import (
+from voiney_lab.chunk_analysis_cache import (
     CACHE_DIRECTORY_ENV,
     ChunkAnalysisCache,
     ChunkCacheError,
@@ -25,13 +25,13 @@ from voice_workflow_agent.chunk_analysis_cache import (
     key_for_chunk,
     prompt_sha256,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     extraction_for_chunk,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_SCHEMA_VERSION,
     EVIDENCE_SEGMENT_VERSION,
@@ -41,7 +41,7 @@ from voice_workflow_agent.protocol_claim_analysis import (
     prepare_chunk_claim_request_context,
 )
 
-from voice_workflow_agent.protocol_catalog import _ACKNOWLEDGEABLE_GATES
+from voiney_lab.protocol_catalog import _ACKNOWLEDGEABLE_GATES
 
 from tests.test_protocol_chunk_analysis import FakeChunkModel
 from tests.test_protocol_claim_analysis import RichClaimModel, write_pages
@@ -331,7 +331,7 @@ class ChunkAnalysisCacheTests(unittest.TestCase):
         self.assertEqual(counts, {7})
 
         # And that is safe because the readiness gate does not take its word.
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
         self.assertIn(
             domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value,
             {code for code in _ACKNOWLEDGEABLE_GATES} | {"unconfirmed_fixed_repetition"},
@@ -569,7 +569,7 @@ class CrossInvocationChunkByChunkTests(unittest.TestCase):
         )
 
     def test_merge_accepts_a_set_that_is_part_cache_and_part_fresh(self) -> None:
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             ValidatedChunkResult,
             merge_validated_chunk_results,
         )
@@ -651,7 +651,7 @@ class EchoedIdentitiesArePinnedTests(unittest.TestCase):
     def test_a_refusal_names_the_segments_it_is_about(self) -> None:
         """STEP 25 had to re-derive by hand which segment a refusal meant."""
 
-        from voice_workflow_agent.experiment_protocol_analysis import (
+        from voiney_lab.experiment_protocol_analysis import (
             ProtocolEvidenceDiagnostic,
         )
 

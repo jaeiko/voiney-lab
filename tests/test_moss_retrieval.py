@@ -11,8 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from voice_workflow_agent.document_store import ingest_manifest, ingest_manifest_file
-from voice_workflow_agent.moss_retrieval import (
+from voiney_lab.document_store import ingest_manifest, ingest_manifest_file
+from voiney_lab.moss_retrieval import (
     MossRerankResult,
     MossRuntime,
     MossSettings,
@@ -20,8 +20,8 @@ from voice_workflow_agent.moss_retrieval import (
     moss_document_key,
     start_moss_runtime_from_environment,
 )
-from voice_workflow_agent.retrieval import search_safety_documents
-from voice_workflow_agent.tools import ToolContext, search_approved_safety_manual
+from voiney_lab.retrieval import search_safety_documents
+from voiney_lab.tools import ToolContext, search_approved_safety_manual
 from tests.test_retrieval import operational_document
 
 
@@ -153,15 +153,15 @@ class MossSettingsTests(unittest.TestCase):
             index_name="test-index",
         )
         with patch(
-            "voice_workflow_agent.moss_retrieval.MossSettings.from_environment",
+            "voiney_lab.moss_retrieval.MossSettings.from_environment",
             return_value=settings,
         ), patch(
-            "voice_workflow_agent.moss_retrieval.MossRuntime.start",
+            "voiney_lab.moss_retrieval.MossRuntime.start",
             side_effect=RuntimeError("mock initialization failure"),
         ), patch(
-            "voice_workflow_agent.moss_retrieval.MossRuntime.close",
+            "voiney_lab.moss_retrieval.MossRuntime.close",
         ) as close, self.assertLogs(
-            "voice_workflow_agent.moss",level="WARNING",
+            "voiney_lab.moss",level="WARNING",
         ) as captured:
             runtime=start_moss_runtime_from_environment()
         self.assertIsNone(runtime)
@@ -387,7 +387,7 @@ class MossToolIntegrationTests(unittest.TestCase):
                     )
 
             with patch(
-                "voice_workflow_agent.moss_retrieval.get_moss_runtime",
+                "voiney_lab.moss_retrieval.get_moss_runtime",
                 return_value=Runtime(),
             ):
                 result = search_approved_safety_manual(
