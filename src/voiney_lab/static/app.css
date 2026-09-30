@@ -425,6 +425,8 @@
     }
     .protocol-register small{display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem}
     .protocol-register small:empty{display:none}
+    .protocol-register small[hidden]{display:none}
+    .protocol-register .protocol-duplicate-notice{color:var(--amber);font-weight:700}
     .protocol-review{
       grid-column:1/-1;
       border:1px solid var(--border-accent);
