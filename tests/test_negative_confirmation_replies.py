@@ -2,7 +2,8 @@
 
 The session reads an answer to its own yes/no question with two patterns:
 _NEGATIVE_COMPLETION_CONFIRMATION for the completion prompt, and the negative
-branch of _binary_frame_reply, which the observation prompt reads on its own.
+branch of _binary_frame_reply. The observation prompt reads
+_observation_binary_reply, whose negative branch is the same pattern.
 They had drifted apart, and neither knew common replies such as 아뇨 or
 아직이요. An unrecognised answer to the completion prompt fell through to the
 off-topic route and the question was dropped without a decline being recorded.
@@ -26,6 +27,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     _binary_frame_reply,
+    _observation_binary_reply,
     _semantic_utterance_key,
     load_curated_protocol_fixture,
 )
@@ -63,6 +65,10 @@ ALIGNED_NEGATIVES = (
 PUNCTUATED_NEGATIVES = ("아뇨.", "아니에요.", "no, not yet", "아니, 아직 안 끝났어.")
 NEGATIVES = ADDED_NEGATIVES + ALIGNED_NEGATIVES + PUNCTUATED_NEGATIVES
 AFFIRMATIVES = ("네", "예", "완료했어요")
+#: The observation prompt asks whether the source endpoint was seen, so a
+#: report that the work was done ("완료했어요") does not answer it; see
+#: test_observation_yes_no_narrowing.
+OBSERVATION_AFFIRMATIVES = ("네", "예")
 #: A bare "next", and a completion report naming a step other than the
 #: current one: the two ways the session asks before advancing.
 QUESTION_OPENERS = ("다음", "2단계 완료했어")
@@ -82,12 +88,13 @@ class NegativeReplyPatternTests(unittest.TestCase):
     def test_both_patterns_read_every_negative_as_negative(self):
         # The completion prompt accepts either pattern, so the session tests
         # below would still pass if one of them missed a reply. The
-        # observation prompt reads only the binary one.
+        # observation prompt reads only its own binary reply.
         for reply in NEGATIVES:
             with self.subTest(reply=reply):
                 key = _semantic_utterance_key(reply)
                 self.assertIsNotNone(_NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key))
                 self.assertEqual(_binary_frame_reply(reply), "negative")
+                self.assertEqual(_observation_binary_reply(reply), "negative")
 
     def test_affirmatives_are_still_affirmative(self):
         for reply in AFFIRMATIVES:
@@ -162,7 +169,7 @@ class ObservationPromptReplyTests(unittest.TestCase):
 
     def test_an_affirmative_still_releases_the_step(self):
         for label in ("7", "9", "20"):
-            for reply in AFFIRMATIVES:
+            for reply in OBSERVATION_AFFIRMATIVES:
                 with self.subTest(step=label, reply=reply):
                     plan, session = self._answer_observation_prompt(label, reply)
 
