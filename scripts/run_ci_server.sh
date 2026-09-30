@@ -39,6 +39,6 @@ export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
 
 echo "=== Starting Voice Workflow Agent (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \
-  voice_workflow_agent.server:app \
+  voiney_lab.server:app \
   --host 127.0.0.1 \
   --port 8000

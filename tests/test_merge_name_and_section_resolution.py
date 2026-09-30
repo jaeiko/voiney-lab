@@ -32,7 +32,7 @@ class NameOverlapVersusConflictTests(unittest.TestCase):
     """The discrimination is made on the citation, not on the name."""
 
     def test_the_same_passage_under_one_name_is_an_overlap(self) -> None:
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _cited_the_same_place,
         )
 
@@ -61,7 +61,7 @@ class NameOverlapVersusConflictTests(unittest.TestCase):
     def test_a_missing_citation_is_never_treated_as_a_match(self) -> None:
         """Fail closed on shape: no evidence is not evidence of sameness."""
 
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _cited_the_same_place,
         )
 
@@ -96,7 +96,7 @@ class SectionInheritanceTests(unittest.TestCase):
     def _action(self, step_id, page, order, section_id=None):
         from dataclasses import dataclass, field
 
-        from voice_workflow_agent.protocol_claim_analysis import ClaimCategory
+        from voiney_lab.protocol_claim_analysis import ClaimCategory
 
         @dataclass
         class Evidence:
@@ -115,7 +115,7 @@ class SectionInheritanceTests(unittest.TestCase):
         return Action(step_id, section_id, order, Evidence(page), f"claim-{step_id}")
 
     def test_a_step_below_a_heading_inherits_it(self) -> None:
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _inherit_declared_section,
         )
 
@@ -131,7 +131,7 @@ class SectionInheritanceTests(unittest.TestCase):
     def test_a_step_above_every_heading_inherits_nothing(self) -> None:
         """3-1: no section declared before it, so none is supplied."""
 
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _inherit_declared_section,
         )
 
@@ -142,7 +142,7 @@ class SectionInheritanceTests(unittest.TestCase):
         self.assertEqual(inherited, ())
 
     def test_a_document_with_no_heading_supplies_nothing(self) -> None:
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _inherit_declared_section,
         )
 
@@ -152,7 +152,7 @@ class SectionInheritanceTests(unittest.TestCase):
         self.assertEqual(inherited, ())
 
     def test_a_step_that_named_its_own_section_keeps_it(self) -> None:
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             _inherit_declared_section,
         )
 
@@ -172,10 +172,10 @@ class TitleFromTheFileTests(unittest.TestCase):
             raise unittest.SkipTest(f"{IN_GEL} is not present.")
 
     def test_it_is_the_file_s_title_and_says_where_it_came_from(self) -> None:
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             MergedProtocolClaims,
             _title_from_the_file,
         )
@@ -202,10 +202,10 @@ class TitleFromTheFileTests(unittest.TestCase):
     def test_a_file_with_no_title_produces_no_title_rather_than_a_guess(self):
         from dataclasses import replace as _replace
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             MergedProtocolClaims,
             _title_from_the_file,
         )
@@ -233,7 +233,7 @@ class TitleFromTheFileTests(unittest.TestCase):
 
         import inspect
 
-        from voice_workflow_agent import protocol_claim_analysis
+        from voiney_lab import protocol_claim_analysis
 
         body = inspect.getsource(
             protocol_claim_analysis.validate_whole_protocol_claims
@@ -249,7 +249,7 @@ class ChunkLocalPreChecksTests(unittest.TestCase):
         import ast
         import pathlib
 
-        from voice_workflow_agent import protocol_claim_analysis
+        from voiney_lab import protocol_claim_analysis
 
         tree = ast.parse(
             pathlib.Path(protocol_claim_analysis.__file__).read_text()
@@ -288,7 +288,7 @@ class ChunkLocalPreChecksTests(unittest.TestCase):
 
         import inspect
 
-        from voice_workflow_agent import protocol_claim_analysis
+        from voiney_lab import protocol_claim_analysis
 
         body = inspect.getsource(
             protocol_claim_analysis._refuse_chunk_local_inconsistency
@@ -303,19 +303,19 @@ class ThePaidChunksSurviveTests(unittest.TestCase):
     """8-4: nothing in this step may cost a call already spent."""
 
     def test_every_cached_chunk_still_loads(self) -> None:
-        from voice_workflow_agent.chunk_analysis_cache import (
+        from voiney_lab.chunk_analysis_cache import (
             ChunkAnalysisCache,
             key_for_chunk,
         )
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_chunk_analysis import (
+        from voiney_lab.protocol_chunk_analysis import (
             ChunkAnalysisLimits,
             extraction_for_chunk,
             plan_protocol_chunks,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             prepare_chunk_claim_request_context,
         )
 

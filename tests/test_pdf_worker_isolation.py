@@ -24,14 +24,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import voice_workflow_agent.experiment_protocol_pdf as pdf_module
-from voice_workflow_agent.experiment_protocol_pdf import (
+import voiney_lab.experiment_protocol_pdf as pdf_module
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfWorkerError,
     ProtocolPdfWorkerTimeoutError,
     clear_protocol_pdf_cache,
     extract_protocol_pdf,
 )
-from voice_workflow_agent.pdf_text_worker import read_page_texts
+from voiney_lab.pdf_text_worker import read_page_texts
 
 from tests.test_protocol_catalog import write_text_pdf
 
@@ -57,9 +57,9 @@ class WorkerDeathTests(unittest.TestCase):
         real = subprocess.run
 
         def substitute(command, **kwargs):
-            if command[1:] == ("-m", "voice_workflow_agent.pdf_text_worker") or list(
+            if command[1:] == ("-m", "voiney_lab.pdf_text_worker") or list(
                 command[1:]
-            ) == ["-m", "voice_workflow_agent.pdf_text_worker"]:
+            ) == ["-m", "voiney_lab.pdf_text_worker"]:
                 return real([sys.executable, "-c", script], **kwargs)
             return real(command, **kwargs)
 
@@ -139,14 +139,14 @@ class WorkerDeathTests(unittest.TestCase):
         is invalid when it is not.
         """
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             ProtocolPdfMalformedError,
         )
 
         self.assertFalse(issubclass(ProtocolPdfWorkerError, ProtocolPdfMalformedError))
         self.assertTrue(issubclass(ProtocolPdfWorkerTimeoutError, ProtocolPdfWorkerError))
 
-        from voice_workflow_agent.server import _catalog_http_error
+        from voiney_lab.server import _catalog_http_error
 
         self.assertEqual(
             _catalog_http_error(ProtocolPdfWorkerError("x")).status_code, 503
@@ -193,7 +193,7 @@ class WorkerContractTests(unittest.TestCase):
             }
         )
         completed = subprocess.run(
-            [sys.executable, "-m", "voice_workflow_agent.pdf_text_worker"],
+            [sys.executable, "-m", "voiney_lab.pdf_text_worker"],
             input=request.encode("utf-8"),
             capture_output=True,
             timeout=60,

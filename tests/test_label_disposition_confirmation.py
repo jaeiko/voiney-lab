@@ -23,17 +23,17 @@ import unittest
 from pathlib import Path
 
 from tests.test_protocol_catalog import write_text_pdf
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
     ProtocolCatalog,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     generate_page_evidence_segments,
 )
 
@@ -46,7 +46,7 @@ _GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
 
 class TheModelCannotMakeThisJudgementTests(unittest.TestCase):
     def test_the_response_schema_has_no_field_for_it(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_RESPONSE_SCHEMA,
         )
 
@@ -57,7 +57,7 @@ class TheModelCannotMakeThisJudgementTests(unittest.TestCase):
         self.assertNotIn("non_step_labels", coverage["required"])
 
     def test_the_prompt_no_longer_asks_for_it(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_ANALYSIS_SYSTEM_PROMPT,
         )
 

@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from voice_workflow_agent import experiment_protocol as domain
+from voiney_lab import experiment_protocol as domain
 from pypdf import PdfReader
 
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     TextVerification,
     _declared_unicode_values,
@@ -21,7 +21,7 @@ from voice_workflow_agent.experiment_protocol_pdf import (
     unmapped_code_points,
     verify_page_text,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ProtocolChunkAdmissionError,
     plan_protocol_chunks,
 )
@@ -151,7 +151,7 @@ class CrossCheckOutcomeTests(unittest.TestCase):
 
     def test_absent_comparator_is_recorded_never_assumed_clean(self) -> None:
         with patch(
-            "voice_workflow_agent.experiment_protocol_pdf.shutil.which",
+            "voiney_lab.experiment_protocol_pdf.shutil.which",
             return_value=None,
         ):
             verdict, divergent = verify_page_text(
@@ -167,7 +167,7 @@ class CrossCheckOutcomeTests(unittest.TestCase):
         ):
             with self.subTest(outcome=type(outcome).__name__):
                 target = (
-                    "voice_workflow_agent.experiment_protocol_pdf"
+                    "voiney_lab.experiment_protocol_pdf"
                     ".subprocess.run"
                 )
                 kwargs = (
@@ -183,7 +183,7 @@ class CrossCheckOutcomeTests(unittest.TestCase):
 
     def test_divergent_pages_are_reported(self) -> None:
         with patch(
-            "voice_workflow_agent.experiment_protocol_pdf._comparator_pages",
+            "voiney_lab.experiment_protocol_pdf._comparator_pages",
             return_value=tuple(
                 "totally different text" if index == 1 else page.text
                 for index, page in enumerate(self.extraction.pages)
@@ -195,7 +195,7 @@ class CrossCheckOutcomeTests(unittest.TestCase):
 
     def test_page_count_disagreement_is_a_mismatch(self) -> None:
         with patch(
-            "voice_workflow_agent.experiment_protocol_pdf._comparator_pages",
+            "voiney_lab.experiment_protocol_pdf._comparator_pages",
             return_value=("one page only",),
         ):
             verdict, _ = verify_page_text(IN_GEL, self.extraction.pages)
@@ -283,11 +283,11 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
     def setUp(self) -> None:
         if not IN_GEL.exists():
             self.skipTest("Local protocol source is not present.")
-        from voice_workflow_agent.experiment_protocol_store import (
+        from voiney_lab.experiment_protocol_store import (
             ProtocolPersistenceSettings,
             initialize_protocol_store,
         )
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
@@ -383,7 +383,7 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
         )
 
     def test_unverified_source_needs_an_audited_acknowledgement(self) -> None:
-        from voice_workflow_agent.protocol_catalog import (
+        from voiney_lab.protocol_catalog import (
             ProtocolApprovalError,
             SharedSecretApprovalPolicy,
         )
@@ -435,7 +435,7 @@ class UnverifiedSourceAcknowledgementTests(unittest.TestCase):
         approve()
 
     def test_a_proven_mismatch_can_never_be_acknowledged(self) -> None:
-        from voice_workflow_agent.protocol_catalog import ProtocolApprovalError
+        from voiney_lab.protocol_catalog import ProtocolApprovalError
 
         entry = self._register_unverified()
         with self.assertRaises(ProtocolApprovalError):
@@ -614,7 +614,7 @@ class UnmappedCodePointDecisionTests(unittest.TestCase):
     def test_the_gate_it_raises_is_not_acknowledgeable(self) -> None:
         """A person may wave through "not cross-checked", never "corrupted"."""
 
-        from voice_workflow_agent.protocol_catalog import _ACKNOWLEDGEABLE_GATES
+        from voiney_lab.protocol_catalog import _ACKNOWLEDGEABLE_GATES
 
         self.assertIn(
             domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,

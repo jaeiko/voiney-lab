@@ -11,21 +11,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.completion_intent import (
+from voiney_lab.completion_intent import (
     is_history_or_continuation_intent,
     is_learning_question,
     is_version_question,
 )
-from voice_workflow_agent.document_store import SCHEMA as DOC_SCHEMA
-from voice_workflow_agent.procedure_definitions import (
+from voiney_lab.document_store import SCHEMA as DOC_SCHEMA
+from voiney_lab.procedure_definitions import (
     ProcedureDefinition,
     ProcedureStep,
     SourceReference,
     load_procedure_definitions,
 )
-from voice_workflow_agent.procedure_store import ProcedureStore
-from voice_workflow_agent.procedures import ProcedureController
-from voice_workflow_agent.tools import ToolContext, execute_tool
+from voiney_lab.procedure_store import ProcedureStore
+from voiney_lab.procedures import ProcedureController
+from voiney_lab.tools import ToolContext, execute_tool
 
 
 class ProductEvolutionTests(unittest.TestCase):

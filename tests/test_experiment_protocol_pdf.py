@@ -15,7 +15,7 @@ from pypdf.generic import (
     NameObject,
 )
 
-from voice_workflow_agent.experiment_protocol_pdf import (
+from voiney_lab.experiment_protocol_pdf import (
     MAX_PROTOCOL_PDF_BYTES,
     PDF_MEDIA_TYPE,
     ProtocolPdfEncryptedError,

@@ -5,15 +5,15 @@ import sqlite3
 
 import pytest
 
-from voice_workflow_agent.drylab_workflows import (
+from voiney_lab.drylab_workflows import (
     DryLabWorkflowError,
     DryLabWorkflowRegistry,
     inspect_nextflow_snapshot,
     inspect_snakemake_snapshot,
 )
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.protocol_sources import SourceSnapshot
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.protocol_sources import SourceSnapshot
+from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceNotFoundError,
     WorkspaceSettings,

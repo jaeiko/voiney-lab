@@ -2,7 +2,7 @@ import json, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from voice_workflow_agent.brain import (
+from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
     SentenceChunker,
@@ -13,7 +13,7 @@ from voice_workflow_agent.brain import (
     sanitize_spoken_text,
     stream_brain_turn,
 )
-from voice_workflow_agent.tools import ToolContext, create_safety_report
+from voiney_lab.tools import ToolContext, create_safety_report
 
 class BrainTests(unittest.TestCase):
     def test_persona_and_guardrails(self):
@@ -146,7 +146,7 @@ class BrainTests(unittest.TestCase):
         async def sentence(item): spoken.append(item.text)
         async def tool_event(kind,fields): events.append(kind)
         async def exercise():
-            with patch("voice_workflow_agent.brain.execute_tool",return_value={"status":"success","answerable":True,"matches":[]}):
+            with patch("voiney_lab.brain.execute_tool",return_value={"status":"success","answerable":True,"matches":[]}):
                 return await stream_brain_turn(client,ConversationHistory(),"question",sentence,on_tool_event=tool_event,
                                                tool_context=ToolContext(Path("unused.sqlite"),None,"en","operational"))
         import asyncio
@@ -179,7 +179,7 @@ class BrainTests(unittest.TestCase):
         async def tool_event(kind,fields): events.append((kind,fields["tool"]))
         results=[{"status":"success","answerable":True,"matches":[{"document_id":"SOP-1"}]}]
         async def exercise():
-            with patch("voice_workflow_agent.brain.execute_tool",side_effect=results):
+            with patch("voiney_lab.brain.execute_tool",side_effect=results):
                 return await stream_brain_turn(client,ConversationHistory(),"누출을 보고할게",sentence,on_tool_event=tool_event,
                                                tool_context=ToolContext(Path("unused.sqlite"),None,"ko","operational"))
         import asyncio
@@ -208,7 +208,7 @@ class BrainTests(unittest.TestCase):
         async def sentence(_): pass
         async def tool_event(kind, fields): events.append((kind, fields))
         import asyncio
-        with patch("voice_workflow_agent.brain.execute_tool") as execute:
+        with patch("voiney_lab.brain.execute_tool") as execute:
             first=asyncio.run(stream_brain_turn(client,history,"보고",sentence,on_tool_event=tool_event))
             self.assertEqual(first.text.find("Lab A") >= 0, True)
             execute.assert_not_called()
@@ -230,7 +230,7 @@ class BrainTests(unittest.TestCase):
         async def tool_event(kind,fields): events.append((kind,fields.copy()))
         class Client: pass
         import asyncio
-        with patch("voice_workflow_agent.brain.execute_tool",side_effect=[{"status":"error","message":"disk full"},{"status":"success","report_id":"SR-20260722-A1B2C3","report_status":"queued_for_handoff"}]) as execute:
+        with patch("voiney_lab.brain.execute_tool",side_effect=[{"status":"error","message":"disk full"},{"status":"success","report_id":"SR-20260722-A1B2C3","report_status":"queued_for_handoff"}]) as execute:
             failed=asyncio.run(stream_brain_turn(Client(),history,"네",sentence,on_tool_event=tool_event))
             self.assertEqual(history.pending_report,draft)
             self.assertIn("다시 승인하거나 취소",failed.text)
@@ -249,7 +249,7 @@ class BrainTests(unittest.TestCase):
         async def tool_event(_,fields): events.append(fields.get("status"))
         class Client: pass
         import asyncio
-        with patch("voice_workflow_agent.brain.execute_tool",side_effect=OSError("disk unavailable")):
+        with patch("voiney_lab.brain.execute_tool",side_effect=OSError("disk unavailable")):
             asyncio.run(stream_brain_turn(Client(),history,"đồng ý",sentence,on_tool_event=tool_event))
         self.assertEqual(history.pending_report,draft)
         self.assertEqual(events,["submitting","submission_failed"])
@@ -275,7 +275,7 @@ class BrainTests(unittest.TestCase):
             asyncio.run(stream_brain_turn(client,history,"보고",sentence))
             self.assertFalse(inbox.exists()); self.assertFalse(status.exists()); self.assertFalse(outbox.exists())
             def write(_,arguments,**_kwargs): return create_safety_report(**arguments,inbox_path=inbox,now_epoch=1000)
-            with patch("voice_workflow_agent.brain.execute_tool",side_effect=write):
+            with patch("voiney_lab.brain.execute_tool",side_effect=write):
                 asyncio.run(stream_brain_turn(client,history,"네",sentence))
             self.assertEqual(len(inbox.read_text(encoding="utf-8").splitlines()),1)
             self.assertFalse(status.exists()); self.assertFalse(outbox.exists())
@@ -293,7 +293,7 @@ class BrainTests(unittest.TestCase):
         client=Client(); client.model="fake"; client.chat=Client(); client.chat.completions=C()
         async def sentence(_): pass
         import asyncio
-        with patch("voice_workflow_agent.brain.execute_tool") as execute:
+        with patch("voiney_lab.brain.execute_tool") as execute:
             asyncio.run(stream_brain_turn(client,history,"vâng, nhưng đổi thành methanol",sentence))
             execute.assert_not_called(); self.assertIsNotNone(history.pending_report)
             asyncio.run(stream_brain_turn(client,history,"hủy báo cáo",sentence))
@@ -338,7 +338,7 @@ class BrainTests(unittest.TestCase):
         client=Client(); client.model="fake"; client.chat=Client(); client.chat.completions=C()
         async def sentence(_): pass
         import asyncio
-        with patch("voice_workflow_agent.brain.execute_tool") as execute:
+        with patch("voiney_lab.brain.execute_tool") as execute:
             result=asyncio.run(stream_brain_turn(client,history,"네, 하지만 아세톤이 아니라 메탄올이에요",sentence))
             execute.assert_not_called()
         self.assertEqual(history.pending_report["material_or_equipment"],"methanol")
@@ -371,7 +371,7 @@ class BrainTests(unittest.TestCase):
                 async def sentence(item): spoken.append(item.text)
                 blocked={"status":status,"answerable":False,"matches":[]}
                 context=ToolContext(Path("unused.sqlite"),"F","ko","operational")
-                with patch("voice_workflow_agent.brain.execute_tool",return_value=blocked):
+                with patch("voiney_lab.brain.execute_tool",return_value=blocked):
                     result=asyncio.run(stream_brain_turn(client,ConversationHistory(),"질문",sentence,
                                                          tool_context=context))
                 self.assertEqual(client.chat.completions.calls,1)
@@ -403,7 +403,7 @@ class BrainTests(unittest.TestCase):
         client=Client();client.model="fake";client.chat=Client();client.chat.completions=Completions()
         async def sentence(_):pass
         context=ToolContext(Path("unused.sqlite"),"F","ko","reference_only")
-        with patch("voice_workflow_agent.brain.execute_tool",return_value={"status":"success","answerable":True,"matches":[match]}):
+        with patch("voiney_lab.brain.execute_tool",return_value={"status":"success","answerable":True,"matches":[match]}):
             result=asyncio.run(stream_brain_turn(client,ConversationHistory(),"질문",sentence,tool_context=context))
         grounding=client.chat.completions.calls[1]["messages"]
         tool_payload=next(json.loads(item["content"]) for item in grounding if item["role"]=="tool")
@@ -456,7 +456,7 @@ class BrainTests(unittest.TestCase):
         client=Client();client.model="fake";client.chat=Client();client.chat.completions=Completions()
         async def sentence(_):pass
         context=ToolContext(Path("unused.sqlite"),None,"en","operational")
-        with patch("voice_workflow_agent.brain.execute_tool",
+        with patch("voiney_lab.brain.execute_tool",
                    return_value={"status":"translation_unverified","answerable":False,"matches":[]}):
             result=asyncio.run(stream_brain_turn(client,ConversationHistory(),"한국어 질문",sentence,
                                                  tool_context=context))
@@ -541,7 +541,7 @@ class BrainTests(unittest.TestCase):
             with self.subTest(scope=scope):
                 client=Client();client.model="fake";client.chat=Client();client.chat.completions=Completions()
                 context=ToolContext(Path("/private/catalog.sqlite"),None,"en",scope)
-                with patch("voice_workflow_agent.brain.execute_tool",
+                with patch("voiney_lab.brain.execute_tool",
                            return_value={"status":"success","answerable":True,"matches":[match]}):
                     result=asyncio.run(stream_brain_turn(client,ConversationHistory(),"Question",sentence,
                                                          tool_context=context))
@@ -580,7 +580,7 @@ class BrainTests(unittest.TestCase):
         context=ToolContext(Path("unused.sqlite"),None,"en","operational")
         first_client=Client();first_client.model="fake";first_client.chat=Client()
         first_client.chat.completions=Completions("call-a")
-        with patch("voice_workflow_agent.brain.execute_tool",
+        with patch("voiney_lab.brain.execute_tool",
                    return_value={"status":"success","answerable":True,
                                  "matches":[match("A","UNIQUE_SOURCE_A")]}):
             first=asyncio.run(stream_brain_turn(first_client,history,"First",sentence,tool_context=context))
@@ -593,7 +593,7 @@ class BrainTests(unittest.TestCase):
 
         second_client=Client();second_client.model="fake";second_client.chat=Client()
         second_client.chat.completions=Completions("call-b")
-        with patch("voice_workflow_agent.brain.execute_tool",
+        with patch("voiney_lab.brain.execute_tool",
                    return_value={"status":"success","answerable":True,
                                  "matches":[match("B","UNIQUE_SOURCE_B")]}):
             second=asyncio.run(stream_brain_turn(second_client,history,"Second",sentence,tool_context=context))
@@ -654,14 +654,14 @@ class BrainTests(unittest.TestCase):
             return results[len(contexts)-1]
 
         korean=client("ko-call","검토된 한국어 답변입니다.")
-        with patch("voice_workflow_agent.brain.execute_tool",side_effect=execute):
+        with patch("voiney_lab.brain.execute_tool",side_effect=execute):
             first=asyncio.run(stream_brain_turn(
                 korean,history,"승인된 응급조치 절차를 알려 주세요.",sentence,
                 tool_context=ToolContext(secret_catalog,None,"ko","operational")))
         history.commit(first.messages,first.source_references)
 
         english=client("en-call","Reviewed English answer.")
-        with patch("voice_workflow_agent.brain.execute_tool",side_effect=execute):
+        with patch("voiney_lab.brain.execute_tool",side_effect=execute):
             second=asyncio.run(stream_brain_turn(
                 english,history,"Please show the approved first aid procedure.",sentence,
                 tool_context=ToolContext(secret_catalog,None,"en","operational")))

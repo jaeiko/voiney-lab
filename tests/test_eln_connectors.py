@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from voice_workflow_agent.eln_connectors import (
+from voiney_lab.eln_connectors import (
     ELabFtwConnector,
     CompletedStep,
     ElnConfirmationRequiredError,
@@ -13,8 +13,8 @@ from voice_workflow_agent.eln_connectors import (
     ExperimentWriteback,
     Observation,
 )
-from voice_workflow_agent.identity import Principal, Role
-from voice_workflow_agent.workspace_store import (
+from voiney_lab.identity import Principal, Role
+from voiney_lab.workspace_store import (
     ApprovalReplayError,
     WorkspaceSettings,
     initialize_workspace_store,

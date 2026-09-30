@@ -3,7 +3,7 @@ import unittest
 import wave
 from io import BytesIO
 
-from voice_workflow_agent.audio import (
+from voiney_lab.audio import (
     FRAME_BYTES,
     FrameBuffer,
     clean_path,

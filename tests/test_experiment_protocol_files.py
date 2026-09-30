@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from pypdf import PdfWriter
 
-from voice_workflow_agent.experiment_protocol_files import (
+from voiney_lab.experiment_protocol_files import (
     MissingProtocolObjectError,
     ProtocolFileStore,
     ProtocolObjectIntegrityError,
@@ -81,7 +81,7 @@ class ProtocolFileStoreTests(unittest.TestCase):
             raise OSError("injected local write failure")
 
         with patch(
-            "voice_workflow_agent.experiment_protocol_files._copy_pdf_bytes",
+            "voiney_lab.experiment_protocol_files._copy_pdf_bytes",
             side_effect=fail_after_partial_write,
         ):
             with self.assertRaises(ProtocolObjectWriteError) as context:
@@ -102,7 +102,7 @@ class ProtocolFileStoreTests(unittest.TestCase):
             raise OSError("injected private write failure")
 
         with patch(
-            "voice_workflow_agent.experiment_protocol_files._copy_pdf_bytes",
+            "voiney_lab.experiment_protocol_files._copy_pdf_bytes",
             side_effect=fail_after_partial_write,
         ), patch.object(
             Path,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tests.test_experiment_protocol import evidence, minimal_protocol, source_action
-from voice_workflow_agent.experiment_protocol import (
+from voiney_lab.experiment_protocol import (
     BranchKind,
     ConditionalBranch,
     FeatureCode,

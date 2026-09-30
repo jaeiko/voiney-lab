@@ -23,14 +23,14 @@ import sys
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.protocol_claim_analysis import (
     ClaimCategory,
     ProtocolClaimConsistencyError,
     _repeated_range_step_ids,
     excerpt_states_range,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
     analyze_protocol_chunk,
@@ -90,7 +90,7 @@ class ExcerptMustStateTheRangeTests(unittest.TestCase):
 
 class RangeExpandsToEveryStepTests(unittest.TestCase):
     def _claim(self, labels):
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ClaimSourceEvidence,
             ProtocolClaim,
         )
@@ -186,7 +186,7 @@ class OnTheRealDocumentTests(unittest.TestCase):
         ).protocol
 
     def _repeats(self):
-        from voice_workflow_agent import experiment_protocol as domain
+        from voiney_lab import experiment_protocol as domain
 
         return [
             construct
@@ -235,7 +235,7 @@ class ServerRefusesAtValidationTests(unittest.TestCase):
 
     def _labels(self, raw, category=ClaimCategory.REPEAT_CONDITION,
                 excerpt="7 Repeat steps 2-7 until clear."):
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _repeated_step_labels,
         )
 
@@ -251,7 +251,7 @@ class ServerRefusesAtValidationTests(unittest.TestCase):
         )
 
     def _refused(self, raw, **kwargs):
-        from voice_workflow_agent.experiment_protocol_analysis import (
+        from voiney_lab.experiment_protocol_analysis import (
             ProtocolAnalysisEvidenceError,
         )
 
@@ -301,7 +301,7 @@ class ContractStatesTheRuleTests(unittest.TestCase):
     """Enforced syntactically, so stated syntactically."""
 
     def test_the_prompt_states_the_shape_not_a_paraphrase(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_ANALYSIS_SYSTEM_PROMPT,
         )
 
@@ -318,7 +318,7 @@ class ContractStatesTheRuleTests(unittest.TestCase):
                 self.assertIn(phrase, prompt)
 
     def test_the_schema_declares_the_field_and_its_shape(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             CLAIM_RESPONSE_SCHEMA,
         )
 
@@ -361,10 +361,10 @@ class ValueHonestyScopeTests(unittest.TestCase):
     """
 
     def test_a_page_with_no_numbered_label_has_nothing_in_scope(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _segments_inside_numbered_steps,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ProtocolEvidenceSegment,
         )
 
@@ -385,7 +385,7 @@ class ValueHonestyScopeTests(unittest.TestCase):
         self.assertEqual(_segments_inside_numbered_steps(segments), frozenset())
 
     def test_a_segment_under_a_label_is_in_scope(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             ProtocolEvidenceSegment,
             _segments_inside_numbered_steps,
         )
@@ -412,10 +412,10 @@ class ValueHonestyScopeTests(unittest.TestCase):
     def test_the_measured_reduction_over_the_local_sources(self) -> None:
         """96 value-bearing segments in scope becomes 77."""
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _segments_inside_numbered_steps,
             generate_page_evidence_segments,
             segment_carries_unit_bearing_value,
@@ -461,10 +461,10 @@ class ValueHonestyScopeTests(unittest.TestCase):
         without anything recognising a domain or a phrase.
         """
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _segments_inside_numbered_steps,
             generate_page_evidence_segments,
             segment_carries_unit_bearing_value,
@@ -497,10 +497,10 @@ class ValueHonestyScopeTests(unittest.TestCase):
     def test_no_running_footer_is_left_in_scope_on_any_local_source(self) -> None:
         """Nine were, across the four sources. The measurement is the test."""
 
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             _segments_inside_numbered_steps,
             generate_page_evidence_segments,
             segment_carries_unit_bearing_value,

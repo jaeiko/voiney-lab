@@ -15,19 +15,19 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from scripts.diagnose_protocol_claim_latency import _privacy_safe_action_audit
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_analysis import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_analysis import (
     ProtocolAnalysisEvidenceError,
     ProtocolAnalysisResponseError,
 )
-from voice_workflow_agent.experiment_protocol_config import (
+from voiney_lab.experiment_protocol_config import (
     ProtocolPersistenceSettings,
 )
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     initialize_protocol_store,
 )
-from voice_workflow_agent.protocol_catalog import (
+from voiney_lab.protocol_catalog import (
     CLAIM_CHUNK_ANALYSIS_ENABLED_ENV,
     ProtocolApprovalError,
     ProtocolCatalog,
@@ -35,7 +35,7 @@ from voice_workflow_agent.protocol_catalog import (
     SharedSecretApprovalPolicy,
     _analysis_state,
 )
-from voice_workflow_agent.protocol_chunk_analysis import (
+from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ProtocolChunkMergeError,
     ValidatedChunkResult,
@@ -44,7 +44,7 @@ from voice_workflow_agent.protocol_chunk_analysis import (
     merge_validated_chunk_results,
     plan_protocol_chunks,
 )
-from voice_workflow_agent.protocol_claim_analysis import (
+from voiney_lab.protocol_claim_analysis import (
     CLAIM_ANALYSIS_SYSTEM_PROMPT,
     CLAIM_RESPONSE_SCHEMA,
     CLAIM_SCHEMA_VERSION,

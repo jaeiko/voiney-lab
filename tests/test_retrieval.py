@@ -8,8 +8,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from voice_workflow_agent.document_store import ingest_manifest
-from voice_workflow_agent.retrieval import search_safety_documents
+from voiney_lab.document_store import ingest_manifest
+from voiney_lab.retrieval import search_safety_documents
 
 from tests.test_document_ingestion import synthetic_document
 

@@ -7,16 +7,16 @@ import unittest
 from pathlib import Path
 
 from tests.test_protocol_catalog import write_text_pdf
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_pdf import extract_protocol_pdf
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
+from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     ProtocolSerializationError,
     deserialize_analysis,
     initialize_protocol_store,
     serialize_analysis,
 )
-from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+from voiney_lab.protocol_catalog import ProtocolCatalog
 
 _PAGE = (
     "Protocol Declined\nSection preparation\n1. Add solution.\nWear gloves."

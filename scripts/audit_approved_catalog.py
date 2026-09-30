@@ -12,8 +12,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from voice_workflow_agent.retrieval import retrieve_approved_lab_documents  # noqa: E402
-from voice_workflow_agent.safety_documents import (  # noqa: E402
+from voiney_lab.retrieval import retrieve_approved_lab_documents  # noqa: E402
+from voiney_lab.safety_documents import (  # noqa: E402
     ManifestValidationError,
     validate_manifest,
 )

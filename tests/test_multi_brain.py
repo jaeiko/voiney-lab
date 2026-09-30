@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from voice_workflow_agent.multi_brain import (
+from voiney_lab.multi_brain import (
     AnswerBrainOutput,
     BrainFact,
     BrainClaim,
@@ -18,12 +18,12 @@ from voice_workflow_agent.multi_brain import (
     VisualBrainOutput,
     activation_for,
 )
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     ClaimRequest,
     ClaimTargetType,
 )
-from voice_workflow_agent.server import _claim_admitted_answer
+from voiney_lab.server import _claim_admitted_answer
 
 
 def snapshot(*, intent="related_question", visual=False):

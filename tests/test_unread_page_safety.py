@@ -23,8 +23,8 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
 )
@@ -69,7 +69,7 @@ class AssemblyStillReachesTheEndTests(unittest.TestCase):
     def test_the_scorer_can_read_an_assembled_protocol(self) -> None:
         """Path only. The candidate is synthetic, so the number is not a score."""
 
-        from voice_workflow_agent.protocol_extraction_accuracy import (
+        from voiney_lab.protocol_extraction_accuracy import (
             audit_reference,
             score_extraction,
         )
@@ -174,7 +174,7 @@ class UnreadPageAtExecutionTests(unittest.TestCase):
         self.assertFalse(disclosure["acknowledged"])
 
     def test_the_omitted_segments_are_quoted_too(self) -> None:
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             generate_page_evidence_segments,
         )
 
@@ -256,7 +256,7 @@ class UnreadPageAtExecutionTests(unittest.TestCase):
         )
 
     def test_the_acknowledgement_is_not_a_reviewer_finding(self) -> None:
-        from voice_workflow_agent.protocol_catalog import ProtocolCatalog
+        from voiney_lab.protocol_catalog import ProtocolCatalog
 
         self.assertNotIn(
             "unread_page", set(ProtocolCatalog._BLOCKER_RESOLUTION)

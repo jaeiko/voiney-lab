@@ -18,8 +18,8 @@ import sqlite3
 import unittest
 from pathlib import Path
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.experiment_protocol_store import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.experiment_protocol_store import (
     ProtocolSerializationError,
     deserialize_analysis,
 )

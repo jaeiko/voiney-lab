@@ -30,8 +30,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from voice_workflow_agent import experiment_protocol as domain
-from voice_workflow_agent.curated_protocol import (
+from voiney_lab import experiment_protocol as domain
+from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
     CuratedProtocolSession,
     build_step_semantic_frame,
@@ -40,14 +40,14 @@ from voice_workflow_agent.curated_protocol import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "data/development_protocols/candidate_a_curated_analysis.json"
+FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE = (
-    ROOT / "data/development_protocols/candidate_a_curated_analysis.provenance.json"
+    ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 )
 IN_GEL = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
 HEADSPACE = ROOT / "usingdynamicheadspacecollections.pdf"
 INTRACELLULAR = ROOT / "intracellularmetaboliteextraction.pdf"
-CURATED_SOURCE = ROOT / "src/voice_workflow_agent/curated_protocol.py"
+CURATED_SOURCE = ROOT / "src/voiney_lab/curated_protocol.py"
 
 
 def _stub_fixture(*constructs) -> SimpleNamespace:
@@ -414,10 +414,10 @@ class TheGateCountIsADocumentPropertyTests(unittest.TestCase):
     """How many gates a source has is read out of the source."""
 
     def _stated_repeats(self, path: Path) -> int:
-        from voice_workflow_agent.experiment_protocol_pdf import (
+        from voiney_lab.experiment_protocol_pdf import (
             extract_protocol_pdf,
         )
-        from voice_workflow_agent.protocol_claim_analysis import (
+        from voiney_lab.protocol_claim_analysis import (
             explicit_repeat_instructions,
         )
 
