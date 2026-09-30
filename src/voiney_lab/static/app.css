@@ -1043,6 +1043,7 @@
     .turn .source-card-domain{font-size:.72rem;color:var(--cyan);display:inline-block;margin-top:.2rem}
 
     .turn .turn-status{grid-column:2;color:var(--blurple);font-size:.8rem;font-weight:800}
+    .turn .turn-status.needs-observation{color:var(--amber)}
     .turn .tools{color:var(--cyan);font-size:.8rem;font-weight:700;white-space:pre-wrap}
     .turn .server-operation{color:var(--muted);font-size:.76rem}
     .turn .stats{color:var(--muted);font-size:.74rem}

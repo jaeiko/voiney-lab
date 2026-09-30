@@ -158,5 +158,50 @@ assert(visibleText(status).includes("새 검토 초안 · rev-1")&&!devText(stat
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class TurnCardStatusTests(unittest.TestCase):
+    """Item 2: the turn card says what happened; the route marker is diagnostic."""
+
+    def test_route_marker_moves_to_diagnostics_and_observation_holds_are_named(self):
+        result = run_page_script(r"""
+acceptedSessionConfiguration={configuration_id:5,mode:"cascade",language:"ko",protocol_id:"p-1",revision_id:"r-1"};sessionActive=true;
+const base={attached:true,protocol_id:"p-1",revision_id:"r-1",display_name:"In-gel",development_only:true,readiness_status:"guidance_ready",active:true,current_step_label:"7",current_step_id:"step-7",total_steps:25,at_final_step:false,block_reason:null,revision:3,source_page_refs:[5],visual_assets:[],visual_status:"unavailable"};
+const send=payload=>onMessage({data:JSON.stringify({configuration_id:5,...payload})},sessionGeneration,socket);
+async function turn(id,{blockReason,done,terminal,extra=[]}){
+ await send({type:"speech.start",turn_id:id,generation:id});
+ await send({type:"transcript",turn_id:id,generation:id,text:"다음 단계로 넘어가 줘"});
+ let revision=0;
+ for(const state of ["routing","checking_protocol","synthesizing","playing"])await send({type:"turn.state",turn_id:id,generation:id,revision:++revision,state,route:"curated_protocol"});
+ if(blockReason!==undefined)await send({type:"protocol.fixture.state",turn_id:id,generation:id,action:"next",state:{...base,block_reason:blockReason}});
+ for(const item of extra)await send({...item,turn_id:id,generation:id});
+ await send({type:"turn.done",turn_id:id,generation:id,route:"curated_protocol",timings_ms:{},segment_count:1,...done});
+ await send({type:"turn.state",turn_id:id,generation:id,revision:++revision,state:terminal,route:"curated_protocol"});
+ const card=turnNode(id,sessionGeneration);
+ return{status:card.querySelector(".turn-status"),error:card.querySelector(".error").textContent,route:card.querySelector(".turn-route")?.textContent||""};
+}
+const done=await turn(1,{done:{result_kind:"current",speech_mode:"control"},terminal:"complete"});
+assert(done.status.textContent==="완료"&&!done.error,`complete turn: ${done.status.textContent}|${done.error}`);
+assert(done.route.includes("개발용 절차")&&done.route.includes("curated_protocol")&&done.route.includes("complete"),`route marker missing from diagnostics: ${done.route}`);
+const gate=await turn(2,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked"});
+assert(gate.status.textContent==="관찰 필요"&&gate.status.className.includes("needs-observation")&&gate.error==="",`observation hold still reads as blocked: ${gate.status.textContent}|${gate.error}`);
+assert(gate.route.includes("blocked")&&gate.route.includes("endpoint_observation_not_reported"),`raw state missing from diagnostics: ${gate.route}`);
+// The reason was already set before this turn, so this turn cannot be told
+// apart from a failed save that restored it: it stays "차단됨".
+const again=await turn(3,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked"});
+assert(again.status.textContent==="차단됨"&&again.error==="차단됨",`unconfirmable hold was relabelled: ${again.status.textContent}`);
+await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:4}});
+const failed=await turn(4,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked",extra:[{type:"experiment.session.error",code:"workspace_error"}]});
+assert(failed.status.textContent==="차단됨"&&failed.error==="차단됨",`a failed save read as an observation hold: ${failed.status.textContent}`);
+await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:5}});
+const interval=await turn(5,{blockReason:"repeat_interval_open",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked"});
+assert(interval.status.textContent==="차단됨"&&interval.error==="차단됨",`another hold reason was relabelled: ${interval.status.textContent}`);
+await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:6}});
+const clarify=await turn(6,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"clarify_reference",speech_mode:"blocked"},terminal:"blocked"});
+assert(clarify.status.textContent==="차단됨",`a non-NEXT turn read as an observation hold: ${clarify.status.textContent}`);
+const cancelled=await turn(7,{done:{result_kind:"current",speech_mode:"control"},terminal:"cancelled"});
+assert(cancelled.status.textContent==="중단됨"&&cancelled.error==="중단됨",`cancelled turn changed: ${cancelled.status.textContent}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
