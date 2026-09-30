@@ -1,0 +1,162 @@
+"""Researcher-screen cleanup, exercised through the production page script.
+
+Every test here loads the whole ``<script>`` block of ``static/index.html`` into
+Node with a small fake DOM and drives the production functions, so a label
+that only exists in a helper cannot pass for one the page actually renders.
+"""
+
+import subprocess
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX = ROOT / "src" / "voiney_lab" / "static" / "index.html"
+
+# A fake DOM just rich enough for the page script. Unlike the harnesses in
+# test_frontend.py, assigning ``textContent`` drops the children, as a browser
+# does, so a status line cannot keep a stale "개발 상세 정보" block.
+PRELUDE = r"""
+const assert=(ok,message)=>{if(!ok)throw new Error(message)};
+const TURN_FIELDS=["transcript","reply","filler-status","turn-visual","turn-status","error","replay-status"];
+class Element{
+ constructor(tag="div"){this.tagName=tag;this.children=[];this._text="";this.hidden=false;this.disabled=false;this.value="";this.className="";this.dataset={};this.attributes={};this.listeners={};this.style={};this.open=false;this.files=[];}
+ get textContent(){return this._text+this.children.map(child=>child.textContent).join("")}
+ set textContent(value){this._text=String(value??"");this.children=[]}
+ get options(){return this.children}
+ get firstChild(){return this.children[0]||null}
+ appendChild(node){this.children.push(node);node.parentNode=this;return node}
+ append(...items){for(const item of items)this.appendChild(typeof item==="string"?Object.assign(new Element("#text"),{_text:item}):item)}
+ prepend(node){this.children.unshift(node);node.parentNode=this;return node}
+ insertBefore(node){return this.prepend(node)}
+ replaceChildren(...items){this.children=[];for(const item of items)this.appendChild(item)}
+ remove(){this.removed=true;if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(child=>child!==this)}
+ setAttribute(name,value){this.attributes[name]=String(value)}
+ getAttribute(name){return this.attributes[name]}
+ removeAttribute(name){delete this.attributes[name]}
+ addEventListener(kind,handler){(this.listeners[kind]||=[]).push(handler)}
+ dispatch(kind){for(const handler of this.listeners[kind]||[])handler({target:this})}
+ cloneNode(){return Object.assign(new Element(this.tagName),{_text:this._text,className:this.className})}
+ scrollTo(){}
+ set innerHTML(_){
+  this.children=[];const title=new Element("b");this.appendChild(title);
+  for(const name of TURN_FIELDS){const item=new Element();item.className=name;if(name==="transcript")item._text="듣는 중…";if(name==="turn-status")item._text="듣는 중…";this.appendChild(item);}
+  const details=new Element("details");details.className="turn-diagnostics";const body=new Element();body.className="turn-diagnostics-body";
+  for(const name of ["server-operation","tools","stats"]){const item=new Element();item.className=name;body.appendChild(item);}
+  details.appendChild(body);this.appendChild(details);
+ }
+ querySelector(selector){
+  const wanted=selector.replace(/^.*[ >]/,"").replace(/^\./,"");
+  for(const child of this.children){if(String(child.className||"").split(" ").includes(wanted))return child;const found=child.querySelector(selector);if(found)return found;}
+  return null;
+ }
+ querySelectorAll(){return []}
+}
+const ids=new Map();
+globalThis.document={getElementById:id=>{if(!ids.has(id)){const node=new Element();node.id=id;ids.set(id,node);}return ids.get(id)},createElement:tag=>new Element(tag),querySelector:()=>null,querySelectorAll:()=>[]};
+globalThis.location={protocol:"http:",host:"test",origin:"http://test"};
+globalThis.addEventListener=()=>{};
+class WS{static OPEN=1;static CLOSING=2;constructor(){this.readyState=1;this.sent=[]}send(value){this.sent.push(value)}close(){this.readyState=3}}
+globalThis.WebSocket=WS;
+Object.defineProperty(globalThis,"navigator",{value:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[]})}},configurable:true});
+globalThis.AudioContext=class{};
+globalThis.fetch=async()=>{throw new Error("unexpected network call")};
+const node=id=>document.getElementById(id);
+const isDev=item=>String(item.className||"").split(" ").includes("dev-code-details");
+function visibleText(item){if(isDev(item))return "";return item._text+" "+item.children.map(visibleText).join(" ")}
+function devText(item){if(isDev(item))return item.textContent;return item.children.map(devText).join(" ")}
+function withoutCode(text,code){return !new RegExp(`(^|[^A-Za-z_])${code}([^A-Za-z_]|$)`).test(text)}
+const json=(payload,ok=true)=>({ok,headers:{get:()=>"application/json"},json:async()=>payload});
+"""
+
+
+def run_page_script(body: str) -> subprocess.CompletedProcess:
+    html = INDEX.read_text(encoding="utf-8")
+    script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+    harness = (
+        PRELUDE + script
+        + "\n(async()=>{\n" + body
+        + "\n})().catch(error=>{console.error(error);process.exit(1)});\n"
+    )
+    return subprocess.run(
+        ["node", "-"], cwd=ROOT, text=True, input=harness,
+        capture_output=True,
+    )
+
+
+class ServerCodeTranslationTests(unittest.TestCase):
+    """Item 1: status codes read as Korean; the codes stay in 개발 상세 정보."""
+
+    def test_review_panel_translates_codes_and_keeps_them_in_dev_details(self):
+        result = run_page_script(r"""
+const review={protocol_id:"protocol-x",title:"In-gel",revision_id:"pdf-1-analysis-1",lifecycle_state:"blocked",readiness_status:"analysis_required",available_for_execution:false,
+ source:{filename:"in-gel.pdf",sha256:"a".repeat(64),page_count:9},
+ readiness:{status:"analysis_required",label:"Protocol 분석 필요",reasons:[
+  {code:"unresolved_ambiguity",message:"A source ambiguity remains unresolved."},
+  {code:"no_declared_safety_warnings",message:"A reviewer must confirm this Protocol's safety warnings before execution."},
+  {code:"reason_from_a_newer_server",message:"Something new."}]},
+ analysis_failure:{code:"protocol_analysis_invalid_evidence",retryable:true,action:"Review the failure code and explicitly retry analysis."},
+ gates:{parsing:"passed",structural_readiness:"blocked",hazard_review:"review_required",human_approval:"pending",operational_authorization:"blocked"},
+ constructs:[{construct_type:"SourceAmbiguity",source_text:"Two volumes are stated.",resolved:false,evidence:{source_page_number:3,source_excerpt:"20 µL or 30 µL"}}],
+ outstanding_blockers:[
+  {code:"unresolved_ambiguity",kind:"reviewer_can_clear",reviewer_action:"resolve_ambiguity",already_acknowledged:false,decision_options:["single_statement_is_authoritative","statements_are_distinct"],clearing_decision:"single_statement_is_authoritative",citable_segments:[{segment_id:"seg-1",segment_index:0,source_page_number:3,excerpt:"20 µL"}]},
+  {code:"no_declared_safety_warnings",kind:"reviewer_can_clear",reviewer_action:"acknowledge_gate",already_acknowledged:false},
+  {code:"unsupported_repeat_until",kind:"capability_required",reviewer_action:null,already_acknowledged:false}],
+ reviewer_findings:[{kind:"gate_acknowledged",reason_code:"no_declared_safety_warnings",actor_principal_id:"reviewer-a",actor_role:"reviewer",recorded_at:"2026-09-30T00:00:00Z"}],
+ sections:[]};
+renderProtocolReview(review);
+const hosts=["protocol-review-content","protocol-blockers","protocol-findings"].map(node);
+const visible=hosts.map(visibleText).join(" "),dev=hosts.map(devText).join(" ");
+for(const code of ["analysis_required","blocked","unresolved_ambiguity","no_declared_safety_warnings","statements_are_distinct","single_statement_is_authoritative","review_required","reviewer_can_clear","capability_required","gate_acknowledged","protocol_analysis_invalid_evidence","SourceAmbiguity","structural_readiness","reason_from_a_newer_server"]){
+ assert(withoutCode(visible,code),`raw code ${code} is still on screen: ${visible}`);
+ assert(!withoutCode(dev,code),`raw code ${code} is missing from 개발 상세 정보: ${dev}`);
+}
+for(const label of ["프로토콜 분석 필요","차단됨 · 조치 필요","원문의 모호한 부분이 해결되지 않음","안전 경고를 검토자가 확인해야 함","두 진술은 서로 다른 내용임","한 진술이 기준임","검토자가 해제 가능","분석 근거가 원문과 맞지 않음","원문의 모호한 부분","구조 실행 준비 · 차단","위험 검토 · 검토 필요","검토자"])assert(visible.includes(label),`label missing: ${label}`);
+assert(visible.includes("확인되지 않은 상태"),"an unknown code was not marked as unconfirmed");
+assert(visible.includes("A source ambiguity remains unresolved."),"the server's own reason message was dropped");
+const select=node("protocol-blockers").children[0].children.find(item=>item.tagName==="select");
+assert(select&&select.children.map(option=>option.value).join(",")==="single_statement_is_authoritative,statements_are_distinct","the decision sent to the server must stay the raw code");
+renderProtocolReview({...review,lifecycle_state:"review_required",readiness:{status:"guidance_ready",label:"안내 준비 완료",reasons:[]},outstanding_blockers:[],reviewer_findings:[],analysis_failure:null,constructs:[]});
+const ready=visibleText(node("protocol-review-content"));
+assert(ready.includes("안내 준비 완료")&&withoutCode(ready,"guidance_ready"),`guidance_ready not translated: ${ready}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_records_lists_and_status_lines_translate_codes(self):
+        result = run_page_script(r"""
+renderExperimentReportList([{report_id:"ER-1",status:"in_progress"},{report_id:"ER-2",status:"status_from_a_newer_server"}]);
+renderExperimentReportEvents([{event_type:"blocked",step_label:"3",created_at:"2026-09-30T00:00:00Z",payload:{timer:{completion_state:"not_started"}}}]);
+const reports=[node("experiment-report-list"),node("experiment-report-events")];
+const reportText=reports.map(visibleText).join(" "),reportDev=reports.map(devText).join(" ");
+for(const code of ["in_progress","blocked","not_started","status_from_a_newer_server"]){assert(withoutCode(reportText,code),`report code ${code} on screen: ${reportText}`);assert(!withoutCode(reportDev,code),`report code ${code} not in dev details`);}
+assert(reportText.includes("진행 중")&&reportText.includes("진행 차단")&&reportText.includes("시작 전")&&reportText.includes("확인되지 않은 상태"),`report labels missing: ${reportText}`);
+renderExperimentTimeline({timeline:[{event_type:"observation_recorded",step_label:"2",created_at:"2026-09-30T00:00:00Z",observation:{category:"appearance",content:"시료가 탁함"}}]});
+const timeline=node("experiment-event-timeline");
+assert(visibleText(timeline).includes("외관 · 시료가 탁함")&&withoutCode(visibleText(timeline),"appearance")&&devText(timeline).includes("appearance"),`observation category not translated: ${visibleText(timeline)}`);
+acceptedSessionConfiguration={configuration_id:1,mode:"cascade"};
+await onMessage({data:JSON.stringify({type:"experiment.report.state",configuration_id:1,generation:0,report:{report_id:"ER-1",status:"completed",event_count:2,anomaly_count:0,blocker_count:0,reports:[],events:[]}})},sessionGeneration,socket);
+const last=node("last-report-state");
+assert(visibleText(last).includes("완료 · 이벤트 2")&&withoutCode(visibleText(last),"completed")&&devText(last).includes("completed"),`report status not translated: ${visibleText(last)}`);
+await onMessage({data:JSON.stringify({type:"report.status",report_id:"SR-1",report_status:"lookup_failed",attempts:1})},sessionGeneration,socket);
+assert(visibleText(last).includes("상태 조회 실패 · 시도 1회")&&withoutCode(visibleText(last),"lookup_failed")&&devText(last).includes("lookup_failed"),`safety report status not translated: ${visibleText(last)}`);
+globalThis.fetch=async url=>{assert(String(url).startsWith("/api/workspace/protocol-library"),`unexpected ${url}`);return json({protocols:[{family_id:"f-1",title:"Local",revision_number:1,connector_kind:"local_pdf",owner:"Lab",department:"Bio",approval_state:null,risk_state:"review_required",tags:[]}]})};
+await loadQuickProtocolLibrary();
+const library=node("quick-library-results");
+for(const code of ["local_pdf","review_required"]){assert(withoutCode(visibleText(library),code),`library code ${code} on screen: ${visibleText(library)}`);assert(devText(library).includes(code),`library code ${code} not in dev details`);}
+assert(visibleText(library).includes("로컬 PDF")&&visibleText(library).includes("검토 필요"),`library labels missing: ${visibleText(library)}`);
+node("protocols-io-connector").value="connector-1";node("protocols-io-identifier").value="10.17504/protocols.io.x";
+globalThis.fetch=async()=>json({detail:"authorization_denied"},false);
+await importProtocolsIo();
+const status=node("protocols-io-status");
+assert(visibleText(status).includes("이 작업을 할 권한이 없습니다.")&&withoutCode(visibleText(status),"authorization_denied")&&devText(status).includes("authorization_denied"),`error detail not translated: ${visibleText(status)}`);
+globalThis.fetch=async()=>json({detail:"detail_from_a_newer_server"},false);
+await importProtocolsIo();
+assert(visibleText(status).includes("가져오기 실패")&&withoutCode(visibleText(status),"detail_from_a_newer_server")&&devText(status).includes("detail_from_a_newer_server"),`unknown detail was not kept in dev details: ${visibleText(status)}`);
+globalThis.fetch=async()=>json({inbox_state:"new",revision_id:"rev-1"});
+await importProtocolsIo();
+assert(visibleText(status).includes("새 검토 초안 · rev-1")&&!devText(status).includes("authorization_denied"),`success status kept a stale code: ${status.textContent}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
