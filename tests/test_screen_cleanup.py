@@ -239,5 +239,38 @@ assert(workflowCalls()===2,"opening the reviewer workspace no longer loads its w
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class DuplicateUploadNoticeTests(unittest.TestCase):
+    """Item 4: a re-upload of a stored PDF names the file it matched."""
+
+    def test_same_pdf_under_another_name_is_announced_whatever_its_state(self):
+        result = run_page_script(r"""
+const notice=node("protocol-duplicate-notice");
+const review=protocol=>({protocol_id:protocol.protocol_id,title:"In-gel",revision_id:"pdf-1",analysis_status:protocol.analysis_status,available_for_execution:protocol.available_for_execution,readiness:{status:"analysis_required",reasons:[]},source:{filename:protocol.source_filename,sha256:"a".repeat(64),page_count:1},sections:[]});
+async function upload(filename,response){
+ node("protocol-pdf").files=[{name:filename,type:"application/pdf"}];
+ const calls=[];
+ globalThis.fetch=async(url,options={})=>{url=String(url);calls.push(`${options.method||"GET"} ${url}`);
+  if(url.startsWith("/api/protocols?filename="))return json(response);
+  if(url===`/api/protocols/${response.protocol.protocol_id}/analysis`)return json({...response.protocol,analysis_status:"review_required",readiness_status:"analysis_required"});
+  if(url.endsWith("/analysis/status"))return json({state:"review_required"});
+  if(url===`/api/protocols/${response.protocol.protocol_id}/review`)return json(review(response.protocol));
+  if(url==="/api/protocols")return json({protocols:[{...response.protocol,title:"In-gel",revision_id:"pdf-1"}]});
+  throw new Error(`unexpected ${url}`);};
+ await registerSelectedProtocol();
+ stopProtocolAnalysisPolling();
+ return calls;
+}
+const expected="이미 등록된 같은 파일입니다 (기존 이름: in-gel-digestion.pdf)";
+for(const [label,state] of [["executable",{analysis_status:"approved",available_for_execution:true}],["awaiting review",{analysis_status:"review_required",available_for_execution:false}],["analysable",{analysis_status:"structured_analysis_ready",available_for_execution:false}],["OCR",{analysis_status:"ocr_required",available_for_execution:false}]]){
+ const calls=await upload("renamed-copy.pdf",{deduplicated:true,protocol:{protocol_id:"p-1",source_filename:"in-gel-digestion.pdf",...state}});
+ assert(calls.includes("GET /api/protocols"),`${label}: catalog was not refreshed: ${calls}`);
+ assert(!notice.hidden&&notice.textContent===expected,`${label}: duplicate notice missing after the catalog refresh: ${notice.hidden}|${notice.textContent}|${node("protocol-upload-status").textContent}`);
+}
+await upload("fresh.pdf",{deduplicated:false,protocol:{protocol_id:"p-2",source_filename:"fresh.pdf",analysis_status:"review_required",available_for_execution:false}});
+assert(notice.hidden&&notice.textContent==="","a first-time upload kept the previous duplicate notice");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
