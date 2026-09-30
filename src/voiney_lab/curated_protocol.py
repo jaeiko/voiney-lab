@@ -7255,6 +7255,16 @@ class CuratedProtocolSession:
             and re.fullmatch(r"[a-z]{1,4}", normalized_confirmation)
             and normalized_confirmation not in {"yes", "no", "done"}
         )
+        # An observation prompt was outstanding and went stale, and this
+        # utterance is not an answer to it. The endpoint-phrase guard near the
+        # end of this method reads it, and that guard is reachable from every
+        # branch of the chain below -- so it is derived here, once, from state
+        # already fixed above, rather than inside one branch. Both inputs are
+        # bound once before this point and never reassigned, so this is the
+        # same value the branch-local assignment produced.
+        stale_observation_reply = (
+            observation_pending is not None and not observation_pending_valid
+        )
         if (
             note_pending_valid
             and not _utterance_looks_like_new_command(transcript)
@@ -7418,9 +7428,6 @@ class CuratedProtocolSession:
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
                 self._pending_completion_confirmation = None
-            stale_observation_reply = (
-                observation_pending is not None and not observation_pending_valid
-            )
             if observation_pending is not None:
                 self._pending_observation_confirmation = None
             pending_anomaly = self._pending_anomaly
