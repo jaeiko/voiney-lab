@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import re
 import ssl
@@ -15,6 +16,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+
+log = logging.getLogger("voiney_lab.external_references")
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
@@ -590,8 +593,11 @@ class XaiAuthoritativeWebSearch:
                             res = on_partial_sources(sources)
                             if asyncio.iscoroutine(res):
                                 asyncio.create_task(res)
-                        except Exception:
-                            pass
+                        except Exception as callback_exc:
+                            log.warning(
+                                "external_search.partial_sources_callback_failed error=%s",
+                                type(callback_exc).__name__,
+                            )
                     if event_type.endswith(".done"):
                         tool_ended = elapsed
                 if event_type == "response.completed":
@@ -656,8 +662,11 @@ class XaiAuthoritativeWebSearch:
                 res_copy = copy.deepcopy(res)
                 res_copy["deduplicated_in_flight"] = True
                 return res_copy
-            except Exception:
-                pass
+            except Exception as in_flight_exc:
+                log.warning(
+                    "external_search.in_flight_failed searching_again=true error=%s",
+                    type(in_flight_exc).__name__,
+                )
 
         future = loop.create_future()
         _IN_FLIGHT_RESEARCH[cache_key] = future
