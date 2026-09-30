@@ -2835,8 +2835,11 @@ async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
             try:
                 store.finish_eln_writeback_request(
                     principal,idempotency_key,succeeded=False)
-            except Exception:
-                pass
+            except Exception as finish_exc:
+                log.warning(
+                    "eln_writeback.finish_failed succeeded=false error=%s",
+                    type(finish_exc).__name__,
+                )
         raise _workspace_http_error(exc) from exc
     finally:
         if store is not None:
@@ -3157,8 +3160,11 @@ async def receive_github_webhook(
             try:
                 store.finish_github_webhook_delivery(
                     connector_id,x_github_delivery or "invalid",succeeded=False)
-            except Exception:
-                pass
+            except Exception as finish_exc:
+                log.warning(
+                    "github_webhook.finish_failed succeeded=false error=%s",
+                    type(finish_exc).__name__,
+                )
         raise _workspace_http_error(exc) from exc
     finally:
         if store is not None:
@@ -9268,7 +9274,11 @@ async def voice_socket(websocket:WebSocket):
     except Exception as exc:
         log.exception("session failed")
         try: await websocket.send_text(event("error",message=str(exc)))
-        except Exception: pass
+        except Exception as send_exc:
+            log.warning(
+                "session.error_event_send_failed error=%s",
+                type(send_exc).__name__,
+            )
     finally:
         if task and not task.done():
             task.cancel()

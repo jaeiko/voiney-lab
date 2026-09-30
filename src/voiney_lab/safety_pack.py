@@ -602,8 +602,11 @@ def resolve_safety_pack(
                     if row["cas_numbers"]:
                         try:
                             cas_list = [c.casefold() for c in json.loads(row["cas_numbers"])]
-                        except Exception:
-                            pass
+                        except Exception as cas_exc:
+                            log.warning(
+                                "Ignoring unreadable CAS numbers on safety document %s: %s",
+                                doc_id, type(cas_exc).__name__,
+                            )
 
                     matches_material = (
                         (prod_name and any(m in prod_name or prod_name in m for m in all_materials_lower))
