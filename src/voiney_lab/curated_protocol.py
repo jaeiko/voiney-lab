@@ -1741,7 +1741,7 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"go\s+to\s+(?:the\s+)?next\s+step)$"
 )
 # The negative reply to any server-owned yes/no question. _binary_frame_reply
-# reads this same pattern for the observation prompt, so the completion and
+# and _observation_binary_reply read this same pattern, so the completion and
 # observation prompts cannot disagree about whether an answer declined.
 _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"^(?:아니|아니요|아니오|아뇨|아니에요|아닙니다|아니야|"
@@ -2748,6 +2748,34 @@ def _binary_frame_reply(value: str) -> str | None:
         r"|yes(?:\s+i\s+(?:did|finished))?|done|correct|that(?:'|’)s\s+right",
         key,
     ) and key:
+        return "affirmative"
+    if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
+        return "negative"
+    return None
+
+
+#: The only replies that say yes to the endpoint prompt. It asks whether the
+#: source endpoint was seen, and "완료했어요", "했어", "다 했어" say the work
+#: was done -- a different claim -- so they answer the completion prompt only.
+_OBSERVATION_AFFIRMATIVE_WORDS = frozenset({
+    "네", "예", "응", "맞아", "맞아요", "됐어", "됐어요",
+})
+_OBSERVATION_AFFIRMATIVE_EN = frozenset({
+    "yes", "correct", "that's right", "that’s right",
+})
+
+
+def _observation_binary_reply(value: str) -> str | None:
+    """Interpret a short answer to the server-owned endpoint prompt."""
+
+    if _reply_withholds_assent(value):
+        return None
+    key = _semantic_utterance_key(value)
+    words = key.split()
+    if key in _OBSERVATION_AFFIRMATIVE_EN or (
+        1 <= len(words) <= 3
+        and all(word in _OBSERVATION_AFFIRMATIVE_WORDS for word in words)
+    ):
         return "affirmative"
     if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"
@@ -7256,6 +7284,48 @@ class CuratedProtocolSession:
             return False
         return step_id not in self._endpoint_observations
 
+    def _stated_endpoint(self, index: int) -> tuple[str, int | None, str | None]:
+        """The source's endpoint sentence at a repeat step, its page, and a translation.
+
+        The translation is the verified sidecar of the one fact whose text is
+        that sentence. A sidecar for a longer passage that merely contains
+        the sentence is not a translation of it, so none is returned there.
+        """
+
+        step = self.fixture.steps[index]
+        interval = self.repetition_anchored_at(step.step_id)
+        if interval is None:
+            return "", None, None
+        stated = " ".join(str(interval["source_text"]).split())
+        page = interval.get("source_page_number")
+        sidecar = next(
+            (
+                self._localized_fact(step.step_id, fact.fact_id)
+                for fact in self.fixture.facts_for_step(index)
+                if " ".join(fact.text.split()) == stated
+            ),
+            None,
+        )
+        return stated, page if isinstance(page, int) else None, sidecar
+
+    def _endpoint_answer_record(
+        self, index: int, transcript: str, language: str
+    ) -> str:
+        """The endpoint a yes/no answered, quoted, beside the words spoken."""
+
+        spoken = " ".join(transcript.split())
+        stated, _page, _sidecar = self._stated_endpoint(index)
+        if not stated:
+            return spoken
+        # The report ledger refuses wording over 800 characters
+        # (experiment_reports._clean_text), and a refused write fails the
+        # turn's acknowledgement; a yes/no answer is a few characters.
+        if len(stated) > 600:
+            stated = stated[:599].rstrip() + "…"
+        if language == "en":
+            return f"Source endpoint “{stated}” — answer: {spoken}"
+        return f"원문 종점 “{stated}” — 답: {spoken}"
+
     def _observation_prompt_reply(
         self,
         held: PendingObservationConfirmation,
@@ -7563,13 +7633,13 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
-        elif observation_pending_valid and binary_reply in {
-            "affirmative", "negative"
-        }:
+        elif observation_pending_valid and (
+            observation_reply := _observation_binary_reply(transcript)
+        ) is not None:
             self._pending_observation_confirmation = None
             observed = (
                 observation_pending.affirmative_outcome
-                if binary_reply == "affirmative"
+                if observation_reply == "affirmative"
                 else observation_pending.negative_outcome
             )
             intent = CuratedControlIntent(
@@ -7578,7 +7648,11 @@ class CuratedProtocolSession:
                 reported_completion=observed == "positive",
                 reported_observation=True,
                 observation_predicate=observed,
-                observation_outcome=normalized_confirmation,
+                # A bare "네" says nothing on its own; the record keeps the
+                # endpoint it answered, quoted, beside the words spoken.
+                observation_outcome=self._endpoint_answer_record(
+                    observation_pending.step_index, transcript, language
+                ),
                 requested_transition=("next" if observed == "positive" else None),
                 requested_followup="describe_new_current_step",
                 target_step="authoritative_current_step",
@@ -9561,6 +9635,7 @@ class CuratedProtocolSession:
                 )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
+            reask_speech: str | None = None
             if intent.intent_kind == "learning_and_next_preview":
                 learning_display, learning_speech, learning_facts, limitations = (
                     self._step_learning_presentation(language=language)
@@ -9620,10 +9695,7 @@ class CuratedProtocolSession:
                     normalized_transcript=intent.normalized_transcript,
                     question_dimensions=intent.question_dimensions,
                 )
-            elif intent.intent_kind in {
-                "observation_confirmation_required",
-                "observation_confirmation_reasked",
-            }:
+            elif intent.intent_kind == "observation_confirmation_required":
                 # The endpoint the agent asks about is the document's, quoted.
                 # Selecting between two hand-written questions by label meant
                 # every step that was not in-gel's step 7 was asked whether
@@ -9653,6 +9725,35 @@ class CuratedProtocolSession:
                         "이 단계는 관찰 결과가 충족될 때까지 반복하는 단계입니다. "
                         "확인하신 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
                     )
+            elif intent.intent_kind == "observation_confirmation_reasked":
+                # A description the phrase families could not read is asked
+                # again as a yes/no. The criterion is shown, not rephrased:
+                # the source sentence as quoted, and the verified sidecar
+                # where one translates exactly that sentence. A Korean
+                # question naming the endpoint in new words would be a
+                # criterion the document does not state (principle 8), so
+                # the spoken question points at the screen instead.
+                stated, page, sidecar = self._stated_endpoint(self.current_index)
+                reask_speech = (
+                    "Has the endpoint shown on screen been reached? "
+                    "Please answer yes or no."
+                    if language == "en" else
+                    "화면에 보이는 원문 기준대로 되었나요? 네 또는 아니요로 답해 주세요."
+                ) if stated else (
+                    "Has the observed endpoint been reached? Please answer yes or no."
+                    if language == "en" else
+                    "관찰 결과가 충족되었나요? 네 또는 아니요로 답해 주세요."
+                )
+                cited = f" (PDF p.{page})" if page is not None else ""
+                if not stated:
+                    response = reask_speech
+                elif language == "en":
+                    response = f"Source endpoint{cited}: “{stated}”\n\n{reask_speech}"
+                else:
+                    translated = f"\n검증된 한국어 번역: {sidecar}" if sidecar else ""
+                    response = (
+                        f"원문 기준{cited}: “{stated}”{translated}\n\n{reask_speech}"
+                    )
             else:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
@@ -9676,7 +9777,7 @@ class CuratedProtocolSession:
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.CLARIFY_COMPLETION,
                     display_text=response,
-                    speech_text=response,
+                    speech_text=reask_speech or response,
                     speech_mode=CuratedProtocolSpeechMode.BLOCKED,
                     facts=(),
                     step_label=step.source_label,
