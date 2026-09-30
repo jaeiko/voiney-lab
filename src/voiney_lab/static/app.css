@@ -487,6 +487,9 @@
       border-radius:var(--radius-sm);
       background:rgba(10,13,58,.4);
     }
+    .dev-code-details{margin-top:.3rem;font-size:.7rem;color:var(--muted)}
+    .dev-code-details>summary{cursor:pointer;color:var(--blurple);font-weight:700;user-select:none}
+    .dev-code-details small{display:block;margin-top:.25rem;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .admin-console{grid-column:1/-1;margin-top:.25rem;font-size:.75rem;color:var(--muted)}
     .admin-console summary{cursor:pointer;color:var(--amber);font-weight:800}
     .admin-access{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
