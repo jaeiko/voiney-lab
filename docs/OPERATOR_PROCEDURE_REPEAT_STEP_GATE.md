@@ -22,7 +22,7 @@
 | | fixture 항목 (**이것을 해소해야 한다**) | 업로드한 PDF(local_pdf) 항목 |
 | --- | --- | --- |
 | `protocol_id` | `candidate-a-curated-development-v1` | `protocol-<PDF sha256 앞 32자>` (예: `protocol-63d81102fb644fca21e1c2296b566987`) |
-| 만들어지는 경로 | `scripts/run_candidate_a.sh` 의 `bootstrap_development_fixture` | 화면의 `새 프로토콜 PDF 등록` (`POST /api/protocols`) |
+| 만들어지는 경로 | `scripts/run_dev.sh` 의 `bootstrap_development_fixture` | 화면의 `새 프로토콜 PDF 등록` (`POST /api/protocols`) |
 | 음성 세션이 실행하는 것 | **예** | 아니오 |
 | 검토 화면 버전 표기 | `pdf-1-analysis-N` | `pdf-1-analysis-N` (같은 모양) |
 | fixture 자체 지문 | `fixture-69517f0fe629d0e4dc35` (감사 답변·provenance 에만 등장, **검토 엔드포인트가 받는 값이 아니다**) | 없음 |
@@ -44,7 +44,7 @@
 ## 1. 서버 기동
 
 ```bash
-./scripts/run_candidate_a.sh
+./scripts/run_dev.sh
 ```
 
 **보여야 하는 것** — `[OK] LOAD_OK`, `protocol_id: candidate-a-curated-development-v1`,

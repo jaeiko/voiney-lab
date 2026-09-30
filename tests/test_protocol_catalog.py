@@ -970,7 +970,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
 
     def test_candidate_launcher_uses_isolated_catalog_without_reload(self):
         repository = Path(__file__).resolve().parents[1]
-        launcher = (repository / "scripts/run_candidate_a.sh").read_text(
+        launcher = (repository / "scripts/run_dev.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn(
@@ -991,7 +991,71 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn('export CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
         self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
-        self.assertIn("--host 0.0.0.0", launcher)
+        # The development launcher binds loopback unless a person overrides
+        # HOST on purpose, and never serves with the reloader.
+        self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
+        self.assertIn('PORT="${PORT:-8000}"', launcher)
+        self.assertIn('--host "$HOST"', launcher)
+        self.assertIn('--port "$PORT"', launcher)
+        self.assertNotIn("--reload", launcher)
+
+    def test_development_launcher_enables_test_mode_only_behind_the_flag(self):
+        """--test-mode is opt-in; without it the launcher sets neither variable."""
+
+        repository = Path(__file__).resolve().parents[1]
+        launcher = (repository / "scripts/run_dev.sh").read_text(encoding="utf-8")
+        self.assertIn('TEST_MODE=false', launcher)
+        self.assertIn('--test-mode)', launcher)
+        gated = launcher[launcher.index('if [[ "$TEST_MODE" == "true" ]]; then'):]
+        gated = gated[: gated.index("\nfi\n")]
+        self.assertIn(
+            'export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="demo"', gated
+        )
+        self.assertIn(
+            'export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="true"',
+            gated,
+        )
+        # Nowhere else in the launcher does either variable get set.
+        outside = launcher.replace(gated, "")
+        self.assertNotIn("VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES", outside)
+        self.assertNotIn("export VOICE_WORKFLOW_AGENT_USAGE_SCOPE", outside)
+
+    def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
+        """The pilot launcher owns its data root and opts out, not in.
+
+        The four out-of-source features and MOSS must each keep a value the
+        operator exported themselves, so turning one on is deliberate; test
+        mode is forced off whatever the environment said.
+        """
+
+        repository = Path(__file__).resolve().parents[1]
+        launcher = (repository / "scripts/run_pilot.sh").read_text(encoding="utf-8")
+        self.assertIn('PILOT_DATA_DIR="$ROOT/data/runtime/pilot"', launcher)
+        self.assertNotIn("candidate-a-live-acceptance", launcher)
+        self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
+        self.assertIn('PORT="${PORT:-8080}"', launcher)
+        for name in (
+            "EXTERNAL_REFERENCES_ENABLED",
+            "SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
+            "WEB_VISUAL_SEARCH_ENABLED",
+            "VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED",
+            "VOICE_WORKFLOW_AGENT_MOSS_ENABLED",
+        ):
+            self.assertIn(
+                f'export {name}="${{{name}:-false}}"',
+                launcher,
+                f"{name} must default to false and stay operator-overridable",
+            )
+        self.assertIn(
+            'export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="false"',
+            launcher,
+        )
+        self.assertNotIn(
+            'VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="true"', launcher
+        )
+        self.assertIn("--check-only", launcher)
+        self.assertIn('--host "$HOST"', launcher)
+        self.assertIn('--port "$PORT"', launcher)
         self.assertNotIn("--reload", launcher)
 
 
