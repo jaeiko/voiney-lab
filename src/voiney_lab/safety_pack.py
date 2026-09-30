@@ -175,6 +175,28 @@ def is_demo_document(usage_scope: Any, title: Any) -> bool:
     return _clean_str(usage_scope) in DEMO_USAGE_SCOPES or "fictional" in _clean_str(title).casefold()
 
 
+def count_catalog_documents(catalog_path: str | Path, usage_scope: str) -> tuple[int, int]:
+    """Return (demo documents, approved active documents in ``usage_scope``).
+
+    For a launcher that refuses a catalog before it starts the server. Every
+    document row counts toward the first number whatever its approval state,
+    by the rule :func:`is_demo_document` applies. The second is what the
+    server's approved-catalog check needs to be at least one. The catalog is
+    opened read-only; a missing or unreadable one raises ``sqlite3.Error``.
+    """
+    uri = f"{Path(catalog_path).resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        rows = conn.execute("SELECT usage_scope, title, approval_status, active FROM documents").fetchall()
+    finally:
+        conn.close()
+    demo = sum(1 for scope, title, _, _ in rows if is_demo_document(scope, title))
+    in_scope = sum(
+        1 for scope, _, status, active in rows if scope == usage_scope and status == "approved" and active == 1
+    )
+    return demo, in_scope
+
+
 def collect_protocol_safety_subjects(protocol: ExperimentProtocol | Any) -> ProtocolSafetySubjects:
     """Extract materials, equipment, prerequisites, and warnings from the actual ExperimentProtocol domain model."""
     protocol_id = (
@@ -490,8 +512,9 @@ def resolve_safety_pack(
 
     # If catalog path is None or file not found
     if catalog_path is None or not Path(catalog_path).is_file():
-        if usage_scope == "operational":
-            # In operational mode, never use demo records as authority
+        if usage_scope not in DEMO_USAGE_SCOPES:
+            # Only a demo or test runtime may show demo records; operational
+            # and reference_only (the controlled pilot) show none instead.
             return unavailable_safety_pack(
                 protocol_id=protocol_id,
                 protocol_revision=protocol_revision,
