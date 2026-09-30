@@ -19,13 +19,24 @@ from voiney_lab.intent_arbitration import (
 # Punctuation to trim
 _PUNCT_RE = re.compile(r"[\s.!?。？！~]+$")
 
-_KOREAN_NUMERALS: dict[str, int] = {
-    "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5,
-    "육": 6, "칠": 7, "팔": 8, "구": 9, "십": 10,
-    "십일": 11, "십이": 12, "십삼": 13, "십사": 14, "십오": 15,
-    "십육": 16, "십칠": 17, "십팔": 18, "십구": 19, "이십": 20,
-    "이십일": 21, "이십이": 22, "이십삼": 23, "이십사": 24, "이십오": 25,
-}
+_KOREAN_DIGITS = "일이삼사오육칠팔구"
+
+
+def _spoken_korean_numerals() -> dict[str, int]:
+    """Sino-Korean numerals 1-99 as spoken: 십 (never 일십), 이십오, 구십구."""
+    numerals: dict[str, int] = {}
+    for value in range(1, 100):
+        tens, ones = divmod(value, 10)
+        word = ""
+        if tens:
+            word = ("" if tens == 1 else _KOREAN_DIGITS[tens - 1]) + "십"
+        if ones:
+            word += _KOREAN_DIGITS[ones - 1]
+        numerals[word] = value
+    return numerals
+
+
+_KOREAN_NUMERALS: dict[str, int] = _spoken_korean_numerals()
 
 # Guard patterns that MUST NOT be classified as completion
 _NEGATIVE_OR_QUESTION_PATTERNS = (
@@ -43,11 +54,13 @@ _NEGATIVE_OR_QUESTION_PATTERNS = (
     re.compile(r"(?:완료|끝)\s*(?:안|못)\s*했"),
 )
 
-# Numbered step reference extraction regex
+# Numbered step reference extraction regex. The patterns below put an
+# optional demonstrative "이" in front of it; that "이" must not be followed by
+# 십, or it takes the tens digit of 이십… and "이십육 단계" reads as 16.
 _STEP_NUM_PREFIX = (
     r"(?:(?P<num>[1-9]|1[0-9]|2[0-5])\s*단계|"
     r"step\s*(?P<en_num>[1-9]|1[0-9]|2[0-5])|"
-    r"(?P<kor_num>일|이|삼|사|오|육|칠|팔|구|십(?:[일이삼사오육칠팔구])?|이십(?:[일이삼사오육칠팔구])?)\s*단계)"
+    r"(?P<kor_num>[이삼사오육칠팔구]?십[일이삼사오육칠팔구]?|[일이삼사오육칠팔구])\s*단계)"
 )
 
 # Positive completion command patterns (Current step)
@@ -88,7 +101,7 @@ _POSITIVE_COMPLETION_PATTERNS = (
 _NUMBERED_COMPLETION_PATTERNS = (
     # "[이번/현재]? N단계 [도/는/은/를/을/이/가/로/까지] [미리/이미/벌써/방금/아까/다/완전히/모두]? 완료했어/끝냈어/다 했어/마쳤어/완료"
     re.compile(
-        rf"^(?:(?:현재|지금|이번|이)\s*)?{_STEP_NUM_PREFIX}\s*(?:도|는|은|를|을|이|가|로|까지)?\s*"
+        rf"^(?:(?:현재|지금|이번|이(?!십))\s*)?{_STEP_NUM_PREFIX}\s*(?:도|는|은|를|을|이|가|로|까지)?\s*"
         r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
         r"(?:완료(?:했어|했어요|했습니다|했으니|했으니까|함)?|"
         r"끝(?:냈어|냈어요|냈습니다|났어|났어요|났습니다)|"
@@ -99,7 +112,7 @@ _NUMBERED_COMPLETION_PATTERNS = (
     ),
     # Exact noun shorthand: "[이번]? N단계 완료"
     re.compile(
-        rf"^(?:(?:현재|지금|이번|이)\s*)?{_STEP_NUM_PREFIX}\s*완료$",
+        rf"^(?:(?:현재|지금|이번|이(?!십))\s*)?{_STEP_NUM_PREFIX}\s*완료$",
         re.IGNORECASE,
     ),
     # English: "Step N is done", "I completed step N", "Step N completed", "yep step N done"
@@ -110,7 +123,7 @@ _NUMBERED_COMPLETION_PATTERNS = (
     # Compound numbered completion + proceed:
     # "N단계 [도] [미리/이미] 완료했으니 다음으로 넘어가자/넘어가줘"
     re.compile(
-        rf"^(?:(?:현재|지금|이번|이)\s*)?{_STEP_NUM_PREFIX}\s*(?:도|는|은|를|을|이|가|로|까지)?\s*"
+        rf"^(?:(?:현재|지금|이번|이(?!십))\s*)?{_STEP_NUM_PREFIX}\s*(?:도|는|은|를|을|이|가|로|까지)?\s*"
         r"(?:미리|이미|벌써|방금|아까|다|완전히|모두)?\s*"
         r"(?:완료(?:했어|했어요|했습니다|했으니|했으니까|했으므로)|"
         r"끝(?:냈어|냈어요|냈습니다|났어|났어요|났습니다|냈으니|냈으니까|났으니|났으니까)|"
