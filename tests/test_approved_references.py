@@ -526,7 +526,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("failure", str(result))
 
     def test_candidate_a_launcher_script_resolves_to_open_mode_and_90s_timeouts(self):
-        script = Path(__file__).resolve().parent.parent / "scripts" / "run_candidate_a.sh"
+        script = Path(__file__).resolve().parent.parent / "scripts" / "run_dev.sh"
         self.assertTrue(script.is_file())
         text = script.read_text(encoding="utf-8")
         self.assertIn('EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', text)

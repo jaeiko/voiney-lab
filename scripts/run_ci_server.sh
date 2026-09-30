@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI-safe server launcher for browser acceptance tests (Playwright).
 #
-# Unlike scripts/run_candidate_a.sh, this does not load the curated "Candidate
+# Unlike scripts/run_dev.sh, this does not load the curated "Candidate
 # A" fixture: that fixture's integrity model requires the exact, externally
 # licensed source PDF (byte size, SHA-256, and page count all checked against
 # recorded provenance) which is not and should not be committed to the repo.

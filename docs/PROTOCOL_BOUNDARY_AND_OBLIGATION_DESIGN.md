@@ -3129,7 +3129,7 @@ removes the possibility of making it wrongly.
 Two things worked when a person ran in-gel through the UI. Traced through the
 code rather than inferred:
 
-**Protocol structure: the hand-built file.** `scripts/run_candidate_a.sh:59`
+**Protocol structure: the hand-built file.** `scripts/run_dev.sh:74`
 exports `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE` pointing at
 `data/development_protocols/candidate_a_curated_analysis.json`, and the session
 selection tries that file **first**, falling through to the protocol catalog

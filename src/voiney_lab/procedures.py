@@ -6,7 +6,7 @@ production ExperimentSession/CuratedProtocolSession stack in
 workspace_store.py/curated_protocol.py. It only activates when an operator
 sets both VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG and
 VOICE_WORKFLOW_AGENT_PROCEDURE_STORE - neither is set by the commercial demo
-launcher (scripts/run_candidate_a.sh) or documented as a normal deployment
+launcher (scripts/run_dev.sh) or documented as a normal deployment
 default. server.py's protocol-selection logic only attempts a legacy
 ProcedureController lookup when no curated fixture was selected
 (`selected_curated_fixture is None`), so a single session can never be bound
