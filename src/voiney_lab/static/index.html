@@ -1713,7 +1713,7 @@ async function startSession(){
 async function loadProtocolCatalog(preferredProtocolId=null){
  const selector=$("protocol-id");
  if(!selector||typeof fetch!=="function")return;
- const selected=preferredProtocolId||selector.value,status=$("protocol-upload-status");
+ const manual=selector.value,selected=preferredProtocolId||manual,status=$("protocol-upload-status");
  selector.setAttribute?.("aria-busy","true");
  $("protocol-readiness").textContent="카탈로그 불러오는 중";
  if(status)status.textContent="프로토콜 카탈로그를 불러오는 중…";
@@ -1727,11 +1727,16 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   for(const item of entries){
    if(!item||typeof item.protocol_id!=="string"||typeof item.title!=="string"||typeof item.revision_id!=="string")continue;
    protocolCatalog.set(item.protocol_id,{...item});
-   const option=document.createElement("option");option.value=item.protocol_id;option.disabled=item.available_for_execution!==true;option.textContent=`${item.title} · ${catalogStatus(item).label}`;option.dataset.revisionId=item.revision_id;selector.appendChild(option);
+   const option=document.createElement("option");option.value=item.protocol_id;option.dataset.runnable=String(item.available_for_execution===true);option.textContent=`${item.title} · ${catalogStatus(item).label}`;option.dataset.revisionId=item.revision_id;selector.appendChild(option);
   }
-  if([...selector.options].some(option=>option.value===selected&&!option.disabled))selector.value=selected;
-  else{const first=[...selector.options].find(option=>option.value&&!option.disabled);selector.value=first?.value||"";}
-  if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 선택할 수 있습니다.`;
+  // A protocol that cannot run can be picked, because picking it is how its
+  // review and development activation are reached; the start button stays
+  // disabled for it. A refresh keeps the person's own pick, and never picks
+  // a protocol that cannot run on their behalf.
+  const runnable=option=>Boolean(option.value)&&option.dataset.runnable==="true";
+  if([...selector.options].some(option=>option.value===selected&&(runnable(option)||selected===manual)))selector.value=selected;
+  else{const first=[...selector.options].find(runnable);selector.value=first?.value||"";}
+  if(status)status.textContent=`카탈로그 ${protocolCatalog.size}개 · 실행 가능 항목만 시작할 수 있습니다.`;
   renderCatalogAnalysisProgress(entries);renderSelectedProtocolContext();
  }catch(_){
   protocolCatalog.clear();selector.replaceChildren();const unavailable=document.createElement("option");unavailable.value="";unavailable.textContent="카탈로그를 불러올 수 없음";selector.appendChild(unavailable);$("protocol-readiness").textContent="카탈로그 불러오기 실패 · 세션 시작 불가";$("protocol-revision").textContent="—";renderCatalogAnalysisProgress([]);if(status)status.textContent="프로토콜 카탈로그를 불러오지 못했습니다.";renderState(visibleState);
@@ -1955,10 +1960,10 @@ function renderProtocolFindings(review){
  appendDevCodeDetails(group,codes);
  host.appendChild(group);
 }
-function renderProtocolReview(review){
+function renderProtocolReview(review,options={}){
  const panel=$("protocol-review-panel"),content=$("protocol-review-content"),status=$("protocol-review-status"),retry=$("protocol-analysis-retry"),activate=$("protocol-development-activate"),ocrRun=$("protocol-ocr-run"),ocrAccept=$("protocol-ocr-accept"),ocrReject=$("protocol-ocr-reject");
  if(!panel||!content||!status)return false;
- panel.hidden=false;panel.open=true;content.replaceChildren();
+ panel.hidden=false;panel.open=options.open!==false;content.replaceChildren();
  currentProtocolReviewRevisionId=typeof review?.revision_id==="string"?review.revision_id:currentProtocolReviewRevisionId;
  lastProtocolReview=review;renderProtocolBlockers(review);renderProtocolFindings(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
@@ -2019,10 +2024,23 @@ function renderProtocolReview(review){
  if(activate){activate.hidden=review?.development_activation_allowed!==true;activate.disabled=isRegisteringProtocol;}
  return true;
 }
-async function loadProtocolReview(protocolId=currentProtocolReviewId){
+async function loadProtocolReview(protocolId=currentProtocolReviewId,options={}){
  if(typeof protocolId!=="string"||!protocolId||typeof fetch!=="function")return null;
- currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status");if(panel){panel.hidden=false;panel.open=true;}if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload);return payload;}catch(_){if(status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
+ currentProtocolReviewId=protocolId;const panel=$("protocol-review-panel"),status=$("protocol-review-status"),activate=$("protocol-development-activate");if(panel){panel.hidden=false;panel.open=options.open!==false;}if(activate)activate.hidden=true;if(status)status.textContent="원문 근거와 구조 분석 결과를 불러오는 중…";
+ // The activation button acts on currentProtocolReviewId, so an answer that
+ // arrives after the person picked another protocol must not be rendered.
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/review`,{headers:{Accept:"application/json"},redirect:"error"});const payload=await safeProtocolUploadPayload(response);if(currentProtocolReviewId!==protocolId)return null;if(!response.ok||!payload)throw new Error("review unavailable");renderProtocolReview(payload,options);return payload;}catch(_){if(currentProtocolReviewId===protocolId&&status)status.textContent="검토 정보를 불러오지 못했습니다. 원문 등록 상태는 유지됩니다.";return null;}
+}
+// Picking a protocol in the run list loads its review, so a protocol that
+// was uploaded earlier can still be activated. The button appears only when
+// the server's review says development_activation_allowed. A protocol that
+// can already run gets its review collapsed: there is nothing to act on.
+function onProtocolSelectionChanged(){
+ renderSelectedProtocolContext();
+ const protocolId=$("protocol-id")?.value||"";
+ if(protocolId!==currentProtocolReviewId){stopProtocolAnalysisPolling();stopProtocolOcrPolling();}
+ if(protocolId){void loadProtocolReview(protocolId,{open:protocolCatalog.get(protocolId)?.available_for_execution!==true});return;}
+ currentProtocolReviewId=null;const panel=$("protocol-review-panel"),activate=$("protocol-development-activate");if(panel)panel.hidden=true;if(activate)activate.hidden=true;
 }
 async function pollProtocolAnalysisStatus(protocolId){
  if(protocolAnalysisPollBusy)return null;protocolAnalysisPollBusy=true;
@@ -2070,6 +2088,8 @@ async function analyzeRegisteredProtocol(protocolId){
 }
 async function activateReviewedProtocol(){
  const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-development-activate");if(!protocolId||isRegisteringProtocol)return;
+ // Only the protocol whose review put this button on screen may be activated.
+ if(lastProtocolReview?.protocol_id!==protocolId||lastProtocolReview?.development_activation_allowed!==true){if(button)button.hidden=true;return;}
  if(button)button.disabled=true;if(status)status.textContent="데모·연구용 활성화 정책을 확인하는 중…";
  try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/activate-development`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status)status.textContent=protocolUploadErrorMessage(code);return;}if(status)status.textContent="개발용 초안 활성화 완료 · 최종 승인 리비전은 아닙니다.";await loadProtocolCatalog(protocolId);await loadProtocolReview(protocolId);await loadQuickProtocolLibrary();await loadWorkspaceProtocolRevisions();}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");}finally{if(button)button.disabled=false;}
 }
@@ -2239,7 +2259,7 @@ $("rail-stop-session")?.addEventListener("click",stopSession);
 $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();clearExperimentResumeSelection();resetSessionUI();renderState("IDLE");announceMilestone("새 세션이 준비되었습니다.");});
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});
 $("toggle-setup-btn")?.addEventListener("click",()=>{const hero=$("hero-setup"),btn=$("toggle-setup-btn");if(!hero||!btn)return;const c=hero.classList.toggle("collapsed");btn.textContent=c?"⚙️ 설정 열기":"⚙️ 설정 접기";btn.setAttribute("aria-expanded",String(!c));});
-$("protocol-id")?.addEventListener("change",renderSelectedProtocolContext);$("repeat-step")?.addEventListener("click",()=>voiceCommandHint("다시 말해 줘"));$("next-step")?.addEventListener("click",()=>voiceCommandHint("다음 단계로 넘어가 줘"));
+$("protocol-id")?.addEventListener("change",onProtocolSelectionChanged);$("repeat-step")?.addEventListener("click",()=>voiceCommandHint("다시 말해 줘"));$("next-step")?.addEventListener("click",()=>voiceCommandHint("다음 단계로 넘어가 줘"));
 $("protocol-review-refresh")?.addEventListener("click",()=>{void loadProtocolReview();});
 $("protocol-ocr-run")?.addEventListener("click",()=>{void runProtocolOcr();});
 $("protocol-ocr-accept")?.addEventListener("click",()=>{void reviewProtocolOcr("accepted");});
