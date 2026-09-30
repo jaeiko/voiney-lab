@@ -451,7 +451,7 @@ class BannerTestModeTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn(
             '<div id="test-mode-banner" class="test-mode-banner" '
-            'role="alert" hidden>테스트 모드: 실행 준비 게이트를 건너뜀',
+            'role="alert" hidden>테스트 모드: 실행 준비 확인 조건을 건너뜀',
             html,
         )
         loader = "async function loadProtocolCatalog("
