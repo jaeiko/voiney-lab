@@ -2757,12 +2757,12 @@ def _binary_frame_reply(value: str) -> str | None:
 #: The only replies that say yes to the endpoint prompt. It asks whether the
 #: source endpoint was seen, and "완료했어요", "했어", "다 했어" say the work
 #: was done -- a different claim -- so they answer the completion prompt only.
-_OBSERVATION_AFFIRMATIVE_WORDS = frozenset({
-    "네", "예", "응", "맞아", "맞아요", "됐어", "됐어요",
-})
-_OBSERVATION_AFFIRMATIVE_EN = frozenset({
-    "yes", "correct", "that's right", "that’s right",
-})
+#: The shape is _binary_frame_reply's, cut down: 됐어/됐어요 may only come
+#: last, so every reply read as yes here was already read as yes there.
+_OBSERVATION_AFFIRMATIVE = re.compile(
+    r"(?:(?:네|예|응|맞아|맞아요)\s+){0,2}(?:네|예|응|맞아|맞아요|됐어|됐어요)"
+    r"|yes|correct|that(?:'|’)s\s+right"
+)
 
 
 def _observation_binary_reply(value: str) -> str | None:
@@ -2771,11 +2771,7 @@ def _observation_binary_reply(value: str) -> str | None:
     if _reply_withholds_assent(value):
         return None
     key = _semantic_utterance_key(value)
-    words = key.split()
-    if key in _OBSERVATION_AFFIRMATIVE_EN or (
-        1 <= len(words) <= 3
-        and all(word in _OBSERVATION_AFFIRMATIVE_WORDS for word in words)
-    ):
+    if _OBSERVATION_AFFIRMATIVE.fullmatch(key):
         return "affirmative"
     if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"

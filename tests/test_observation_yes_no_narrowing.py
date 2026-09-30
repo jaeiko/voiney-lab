@@ -60,7 +60,9 @@ class ReplyTests(unittest.TestCase):
         for reply in OBSERVATION_YES:
             with self.subTest(reply=reply):
                 self.assertEqual(_observation_binary_reply(reply), "affirmative")
-        for reply in WORK_DONE + QUESTIONING_YES + ("그래", "물론"):
+        # 됐어 may only come last, as in the completion reader: the narrowed
+        # set must not accept an order the wider one refused.
+        for reply in WORK_DONE + QUESTIONING_YES + ("그래", "물론", "됐어 네", "됐어요 맞아요"):
             with self.subTest(reply=reply):
                 self.assertIsNone(_observation_binary_reply(reply))
         for reply in ("아니요", "아니", "아직이요"):
