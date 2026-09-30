@@ -58,8 +58,8 @@ _NEGATIVE_OR_QUESTION_PATTERNS = (
 # optional demonstrative "이" in front of it; that "이" must not be followed by
 # 십, or it takes the tens digit of 이십… and "이십육 단계" reads as 16.
 _STEP_NUM_PREFIX = (
-    r"(?:(?P<num>[1-9]|1[0-9]|2[0-5])\s*단계|"
-    r"step\s*(?P<en_num>[1-9]|1[0-9]|2[0-5])|"
+    r"(?:(?P<num>[1-9][0-9]?)\s*단계|"
+    r"step\s*(?P<en_num>[1-9][0-9]?)|"
     r"(?P<kor_num>[이삼사오육칠팔구]?십[일이삼사오육칠팔구]?|[일이삼사오육칠팔구])\s*단계)"
 )
 
@@ -117,7 +117,7 @@ _NUMBERED_COMPLETION_PATTERNS = (
     ),
     # English: "Step N is done", "I completed step N", "Step N completed", "yep step N done"
     re.compile(
-        r"^(?:(?:i\s+(?:have\s+)?(?:completed|finished|done)|yep|yes|ok|okay)\s+)?step\s*(?P<en_num>[1-9]|1[0-9]|2[0-5])(?:\s+(?:is\s+)?(?:done|complete|completed|finished))?$",
+        r"^(?:(?:i\s+(?:have\s+)?(?:completed|finished|done)|yep|yes|ok|okay)\s+)?step\s*(?P<en_num>[1-9][0-9]?)(?:\s+(?:is\s+)?(?:done|complete|completed|finished))?$",
         re.IGNORECASE,
     ),
     # Compound numbered completion + proceed:
