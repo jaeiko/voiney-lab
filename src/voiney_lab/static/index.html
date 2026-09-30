@@ -761,7 +761,13 @@ async function loadAdminMetrics(){const status=$("admin-metrics-status"),target=
 
 let selectedWorkspaceRevision=null,pendingReviewerDecision=null,selectedReviewerAllowedActions=new Set();
 function activateWorkspace(name){for(const item of ["researcher","reviewer","admin"]){const page=$(item+"-workspace"),button=$("workspace-"+item);if(page)page.hidden=item!==name;if(button)button.setAttribute("aria-current",item===name?"page":"false");}if(name==="reviewer"){void loadReviewerWorkspace();void loadDryLabWorkflows();}if(name==="admin"){void loadAdminConnectors();void loadAdminCredentials();void loadAdminMemberships();void loadAdminMetrics();void loadAdminSecurity();updateAdminConnectorFields();}}
-async function loadWorkspaceSession(){try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json(),routes=new Set(data.workspaces||[]);if($("workspace-reviewer"))$("workspace-reviewer").hidden=!routes.has("reviewer");if($("workspace-admin"))$("workspace-admin").hidden=!routes.has("admin");await loadWorkspaceConnectors();await loadQuickProtocolLibrary();await loadDryLabWorkflows();await loadExperimentSessions();return true;}catch{return false;}}
+// The approved computational workflows are not fetched when the page opens.
+// The reviewer workspace loads them when it is opened, and the researcher's
+// link picker needs them only once an experiment session is on screen, so
+// the first timeline of a workspace session asks for them once.
+let researcherDryLabWorkflowsRequested=false;
+async function ensureResearcherDryLabWorkflows(){if(researcherDryLabWorkflowsRequested)return false;researcherDryLabWorkflowsRequested=true;return loadDryLabWorkflows();}
+async function loadWorkspaceSession(){researcherDryLabWorkflowsRequested=false;try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json(),routes=new Set(data.workspaces||[]);if($("workspace-reviewer"))$("workspace-reviewer").hidden=!routes.has("reviewer");if($("workspace-admin"))$("workspace-admin").hidden=!routes.has("admin");await loadWorkspaceConnectors();await loadQuickProtocolLibrary();await loadExperimentSessions();return true;}catch{return false;}}
 function workspaceRow(title,detail){const row=document.createElement("div"),bold=document.createElement("b"),small=document.createElement("small");row.className="workspace-row";bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
 function experimentEventLabel(type){return {session_started:"세션 생성",protocol_started:"프로토콜 시작",session_recovered:"세션 복구",session_resumed:"세션 재개",session_paused:"세션 일시정지",session_stopped:"세션 종료",session_completed:"실험 완료",step_completed:"단계 완료",step_advanced:"단계 이동",observation_recorded:"관찰 기록",evidence_attached:"근거 첨부",reviewer_action:"검토자 작업"}[type]||"이벤트";}
 function experimentEventKind(type){return {session_started:"lifecycle",session_stopped:"lifecycle",session_recovered:"lifecycle",session_resumed:"resume",session_paused:"pause",session_completed:"completion",step_completed:"step",step_advanced:"step",observation_recorded:"observation",evidence_attached:"evidence",reviewer_action:"reviewer-action"}[type]||"other";}
@@ -813,7 +819,7 @@ async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
  try{
   const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(sessionId)}/timeline`,{cache:"no-store"}),data=await response.json();
   if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"타임라인을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));
-  const rendered=renderExperimentTimeline(data);await loadDryLabLinks(sessionId);return rendered;
+  const rendered=renderExperimentTimeline(data);await loadDryLabLinks(sessionId);await ensureResearcherDryLabWorkflows();return rendered;
  }catch(error){
   if(target){target.replaceChildren();target.appendChild(workspaceRow("타임라인 오류",researcherErrorMessage(error?.message,"타임라인을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요.")));}
   setText("experiment-resume-disclosure","실험 상태를 복구하지 못했습니다. 서버 상태가 변경되었다고 가정하지 말고 타임라인을 새로고침해 주세요.");
