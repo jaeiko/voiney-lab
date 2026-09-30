@@ -478,12 +478,12 @@ globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{med
  await onMessage({data:JSON.stringify({type:"turn.state",...base,revision:6,state:"synthesizing",route:"curated_protocol"})},browserGeneration,current);
  await onMessage({data:JSON.stringify({type:"turn.state",...base,revision:7,state:"playing",route:"curated_protocol",timings_ms:{time_to_playable_audio:12}})},browserGeneration,current);
  await onMessage({data:JSON.stringify({type:"turn.state",...base,revision:8,state:"complete",route:"curated_protocol",timings_ms:{playback_completion:20}})},browserGeneration,current);
- assert(node.querySelector(".turn-status").textContent==="완료 · 개발용 절차","complete state missing");
+ assert(node.querySelector(".turn-status").textContent==="완료","complete state missing");
  assert(node.querySelector(".transcript").textContent==="현재 단계 알려줘"&&node.querySelector(".reply").textContent==="Canonical display "&&!node.querySelector(".reply").textContent.includes("Short speech"),"progress lost transcript/display separation");
  await onMessage({data:JSON.stringify({type:"turn.state",...base,revision:9,state:"playing",route:"curated_protocol"})},browserGeneration,current);
  await onMessage({data:JSON.stringify({type:"turn.state",...base,configuration_id:99,revision:20,state:"error"})},browserGeneration,current);
  await onMessage({data:JSON.stringify({type:"turn.state",...base,generation:9,revision:20,state:"error"})},browserGeneration,current);
- assert(node.querySelector(".turn-status").textContent==="완료 · 개발용 절차"&&!node.querySelector(".error").textContent,"terminal or stale identity revived card");
+ assert(node.querySelector(".turn-status").textContent==="완료"&&!node.querySelector(".error").textContent,"terminal or stale identity revived card");
  const visible=node.querySelector(".turn-status").textContent+node.querySelector(".error").textContent;for(const forbidden of ["prompt","reasoning","tool arguments","Traceback"])assert(!visible.includes(forbidden),"hidden internals exposed");
 })().catch(error=>{console.error(error);process.exit(1)});
 """

@@ -555,6 +555,18 @@ const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",se
 const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",step_learning_read:"현재 단계 학습·주의 근거 조회",protocol_audit_read:"프로토콜 버전·해시 조회",experiment_history_read:"이전 실험 세션 조회",bounded_uncertainty_response:"실험 결과 불확실성 안내",learning_next_preview_confirmation:"단계 이유·다음 단계 미리보기·완료 확인",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 참고 자료 질의",external_reference_qa:"웹 참고 자료 확인",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",completion_confirmation_declined:"완료 및 이동 취소",experiment_observation_recorded:"실험 관찰 기록",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단",agent_meta_information:"에이전트 역할 및 목적 안내",workflow_paused:"실험 일시 중지",workflow_resumed:"실험 재개",step_timer_started:"단계 타이머 시작",step_timer_status_read:"단계 타이머 상태 조회",step_preview_read:"단계 미리보기",expected_result_explanation:"예상 결과 설명",completion_criteria_read:"완료 조건 조회",operational_deviation_refused:"임의 절차 변경 거절",parameter_clarification_required:"파라미터 확인 필요",readonly_operation_cancelled:"조회 작업 취소"};
 const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
 const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
+// A curated NEXT turn ends "blocked" for many reasons: a clarification, a
+// refused move, a failed save, or the step waiting for the person's own
+// observation. Only the last is a normal turn, and the server names it by
+// setting block_reason to endpoint_observation_not_reported in that turn's
+// protocol.fixture.state. The reason persists across turns and a failed
+// save restores the previous one, so a turn counts as "관찰 필요" only when
+// its own state moved block_reason onto that value, its turn.done says a
+// blocked NEXT, and no save error arrived for it. Anything less keeps "차단됨".
+const OBSERVATION_HOLD_REASON="endpoint_observation_not_reported";
+const turnHoldEvidence=new Map();
+function turnHold(serverKey){if(!turnHoldEvidence.has(serverKey))turnHoldEvidence.set(serverKey,{observationGateSet:false,failed:false,done:null});return turnHoldEvidence.get(serverKey);}
+function turnHeldForObservation(serverKey){const evidence=turnHoldEvidence.get(serverKey);return Boolean(evidence&&evidence.observationGateSet&&!evidence.failed&&evidence.done?.route==="curated_protocol"&&evidence.done.result_kind==="next"&&evidence.done.speech_mode==="blocked");}
 const TURN_ROUTE_LABELS={approved_information:"승인된 정보",brain:"일반 응답",curated_protocol:"개발용 절차",deterministic_emergency:"긴급 응답",deterministic_procedure:"승인 절차",language_clarification:"언어 확인"};
 const TURN_STATE_TRANSITIONS={listening:new Set(["transcribing","cancelled","error"]),transcribing:new Set(["routing","cancelled","error"]),routing:new Set(["checking_protocol","checking_approved_information","composing","synthesizing","cancelled","error"]),checking_protocol:new Set(["checking_approved_information","synthesizing","cancelled","error"]),checking_approved_information:new Set(["composing","synthesizing","cancelled","error"]),composing:new Set(["checking_approved_information","synthesizing","cancelled","error"]),synthesizing:new Set(["playing","cancelled","error"]),playing:new Set(["complete","blocked","cancelled","error"])};
 const TOOL_ERROR_LABELS={observation_evidence_mismatch:"음성 원문과 관찰값 불일치",observation_required:"필수 관찰값 없음",timer_not_configured:"현재 단계에 타이머 없음",timer_not_started:"타이머 시작 필요",timer_not_elapsed:"타이머 진행 중",procedure_blocked_for_handoff:"관리자 인계로 진행 차단",explicit_confirmation_required:"명시적 단계 완료 확인 필요",step_mismatch:"현재 단계 불일치",observation_not_allowed:"현재 단계에서 관찰 기록 불가",observation_value_invalid:"관찰값 형식 오류",procedure_store_unavailable:"워크플로 저장소 오류",no_active_procedure:"진행 중인 워크플로 없음"};
@@ -1030,7 +1042,7 @@ function resetSessionUI(){
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();
- turnProgress.clear();turnServerGenerations.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
+ turnProgress.clear();turnServerGenerations.clear();turnHoldEvidence.clear();interruptedTurns.clear();interruptedCascadeTurns.clear();
  webReferenceHistory.length=0;
  if($("task-web-reference-panel"))$("task-web-reference-panel").hidden=true;
  if($("task-web-reference-content"))$("task-web-reference-content").replaceChildren();
@@ -1145,6 +1157,8 @@ function renderCuratedProtocolState(message){
  const previewValid=!value.active&&["preview","ready"].includes(value.workflow_status)&&nonempty(value.current_step_label)&&nonempty(value.current_step_id);
  const activeValid=value.active?nonempty(value.current_step_label)&&nonempty(value.current_step_id):(previewValid||(value.current_step_label===null&&value.current_step_id===null));
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
+ const previousBlockReason=curatedProtocolState?.attached===true?curatedProtocolState.block_reason:null;
+ if(Number.isInteger(message.turn_id)&&Number.isInteger(message.generation))turnHold(turnProgressKey(message.turn_id,message.generation)).observationGateSet=value.block_reason===OBSERVATION_HOLD_REASON&&previousBlockReason!==OBSERVATION_HOLD_REASON;
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
@@ -1597,9 +1611,16 @@ function applyTurnState(message,browserGeneration=sessionGeneration){
  const key=turnProgressKey(message.turn_id,message.generation),previous=turnProgress.get(key);if(previous&&(message.revision<=previous.revision||TURN_TERMINAL_STATES.has(previous.state)))return false;if(!validTurnStateTransition(previous?.state??null,state))return false;
  turnServerGenerations.set(browserKey,message.generation);turnProgress.set(key,{revision:message.revision,state,terminal:TURN_TERMINAL_STATES.has(state),route:route||previous?.route||null});
  if(state==="listening"&&!turns.has(browserKey))return true;
- const node=turnNode(message.turn_id,browserGeneration),routeLabel=route?TURN_ROUTE_LABELS[route]:"";node.querySelector(".turn-status").textContent=`${TURN_STATE_LABELS[state]}${routeLabel?` · ${routeLabel}`:""}`;
- if(state==="cancelled")node.querySelector(".error").textContent="중단됨";else if(state==="blocked")node.querySelector(".error").textContent="차단됨";else if(state==="error")node.querySelector(".error").textContent="오류";
+ renderTurnState(turnNode(message.turn_id,browserGeneration),state,route||previous?.route||null,key);
  return true;
+}
+function renderTurnState(node,state,route,serverKey){
+ const heldForObservation=state==="blocked"&&turnHeldForObservation(serverKey),status=node.querySelector(".turn-status");
+ status.textContent=heldForObservation?"관찰 필요":TURN_STATE_LABELS[state];status.className=heldForObservation?"turn-status needs-observation":"turn-status";
+ if(state==="cancelled")node.querySelector(".error").textContent="중단됨";else if(state==="blocked"&&!heldForObservation)node.querySelector(".error").textContent="차단됨";else if(state==="error")node.querySelector(".error").textContent="오류";
+ const details=node.querySelector?.(".turn-diagnostics-body");if(!details)return;
+ let line=details.querySelector?.(".turn-route");if(!line){line=document.createElement("div");line.className="turn-route";details.appendChild(line);}
+ line.textContent=`처리 경로 · ${route?`${TURN_ROUTE_LABELS[route]} (${route})`:"확인 전"} · 턴 상태 ${state}${heldForObservation?` · block_reason ${OBSERVATION_HOLD_REASON}`:""}`;
 }
 function removeTurnProgress(id,browserGeneration,serverGeneration){const browserKey=turnBrowserKey(id,browserGeneration),known=turnServerGenerations.get(browserKey),target=serverGeneration===null?known:serverGeneration;if(Number.isInteger(target))turnProgress.delete(turnProgressKey(id,target));if(serverGeneration===null||known===serverGeneration)turnServerGenerations.delete(browserKey);}
 function removeProvisionalTurn(id,browserGeneration=sessionGeneration,serverGeneration=null){const key=turnBrowserKey(id,browserGeneration),node=turns.get(key),known=provisionalTurns.get(key);if(known!==undefined&&serverGeneration!==null&&known!==serverGeneration)return false;if(node&&(node.querySelector(".transcript").textContent!=="듣는 중…"||node.querySelector(".reply").textContent.trim()))return false;if(node){node.remove();turns.delete(key);}provisionalTurns.delete(key);if(Number.isInteger(serverGeneration))pendingFillers.delete(cascadeTurnKey(id,serverGeneration));removeTurnProgress(id,browserGeneration,serverGeneration);if(id===activeTurn&&(serverGeneration===null||serverGeneration===activeCascadeGeneration)){playbackEpoch++;resetCascadePlayback();}return node!==undefined||known!==undefined;}
@@ -2155,7 +2176,7 @@ async function onMessage(e,generation,current){
  if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
- if(m.type==="experiment.session.error"){const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
+ if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="protocol.visual.state"&&applyGeneratedVisualState(m,generation))promoteTurnVisualToPanel(m,generation);
  if(m.type==="research.state")applyResearchState(m,generation);
  if(m.type==="research.result")applyResearchResult(m,generation);
@@ -2166,7 +2187,7 @@ async function onMessage(e,generation,current){
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
   const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);updateElnWritebackAvailability(report);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
  }
- if(m.type==="experiment.report.error"&&reportEventCurrent())$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";
+ if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)$("last-report-id").textContent=m.report_id;const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
  if(m.type==="barge_in_candidate"){provisionalCascadeInterruption(m);}
  if(m.type==="barge_in_rejected"){rejectCascadeInterruption(m);}
@@ -2193,9 +2214,9 @@ async function onMessage(e,generation,current){
  if(m.type==="audio.complete"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){audioComplete=true;pump(generation);}
  if(m.type==="audio.replay.available"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){}
  if(m.type==="audio.replay.request"&&!cascadeTurnInterrupted(m)&&currentCascadeMessage(m)){const node=turnNode(m.turn_id,generation),status=node.querySelector(".replay-status");if(lastReplayableAudio){pendingVoiceReplay=true;if(status)status.textContent="현재 안내 뒤에 마지막 답변을 한 번 다시 재생합니다.";pump(generation);}else if(status)status.textContent="재생 가능한 이전 답변이 없습니다. 브라우저 음성 출력과 볼륨을 확인해 주세요.";}
- if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?"경로 server_greeting · 세션 안내":`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
+ if(m.type==="turn.done"&&!cascadeTurnInterrupted(m)){const t=m.timings_ms||{},firstAudio=Number.isFinite(t.first_audio_ms)?`${t.first_audio_ms} ms`:"측정 안 됨",total=Number.isFinite(t.total_ms)?`${t.total_ms} ms`:"측정 안 됨",tool=t.tool_ms!==undefined?` · Tool ${t.tool_ms} ms`:"",stt=` · STT ${t.stt} ms`,segments=` · ${m.segment_count}개 문장`;const isGreeting=m.route==="server_greeting"||Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const statsEl=turnNode(m.turn_id,generation).querySelector(".stats");if(statsEl){statsEl.textContent=isGreeting?"경로 server_greeting · 세션 안내":`경로 ${m.route} · Cascade${stt} · 첫 음성 ${firstAudio} · 전체 ${total}${tool}${segments}`;}if(Number.isInteger(m.generation)){const serverKey=turnProgressKey(m.turn_id,m.generation);turnHold(serverKey).done={route:m.route,result_kind:m.result_kind,speech_mode:m.speech_mode};const progress=turnProgress.get(serverKey);if(progress?.state==="blocked")renderTurnState(turnNode(m.turn_id,generation),"blocked",progress.route,serverKey);}if(currentCascadeMessage(m)){turnComplete=true;pump(generation);}}
  if(m.type==="playback.completed"&&!cascadeTurnInterrupted(m)&&!interruptedTurns.has(m.turn_id)&&Number.isInteger(m.playback_completion_ms)){const isGreeting=Boolean(turnNode(m.turn_id,generation).dataset.greetingOwner);const stats=turnNode(m.turn_id,generation).querySelector(".stats"),metric=`재생 완료 ${m.playback_completion_ms} ms`;if(stats&&!isGreeting&&!stats.textContent.includes(metric))stats.textContent+=`${stats.textContent?" · ":""}${metric}`;}
- if(m.type==="error"){renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(researcherErrorMessage(m.message),m.turn_id);}
+ if(m.type==="error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(researcherErrorMessage(m.message),m.turn_id);}
 }
 
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
