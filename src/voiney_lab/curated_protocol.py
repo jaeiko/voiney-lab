@@ -7326,6 +7326,18 @@ class CuratedProtocolSession:
             return f"Source endpoint “{stated}” — answer: {spoken}"
         return f"원문 종점 “{stated}” — 답: {spoken}"
 
+    def _names_another_step(self, intent: CuratedControlIntent) -> bool:
+        """True for a completion report that names a step other than the current one."""
+
+        return bool(
+            intent.action is CuratedProtocolAction.NEXT
+            and intent.target_step not in (None, "authoritative_current_step")
+            and self.active
+            and 0 <= self.current_index < len(self.fixture.steps)
+            and intent.target_step
+            != self.fixture.steps[self.current_index].source_label
+        )
+
     def _observation_prompt_reply(
         self,
         held: PendingObservationConfirmation,
@@ -7341,13 +7353,17 @@ class CuratedProtocolSession:
 
         Reached only after the reply was read as neither an endpoint phrase
         nor a yes/no, with the prompt already cleared. Nothing here advances:
-        a control command keeps the route it had, an explicit question keeps
+        a control command -- or a completion naming another step, which is
+        asked about first -- keeps the route it had, an explicit question keeps
         its read-only answer and the prompt, and anything else asks again --
         at most _OBSERVATION_REPROMPT_LIMIT times, after which the prompt is
         let go with no observation recorded.
         """
 
-        if routed.action in _OBSERVATION_PROMPT_PASS_THROUGH:
+        if (
+            routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
+            or self._names_another_step(routed)
+        ):
             return routed
         if (
             routed.action in _OBSERVATION_PROMPT_READ_ONLY
@@ -7844,12 +7860,17 @@ class CuratedProtocolSession:
         # it. That path is label-agnostic, so the gate is releasable on a
         # document this module has never seen, by confirmation rather than by
         # phrase recognition.
+        # A completion naming another step ("8단계 완료했어" at 7) is first
+        # asked which step was meant, as at any other step. Read as an
+        # endpoint question instead, a "네" to it released this step on a
+        # report that was about a different one.
         if (
             self.active
             and self.fixture.steps[self.current_index].step_id
             in self._steps_anchoring_a_repetition()
             and not intent.reported_observation
             and not stale_observation_reply
+            and not self._names_another_step(intent)
         ):
             observed = _observation_predicate(
                 self.fixture.steps[self.current_index].source_label, transcript
@@ -8342,11 +8363,30 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind=intent.intent_kind,
             )
+        elif command is CuratedProtocolAction.PREVIEW_STEP and (
+            self._step_index_for_label(intent.target_step or "1") is None
+        ):
+            # A step the protocol does not have is refused, as the full-detail
+            # lookup refuses it, rather than previewing step 1 in its place.
+            response = {
+                "en": "That step is not present in the selected protocol. The current step did not change.",
+                "vi": "Bước đó không có trong quy trình đã chọn. Bước hiện tại không thay đổi.",
+                "ko": "선택한 절차에 해당 단계가 없습니다. 현재 단계는 변경하지 않았습니다.",
+            }.get(language, "해당 단계를 확인할 수 없습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PREVIEW_STEP,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind=intent.intent_kind,
+                target_step=intent.target_step,
+            )
         elif command is CuratedProtocolAction.PREVIEW_STEP:
-            target_label = intent.target_step or "1"
-            target_idx = self._step_index_for_label(target_label)
-            if target_idx is None:
-                target_idx = 0
+            target_idx = self._step_index_for_label(intent.target_step or "1")
             target_step = steps[target_idx]
             localized = self._localized_fact(target_step.step_id, "current_step")
             instruction = localized if language == "ko" and localized else target_step.instruction_source_text
@@ -8979,12 +9019,7 @@ class CuratedProtocolSession:
                 unresolved_dimensions=("rationale",),
             )
         elif command is CuratedProtocolAction.NEXT:
-            if (
-                intent.target_step not in (None, "authoritative_current_step")
-                and self.active
-                and 0 <= self.current_index < len(steps)
-                and intent.target_step != steps[self.current_index].source_label
-            ):
+            if self._names_another_step(intent):
                 current_label = steps[self.current_index].source_label
                 self._pending_completion_confirmation = PendingCompletionConfirmation(
                     configuration_id=configuration_id,
