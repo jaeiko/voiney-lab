@@ -1494,6 +1494,9 @@ class PendingObservationConfirmation:
     predicate_id: str
     affirmative_outcome: str = "positive"
     negative_outcome: str = "negative"
+    #: How many times this prompt has been asked again after a reply it could
+    #: not read. Bounded by _OBSERVATION_REPROMPT_LIMIT.
+    reprompt_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -1791,6 +1794,45 @@ _POST_FRAME_NEGATION = re.compile(
     r"|아닌|아니(?!면)"
 )
 _PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
+# What an outstanding observation prompt does with a reply it could not read.
+# Control commands go through as before, and so do record/report commands the
+# person issues on their own. A read-only answer keeps the prompt only for an
+# explicit question: a description the classifier happens to read as a term
+# question ("결과는 탈색돼 있어") is an unread answer, not a question.
+_OBSERVATION_PROMPT_PASS_THROUGH = frozenset({
+    CuratedProtocolAction.STOP,
+    CuratedProtocolAction.PAUSE,
+    CuratedProtocolAction.RESUME,
+    CuratedProtocolAction.START,
+    CuratedProtocolAction.START_TIMER,
+    CuratedProtocolAction.TIMER_STATUS,
+    CuratedProtocolAction.AUDIO_RECOVERY,
+    CuratedProtocolAction.CANCEL_READONLY,
+    CuratedProtocolAction.RECORD_OBSERVATION,
+    CuratedProtocolAction.REPORT_ANOMALY,
+    CuratedProtocolAction.SHOW_REPORT,
+    CuratedProtocolAction.REPORT_HANDOFF,
+})
+_OBSERVATION_PROMPT_READ_ONLY = frozenset({
+    CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION,
+    CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.CURRENT,
+    CuratedProtocolAction.REPEAT,
+    CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.OPERATIONAL_DEVIATION,
+    CuratedProtocolAction.PROTOCOL_QUERY,
+    CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE,
+    CuratedProtocolAction.LAB_DOMAIN_QA,
+    CuratedProtocolAction.VISUAL_REQUEST,
+    CuratedProtocolAction.AGENT_META,
+    CuratedProtocolAction.CLARIFY_REFERENCE,
+    CuratedProtocolAction.UNSUPPORTED,
+})
+#: Times an observation prompt is asked again before it is let go.
+_OBSERVATION_REPROMPT_LIMIT = 2
 
 
 def _reply_withholds_assent(transcript: str) -> bool:
@@ -7214,6 +7256,63 @@ class CuratedProtocolSession:
             return False
         return step_id not in self._endpoint_observations
 
+    def _observation_prompt_reply(
+        self,
+        held: PendingObservationConfirmation,
+        routed: CuratedControlIntent,
+        transcript: str,
+        *,
+        turn_id: int,
+        generation: int | None,
+        language: str,
+        normalized_transcript: str,
+    ) -> CuratedControlIntent:
+        """Keep, ask again, or let go of a prompt this reply did not answer.
+
+        Reached only after the reply was read as neither an endpoint phrase
+        nor a yes/no, with the prompt already cleared. Nothing here advances:
+        a control command keeps the route it had, an explicit question keeps
+        its read-only answer and the prompt, and anything else asks again --
+        at most _OBSERVATION_REPROMPT_LIMIT times, after which the prompt is
+        let go with no observation recorded.
+        """
+
+        if routed.action in _OBSERVATION_PROMPT_PASS_THROUGH:
+            return routed
+        if (
+            routed.action in _OBSERVATION_PROMPT_READ_ONLY
+            and not routed.allows_state_mutation
+            and _QUESTION_MARKERS.search(" ".join(transcript.casefold().split()))
+        ):
+            self._pending_observation_confirmation = replace(
+                held, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            return routed
+        if held.reprompt_count < _OBSERVATION_REPROMPT_LIMIT:
+            self._pending_observation_confirmation = replace(
+                held,
+                requested_turn_id=turn_id,
+                requested_generation=generation,
+                reprompt_count=held.reprompt_count + 1,
+            )
+            return CuratedControlIntent(
+                intent_kind="observation_confirmation_reasked",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                confidence_source="server_pending_observation",
+                language=language,
+                normalized_transcript=normalized_transcript,
+            )
+        return CuratedControlIntent(
+            intent_kind="observation_confirmation_released",
+            action=CuratedProtocolAction.DECLINE_COMPLETION,
+            target_step="authoritative_current_step",
+            confidence_source="server_pending_observation",
+            language=language,
+            normalized_transcript=normalized_transcript,
+        )
+
     def plan(
         self,
         transcript: str,
@@ -7516,6 +7615,18 @@ class CuratedProtocolSession:
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
                 self._pending_completion_confirmation = None
+            # An observation prompt this turn still owns is not given up on a
+            # reply it could not read. Dropping it here sent every unread
+            # description ("결과는 탈색돼 있어") to the general classifier,
+            # where the endpoint's own words -- 탈색, 밴드 -- made it a term
+            # question and the server attached a web search. It is cleared
+            # now and _observation_prompt_reply decides, after routing,
+            # whether it is kept, asked again, or let go.
+            observation_hold = (
+                observation_pending
+                if observation_pending_valid and self._pause_state != "paused"
+                else None
+            )
             if observation_pending is not None:
                 self._pending_observation_confirmation = None
             pending_anomaly = self._pending_anomaly
@@ -7524,6 +7635,7 @@ class CuratedProtocolSession:
                 and self.active
                 and _utterance_looks_like_anomaly_follow_up(transcript)
             ):
+                observation_hold = None
                 intent = CuratedControlIntent(
                     intent_kind="enrich_pending_anomaly",
                     action=CuratedProtocolAction.REPORT_ANOMALY,
@@ -7541,7 +7653,11 @@ class CuratedProtocolSession:
                     repair = classify_contextual_transcript_repair(transcript, step_lbl, language)
                     if repair.status == "safe_autocorrection":
                         transcript = repair.normalized_transcript
-                    elif repair.status == "confirmation_required" and repair.proposed_transcript:
+                    elif (
+                        repair.status == "confirmation_required"
+                        and repair.proposed_transcript
+                        and observation_hold is None
+                    ):
                         self._pending_transcript_confirmation = PendingTranscriptConfirmation(
                             configuration_id=configuration_id,
                             step_id=self.fixture.steps[self.current_index].step_id,
@@ -7595,6 +7711,16 @@ class CuratedProtocolSession:
                         settings=(
                             semantic_settings or SemanticIntentSettings()
                         ),
+                    )
+                if observation_hold is not None:
+                    intent = self._observation_prompt_reply(
+                        observation_hold,
+                        intent,
+                        transcript,
+                        turn_id=turn_id,
+                        generation=generation,
+                        language=language,
+                        normalized_transcript=normalized_confirmation,
                     )
         if self.active:
             plausibility = assess_transcript_plausibility(
@@ -9494,7 +9620,10 @@ class CuratedProtocolSession:
                     normalized_transcript=intent.normalized_transcript,
                     question_dimensions=intent.question_dimensions,
                 )
-            elif intent.intent_kind == "observation_confirmation_required":
+            elif intent.intent_kind in {
+                "observation_confirmation_required",
+                "observation_confirmation_reasked",
+            }:
                 # The endpoint the agent asks about is the document's, quoted.
                 # Selecting between two hand-written questions by label meant
                 # every step that was not in-gel's step 7 was asked whether
@@ -9565,20 +9694,31 @@ class CuratedProtocolSession:
                 )
         elif command is CuratedProtocolAction.DECLINE_COMPLETION:
             step = steps[self.current_index]
-            response = {
-                "en": (
-                    f"Understood. Step {step.source_label} remains current. "
-                    "No completion or report event was recorded."
-                ),
-                "vi": (
-                    f"Đã hiểu. Bước {step.source_label} vẫn là bước hiện tại. "
-                    "Không ghi nhận hoàn thành."
-                ),
-                "ko": (
-                    f"알겠습니다. 현재 {step.source_label}단계를 그대로 유지합니다. "
-                    "완료 처리나 완료 기록은 만들지 않았습니다."
-                ),
-            }.get(language, "현재 단계를 그대로 유지합니다.")
+            if intent.intent_kind == "observation_confirmation_released":
+                # The observation prompt was asked again and still not
+                # answered, so it is let go. Only that fact is said:
+                # restating the endpoint once more, or in other words, would
+                # be a criterion the source does not state.
+                response = {
+                    "en": f"The Step {step.source_label} observation was not recorded.",
+                    "vi": f"Quan sát của bước {step.source_label} chưa được ghi lại.",
+                    "ko": f"{step.source_label}단계 관찰 결과는 기록하지 않았습니다.",
+                }.get(language, f"{step.source_label}단계 관찰 결과는 기록하지 않았습니다.")
+            else:
+                response = {
+                    "en": (
+                        f"Understood. Step {step.source_label} remains current. "
+                        "No completion or report event was recorded."
+                    ),
+                    "vi": (
+                        f"Đã hiểu. Bước {step.source_label} vẫn là bước hiện tại. "
+                        "Không ghi nhận hoàn thành."
+                    ),
+                    "ko": (
+                        f"알겠습니다. 현재 {step.source_label}단계를 그대로 유지합니다. "
+                        "완료 처리나 완료 기록은 만들지 않았습니다."
+                    ),
+                }.get(language, "현재 단계를 그대로 유지합니다.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.DECLINE_COMPLETION,
                 display_text=response,
