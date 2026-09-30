@@ -269,6 +269,7 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
 async def lifespan(_: FastAPI):
     """Warm optional in-memory retrieval without making it a startup dependency."""
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
+    log_readiness_gate_test_mode()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     await asyncio.to_thread(start_moss_runtime_from_environment)
     try:
@@ -899,7 +900,8 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     if not settings.enabled:
         raise ProtocolCatalogUnavailableError("Protocol catalog is disabled.")
     store=initialize_protocol_store(settings)
-    return ProtocolCatalog(store),store
+    return ProtocolCatalog(
+        store,skip_readiness_gates=_test_mode_skips_readiness_gates()),store
 
 class ServerConfigurationError(RuntimeError):
     """Invalid server policy with safe environment field names for diagnostics."""
@@ -3371,7 +3373,11 @@ def list_protocol_catalog()->dict[str,object]:
             ]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
-    return {"protocols":entries}
+    payload:dict[str,object]={"protocols":entries}
+    if _test_mode_skips_readiness_gates():
+        # Drives the page-top banner; absent when test mode is off.
+        payload["test_mode"]={"readiness_gates_skipped":True}
+    return payload
 
 
 @app.get("/api/protocols/{protocol_id}")
@@ -3509,6 +3515,63 @@ def _development_activation_allowed() -> bool:
         or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     return scope in {"demo", "reference_only", "test_only"}
+
+
+READINESS_GATE_TEST_MODE_ENV = "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES"
+READINESS_GATE_TEST_MODE_LABEL = "테스트 모드: 실행 준비 게이트를 건너뜀"
+
+
+def _readiness_gate_test_mode_requested() -> bool:
+    raw = os.environ.get(READINESS_GATE_TEST_MODE_ENV, "false").strip().casefold()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _test_mode_skips_readiness_gates() -> bool:
+    """Whether development test mode lets analysed protocols skip readiness gates.
+
+    Off unless a person sets the variable before starting the server; no
+    launcher sets it. It is honoured only in the scopes that already permit
+    development activation, so an operational runtime ignores it (the
+    startup log says so). It never changes a readiness verdict and never
+    stands in for the development activation itself.
+    """
+
+    return _readiness_gate_test_mode_requested() and _development_activation_allowed()
+
+
+def log_readiness_gate_test_mode() -> None:
+    """Say loudly at startup that test mode is on, or that it was ignored."""
+
+    if not _readiness_gate_test_mode_requested():
+        return
+    if _test_mode_skips_readiness_gates():
+        banner = "!" * 72
+        log.warning(banner)
+        log.warning(
+            "%s (%s=true)",
+            READINESS_GATE_TEST_MODE_LABEL, READINESS_GATE_TEST_MODE_ENV,
+        )
+        log.warning(
+            "TEST MODE: analysed protocols can be activated and run with "
+            "readiness gates outstanding. Development only; not for real "
+            "experiments."
+        )
+        log.warning(banner)
+        return
+    scope = (
+        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
+        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+    ).strip().casefold()
+    log.warning(
+        "readiness_gate_test_mode.ignored %s=true reason=%s usage_scope=%s",
+        READINESS_GATE_TEST_MODE_ENV,
+        (
+            "operational_usage_scope"
+            if scope == "operational"
+            else "usage_scope_not_development"
+        ),
+        scope or "unset",
+    )
 
 
 @app.post("/api/protocols/{protocol_id}/ocr",status_code=202)
@@ -3852,6 +3915,7 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
                 and (
                     readiness.get("status") == "guidance_ready"
                     or review.get("readiness_gates_cleared") is True
+                    or _test_mode_skips_readiness_gates()
                 )
                 and review.get("available_for_execution") is not True
             )
@@ -4667,6 +4731,7 @@ class ListenerSession:
         self.semantic_intent_settings=(
             semantic_intent_settings or SemanticIntentSettings())
         self.experiment_report_id:str|None=None
+        self.test_mode_readiness_gates_skipped=False
         self.session_id=new_session_id()
         self.voice_connection_id="voice-"+secrets.token_hex(16)
         self.experiment_state_version:int|None=None
@@ -6015,6 +6080,19 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        if getattr(session,"test_mode_readiness_gates_skipped",False):
+            readiness=curated.fixture.draft.readiness
+            store.append_event(
+                session.experiment_report_id,
+                event_key="test-mode-readiness-gates-skipped",
+                event_type="test_mode_readiness_gates_skipped",
+                payload={
+                    "switch":READINESS_GATE_TEST_MODE_ENV,
+                    "readiness_status":readiness.status.value,
+                    "outstanding_reason_codes":sorted(
+                        set(readiness.reason_codes)),
+                },
+            )
     return store.get_report(session.experiment_report_id)
 
 
@@ -8704,6 +8782,10 @@ async def voice_socket(websocket:WebSocket):
                                 selected_procedure_definitions,procedure_store))
                     configuration_stage="session_state"
                     session.set_tool_context(context)
+                    # Recorded in the experiment report when it opens.
+                    session.test_mode_readiness_gates_skipped=bool(
+                        selected_curated_fixture is not None
+                        and _test_mode_skips_readiness_gates())
                     session.set_curated_protocol_fixture(selected_curated_fixture)
                     recovery_session_id=control.get("experiment_session_id")
                     recovery_version=control.get("experiment_session_version")
