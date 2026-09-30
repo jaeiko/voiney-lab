@@ -24,7 +24,7 @@ Each command class needs positive cases, near-neighbor cases, and adversarial ba
 2. Mix reproducible public or synthetic noise locally at the declared SNR. Do not add the resulting audio to Git unless its license and repository policy explicitly permit that.
 3. Exercise the production microphone/STT/routing boundary, not a helper-only classifier.
 4. Record the expected and actual transcripts, intents, mutation booleans, VAD boundaries, and timings in a local result manifest.
-5. Run `voice-workflow-evaluate path/to/results.json` (or `python -m voiney_lab.voice_evaluation path/to/results.json`). Archive the aggregate JSON with the tested build SHA and provider/model identifiers.
+5. Run `voiney-evaluate path/to/results.json` (or `python -m voiney_lab.voice_evaluation path/to/results.json`). Archive the aggregate JSON with the tested build SHA and provider/model identifiers.
 
 The result manifest format is defined by `EvaluationCase` in `voice_evaluation.py`. It contains no audio path or audio bytes. Synthetic evaluation is useful for repeatability but must not be presented as real bench performance.
 

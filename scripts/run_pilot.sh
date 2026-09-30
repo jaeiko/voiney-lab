@@ -82,7 +82,7 @@ feature_state() {
   esac
 }
 
-echo "=== Voice Workflow Agent — controlled pilot ==="
+echo "=== Voiney Lab — controlled pilot ==="
 echo
 echo "--- Listen address ---"
 echo "HOST = $HOST   (override: HOST=...)"
@@ -122,7 +122,7 @@ fi
 mkdir -p "$PILOT_DATA_DIR"
 
 echo
-echo "=== Starting Voice Workflow Agent ==="
+echo "=== Starting Voiney Lab ==="
 
 exec python -B -m uvicorn \
   voiney_lab.server:app \
