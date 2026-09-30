@@ -1738,8 +1738,8 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"go\s+to\s+(?:the\s+)?next\s+step)$"
 )
 _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
-    r"^(?:아니|아니요|아직|아직\s*아니야|아직\s*안\s*(?:끝났어|했어|했어요)|"
-    r"아니요?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
+    r"^(?:아니|아니요|아니오|아직|아직\s*아니야|아직\s*안\s*(?:끝났어|했어|했어요)|"
+    r"아니[요오]?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
     r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet)$"
 )
 
@@ -2633,7 +2633,7 @@ def _binary_frame_reply(value: str) -> str | None:
     ) and key:
         return "affirmative"
     if re.fullmatch(
-        r"(?:아니|아니요|아직|아직\s*아니야|아직\s*안\s*(?:했어|됐어|끝났어)|"
+        r"(?:아니|아니요|아니오|아직|아직\s*아니야|아직\s*안\s*(?:했어|됐어|끝났어)|"
         r"no|not\s+yet|no,?\s+not\s+yet)", key,
     ):
         return "negative"
