@@ -1748,6 +1748,66 @@ _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"아니[요오]?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
     r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet|no,?\s+not\s+yet)$"
 )
+# A reply that asks or hedges is not assent, whatever words it shares with a
+# report. These read the transcript as spoken: the utterance key turns "?" into
+# a space, so a guard on the key cannot tell "네?" -- asking to hear the
+# question again -- from "네", or "젤이 투명해?" from "젤이 투명해".
+# "니까" is excluded from the question ending because it is also "because"
+# ("상태니까"), and "아까" because it is "a moment ago".
+_QUESTION_MARKERS = re.compile(
+    r"[?？]"
+    r"|(?:나요|습니까|냐)(?=$|[\s.,!~])"
+    r"|(?<![니아])까요?(?=$|[\s.,!~])"
+    r"|(?:했|됐|되|하|있|없|맞|났|졌|봤)니(?=$|[\s.,!~])"
+    r"|(?:한|된|인|건|는|은)가요?(?=$|[\s.,!~])"
+    r"|뭐(?:야|예요|에요|지|죠|니|냐)|뭔(?:가요|데|지)|무엇|무슨|왜|어떻게|얼마나|언제|어디|몇"
+    r"|알려|설명|의미|(?<!따)뜻"
+    r"|\b(?:what|why|how|when|where|which|explain|meaning)\b"
+)
+_UNCERTAIN_MARKERS = re.compile(
+    r"(?:는|은|인|한|된|건|던)지(?=$|[\s.,!~]|도|를|가|는|요)"
+    r"|모르(?:겠|는)|몰라|잘\s*모르"
+    r"|확인해\s*볼|확인할게|봐야|볼게"
+    r"|(?:해|돼|되어|되|보여|있어|어|아|여)야\s*(?:해|돼|되|하|합|됩)"
+    r"|(?:것|거|듯)\s*같|듯(?:해|하|싶)|같기도"
+    r"|아마|혹시|글쎄|애매|헷갈"
+    r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
+    r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b|let\s+me\s+check"
+    r"|(?:i(?:'|’)ll|will)\s+check|need\s+to|have\s+to"
+)
+# Reading the source line back ("…탈색될 때까지 2-7단계를 반복합니다") names
+# the endpoint without reporting it.
+_SOURCE_RECITATION = re.compile(
+    r"때까지|\buntil\b|반복(?:합니다|하세요|한다|하십시오|하라)|\brepeat\s+steps?\b"
+)
+# A negation after the endpoint phrase undoes it: "완전히 탈색 안 됐어",
+# "젤이 투명해지지 않았어". A standalone 안/못/덜 only, so 안내 or 잘못 does
+# not read as one.
+_POST_FRAME_NEGATION = re.compile(
+    r"(?<![가-힣])안(?=$|\s|[됐되돼된했해보빠변말])"
+    r"|않"
+    r"|(?<![가-힣])못(?=$|\s|[했해하봤보됐되돼])"
+    r"|(?<![가-힣])덜(?=$|\s|[됐되돼빠말했])"
+    r"|아닌|아니(?!면)"
+)
+_PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
+
+
+def _reply_withholds_assent(transcript: str) -> bool:
+    """True when the spoken reply asks a question or hedges."""
+
+    raw = " ".join(str(transcript).casefold().split())
+    return bool(_QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
+
+
+def _frame_negated(key: str, match: re.Match[str]) -> bool:
+    """True when a negation sits right after (Korean) or before (English) a frame."""
+
+    tail = key[match.end():match.end() + 12]
+    head = key[max(0, match.start() - 24):match.start()]
+    return bool(
+        _POST_FRAME_NEGATION.search(tail) or _PRE_FRAME_NEGATION_EN.search(head)
+    )
 
 
 def _observation_predicate(step_label: str, transcript: str) -> str | None:
@@ -1757,8 +1817,15 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
     report and bind it to the source endpoint for the current step. Negative
     patterns and question guards run first so phrases such as "not transparent"
     or questions like "투명한가요?" never become a positive result by substring overlap.
+    A question, a hedge, or the source line read back is no report at all, and
+    a negation after a positive phrase makes it a negative one.
     """
     key = _semantic_utterance_key(transcript)
+    if step_label in {"7", "9", "20"} and (
+        _reply_withholds_assent(transcript)
+        or _SOURCE_RECITATION.search(" ".join(str(transcript).casefold().split()))
+    ):
+        return None
     if step_label in {"7"}:
         if re.search(
             r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
@@ -1775,14 +1842,14 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative"
-        if re.search(
+        if positive := re.search(
             r"(?:완전히\s*탈색(?:됐|되었|되어|됐어|됐습니다|된|돼서)?|"
             r"젤(?:이|은|이\s*(?:이제\s*)?)?\s*(?:이제\s*)?(?:완전히\s*)?투명(?:해|합니다|해졌어|해요|해졌습니다)|"
             r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
             r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
             key,
         ):
-            return "positive"
+            return "negative" if _frame_negated(key, positive) else "positive"
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
@@ -1795,13 +1862,13 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative"
-        if re.search(
+        if positive := re.search(
             r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
             r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
-            return "positive"
+            return "negative" if _frame_negated(key, positive) else "positive"
     return None
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
@@ -2628,6 +2695,8 @@ def assess_transcript_plausibility(
 def _binary_frame_reply(value: str) -> str | None:
     """Interpret a short answer only after a server-owned binary question."""
 
+    if _reply_withholds_assent(value):
+        return None
     key = _semantic_utterance_key(value)
     if re.fullmatch(
         r"(?:(?:네|예|응|그래|맞아|맞아요|물론)(?:\s+|$))*"
@@ -7252,6 +7321,10 @@ class CuratedProtocolSession:
         if note_pending is not None and not note_pending_valid:
             self._pending_note_capture = None
         binary_reply = _binary_frame_reply(transcript)
+        # "네?" asks to hear the question again. Its key is "네", so the
+        # confirmation patterns below read the key only when the spoken reply
+        # neither asks nor hedges.
+        reply_withheld = _reply_withholds_assent(transcript)
         pending_language_mismatch = bool(
             (pending_valid or observation_pending_valid or transcript_pending_valid)
             and language == "ko"
@@ -7286,7 +7359,10 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif transcript_pending_valid and (
-            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "affirmative"
         ):
             proposed_tx = transcript_pending.proposed_transcript
@@ -7300,7 +7376,10 @@ class CuratedProtocolSession:
                 generation=generation,
             )
         elif transcript_pending_valid and (
-            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "negative"
         ):
             self._pending_transcript_confirmation = None
@@ -7328,7 +7407,10 @@ class CuratedProtocolSession:
             self._replay[turn_id] = plan
             return plan
         elif pending_valid and (
-            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "affirmative"
         ):
             self._pending_completion_confirmation = None
@@ -7345,7 +7427,10 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif pending_valid and (
-            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "negative"
         ):
             self._pending_completion_confirmation = None
