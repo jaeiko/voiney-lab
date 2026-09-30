@@ -1737,10 +1737,16 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"yes[, ]*move\s+on|let(?:'|’)s\s+continue|proceed|"
     r"go\s+to\s+(?:the\s+)?next\s+step)$"
 )
+# The negative reply to any server-owned yes/no question. _binary_frame_reply
+# reads this same pattern for the observation prompt, so the completion and
+# observation prompts cannot disagree about whether an answer declined.
 _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
-    r"^(?:아니|아니요|아니오|아직|아직\s*아니야|아직\s*안\s*(?:끝났어|했어|했어요)|"
+    r"^(?:아니|아니요|아니오|아뇨|아니에요|아닙니다|아니야|"
+    r"아직|아직이요|아직요|아직\s*아니야|아직\s*아니에요|"
+    r"아직\s*안\s*(?:끝났어|끝났어요|했어|했어요|됐어|됐어요)|"
+    r"아직\s*못\s*했어|안\s*했어|안\s*했어요|"
     r"아니[요오]?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
-    r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet)$"
+    r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet|no,?\s+not\s+yet)$"
 )
 
 
@@ -1939,8 +1945,8 @@ _TIMER_QUERY_PATTERNS = (
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
 )
 _PREVIEW_STEP_PATTERNS = (
-    re.compile(r"^(?:(?P<label>[1-9]|1[0-9]|2[0-5])\s*단계|step\s*(?P<en>[1-9]|1[0-9]|2[0-5]))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
-    re.compile(r"^(?:preview\s+step\s*(?P<pen>[1-9]|1[0-9]|2[0-5]))$", re.I),
+    re.compile(r"^(?:(?P<label>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?))\s*(?:미리\s*알려줘|미리보기|미리\s*설명|예습)$", re.I),
+    re.compile(r"^(?:preview\s+step\s*(?P<pen>[1-9][0-9]?))$", re.I),
 )
 
 _KOREAN_STEP_NUMBERS = {
@@ -2097,7 +2103,7 @@ _PROTOCOL_SCOPE_PATTERNS = (
     ("safety", re.compile(r"전체\s*(?:안전\s*수칙|주의\s*사항|경고)|protocol.*(?:safety|warnings)")),
 )
 _SPECIFIC_STEP_PATTERN = re.compile(
-    r"^(?:(?P<ko>[1-9]|1[0-9]|2[0-5])\s*단계|step\s*(?P<en>[1-9]|1[0-9]|2[0-5]))"
+    r"^(?:(?P<ko>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?))"
     r"(?:는|은|를)?\s*(?:뭐야|무엇|알려|설명|show|explain|what).*$"
 )
 _SOURCE_REQUEST_PATTERNS = (
@@ -2632,10 +2638,7 @@ def _binary_frame_reply(value: str) -> str | None:
         key,
     ) and key:
         return "affirmative"
-    if re.fullmatch(
-        r"(?:아니|아니요|아니오|아직|아직\s*아니야|아직\s*안\s*(?:했어|됐어|끝났어)|"
-        r"no|not\s+yet|no,?\s+not\s+yet)", key,
-    ):
+    if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"
     return None
 
