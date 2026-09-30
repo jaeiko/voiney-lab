@@ -272,5 +272,60 @@ assert(notice.hidden&&notice.textContent==="","a first-time upload kept the prev
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class ActivationFromProtocolListTests(unittest.TestCase):
+    """Item 5: picking a protocol in the run list reaches its activation."""
+
+    def test_selected_protocol_loads_its_review_and_shows_activation_when_allowed(self):
+        result = run_page_script(r"""
+const entry=(id,title,available,extra={})=>({protocol_id:id,title,revision_id:`${id}-rev`,readiness_status:"guidance_ready",analysis_status:available?"approved":"review_required",lifecycle_state:available?"approved":"review_required",available_for_execution:available,...extra});
+const catalog=[entry("p-run","Runnable",true),entry("p-act","Needs activation",false),entry("p-block","Blocked",false,{lifecycle_state:"blocked",readiness_status:"analysis_required"})];
+const reviews={"p-run":{development_activation_allowed:false,available_for_execution:true},"p-act":{development_activation_allowed:true,available_for_execution:false},"p-block":{development_activation_allowed:false,available_for_execution:false}};
+const held=new Map(),calls=[];
+globalThis.fetch=async(url,options={})=>{url=String(url);calls.push(`${options.method||"GET"} ${url}`);
+ if(url==="/api/protocols")return json({protocols:catalog});
+ const reviewMatch=url.match(/^\/api\/protocols\/([^/]+)\/review$/);
+ if(reviewMatch){const id=decodeURIComponent(reviewMatch[1]);const payload={...catalog.find(item=>item.protocol_id===id),...reviews[id],source:{filename:`${id}.pdf`,sha256:"a".repeat(64),page_count:1},readiness:{status:"guidance_ready",reasons:[]},sections:[]};if(held.has(id))await held.get(id);return json(payload);}
+ if(url==="/api/protocols/p-act/activate-development"&&options.method==="POST")return json({protocol_id:"p-act"});
+ if(url.startsWith("/api/workspace/"))return json({protocols:[]});
+ throw new Error(`unexpected ${options.method||"GET"} ${url}`);};
+const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
+const select=node("protocol-id"),panel=node("protocol-review-panel"),activate=node("protocol-development-activate");
+const pick=async id=>{select.value=id;select.dispatch("change");await settle();};
+panel.hidden=true;activate.hidden=true;// as in the page markup
+await loadProtocolCatalog();
+const option=id=>select.children.find(item=>item.value===id);
+assert(option("p-act")&&!option("p-act").disabled&&option("p-act").dataset.runnable==="false"&&option("p-run").dataset.runnable==="true","a protocol that cannot run is not pickable");
+assert(node("protocol-upload-status").textContent.includes("실행 가능 항목만 시작할 수 있습니다"),"catalog status still says only runnable items can be picked");
+assert(panel.hidden!==false&&activate.hidden,"a review opened before anything was picked");
+await pick("p-act");
+assert(calls.includes("GET /api/protocols/p-act/review"),`picking did not load the review: ${calls}`);
+assert(!panel.hidden&&panel.open&&!activate.hidden&&!activate.disabled,"an activatable pick did not show the activation button");
+assert(node("start").disabled,"a protocol that cannot run became startable");
+await loadProtocolCatalog("p-act");
+assert(select.value==="p-act","a refresh dropped the person's own pick");
+await pick("p-block");
+assert(activate.hidden&&!panel.hidden,"activation shown although the server did not allow it");
+let release;held.set("p-act",new Promise(resolve=>{release=resolve}));
+select.value="p-act";select.dispatch("change");
+await pick("p-block");
+release();await settle();
+assert(activate.hidden&&lastProtocolReview.protocol_id==="p-block",`a late review of an earlier pick replaced the current one: ${lastProtocolReview?.protocol_id}`);
+held.clear();
+await pick("p-run");
+assert(!panel.hidden&&!panel.open&&activate.hidden&&!node("start").disabled,"a runnable pick did not keep its review collapsed or stay startable");
+select.value="p-run";await loadProtocolCatalog("p-block");
+assert(select.value==="p-run","a refresh picked a protocol that cannot run on the person's behalf");
+await pick("");
+assert(panel.hidden&&activate.hidden&&currentProtocolReviewId===null,"clearing the pick left a review and its activation on screen");
+await pick("p-act");
+currentProtocolReviewId="p-block";activate.dispatch("click");await settle();
+assert(!calls.includes("POST /api/protocols/p-block/activate-development")&&!calls.includes("POST /api/protocols/p-act/activate-development"),"activation acted on a protocol whose review is not on screen");
+await pick("p-act");
+activate.dispatch("click");await settle();
+assert(calls.includes("POST /api/protocols/p-act/activate-development"),"activation of the reviewed pick was not sent");
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
