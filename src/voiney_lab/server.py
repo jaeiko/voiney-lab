@@ -6377,10 +6377,10 @@ async def _send_session_greeting(
         if session.curated_protocol_session is not None else "the selected protocol"
     )
     greeting={
-        "ko":f"Voice Workflow Agent입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
-        "en":f"This is Voice Workflow Agent. {title} is ready. Would you like to begin, or ask a question first?",
-        "vi":f"Voice Workflow Agent đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
-    }.get(language,"Voice Workflow Agent is ready.")
+        "ko":f"Voiney Lab입니다. 선택한 {title} 프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
+        "en":f"This is Voiney Lab. {title} is ready. Would you like to begin, or ask a question first?",
+        "vi":f"Voiney Lab đã sẵn sàng với {title}. Bạn muốn bắt đầu hay hỏi trước?",
+    }.get(language,"Voiney Lab is ready.")
     generation=session.generation
     configuration_id=session.accepted_configuration_id
     greeting_id=hashlib.sha256(
