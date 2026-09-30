@@ -327,5 +327,30 @@ assert(calls.includes("POST /api/protocols/p-act/activate-development"),"activat
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class PlainScreenTermTests(unittest.TestCase):
+    """Item 6: the screen no longer uses the jargon the pilot found hard."""
+
+    HARD_TERMS = ("리비전", "해소", "게이트", "정본", "세그먼트", "페이로드", "수명주기")
+
+    def test_hard_terms_are_gone_from_the_page_and_its_stylesheet(self):
+        page = INDEX.read_text(encoding="utf-8") + (
+            INDEX.parent / "app.css"
+        ).read_text(encoding="utf-8")
+        for term in self.HARD_TERMS:
+            self.assertNotIn(term, page)
+
+    def test_review_panel_renders_the_plain_words(self):
+        result = run_page_script(r"""
+renderProtocolReview({protocol_id:"p-1",title:"In-gel",revision_id:"pdf-1-analysis-2",lifecycle_state:"review_required",analysis_payload_sha256:"b".repeat(64),available_for_execution:false,
+ source:{filename:"in-gel.pdf",sha256:"a".repeat(64),page_count:9},readiness:{status:"guidance_ready",reasons:[]},gates:{parsing:"passed"},
+ outstanding_blockers:[{code:"unresolved_ambiguity",kind:"reviewer_can_clear",reviewer_action:"resolve_ambiguity",already_acknowledged:false,decision_options:["single_statement_is_authoritative"],clearing_decision:"single_statement_is_authoritative",citable_segments:[]}],
+ reviewer_findings:[{kind:"ambiguity_resolved",actor_principal_id:"reviewer-a",actor_role:"reviewer"},{kind:"gate_acknowledged",reason_code:"no_declared_safety_warnings",actor_principal_id:"reviewer-a",actor_role:"reviewer"}],sections:[]});
+const text=["protocol-review-content","protocol-blockers","protocol-findings"].map(id=>visibleText(node(id))).join(" ");
+for(const phrase of ["원문과 분석 버전","버전 pdf-1-analysis-2","분석 결과 데이터 SHA-256","처리 단계 · 검토 필요","실행 전 확인 조건","어느 진술이 기준인지","근거 없는 해결은 서버가 거부합니다","선택할 근거 원문 구간이 없습니다","이 모호성을 해결","모호성 해결","확인 처리"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+for(const term of ["리비전","해소","게이트","정본","세그먼트","페이로드","수명주기"])assert(!text.includes(term),`hard term still rendered: ${term}`);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
