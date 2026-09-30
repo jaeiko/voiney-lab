@@ -9,6 +9,7 @@ only bounded configuration, timing, size, usage, and outcome metadata.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import signal
@@ -33,6 +34,8 @@ from voiney_lab.protocol_claim_stream_telemetry import (
     ProtocolClaimStructuralTelemetry,
 )
 
+
+log = logging.getLogger("voiney_lab.protocol_provider_diagnostics")
 
 TimeoutPhase = Literal["before_first_output", "after_first_output"]
 ServiceTier = Literal["default", "priority"]
@@ -473,8 +476,11 @@ def run_protocol_provider_stream_diagnostic(
         if callable(close):
             try:
                 close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                log.warning(
+                    "provider diagnostic stream close failed: %s",
+                    type(close_exc).__name__,
+                )
         content_parts.clear()
 
     finished = monotonic()

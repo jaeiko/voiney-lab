@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import re
 import time
@@ -24,6 +25,8 @@ from .external_references import (
     _tool_usage_counts,
 )
 
+
+log = logging.getLogger("voiney_lab.web_visuals")
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
@@ -220,8 +223,11 @@ class XaiAuthoritativeImageSearch:
                 res_copy = copy.deepcopy(res)
                 res_copy["deduplicated_in_flight"] = True
                 return res_copy
-            except Exception:
-                pass
+            except Exception as in_flight_exc:
+                log.warning(
+                    "image_search.in_flight_failed searching_again=true error=%s",
+                    type(in_flight_exc).__name__,
+                )
 
         future = loop.create_future()
         _IN_FLIGHT_IMAGE_SEARCH[cache_key] = future
@@ -541,8 +547,10 @@ class PubChemChemistryAdapter:
                             "display_mode": "structure_image",
                             "backend": "pubchem_pug_rest",
                         }
-        except Exception:
-            pass
+        except Exception as lookup_exc:
+            log.warning(
+                "pubchem.lookup_failed error=%s", type(lookup_exc).__name__
+            )
         return None
 
 

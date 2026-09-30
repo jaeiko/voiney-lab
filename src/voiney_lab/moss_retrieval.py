@@ -478,8 +478,11 @@ class MossRuntime:
         if self.ready:
             try:
                 self._submit(self._unload, 5)
-            except Exception:
-                pass
+            except Exception as unload_exc:
+                log.warning(
+                    "Moss index unload failed during close: %s",
+                    type(unload_exc).__name__,
+                )
         with self._state_lock:
             self._ready = False
         self._jobs.put(None)
