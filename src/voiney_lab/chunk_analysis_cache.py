@@ -58,7 +58,12 @@ from .protocol_claim_analysis import (
 
 CACHE_FORMAT_VERSION = 1
 CACHE_DIRECTORY_ENV = "VOICE_WORKFLOW_AGENT_CHUNK_CACHE_DIR"
-DEFAULT_CACHE_DIRECTORY = Path("data/development_cache/chunk_analysis")
+#: Anchored at the repository root rather than the working directory, so a run
+#: started from scripts/ or tests/ reads the entries a run from the root wrote.
+DEFAULT_CACHE_DIRECTORY = (
+    Path(__file__).resolve().parents[2]
+    / "data" / "development_cache" / "chunk_analysis"
+)
 #: A stored payload is bounded for the same reason a live response is: an
 #: unbounded read is a denial of service against the process that trusts it.
 MAX_CACHED_PAYLOAD_BYTES = 4 * 1024 * 1024
