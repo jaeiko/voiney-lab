@@ -1,10 +1,12 @@
-"""Pilot safety: no demo safety wording reaches a pilot run.
+"""Pilot safety: no demo safety wording reaches a pilot run, no user words reach its logs.
 
 Kept apart from test_safety_pack.py, which conftest skips whenever the
 licensed Candidate A PDF is absent; nothing here needs that PDF, so these
 guards also run in CI (condition B).
 """
 
+import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -14,7 +16,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from voiney_lab.curated_protocol import CuratedProtocolSession
 from voiney_lab.document_store import ingest_manifest
 from voiney_lab.experiment_protocol import (
     ExperimentProtocol,
@@ -30,7 +35,13 @@ from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfMetadata,
     ProtocolPdfPage,
 )
+from voiney_lab.external_references import ExternalReferenceSettings
+from voiney_lab.language import Transcription
+from voiney_lab.replay_turns import _demo_fixture as replay_fixture
 from voiney_lab.safety_pack import count_catalog_documents, resolve_safety_pack
+from voiney_lab.server import ListenerSession, run_turn
+from voiney_lab.tools import ToolContext
+from voiney_lab.vad import TurnState
 
 ROOT = Path(__file__).resolve().parents[1]
 MOSS_DEMO_MANIFEST = ROOT / "data/moss_demo/approved_documents.ko.json"
@@ -406,6 +417,104 @@ class PilotLauncherTests(unittest.TestCase):
         self.assertIn(f"SAFETY_CATALOG = {self.catalog}\n", result.stdout)
         self.assertIn("USAGE_SCOPE    = reference_only\n", result.stdout)
         self.assertIn("demo documents = 0\n", result.stdout)
+
+
+class _Socket:
+    def __init__(self):
+        self.text: list[dict] = []
+
+    async def send_text(self, value: str) -> None:
+        self.text.append(json.loads(value))
+
+    async def send_bytes(self, value: bytes) -> None:
+        pass
+
+
+class UtteranceFreeLogTests(unittest.TestCase):
+    """A turn that escalates to web search logs no words the user said."""
+
+    UTTERANCE = "fictional buffer 농도는 왜 그렇게 정해졌어?"
+
+    def _session(self) -> ListenerSession:
+        # The replay fixture needs no licensed PDF.
+        fixture = replay_fixture()
+        workflow = CuratedProtocolSession(fixture)
+        workflow.active = True
+        session = ListenerSession(
+            tool_context=ToolContext(Path("/unused/offline-catalog"), None, "ko", "test_only"),
+            curated_protocol_session=workflow,
+        )
+        session.active = True
+        session.active_turn_id = 1
+        session.next_turn_id = 2
+        session.turn_generations[1] = session.generation
+        session.accept_configuration(41, "cascade", "ko", fixture.protocol_id)
+        session.detector.state = TurnState.PROCESSING
+        session.external_reference_settings = ExternalReferenceSettings(
+            True, ("pubchem.ncbi.nlm.nih.gov",), "offline-web", 2.0, 3, "candidate_a",
+        )
+        return session
+
+    def test_the_external_search_log_keeps_only_the_query_size_and_digest(self):
+        session = self._session()
+        queries: list[str] = []
+
+        async def immediate(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        async def unsupported(*args, **kwargs):
+            return SimpleNamespace(
+                intent="unsupported", primary_text="", evidence_ids=(),
+                inference_labels=(), unsupported_parts=("definition",),
+            )
+
+        class Web:
+            def __init__(self, *args):
+                pass
+
+            async def search(self, query, *, language):
+                queries.append(query)
+                return {"status": "success", "answer": "", "matches": [],
+                        "backend": "xai_responses_web_search"}
+
+        with patch(
+            "voiney_lab.server.transcribe",
+            return_value=Transcription(self.UTTERANCE, "ko"),
+        ), patch(
+            "voiney_lab.server.synthesize", return_value=b"\0\0",
+        ), patch(
+            "voiney_lab.server.answer_curated_protocol_question", side_effect=unsupported,
+        ), patch(
+            "voiney_lab.server.search_approved_lab_references",
+            return_value={"status": "no_admissible_evidence", "answerable": False,
+                          "matches": [], "retrieval": {"backend": "sqlite"}},
+        ), patch(
+            "voiney_lab.server.XaiAuthoritativeWebSearch", Web,
+        ), patch(
+            "voiney_lab.server.AsyncOpenAI", return_value=SimpleNamespace(),
+        ), patch(
+            "voiney_lab.server.require_env", return_value="offline",
+        ), patch(
+            "voiney_lab.server.asyncio.to_thread", side_effect=immediate,
+        ), self.assertLogs("voiney_lab", level="DEBUG") as captured:
+            asyncio.run(run_turn(_Socket(), session, b"\0\0", 1, 1))
+
+        # The provider really was handed the user's question ...
+        self.assertEqual(len(queries), 1)
+        spoken = self.UTTERANCE.rstrip("?")
+        self.assertIn(spoken, queries[0])
+        # ... and the log line names only its size and digest.
+        started = [
+            line for line in captured.output
+            if "external_search.provider_started" in line
+        ]
+        self.assertEqual(len(started), 1)
+        digest = hashlib.sha256(queries[0].encode("utf-8")).hexdigest()[:16]
+        self.assertIn(f"query_chars={len(queries[0])} query_sha256={digest}", started[0])
+        for line in captured.output:
+            self.assertNotIn(spoken, line)
+            self.assertNotIn("농도", line)
+            self.assertNotIn("Question:", line)
 
 
 if __name__ == "__main__":
