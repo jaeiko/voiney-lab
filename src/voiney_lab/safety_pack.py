@@ -166,6 +166,15 @@ def _clean_str(val: Any) -> str:
     return str(val or "").strip()
 
 
+#: Catalog usage scopes whose documents are demo material, never facility guidance.
+DEMO_USAGE_SCOPES = ("demo", "test_only")
+
+
+def is_demo_document(usage_scope: Any, title: Any) -> bool:
+    """Whether one catalog document is demo material rather than approved guidance."""
+    return _clean_str(usage_scope) in DEMO_USAGE_SCOPES or "fictional" in _clean_str(title).casefold()
+
+
 def collect_protocol_safety_subjects(protocol: ExperimentProtocol | Any) -> ProtocolSafetySubjects:
     """Extract materials, equipment, prerequisites, and warnings from the actual ExperimentProtocol domain model."""
     protocol_id = (
@@ -549,7 +558,13 @@ def resolve_safety_pack(
     try:
         conn = connect(catalog_path)
         try:
-            scope_filter = "d.usage_scope != 'test_only'" if usage_scope != "test_only" else "1=1"
+            if usage_scope == "operational":
+                # Demo and test documents never reach an operational pack.
+                scope_filter = "d.usage_scope NOT IN ('demo', 'test_only')"
+            elif usage_scope == "test_only":
+                scope_filter = "1=1"
+            else:
+                scope_filter = "d.usage_scope != 'test_only'"
             rows = conn.execute(
                 f"""
                 SELECT d.id, d.document_id, d.document_type, d.title, d.version, d.language,
@@ -569,7 +584,12 @@ def resolve_safety_pack(
                 doc_facility = row["facility_id"]
                 doc_scope = _clean_str(row["usage_scope"])
                 doc_title = _clean_str(row["title"])
-                is_demo = doc_scope in ("demo", "test_only") or "fictional" in doc_title.casefold()
+                is_demo = is_demo_document(doc_scope, doc_title)
+                if is_demo and usage_scope == "operational":
+                    # The scope filter above keeps demo scopes out; this also
+                    # drops a document whose title marks it fictional, for
+                    # facility SOPs as well as SDS and equipment manuals.
+                    continue
 
                 # Facility SOP filtering
                 if doc_type == "facility_sop":
