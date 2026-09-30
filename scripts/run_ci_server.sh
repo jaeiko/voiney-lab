@@ -37,7 +37,7 @@ export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
 export WEB_VISUAL_SEARCH_ENABLED="false"
 export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
 
-echo "=== Starting Voice Workflow Agent (CI, empty protocol catalog) ==="
+echo "=== Starting Voiney Lab (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \
   voiney_lab.server:app \
   --host 127.0.0.1 \

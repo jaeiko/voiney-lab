@@ -228,7 +228,7 @@ if [[ "$BOOTSTRAP_ONLY" == "true" ]]; then
 fi
 
 echo
-echo "=== Starting Voice Workflow Agent ==="
+echo "=== Starting Voiney Lab ==="
 echo "HOST = $HOST"
 echo "PORT = $PORT"
 

@@ -672,7 +672,7 @@ Connector list responses never return credential references or resolved secrets.
 The A–G replay no longer relies on an ad-hoc `PYTHONPATH`:
 
 ```bash
-voice-workflow-replay
+voiney-replay
 # Equivalent project-native invocation:
 python -m voiney_lab.replay_turns
 # The historical script remains a thin compatibility wrapper:
@@ -683,7 +683,7 @@ Evaluate a sanitized JSON manifest of recognized/reference outcomes without
 loading audio:
 
 ```bash
-voice-workflow-evaluate path/to/results.json
+voiney-evaluate path/to/results.json
 ```
 
 The manifest reports WER, semantic and command accuracy, false mutation rate,

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0a0d3a">
-  <title>Voice Workflow Agent · Lab Copilot</title>
+  <title>Voiney Lab · Lab Copilot</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -36,7 +36,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">VW</div>
-      <div>Voice Workflow Agent<small>Lab Copilot · 지능형 실험 보조</small></div>
+      <div>Voiney Lab<small>Lab Copilot · 지능형 실험 보조</small></div>
     </div>
     <div class="session-badge"><span class="session-dot" aria-hidden="true"></span>음성 보조 · 승인자료 기반</div>
   </header>
@@ -545,7 +545,7 @@ const webReferenceHistory=[];
 const queued=new Map(),turns=new Map(),provisionalTurns=new Map(),pendingFillers=new Map(),toolEvents=new Map(),visualEvents=new Map(),researchEvents=new Map(),brainEvents=new Map(),greetingEvents=new Set(),audioRecoveryTurns=new Set();
 const UI={
  IDLE:["준비됨 · 세션 시작을 한 번 눌러주세요.",false,true],CONNECTING:["마이크와 음성 세션을 연결하는 중…",true,false],LISTENING:["듣고 있습니다…",true,false],
- THINKING:["승인자료와 보고 작업을 확인하는 중…",true,false],SPEAKING:["Voice Workflow Agent가 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
+ THINKING:["승인자료와 보고 작업을 확인하는 중…",true,false],SPEAKING:["Voiney Lab이 답변하고 있습니다…",true,false],ERROR:["세션이 중단됐습니다 · 다시 시작해주세요.",false,true],
  INTERRUPTING:["답변을 중단하는 중…",true,false],RECONNECTING:["다시 연결하는 중…",true,false]
 };
 const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
