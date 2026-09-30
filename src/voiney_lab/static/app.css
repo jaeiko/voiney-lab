@@ -425,6 +425,8 @@
     }
     .protocol-register small{display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem}
     .protocol-register small:empty{display:none}
+    .protocol-register small[hidden]{display:none}
+    .protocol-register .protocol-duplicate-notice{color:var(--amber);font-weight:700}
     .protocol-review{
       grid-column:1/-1;
       border:1px solid var(--border-accent);
@@ -487,6 +489,9 @@
       border-radius:var(--radius-sm);
       background:rgba(10,13,58,.4);
     }
+    .dev-code-details{margin-top:.3rem;font-size:.7rem;color:var(--muted)}
+    .dev-code-details>summary{cursor:pointer;color:var(--blurple);font-weight:700;user-select:none}
+    .dev-code-details small{display:block;margin-top:.25rem;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .admin-console{grid-column:1/-1;margin-top:.25rem;font-size:.75rem;color:var(--muted)}
     .admin-console summary{cursor:pointer;color:var(--amber);font-weight:800}
     .admin-access{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
@@ -1040,6 +1045,7 @@
     .turn .source-card-domain{font-size:.72rem;color:var(--cyan);display:inline-block;margin-top:.2rem}
 
     .turn .turn-status{grid-column:2;color:var(--blurple);font-size:.8rem;font-weight:800}
+    .turn .turn-status.needs-observation{color:var(--amber)}
     .turn .tools{color:var(--cyan);font-size:.8rem;font-weight:700;white-space:pre-wrap}
     .turn .server-operation{color:var(--muted);font-size:.76rem}
     .turn .stats{color:var(--muted);font-size:.74rem}
