@@ -477,7 +477,7 @@ class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
     The declaration changes the fixture's readiness without changing one byte
     of the fixture, and the analysis id named only the fixture. The store then
     found an id it already held whose payload had changed and refused --
-    at server start, from ``scripts/run_candidate_a.sh``, on any catalog that
+    at server start, from ``scripts/run_dev.sh``, on any catalog that
     had already materialized this fixture. The pilot catalog is one: it holds
     ``curated-69517f0f...`` with payload ``47df9633...`` while the declared
     policy produces ``824e9b54...``.

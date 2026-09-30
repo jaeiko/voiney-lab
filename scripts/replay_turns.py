@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compatibility wrapper for the package-native replay command.
 
-Install the project first, then prefer ``voice-workflow-replay`` or
+Install the project first, then prefer ``voiney-replay`` or
 ``python -m voiney_lab.replay_turns``.
 """
 

@@ -80,7 +80,7 @@ jobs:
           # scripts/run_ci_server.sh does not require the externally licensed
           # Candidate A source PDF or any live xAI credentials - see that
           # script's header comment. playwright.config.ts (the local-dev
-          # config) still uses the full scripts/run_candidate_a.sh.
+          # config) still uses the full scripts/run_dev.sh.
           CI: "true"
 
       - uses: actions/upload-artifact@v4

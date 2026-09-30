@@ -1,7 +1,7 @@
 # Deployment Runbook — Controlled Pilot
 
 This documents the reproducible deployment path that already exists in this
-repository (`scripts/run_candidate_a.sh` plus a directly-invoked `uvicorn`
+repository (`scripts/run_dev.sh` plus a directly-invoked `uvicorn`
 process), rather than introducing a new orchestration platform. It is scoped
 to a controlled research pilot, not a regulated GxP/clinical release — see
 `README.md`'s "Known limitations and deliberate non-goals" section.

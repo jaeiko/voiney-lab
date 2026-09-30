@@ -3,7 +3,7 @@
 Some tests validate byte-exact identity guarantees (SHA-256, byte size, page
 count) against the real "Candidate A" in-gel digestion source PDF. That PDF
 is externally licensed and is intentionally not committed to this repository
-(see scripts/run_candidate_a.sh's header). On the maintainer's own machine it
+(see scripts/run_dev.sh's header). On the maintainer's own machine it
 lives at a fixed local path; in any other environment - including CI - it is
 absent by design, not by mistake.
 
@@ -45,7 +45,7 @@ def pytest_collection_modifyitems(config, items):
         reason=(
             f"requires the externally licensed Candidate A source PDF at "
             f"{CANDIDATE_A_SOURCE_PDF}, which is not committed to this "
-            f"repository (see scripts/run_candidate_a.sh)"
+            f"repository (see scripts/run_dev.sh)"
         )
     )
     for item in items:

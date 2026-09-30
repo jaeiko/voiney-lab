@@ -26,7 +26,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'bash scripts/run_candidate_a.sh',
+    command: 'bash scripts/run_dev.sh',
     url: BASE_URL,
     reuseExistingServer: true,
     timeout: 120_000,

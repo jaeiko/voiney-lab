@@ -506,6 +506,43 @@ loop:
 python -m voiney_lab.worker
 ```
 
+### Launchers
+
+Two wrappers around that same `uvicorn` process exist so the two runtime
+profiles are not assembled by hand. Both bind `127.0.0.1` by default and take
+`HOST` / `PORT` from the environment; `server.py` calls
+`load_dotenv(..., override=False)`, so what a launcher exports wins over the
+same key in a repo-root `.env`.
+
+```bash
+./scripts/run_dev.sh                 # development, port 8000
+./scripts/run_dev.sh --bootstrap-only  # load the curated fixture, do not serve
+./scripts/run_dev.sh --test-mode       # also skip execution readiness gates
+./scripts/run_pilot.sh               # controlled pilot, port 8080
+./scripts/run_pilot.sh --check-only  # print the configuration, do not serve
+```
+
+`scripts/run_dev.sh` is the full development launcher: it verifies the
+Candidate A fixture and its externally licensed source PDF by SHA-256, loads
+the curated fixture, and enables the xAI-dependent optional features. Its
+`--test-mode` flag sets `VOICE_WORKFLOW_AGENT_USAGE_SCOPE=demo` and
+`VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
+without the flag neither variable is set. `scripts/run_candidate_a.sh` is the
+former name and now forwards to it.
+
+`scripts/run_pilot.sh` loads no fixture, keeps its state under
+`data/runtime/pilot/`, and turns every feature that reaches outside the
+approved source documents off — `EXTERNAL_REFERENCES_ENABLED`,
+`SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `WEB_VISUAL_SEARCH_ENABLED`,
+`VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED` — along with
+`VOICE_WORKFLOW_AGENT_MOSS_ENABLED`. Each keeps a value the operator exported
+themselves, so enabling one is a deliberate act taken before startup. Test
+mode is forced off whatever the environment said. Dry-lab workflows and the
+eLabFTW ELN write-back have no flag of their own: both sit behind the
+commercial workspace that the reviewer inbox and experiment timeline also
+need, and both stay inert until an admin configures and verifies a connector,
+so the launcher reports them rather than disabling them.
+
 ### Core configuration
 
 | Variable | Purpose |
@@ -635,7 +672,7 @@ Connector list responses never return credential references or resolved secrets.
 The A–G replay no longer relies on an ad-hoc `PYTHONPATH`:
 
 ```bash
-voice-workflow-replay
+voiney-replay
 # Equivalent project-native invocation:
 python -m voiney_lab.replay_turns
 # The historical script remains a thin compatibility wrapper:
@@ -646,7 +683,7 @@ Evaluate a sanitized JSON manifest of recognized/reference outcomes without
 loading audio:
 
 ```bash
-voice-workflow-evaluate path/to/results.json
+voiney-evaluate path/to/results.json
 ```
 
 The manifest reports WER, semantic and command accuracy, false mutation rate,
@@ -692,7 +729,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs both on every push/PR to
 an empty protocol catalog instead of the full Candidate A demo fixture, since
 that fixture's integrity check requires an externally licensed source PDF
 that is intentionally not committed to the repository. Local development
-still uses `scripts/run_candidate_a.sh` (the default `playwright.config.ts`)
+still uses `scripts/run_dev.sh` (the default `playwright.config.ts`)
 for full-fidelity manual testing when that PDF is available.
 
 The same externally licensed PDF also backs 14 pytest modules' byte-exact

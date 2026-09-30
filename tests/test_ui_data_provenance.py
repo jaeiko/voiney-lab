@@ -20,7 +20,7 @@ from pathlib import Path
 
 FIXTURE = Path("data/fixtures/development_protocols/candidate_a_curated_analysis.json")
 VISUALS = Path("data/fixtures/development_protocols/candidate_a_curated_analysis.visuals.json")
-LAUNCHER = Path("scripts/run_candidate_a.sh")
+LAUNCHER = Path("scripts/run_dev.sh")
 
 
 class TheUiIsServedTheHandBuiltFixtureTests(unittest.TestCase):

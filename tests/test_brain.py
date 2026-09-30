@@ -17,7 +17,10 @@ from voiney_lab.tools import ToolContext, create_safety_report
 
 class BrainTests(unittest.TestCase):
     def test_persona_and_guardrails(self):
-        for text in ("Voice Workflow Agent","wet-lab researchers","Korean, English, or Vietnamese","Never use Markdown","Never approve work resumption","search_approved_safety_manual","create_safety_report","check_safety_report_status"):
+        # Property: the system prompt still states who the assistant is, who it
+        # serves, its languages, its Markdown ban, its never-approve-resumption
+        # rule, and the three tools it may call. Only the identity literal moved.
+        for text in ("Voiney Lab","wet-lab researchers","Korean, English, or Vietnamese","Never use Markdown","Never approve work resumption","search_approved_safety_manual","create_safety_report","check_safety_report_status"):
             self.assertIn(text,SYSTEM_PROMPT)
 
     def test_existing_emergency_boundary_is_prompt_and_report_confirmation(self):

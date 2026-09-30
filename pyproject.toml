@@ -28,8 +28,8 @@ dependencies = [
 ]
 
 [project.scripts]
-voice-workflow-replay = "voiney_lab.replay_turns:main"
-voice-workflow-evaluate = "voiney_lab.voice_evaluation:main"
+voiney-replay = "voiney_lab.replay_turns:main"
+voiney-evaluate = "voiney_lab.voice_evaluation:main"
 
 [project.optional-dependencies]
 moss = [

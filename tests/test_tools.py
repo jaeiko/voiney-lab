@@ -73,7 +73,7 @@ class ToolTests(unittest.TestCase):
                 "does not contact emergency services",
             ),
             "check_safety_report_status": (
-                "previously submitted Voice Workflow Agent report",
+                "previously submitted Voiney Lab report",
                 "read-only status check",
                 "draft that has not been confirmed",
             ),
