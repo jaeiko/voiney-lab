@@ -841,7 +841,13 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             store = initialize_protocol_store(self.settings)
             return ProtocolCatalog(store), store
 
-        with patch.object(
+        # The readiness verdict below is only reached in a scope that
+        # permits development activation; outside one the projection stops
+        # at usage_scope_not_development. Only a maintainer's .env used to
+        # set the scope, so the test sets it.
+        with patch.dict(
+            os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}
+        ), patch.object(
             server_module, "server_config", return_value=SimpleNamespace()
         ), patch.object(
             server_module,

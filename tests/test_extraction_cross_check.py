@@ -497,6 +497,8 @@ class UnmappedCodePointDecisionTests(unittest.TestCase):
         self.assertEqual(unmapped_code_points("Chromatography–Mass"), {})
 
     def test_class_one_is_read_from_the_document(self) -> None:
+        if not ANKOM.exists():
+            self.skipTest("Local protocol source is not present.")
         extraction = extract_protocol_pdf(ANKOM)
         self.assertEqual(len(extraction.glyph_resolutions), 9)
         for resolution in extraction.glyph_resolutions:
@@ -509,12 +511,16 @@ class UnmappedCodePointDecisionTests(unittest.TestCase):
     def test_the_document_really_declares_that_character(self) -> None:
         """The mapping the resolution rests on, read from the font itself."""
 
+        if not ANKOM.exists():
+            self.skipTest("Local protocol source is not present.")
         page = PdfReader(ANKOM).pages[8]
         self.assertIn("-", _declared_unicode_values(page))
 
     def test_admitted_text_never_keeps_an_unmapped_code_point(self) -> None:
         """The invariant: resolve every one, or refuse the document."""
 
+        if not ANKOM.exists() or not IN_GEL.exists():
+            self.skipTest("Local protocol sources are not present.")
         for source in (ANKOM, IN_GEL):
             extraction = extract_protocol_pdf(source)
             with self.subTest(source=source.name):
@@ -586,6 +592,8 @@ class UnmappedCodePointDecisionTests(unittest.TestCase):
     def test_no_provenance_means_no_resolution(self) -> None:
         """A position that cannot be recorded is not allowed through."""
 
+        if not ANKOM.exists():
+            self.skipTest("Local protocol source is not present.")
         extraction = extract_protocol_pdf(ANKOM)
         recorded = {
             (r.source_page_number, r.text_offset)

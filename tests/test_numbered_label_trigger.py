@@ -45,6 +45,15 @@ def _intracellular():
     return extraction
 
 
+def _ankom():
+    if not ANKOM.is_file():
+        raise unittest.SkipTest(
+            f"{ANKOM.name} (ANKOM) is not present in the working tree; it is "
+            f"a source from a restored store that is deliberately not committed."
+        )
+    return extract_protocol_pdf(ANKOM)
+
+
 class LineAnchoredTriggerTests(unittest.TestCase):
     """A numbered step begins its own line.
 
@@ -114,7 +123,7 @@ class LocalSourceTriggerTests(unittest.TestCase):
     def test_the_properly_numbered_source_loses_nothing(self) -> None:
         """ANKOM: every label already began its own line."""
 
-        extraction = extract_protocol_pdf(ANKOM)
+        extraction = _ankom()
         self.assertEqual(
             sum(len(mid_line_numbered_labels(p.text)) for p in extraction.pages),
             0,
@@ -127,7 +136,7 @@ class LocalSourceTriggerTests(unittest.TestCase):
     def test_the_guarantee_still_fires_where_it_caught_a_real_miss(self) -> None:
         """Page 32 is where the whole-document run caught a genuine omission."""
 
-        extraction = extract_protocol_pdf(ANKOM)
+        extraction = _ankom()
         self.assertTrue(_numbered_step_labels(extraction.pages[31].text))
 
     def test_the_near_unnumbered_source_drops_every_false_trigger(self) -> None:
@@ -216,6 +225,10 @@ class LocalSourceTriggerTests(unittest.TestCase):
 
         for source, expected in ((ANKOM, 67), (CANDIDATE_A, 25)):
             with self.subTest(source=source.name):
+                if not source.is_file():
+                    self.skipTest(
+                        f"{source.name} is not present in the working tree."
+                    )
                 extraction = extract_protocol_pdf(source)
                 labels = [
                     label
@@ -239,7 +252,7 @@ class FixtureScopeTests(unittest.TestCase):
     def test_a_properly_numbered_source_is_in_scope(self) -> None:
         from prototype_claim_chunks import fixture_scope
 
-        scope = fixture_scope(extract_protocol_pdf(ANKOM))
+        scope = fixture_scope(_ankom())
         self.assertTrue(scope["in_scope"])
         self.assertEqual(scope["duplicate_labels"], 0)
         self.assertEqual(scope["descents"], [])
@@ -319,7 +332,7 @@ class FixtureScopeKnownLimitationTests(unittest.TestCase):
     def test_the_four_local_sources_do_not_show_that_shape(self):
         """Labels are spread through the body, not confined to the tail."""
 
-        extraction = extract_protocol_pdf(ANKOM)
+        extraction = _ankom()
         from prototype_claim_chunks import fixture_step_labels
 
         pages = {page for page, _ in fixture_step_labels(extraction)}
