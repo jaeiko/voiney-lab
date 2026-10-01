@@ -5852,9 +5852,14 @@ async def _queue_curated_research(
                 session.external_reference_settings.read_timeout_seconds,
                 include_images,
             )
+            # The query carries the user's question, so only its size and a
+            # short digest are logged (AGENTS.md rule 6), as turn.route_decision does.
+            reference_query=str(ctx["reference_query"])
             log.info(
-                "external_search.provider_started turn_id=%s generation=%s query=%s",
-                turn_id,generation,ctx["reference_query"][:120],
+                "external_search.provider_started turn_id=%s generation=%s "
+                "query_chars=%d query_sha256=%s",
+                turn_id,generation,len(reference_query),
+                hashlib.sha256(reference_query.encode("utf-8")).hexdigest()[:16],
             )
             async def _on_partial_sources(srcs: list[dict[str, Any]]) -> None:
                 if session.owns_research_result(turn_id, generation, configuration_id):
