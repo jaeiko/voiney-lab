@@ -40,6 +40,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSpeechMode,
     ProtocolVisualKind,
     load_curated_protocol_fixture,
+    reader_translation_issue,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -4850,6 +4851,9 @@ class ListenerSession:
         self.generated_visual_settings=(
             generated_visual_settings or GeneratedVisualSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
+        # Checked Korean readings of source statements, so a step read twice
+        # is translated once: (fixture sha, step label, statement) -> Korean.
+        self.reader_translations:dict[tuple[str,str,str],str]={}
         self.semantic_intent_settings=(
             semantic_intent_settings or SemanticIntentSettings())
         self.experiment_report_id:str|None=None
@@ -5829,6 +5833,137 @@ async def _queue_curated_web_visual(
     session.track_visual_task(task)
 
 
+READER_TRANSLATION_PROMPT=(
+    "You translate one laboratory protocol step for a researcher who is new to the lab "
+    "and reads Korean. Write plain, concrete Korean that says exactly what the step "
+    "says, so it can be followed at the bench. Keep every number, unit, time, "
+    "temperature, concentration and ratio exactly as written, and keep reagent, "
+    "material and equipment names in their original spelling. Begin with the step "
+    "label followed by '단계: '. Do not add any step, reason, warning, quantity, "
+    "condition or advice the text does not state, and do not leave out any "
+    "instruction. Return only the JSON object."
+)
+READER_TRANSLATION_HEADING="한국어 안내 · 자동 번역(검토 전)"
+# Said before an unreviewed reading, so it is never heard as a reviewed one.
+READER_TRANSLATION_SPOKEN_LEAD="자동 번역입니다."
+READER_TRANSLATION_UNAVAILABLE=(
+    "한국어 자동 번역을 확인하지 못해 원문을 그대로 읽었습니다."
+)
+
+
+def _with_reader_section(document:Any,heading:str,text:str)->Any:
+    """The reply's document with one labelled section first; otherwise unchanged."""
+
+    if not isinstance(document,dict):
+        return document
+    sections=[{"kind":"section","heading":heading,"text":text},
+              *(document.get("sections") or ())]
+    return {**document,"sections":sections}
+
+
+async def _request_reader_translation(
+    session:ListenerSession,label:str,statement:str,
+)->str:
+    """One bounded model call for a Korean reading of one source statement."""
+
+    settings=session.multi_brain_settings
+    client=AsyncOpenAI(
+        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),max_retries=0)
+    response=await asyncio.wait_for(
+        client.chat.completions.create(
+            model=settings.answer_brain_model or settings.model,
+            messages=[
+                {"role":"system","content":READER_TRANSLATION_PROMPT},
+                {"role":"user","content":json.dumps(
+                    {"step_label":label,"source_text":statement},
+                    ensure_ascii=False,
+                )},
+            ],
+            response_format={
+                "type":"json_schema",
+                "json_schema":{
+                    "name":"protocol_step_reader_translation_v1",
+                    "strict":True,
+                    "schema":{
+                        "type":"object","additionalProperties":False,
+                        "properties":{"korean":{"type":"string"}},
+                        "required":["korean"],
+                    },
+                },
+            },
+            temperature=0,
+        ),
+        timeout=min(6.0,settings.answer_timeout_seconds),
+    )
+    payload=json.loads(response.choices[0].message.content or "{}")
+    korean=payload.get("korean") if isinstance(payload,dict) else None
+    return " ".join(korean.split()) if isinstance(korean,str) else ""
+
+
+async def _apply_reader_translation(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
+    target:tuple[str,str,tuple[str,...]],*,turn_id:int,generation:int,
+    clock:Callable[[],float],
+)->Any:
+    """Speak a checked Korean reading of a step the reader asked to hear.
+
+    Only for a step with no reviewed translation, only when the read-only
+    model roles are enabled, and only a reading that keeps every number,
+    unit and protocol term (``reader_translation_issue``). The reading is
+    spoken after "자동 번역입니다." and labelled as an unreviewed automatic
+    translation on screen, above the unchanged source; a failed or refused reading says so, and the source is
+    read as before. No workflow state is involved.
+    """
+
+    settings=session.multi_brain_settings
+    if not settings.answer_brain_enabled:
+        return plan
+    label,statement,terms=target
+    key=(curated.fixture.fixture_sha256,label,statement)
+    korean=session.reader_translations.get(key)
+    status="cached" if korean else "unavailable"
+    started=clock()
+    if korean is None:
+        try:
+            candidate=await _request_reader_translation(session,label,statement)
+        except Exception as exc:
+            status=f"provider_{type(exc).__name__}"
+        else:
+            issue=reader_translation_issue(
+                statement,candidate,required_terms=terms,step_label=label)
+            if issue is None:
+                korean=candidate
+                session.reader_translations[key]=korean
+                status="accepted"
+            else:
+                status=f"rejected_{issue}"
+    # Status and size only: the statement and the reading stay out of logs.
+    log.info(
+        "reader_translation turn_id=%s status=%s chars=%d elapsed_ms=%d",
+        turn_id,status,len(korean or ""),round((clock()-started)*1000),
+    )
+    if not session.is_current(turn_id,generation):
+        # Superseded while waiting: the turn's own fences drop it anyway.
+        return plan
+    if korean:
+        return replace(
+            plan,
+            speech_text=f"{READER_TRANSLATION_SPOKEN_LEAD} {korean}",
+            display_text=(
+                f"{READER_TRANSLATION_HEADING}\n{korean}\n\n{plan.display_text}"),
+            display_document=_with_reader_section(
+                plan.display_document,READER_TRANSLATION_HEADING,korean),
+            translation_status="model_assisted_unreviewed",
+        )
+    return replace(
+        plan,
+        speech_text=f"{READER_TRANSLATION_UNAVAILABLE} {plan.speech_text}",
+        display_text=f"{READER_TRANSLATION_UNAVAILABLE}\n\n{plan.display_text}",
+        display_document=_with_reader_section(
+            plan.display_document,"한국어 안내",READER_TRANSLATION_UNAVAILABLE),
+    )
+
+
 async def _queue_curated_research(
     *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
     endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
@@ -5857,6 +5992,7 @@ async def _queue_curated_research(
                 requested_entities=plan.requested_entities,
                 question_kind=plan.question_kind,
                 question_dimensions=plan.question_dimensions,
+                **curated.research_scope(),
             )}
 
         research_budget=min(120.0,max(
@@ -6788,7 +6924,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
         return
     admission = classify_transcription_language(
-        transcription,session.accepted_input_language
+        transcription,session.accepted_input_language,
+        # The protocol's own terms, not one document's list.
+        known_terms=(
+            tuple(stt_keyterms)
+            if session.curated_protocol_session is not None else None
+        ),
     )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
@@ -7278,6 +7419,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     question_dimensions=(
                         plan.unresolved_dimensions or plan.question_dimensions
                     ),
+                    **curated.research_scope(),
                 )
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
@@ -7422,6 +7564,17 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                             )
                         await report_state(report)
+            # A Korean reader asked to hear a step that has no reviewed
+            # translation: a checked automatic reading, or the source as before.
+            reader_target=(
+                curated.reader_translation_target(plan)
+                if turn_language=="ko" else None
+            )
+            if reader_target is not None:
+                plan=await _apply_reader_translation(
+                    session,curated,plan,reader_target,
+                    turn_id=turn_id,generation=generation,clock=clock,
+                )
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")

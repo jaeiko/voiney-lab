@@ -612,7 +612,9 @@ class SemanticAmbiguityAndFailClosedTests(SemanticFallbackTestCase):
         self.assertEqual(routed.plan.action, CuratedProtocolAction.OFF_TOPIC)
         self.assertFalse(routed.plan.state_changed)
         self.assertEqual(canonical_state(workflow), before)
-        self.assertIn("관찰 게이트", routed.plan.speech_text)
+        # "게이트" was replaced by the screen's own word for it, "확인 조건".
+        self.assertIn("관찰 확인 조건", routed.plan.speech_text)
+        self.assertNotIn("게이트", routed.plan.speech_text)
         self.assertIn("상태를 변경하지 않았습니다", routed.plan.speech_text)
 
     def test_an_unavailable_model_leaves_the_deterministic_outcome_intact(self) -> None:

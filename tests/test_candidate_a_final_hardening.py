@@ -104,7 +104,10 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
             "이 프로토콜의 목적이 뭐야?", turn_id=1, language="ko"
         )
         self.assertEqual(plan.action, CuratedProtocolAction.PROTOCOL_QUERY)
-        self.assertIn("질량분석", plan.display_text)
+        # The purpose shown is the PDF's own statement, not a sentence
+        # written for this document.
+        self.assertIn(view.purpose.text, plan.display_text)
+        self.assertNotIn("질량분석용 시료를 준비하는 것입니다", plan.display_text)
         self.assertIn(view.purpose.text, plan.source_texts)
         self.assertEqual(session.state(), opening)
 

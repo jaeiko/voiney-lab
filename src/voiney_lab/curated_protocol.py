@@ -1098,6 +1098,8 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
         return False
     if key in _WORKFLOW_COMMANDS or key in _FULL_DETAIL_COMMANDS:
         return True
+    if _READ_ALOUD_REQUEST.fullmatch(key):
+        return True
     if _SPECIFIC_STEP_PATTERN.fullmatch(key):
         return True
     if any(pattern.fullmatch(key) for pattern in _CURRENT_INFORMATION_PATTERNS):
@@ -1376,6 +1378,29 @@ class AnswerEnvelope:
     evidence_ids: tuple[str, ...]
     source_plan: SourcePlan
     admitted_claim_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EntitySourceAnswer:
+    """One entity answered only from the active protocol's own statements."""
+
+    entity: str
+    label: str
+    text: str
+    speech: str
+    evidence_ids: tuple[str, ...]
+    found: bool
+    #: The long form the PDF itself gives the label, as in
+    #: "ammonium bicarbonate (AMBIC)"; the one definition it can supply.
+    defined_as: str | None = None
+    #: For a question about this entity alone: the first mention's reviewed
+    #: Korean content spoken too, since there is nothing else to hear.
+    spoken_detail: str = ""
+
+    def spoken(self, *, alone: bool) -> str:
+        if alone and not self.defined_as and self.spoken_detail:
+            return self.spoken_detail
+        return self.speech
 
 
 @dataclass(frozen=True)
@@ -2636,6 +2661,23 @@ def _edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
+#: A request that reports progress or asks to move is not a term question.
+_WORKFLOW_CUE = re.compile(
+    r"(?:다음|넘어가|넘겨|완료|끝났|끝냈|다\s*했|했어|했습니다|됐어|됐습니다|되었|"
+    r"시작|멈춰|그만|정지|타이머|next|done|finished|complete|start|stop|timer)",
+    re.IGNORECASE,
+)
+_TERM_QUESTION_CUE = re.compile(
+    r"(?:뭐|무엇|무슨|왜|어떻게|어떤|설명|알려|의미|뜻|역할|안전|위험|주의|"
+    r"\?|what|why|how|explain|mean|role|safe)",
+    re.IGNORECASE,
+)
+
+
+def _asks_about_a_term(key: str) -> bool:
+    return bool(_TERM_QUESTION_CUE.search(key)) and not _WORKFLOW_CUE.search(key)
+
+
 def normalize_scientific_request(
     transcript: str,
     *,
@@ -2734,14 +2776,44 @@ def normalize_scientific_request(
         observed, replacement = unique[0]
         key = re.sub(rf"(?<![a-z0-9]){re.escape(observed)}(?![a-z0-9])", replacement, key)
         corrections.append((observed, replacement.upper()))
-    matches: list[tuple[int, str]] = []
+    matches: list[tuple[int, int, str]] = []
     for pattern, name in _TERM_QUESTION_PATTERNS:
         if not present(name):
             continue
         for match in pattern.finditer(key):
-            matches.append((match.start(), name))
+            matches.append((match.start(), match.end(), name))
+    if protocol_vocabulary is not None and _asks_about_a_term(key):
+        # The active protocol's own terms -- its material and equipment
+        # names, labelled reagents and defined abbreviations -- are entities
+        # too, named as the protocol spells them, so a question about any
+        # registered PDF's material is answered from that PDF. Only a
+        # question: "ethanol 준비됐어 다음으로" keeps reaching the semantic
+        # fallback as before.
+        claimed = {
+            surface for surfaces in _ENTITY_SOURCE_ALIASES.values()
+            for surface in surfaces
+        }
+        for term in protocol_vocabulary.terms:
+            folded = " ".join(term.text.split()).casefold()
+            if folded in claimed or len(folded) < 3:
+                continue
+            match = _term_pattern(term.text).search(key)
+            if match is not None:
+                matches.append((match.start(), match.end(), term.text))
+    # One stretch of the request names one entity: "microcentrifuge" is not
+    # also a "centrifuge", and a span the reviewed table already names keeps
+    # that name.
+    kept = [
+        item for index, item in enumerate(matches)
+        if not any(
+            (other[0] <= item[0] and item[1] <= other[1])
+            and ((other[1] - other[0]) > (item[1] - item[0]) or other_index < index)
+            for other_index, other in enumerate(matches)
+            if other_index != index
+        )
+    ]
     entities = tuple(dict.fromkeys(
-        name for _, name in sorted(matches, key=lambda item: item[0])
+        name for _, _, name in sorted(kept, key=lambda item: item[0])
     ))
     labels = {
         "ambic": "AMBIC", "hplc_water": "HPLC water",
@@ -2754,7 +2826,7 @@ def normalize_scientific_request(
         "contamination": "contamination",
     }
     if key != raw and not corrections and entities:
-        corrections.append((raw, labels[entities[0]]))
+        corrections.append((raw, labels.get(entities[0], entities[0])))
     corrections = list(dict.fromkeys(corrections))
     if corrections:
         correction_note = " / ".join(
@@ -3559,7 +3631,7 @@ def classify_curated_control_intent(
             language=language,
             allows_state_mutation=True,
         )
-    if key in _FULL_DETAIL_COMMANDS:
+    if key in _FULL_DETAIL_COMMANDS or _READ_ALOUD_REQUEST.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="full_detail",
             action=CuratedProtocolAction.FULL_DETAIL,
@@ -4083,6 +4155,16 @@ _FULL_DETAIL_COMMANDS = frozenset({
     "현재 단계 상세 내용을 읽어줘",
 })
 
+#: Asking to hear the current step read aloud: "이 단계 읽어줘", "단계 내용
+#: 읽어 주세요", "한국어로 읽어줘", "다시 읽어줘". Only an explicit request
+#: reads a step's content; moving between steps keeps its short sentence.
+#: "원문 그대로 읽어줘" is not one -- it asks for the English, not Korean.
+_READ_ALOUD_REQUEST = re.compile(
+    r"(?:(?:이|현재|지금)\s*)?(?:단계\s*)?(?:(?:내용|전체|안내)(?:을|를)?\s*)?"
+    r"(?:한국어로\s*)?(?:다시\s*)?(?:소리\s*내(?:어|서)\s*)?"
+    r"읽어\s*(?:줘|줘요|주세요|줄래|줄래요|줄래\?)"
+)
+
 
 # Each reviewed question selects one existing current-step fact.  A rule that
 # matches zero or multiple facts fails closed instead of asking a model to
@@ -4231,6 +4313,35 @@ def _display_document(
     return {"title": title, "sections": sections}
 
 
+#: A source note that offers the reader another way to do the step.
+_SOURCE_ALTERNATIVE = re.compile(
+    r"\b(?:alternatively|optionally|you\s+(?:can|may)\s+(?:also\s+)?"
+    r"(?:use|increase|decrease|reduce|extend|replace|substitute|choose|skip|"
+    r"shake|incubate|perform|do|leave|instead)|can\s+be\s+(?:replaced|substituted|"
+    r"used\s+instead))\b",
+    re.IGNORECASE,
+)
+#: A note that forbids something is not an alternative, whatever it names.
+_SOURCE_PROHIBITION = re.compile(
+    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|cannot|can't|avoid)\b",
+    re.IGNORECASE,
+)
+
+
+def _offers_source_alternative(text: str) -> bool:
+    derived = _derived_source_text(text)
+    return bool(_SOURCE_ALTERNATIVE.search(derived)) and not _SOURCE_PROHIBITION.search(derived)
+
+_FACT_POINT_LABELS_EN = {
+    "step": "Verified action",
+    "note": "Source note",
+    "warning": "Source warning",
+    "expected_result": "Expected result",
+    "prerequisite": "Before starting",
+    "material": "Verified material",
+    "equipment": "Verified equipment",
+}
+
 _FACT_POINT_LABELS = {
     "step": "확인된 동작",
     "note": "원문 참고",
@@ -4240,6 +4351,17 @@ _FACT_POINT_LABELS = {
     "material": "확인된 재료",
     "equipment": "확인된 장비",
 }
+
+
+def _fact_point_label(fact: CuratedProtocolFact, *, korean: bool) -> str:
+    """Label one admitted statement by its kind; a note offering another way
+    to do the step is labelled as the source's own alternative."""
+
+    if fact.kind == "note" and _offers_source_alternative(fact.text):
+        return "원문이 허용한 대안" if korean else "Source-approved alternative"
+    if korean:
+        return _FACT_POINT_LABELS.get(fact.kind, "확인된 내용")
+    return _FACT_POINT_LABELS_EN.get(fact.kind, "Verified detail")
 
 
 def _detailed_step_presentation(
@@ -4282,22 +4404,12 @@ def _detailed_step_presentation(
     facts = tuple(item[0] for item in localized_items)
     localized_texts = tuple(item[1] for item in localized_items)
     if language == "ko":
+        # Every point is one of the step's own reviewed statements, labelled
+        # by its kind -- the same for every step of every protocol.
         points = "\n".join(
-            f"- {('원문이 허용한 대안' if step.source_label == '3' and fact.kind == 'note' else _FACT_POINT_LABELS.get(fact.kind, '확인된 내용'))}: {text}"
+            f"- {_fact_point_label(fact, korean=True)}: {text}"
             for fact, text in localized_items
         )
-        if step.source_label == "4":
-            points = (
-                "- 무엇을 제거하나요: Solution A를 제거합니다.\n"
-                "- 어디에서 제거하나요: 젤 밴드가 들어 있는 튜브입니다.\n"
-                "- 무엇이 남아 있나요: 다음 작업 대상인 젤 밴드는 튜브에 남습니다.\n"
-                "- 원문이 지정하지 않은 내용: 제거 도구와 폐기물 분류 방법은 이 단계에 명시되어 있지 않습니다."
-            )
-        elif expected_result_only and step.source_label == "7":
-            points += (
-                "\n- 실행 경계: 두 번의 세척 사이클은 원문의 일반적 설명이며, "
-                "고정 반복 횟수나 자동 완료 승인이 아닙니다. 7단계의 관찰 기반 반복 제어는 계속 차단됩니다."
-            )
         primary = f"{step.source_label}단계 상세 설명\n{points}"
         speech = (
             localized_texts[-1]
@@ -4307,7 +4419,7 @@ def _detailed_step_presentation(
         status = "verified_sidecar"
     else:
         primary = "\n".join(
-            f"- {('Source-approved alternative' if step.source_label == '3' and fact.kind == 'note' else _FACT_POINT_LABELS.get(fact.kind, 'Verified detail'))}: {text}"
+            f"- {_fact_point_label(fact, korean=False)}: {text}"
             for fact, text in localized_items
         )
         speech = localized_texts[0]
@@ -4379,36 +4491,38 @@ def _protocol_query_presentation(
 
     if scope == "purpose":
         facts.append(knowledge.purpose)
+        # The purpose is the document's own statement of it, for every
+        # protocol: nothing here may say what one particular PDF is for.
+        page=knowledge.purpose.source_page
         if language=="ko":
-            speech=(
-                "이 실험의 목적은 젤 안의 단백질을 소화해 질량분석용 시료를 준비하는 것입니다. "
-                "소화가 끝나면 시료를 Evotip에 로딩해 질량분석을 진행할 수 있다고 원문이 설명합니다."
-            )
+            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
             display=(
-                f"실험 목적\n{speech}\n\n원문 · English · PDF p.2\n"
+                f"실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.{page}\n"
                 f"{knowledge.purpose.text}"
             )
         else:
-            speech=(
-                "This in-gel protocol prepares in-gel digests. After digestion, "
-                "the sample is ready to load onto Evotips for mass-spectrometry analysis."
-            )
-            display=f"Experiment purpose\n{speech}\n\nOriginal · PDF p.2\n{knowledge.purpose.text}"
+            speech=f"The protocol states its purpose as: {knowledge.purpose.text}"
+            display=f"Experiment purpose\n{speech}\n\nOriginal · PDF p.{page}\n{knowledge.purpose.text}"
         return display,speech,tuple(facts)
 
     if scope == "overview":
         facts.extend((knowledge.purpose,*knowledge.sections))
         if language == "ko":
             speech = (
-                "젤 안의 단백질 소화물을 준비해 질량분석 시료로 만드는 프로토콜입니다. "
-                f"전체 {total}단계는 밴드 절단, 탈색, 환원·알킬화, 트립신 소화, 펩타이드 추출 순서입니다."
+                f"이 프로토콜은 전체 {total}단계이고, 원문은 "
+                f"{len(knowledge.sections)}개 구간으로 나뉩니다. 구간 이름은 화면에 표시했습니다."
+                if knowledge.sections else
+                f"이 프로토콜은 전체 {total}단계입니다."
             )
             display = f"전체 흐름\n{speech}\n\n구간\n" + "\n".join(
                 f"- {fact.text} · 원문 p.{fact.source_page}"
                 for fact in knowledge.sections
             )
         else:
-            speech = f"The {total}-step protocol is organized into five ordered sections."
+            speech = (
+                f"The {total}-step protocol is organized into "
+                f"{len(knowledge.sections)} ordered sections."
+            )
             display = "Protocol overview\n" + "\n".join(
                 f"- {fact.text} · source p.{fact.source_page}" for fact in facts
             )
@@ -4743,23 +4857,258 @@ def canonical_research_plan(entity_key: str) -> dict[str, Any]:
     }
 
 
-_CONCISE_SUMMARIES_KO = {
-    "ambic": "AMBIC는 이 프로토콜의 중탄산암모늄 완충 성분",
-    "hplc_water": "HPLC water는 고순도 크로마토그래피용 정제수",
-    "solution_a": "Solution A는 세척 및 탈수용 혼합 용액",
-    "solution_b": "Solution B는 25 mM AMBIC 기본 완충 용액",
-    "acetonitrile": "Acetonitrile은 젤 탈수와 세척에 사용하는 유기 용매",
-    "gel_plug": "젤 플러그는 밴드에서 잘라낸 약 1 mm³ 젤 조각",
-    "stained_protein_band": "염색된 단백질 밴드는 SDS-PAGE에서 확인한 표적 젤 영역",
-    "dtt": "DTT는 단백질 이황화 결합을 끊는 환원제",
-    "iodoacetamide": "Iodoacetamide는 시스테인을 알킬화하는 시약",
-    "trypsin": "Trypsin은 단백질을 펩타이드로 자르는 소화 효소",
-    "formic_acid": "Formic acid는 트립신 소화를 정지시키는 산성화 시약",
-    "rpm": "rpm은 분당 회전수 교반 설정값",
-    "incubation": "배양(incubation)은 반응물이 특정 온도와 시간에서 반응하도록 유지하는 과정",
-    "contamination": "오염(contamination)은 외부 물질이 시료에 유입되는 현상",
-    "tube": "튜브는 젤 플러그를 담아 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브",
+#: How the protocol text may spell an entity the request inventory names.
+#: Lower-case surfaces, matched against the source's own statements; a
+#: surface only finds a statement the active PDF actually contains, so the
+#: table names spellings, never what any one protocol does with them.
+_ENTITY_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
+    "ambic": ("ambic", "ammonium bicarbonate"),
+    "hplc_water": ("hplc water", "hplc"),
+    "solution_a": ("solution a",),
+    "solution_b": ("solution b",),
+    "acetonitrile": ("acetonitrile",),
+    "gel_plug": ("gel plug", "plug of a stained protein band"),
+    "stained_protein_band": (
+        "stained protein band", "protein band", "gel band", "band",
+    ),
+    "tube": ("microcentrifuge tube", "tube"),
+    "dtt": ("dtt", "dithiothreitol"),
+    "iodoacetamide": ("iodoacetamide",),
+    "trypsin": ("trypsin",),
+    "formic_acid": ("formic acid", "formic"),
+    "rpm": ("rpm",),
+    "incubation": ("incubat",),
+    "contamination": ("contaminat", "keratin"),
+    "sds_page": ("sds-page", "sds page", "polyacrylamide gel"),
+    "electrophoresis": ("electrophoresis",),
+    "coomassie": ("coomassie",),
+    "destaining": ("destain",),
+    "centrifuge": ("centrifug",),
+    "pipette": ("pipett",),
+    "mass_spectrometry": ("mass spectrometr", "mass spec"),
 }
+
+#: The named solutions a definition statement can be found for.
+_SOLUTION_SURFACES = {"solution_a": "solution a", "solution_b": "solution b"}
+
+#: The spelling to fall back on when the active PDF does not use the entity.
+_ENTITY_FALLBACK_LABELS = {
+    "ambic": "AMBIC", "hplc_water": "HPLC water",
+    "solution_a": "Solution A", "solution_b": "Solution B",
+    "dtt": "DTT", "formic_acid": "formic acid", "gel_plug": "gel plug",
+    "stained_protein_band": "stained protein band",
+}
+
+
+#: Surfaces that are word stems ("incubat" for incubate/incubation); every
+#: other surface must match as whole words, so "ethanol" is not "methanol"
+#: and "PBS" is not "DPBS".
+_ENTITY_STEMS = frozenset({
+    "incubat", "contaminat", "centrifug", "pipett", "mass spectrometr", "destain",
+})
+
+
+def _entity_surfaces(entity: str) -> tuple[str, ...]:
+    return _ENTITY_SOURCE_ALIASES.get(
+        entity, (" ".join(entity.replace("_", " ").split()).casefold(),)
+    )
+
+
+def _entity_patterns(entity: str) -> tuple[re.Pattern[str], ...]:
+    patterns = []
+    for surface in _entity_surfaces(entity):
+        words = r"\s+".join(re.escape(word) for word in surface.split())
+        tail = r"[a-z]*" if surface in _ENTITY_STEMS else r"(?:e?s)?"
+        patterns.append(re.compile(
+            rf"(?<![0-9A-Za-z]){words}{tail}(?![0-9A-Za-z])", re.IGNORECASE
+        ))
+    return tuple(patterns)
+
+
+def _names_entity(text: str, entity: str) -> bool:
+    derived = _derived_source_text(text)
+    return any(pattern.search(derived) for pattern in _entity_patterns(entity))
+
+
+def _source_spelling(entity: str, texts: tuple[str, ...]) -> str | None:
+    """The entity as the protocol itself writes it, from the first statement naming it."""
+
+    for pattern in _entity_patterns(entity):
+        for text in texts:
+            match = pattern.search(_derived_source_text(text))
+            if match:
+                return match.group(0)
+    return None
+
+
+def _source_abbreviation(label: str, texts: tuple[str, ...]) -> str | None:
+    """The long form a statement defines an abbreviation with: "long form (LABEL)"."""
+
+    if not (1 < len(label) <= 10 and any(char.isupper() for char in label)):
+        return None
+    pattern = re.compile(
+        r"(?<![0-9A-Za-z])((?:[A-Za-z][A-Za-z-]*\s+){0,4}[A-Za-z][A-Za-z-]*)"
+        rf"\s*\(\s*{re.escape(label)}\s*\)"
+    )
+    letters = [char for char in label.casefold() if char.isalpha()]
+
+    def spells(words: list[str]) -> bool:
+        # The long form starts with the acronym's first letter and holds
+        # its letters in order, as "ammonium bicarbonate" holds A-M-B-I-C.
+        phrase = " ".join(words).casefold()
+        if not letters or not phrase.startswith(letters[0]):
+            return False
+        position = 0
+        for char in letters:
+            position = phrase.find(char, position)
+            if position < 0:
+                return False
+            position += 1
+        return True
+
+    for text in texts:
+        for match in pattern.finditer(_derived_source_text(text)):
+            words = match.group(1).split()
+            for start in range(len(words) - 1, -1, -1):
+                candidate = words[start:]
+                if " ".join(candidate).casefold() == label.casefold():
+                    continue
+                if spells(candidate):
+                    return " ".join(candidate)
+    return None
+
+
+def _without_step_prefix(label: str, text: str) -> str:
+    """A reviewed step translation without its own leading "N단계:" label."""
+
+    return re.sub(rf"^\s*{re.escape(label)}\s*단계\s*:\s*", "", text).strip()
+
+
+def _spoken_summary_sentence(summary: str) -> str:
+    """End one summary as a sentence: a finished Korean sentence keeps its own ending."""
+
+    text = summary.strip().rstrip(".")
+    return f"{text}." if text.endswith("다") else f"{text}입니다."
+
+
+#: Units a reader translation must keep, each with its canonical name.
+#: Prefixes stay distinct (mM is not µM, mL is not µL); a Korean word may
+#: stand for a unit only directly after its number ("15분", "37도").
+_READER_UNIT_FORMS: tuple[tuple[str, str], ...] = (
+    (r"ng\s*/\s*(?:µ|μ|u)[lL]", "ng/µL"),
+    (r"mg\s*/\s*m[lL]", "mg/mL"),
+    (r"(?:µ|μ|u)[lL]", "µL"),
+    (r"m[lL]", "mL"),
+    (r"(?:µ|μ|u)M", "µM"),
+    (r"nM", "nM"),
+    (r"mM", "mM"),
+    (r"M", "M"),
+    (r"mm³", "mm³"),
+    (r"°\s*C|℃|도|C", "°C"),
+    (r"[rR][pP][mM]|분당\s*회전", "rpm"),
+    (r"min(?:ute)?s?|분", "min"),
+    (r"h(?:ours?|rs?)?|시간", "h"),
+    (r"s(?:ec(?:ond)?s?)?|초", "s"),
+    (r"%|퍼센트", "%"),
+    (r"[x×]\s*g", "x g"),
+    (r"parts?", "part"),
+    (r"times?|번|회", "times"),
+)
+_READER_QUANTITY = re.compile(
+    r"(?<![0-9.])(\d+(?:\.\d+)?)\s*(?:("
+    + "|".join(f"(?:{form})" for form, _ in _READER_UNIT_FORMS)
+    + r")(?![A-Za-z]))?"
+)
+_READER_CLOCK = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)")
+_ENGLISH_COUNTS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+}
+_ENGLISH_REPEATS = {"once": "1 times", "twice": "2 times", "thrice": "3 times"}
+_KOREAN_COUNTS = {
+    "한": "1", "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
+    "일곱": "7", "여덟": "8", "아홉": "9", "열": "10",
+}
+_SOURCE_NEGATION = re.compile(
+    r"\b(?:not|no|never|don't|do\s+not|avoid|without|must\s+not|cannot|can't)\b",
+    re.IGNORECASE,
+)
+_KOREAN_NEGATION = re.compile(
+    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피하|못\s|않)"
+)
+
+
+def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
+    """The (number, unit) pairs a statement states, clock times as one each."""
+
+    value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
+    found: list[tuple[str, str | None]] = [
+        (match.group(0), "clock") for match in _READER_CLOCK.finditer(value)
+    ]
+    value = _READER_CLOCK.sub(" ", value)
+    for match in _READER_QUANTITY.finditer(value):
+        unit = None
+        if match.group(2):
+            unit = next(
+                canonical for form, canonical in _READER_UNIT_FORMS
+                if re.fullmatch(form, match.group(2))
+            )
+        number = match.group(1)
+        if "." in number:
+            number = number.rstrip("0").rstrip(".")
+        found.append((number, unit))
+    return sorted(found, key=lambda item: (item[0], item[1] or ""))
+
+
+def reader_translation_issue(
+    source_text: str,
+    translation: str,
+    *,
+    required_terms: tuple[str, ...] = (),
+    step_label: str | None = None,
+) -> str | None:
+    """Why a model's Korean reading of one source statement may not be used.
+
+    The check is mechanical and fails closed. The reading must state the
+    same quantities -- each number with its own unit, prefixes distinct, a
+    Korean unit word only right after its number, counts written as words
+    included -- and no other; it must keep every protocol term the
+    statement uses in its original spelling; and it must neither add nor
+    drop a negation. A leading "N단계:" for the statement's own label is
+    allowed. ``None`` means the reading may be spoken.
+    """
+
+    text = " ".join(str(translation or "").split())
+    if not text:
+        return "empty"
+    if not re.search(r"[가-힣]", text):
+        return "not_korean"
+    source = _derived_source_text(" ".join(source_text.split()))
+    if len(text) > max(600, 3 * len(source)):
+        return "too_long"
+    reading = _derived_source_text(text)
+    if step_label:
+        reading = re.sub(
+            rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
+        source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
+    for word, digits in _ENGLISH_REPEATS.items():
+        source = re.sub(rf"\b{word}\b", digits, source, flags=re.IGNORECASE)
+    for word, digit in _ENGLISH_COUNTS.items():
+        source = re.sub(rf"\b{word}\b", digit, source, flags=re.IGNORECASE)
+    for word, digit in sorted(_KOREAN_COUNTS.items(), key=lambda item: -len(item[0])):
+        reading = re.sub(
+            rf"(?<![가-힣]){word}\s*(?=(?:번|회|개|방울|조각|배|가지)(?![가-힣]))",
+            f"{digit} ", reading,
+        )
+    if _reader_quantities(source) != _reader_quantities(reading):
+        return "quantities_changed"
+    if bool(_SOURCE_NEGATION.search(source)) != bool(_KOREAN_NEGATION.search(reading)):
+        return "negation_changed"
+    folded = text.casefold()
+    for term in required_terms:
+        if term.casefold() not in folded:
+            return "term_missing"
+    return None
 
 
 class CuratedProtocolSession:
@@ -5714,6 +6063,235 @@ class CuratedProtocolSession:
                 return False
         return True
 
+    def reader_translation_target(
+        self, plan: CuratedProtocolTurnPlan,
+    ) -> tuple[str, str, tuple[str, ...]] | None:
+        """The one source statement a reader asked to hear, with no reviewed translation.
+
+        Returns the step label, the statement, and the protocol's own terms
+        it uses -- what ``reader_translation_issue`` holds a model's Korean
+        reading to. Only an explicit request to read a step qualifies.
+        """
+
+        if plan.action is not CuratedProtocolAction.FULL_DETAIL:
+            return None
+        if plan.intent_kind not in {"full_detail", "step_elaboration"}:
+            return None
+        if plan.translation_status not in {"source_language", "unavailable"}:
+            return None
+        if len(plan.source_texts) != 1 or not plan.step_label:
+            return None
+        statement = plan.source_texts[0]
+        terms = tuple(dict.fromkeys(
+            term.text for term in self._protocol_vocabulary().terms
+            if _term_pattern(term.text).search(statement)
+        ))
+        return plan.step_label, statement, terms
+
+    def entity_source_answer(
+        self,
+        entity: str,
+        *,
+        language: str,
+        facts: tuple[CuratedProtocolFact, ...] = (),
+    ) -> EntitySourceAnswer:
+        """What the active PDF itself says about one requested entity.
+
+        Every sentence is the protocol's own: which steps name the entity,
+        and the first statement naming it, where the source introduces it --
+        its reviewed Korean translation where the fixture carries one, else
+        the source line. A definition is given only where the PDF writes the
+        long form ("ammonium bicarbonate (AMBIC)"); any other definition
+        stays for the approved and external references.
+        """
+
+        steps = self.fixture.steps
+
+        def names(fact: CuratedProtocolFact) -> bool:
+            return _names_entity(fact.text, entity)
+
+        # A step's own statements, not the material rows bound to it.
+        mentions: list[tuple[int, CuratedProtocolFact]] = [
+            (index, fact)
+            for index in range(len(steps))
+            for fact in self.fixture.facts_for_step(index)
+            if fact.kind not in {"material", "equipment"} and names(fact)
+        ]
+        if entity in _SOLUTION_SURFACES:
+            # Where the source defines a named solution is where it is
+            # introduced, whichever step names it first.
+            defining = self._solution_definition(entity)
+            if defining is not None:
+                mentions.sort(key=lambda item: item[1] is not defining[1])
+        try:
+            knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
+        except CuratedProtocolFixtureError:
+            knowledge = None
+        overview_kinds: dict[str, tuple[str, str]] = {}
+        overview: tuple[CuratedProtocolFact, ...] = ()
+        if knowledge is not None:
+            overview_kinds = {
+                **{fact.fact_id: ("재료 목록", "materials list") for fact in knowledge.materials},
+                **{fact.fact_id: ("장비 목록", "equipment list") for fact in knowledge.equipment},
+                **{fact.fact_id: ("구간 이름", "section titles") for fact in knowledge.sections},
+            }
+            overview = (
+                *knowledge.materials, *knowledge.equipment, *knowledge.sections,
+                knowledge.purpose, *knowledge.before_start, *knowledge.safety,
+            )
+        materials = tuple(fact for fact in overview if names(fact))
+        supplied = tuple(fact for fact in facts if names(fact))
+        texts = tuple(fact.text for fact in (*supplied, *(f for _, f in mentions), *materials))
+        label = (
+            _source_spelling(entity, texts)
+            or _ENTITY_FALLBACK_LABELS.get(entity)
+            or entity.replace("_", " ")
+        )
+        if not mentions and not materials:
+            text = (
+                f"활성 프로토콜 원문에서 {label}에 대한 내용을 찾지 못했습니다. "
+                "별도 승인 자료를 참조해 주세요."
+                if language == "ko" else
+                f"The active protocol does not mention {label}. "
+                "Please consult approved reference materials."
+            )
+            return EntitySourceAnswer(entity, label, text, text, (), False)
+        defined_as = _source_abbreviation(label, texts)
+        definition = (
+            (
+                f"원문에서 {label}는 {defined_as}의 약어입니다."
+                if language == "ko" else
+                f"The protocol writes {label} for {defined_as}."
+            )
+            if defined_as else None
+        )
+        evidence: list[str] = []
+        if mentions:
+            labels = tuple(dict.fromkeys(steps[index].source_label for index, _ in mentions))
+            # Where the source first names it is where it introduces it.
+            nearest_index, nearest = mentions[0]
+            nearest_label = steps[nearest_index].source_label
+            localized = self._localized_fact(steps[nearest_index].step_id, nearest.fact_id)
+            if localized is not None:
+                localized = _without_step_prefix(nearest_label, localized)
+            listed = ", ".join(
+                (f"{item}단계" if language == "ko" else item) for item in labels[:6]
+            )
+            more = (" 등" if language == "ko" else ", ...") if len(labels) > 6 else ""
+            evidence.append(nearest.fact_id)
+            if language == "ko":
+                lead = f"{label}: 이 프로토콜 원문에서 {listed}{more}에 나옵니다."
+                body = (
+                    f"{nearest_label}단계 내용: {localized}"
+                    if localized is not None else
+                    f"{nearest_label}단계 원문: “{nearest.text.strip()}”"
+                )
+            else:
+                lead = f"{label} appears in the active protocol at step {listed}{more}."
+                body = f"Step {nearest_label} source: “{nearest.text.strip()}”"
+            speech = f"{definition} {lead}" if definition else lead
+            spoken_detail = (
+                f"{lead} {body}" if localized is not None or language != "ko"
+                else f"{lead} 해당 원문은 화면에 표시했습니다."
+            )
+            text = "\n".join(item for item in (definition, lead, body) if item)
+        else:
+            material = materials[0]
+            evidence.append(material.fact_id)
+            where = overview_kinds.get(material.fact_id, ("개요", "overview"))
+            if language == "ko":
+                lead = f"{label}: 이 프로토콜 원문의 {where[0]}에 나옵니다."
+                body = f"원문(p.{material.source_page}): “{material.text.strip()}”"
+            else:
+                lead = f"{label} appears in the active protocol's {where[1]}."
+                body = f"Source (p.{material.source_page}): “{material.text.strip()}”"
+            speech = f"{definition} {lead}" if definition else lead
+            spoken_detail = (
+                f"{lead} 해당 원문은 화면에 표시했습니다." if language == "ko"
+                else f"{lead} {body}"
+            )
+            text = "\n".join(item for item in (definition, lead, body) if item)
+        return EntitySourceAnswer(
+            entity, label, text, speech, tuple(evidence), True, defined_as,
+            spoken_detail,
+        )
+
+    def _solution_definition(
+        self, entity: str,
+    ) -> tuple[int, CuratedProtocolFact] | None:
+        """The step statement that defines a named solution, if the source has one.
+
+        "Solution A: 2 parts of ...", "Prepare Solution A by ...", "Solution A
+        is/contains/made with ..." -- not a line that only uses it.
+        """
+
+        surface = _SOLUTION_SURFACES.get(entity)
+        if surface is None:
+            return None
+        name = rf"(?<![a-z0-9]){surface}(?![a-z0-9])"
+        defines = re.compile(
+            rf"{name}\s*[:=]|\bprepare\b[^.]*{name}|"
+            rf"{name}[^.]*\b(?:is|consists\s+of|contains|made\s+(?:up\s+)?(?:of|with|in|by))\b",
+            re.IGNORECASE,
+        )
+        for index in range(len(self.fixture.steps)):
+            for fact in self.fixture.facts_for_step(index):
+                if fact.kind in {"material", "equipment"}:
+                    continue
+                if defines.search(_derived_source_text(fact.text).casefold()):
+                    return index, fact
+        return None
+
+    def entity_pair_statement(
+        self, first: str, second: str, *, language: str,
+    ) -> tuple[str, str] | None:
+        """The protocol statement naming both entities, as (answer, fact id).
+
+        The relationship is whatever that one statement says -- its reviewed
+        translation or the source line -- never a sentence written for it.
+        """
+
+        steps = self.fixture.steps
+        found: list[tuple[int, CuratedProtocolFact]] = [
+            (index, fact)
+            for index in range(len(steps))
+            for fact in self.fixture.facts_for_step(index)
+            if fact.kind not in {"material", "equipment"}
+            and _names_entity(fact.text, first)
+            and _names_entity(fact.text, second)
+        ]
+        if not found:
+            return None
+        index, fact = min(
+            found,
+            key=lambda item: (
+                item[0] != self.current_index,
+                item[0] < self.current_index,
+                abs(item[0] - self.current_index),
+            ),
+        )
+        first_label = _source_spelling(first, (fact.text,)) or first.replace("_", " ")
+        second_label = _source_spelling(second, (fact.text,)) or second.replace("_", " ")
+        label = steps[index].source_label
+        localized = self._localized_fact(steps[index].step_id, fact.fact_id)
+        if localized is not None:
+            localized = _without_step_prefix(label, localized)
+        if language == "ko":
+            content = (
+                f"{label}단계 내용: {localized}" if localized is not None
+                else f"{label}단계 원문: “{fact.text.strip()}”"
+            )
+            answer = (
+                f"관계: 원문에서 {first_label}와 {second_label}가 함께 나오는 곳은 "
+                f"{label}단계입니다. {content}"
+            )
+        else:
+            answer = (
+                f"Relationship: {first_label} and {second_label} appear together "
+                f"at step {label}: “{fact.text.strip()}”"
+            )
+        return answer, fact.fact_id
+
     def current_step_semantic_frame(self) -> StepSemanticFrame:
         return build_step_semantic_frame(self.fixture, self.current_index)
 
@@ -5737,7 +6315,6 @@ class CuratedProtocolSession:
         frame = self.current_step_semantic_frame()
         facts = self.related_facts(transcript)
         knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
-        candidate_a = self.fixture.protocol_id == CANDIDATE_A_PROTOCOL_ID
         claims: list[ClaimRequest] = []
 
         def add(
@@ -5772,10 +6349,6 @@ class CuratedProtocolSession:
 
         if intent.protocol_scope == "purpose":
             answer = (
-                "이 프로토콜은 젤 안의 단백질을 소화해 Evotip과 질량분석에 사용할 시료를 준비하는 실험입니다."
-                if candidate_a and language == "ko" else
-                "This protocol prepares in-gel digests for loading onto Evotips and mass-spectrometry analysis."
-                if candidate_a else
                 f"활성 프로토콜 원문에 표시된 목적 또는 제목은 다음과 같습니다: {knowledge.purpose.text}"
                 if language == "ko" else
                 f"The active protocol source states this purpose or title: {knowledge.purpose.text}"
@@ -5786,10 +6359,6 @@ class CuratedProtocolSession:
             )
         elif intent.question_kind == "protocol_benefit":
             answer = (
-                "이 과정이 유용한 이유는 젤 안의 단백질을 소화한 뒤 Evotip과 질량분석으로 이어질 수 있는 시료 상태를 만들기 때문입니다."
-                if candidate_a and language == "ko" else
-                "It is useful because it turns protein in the gel into an in-gel digest that the source says is ready for Evotips and mass-spectrometry analysis."
-                if candidate_a else
                 f"활성 원문에서 확인되는 범위는 ‘{knowledge.purpose.text}’입니다. 별도의 과학적 이점은 원문 근거 없이 추정하지 않습니다."
                 if language == "ko" else
                 f"The active source supports only ‘{knowledge.purpose.text}’. I will not infer a separate scientific benefit without source evidence."
@@ -5807,140 +6376,42 @@ class CuratedProtocolSession:
             r"(?:비율|parts?|ratio|몇\s*대\s*몇|\d+\s*대\s*\d+|대\s*일|:\s*1)",
             key,
         ))
-        entity_answers = {
-            "ambic": (
-                "AMBIC는 ammonium bicarbonate(중탄산 암모늄)의 약칭으로, 휘발성 약알칼리성 완충 용액 역할을 합니다. 이 프로토콜에서는 25 mM 농도로 조제하여 Solution A와 B의 기본 성분 및 트립신 배양액으로 사용됩니다. 프로토콜 원문에는 25 mM AMBIC의 구체적 작용 기전은 설명되어 있지 않습니다."
-                if language == "ko" else
-                "AMBIC stands for ammonium bicarbonate, a volatile mildly basic buffer. In this protocol, it is prepared at 25 mM as the base component of Solutions A and B and as the trypsin digestion buffer. The protocol text specifies 25 mM AMBIC without detailing its chemical mechanism."
-            ),
-            "hplc_water": (
-                "HPLC water는 고성능 액체 크로마토그래피 등급의 고순도 정제수로, 불순물로 인한 질량분석 방해를 방지합니다. 이 프로토콜에서는 25 mM AMBIC 수용액을 만드는 데 사용됩니다. 일반 정제수와의 구체적 불순물 기준 차이는 별도 권위 자료가 필요합니다."
-                if language == "ko" else
-                "HPLC water is high-purity chromatography-grade water used to prevent mass spec background interference. In this protocol, it is used to prepare the 25 mM AMBIC base solution. Quality differences compared to deionized water require separate authoritative references."
-            ),
-            "solution_a": (
-                "Solution A는 25 mM AMBIC 수용액 2 parts와 acetonitrile 1 part를 혼합한 젤 탈색 세척 용액입니다. 젤에서 염색약을 씻어내는 유기/수계 혼합 세척 역할을 합니다. 후보 A 원문은 2:1 혼합 비율을 지정하지만 해당 혼합비의 기전적 이유는 명시하지 않습니다."
-                if language == "ko" else
-                "Solution A is the wash solution prepared by mixing 2 parts of 25 mM AMBIC in HPLC water with 1 part acetonitrile. It acts as an organic-aqueous wash to destain gel pieces. Candidate A specifies the 2:1 ratio without stating the mechanistic rationale."
-            ),
-            "solution_b": (
-                "Solution B는 HPLC water로 조제한 25 mM AMBIC 수용액입니다. Solution A 세척 후 젤 조각을 헹구고 완충 환경을 맞추는 역할을 합니다. 원문은 500 µL 세척을 지시하지만 세척 후 배출액의 시설별 폐기 경로는 명시하지 않습니다."
-                if language == "ko" else
-                "Solution B is 25 mM AMBIC made in HPLC water. It rinses the gel piece after Solution A washes and maintains the buffer environment. The protocol specifies 500 µL washes without defining facility-specific waste streams."
-            ),
-            "acetonitrile": (
-                "Acetonitrile(아세토니트릴)은 유기 용매로, 단백질 젤을 탈수시키고 소수성 상호작용을 줄여 염색약 제거와 시약 침투를 돕습니다. 이 프로토콜에서는 Solution A의 1 part 성분 및 젤 탈수 세척액으로 사용됩니다."
-                if language == "ko" else
-                "Acetonitrile is an organic solvent used to dehydrate gel pieces and facilitate destaining and reagent penetration. In this protocol, it is the 1-part component of Solution A and the wash for gel dehydration."
-            ),
-            "gel_plug": (
-                "젤 플러그(gel plug)는 염색된 단백질 밴드에서 잘라낸 약 1 mm³ 크기의 작은 젤 조각입니다. 세척, 탈색, 환원·알킬화, 트립신 소화 등 전체 인젤 소화 과정의 물리적 반응 대상입니다."
-                if language == "ko" else
-                "A gel plug is the small (~1 mm³) piece excised from a stained protein band. It serves as the reaction vessel material throughout destaining, reduction/alkylation, and trypsin digestion."
-            ),
-            "stained_protein_band": (
-                "염색된 단백질 밴드는 SDS-PAGE 전기영동 후 염색되어 육안으로 확인되는 표적 단백질 겔 영역입니다. 이 프로토콜에서 1 mm³ 플러그 또는 밴드 전체를 잘라내어 인젤 소화 및 질량분석 시료로 준비합니다."
-                if language == "ko" else
-                "The stained protein band is the visualized protein zone on an SDS-PAGE gel after electrophoresis. In this protocol, it is excised as a 1 mm³ plug or sliced into smaller sections for in-gel digestion and mass spectrometry."
-            ),
-            "dtt": (
-                "DTT(dithiothreitol)는 강력한 환원제로, 단백질 내 이황화 결합(disulfide bond)을 끊어 3차 구조를 풀어줍니다. 이 프로토콜 10단계에서 1.5 mg/mL (10 mM) 농도로 25 mM AMBIC에 조제하여 사용합니다."
-                if language == "ko" else
-                "DTT (dithiothreitol) is a reducing agent that breaks disulfide bonds to denature protein structure. In step 10, it is prepared at 1.5 mg/mL (10 mM) in 25 mM AMBIC."
-            ),
-            "iodoacetamide": (
-                "Iodoacetamide(요오도아세트아미드)는 알킬화제로, DTT로 환원된 시스테인 티올기(-SH)를 알킬화(카르바미도메틸화)하여 이황화 결합의 재형성을 막습니다. 10단계에서 10 mg/mL (60 mM)로 조제하여 암소에서 반응시킵니다."
-                if language == "ko" else
-                "Iodoacetamide is an alkylating agent that covalently modifies reduced cysteine thiols to prevent disulfide reformation. In step 10, it is prepared at 10 mg/mL (60 mM) and incubated in the dark."
-            ),
-            "trypsin": (
-                "Trypsin(트립신)은 단백질 분해 효소로, 라이신(Lys)과 아르기닌(Arg) 잔기의 C-말단을 특이적으로 절단하여 질량분석에 적합한 펩타이드를 생성합니다. 21단계에서 25 mM AMBIC에 6 ng/µL로 조제하여 사용합니다."
-                if language == "ko" else
-                "Trypsin is a protease that specifically cleaves proteins at the C-terminus of lysine and arginine residues to produce peptides for mass spectrometry. In step 21, it is prepared at 6 ng/µL in 25 mM AMBIC."
-            ),
-            "formic_acid": (
-                "Formic acid(포름산, LC-MS grade)는 산성화 시약으로, 트립신 소화 반응을 정지시키고 펩타이드를 양이온화하여 펩타이드 추출 및 LC-MS 이온화를 돕습니다. 24단계에서 최종 1% (v/v) 농도로 첨가합니다."
-                if language == "ko" else
-                "Formic acid (LC-MS grade) is an acidifying agent used to quench trypsin activity and protonate peptides for extraction and LC-MS ionization. In step 24, it is added to achieve a final 1% (v/v) concentration."
-            ),
-            "rpm": (
-                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 이 프로토콜에서는 800 rpm이 부드러운 교반 속도로 지정되어 있습니다. 원문은 800 rpm을 지정하지만 이 회전 속도의 기전적 근거는 명시하지 않습니다."
-                if language == "ko" else
-                "rpm means revolutions per minute; in this protocol 800 rpm is the gentle-agitation speed setting. The protocol specifies 800 rpm without detailing the mechanistic basis for this speed."
-            ),
-            "incubation": (
-                "배양(incubation)은 반응물이 특정 온도와 시간 조건에서 반응하도록 유지하는 과정입니다. 이 프로토콜에서는 탈색, 환원, 알킬화, 트립신 소화 등 각 단계마다 37°C, 60°C, 실온 등의 온도 조건이 지정됩니다."
-                if language == "ko" else
-                "Incubation is holding the reaction mixture at specified temperature and time conditions. In this protocol, different steps use 37°C, 60°C, or room temperature for destaining, reduction, alkylation, and digestion."
-            ),
-            "contamination": (
-                "오염(contamination)은 외부 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 각질(keratin) 및 먼지 오염을 방지하기 위해 장갑 착용과 깨끗한 작업 환경을 경고합니다."
-                if language == "ko" else
-                "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace."
-            ),
-            "tube": (
-                "이 프로토콜에서 튜브는 잘라낸 1 mm³ 젤 플러그를 담아 세척, 탈색, 환원·알킬화 및 효소 소화 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브(반응 튜브)를 의미합니다. 프로토콜 원문은 튜브의 특정 재질이나 제조사를 별도로 한정하지 않습니다."
-                if language == "ko" else
-                "In this protocol, the tube refers to the 1.5 mL microcentrifuge reaction tube that holds the excised 1 mm³ gel plug during washing, destaining, reduction/alkylation, and enzymatic digestion. The source protocol does not restrict specific tube materials or brands."
-            ),
-        }
-        if not candidate_a:
-            # These curated explanations were reviewed only for Candidate A.
-            # Arbitrary PDFs may share entity names but not context or authority.
-            entity_answers = {}
-        alias_map = {
-            "ambic": ("ambic", "ammonium bicarbonate"),
-            "hplc_water": ("hplc water", "hplc"),
-            "solution_a": ("solution a",),
-            "solution_b": ("solution b",),
-            "acetonitrile": ("acetonitrile",),
-            "gel_plug": ("gel plug",),
-            "stained_protein_band": ("stained protein band", "protein band", "gel band", "band", "밴드", "단백질 밴드", "젤 밴드"),
-            "tube": ("tube", "microcentrifuge tube", "튜브", "반응 튜브", "관"),
-            "dtt": ("dtt", "dithiothreitol"),
-            "iodoacetamide": ("iodoacetamide",),
-            "trypsin": ("trypsin",),
-            "formic_acid": ("formic acid", "formic"),
-            "rpm": ("rpm",),
-            "incubation": ("incubat", "배양"),
-            "contamination": ("contamination", "keratin", "오염"),
-        }
         for entity in intent.requested_entities:
-            evidence = tuple(
-                fact.fact_id for fact in facts
-                if any(alias in _derived_source_text(fact.text).casefold()
-                       for alias in alias_map.get(entity, (entity,)))
-            )[:2]
-            if not evidence:
-                evidence = tuple(
-                    fact.fact_id
-                    for idx in range(len(self.fixture.steps))
-                    for fact in self.fixture.facts_for_step(idx)
-                    if any(alias in _derived_source_text(fact.text).casefold()
-                           for alias in alias_map.get(entity, (entity,)))
-                )[:2]
-            if not evidence and knowledge.materials:
-                evidence = tuple(
-                    fact.fact_id for fact in knowledge.materials
-                    if any(alias in _derived_source_text(fact.text).casefold()
-                           for alias in alias_map.get(entity, (entity,)))
-                )[:2]
-            if not evidence and knowledge.purpose:
-                evidence = (knowledge.purpose.fact_id,)
-            answer = entity_answers.get(entity)
-            if answer and evidence:
-                dimension = (
-                    "composition" if entity in {"solution_a", "solution_b"}
-                    else "definition"
-                )
-                add(
-                    ClaimTargetType.ENTITY, entity, dimension,
-                    evidence_ids=evidence, local_answer=answer,
-                )
+            # What the PDF says about the entity, and nothing it does not say.
+            # A named solution's composition is the statement that defines it,
+            # so only that is admitted locally; a definition the PDF does not
+            # give is left for the approved and external references. A safety
+            # question is about safety, which the envelope's safety branch
+            # answers, not about what the entity is.
+            if intent.question_kind == "safety":
+                continue
+            found = self.entity_source_answer(entity, language=language, facts=facts)
+            if not found.found:
+                continue
+            composition = entity in _SOLUTION_SURFACES
+            local = (
+                self._solution_definition(entity) is not None if composition
+                else found.defined_as is not None
+            )
+            add(
+                ClaimTargetType.ENTITY, entity,
+                "composition" if composition else "definition",
+                evidence_ids=found.evidence_ids, local_answer=found.text,
+                unresolved_reason=(
+                    None if local else "definition_absent_from_active_protocol"
+                ),
+                authority=(
+                    "ACTIVE_PROTOCOL" if local
+                    else "AUTHORITATIVE_EXTERNAL_REFERENCE"
+                ),
+                status=(
+                    None if local else ClaimAdmissionStatus.RESEARCH_REQUIRED
+                ),
+            )
         if "difference" in intent.question_dimensions and intent.requested_entities:
             target = "-vs-".join(intent.requested_entities)
             limitation = (
-                "활성 프로토콜은 일반 물과의 품질 차이를 정의하지 않으므로, 그 비교에는 별도 권위 자료가 필요합니다."
+                "활성 프로토콜은 그 차이를 정의하지 않으므로, 비교에는 별도 권위 자료가 필요합니다."
                 if language == "ko" else
                 "The active protocol does not define that general quality difference, so the comparison requires a separate authoritative source."
             )
@@ -5957,31 +6428,39 @@ class CuratedProtocolSession:
             )
         elif (
             "relationship" in intent.question_dimensions
-            and {"hplc_water", "ambic"} <= set(intent.requested_entities)
+            and len(intent.requested_entities) >= 2
+            and (joint := self.entity_pair_statement(
+                intent.requested_entities[0], intent.requested_entities[1],
+                language=language,
+            )) is not None
         ):
-            evidence_ids = tuple(dict.fromkeys(
-                evidence_id for claim in claims
-                for evidence_id in claim.evidence_ids
-            ))
-            answer = (
-                "관계: 이 프로토콜에서는 HPLC water가 25 mM AMBIC 용액을 만드는 물이고, AMBIC가 그 용액의 성분입니다."
-                if language == "ko" else
-                "Relationship: in this protocol, HPLC water is the water used to prepare the 25 mM AMBIC solution, and AMBIC is its solute component."
+            add(
+                ClaimTargetType.COMPARISON,
+                "-".join(intent.requested_entities[:2]),
+                "relationship", evidence_ids=(joint[1],),
+                local_answer=joint[0],
             )
-            if evidence_ids:
-                add(
-                    ClaimTargetType.COMPARISON, "hplc_water-ambic",
-                    "relationship", evidence_ids=evidence_ids,
-                    local_answer=answer,
-                )
 
-        if re.search(r"(?:1\.5\s*mL\s*튜브|1\.5\s*mL\s*tube|그\s*크기\s*튜브)", key, re.I):
+        current_source = self.fixture.steps[self.current_index]
+        if re.search(
+            r"(?:1\.5\s*mL\s*튜브|1\.5\s*mL\s*tube|그\s*크기\s*튜브)", key, re.I
+        ) and re.search(
+            r"1\.5\s*ml\s*tube",
+            _derived_source_text(current_source.instruction_source_text),
+            re.I,
+        ):
+            # Only where the current step itself names a 1.5 mL tube, and
+            # answered with that step's own statement.
             current_evidence = ("current_step",)
             if re.search(r"(?:뭘|무엇|what).*(?:넣|들어|place|contain)|(?:튜브).*(?:뭘|무엇)", key):
+                localized = self._localized_fact(current_source.step_id, "current_step")
                 answer = (
-                    "1.5 mL 튜브에는 약 200 µL의 25 mM AMBIC이 있고, 절취한 젤 재료를 그 안에 넣습니다."
+                    f"현재 {current_source.source_label}단계 내용: "
+                    f"{_without_step_prefix(current_source.source_label, localized)}"
+                    if language == "ko" and localized is not None else
+                    f"현재 {current_source.source_label}단계 원문: “{current_source.instruction_source_text.strip()}”"
                     if language == "ko" else
-                    "The 1.5 mL tube contains approximately 200 µL of 25 mM AMBIC, and the excised gel material is placed into it."
+                    f"Step {current_source.source_label} source: “{current_source.instruction_source_text.strip()}”"
                 )
                 add(
                     ClaimTargetType.ACTION, "place_gel_in_tube", "value",
@@ -6060,9 +6539,9 @@ class CuratedProtocolSession:
                     for claim in claims
                 ):
                     limitation = (
-                        f"후보 A 프로토콜 원문은 {frame.step_label}단계의 {label} 조건을 명시하고 있으나, 저자가 이 정확한 수치를 선택한 과학적 근거는 원문 문서 자체에 설명되어 있지 않습니다."
+                        f"활성 프로토콜 원문은 {frame.step_label}단계의 {label} 조건을 명시하고 있으나, 저자가 이 정확한 수치를 선택한 과학적 근거는 원문 문서 자체에 설명되어 있지 않습니다."
                         if language == "ko" else
-                        f"Candidate A specifies the {label} condition for step {frame.step_label}, but the document itself does not explain why the author selected this exact value."
+                        f"The active protocol specifies the {label} condition for step {frame.step_label}, but the document itself does not explain why the author selected this exact value."
                     )
                     add(
                         ClaimTargetType.PARAMETER, binding.parameter_id, "rationale",
@@ -6132,9 +6611,9 @@ class CuratedProtocolSession:
             target_label = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "지정된 용액"
             target_label_en = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "the specified solution"
             action_answer = (
-                f"활성 프로토콜은 젤 밴드가 든 튜브에서 {target_label}를 제거해 버리라고 지시합니다."
+                f"활성 프로토콜은 {target_label}를 제거해 버리라고 지시합니다."
                 if language == "ko" and action.action_type == "remove_discard" else
-                f"The active protocol instructs you to remove and discard {target_label_en} from the tube containing the gel band."
+                f"The active protocol instructs you to remove and discard {target_label_en}."
                 if action.action_type == "remove_discard" else
                 (f"현재 단계의 확인된 동작은 {_derived_source_text(action.source_text)}입니다.")
             )
@@ -6171,9 +6650,9 @@ class CuratedProtocolSession:
                 )
             if re.search(r"(?:어떻게|폐기|처리\s*방법|waste|stream|how|dispos|discard|방법|분류)", key):
                 limitation = (
-                    f"Candidate A는 {target_label}를 제거해 폐기하라고 지시하지만, 구체적인 폐기 방법이나 시설별 폐기물 분류는 이 PDF에 명시되어 있지 않습니다. 관련 안전자료와 외부 권위자료를 확인해보겠습니다."
+                    f"활성 프로토콜은 {target_label}를 제거해 폐기하라고 지시하지만, 구체적인 폐기 방법이나 시설별 폐기물 분류는 이 PDF에 명시되어 있지 않습니다. 관련 안전자료와 외부 권위자료를 확인해보겠습니다."
                     if language == "ko" else
-                    f"Candidate A instructs removing and discarding {target_label_en}, but specific laboratory disposal methods and facility waste streams are not detailed in this protocol PDF."
+                    f"The active protocol instructs removing and discarding {target_label_en}, but specific laboratory disposal methods and facility waste streams are not detailed in this protocol PDF."
                 )
                 add(
                     ClaimTargetType.ACTION, action.action_id, "disposal_method",
@@ -6254,20 +6733,10 @@ class CuratedProtocolSession:
             ),
             "",
         )
-        section_key = section_title.casefold()
         if language == "ko":
-            purpose = ""
-            if "band excision" in section_key:
-                purpose = "SDS-PAGE 젤에서 분석할 밴드 시료를 절취해 후속 처리를 위한 튜브에 준비하는 것"
-            elif "destain" in section_key:
-                purpose = "젤 밴드의 염색을 제거해 다음 처리 단계로 진행할 상태를 만드는 것"
-            elif "reduction" in section_key or "alkylation" in section_key:
-                purpose = "원문에 정의된 cysteine 환원·알킬화 구간을 수행하는 것"
-            elif "trypsin" in section_key or "digestion" in section_key:
-                purpose = "젤 안의 단백질을 trypsin 소화 단계로 처리하는 것"
-            elif "peptide" in section_key or "extract" in section_key:
-                purpose = "소화된 peptide를 회수해 후속 분석용 시료로 준비하는 것"
-            elif section_title:
+            # The step's purpose is the section the source puts it in, named
+            # as the source names it -- never a sentence written for one PDF.
+            if section_title:
                 purpose = f"원문의 ‘{concise(section_title, 90)}’ 구간을 수행하는 것"
             else:
                 purpose = "현재 PDF에 정의된 순서에 따라 후속 단계를 준비하는 것"
@@ -6339,16 +6808,32 @@ class CuratedProtocolSession:
         self,
         transcript: str,
     ) -> tuple[int, CuratedProtocolFact, str] | None:
-        """Resolve one dominant recent Solution A/B reference from adjacent facts."""
+        """Resolve one dominant recent Solution A/B reference from adjacent facts.
 
-        if self.fixture.steps[self.current_index].source_label not in {"3", "5"}:
+        Read off the source for any protocol: the current step names exactly
+        one of the solutions, and the statement that resolves the question is
+        the step statement that defines it ("Solution A: ...", "Prepare
+        Solution A ..."), never one that only uses it. Only a question about
+        how it is made qualifies. On in-gel that is step 2.
+        """
+
+        current_text = _derived_source_text(
+            self.fixture.steps[self.current_index].instruction_source_text
+        ).casefold()
+        named_here = tuple(
+            name for name, surface in _SOLUTION_SURFACES.items()
+            if re.search(rf"(?<![a-z0-9]){surface}(?![a-z0-9])", current_text)
+        )
+        if len(named_here) != 1:
             return None
         key = _semantic_utterance_key(transcript)
+        # Only a question about how the solution is made: "그거 어떻게 버려?"
+        # asks about disposal and is not answered with the recipe.
         if not any(
             term in key
             for term in (
-                "어떻게", "준비", "만들", "조성", "구성", "비율", "뭐가",
-                "무엇이", "들어가", "prepare", "make", "contain",
+                "준비", "만들", "조성", "구성", "비율", "들어가", "뭐로", "무엇으로",
+                "prepare", "make", "contain", "composition",
             )
         ):
             return None
@@ -6359,44 +6844,37 @@ class CuratedProtocolSession:
             r"(?:solution\s*b|b\s*용액|용액\s*b|비\s*용액|용액\s*비)", key
         ))
         vague = bool(re.search(r"(?:(?:그|해당)\s*용액|그거|방금\s*말한\s*것)", key))
-        if not (explicit_a or explicit_b or vague or re.search(
-            r"(?<![a-z0-9])ambic(?![a-z0-9])", key
-        )):
-            return None
-        current_label = self.fixture.steps[self.current_index].source_label
         mentions_ambic = bool(re.search(
             r"(?<![a-z0-9])ambic(?![a-z0-9])", key
         ))
+        if not (explicit_a or explicit_b or vague or mentions_ambic):
+            return None
         entity = (
             "solution_a" if explicit_a else
             "solution_b" if explicit_b else
-            "solution_a" if vague and current_label == "3" else
-            "solution_b" if vague and current_label == "5" else
-            "solution_a" if mentions_ambic and current_label == "3" else
-            "solution_b" if mentions_ambic and current_label == "5" else
-            None
+            named_here[0]
         )
-        if entity is None:
+        defining = self._solution_definition(entity)
+        if defining is None or defining[0] == self.current_index:
             return None
-        source_index = next(
-            (index for index, step in enumerate(self.fixture.steps)
-             if step.source_label == "2"), -1
-        )
-        candidates = tuple(
-            fact
-            for fact in self.fixture.facts_for_step(source_index)
-            if fact.fact_id == "current_step"
-            and "solution a" in fact.text.casefold()
-            and "solution b" in fact.text.casefold()
-            and "ambic" in fact.text.casefold()
-            and "acetonitrile" in fact.text.casefold()
-        )
-        return (source_index, candidates[0], entity) if len(candidates) == 1 else None
+        source_index, fact = defining
+        if fact.fact_id != "current_step":
+            return None
+        if mentions_ambic and not (explicit_a or explicit_b or vague) and (
+            "ambic" not in _derived_source_text(fact.text).casefold()
+        ):
+            return None
+        return source_index, fact, entity
 
     def _needs_solution_clarification(self, transcript: str) -> bool:
         key = _semantic_utterance_key(transcript)
+        current_text = _derived_source_text(
+            self.fixture.steps[self.current_index].instruction_source_text
+        ).casefold()
         return bool(
-            self.fixture.steps[self.current_index].source_label == "2"
+            # A step that names both solutions leaves "그 용액" ambiguous.
+            "solution a" in current_text
+            and "solution b" in current_text
             and re.search(r"(?:(?:그|해당)\s*용액|그거|방금\s*말한\s*것)", key)
             and any(term in key for term in ("어떻게", "준비", "만들", "구성", "비율"))
         )
@@ -6892,7 +7370,6 @@ class CuratedProtocolSession:
         entities = plan.requested_entities or (
             (plan.requested_entity,) if plan.requested_entity else ()
         )
-        candidate_a = self.fixture.protocol_id == CANDIDATE_A_PROTOCOL_ID
         if plan.claim_requests:
             admitted = tuple(
                 claim for claim in plan.claim_requests
@@ -6913,18 +7390,28 @@ class CuratedProtocolSession:
                 )
                 if language == "ko":
                     summaries = []
+                    entity_claims = tuple(
+                        claim for claim in visible
+                        if claim.target_type is ClaimTargetType.ENTITY
+                    )
                     for claim in visible:
-                        target = claim.target_id
-                        if target in _CONCISE_SUMMARIES_KO:
-                            summaries.append(_CONCISE_SUMMARIES_KO[target])
-                        elif claim.local_answer:
-                            first_sent = claim.local_answer.split(".")[0].strip()
+                        if claim.target_type is ClaimTargetType.ENTITY:
+                            summaries.append(self.entity_source_answer(
+                                claim.target_id, language=language, facts=facts,
+                            ).spoken(alone=len(entity_claims) == 1 and len(visible) == 1))
+                            continue
+                        if claim.local_answer:
+                            first_sent = re.split(
+                                r"(?<=다)\.\s|\n", claim.local_answer.strip(), maxsplit=1
+                            )[0].strip()
                             if first_sent:
                                 summaries.append(first_sent)
-                    if len(summaries) == 1:
-                        speech = f"{summaries[0]}입니다. 자세한 내용은 화면에 정리했습니다."
-                    elif len(summaries) >= 2:
-                        speech = f"{summaries[0]}이고, {summaries[1]}입니다. 자세한 내용은 화면에 정리했습니다."
+                    if summaries:
+                        speech = " ".join(
+                            _spoken_summary_sentence(item) for item in summaries[:2]
+                        )
+                        if "화면에" not in speech:
+                            speech += " 자세한 내용은 화면에 정리했습니다."
                     else:
                         speech = "요청하신 내용을 정리했습니다. 자세한 내용은 화면을 확인해 주세요."
                 else:
@@ -6973,159 +7460,24 @@ class CuratedProtocolSession:
                     ),
                 )
         sections: list[tuple[str, str]] = []
-        explanations_ko = {
-            "ambic": (
-                "AMBIC",
-                "AMBIC는 ammonium bicarbonate(중탄산 암모늄)의 약칭으로, 휘발성 약알칼리성 완충 용액 역할을 합니다. 이 프로토콜에서는 25 mM 농도로 조제하여 Solution A와 B의 기본 성분 및 트립신 배양액으로 사용됩니다. 프로토콜 원문에는 25 mM AMBIC의 구체적 작용 기전은 설명되어 있지 않습니다.",
-            ),
-            "hplc_water": (
-                "HPLC water",
-                "HPLC water는 고성능 액체 크로마토그래피 등급의 고순도 정제수로, 불순물로 인한 질량분석 방해를 방지합니다. 이 프로토콜에서는 25 mM AMBIC 수용액을 만드는 데 사용됩니다. 일반 정제수와의 구체적 불순물 기준 차이는 별도 권위 자료가 필요합니다.",
-            ),
-            "solution_a": (
-                "Solution A",
-                "Solution A는 25 mM AMBIC 수용액 2 parts와 acetonitrile 1 part를 혼합한 젤 탈색 세척 용액입니다. 젤에서 염색약을 씻어내는 유기/수계 혼합 세척 역할을 합니다. 후보 A 원문은 2:1 혼합 비율을 지정하지만 해당 혼합비의 기전적 이유는 명시하지 않습니다.",
-            ),
-            "solution_b": (
-                "Solution B",
-                "Solution B는 HPLC water로 조제한 25 mM AMBIC 수용액입니다. Solution A 세척 후 젤 조각을 헹구고 완충 환경을 맞추는 역할을 합니다. 원문은 500 µL 세척을 지시하지만 세척 후 배출액의 시설별 폐기 경로는 명시하지 않습니다.",
-            ),
-            "acetonitrile": (
-                "Acetonitrile",
-                "Acetonitrile(아세토니트릴)은 유기 용매로, 단백질 젤을 탈수시키고 소수성 상호작용을 줄여 염색약 제거와 시약 침투를 돕습니다. 이 프로토콜에서는 Solution A의 1 part 성분 및 젤 탈수 세척액으로 사용됩니다.",
-            ),
-            "gel_plug": (
-                "Gel plug",
-                "젤 플러그(gel plug)는 염색된 단백질 밴드에서 잘라낸 약 1 mm³ 크기의 작은 젤 조각입니다. 세척, 탈색, 환원·알킬화, 트립신 소화 등 전체 인젤 소화 과정의 물리적 반응 대상입니다.",
-            ),
-            "stained_protein_band": (
-                "Stained protein band",
-                "염색된 단백질 밴드는 SDS-PAGE 전기영동 후 염색되어 육안으로 확인되는 표적 단백질 겔 영역입니다. 이 프로토콜에서 1 mm³ 플러그 또는 밴드 전체를 잘라내어 인젤 소화 및 질량분석 시료로 준비합니다.",
-            ),
-            "dtt": (
-                "DTT",
-                "DTT(dithiothreitol)는 강력한 환원제로, 단백질 내 이황화 결합(disulfide bond)을 끊어 3차 구조를 풀어줍니다. 이 프로토콜 10단계에서 1.5 mg/mL (10 mM) 농도로 25 mM AMBIC에 조제하여 사용합니다.",
-            ),
-            "iodoacetamide": (
-                "Iodoacetamide",
-                "Iodoacetamide(요오도아세트아미드)는 알킬화제로, DTT로 환원된 시스테인 티올기(-SH)를 알킬화(카르바미도메틸화)하여 이황화 결합의 재형성을 막습니다. 10단계에서 10 mg/mL (60 mM)로 조제하여 암소에서 반응시킵니다.",
-            ),
-            "trypsin": (
-                "Trypsin",
-                "Trypsin(트립신)은 단백질 분해 효소로, 라이신(Lys)과 아르기닌(Arg) 잔기의 C-말단을 특이적으로 절단하여 질량분석에 적합한 펩타이드를 생성합니다. 21단계에서 25 mM AMBIC에 6 ng/µL로 조제하여 사용합니다.",
-            ),
-            "formic_acid": (
-                "Formic acid",
-                "Formic acid(포름산, LC-MS grade)는 산성화 시약으로, 트립신 소화 반응을 정지시키고 펩타이드를 양이온화하여 펩타이드 추출 및 LC-MS 이온화를 돕습니다. 24단계에서 최종 1% (v/v) 농도로 첨가합니다.",
-            ),
-            "rpm": (
-                "rpm",
-                "rpm은 분당 회전수를 나타내는 기기 설정값이며, 이 프로토콜에서는 800 rpm이 부드러운 교반 속도로 지정되어 있습니다. 원문은 800 rpm을 지정하지만 이 회전 속도의 기전적 근거는 명시하지 않습니다.",
-            ),
-            "incubation": (
-                "Incubation",
-                "배양(incubation)은 반응물이 특정 온도와 시간 조건에서 반응하도록 유지하는 과정입니다. 이 프로토콜에서는 탈색, 환원, 알킬화, 트립신 소화 등 각 단계마다 37°C, 60°C, 실온 등의 온도 조건이 지정됩니다.",
-            ),
-            "contamination": (
-                "Contamination",
-                "오염(contamination)은 외부 물질이 시료에 섞이는 상태이며, 이 프로토콜은 특히 각질(keratin) 및 먼지 오염을 방지하기 위해 장갑 착용과 깨끗한 작업 환경을 경고합니다.",
-            ),
-            "tube": (
-                "Tube (반응 튜브)",
-                "이 프로토콜에서 튜브는 잘라낸 1 mm³ 젤 플러그를 담아 세척, 탈색, 환원·알킬화 및 효소 소화 반응을 진행하는 1.5 mL 마이크로센트리퓨즈 튜브(반응 튜브)를 의미합니다. 프로토콜 원문은 튜브의 특정 재질이나 제조사를 별도로 한정하지 않습니다.",
-            ),
-        }
-        explanations_en = {
-            "ambic": (
-                "AMBIC",
-                "AMBIC stands for ammonium bicarbonate, a volatile mildly basic buffer. In this protocol, it is prepared at 25 mM as the base component of Solutions A and B and as the trypsin digestion buffer. The protocol text specifies 25 mM AMBIC without detailing its chemical mechanism.",
-            ),
-            "hplc_water": (
-                "HPLC water",
-                "HPLC water is high-purity chromatography-grade water used to prevent mass spec background interference. In this protocol, it is used to prepare the 25 mM AMBIC base solution. Quality differences compared to deionized water require separate authoritative references.",
-            ),
-            "solution_a": (
-                "Solution A",
-                "Solution A is the wash solution prepared by mixing 2 parts of 25 mM AMBIC in HPLC water with 1 part acetonitrile. It acts as an organic-aqueous wash to destain gel pieces. Candidate A specifies the 2:1 ratio without stating the mechanistic rationale.",
-            ),
-            "solution_b": (
-                "Solution B",
-                "Solution B is 25 mM AMBIC made in HPLC water. It rinses the gel piece after Solution A washes and maintains the buffer environment. The protocol specifies 500 µL washes without defining facility-specific waste streams.",
-            ),
-            "acetonitrile": (
-                "Acetonitrile",
-                "Acetonitrile is an organic solvent used to dehydrate gel pieces and facilitate destaining and reagent penetration. In this protocol, it is the 1-part component of Solution A and the wash for gel dehydration.",
-            ),
-            "gel_plug": (
-                "Gel plug",
-                "A gel plug is the small (~1 mm³) piece excised from a stained protein band. It serves as the reaction vessel material throughout destaining, reduction/alkylation, and trypsin digestion.",
-            ),
-            "stained_protein_band": (
-                "Stained protein band",
-                "The stained protein band is the visualized protein zone on an SDS-PAGE gel after electrophoresis. In this protocol, it is excised as a 1 mm³ plug or sliced into smaller sections for in-gel digestion and mass spectrometry.",
-            ),
-            "dtt": (
-                "DTT",
-                "DTT (dithiothreitol) is a reducing agent that breaks disulfide bonds to denature protein structure. In step 10, it is prepared at 1.5 mg/mL (10 mM) in 25 mM AMBIC.",
-            ),
-            "iodoacetamide": (
-                "Iodoacetamide",
-                "Iodoacetamide is an alkylating agent that covalently modifies reduced cysteine thiols to prevent disulfide reformation. In step 10, it is prepared at 10 mg/mL (60 mM) and incubated in the dark.",
-            ),
-            "trypsin": (
-                "Trypsin",
-                "Trypsin is a protease that specifically cleaves proteins at the C-terminus of lysine and arginine residues to produce peptides for mass spectrometry. In step 21, it is prepared at 6 ng/µL in 25 mM AMBIC.",
-            ),
-            "formic_acid": (
-                "Formic acid",
-                "Formic acid (LC-MS grade) is an acidifying agent used to quench trypsin activity and protonate peptides for extraction and LC-MS ionization. In step 24, it is added to achieve a final 1% (v/v) concentration.",
-            ),
-            "rpm": (
-                "rpm",
-                "rpm means revolutions per minute; in this protocol 800 rpm is the gentle-agitation speed setting. The protocol specifies 800 rpm without detailing the mechanistic basis for this speed.",
-            ),
-            "incubation": (
-                "Incubation",
-                "Incubation is holding the reaction mixture at specified temperature and time conditions. In this protocol, different steps use 37°C, 60°C, or room temperature for destaining, reduction, alkylation, and digestion.",
-            ),
-            "contamination": (
-                "Contamination",
-                "Contamination refers to unwanted materials entering the sample; this protocol specifically warns against keratin and dust contamination by requiring gloves and a clean workspace.",
-            ),
-            "tube": (
-                "Tube",
-                "In this protocol, the tube refers to the 1.5 mL microcentrifuge reaction tube that holds the excised 1 mm³ gel plug during washing, destaining, reduction/alkylation, and enzymatic digestion. The source protocol does not restrict specific tube materials or brands.",
-            ),
-        }
-        explanations = explanations_ko if language == "ko" else explanations_en
-        if not candidate_a:
-            # These curated explanations were reviewed only for Candidate A.
-            # Arbitrary PDFs may share entity names but not context or authority.
-            # Every entry states what *this protocol* does with the reagent, so
-            # on any other document it would be a fabricated protocol claim.
-            # Emptying the map routes every entity down the already-existing
-            # unknown-entity branch below, which points at approved references
-            # instead of answering.
-            explanations = {}
-        for entity in entities:
-            if entity in explanations:
-                sections.append(explanations[entity])
-            else:
-                fallback_label = entity.replace("_", " ").title()
-                fallback_text = (
-                    f"활성 프로토콜에 언급된 {fallback_label}에 대한 정의나 설명은 별도 승인 자료를 참조해 주세요."
-                    if language == "ko" else
-                    f"For definitions or details regarding {fallback_label} mentioned in the active protocol, please consult approved reference materials."
-                )
-                sections.append((fallback_label, fallback_text))
+        spoken_sections: list[str] = []
+        # Each entity is answered from what this protocol's own statements say
+        # about it -- for every protocol alike. A definition the PDF does not
+        # give stays unresolved, for the approved and external references.
+        answers = tuple(
+            self.entity_source_answer(entity, language=language, facts=facts)
+            for entity in entities
+        )
+        for answer in answers:
+            sections.append((answer.label, answer.text))
+            spoken_sections.append(answer.spoken(alone=len(answers) == 1))
         relation = ""
-        if candidate_a and {"hplc_water", "ambic"}.issubset(entities):
-            relation = (
-                "이 프로토콜에서는 HPLC water에 AMBIC를 녹여 "
-                "Solution A와 B의 기본 용액을 만듭니다."
-                if language == "ko" else
-                "In this protocol, AMBIC is dissolved in HPLC water to make the base solution used in Solutions A and B."
-            )
+        joint = (
+            self.entity_pair_statement(entities[0], entities[1], language=language)
+            if len(entities) >= 2 else None
+        )
+        if joint is not None:
+            relation = joint[0]
         if plan.question_kind == "safety":
             step = self.fixture.steps[self.current_index]
             warnings = tuple(fact for fact in facts if fact.kind == "warning")
@@ -7149,36 +7501,8 @@ class CuratedProtocolSession:
             if relation:
                 rel_title = "프로토콜 내 관계" if language == "ko" else "Protocol Relationship"
                 formatted_blocks.append(f"### {rel_title}\n{relation}")
-            if (
-                candidate_a
-                and "difference" in plan.question_dimensions
-                and "hplc_water" in entities
-            ):
-                limitation = (
-                    "활성 프로토콜은 HPLC water와 일반 물의 품질 차이를 정의하지 않으므로 그 차이는 별도 권위 자료가 필요합니다."
-                    if language == "ko" else
-                    "The active protocol does not define the quality difference between HPLC water and ordinary water, so that comparison needs a separate authoritative source."
-                )
-                lim_title = "참고 한계" if language == "ko" else "Note"
-                formatted_blocks.append(f"### {lim_title}\n{limitation}")
-            if "role" in plan.question_dimensions:
-                role_notes = {
-                    "ambic": (
-                        "이 프로토콜에서는 HPLC water에 녹여 Solution A와 B의 구성 성분으로 사용합니다."
-                        if language == "ko" else
-                        "In this protocol, it is dissolved in HPLC water and used in Solutions A and B."
-                    ),
-                    "hplc_water": (
-                        "이 프로토콜에서는 AMBIC 용액을 만드는 물로 사용합니다."
-                        if language == "ko" else
-                        "In this protocol, it is the water used to prepare the AMBIC solution."
-                    ),
-                }
-                if candidate_a and entities and entities[0] in role_notes:
-                    role_title = "역할" if language == "ko" else "Role"
-                    formatted_blocks.append(f"### {role_title}\n{role_notes[entities[0]]}")
             direct = "\n\n".join(formatted_blocks)
-            speech_parts = [text for _, text in sections[:2]]
+            speech_parts = list(spoken_sections[:2])
             if relation and len(sections) <= 2:
                 speech_parts.append(relation)
             speech = " ".join(speech_parts)
@@ -7193,19 +7517,23 @@ class CuratedProtocolSession:
                 f"활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. "
                 "추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다."
             )
+        # Only what the PDF's statements answer is local: where an entity
+        # appears is not its definition or its role, so those dimensions stay
+        # for the references, as they always did on every other document.
         locally_supported: set[str] = set()
-        if sections:
+        if answers and all(answer.defined_as for answer in answers):
             locally_supported.add("definition")
-        if entities and all(entity in explanations for entity in entities):
-            locally_supported.add("role")
         if any(fact.kind == "warning" for fact in facts):
             locally_supported.add("safety")
-        if candidate_a and {"hplc_water", "ambic"}.issubset(entities):
-            # Kept in step with the gate on ``relation`` above: claiming the
-            # relationship is locally supported while emitting no relationship
-            # text would strand the dimension instead of escalating it.
+        if relation:
+            # Kept in step with ``relation`` above: claiming the relationship
+            # is locally supported while emitting no relationship text would
+            # strand the dimension instead of escalating it.
             locally_supported.add("relationship")
-        if any(entity in {"solution_a", "solution_b"} for entity in entities):
+        if any(
+            answer.found and self._solution_definition(answer.entity) is not None
+            for answer in answers
+        ):
             locally_supported.add("composition")
         research_dimensions = {
             "definition", "role", "difference", "safety", "rationale",
@@ -8355,10 +8683,16 @@ class CuratedProtocolSession:
                 ),
             )
             if language == "ko" and not resumed:
+                # The opening names the first step in the protocol's own
+                # reviewed Korean translation; with none, the step is on
+                # screen from its source. Nothing here is one PDF's wording.
+                first = self._localized_fact(step.step_id, "current_step")
+                if first is not None:
+                    first = _without_step_prefix(step.source_label, first)
                 control_text = (
-                    "실험을 시작합니다. 현재 1단계입니다. "
-                    "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
-                    "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요."
+                    f"실험을 시작합니다. 현재 {step.source_label}단계입니다. "
+                    + (first or "안내를 화면에 표시했습니다.")
+                    + control_text.partition("표시했습니다.")[2]
                 )
             response, primary, sources, pages, evidence_ids, translation_status = (
                 _step_presentation(
@@ -8978,12 +9312,12 @@ class CuratedProtocolSession:
                 checksum = self.fixture.source_pdf_sha256 or "unavailable"
                 if language == "ko":
                     speech = (
-                        f"현재 프로토콜은 {self.fixture.title}, 리비전 {protocol_version}입니다. "
+                        f"현재 프로토콜은 {self.fixture.title}, 실행 버전 {protocol_version}입니다. "
                         f"원문 문서 버전은 {document_version}이며 전체 해시는 화면에 표시했습니다."
                     )
                     display = (
                         f"프로토콜 감사 정보\n- 제목: {self.fixture.title}\n"
-                        f"- 실행 리비전: {protocol_version}\n"
+                        f"- 실행 버전: {protocol_version}\n"
                         f"- 원문 문서 버전: {document_version}\n"
                         f"- 원문 PDF SHA-256: {checksum}\n"
                         f"- 구조화 fixture SHA-256: {self.fixture.fixture_sha256}"
@@ -9540,25 +9874,25 @@ class CuratedProtocolSession:
                     response = {
                         "en": (
                             f"Step {step.source_label} is a repeat-until step, but its observed endpoint is not connected to a supported server completion signal. "
-                            "You cannot satisfy that gate through the current Candidate A development session. The step has not been marked complete, and no transition was made."
+                            "You cannot satisfy that gate through the current development session. The step has not been marked complete, and no transition was made."
                         ),
                         "vi": (
                             f"Bước {step.source_label} yêu cầu lặp lại đến khi đạt điểm kết thúc quan sát, nhưng tín hiệu hoàn thành đó chưa được máy chủ hỗ trợ. Bước vẫn chưa hoàn thành."
                         ),
                         "ko": (
                             f"{step.source_label}단계는 관찰 결과가 충족될 때까지 반복해야 하지만, 그 관찰 종점이 지원되는 서버 완료 신호에 연결되어 있지 않습니다. "
-                            "현재 Candidate A 개발 세션에서는 사용자가 이 게이트를 충족할 수 없습니다. 완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
+                            "현재 개발용 세션에서는 사용자가 이 확인 조건을 충족할 수 없습니다. 완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
                         ),
                     }.get(language, "관찰 기반 반복 종료 신호가 지원되지 않아 진행할 수 없습니다.")
                 else:
                     response = {
                         "en": (
-                            f"Step {step.source_label} contains an unresolved source ambiguity, so Candidate A development mode cannot validate completion. "
+                            f"Step {step.source_label} contains an unresolved source ambiguity, so the current development session cannot validate completion. "
                             "The step has not been marked complete, and no transition was made."
                         ),
                         "vi": f"Bước {step.source_label} còn mơ hồ trong nguồn nên chưa thể xác nhận hoàn thành.",
                         "ko": (
-                            f"{step.source_label}단계는 원문의 실행 의미가 미해결 상태여서 Candidate A 개발 모드에서 완료를 검증할 수 없습니다. "
+                            f"{step.source_label}단계는 원문의 실행 의미가 미해결 상태여서 현재 개발용 세션에서 완료를 검증할 수 없습니다. "
                             "완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
                         ),
                     }.get(language, "원문의 실행 의미가 미해결 상태여서 진행할 수 없습니다.")
@@ -9741,8 +10075,7 @@ class CuratedProtocolSession:
                         )
                     else:
                         control_text = (
-                            "아직 실험 시작 전입니다. 1단계는 염색된 단백질 밴드에서 "
-                            "작은 조각을 나누고 지정된 AMBIC 용액이 담긴 튜브에 넣는 단계입니다. "
+                            "아직 실험 시작 전입니다. 1단계 안내를 화면에 표시했습니다. "
                             "지금 실험을 시작할까요?"
                         )
                 else:
@@ -9861,7 +10194,13 @@ class CuratedProtocolSession:
                     ("current_step",),
                     translated=language != "ko" or localized is not None,
                 )
-                speech = step.instruction_source_text
+                # Asked to hear the step, a Korean reader hears its reviewed
+                # Korean translation; with none, the source as before.
+                speech = (
+                    localized
+                    if language == "ko" and localized is not None
+                    else step.instruction_source_text
+                )
                 admitted_facts = self.fixture.facts_for_step(target_index)
                 sources = (step.instruction_source_text,)
                 pages = (step.evidence.source_page_number,)
@@ -9908,8 +10247,10 @@ class CuratedProtocolSession:
                 ),
                 source_plan_scopes=(
                     ("ACTIVE_PROTOCOL", "SOURCE_APPROVED_ALTERNATIVE")
-                    if step.source_label == "3"
-                    and any(fact.kind == "note" for fact in admitted_facts)
+                    if any(
+                        fact.kind == "note" and _offers_source_alternative(fact.text)
+                        for fact in admitted_facts
+                    )
                     else ("ACTIVE_PROTOCOL",)
                 ),
                 display_document=_display_document(
@@ -10421,22 +10762,21 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.LAB_DOMAIN_QA:
             current_step = steps[self.current_index]
-            localized_step = self._localized_fact(current_step.step_id, "current_step") or current_step.text
+            localized_step = (
+                self._localized_fact(current_step.step_id, "current_step")
+                or current_step.instruction_source_text
+            )
+            speech_text = None
             if re.search(r"(?:튜브|tube|용기|vial|container)", transcript.casefold()):
-                if language == "ko":
-                    response = (
-                        "이 프로토콜에서 튜브는 젤 밴드 조각을 담아 세척(Solution A/B), "
-                        "환원, 알킬화 및 트립신 소화 반응을 진행하는 약 1.5 mL 마이크로센트리퓨지 튜브입니다. "
-                        f"현재 진행 중인 {current_step.source_label}단계에서는 튜브 내의 용액을 처리하는 과정입니다. "
-                        f"현재 프로토콜 상태는 {current_step.source_label}단계를 그대로 유지합니다."
-                    )
-                else:
-                    response = (
-                        "In this in-gel digestion protocol, the tube refers to a standard ~1.5 mL microcentrifuge tube "
-                        "used to hold the gel plug and reagents for washing and digestion. "
-                        f"At the current Step {current_step.source_label}, operations take place inside this reaction tube. "
-                        f"The protocol state remains at Step {current_step.source_label}."
-                    )
+                # What this protocol's own statements say about its tubes.
+                tube = self.entity_source_answer("tube", language=language)
+                keep = (
+                    f"현재 프로토콜 상태는 {current_step.source_label}단계를 그대로 유지합니다."
+                    if language == "ko" else
+                    f"The protocol state remains at Step {current_step.source_label}."
+                )
+                response = f"{tube.text}\n{keep}"
+                speech_text = f"{tube.spoken(alone=True)} {keep}"
             else:
                 if language == "ko":
                     response = (
@@ -10451,7 +10791,7 @@ class CuratedProtocolSession:
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.LAB_DOMAIN_QA,
                 display_text=response,
-                speech_text=response,
+                speech_text=speech_text or response,
                 speech_mode=CuratedProtocolSpeechMode.FULL_DETAIL,
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=current_step.source_label,
@@ -10469,7 +10809,7 @@ class CuratedProtocolSession:
                 "hypothetical_completion", "quoted_completion"
             }:
                 response = (
-                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 확인 조건과 관찰 게이트를 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
+                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
                     if language == "ko" else
                     "If you explicitly report the current step complete, the server first checks its approved completion and observation gates. It records completion and advances only when those gates pass. This question did not change state."
                 )

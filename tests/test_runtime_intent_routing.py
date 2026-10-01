@@ -109,10 +109,11 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
                 self.assertEqual(routed.plan.answer_origin, origin)
                 self.assertFalse(routed.state_mutation)
                 self.assertEqual(workflow.state(), before)
-                self.assertNotIn(
+                for opening in (
                     "염색된 단백질 밴드를 준비해 작은 조각",
-                    routed.plan.speech_text or "",
-                )
+                    "염색된 단백질 밴드에서 작은 1 mm³ 플러그",
+                ):
+                    self.assertNotIn(opening, routed.plan.speech_text or "")
 
     def test_combined_learning_and_next_previews_then_requires_explicit_confirmation(self) -> None:
         workflow = self.active_workflow()

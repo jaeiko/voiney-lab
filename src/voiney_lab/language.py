@@ -119,13 +119,42 @@ _SHORT_KOREAN_DISCOURSE_ALIASES = {
 }
 
 
+#: The terms admitted when no protocol is attached. With a protocol, the
+#: protocol's own terms take their place (``known_terms``).
+_DEFAULT_SCIENTIFIC_TERMS = frozenset({
+    "ambic", "ammonium", "bicarbonate", "hplc", "water", "acetonitrile",
+    "dtt", "iodoacetamide", "trypsin", "sds", "page", "sds-page", "gel",
+    "thermomixer", "rpm", "evotip", "formic", "acid", "lc-ms", "lc", "ms",
+    "solution", "a", "b", "plug", "band", "keratin", "contamination",
+})
+
+
+def _known_term_tokens(terms: tuple[str, ...]) -> frozenset[str]:
+    """Each term's words, and a hyphenated word's parts, as the check reads them."""
+
+    tokens: set[str] = set()
+    for term in terms:
+        if not isinstance(term, str):
+            continue
+        for token in re.findall(r"[0-9A-Za-z_-]+", term.casefold()):
+            tokens.add(token)
+            tokens.update(part for part in token.split("-") if part)
+    return frozenset(tokens)
+
+
 def classify_korean_admission(
     raw_text: str,
     detected_language: str | None,
     *,
     expected_language: str = "ko",
+    known_terms: tuple[str, ...] | None = None,
 ) -> KoreanTranscriptionAdmission:
-    """Evaluate transcript against the server-owned Korean voice policy."""
+    """Evaluate transcript against the server-owned Korean voice policy.
+
+    ``known_terms`` are the active protocol's own technical terms (its STT
+    keyterms): an English-only utterance made of them is a term, not a
+    language contradiction. Without a protocol the default set applies.
+    """
     cleaned = raw_text.strip()
     if not cleaned:
         return KoreanTranscriptionAdmission(
@@ -160,14 +189,12 @@ def classify_korean_admission(
             clarification_required=False,
         )
 
-    # Check if text is known scientific/technical terminology (e.g. "AMBIC", "HPLC water", "SDS-PAGE")
+    # Known technical terminology alone (e.g. "AMBIC", "HPLC water") is a term.
     tokens = [t.casefold() for t in re.findall(r"[0-9A-Za-z_-]+", cleaned)]
-    scientific_known = {
-        "ambic", "ammonium", "bicarbonate", "hplc", "water", "acetonitrile",
-        "dtt", "iodoacetamide", "trypsin", "sds", "page", "sds-page", "gel",
-        "thermomixer", "rpm", "evotip", "formic", "acid", "lc-ms", "lc", "ms",
-        "solution", "a", "b", "plug", "band", "keratin", "contamination",
-    }
+    scientific_known = (
+        _DEFAULT_SCIENTIFIC_TERMS if known_terms is None
+        else _known_term_tokens(known_terms)
+    )
     if tokens and all(t in scientific_known or t.isdigit() for t in tokens):
         return KoreanTranscriptionAdmission(
             raw_text=raw_text,
@@ -202,6 +229,8 @@ def classify_korean_admission(
 def classify_transcription_language(
     transcription: Transcription,
     preference: InputLanguagePreference | str,
+    *,
+    known_terms: tuple[str, ...] | None = None,
 ) -> KoreanTranscriptionAdmission:
     """Fail closed on a selected-language contradiction before any mutation."""
 
@@ -218,6 +247,7 @@ def classify_transcription_language(
             transcription.text,
             transcription.detected_language,
             expected_language="ko",
+            known_terms=known_terms,
         )
 
     cleaned = transcription.text.strip()

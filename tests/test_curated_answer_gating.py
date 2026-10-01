@@ -1,15 +1,19 @@
-"""Curated prose answers must not travel to a protocol they were not reviewed against.
+"""An entity answer comes from the active PDF's own statements, for every protocol.
 
-``protocol_answer_envelope`` carries reagent explanations written and reviewed
-against one document, the Candidate A in-gel digestion protocol. Every entry
-states what *this protocol* does with the reagent -- "Solution A는 25 mM AMBIC
-수용액 2 parts와 acetonitrile 1 part를 혼합한..." -- so on any other document
-the same sentence is a fabricated protocol claim, which AGENTS.md rule 1
-forbids. Reagent names are not unique to one protocol: another proteomics
-document can mention AMBIC, HPLC water or acetonitrile and pick these up.
+``protocol_answer_envelope`` used to carry reagent explanations written for
+one document, the Candidate A in-gel digestion protocol -- "Solution A는 25 mM
+AMBIC 수용액 2 parts와 acetonitrile 1 part를 혼합한..." -- and a gate on the
+protocol id kept them from other documents. That gate was on a name, not on
+content: a fixture carrying Candidate A's id received the in-gel prose
+whatever its PDF said, and in-gel itself received sentences its PDF does not
+contain (AGENTS.md rule 1).
 
-The sibling block in ``_semantic_claim_requests`` was already gated on the
-protocol's identity; these tests hold the same gate on the answer envelope.
+The prose and the gate are gone. Every protocol, in-gel included, is answered
+with what its own statements say about the entity: the steps that name it,
+the first of those statements (its reviewed translation where the fixture has
+one), and a definition only where the PDF itself writes the long form.
+These tests hold that on a fictional document that names in-gel reagents, so
+the answer cannot depend on which protocol id it carries.
 
 The fixtures here are fictional and built in memory, so these tests run with or
 without the externally licensed source PDF (see the README's two baselines).
@@ -49,21 +53,21 @@ _PAGE_TWO = (
     "Before start\nConfirm this is a non-operational fixture."
 )
 
-#: Phrases that appear only in the curated Candidate A explanations.
+#: Phrases that appeared only in the removed Candidate A explanations.
 CURATED_MARKERS = (
     "중탄산 암모늄",
     "Solution A",
     "고성능 액체 크로마토그래피",
 )
-#: The unknown-entity branch every non-Candidate-A entity should fall to.
-FALLBACK_MARKER = "별도 승인 자료를 참조해 주세요"
+#: The answer quotes the fixture's own first statement naming AMBIC.
+SOURCE_MARKER = _FIRST
 
 
 def _fixture(protocol_id: str) -> CuratedProtocolFixture:
     """One fictional two-step protocol whose text names in-gel reagents.
 
-    Identical apart from ``protocol_id``, so a difference in the answer can
-    only come from the identity gate.
+    Identical apart from ``protocol_id``, so a difference in the answer could
+    only come from the protocol's identity -- and there must be none.
     """
 
     source_text = _PAGE_ONE + "\n" + _PAGE_TWO
@@ -168,7 +172,7 @@ def _answer(protocol_id: str, prompt: str):
 
 
 class CuratedExplanationGateTests(unittest.TestCase):
-    """The reagent explanations are Candidate A's, and stay there."""
+    """No protocol id selects prose; the PDF's statements are the answer."""
 
     def test_both_fixtures_actually_offer_the_entities(self):
         """Guard the guard: a gate proves nothing if the entity never arrives.
@@ -187,25 +191,35 @@ class CuratedExplanationGateTests(unittest.TestCase):
         for marker in CURATED_MARKERS:
             self.assertNotIn(marker, envelope.direct_answer)
             self.assertNotIn(marker, envelope.speech_summary)
-        self.assertIn(FALLBACK_MARKER, envelope.direct_answer)
+        self.assertIn(SOURCE_MARKER, envelope.direct_answer)
+        self.assertIn("1단계", envelope.direct_answer)
 
-    def test_curated_explanations_still_serve_candidate_a(self):
-        _, envelope = _answer(CANDIDATE_A_PROTOCOL_ID, "AMBIC가 무엇인지 설명해줘.")
-        self.assertIn("중탄산", envelope.direct_answer)
-        self.assertNotIn(FALLBACK_MARKER, envelope.direct_answer)
+    def test_curated_explanations_serve_no_protocol_id(self):
+        """Candidate A's id selects nothing: the same PDF gets the same answer."""
 
-    def test_protocol_relationship_sentence_is_gated(self):
-        """The AMBIC/HPLC-water relationship is a Candidate A fact, not a general one."""
+        prompt = "AMBIC가 무엇인지 설명해줘."
+        _, mine = _answer(CANDIDATE_A_PROTOCOL_ID, prompt)
+        _, theirs = _answer(OTHER_PROTOCOL_ID, prompt)
+        for marker in (*CURATED_MARKERS, "중탄산"):
+            self.assertNotIn(marker, mine.direct_answer)
+            self.assertNotIn(marker, mine.speech_summary)
+        self.assertEqual(mine.direct_answer, theirs.direct_answer)
+        self.assertEqual(mine.speech_summary, theirs.speech_summary)
+        self.assertIn(SOURCE_MARKER, mine.direct_answer)
+
+    def test_protocol_relationship_sentence_is_the_shared_statement(self):
+        """The AMBIC/HPLC-water relationship is the statement naming both, nothing more."""
 
         prompt = "AMBIC와 HPLC water가 무엇인지 설명해줘."
-
         _, mine = _answer(CANDIDATE_A_PROTOCOL_ID, prompt)
-        self.assertIn("AMBIC", mine.direct_answer)
-
         _, theirs = _answer(OTHER_PROTOCOL_ID, prompt)
-        for marker in CURATED_MARKERS:
-            self.assertNotIn(marker, theirs.direct_answer)
-        self.assertIn(FALLBACK_MARKER, theirs.direct_answer)
+        for envelope in (mine, theirs):
+            for marker in CURATED_MARKERS:
+                self.assertNotIn(marker, envelope.direct_answer)
+            self.assertIn("AMBIC", envelope.direct_answer)
+            self.assertIn("HPLC water", envelope.direct_answer)
+            self.assertIn(SOURCE_MARKER, envelope.direct_answer)
+        self.assertEqual(mine.direct_answer, theirs.direct_answer)
 
     def test_gated_answer_is_well_formed_rather_than_empty(self):
         """Emptying the map must route to the fallback, not produce a blank turn.
