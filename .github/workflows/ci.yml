@@ -21,6 +21,14 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Install the pdftotext comparator (poppler-utils)
+        # The extraction cross-check compares pypdfium2's text with pdftotext
+        # (README, "PDF text extraction and its cross-check"). Without it
+        # every source is comparator_unavailable and readiness gains
+        # source_text_cross_check_unavailable, so 40 tests that expect the
+        # comparator fail. The hosted runner image does not include it.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+
       - name: Install package with test extras
         run: python -m pip install -e '.[test]'
 
