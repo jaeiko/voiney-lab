@@ -31,7 +31,12 @@ from voiney_lab.configuration import (
     VoiceVadSettings,
     cascade_filler_delay_ms,
 )
-from voiney_lab.cascade_filler import CascadeFiller,cascade_filler_mode
+from voiney_lab.cascade_filler import (
+    CascadeFiller,
+    FillerSessionMemory,
+    cascade_filler_mode,
+    cascade_filler_status_delay_ms,
+)
 from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     CuratedProtocolAction,
@@ -345,8 +350,9 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
 def log_cascade_filler_configuration()->None:
     """Check the waiting-cue settings once at startup and say which cue is on."""
     log.info(
-        "cascade_filler.configuration mode=%s delay_ms=%d",
+        "cascade_filler.configuration mode=%s delay_ms=%d status_delay_ms=%d",
         cascade_filler_mode(),cascade_filler_delay_ms(),
+        cascade_filler_status_delay_ms(),
     )
 
 
@@ -4863,6 +4869,8 @@ class ListenerSession:
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
         self.reader_translations:dict[tuple[str,str,str],str]={}
+        # Waiting-status sentences already said and made in this session.
+        self.filler_memory=FillerSessionMemory()
         self.semantic_intent_settings=(
             semantic_intent_settings or SemanticIntentSettings())
         self.experiment_report_id:str|None=None
@@ -8537,6 +8545,10 @@ async def run_turn_safely(
             "filler.tone",
             configuration_id=session.accepted_configuration_id,
             turn_id=target_turn,generation=target_generation)
+    def filler_activity()->str|None:
+        # The same progress state the Turn card shows; nothing else is claimed.
+        progress=session.turn_progress.get((turn_id,generation))
+        return progress.state if progress is not None else None
     filler=CascadeFiller(
         turn_id=turn_id,generation=generation,language=language,
         delay_ms=cascade_filler_delay_ms(),
@@ -8545,7 +8557,9 @@ async def run_turn_safely(
         send_audio=filler_audio,send_event=filler_event,
         send_clear=filler_clear,is_current=session.is_current,
         clock=session.clock,
-        mode=cascade_filler_mode(),send_tone=filler_tone)
+        mode=cascade_filler_mode(),send_tone=filler_tone,
+        status_delay_ms=cascade_filler_status_delay_ms(),
+        activity=filler_activity,memory=session.filler_memory)
     filler.start()
     try: await run_turn(
         websocket,session,source_pcm,turn_id,input_frames,voiced_frames,
