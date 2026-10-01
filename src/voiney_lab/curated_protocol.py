@@ -2101,6 +2101,11 @@ _OBSERVATION_PROMPT_READ_ONLY = frozenset({
 })
 #: Times an observation prompt is asked again before it is let go.
 _OBSERVATION_REPROMPT_LIMIT = 2
+#: Asking to hear the observation question again ("다시 말해줘"). It is not
+#: a reply to the question, so it does not count toward the limit above.
+_OBSERVATION_REPEAT_REQUEST = re.compile(
+    r"^(?:다시(?:\s*한\s*번)?|한\s*번\s*더)\s*(?:말해|들려)\s*(?:줘|주세요)$"
+)
 
 
 def _reply_withholds_assent(transcript: str) -> bool:
@@ -2303,6 +2308,9 @@ _UNDERSPECIFIED_RESULT_PATTERNS = (
 )
 _PAUSE_PATTERNS = (
     re.compile(r"(?:잠깐|잠시)?\s*(?:실험|프로토콜|안내)?\s*(?:일시\s*중지|일시\s*정지|멈춰|잠깐\s*멈|잠시\s*멈|나갔다\s*올게|나가\s*있을게)"),
+    # "그만" and "정지" said on their own pause, as "멈춰" does: the place in
+    # the protocol is kept. Ending the session takes "종료" or "중지".
+    re.compile(r"^(?:그만|정지)(?:해(?:줘|요)?)?$"),
     re.compile(r"^(?:pause(?:\s+(?:the\s+)?(?:protocol|experiment))?|take\s+a\s+break|hold\s+on)$", re.I),
 )
 _RESUME_PATTERNS = (
@@ -4057,7 +4065,6 @@ _WORKFLOW_COMMANDS = {
     "next": CuratedProtocolAction.NEXT,
     "종료": CuratedProtocolAction.STOP,
     "중지": CuratedProtocolAction.STOP,
-    "그만": CuratedProtocolAction.STOP,
     "프로토콜 종료": CuratedProtocolAction.STOP,
     "프로토콜을 종료해줘": CuratedProtocolAction.STOP,
     "프로토콜 종료해줘": CuratedProtocolAction.STOP,
@@ -7698,6 +7705,21 @@ class CuratedProtocolSession:
             or self._names_another_step(routed)
         ):
             return routed
+        if _OBSERVATION_REPEAT_REQUEST.fullmatch(_utterance_key(transcript)):
+            # The question is said again as it was last asked, and the count
+            # of times it was asked again stays where it was.
+            self._pending_observation_confirmation = replace(
+                held, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            return CuratedControlIntent(
+                intent_kind="observation_confirmation_repeated",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                confidence_source="server_pending_observation",
+                language=language,
+                normalized_transcript=normalized_transcript,
+            )
         if (
             routed.action in _OBSERVATION_PROMPT_READ_ONLY
             and not routed.allows_state_mutation
@@ -10004,6 +10026,14 @@ class CuratedProtocolSession:
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
             reask_speech: str | None = None
+            # A repeat request says again what was last asked: the opening
+            # question, or the yes/no it was narrowed to.
+            repeated = intent.intent_kind == "observation_confirmation_repeated"
+            repeated_after_reask = bool(
+                repeated
+                and self._pending_observation_confirmation is not None
+                and self._pending_observation_confirmation.reprompt_count > 0
+            )
             if intent.intent_kind == "learning_and_next_preview":
                 learning_display, learning_speech, learning_facts, limitations = (
                     self._step_learning_presentation(language=language)
@@ -10063,7 +10093,10 @@ class CuratedProtocolSession:
                     normalized_transcript=intent.normalized_transcript,
                     question_dimensions=intent.question_dimensions,
                 )
-            elif intent.intent_kind == "observation_confirmation_required":
+            elif (
+                intent.intent_kind == "observation_confirmation_required"
+                or (repeated and not repeated_after_reask)
+            ):
                 # The endpoint the agent asks about is the document's, quoted.
                 # Selecting between two hand-written questions by label meant
                 # every step that was not in-gel's step 7 was asked whether
@@ -10093,7 +10126,10 @@ class CuratedProtocolSession:
                         "이 단계는 관찰 결과가 충족될 때까지 반복하는 단계입니다. "
                         "확인하신 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
                     )
-            elif intent.intent_kind == "observation_confirmation_reasked":
+            elif (
+                intent.intent_kind == "observation_confirmation_reasked"
+                or repeated_after_reask
+            ):
                 # A description the phrase families could not read is asked
                 # again as a yes/no. The criterion is shown, not rephrased:
                 # the source sentence as quoted, and the verified sidecar
