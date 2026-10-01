@@ -1504,6 +1504,26 @@ _HYPHENATED_ACRONYM = re.compile(
 )
 
 
+#: The in-gel reagents and gel pieces the mis-hearing repairs and entity
+#: patterns resolve to, with the protocol wording that shows a protocol has
+#: one. Those repairs apply only where the active protocol's text uses one of
+#: these surfaces; an entity not listed here is general lab vocabulary and is
+#: recognised in any protocol.
+_SUBSTANCE_PRESENCE_ALIASES: dict[str, tuple[str, ...]] = {
+    "ambic": ("ambic", "ammonium bicarbonate"),
+    "hplc_water": ("hplc water",),
+    "solution_a": ("solution a",),
+    "solution_b": ("solution b",),
+    "acetonitrile": ("acetonitrile",),
+    "gel_plug": ("gel plug",),
+    "stained_protein_band": ("stained protein band",),
+    "dtt": ("dtt", "dithiothreitol"),
+    "iodoacetamide": ("iodoacetamide",),
+    "trypsin": ("trypsin",),
+    "formic_acid": ("formic acid",),
+}
+
+
 def _term_pattern(term: str) -> re.Pattern[str]:
     """Match ``term`` as whole words, with any whitespace and a plural ending."""
 
@@ -1575,6 +1595,23 @@ class ProtocolVocabulary:
     """
 
     terms: tuple[ProtocolTerm, ...]
+    #: Everything the protocol says, whitespace-collapsed and casefolded.
+    corpus: str = ""
+
+    def mentions(self, surface: str) -> bool:
+        """Whether the protocol's text uses ``surface`` as whole words."""
+
+        return _term_pattern(surface).search(self.corpus) is not None
+
+    def mentions_entity(self, entity: str) -> bool:
+        """Whether a substance-scoped entity is one this protocol has.
+
+        An entity outside ``_SUBSTANCE_PRESENCE_ALIASES`` is general lab
+        vocabulary, so it is always allowed.
+        """
+
+        aliases = _SUBSTANCE_PRESENCE_ALIASES.get(entity)
+        return aliases is None or any(self.mentions(alias) for alias in aliases)
 
     @classmethod
     def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
@@ -1654,7 +1691,10 @@ class ProtocolVocabulary:
                 ),
                 resource=resource,
             )
-        return cls(terms=tuple(terms.values()))
+        return cls(
+            terms=tuple(terms.values()),
+            corpus="\n".join(corpus).casefold(),
+        )
 
     def keyterms_near(self, index: int | None) -> tuple[str, ...]:
         """Every term, the current step's neighbourhood first.
@@ -2584,10 +2624,21 @@ def normalize_scientific_request(
     transcript: str,
     *,
     entity_inventory: tuple[str, ...] = (),
+    protocol_vocabulary: ProtocolVocabulary | None = None,
 ) -> tuple[
     str, tuple[str, ...], str | None, tuple[tuple[str, str], ...]
 ]:
-    """Resolve ordered known entities while preserving auditable corrections."""
+    """Resolve ordered known entities while preserving auditable corrections.
+
+    The mis-hearing repairs below ("엠빅" -> AMBIC, "아세토나이트릴" ->
+    acetonitrile) and the reagent entities they lead to are the in-gel
+    document's. With ``protocol_vocabulary`` they apply only to a substance
+    that protocol's text contains, so a protocol without AMBIC never hears
+    it. ``None`` -- a caller with no active protocol -- keeps every rule.
+    """
+
+    def present(entity: str) -> bool:
+        return protocol_vocabulary is None or protocol_vocabulary.mentions_entity(entity)
 
     raw = _semantic_utterance_key(transcript)
     key = re.sub(
@@ -2597,8 +2648,10 @@ def normalize_scientific_request(
     )
     corrections: list[tuple[str, str]] = []
 
-    def repair(pattern: str, replacement: str, label: str) -> None:
+    def repair(pattern: str, replacement: str, label: str, entity: str) -> None:
         nonlocal key
+        if not present(entity):
+            return
         match = re.search(pattern, key)
         if match is None:
             return
@@ -2607,21 +2660,36 @@ def normalize_scientific_request(
         if observed.casefold() != label.casefold():
             corrections.append((observed, label))
 
-    repair(r"(?<![a-z0-9])anbi[-\s]*c?(?![a-z0-9])", "ambic", "AMBIC")
-    repair(r"(?<![a-z0-9])am\s+bic(?![a-z0-9])", "ambic", "AMBIC")
-    repair(r"(?<![a-z0-9])jel\s+tug(?![a-z0-9])", "gel plug", "gel plug")
-    repair(r"제트\s*플러그", "젤 플러그", "gel plug")
-    repair(r"(?:염색된\s*)?단백질\s*(?:뱀드|뱄드|밸드|밴트)", "단백질 밴드", "단백질 밴드")
-    repair(r"에이\s*엠\s*빅", "ambic", "AMBIC")
-    repair(r"엠빅|암비크", "ambic", "AMBIC")
-    repair(r"트립씬", "트립신", "trypsin")
-    repair(r"폼산", "포름산", "formic acid")
-    repair(r"아이오도아세트아마이드|이오도아세트아미드", "아이오도아세트아미드", "iodoacetamide")
-    repair(r"디티티", "dtt", "DTT")
-    key = re.sub(r"에이\s*엠\s*빅", "ambic", key)
-    key = re.sub(r"솔루션\s*([ab])", r"solution \1", key)
-    hplc_spaced = re.search(
-        r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)", key
+    repair(r"(?<![a-z0-9])anbi[-\s]*c?(?![a-z0-9])", "ambic", "AMBIC", "ambic")
+    repair(r"(?<![a-z0-9])am\s+bic(?![a-z0-9])", "ambic", "AMBIC", "ambic")
+    repair(r"(?<![a-z0-9])jel\s+tug(?![a-z0-9])", "gel plug", "gel plug", "gel_plug")
+    repair(r"제트\s*플러그", "젤 플러그", "gel plug", "gel_plug")
+    repair(
+        r"(?:염색된\s*)?단백질\s*(?:뱀드|뱄드|밸드|밴트)", "단백질 밴드", "단백질 밴드",
+        "stained_protein_band",
+    )
+    repair(r"에이\s*엠\s*빅", "ambic", "AMBIC", "ambic")
+    repair(r"엠빅|암비크", "ambic", "AMBIC", "ambic")
+    repair(r"트립씬", "트립신", "trypsin", "trypsin")
+    repair(r"폼산", "포름산", "formic acid", "formic_acid")
+    repair(
+        r"아이오도아세트아마이드|이오도아세트아미드", "아이오도아세트아미드",
+        "iodoacetamide", "iodoacetamide",
+    )
+    repair(r"디티티", "dtt", "DTT", "dtt")
+    if present("ambic"):
+        key = re.sub(r"에이\s*엠\s*빅", "ambic", key)
+    key = re.sub(
+        r"솔루션\s*([ab])",
+        lambda match: (
+            f"solution {match.group(1)}"
+            if present(f"solution_{match.group(1)}") else match.group(0)
+        ),
+        key,
+    )
+    hplc_spaced = (
+        re.search(r"(?<![a-z0-9])h\s+plc\s*(?:water|워터)", key)
+        if present("hplc_water") else None
     )
     if hplc_spaced is not None:
         corrections.append((hplc_spaced.group(0), "HPLC water"))
@@ -2652,6 +2720,8 @@ def normalize_scientific_request(
         corrections.append((observed, replacement.upper()))
     matches: list[tuple[int, str]] = []
     for pattern, name in _TERM_QUESTION_PATTERNS:
+        if not present(name):
+            continue
         for match in pattern.finditer(key):
             matches.append((match.start(), name))
     entities = tuple(dict.fromkeys(
@@ -2682,11 +2752,13 @@ def normalize_scientific_query(
     transcript: str,
     *,
     entity_inventory: tuple[str, ...] = (),
+    protocol_vocabulary: ProtocolVocabulary | None = None,
 ) -> tuple[str, str | None, str | None]:
     """Backward-compatible single-entity view of normalized scientific input."""
 
     key, entities, correction_note, _ = normalize_scientific_request(
         transcript, entity_inventory=entity_inventory,
+        protocol_vocabulary=protocol_vocabulary,
     )
     return key, (entities[0] if entities else None), correction_note
 
@@ -3110,6 +3182,7 @@ def classify_curated_control_intent(
     completion_context: bool = False,
     current_step: int | str | None = None,
     max_steps: int = 25,
+    protocol_vocabulary: ProtocolVocabulary | None = None,
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
@@ -3118,7 +3191,8 @@ def classify_curated_control_intent(
 
     key, normalized_entities, correction_note, corrections = (
         normalize_scientific_request(
-        transcript, entity_inventory=entity_inventory
+        transcript, entity_inventory=entity_inventory,
+        protocol_vocabulary=protocol_vocabulary,
         )
     )
     focus_entities, _context_entities = resolve_question_focus(
@@ -6460,6 +6534,7 @@ class CuratedProtocolSession:
             completion_context=self.active,
             current_step=self.current_index + 1,
             max_steps=len(self.fixture.steps),
+            protocol_vocabulary=self._protocol_vocabulary(),
         )
 
     def semantic_intent_context(
@@ -6716,7 +6791,8 @@ class CuratedProtocolSession:
         """Return uniquely identified current/adjacent facts relevant to research."""
 
         key, entities, _, _ = normalize_scientific_request(
-            transcript, entity_inventory=self._entity_inventory()
+            transcript, entity_inventory=self._entity_inventory(),
+            protocol_vocabulary=self._protocol_vocabulary(),
         )
         indexes = {self.current_index}
         if entities:
