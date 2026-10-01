@@ -145,6 +145,8 @@ def _document(
     language: str = "en",
     translation_status: str = "original",
     translation_of: str | None = None,
+    cas: tuple[str, ...] = (),
+    aliases: tuple[tuple[str, bool, bool], ...] = (),
 ) -> dict:
     family = family or document_id
     return {
@@ -158,7 +160,7 @@ def _document(
         "manufacturer": None,
         "product_name": product_name,
         "product_code": None,
-        "cas_numbers": [],
+        "cas_numbers": list(cas),
         "version": "1.0",
         "language": language,
         "facility_id": "MAIN-LAB",
@@ -180,6 +182,10 @@ def _document(
                 "topic": topic,
             }
             for code, topic, content in sections
+        ],
+        "aliases": [
+            {"alias": alias, "language": language, "approved": approved, "generic": generic}
+            for alias, approved, generic in aliases
         ],
     }
 
@@ -393,6 +399,84 @@ class SafetyCardTextTests(unittest.TestCase):
                 self.assert_card_lines_are_source_text(
                     pack.guidance_for_step(step, index), steps[index][1], heads
                 )
+
+
+class SdsStepBindingTests(unittest.TestCase):
+    """An SDS goes to the steps that name its own substance and to no other step."""
+
+    def _resolve(self, steps):
+        documents = [
+            _document(
+                "SDS-ACN", "supplier_sds", "Acetonitrile SDS",
+                [("07", "handling", "Highly flammable liquid and vapour. Keep away from heat.")],
+                product_name="Acetonitrile", cas=("75-05-8",),
+                # A generic alias names no substance, so it binds nothing.
+                aliases=(("ACN", True, False), ("solvent", True, True)),
+            ),
+            _document(
+                "SDS-ACN-KO", "supplier_sds", "아세토니트릴 SDS",
+                [("07", "handling", "고인화성 액체 및 증기. 열로부터 멀리하시오.")],
+                family="SDS-ACN", product_name="아세토니트릴", language="ko",
+                translation_status="human_reviewed", translation_of="SDS-ACN",
+                aliases=(("아세토니트릴", True, False),),
+            ),
+            _document(
+                "SDS-DTT", "supplier_sds", "DL-Dithiothreitol SDS",
+                [("08", "ppe", "Causes skin irritation. Wear protective gloves.")],
+                product_name="DL-Dithiothreitol", cas=("3483-12-3",),
+                # An alias nobody approved binds nothing either.
+                aliases=(("DTT", True, False), ("buffer", False, False)),
+            ),
+        ]
+        protocol = _protocol(
+            steps,
+            materials=(
+                "Acetonitrile LC-MS grade B&J Brand VWR International",
+                "DTT Merck MilliporeSigma (Sigma-Aldrich) Catalog #D0632",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog = Path(temp_dir) / "catalog.sqlite"
+            ingest_manifest({"documents": documents}, catalog)
+            pack = resolve_safety_pack(protocol, catalog, facility_id="MAIN-LAB", usage_scope="reference_only")
+        return pack, protocol.sections[0].steps
+
+    def test_two_substances_each_reach_only_their_own_steps(self):
+        steps = [
+            ("Wash the gel piece with 500 µL acetonitrile.", ()),
+            ("Add enough volume of the DTT solution to fully cover the gel band.", ()),
+            ("Prepare the buffer and the solvent, then add trypsin, AMBIC, IAA and formic acid.", ()),
+            ("Mix ACN with the DTT solution.", ()),
+            ("Use the reagent with CAS 3483-12-3 from the cold room.", ()),
+            ("아세토니트릴을 넣고 섞는다.", ()),
+            ("Label the WDTT tube and the ACNE box.", ()),
+            ("Incubate the plug.", ("Acetonitrile vapour is flammable.",)),
+        ]
+        expected = [
+            {"SDS-ACN"},
+            {"SDS-DTT"},
+            set(),
+            {"SDS-ACN", "SDS-DTT"},
+            {"SDS-DTT"},
+            {"SDS-ACN"},
+            set(),
+            {"SDS-ACN"},
+        ]
+        pack, protocol_steps = self._resolve(steps)
+        # The DTT sheet names its product "DL-Dithiothreitol"; only the
+        # catalog's approved alias ties it to this protocol's "DTT".
+        self.assertEqual({d.document_id for d in pack.sds_documents}, {"SDS-ACN", "SDS-DTT"})
+        titles = {"SDS-ACN": "Acetonitrile SDS", "SDS-DTT": "DL-Dithiothreitol SDS"}
+        for index, (step, want) in enumerate(zip(protocol_steps, expected)):
+            with self.subTest(step=step.instruction_source_text):
+                guidance = pack.guidance_for_step(step, index)
+                got = {d.document_id for d in guidance.applicable_documents if d.document_type == "supplier_sds"}
+                self.assertEqual(got, want)
+                card = "\n".join(guidance.display_bullets + guidance.localized_display_bullets)
+                for document_id, title in titles.items():
+                    if document_id not in want:
+                        self.assertNotIn(title, card)
+                self.assertEqual(guidance.citation_label.count("물질 SDS"), len(want))
 
 
 if __name__ == "__main__":
