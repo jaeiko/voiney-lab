@@ -126,6 +126,14 @@ What the step safety card shows depends on the manifest:
   `generic: false`. Record the names the protocol actually uses as approved
   aliases (for example `DTT` for a sheet titled "DL-Dithiothreitol", `AMBIC`
   for ammonium bicarbonate) and mark broad words such as "solvent" `generic`.
+- An equipment manual reaches a step the same way: only when the step's text
+  names its `product_name` (the machine), its `product_code` (the model), or
+  an alias with `approved: true` and `generic: false`. A word such as
+  "centrifuge", "vortex", "기계" or "설비" names no machine and attaches no
+  manual. A manual for a machine missing from the protocol's equipment list
+  (Candidate A's step 25 says only "speedvac") joins the pack only through
+  such a name in a step, so record the name the protocol uses as an approved
+  alias when the laboratory decides it means that one machine.
 - A Korean translation is shown beside its original only when it is a
   separate document with `translation_status: human_reviewed`,
   `translation_of_document_id` naming the original, and the same

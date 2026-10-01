@@ -82,7 +82,11 @@ def _evidence() -> SourceEvidence:
     return SourceEvidence(source_page_number=1, source_excerpt="excerpt")
 
 
-def _protocol(steps: list[tuple[str, tuple[str, ...]]], materials: tuple[str, ...]) -> ExperimentProtocol:
+def _protocol(
+    steps: list[tuple[str, tuple[str, ...]]],
+    materials: tuple[str, ...],
+    equipment: tuple[str, ...] = ("Centrifuge 5424 R",),
+) -> ExperimentProtocol:
     pdf = ProtocolPdfExtraction(
         original_filename="card.pdf",
         byte_size=1024,
@@ -108,8 +112,9 @@ def _protocol(steps: list[tuple[str, tuple[str, ...]]], materials: tuple[str, ..
             Material(material_id=f"mat-{i}", name_source_text=name, evidence=_evidence())
             for i, name in enumerate(materials, 1)
         ),
-        equipment=(
-            Equipment(equipment_id="eq-1", name_source_text="Centrifuge 5424 R", evidence=_evidence()),
+        equipment=tuple(
+            Equipment(equipment_id=f"eq-{i}", name_source_text=name, evidence=_evidence())
+            for i, name in enumerate(equipment, 1)
         ),
         sections=(
             ProtocolSection(
@@ -142,6 +147,7 @@ def _document(
     *,
     family: str | None = None,
     product_name: str | None = None,
+    product_code: str | None = None,
     language: str = "en",
     translation_status: str = "original",
     translation_of: str | None = None,
@@ -159,7 +165,7 @@ def _document(
         "issuer": "Main lab safety committee",
         "manufacturer": None,
         "product_name": product_name,
-        "product_code": None,
+        "product_code": product_code,
         "cas_numbers": list(cas),
         "version": "1.0",
         "language": language,
@@ -234,7 +240,8 @@ def _catalog_documents() -> list[dict]:
 def _steps() -> list[tuple[str, tuple[str, ...]]]:
     instructions = (
         "Mix acetonitrile with the buffer and the solvent.",
-        "Add formic acid, then spin in the centrifuge.",
+        # A manual reaches only a step that names its machine as the catalog does.
+        "Add formic acid, then spin in the Centrifuge 5424 R.",
         "Wear gloves and cut the band with a scalpel.",
         "Incubate the plug.",
     )
@@ -477,6 +484,100 @@ class SdsStepBindingTests(unittest.TestCase):
                     if document_id not in want:
                         self.assertNotIn(title, card)
                 self.assertEqual(guidance.citation_label.count("물질 SDS"), len(want))
+
+
+class EquipmentStepBindingTests(unittest.TestCase):
+    """An equipment manual goes to the steps that name its own machine and to no other step."""
+
+    def _resolve(self, steps):
+        section = [("03", "equipment_operation", "Load the rotor symmetrically. Never open the lid while it turns.")]
+        documents = [
+            _document(
+                "EQ-CENTRIFUGE", "equipment_manual", "Centrifuge 5424 R manual", section,
+                product_name="Centrifuge 5424 R", product_code="5424 R",
+                # A generic alias names no machine, and nobody approved "spinner".
+                aliases=(("centrifuge", True, True), ("spinner", False, False)),
+            ),
+            _document(
+                "EQ-CENTRIFUGE-KO", "equipment_manual", "원심분리기 5424 R 설명서", section,
+                family="EQ-CENTRIFUGE", product_name="원심분리기 5424 R", language="ko",
+                translation_status="human_reviewed", translation_of="EQ-CENTRIFUGE",
+            ),
+            _document(
+                "EQ-CENTRIFUGE-MT", "equipment_manual", "원심분리기 설명서 (기계 번역)", section,
+                family="EQ-CENTRIFUGE", product_name="회전분리장치", language="ko",
+                translation_status="machine_unreviewed", translation_of="EQ-CENTRIFUGE",
+            ),
+            _document(
+                "EQ-THERMOMIXER", "equipment_manual", "Thermomixer C manual",
+                [("02", "equipment_operation", "Keep the lid closed while the block is hot.")],
+                product_name="Thermomixer C", product_code="5382",
+            ),
+            # Not in the protocol's equipment list; a step names it by its approved alias.
+            _document(
+                "EQ-SPEEDVAC", "equipment_manual", "SpeedVac SPD120 manual",
+                [("04", "equipment_operation", "Release the vacuum before opening the lid.")],
+                product_name="SpeedVac SPD120", aliases=(("speedvac", True, False),),
+            ),
+        ]
+        protocol = _protocol(
+            steps,
+            materials=(),
+            equipment=("Centrifuge 5424 R", "Eppendorf Thermomixer C Model 5382"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog = Path(temp_dir) / "catalog.sqlite"
+            ingest_manifest({"documents": documents}, catalog)
+            pack = resolve_safety_pack(protocol, catalog, facility_id="MAIN-LAB", usage_scope="reference_only")
+        return pack, protocol.sections[0].steps
+
+    def test_a_manual_reaches_only_the_steps_that_name_its_machine(self):
+        steps = [
+            ("Spin the tubes in the Centrifuge 5424 R for 1 min.", ()),
+            ("Balance the centrifuge, vortex the tube and put it in the incubator.", ()),
+            ("원심분리기와 인큐베이터, 기계와 설비를 점검한다.", ()),
+            ("Set the 5424 R to 4 °C.", ()),
+            ("Dry the peptides to completion using a speedvac.", ()),
+            ("원심분리기 5424 R에 넣고 돌린다.", ()),
+            ("Spin in the Centrifuge 5424 R, then shake in the Thermomixer C.", ()),
+            ("Label the Centrifuge 5424 RX rack and the Thermomixer CX box.", ()),
+            ("Hand the tube to the spinner, not the 회전분리장치.", ()),
+            ("Incubate the plug.", ("Keep the Thermomixer C lid closed.",)),
+        ]
+        expected = [
+            {"EQ-CENTRIFUGE"},
+            set(),
+            set(),
+            {"EQ-CENTRIFUGE"},
+            {"EQ-SPEEDVAC"},
+            {"EQ-CENTRIFUGE"},
+            {"EQ-CENTRIFUGE", "EQ-THERMOMIXER"},
+            set(),
+            set(),
+            {"EQ-THERMOMIXER"},
+        ]
+        pack, protocol_steps = self._resolve(steps)
+        # The SpeedVac is in no equipment list; its approved alias in a step
+        # is what brings its manual into the pack.
+        self.assertEqual(
+            {d.document_id for d in pack.equipment_documents},
+            {"EQ-CENTRIFUGE", "EQ-THERMOMIXER", "EQ-SPEEDVAC"},
+        )
+        titles = {
+            "EQ-CENTRIFUGE": "Centrifuge 5424 R manual",
+            "EQ-THERMOMIXER": "Thermomixer C manual",
+            "EQ-SPEEDVAC": "SpeedVac SPD120 manual",
+        }
+        for index, (step, want) in enumerate(zip(protocol_steps, expected)):
+            with self.subTest(step=step.instruction_source_text):
+                guidance = pack.guidance_for_step(step, index)
+                got = {d.document_id for d in guidance.applicable_documents if d.document_type == "equipment_manual"}
+                self.assertEqual(got, want)
+                card = "\n".join(guidance.display_bullets + guidance.localized_display_bullets)
+                for document_id, title in titles.items():
+                    if document_id not in want:
+                        self.assertNotIn(title, card)
+                self.assertEqual(guidance.citation_label.count("장비 매뉴얼"), len(want))
 
 
 if __name__ == "__main__":

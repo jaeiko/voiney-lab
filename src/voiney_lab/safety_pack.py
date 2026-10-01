@@ -55,10 +55,11 @@ class SafetyDocumentRef:
     #: (language, excerpt) of this section in a human-reviewed translation the
     #: catalog links to this document; the only translation the card may show.
     reviewed_translations: tuple[tuple[str, str], ...] = ()
-    #: An SDS's substance as the catalog names it: product name, approved
-    #: non-generic aliases and CAS numbers, casefolded. A step gets the SDS
-    #: only when its own text names one of these.
-    substance_terms: tuple[str, ...] = ()
+    #: What the document is about as the catalog names it, casefolded: an
+    #: SDS's product name, CAS numbers and approved non-generic aliases; an
+    #: equipment manual's equipment name, model and approved non-generic
+    #: aliases. A step gets the document only when its own text names one.
+    name_terms: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -199,7 +200,7 @@ def _match_text(text: Any) -> str:
 _HANGUL = "\uac00-\ud7a3"
 
 
-def mentions_substance(term: str, text: str) -> bool:
+def mentions_name(term: str, text: str) -> bool:
     """Whether ``text`` names ``term`` as a whole name, not inside a longer word.
 
     Both arguments are already :func:`_match_text`. ``dtt`` is not found in
@@ -371,20 +372,12 @@ def resolve_step_safety_context(
     matching_docs: list[SafetyDocumentRef] = []
 
     if safety_pack.coverage_status not in ("unavailable", "disabled") and safety_pack.total_document_count > 0:
-        # An SDS belongs to a step that names its own substance, and to no
-        # other: a word such as "buffer" or "solvent" names no substance.
-        for sds in safety_pack.sds_documents:
-            if any(mentions_substance(term, step_text) for term in sds.substance_terms):
-                matching_docs.append(sds)
-
-        # Match Equipment manuals
-        for eq in safety_pack.equipment_documents:
-            title_lower = eq.title.casefold()
-            topic_lower = (eq.topic or "").casefold()
-            if any(term in step_text for term in (title_lower, topic_lower)) or any(
-                term in step_text for term in ("centrifuge", "speedvac", "vortex", "incubator", "원심분리기", "인큐베이터", "기계", "설비")
-            ):
-                matching_docs.append(eq)
+        # An SDS or an equipment manual belongs to a step that names its own
+        # substance or machine, and to no other: a word such as "buffer",
+        # "solvent", "centrifuge" or "기계" names neither.
+        for doc in safety_pack.sds_documents + safety_pack.equipment_documents:
+            if any(mentions_name(term, step_text) for term in doc.name_terms):
+                matching_docs.append(doc)
 
         # Match SOP by step hazard warnings / topics
         for sop in safety_pack.sop_documents:
@@ -595,12 +588,15 @@ def resolve_safety_pack(
 
     all_materials_lower = {m.casefold() for m in subjects.materials}
     all_equipment_lower = {e.casefold() for e in subjects.equipment}
-    # Where the protocol may name a substance: its materials list and every step.
-    protocol_texts = [_match_text(m) for m in subjects.materials] + [
+    step_texts = [
         _step_text(step)
         for section in getattr(protocol, "sections", ()) or ()
         for step in getattr(section, "steps", ()) or ()
     ]
+    # Where the protocol may name a substance or a machine: its materials or
+    # equipment list, and every step.
+    material_texts = [_match_text(m) for m in subjects.materials] + step_texts
+    equipment_texts = [_match_text(e) for e in subjects.equipment] + step_texts
 
     try:
         conn = connect(catalog_path)
@@ -652,21 +648,27 @@ def resolve_safety_pack(
             aliases: dict[int, list[str]] = {}
             for alias_row in alias_rows:
                 aliases.setdefault(alias_row["document_row_id"], []).append(_clean_str(alias_row["alias"]))
-            # An SDS's substance names, its reviewed translations' included.
-            substance_terms: dict[str, set[str]] = {}
+            # An SDS's substance names and an equipment manual's machine
+            # names, its reviewed translations' included.
+            name_terms: dict[str, set[str]] = {}
             cas_by_row: dict[int, list[str]] = {}
             for row in rows:
                 status = _clean_str(row["translation_status"])
-                if _clean_str(row["document_type"]) != "supplier_sds" or status in UNREVIEWED_TRANSLATION_STATUSES:
+                doc_type = _clean_str(row["document_type"])
+                if doc_type not in ("supplier_sds", "equipment_manual") or status in UNREVIEWED_TRANSLATION_STATUSES:
                     continue
                 translation_of = _clean_str(row["translation_of_document_id"])
                 owner = translation_of if status == "human_reviewed" and translation_of in originals else _clean_str(
                     row["document_id"]
                 )
-                if row["id"] not in cas_by_row:
-                    cas_by_row[row["id"]] = _cas_numbers(row)
-                names = [row["product_name"], *cas_by_row[row["id"]], *aliases.get(row["id"], ())]
-                substance_terms.setdefault(owner, set()).update(
+                if doc_type == "supplier_sds":
+                    if row["id"] not in cas_by_row:
+                        cas_by_row[row["id"]] = _cas_numbers(row)
+                    names = [row["product_name"], *cas_by_row[row["id"]], *aliases.get(row["id"], ())]
+                else:
+                    # The machine's name, its model, and approved aliases.
+                    names = [row["product_name"], row["product_code"], *aliases.get(row["id"], ())]
+                name_terms.setdefault(owner, set()).update(
                     term for term in (_match_text(name) for name in names) if term
                 )
 
@@ -718,13 +720,13 @@ def resolve_safety_pack(
                     prod_name = _clean_str(row["product_name"]).casefold()
                     prod_code = _clean_str(row["product_code"]).casefold()
                     cas_list = [c.casefold() for c in cas_by_row.get(row["id"], ())]
-                    terms = tuple(sorted(substance_terms.get(doc_id, ())))
+                    terms = tuple(sorted(name_terms.get(doc_id, ())))
 
                     matches_material = (
                         (prod_name and any(m in prod_name or prod_name in m for m in all_materials_lower))
                         or (prod_code and any(prod_code == m for m in all_materials_lower))
                         or any(c in all_materials_lower for c in cas_list)
-                        or any(mentions_substance(t, text) for t in terms for text in protocol_texts)
+                        or any(mentions_name(t, text) for t in terms for text in material_texts)
                     )
                     if matches_material or (is_demo and usage_scope != "operational"):
                         ref = SafetyDocumentRef(
@@ -741,7 +743,7 @@ def resolve_safety_pack(
                             summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
                             reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
-                            substance_terms=terms,
+                            name_terms=terms,
                         )
                         sds_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
@@ -749,9 +751,11 @@ def resolve_safety_pack(
                 elif doc_type == "equipment_manual":
                     prod_name = _clean_str(row["product_name"]).casefold()
                     prod_code = _clean_str(row["product_code"]).casefold()
+                    terms = tuple(sorted(name_terms.get(doc_id, ())))
                     matches_eq = (
                         (prod_name and any(e in prod_name or prod_name in e for e in all_equipment_lower))
                         or (prod_code and any(prod_code == e for e in all_equipment_lower))
+                        or any(mentions_name(t, text) for t in terms for text in equipment_texts)
                     )
                     if matches_eq or (is_demo and usage_scope != "operational"):
                         ref = SafetyDocumentRef(
@@ -768,6 +772,7 @@ def resolve_safety_pack(
                             summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
                             reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
+                            name_terms=terms,
                         )
                         equipment_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
