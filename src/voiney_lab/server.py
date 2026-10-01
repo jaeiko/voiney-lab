@@ -5857,6 +5857,7 @@ async def _queue_curated_research(
                 requested_entities=plan.requested_entities,
                 question_kind=plan.question_kind,
                 question_dimensions=plan.question_dimensions,
+                **curated.research_scope(),
             )}
 
         research_budget=min(120.0,max(
@@ -7278,6 +7279,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     question_dimensions=(
                         plan.unresolved_dimensions or plan.question_dimensions
                     ),
+                    **curated.research_scope(),
                 )
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
