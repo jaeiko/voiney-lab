@@ -8,6 +8,7 @@ handoff, writes an ``.eml`` artifact, and advances a durable processed ledger.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -196,11 +197,16 @@ def process_once(
         previous = load_status(report_id, status_dir)
         attempts = int(previous.get("attempts", 0)) + 1
         write_status(report_id, "processing", attempts, status_dir=status_dir)
+        # The location is the reporter's own words; the log keeps only its
+        # size and digest, and an urgency outside the known set by name only.
+        location = str(report.get("location") or "")
+        urgency = report.get("urgency")
         log.info(
-            "processing %s (%s, %s)",
+            "processing %s (location_chars=%d location_sha256=%s, %s)",
             report_id,
-            report.get("location"),
-            report.get("urgency"),
+            len(location),
+            hashlib.sha256(location.encode("utf-8")).hexdigest()[:16],
+            urgency if isinstance(urgency, str) and urgency in URGENCY_ORDER else "unknown_urgency",
         )
         try:
             body = draft_handoff(report, client=client)
