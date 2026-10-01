@@ -1,10 +1,46 @@
-"""Generation-scoped latency filler scheduling for Cascade turns."""
+"""Generation-scoped latency filler scheduling for Cascade turns.
+
+The cue is chosen by ``CASCADE_FILLER_MODE``:
+
+* ``tone`` (the default) -- the browser plays one short, quiet tone. Nothing is
+  synthesized and nothing is said, so the cue costs no TTS call and cannot
+  arrive later than the answer because a sentence took long to make.
+* ``phrase`` -- the earlier behaviour, kept so a deployment can go back to it:
+  one synthesized sentence from ``FILLER_PHRASES``.
+
+Either cue carries no protocol content, starts only once ``delay_ms`` has passed
+with the primary turn still pending, and is cleared the moment the primary
+audio is admitted.
+"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import os
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+
+from voiney_lab.configuration import ConfigurationError
+
+
+FILLER_MODE_ENV = "CASCADE_FILLER_MODE"
+FILLER_MODE_TONE = "tone"
+FILLER_MODE_PHRASE = "phrase"
+FILLER_MODES = frozenset({FILLER_MODE_TONE, FILLER_MODE_PHRASE})
+DEFAULT_FILLER_MODE = FILLER_MODE_TONE
+
+
+def cascade_filler_mode(environment: Mapping[str, str] | None = None) -> str:
+    """Return the configured cue: ``tone`` unless ``phrase`` is asked for."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(FILLER_MODE_ENV, "").strip().casefold() or DEFAULT_FILLER_MODE
+    if raw not in FILLER_MODES:
+        raise ConfigurationError(
+            f"{FILLER_MODE_ENV} must be one of: "
+            + ", ".join(sorted(FILLER_MODES))
+        )
+    return raw
 
 
 FILLER_PHRASES = {
@@ -39,7 +75,15 @@ class CascadeFiller:
         is_current: Callable[[int, int], bool],
         clock: Callable[[], float],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        mode: str = FILLER_MODE_PHRASE,
+        send_tone: Callable[[int, int], Awaitable[None]] | None = None,
     ) -> None:
+        if mode not in FILLER_MODES:
+            raise ValueError(f"unknown filler mode: {mode!r}")
+        if mode == FILLER_MODE_TONE and send_tone is None:
+            raise ValueError("a tone filler needs send_tone")
+        self.mode = mode
+        self._send_tone = send_tone
         self.turn_id = turn_id
         self.generation = generation
         self.language = language if language in FILLER_PHRASES else "ko"
@@ -82,6 +126,7 @@ class CascadeFiller:
                 turn_id=self.turn_id,
                 generation=self.generation,
                 outcome=outcome,
+                cue=self.mode,
                 scheduled_ms=0,
                 started_ms=self._started_ms,
                 finished_ms=self._finished_ms,
@@ -98,6 +143,7 @@ class CascadeFiller:
                 turn_id=self.turn_id,
                 generation=self.generation,
                 outcome="scheduled",
+                cue=self.mode,
                 scheduled_ms=0,
                 delay_ms=self.delay_ms,
             )
@@ -106,6 +152,9 @@ class CascadeFiller:
                 self.turn_id, self.generation
             ):
                 await self._outcome_event("skipped")
+                return
+            if self.mode == FILLER_MODE_TONE:
+                await self._play_tone()
                 return
             try:
                 pcm = await self._synthesize(
@@ -132,6 +181,14 @@ class CascadeFiller:
                 self._outcome = "cancelled"
                 self._finished_ms = self._elapsed_ms()
             raise
+
+    async def _play_tone(self) -> None:
+        """Ask the browser for the tone; the server sends no audio for it."""
+
+        self._started = True
+        self._started_ms = self._elapsed_ms()
+        await self._send_tone(self.turn_id, self.generation)
+        await self._outcome_event("played")
 
     async def primary_ready(self) -> None:
         """Cancel/clear filler before the primary segment is admitted."""

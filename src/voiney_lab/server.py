@@ -31,7 +31,7 @@ from voiney_lab.configuration import (
     VoiceVadSettings,
     cascade_filler_delay_ms,
 )
-from voiney_lab.cascade_filler import CascadeFiller
+from voiney_lab.cascade_filler import CascadeFiller,cascade_filler_mode
 from voiney_lab.curated_protocol import (
     ClaimAdmissionStatus,
     CuratedProtocolAction,
@@ -342,10 +342,19 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
     )
 
 
+def log_cascade_filler_configuration()->None:
+    """Check the waiting-cue settings once at startup and say which cue is on."""
+    log.info(
+        "cascade_filler.configuration mode=%s delay_ms=%d",
+        cascade_filler_mode(),cascade_filler_delay_ms(),
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Warm optional in-memory retrieval without making it a startup dependency."""
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
+    log_cascade_filler_configuration()
     log_readiness_gate_test_mode()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     await asyncio.to_thread(start_moss_runtime_from_environment)
@@ -8522,6 +8531,12 @@ async def run_turn_safely(
             configuration_id=session.accepted_configuration_id,
             turn_id=target_turn,generation=target_generation,
             reason="primary_audio_ready")
+    async def filler_tone(target_turn:int,target_generation:int):
+        # The browser makes the tone itself; no audio frames follow.
+        await sender.text(
+            "filler.tone",
+            configuration_id=session.accepted_configuration_id,
+            turn_id=target_turn,generation=target_generation)
     filler=CascadeFiller(
         turn_id=turn_id,generation=generation,language=language,
         delay_ms=cascade_filler_delay_ms(),
@@ -8529,7 +8544,8 @@ async def run_turn_safely(
             synthesize,text,selected),
         send_audio=filler_audio,send_event=filler_event,
         send_clear=filler_clear,is_current=session.is_current,
-        clock=session.clock)
+        clock=session.clock,
+        mode=cascade_filler_mode(),send_tone=filler_tone)
     filler.start()
     try: await run_turn(
         websocket,session,source_pcm,turn_id,input_frames,voiced_frames,
