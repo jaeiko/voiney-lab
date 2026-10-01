@@ -131,8 +131,28 @@ Branch from `dev` and open pull requests into `dev`. `main` is the version
 deployed to pilot labs and only receives merges from `dev`; never push
 directly to `main`. Branch naming, the pre-PR checks, and file ownership are
 in `docs/GIT_WORKFLOW.md`. Commit each phase of multi-phase work separately
-with a descriptive message, and confirm with the user before pushing to a
-shared remote branch or renaming/transferring the GitHub repository itself.
+with a descriptive message.
+
+An agent may push its own work branch, open a pull request into `dev` with
+`gh pr create --base dev`, and merge it as a merge commit
+(`gh pr merge <branch> --merge`) — only when all of these hold: the failure
+list matches the one measured before the work and nothing new fails; no
+decision is left for a person (anything you stopped on and reported blocks the
+merge); only the files the task allows were changed; and the base is `dev`.
+Otherwise open the pull request, do not merge it, and say why at the top of
+the report. Only a person opens or merges a pull request into `main`,
+force-pushes, deletes a branch, or renames/transfers the GitHub repository
+itself.
+
+Commit messages and pull request bodies carry no Claude attribution: no
+`Co-Authored-By: Claude…`, `Generated with [Claude Code]`, `claude.ai/code`
+link, or `Claude-Session:` line. This repository's `commit-msg` hook deletes
+the Co-Authored-By, Generated-with and Claude-Session lines from commit
+messages, but it lives in `.git/hooks/` outside version control, so another
+clone lacks it, and it never sees a pull request body — run the two `grep`
+checks in `docs/GIT_WORKFLOW.md` before `gh pr create`. Write the pull request
+body in Korean so another team member can carry the work on from it alone,
+with the sections in the order `docs/GIT_WORKFLOW.md` lists.
 
 ## Historical archive
 

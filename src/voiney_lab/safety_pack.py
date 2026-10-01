@@ -55,10 +55,11 @@ class SafetyDocumentRef:
     #: (language, excerpt) of this section in a human-reviewed translation the
     #: catalog links to this document; the only translation the card may show.
     reviewed_translations: tuple[tuple[str, str], ...] = ()
-    #: An SDS's substance as the catalog names it: product name, approved
-    #: non-generic aliases and CAS numbers, casefolded. A step gets the SDS
-    #: only when its own text names one of these.
-    substance_terms: tuple[str, ...] = ()
+    #: What the document is about as the catalog names it, casefolded: an
+    #: SDS's product name, CAS numbers and approved non-generic aliases; an
+    #: equipment manual's equipment name, model and approved non-generic
+    #: aliases. A step gets the document only when its own text names one.
+    name_terms: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +137,10 @@ class SafetyPack:
     coverage_status: str  # "available", "partial", "unavailable", "disabled", "demo_only"
     missing_coverage: tuple[str, ...]
     source_identities: tuple[str, ...]
+    #: ``document_id:version`` of approved, in-scope documents left out
+    #: because their ``review_due_at`` has passed. Only the fact is kept;
+    #: none of their text reaches the pack or a card.
+    review_overdue_documents: tuple[str, ...] = ()
 
     @property
     def total_document_count(self) -> int:
@@ -166,6 +171,7 @@ class SafetyPack:
             "missing_coverage": list(self.missing_coverage),
             "source_identities": list(self.source_identities),
             "total_document_count": self.total_document_count,
+            "review_overdue_documents": list(self.review_overdue_documents),
         }
 
 
@@ -199,7 +205,7 @@ def _match_text(text: Any) -> str:
 _HANGUL = "\uac00-\ud7a3"
 
 
-def mentions_substance(term: str, text: str) -> bool:
+def mentions_name(term: str, text: str) -> bool:
     """Whether ``text`` names ``term`` as a whole name, not inside a longer word.
 
     Both arguments are already :func:`_match_text`. ``dtt`` is not found in
@@ -337,6 +343,49 @@ def collect_protocol_safety_subjects(protocol: ExperimentProtocol | Any) -> Prot
     )
 
 
+#: Section topics the card prefers for a document's one line, best first: the
+#: hazards section (an SDS's section 2), then handling, under its own name or
+#: voice search's ``handling_storage``.
+_CARD_TOPIC_RANKS = {"hazards": 0, "handling": 1, "handling_storage": 1}
+
+
+def _section_code_key(code: str | None) -> tuple[tuple[int, int | str], ...]:
+    """Orders section codes as numbered: "2" before "10", "SDS-2" before "SDS-10"."""
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in re.findall(r"\d+|\D+", code or "")
+    )
+
+
+def _card_section_key(doc: SafetyDocumentRef) -> tuple[Any, ...]:
+    """Which of a document's sections the card shows: the smallest key.
+
+    A hazards section first, else a handling one, else the earliest page;
+    the section code settles a tie, so the choice never rests on row order.
+    """
+    rank = _CARD_TOPIC_RANKS.get((doc.topic or "").casefold(), max(_CARD_TOPIC_RANKS.values()) + 1)
+    return (rank, doc.page_number or 1, _section_code_key(doc.section_code))
+
+
+def _review_overdue(review_due_at: Any, now: datetime) -> bool:
+    """Whether a document's review date has passed, as voice search decides it.
+
+    The same comparison as ``retrieval._is_stale`` and
+    ``moss_retrieval._review_is_current``: a date without a zone is UTC, and
+    no date never falls due. An unreadable date counts as passed.
+    """
+    value = _clean_str(review_due_at)
+    if not value:
+        return False
+    try:
+        due = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return due < now
+
+
 def resolve_step_safety_context(
     safety_pack: SafetyPack,
     step: ProtocolSourceStep | Any,
@@ -371,20 +420,12 @@ def resolve_step_safety_context(
     matching_docs: list[SafetyDocumentRef] = []
 
     if safety_pack.coverage_status not in ("unavailable", "disabled") and safety_pack.total_document_count > 0:
-        # An SDS belongs to a step that names its own substance, and to no
-        # other: a word such as "buffer" or "solvent" names no substance.
-        for sds in safety_pack.sds_documents:
-            if any(mentions_substance(term, step_text) for term in sds.substance_terms):
-                matching_docs.append(sds)
-
-        # Match Equipment manuals
-        for eq in safety_pack.equipment_documents:
-            title_lower = eq.title.casefold()
-            topic_lower = (eq.topic or "").casefold()
-            if any(term in step_text for term in (title_lower, topic_lower)) or any(
-                term in step_text for term in ("centrifuge", "speedvac", "vortex", "incubator", "원심분리기", "인큐베이터", "기계", "설비")
-            ):
-                matching_docs.append(eq)
+        # An SDS or an equipment manual belongs to a step that names its own
+        # substance or machine, and to no other: a word such as "buffer",
+        # "solvent", "centrifuge" or "기계" names neither.
+        for doc in safety_pack.sds_documents + safety_pack.equipment_documents:
+            if any(mentions_name(term, step_text) for term in doc.name_terms):
+                matching_docs.append(doc)
 
         # Match SOP by step hazard warnings / topics
         for sop in safety_pack.sop_documents:
@@ -401,13 +442,18 @@ def resolve_step_safety_context(
                 # to every step, so a "general" SOP takes a card line on each.
                 matching_docs.append(sop)
 
-    # Deduplicate matching docs
+    # One line per document, in the order the documents first matched; of
+    # the sections that matched, the card shows the one _card_section_key
+    # puts first.
     unique_docs: list[SafetyDocumentRef] = []
-    seen_ids = set()
+    position: dict[str, int] = {}
     for doc in matching_docs:
-        if doc.document_id not in seen_ids:
-            seen_ids.add(doc.document_id)
+        at = position.get(doc.document_id)
+        if at is None:
+            position[doc.document_id] = len(unique_docs)
             unique_docs.append(doc)
+        elif _card_section_key(doc) < _card_section_key(unique_docs[at]):
+            unique_docs[at] = doc
 
     ppe_reqs: list[str] = []
     handling: list[str] = []
@@ -516,9 +562,19 @@ def resolve_safety_pack(
     facility_id: str | None = None,
     usage_scope: str = "demo",
     protocol_revision: str = "1",
+    *,
+    now: datetime | None = None,
 ) -> SafetyPack:
-    """Conservatively resolve approved safety documents matching the structured protocol."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    """Conservatively resolve approved safety documents matching the structured protocol.
+
+    A catalog document whose ``review_due_at`` is before ``now`` (the current
+    time when omitted) is left out, as voice search leaves it out, and only
+    its identity is kept in :attr:`SafetyPack.review_overdue_documents`.
+    """
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    now_iso = current.isoformat()
     subjects = collect_protocol_safety_subjects(protocol)
     protocol_id = subjects.protocol_id
 
@@ -527,6 +583,7 @@ def resolve_safety_pack(
     equipment_docs: list[SafetyDocumentRef] = []
     topics_found: set[str] = set()
     identities: set[str] = set()
+    overdue: set[str] = set()
 
     # If catalog path is None or file not found
     if catalog_path is None or not Path(catalog_path).is_file():
@@ -595,12 +652,15 @@ def resolve_safety_pack(
 
     all_materials_lower = {m.casefold() for m in subjects.materials}
     all_equipment_lower = {e.casefold() for e in subjects.equipment}
-    # Where the protocol may name a substance: its materials list and every step.
-    protocol_texts = [_match_text(m) for m in subjects.materials] + [
+    step_texts = [
         _step_text(step)
         for section in getattr(protocol, "sections", ()) or ()
         for step in getattr(section, "steps", ()) or ()
     ]
+    # Where the protocol may name a substance or a machine: its materials or
+    # equipment list, and every step.
+    material_texts = [_match_text(m) for m in subjects.materials] + step_texts
+    equipment_texts = [_match_text(e) for e in subjects.equipment] + step_texts
 
     try:
         conn = connect(catalog_path)
@@ -617,14 +677,29 @@ def resolve_safety_pack(
                 SELECT d.id, d.document_id, d.document_type, d.title, d.version, d.language,
                        d.facility_id, d.manufacturer, d.product_name, d.product_code,
                        d.cas_numbers, d.usage_scope, d.source_uri, d.source_checksum,
-                       d.translation_status, d.translation_of_document_id,
+                       d.translation_status, d.translation_of_document_id, d.review_due_at,
                        s.section_code, s.section_title, s.page_start, s.content, s.topic, s.keywords
                 FROM documents AS d
                 LEFT JOIN sections AS s ON s.document_row_id = d.id
                 WHERE d.approval_status = 'approved' AND d.active = 1 AND {scope_filter}
-                ORDER BY d.document_type, d.document_id, s.page_start
+                ORDER BY d.document_type, d.document_id, s.page_start, s.section_code
                 """
             ).fetchall()
+
+            # A document past its review date is gone before anything else
+            # looks at it: no line, no translation, no name that binds a step.
+            current_rows = []
+            for row in rows:
+                if _review_overdue(row["review_due_at"], current):
+                    overdue.add(f"{_clean_str(row['document_id'])}:{_clean_str(row['version'])}")
+                else:
+                    current_rows.append(row)
+            rows = current_rows
+            if overdue:
+                log.warning(
+                    "Safety documents past their review date left out of the pack: %s",
+                    ", ".join(sorted(overdue)),
+                )
 
             # A human-reviewed translation is shown beside the section of its
             # original that has the same code, not as a document of its own.
@@ -652,21 +727,27 @@ def resolve_safety_pack(
             aliases: dict[int, list[str]] = {}
             for alias_row in alias_rows:
                 aliases.setdefault(alias_row["document_row_id"], []).append(_clean_str(alias_row["alias"]))
-            # An SDS's substance names, its reviewed translations' included.
-            substance_terms: dict[str, set[str]] = {}
+            # An SDS's substance names and an equipment manual's machine
+            # names, its reviewed translations' included.
+            name_terms: dict[str, set[str]] = {}
             cas_by_row: dict[int, list[str]] = {}
             for row in rows:
                 status = _clean_str(row["translation_status"])
-                if _clean_str(row["document_type"]) != "supplier_sds" or status in UNREVIEWED_TRANSLATION_STATUSES:
+                doc_type = _clean_str(row["document_type"])
+                if doc_type not in ("supplier_sds", "equipment_manual") or status in UNREVIEWED_TRANSLATION_STATUSES:
                     continue
                 translation_of = _clean_str(row["translation_of_document_id"])
                 owner = translation_of if status == "human_reviewed" and translation_of in originals else _clean_str(
                     row["document_id"]
                 )
-                if row["id"] not in cas_by_row:
-                    cas_by_row[row["id"]] = _cas_numbers(row)
-                names = [row["product_name"], *cas_by_row[row["id"]], *aliases.get(row["id"], ())]
-                substance_terms.setdefault(owner, set()).update(
+                if doc_type == "supplier_sds":
+                    if row["id"] not in cas_by_row:
+                        cas_by_row[row["id"]] = _cas_numbers(row)
+                    names = [row["product_name"], *cas_by_row[row["id"]], *aliases.get(row["id"], ())]
+                else:
+                    # The machine's name, its model, and approved aliases.
+                    names = [row["product_name"], row["product_code"], *aliases.get(row["id"], ())]
+                name_terms.setdefault(owner, set()).update(
                     term for term in (_match_text(name) for name in names) if term
                 )
 
@@ -718,13 +799,13 @@ def resolve_safety_pack(
                     prod_name = _clean_str(row["product_name"]).casefold()
                     prod_code = _clean_str(row["product_code"]).casefold()
                     cas_list = [c.casefold() for c in cas_by_row.get(row["id"], ())]
-                    terms = tuple(sorted(substance_terms.get(doc_id, ())))
+                    terms = tuple(sorted(name_terms.get(doc_id, ())))
 
                     matches_material = (
                         (prod_name and any(m in prod_name or prod_name in m for m in all_materials_lower))
                         or (prod_code and any(prod_code == m for m in all_materials_lower))
                         or any(c in all_materials_lower for c in cas_list)
-                        or any(mentions_substance(t, text) for t in terms for text in protocol_texts)
+                        or any(mentions_name(t, text) for t in terms for text in material_texts)
                     )
                     if matches_material or (is_demo and usage_scope != "operational"):
                         ref = SafetyDocumentRef(
@@ -741,7 +822,7 @@ def resolve_safety_pack(
                             summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
                             reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
-                            substance_terms=terms,
+                            name_terms=terms,
                         )
                         sds_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
@@ -749,9 +830,11 @@ def resolve_safety_pack(
                 elif doc_type == "equipment_manual":
                     prod_name = _clean_str(row["product_name"]).casefold()
                     prod_code = _clean_str(row["product_code"]).casefold()
+                    terms = tuple(sorted(name_terms.get(doc_id, ())))
                     matches_eq = (
                         (prod_name and any(e in prod_name or prod_name in e for e in all_equipment_lower))
                         or (prod_code and any(prod_code == e for e in all_equipment_lower))
+                        or any(mentions_name(t, text) for t in terms for text in equipment_texts)
                     )
                     if matches_eq or (is_demo and usage_scope != "operational"):
                         ref = SafetyDocumentRef(
@@ -768,6 +851,7 @@ def resolve_safety_pack(
                             summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
                             reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
+                            name_terms=terms,
                         )
                         equipment_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
@@ -805,4 +889,5 @@ def resolve_safety_pack(
         coverage_status=coverage,
         missing_coverage=tuple(missing),
         source_identities=tuple(sorted(identities)),
+        review_overdue_documents=tuple(sorted(overdue)),
     )

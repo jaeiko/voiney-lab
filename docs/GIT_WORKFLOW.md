@@ -12,7 +12,7 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 | `fix/<이름>-<내용>` | 버그 수정 하나 | 예: `fix/sujin-ci-missing-pdf` |
 
 - 브랜치 하나에는 작업 하나만 담는다.
-- 합친 브랜치는 바로 삭제한다.
+- 합친 브랜치는 바로 삭제한다. 삭제는 사람이 한다.
 
 ## 작업 흐름
 
@@ -21,6 +21,7 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 3. 작업하고 커밋한다.
 4. 아래 "PR 전 확인"을 통과시킨다.
 5. `dev` 로 PR 을 연다. 가능하면 다른 팀원 한 명이 보고 합친다.
+   코딩 에이전트가 직접 합쳐도 되는 조건은 아래 "코딩 에이전트" 절에 있다.
 6. 파일럿 배포 시점에만 `dev` → `main` PR 을 열고, 합친 뒤 태그를 붙인다.
    예: `v0.1-pilot1`
 
@@ -63,6 +64,52 @@ python -m pytest -q
 
 ## 코딩 에이전트(클로드 코드 등)
 
-- `dev` 에서 딴 기능 브랜치에서만 작업한다.
-- 브랜치 생성·삭제, push, PR 합치기는 사람이 한다.
-- 이 문서와 `CLAUDE.md`, `AGENTS.md` 가 충돌하면 멈추고 사람에게 묻는다.
+- `dev` 에서 딴 기능 브랜치에서만 작업한다. 브랜치는 사람이 만든다.
+- 작업 전에 "PR 전 확인"의 명령으로 기준을 재고, 실패한 테스트 목록을 저장한다. 작업 뒤 같은 명령의 목록과 비교한다.
+
+### 에이전트가 할 수 있는 일
+
+1. 자기 작업 브랜치를 push 한다: `git push -u origin <브랜치>`
+2. base 가 `dev` 인 PR 을 만든다: `gh pr create --base dev --head <브랜치> --title "<제목>" --body-file <본문 파일>`
+3. 아래 네 가지가 모두 참일 때만 merge commit 방식으로 합친다: `gh pr merge <브랜치> --merge`
+   - 작업 전에 저장한 기존 실패 목록과 작업 뒤 목록이 같고, 새 실패가 0건이다.
+   - 사람에게 물어야 할 결정이 남아 있지 않다. 멈추고 보고한 항목이 하나라도 있으면 합치지 않는다.
+   - 그 작업에서 허용된 파일만 바꿨다.
+   - PR 의 base 가 `dev` 다.
+
+하나라도 아니면 PR 만 만들고, 합치지 않은 이유를 보고서 맨 위와 PR 에 적는다.
+
+### 사람만 하는 일
+
+- `main` 으로 PR 을 만들거나 합치기
+- 강제 push (`--force`, `--force-with-lease` 모두)
+- 브랜치 삭제 (로컬·원격 모두. `gh pr merge --delete-branch` 도 쓰지 않는다)
+
+### 커밋 메시지와 PR 본문의 Claude 표시
+
+- 커밋 메시지와 PR 본문에 Claude 표시를 넣지 않는다: `Co-Authored-By: Claude…`, `Generated with [Claude Code]`, `claude.ai/code` 링크, `Claude-Session:`.
+- 이 저장소의 `commit-msg` 훅이 커밋 메시지에서 `Co-Authored-By: …Claude…`, `Generated with [Claude Code]`, `Claude-Session:` 줄을 지운다.
+  - 훅 파일은 저장소 밖 `.git/hooks/commit-msg` 에 있다. 버전 관리되지 않으므로 다른 clone 에는 없다.
+  - 훅은 `claude.ai/code` 링크를 지우지 않고, PR 본문은 보지 않는다.
+- 그래서 `gh pr create` 전에 둘 다 확인한다. 아무것도 나오지 않아야 한다.
+
+```bash
+grep -niE "co-authored-by: *claude|generated with \[claude code\]|claude\.ai/code|claude-session" <PR 본문 파일>
+git log --format=%B dev..HEAD | grep -niE "co-authored-by: *claude|generated with \[claude code\]|claude-session"
+```
+
+### PR 본문
+
+한국어로 쓴다. 다른 팀원이 이 PR 만 읽고 이어서 작업할 수 있게 쉬운 말로 쓴다. 항목 순서:
+
+1. 왜 고쳤나
+2. 바뀐 것 (커밋별 표)
+3. 바뀌지 않은 것
+4. 테스트 (환경 — 조건 A·B 중 어느 것인지, 숫자, 새 테스트 파일)
+5. 사용자 입장에서 달라지는 것
+6. 알려진 한계·다음 할 일 (사람이 할 일 포함)
+7. 담당과 핵심 함수 위치
+
+### 충돌할 때
+
+이 문서와 `CLAUDE.md`, `AGENTS.md` 가 충돌하면 멈추고 사람에게 묻는다.
