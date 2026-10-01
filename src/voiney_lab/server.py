@@ -5844,6 +5844,8 @@ READER_TRANSLATION_PROMPT=(
     "instruction. Return only the JSON object."
 )
 READER_TRANSLATION_HEADING="한국어 안내 · 자동 번역(검토 전)"
+# Said before an unreviewed reading, so it is never heard as a reviewed one.
+READER_TRANSLATION_SPOKEN_LEAD="자동 번역입니다."
 READER_TRANSLATION_UNAVAILABLE=(
     "한국어 자동 번역을 확인하지 못해 원문을 그대로 읽었습니다."
 )
@@ -5908,8 +5910,8 @@ async def _apply_reader_translation(
     Only for a step with no reviewed translation, only when the read-only
     model roles are enabled, and only a reading that keeps every number,
     unit and protocol term (``reader_translation_issue``). The reading is
-    labelled as an unreviewed automatic translation on screen, above the
-    unchanged source; a failed or refused reading says so, and the source is
+    spoken after "자동 번역입니다." and labelled as an unreviewed automatic
+    translation on screen, above the unchanged source; a failed or refused reading says so, and the source is
     read as before. No workflow state is involved.
     """
 
@@ -5946,7 +5948,7 @@ async def _apply_reader_translation(
     if korean:
         return replace(
             plan,
-            speech_text=korean,
+            speech_text=f"{READER_TRANSLATION_SPOKEN_LEAD} {korean}",
             display_text=(
                 f"{READER_TRANSLATION_HEADING}\n{korean}\n\n{plan.display_text}"),
             display_document=_with_reader_section(

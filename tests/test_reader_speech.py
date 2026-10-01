@@ -198,7 +198,9 @@ class InGelSpeechTests(unittest.TestCase):
                     session = _listener(self.fixture, label - 1, model_roles=True)
                     before = session.curated_protocol_session.state()
                     spoken, reply, state = _turn(session, transcript, 1)
+                    # A reviewed translation is read as it is, unannounced.
                     self.assertEqual(spoken, [self.reviewed(label)])
+                    self.assertFalse(spoken[0].startswith("자동 번역"))
                     for mark in SCREEN_ONLY:
                         self.assertNotIn(mark, spoken[0])
                     self.assertIn("원문 · English", reply["text"])
@@ -225,21 +227,38 @@ class UntranslatedStepTests(unittest.TestCase):
         model = _FakeModel(GOOD_READING)
         session = _listener(self.fixture, 0, model_roles=True)
         spoken, reply, state = _turn(session, "이 단계 읽어줘", 1, model)
-        self.assertEqual(spoken, [GOOD_READING])
+        # Heard as automatic before it is heard at all.
+        self.assertEqual(spoken, ["자동 번역입니다. " + GOOD_READING])
         self.assertEqual(reply["translation_status"], "model_assisted_unreviewed")
         first = reply["display_document"]["sections"][0]
         self.assertEqual(first["heading"], "한국어 안내 · 자동 번역(검토 전)")
+        # The screen shows the reading itself, labelled by its heading.
         self.assertEqual(first["text"], GOOD_READING)
         # The source stays on screen under it, unchanged.
         self.assertIn(MINIPREP_STEPS[0], reply["text"])
-        self.assertEqual(state["spoken_summary"], GOOD_READING)
+        self.assertEqual(state["spoken_summary"], spoken[0])
         self.assertEqual(len(model.calls), 1)
         request = json.loads(model.calls[0]["messages"][1]["content"])
         self.assertEqual(request, {"step_label": "1", "source_text": MINIPREP_STEPS[0]})
         # Read again: the checked reading is reused, not requested twice.
         spoken_again, _, _ = _turn(session, "다시 읽어줘", 2, model)
-        self.assertEqual(spoken_again, [GOOD_READING])
+        self.assertEqual(spoken_again, ["자동 번역입니다. " + GOOD_READING])
         self.assertEqual(len(model.calls), 1)
+
+    def test_only_an_accepted_unreviewed_reading_is_announced_as_automatic(self) -> None:
+        accepted = _listener(self.fixture, 0, model_roles=True)
+        spoken, reply, _ = _turn(accepted, "이 단계 읽어줘", 1, _FakeModel(GOOD_READING))
+        self.assertTrue(spoken[0].startswith("자동 번역입니다. "))
+        self.assertEqual(spoken[0].count("자동 번역입니다."), 1)
+        self.assertNotIn("자동 번역입니다.", reply["display_document"]["sections"][0]["text"])
+        # A refused reading is not spoken, so nothing is announced as one.
+        refused = _listener(self.fixture, 0, model_roles=True)
+        spoken, _, _ = _turn(refused, "이 단계 읽어줘", 1, _FakeModel(BAD_READING))
+        self.assertNotIn("자동 번역입니다.", spoken[0])
+        # Without the model roles the source is read, unannounced.
+        off = _listener(self.fixture, 0, model_roles=False)
+        spoken, _, _ = _turn(off, "이 단계 읽어줘", 1)
+        self.assertNotIn("자동 번역", spoken[0])
 
     def test_a_reading_that_changes_a_number_is_refused_aloud(self) -> None:
         session = _listener(self.fixture, 0, model_roles=True)
