@@ -68,7 +68,8 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         )
         follow = session.plan("그게 왜 유용해?", turn_id=3, language="ko")
         self.assertEqual(follow.intent_kind, "protocol_purpose_followup")
-        self.assertIn("질량분석", follow.primary_text or "")
+        # The follow-up states the PDF's own purpose, in its own words.
+        self.assertIn("mass spec analysis", follow.primary_text or "")
         self.assertFalse(follow.state_changed)
 
         session.plan("AMBIC가 뭐야?", turn_id=4, language="ko")
@@ -92,12 +93,20 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
             if claim.admission_status is ClaimAdmissionStatus.RESEARCH_REQUIRED
         )
         self.assertGreaterEqual(len(admitted), 2)
-        self.assertEqual(len(unresolved), 1)
-        self.assertEqual(unresolved[0].target_id, "vessel_capacity")
+        # The tube's definition is not in the PDF (it names a "1.5ml tube"
+        # and never says what one is), so it joins the vessel rationale as
+        # unresolved; AMBIC's is, as "ammonium bicarbonate (AMBIC)".
+        self.assertEqual(
+            {claim.target_id for claim in unresolved}, {"tube", "vessel_capacity"}
+        )
+        self.assertIn("ambic", {claim.target_id for claim in admitted})
         self.assertIn("AMBIC", plan.primary_text or "")
         self.assertIn("200 µL", plan.primary_text or "")
         self.assertIn("설명하지 않습니다", plan.primary_text or "")
-        self.assertEqual(plan.unresolved_claim_ids, (unresolved[0].claim_id,))
+        self.assertEqual(
+            plan.unresolved_claim_ids,
+            tuple(claim.claim_id for claim in unresolved),
+        )
         self.assertEqual(session.current_index, opening)
 
         paraphrase = self.session("2").plan(
@@ -488,8 +497,9 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                     "solution_a": "Solution A",
                     "solution_b": "Solution B",
                     "dtt": "DTT",
-                    "iodoacetamide": "Iodoacetamide",
-                    "trypsin": "트립신",
+                    # As the PDF spells them.
+                    "iodoacetamide": "iodoacetamide",
+                    "trypsin": "trypsin",
                 }
                 labels = labels_en if is_en else labels_ko
                 for ent in expected_entities:

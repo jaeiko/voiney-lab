@@ -836,8 +836,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     self.assertEqual(
                         plan.speech_text,
                         "실험을 시작합니다. 현재 1단계입니다. "
-                        "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
-                        "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
+                        "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
+                        "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
                     )
                     self.assertEqual(session.current_index, 0)
                     started = session.state()
@@ -896,8 +896,8 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 "프로토콜을 시작해 줘",
                 CuratedProtocolAction.START,
                 "실험을 시작합니다. 현재 1단계입니다. "
-                "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
-                "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
+                "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
+                "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
             ),
             (
                 "현재 단계 알려줘",
@@ -1383,6 +1383,10 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 self.assertEqual(session.current_index, index)
 
     def test_detail_planner_uses_admitted_facts_without_invented_method(self):
+        # The detail is the step's own reviewed statements, labelled by kind.
+        # Step 4 used to get a hand-written Q&A ("무엇을 제거하나요", "젤 밴드는
+        # 튜브에 남습니다", "제거 도구...") that its PDF statement does not
+        # contain; every step of every protocol now reads the same way.
         session = CuratedProtocolSession(self.fixture)
         session.active = True
         session.current_index = 3
@@ -1393,16 +1397,12 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             language="ko",
         )
         self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
-        self.assertIn("무엇을 제거하나요", plan.display_text)
-        self.assertIn("젤 밴드는 튜브에 남습니다", plan.display_text)
-        self.assertIn("제거 도구", plan.display_text)
-        self.assertNotIn("피펫", plan.display_text)
-        self.assertNotEqual(
-            " ".join(plan.primary_text.split()),
-            " ".join(self.fixture.localized_fact(
-                self.fixture.steps[3].step_id, "current_step"
-            ).split()),
+        reviewed = self.fixture.localized_fact(
+            self.fixture.steps[3].step_id, "current_step"
         )
+        self.assertIn(f"- 확인된 동작: {reviewed}", plan.display_text)
+        for invented in ("무엇을 제거하나요", "젤 밴드는 튜브에 남습니다", "제거 도구", "피펫"):
+            self.assertNotIn(invented, plan.display_text)
         self.assertEqual(session.state(), opening)
 
     def test_fully_destained_explanation_uses_all_page_five_evidence(self):
@@ -1418,7 +1418,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertEqual(plan.action, CuratedProtocolAction.FULL_DETAIL)
         self.assertIn("투명", plan.display_text)
         self.assertIn("두 번의 사이클", plan.display_text)
-        self.assertIn("고정 반복 횟수", plan.display_text)
+        # A hand-written note about step 7's repeat control is no longer
+        # added; the explanation is the step's reviewed statements alone.
+        self.assertNotIn("고정 반복 횟수", plan.display_text)
         self.assertIn("expected_result_1", plan.evidence_ids)
         self.assertIn(5, plan.source_pages)
         self.assertEqual(session.state(), opening)
@@ -3094,8 +3096,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(
             tts.call_args.args[0],
             "실험을 시작합니다. 현재 1단계입니다. "
-            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
-            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
+            "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
+            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
         )
         self.assertNotIn("검증된 개발용 픽스처", display)
         self.assertTrue(session.playback_ended(1))
@@ -4271,8 +4273,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             f"Voiney Lab입니다. 선택한 {self.fixture.title} "
             "프로토콜이 준비되었습니다. 시작할까요, 아니면 먼저 질문하시겠어요?",
             "실험을 시작합니다. 현재 1단계입니다. "
-            "염색된 단백질 밴드를 준비해 작은 조각으로 나누고 "
-            "지정된 AMBIC 용액이 담긴 튜브에 넣어 주세요.",
+            "염색된 단백질 밴드에서 작은 1 mm³ 플러그를 자르거나 밴드 전체를 절취해 "
+            "더 작은 조각으로 나누고, 약 200 µL의 25mM AMBIC이 담긴 1.5 mL 튜브에 넣습니다.",
             "현재 1단계입니다. 안내를 화면에 표시했습니다.",
             "현재 1단계 안내를 다시 표시했습니다.",
             "2단계로 이동했습니다. 안내를 화면에 표시했습니다.",
@@ -4537,7 +4539,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIn("ambic", intent.requested_entities)
         plan = curated_session.plan(prompt, turn_id=1, language="ko")
         envelope = curated_session.protocol_answer_envelope(plan, language="ko")
-        self.assertIn("단백질 밴드", envelope.speech_summary)
+        # Each entity is spoken as the PDF spells it.
+        self.assertIn("stained protein band", envelope.speech_summary)
         self.assertIn("AMBIC", envelope.speech_summary)
         self.assertGreaterEqual(len(envelope.admitted_claim_ids), 2)
 
@@ -4551,7 +4554,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         plan = curated_session.plan(prompt, turn_id=1, language="ko")
         envelope = curated_session.protocol_answer_envelope(plan, language="ko")
         self.assertNotIn("Solution A를 제거해 폐기합니다", envelope.speech_summary)
-        self.assertIn("튜브", envelope.speech_summary)
+        # Where the PDF introduces its tube: step 1's 1.5 mL tube.
+        self.assertIn("1.5 mL 튜브", envelope.speech_summary)
 
     def test_timer_aware_spoken_prompt_appends_hint_on_timed_steps(self):
         curated_session = CuratedProtocolSession(self.fixture)

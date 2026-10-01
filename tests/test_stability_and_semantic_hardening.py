@@ -262,7 +262,8 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         plan = self.session.plan("여기서 젤 밴드가 들어있는 튜브가 뭐야?", turn_id=2, language="ko")
         self.assertEqual(plan.action, CuratedProtocolAction.LAB_DOMAIN_QA)
         self.assertFalse(plan.state_changed)
-        self.assertIn("마이크로센트리퓨지 튜브", plan.display_text)
+        # The tube as the PDF introduces it, in step 1's reviewed translation.
+        self.assertIn("1.5 mL 튜브", plan.display_text)
         self.assertNotIn("염색된 단백질 밴드는 SDS-PAGE", plan.display_text)
 
     def test_completion_claims_with_adverbs_and_guards(self) -> None:
@@ -387,7 +388,8 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         plan1 = self.session.plan("AMBIC가 뭐야?", turn_id=2, language="ko")
         self.assertIn(plan1.action, {CuratedProtocolAction.LAB_DOMAIN_QA, CuratedProtocolAction.RELATED_QUESTION, CuratedProtocolAction.QUESTION})
         self.assertLessEqual(len(plan1.speech_text), 150)
-        self.assertIn("중탄산암모늄", plan1.speech_text)
+        # The definition the PDF itself gives: "ammonium bicarbonate (AMBIC)".
+        self.assertIn("ammonium bicarbonate", plan1.speech_text)
         self.assertIn("화면에 정리했습니다", plan1.speech_text)
         self.assertNotIn("http", plan1.speech_text)
         self.assertNotIn(".pdf", plan1.speech_text)
