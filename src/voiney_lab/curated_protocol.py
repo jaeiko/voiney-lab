@@ -1098,6 +1098,8 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
         return False
     if key in _WORKFLOW_COMMANDS or key in _FULL_DETAIL_COMMANDS:
         return True
+    if _READ_ALOUD_REQUEST.fullmatch(key):
+        return True
     if _SPECIFIC_STEP_PATTERN.fullmatch(key):
         return True
     if any(pattern.fullmatch(key) for pattern in _CURRENT_INFORMATION_PATTERNS):
@@ -3610,7 +3612,7 @@ def classify_curated_control_intent(
             language=language,
             allows_state_mutation=True,
         )
-    if key in _FULL_DETAIL_COMMANDS:
+    if key in _FULL_DETAIL_COMMANDS or _READ_ALOUD_REQUEST.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="full_detail",
             action=CuratedProtocolAction.FULL_DETAIL,
@@ -4133,6 +4135,16 @@ _FULL_DETAIL_COMMANDS = frozenset({
     "상세 내용을 읽어줘",
     "현재 단계 상세 내용을 읽어줘",
 })
+
+#: Asking to hear the current step read aloud: "이 단계 읽어줘", "단계 내용
+#: 읽어 주세요", "한국어로 읽어줘", "다시 읽어줘". Only an explicit request
+#: reads a step's content; moving between steps keeps its short sentence.
+#: "원문 그대로 읽어줘" is not one -- it asks for the English, not Korean.
+_READ_ALOUD_REQUEST = re.compile(
+    r"(?:(?:이|현재|지금)\s*)?(?:단계\s*)?(?:(?:내용|전체|안내)(?:을|를)?\s*)?"
+    r"(?:한국어로\s*)?(?:다시\s*)?(?:소리\s*내(?:어|서)\s*)?"
+    r"읽어\s*(?:줘|줘요|주세요|줄래|줄래요|줄래\?)"
+)
 
 
 # Each reviewed question selects one existing current-step fact.  A rule that
@@ -4920,6 +4932,63 @@ def _spoken_summary_sentence(summary: str) -> str:
 
     text = summary.strip().rstrip(".")
     return f"{text}." if text.endswith("다") else f"{text}입니다."
+
+
+#: Units a reader translation must keep, each with the Korean words that
+#: may stand for it (time, temperature and percent only).
+_READER_UNITS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (re.compile(r"(?<![A-Za-zµμ])(?:µ|μ|u)l(?![a-z])", re.I), ()),
+    (re.compile(r"(?<![A-Za-zµμ])ml(?![a-z])", re.I), ()),
+    (re.compile(r"(?<![A-Za-zµμ])(?:µ|μ|u|n|m)M(?![a-zA-Z])"), ()),
+    (re.compile(r"mg/ml", re.I), ()),
+    (re.compile(r"ng/(?:µ|μ|u)l", re.I), ()),
+    (re.compile(r"°\s*C|(?<=\d)C(?![a-zA-Z])"), ("℃", "도")),
+    (re.compile(r"rpm", re.I), ()),
+    (re.compile(r"(?<![a-z])min(?:ute)?s?(?![a-z])", re.I), ("분",)),
+    (re.compile(r"(?<![a-z])(?:h|hr|hours?)(?![a-z])", re.I), ("시간",)),
+    (re.compile(r"%"), ("퍼센트",)),
+)
+
+
+def reader_translation_issue(
+    source_text: str,
+    translation: str,
+    *,
+    required_terms: tuple[str, ...] = (),
+) -> str | None:
+    """Why a model's Korean reading of one source statement may not be used.
+
+    The check is mechanical and fails closed: every number in the source
+    and no other, every unit (a time or temperature unit may be its Korean
+    word), and every one of the protocol's own terms the statement uses, in
+    its original spelling. ``None`` means the translation may be spoken.
+    """
+
+    text = " ".join(str(translation or "").split())
+    if not text:
+        return "empty"
+    if not re.search(r"[가-힣]", text):
+        return "not_korean"
+    source = _derived_source_text(" ".join(source_text.split()))
+    if len(text) > max(600, 3 * len(source)):
+        return "too_long"
+
+    def numbers(value: str) -> list[str]:
+        value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
+        return sorted(re.findall(r"\d+(?:\.\d+)?", value))
+
+    if numbers(source) != numbers(_derived_source_text(text)):
+        return "numbers_changed"
+    folded = text.casefold()
+    for pattern, korean in _READER_UNITS:
+        if pattern.search(source) and not (
+            pattern.search(text) or any(word in text for word in korean)
+        ):
+            return "unit_missing"
+    for term in required_terms:
+        if term.casefold() not in folded:
+            return "term_missing"
+    return None
 
 
 class CuratedProtocolSession:
@@ -5873,6 +5942,31 @@ class CuratedProtocolSession:
             if repetition_id not in self._operator_repetition_counts:
                 return False
         return True
+
+    def reader_translation_target(
+        self, plan: CuratedProtocolTurnPlan,
+    ) -> tuple[str, str, tuple[str, ...]] | None:
+        """The one source statement a reader asked to hear, with no reviewed translation.
+
+        Returns the step label, the statement, and the protocol's own terms
+        it uses -- what ``reader_translation_issue`` holds a model's Korean
+        reading to. Only an explicit request to read a step qualifies.
+        """
+
+        if plan.action is not CuratedProtocolAction.FULL_DETAIL:
+            return None
+        if plan.intent_kind not in {"full_detail", "step_elaboration"}:
+            return None
+        if plan.translation_status not in {"source_language", "unavailable"}:
+            return None
+        if len(plan.source_texts) != 1 or not plan.step_label:
+            return None
+        statement = plan.source_texts[0]
+        terms = tuple(dict.fromkeys(
+            term.text for term in self._protocol_vocabulary().terms
+            if _term_pattern(term.text).search(statement)
+        ))
+        return plan.step_label, statement, terms
 
     def entity_source_answer(
         self,
@@ -9946,7 +10040,13 @@ class CuratedProtocolSession:
                     ("current_step",),
                     translated=language != "ko" or localized is not None,
                 )
-                speech = step.instruction_source_text
+                # Asked to hear the step, a Korean reader hears its reviewed
+                # Korean translation; with none, the source as before.
+                speech = (
+                    localized
+                    if language == "ko" and localized is not None
+                    else step.instruction_source_text
+                )
                 admitted_facts = self.fixture.facts_for_step(target_index)
                 sources = (step.instruction_source_text,)
                 pages = (step.evidence.source_page_number,)

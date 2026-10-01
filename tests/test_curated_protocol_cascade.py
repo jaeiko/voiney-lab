@@ -954,7 +954,13 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 )
                 self.assertIn(canonical, detail.display_text)
                 self.assertIn("답변 · 한국어 참고 번역", detail.display_text)
-                self.assertEqual(detail.speech_text, canonical)
+                # Asked to read the step, the reader hears its reviewed
+                # Korean translation; the English stays on screen.
+                self.assertEqual(
+                    detail.speech_text,
+                    self.fixture.localized_fact(
+                        self.fixture.steps[0].step_id, "current_step"),
+                )
                 self.assertEqual(
                     detail.speech_mode,
                     CuratedProtocolSpeechMode.FULL_DETAIL,
@@ -4281,7 +4287,10 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             self.fixture.localized_fact(
                 self.fixture.steps[1].step_id, "current_step"
             ),
-            step_two,
+            # The full-detail read is spoken from the reviewed translation.
+            self.fixture.localized_fact(
+                self.fixture.steps[1].step_id, "current_step"
+            ),
             "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
