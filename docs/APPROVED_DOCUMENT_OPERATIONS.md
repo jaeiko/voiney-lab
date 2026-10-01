@@ -118,9 +118,23 @@ What the step safety card shows depends on the manifest:
   document, whole sentences only, about 240 characters at most and marked
   `…` where the section goes on. Nothing is paraphrased or translated by the
   server.
-- A matched document contributes one section: the one with the lowest
-  `page_start`. Which section that is follows from what the manifest includes;
-  an SDS's identification section is rarely what a step needs.
+- A matched document contributes one section. Of its sections that matched
+  the step, the card shows one whose `topic` is `hazards`; failing that, one
+  whose `topic` is `handling` or `handling_storage`; failing that, the one with
+  the lowest `page_start`. Within each of those, the lower `page_start` and
+  then the lower `section_code`, read as numbers ("2" before "10"), decide.
+  So give an SDS's hazard-identification section (section 2) the topic
+  `hazards` to put it on the card, whatever else the manifest includes; voice
+  search still uses every section.
+- A document whose `review_due_at` has passed is left out of the card exactly
+  as voice search leaves it out: none of its sections is shown and its names
+  attach it to no step. Each document is judged by its own date, so an
+  overdue translation disappears from beside its original, and a current
+  reviewed translation of an overdue original is shown as a document of its
+  own. Give a translation the same `review_due_at` as its original to have
+  them leave together. The pack's `review_overdue_documents` lists the
+  documents left out as `document_id:version`, and the server logs them; a
+  date the server cannot read counts as passed.
 - An SDS reaches a step only when the step's text names its `product_name`,
   one of its CAS numbers, or an alias with `approved: true` and
   `generic: false`. Record the names the protocol actually uses as approved

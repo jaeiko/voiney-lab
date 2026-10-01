@@ -137,6 +137,10 @@ class SafetyPack:
     coverage_status: str  # "available", "partial", "unavailable", "disabled", "demo_only"
     missing_coverage: tuple[str, ...]
     source_identities: tuple[str, ...]
+    #: ``document_id:version`` of approved, in-scope documents left out
+    #: because their ``review_due_at`` has passed. Only the fact is kept;
+    #: none of their text reaches the pack or a card.
+    review_overdue_documents: tuple[str, ...] = ()
 
     @property
     def total_document_count(self) -> int:
@@ -167,6 +171,7 @@ class SafetyPack:
             "missing_coverage": list(self.missing_coverage),
             "source_identities": list(self.source_identities),
             "total_document_count": self.total_document_count,
+            "review_overdue_documents": list(self.review_overdue_documents),
         }
 
 
@@ -338,6 +343,49 @@ def collect_protocol_safety_subjects(protocol: ExperimentProtocol | Any) -> Prot
     )
 
 
+#: Section topics the card prefers for a document's one line, best first: the
+#: hazards section (an SDS's section 2), then handling, under its own name or
+#: voice search's ``handling_storage``.
+_CARD_TOPIC_RANKS = {"hazards": 0, "handling": 1, "handling_storage": 1}
+
+
+def _section_code_key(code: str | None) -> tuple[tuple[int, int | str], ...]:
+    """Orders section codes as numbered: "2" before "10", "SDS-2" before "SDS-10"."""
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in re.findall(r"\d+|\D+", code or "")
+    )
+
+
+def _card_section_key(doc: SafetyDocumentRef) -> tuple[Any, ...]:
+    """Which of a document's sections the card shows: the smallest key.
+
+    A hazards section first, else a handling one, else the earliest page;
+    the section code settles a tie, so the choice never rests on row order.
+    """
+    rank = _CARD_TOPIC_RANKS.get((doc.topic or "").casefold(), max(_CARD_TOPIC_RANKS.values()) + 1)
+    return (rank, doc.page_number or 1, _section_code_key(doc.section_code))
+
+
+def _review_overdue(review_due_at: Any, now: datetime) -> bool:
+    """Whether a document's review date has passed, as voice search decides it.
+
+    The same comparison as ``retrieval._is_stale`` and
+    ``moss_retrieval._review_is_current``: a date without a zone is UTC, and
+    no date never falls due. An unreadable date counts as passed.
+    """
+    value = _clean_str(review_due_at)
+    if not value:
+        return False
+    try:
+        due = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return due < now
+
+
 def resolve_step_safety_context(
     safety_pack: SafetyPack,
     step: ProtocolSourceStep | Any,
@@ -394,13 +442,18 @@ def resolve_step_safety_context(
                 # to every step, so a "general" SOP takes a card line on each.
                 matching_docs.append(sop)
 
-    # Deduplicate matching docs
+    # One line per document, in the order the documents first matched; of
+    # the sections that matched, the card shows the one _card_section_key
+    # puts first.
     unique_docs: list[SafetyDocumentRef] = []
-    seen_ids = set()
+    position: dict[str, int] = {}
     for doc in matching_docs:
-        if doc.document_id not in seen_ids:
-            seen_ids.add(doc.document_id)
+        at = position.get(doc.document_id)
+        if at is None:
+            position[doc.document_id] = len(unique_docs)
             unique_docs.append(doc)
+        elif _card_section_key(doc) < _card_section_key(unique_docs[at]):
+            unique_docs[at] = doc
 
     ppe_reqs: list[str] = []
     handling: list[str] = []
@@ -509,9 +562,19 @@ def resolve_safety_pack(
     facility_id: str | None = None,
     usage_scope: str = "demo",
     protocol_revision: str = "1",
+    *,
+    now: datetime | None = None,
 ) -> SafetyPack:
-    """Conservatively resolve approved safety documents matching the structured protocol."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    """Conservatively resolve approved safety documents matching the structured protocol.
+
+    A catalog document whose ``review_due_at`` is before ``now`` (the current
+    time when omitted) is left out, as voice search leaves it out, and only
+    its identity is kept in :attr:`SafetyPack.review_overdue_documents`.
+    """
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    now_iso = current.isoformat()
     subjects = collect_protocol_safety_subjects(protocol)
     protocol_id = subjects.protocol_id
 
@@ -520,6 +583,7 @@ def resolve_safety_pack(
     equipment_docs: list[SafetyDocumentRef] = []
     topics_found: set[str] = set()
     identities: set[str] = set()
+    overdue: set[str] = set()
 
     # If catalog path is None or file not found
     if catalog_path is None or not Path(catalog_path).is_file():
@@ -613,14 +677,29 @@ def resolve_safety_pack(
                 SELECT d.id, d.document_id, d.document_type, d.title, d.version, d.language,
                        d.facility_id, d.manufacturer, d.product_name, d.product_code,
                        d.cas_numbers, d.usage_scope, d.source_uri, d.source_checksum,
-                       d.translation_status, d.translation_of_document_id,
+                       d.translation_status, d.translation_of_document_id, d.review_due_at,
                        s.section_code, s.section_title, s.page_start, s.content, s.topic, s.keywords
                 FROM documents AS d
                 LEFT JOIN sections AS s ON s.document_row_id = d.id
                 WHERE d.approval_status = 'approved' AND d.active = 1 AND {scope_filter}
-                ORDER BY d.document_type, d.document_id, s.page_start
+                ORDER BY d.document_type, d.document_id, s.page_start, s.section_code
                 """
             ).fetchall()
+
+            # A document past its review date is gone before anything else
+            # looks at it: no line, no translation, no name that binds a step.
+            current_rows = []
+            for row in rows:
+                if _review_overdue(row["review_due_at"], current):
+                    overdue.add(f"{_clean_str(row['document_id'])}:{_clean_str(row['version'])}")
+                else:
+                    current_rows.append(row)
+            rows = current_rows
+            if overdue:
+                log.warning(
+                    "Safety documents past their review date left out of the pack: %s",
+                    ", ".join(sorted(overdue)),
+                )
 
             # A human-reviewed translation is shown beside the section of its
             # original that has the same code, not as a document of its own.
@@ -810,4 +889,5 @@ def resolve_safety_pack(
         coverage_status=coverage,
         missing_coverage=tuple(missing),
         source_identities=tuple(sorted(identities)),
+        review_overdue_documents=tuple(sorted(overdue)),
     )

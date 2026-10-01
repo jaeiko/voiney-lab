@@ -8,8 +8,10 @@ also runs in CI (condition B).
 """
 
 import json
+import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from voiney_lab.document_store import ingest_manifest
@@ -143,7 +145,7 @@ def _document(
     document_id: str,
     document_type: str,
     title: str,
-    sections: list[tuple[str, str, str]],
+    sections: list[tuple],
     *,
     family: str | None = None,
     product_name: str | None = None,
@@ -153,7 +155,9 @@ def _document(
     translation_of: str | None = None,
     cas: tuple[str, ...] = (),
     aliases: tuple[tuple[str, bool, bool], ...] = (),
+    review_due_at: str | None = None,
 ) -> dict:
+    """One manifest document; a section is (code, topic, content) or (code, topic, content, page)."""
     family = family or document_id
     return {
         "document_id": document_id,
@@ -178,16 +182,17 @@ def _document(
         "translation_status": translation_status,
         "translation_of_document_id": translation_of,
         "active": True,
+        "review_due_at": review_due_at,
         "sections": [
             {
                 "section_code": code,
                 "section_title": title,
-                "page_start": 1,
-                "page_end": 1,
+                "page_start": page,
+                "page_end": page,
                 "content": content,
                 "topic": topic,
             }
-            for code, topic, content in sections
+            for code, topic, content, page in (tuple(section) + (1,) * (4 - len(section)) for section in sections)
         ],
         "aliases": [
             {"alias": alias, "language": language, "approved": approved, "generic": generic}
@@ -578,6 +583,212 @@ class EquipmentStepBindingTests(unittest.TestCase):
                     if document_id not in want:
                         self.assertNotIn(title, card)
                 self.assertEqual(guidance.citation_label.count("장비 매뉴얼"), len(want))
+
+
+class CardSectionChoiceTests(unittest.TestCase):
+    """Which one of a document's sections its card line shows."""
+
+    def _documents(self, reverse: bool) -> list[dict]:
+        def ordered(sections):
+            return list(reversed(sections)) if reverse else sections
+
+        return [
+            # A hazards section beats an earlier page and a later hazards one.
+            _document(
+                "SDS-ACN", "supplier_sds", "Acetonitrile SDS",
+                ordered([
+                    ("1", "identification", "Product identifier: Acetonitrile.", 1),
+                    ("2", "Hazards", "Highly flammable liquid and vapour.", 2),
+                    ("2.1", "hazards", "Harmful if swallowed.", 3),
+                    ("7", "handling", "Keep away from heat.", 2),
+                ]),
+                product_name="Acetonitrile",
+            ),
+            _document(
+                "SDS-ACN-KO", "supplier_sds", "아세토니트릴 SDS",
+                ordered([
+                    ("1", "identification", "제품명: 아세토니트릴.", 1),
+                    ("2", "hazards", "고인화성 액체 및 증기.", 2),
+                ]),
+                family="SDS-ACN", product_name="Acetonitrile", language="ko",
+                translation_status="human_reviewed", translation_of="SDS-ACN",
+            ),
+            # No hazards section: handling, under voice search's topic name.
+            _document(
+                "SDS-DTT", "supplier_sds", "DTT SDS",
+                ordered([
+                    ("1", "identification", "Product identifier: DL-Dithiothreitol.", 1),
+                    ("8", "exposure_ppe", "Wear protective gloves.", 2),
+                    ("7", "handling_storage", "Store in a cool, dry place.", 3),
+                ]),
+                product_name="DTT",
+            ),
+            # Neither: the earliest page, and on one page the lower code, "2" before "10".
+            _document(
+                "SDS-IAA", "supplier_sds", "Iodoacetamide SDS",
+                ordered([
+                    ("10", "stability", "Light sensitive.", 2),
+                    ("2", "classification", "Toxic if swallowed.", 2),
+                    ("1", "identification", "Product identifier: Iodoacetamide.", 3),
+                ]),
+                product_name="Iodoacetamide",
+            ),
+        ]
+
+    def test_a_hazards_section_comes_first_then_handling_then_the_earliest_page(self):
+        protocol = _protocol(
+            [("Mix acetonitrile, DTT and iodoacetamide.", ())],
+            materials=("Acetonitrile", "DTT", "Iodoacetamide"),
+        )
+        expected = {
+            "SDS-ACN": ("2", "• 물질 SDS · Acetonitrile SDS: Highly flammable liquid and vapour.", "물질 SDS p.2"),
+            "SDS-DTT": ("7", "• 물질 SDS · DTT SDS: Store in a cool, dry place.", "물질 SDS p.3"),
+            "SDS-IAA": ("2", "• 물질 SDS · Iodoacetamide SDS: Toxic if swallowed.", "물질 SDS p.2"),
+        }
+        for reverse in (False, True):
+            with self.subTest(sections_reversed=reverse), tempfile.TemporaryDirectory() as temp_dir:
+                catalog = Path(temp_dir) / "catalog.sqlite"
+                ingest_manifest({"documents": self._documents(reverse)}, catalog)
+                pack = resolve_safety_pack(protocol, catalog, facility_id="MAIN-LAB", usage_scope="reference_only")
+                guidance = pack.guidance_for_step(protocol.sections[0].steps[0])
+                chosen = {d.document_id: d.section_code for d in guidance.applicable_documents}
+                self.assertEqual(chosen, {doc_id: code for doc_id, (code, _, _) in expected.items()})
+                self.assertEqual(
+                    list(guidance.display_bullets), [line for _, line, _ in expected.values()]
+                )
+                for _, _, citation in expected.values():
+                    self.assertIn(citation, guidance.citation_label)
+                # The reviewed translation shown is that of the chosen section.
+                self.assertEqual(
+                    guidance.localized_display_bullets[0],
+                    "• 물질 SDS · Acetonitrile SDS: Highly flammable liquid and vapour.\n"
+                    "  검토된 한국어 번역: 고인화성 액체 및 증기.",
+                )
+
+
+class ReviewDateTests(unittest.TestCase):
+    """A document past its review date leaves the card as it leaves voice search."""
+
+    NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+    def _catalog(self, directory: str) -> Path:
+        documents = [
+            _document(
+                "SDS-ACN", "supplier_sds", "Acetonitrile SDS",
+                [("2", "hazards", "Highly flammable liquid and vapour.")],
+                product_name="Acetonitrile", review_due_at="2026-09-30T23:59:59+00:00",
+            ),
+            _document(
+                "SDS-DTT", "supplier_sds", "DTT SDS",
+                [("2", "hazards", "Causes skin irritation.")],
+                product_name="DTT", review_due_at="2026-10-02",
+            ),
+            # The original is current; its translation is not.
+            _document(
+                "SDS-DTT-KO", "supplier_sds", "디티티 SDS",
+                [("2", "hazards", "피부에 자극을 일으킴.")],
+                family="SDS-DTT", product_name="디티티", language="ko",
+                translation_status="human_reviewed", translation_of="SDS-DTT",
+                review_due_at="2026-09-01T00:00:00Z",
+            ),
+            _document(
+                "SDS-FA", "supplier_sds", "Formic acid SDS",
+                [("2", "hazards", "Causes severe skin burns.")],
+                product_name="Formic acid",
+            ),
+            _document(
+                "SDS-IAA", "supplier_sds", "Iodoacetamide SDS",
+                [("2", "hazards", "Toxic if swallowed.")],
+                product_name="Iodoacetamide", review_due_at="2027-01-01T00:00:00+00:00",
+            ),
+            # The original is overdue; its translation, judged by its own date, is not.
+            _document(
+                "SDS-TRY", "supplier_sds", "Trypsin SDS",
+                [("2", "hazards", "May cause allergy or asthma symptoms if inhaled.")],
+                product_name="Trypsin", review_due_at="2026-09-15",
+            ),
+            _document(
+                "SDS-TRY-KO", "supplier_sds", "트립신 SDS",
+                [("2", "hazards", "흡입 시 알레르기성 반응을 일으킬 수 있음.")],
+                family="SDS-TRY", product_name="트립신", language="ko",
+                translation_status="human_reviewed", translation_of="SDS-TRY",
+                review_due_at="2027-01-01",
+            ),
+            _document(
+                "SOP-SPILL", "facility_sop", "Solvent spill response",
+                [("01", "spill", "Contain the spill with absorbent pads.")],
+                review_due_at="2026-09-01T00:00:00",
+            ),
+        ]
+        catalog = Path(directory) / "catalog.sqlite"
+        ingest_manifest({"documents": documents}, catalog)
+        # Ingestion refuses a date it cannot read; a damaged catalog may still hold one.
+        connection = sqlite3.connect(catalog)
+        try:
+            connection.execute("UPDATE documents SET review_due_at = 'next spring' WHERE document_id = 'SDS-IAA'")
+            connection.commit()
+        finally:
+            connection.close()
+        return catalog
+
+    def test_an_overdue_document_is_left_out_and_only_named_in_the_pack(self):
+        protocol = _protocol(
+            [
+                ("Mix acetonitrile, DTT, iodoacetamide and formic acid; clean any toxic spill.", ()),
+                ("디티티를 넣는다.", ()),
+                ("Add trypsin, then 트립신 buffer.", ()),
+            ],
+            materials=("Acetonitrile", "DTT", "Formic acid", "Iodoacetamide"),
+            equipment=(),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            catalog = self._catalog(temp_dir)
+            with self.assertLogs("voiney_lab.safety_pack", level="WARNING"):
+                pack = resolve_safety_pack(
+                    protocol, catalog, facility_id="MAIN-LAB", usage_scope="reference_only", now=self.NOW
+                )
+            earlier = resolve_safety_pack(
+                protocol, catalog, facility_id="MAIN-LAB", usage_scope="reference_only",
+                now=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            )
+        overdue = ("SDS-ACN:1.0", "SDS-DTT-KO:1.0", "SDS-IAA:1.0", "SDS-TRY:1.0", "SOP-SPILL:1.0")
+        self.assertEqual(pack.review_overdue_documents, overdue)
+        self.assertEqual(pack.public_dict()["review_overdue_documents"], list(overdue))
+        self.assertEqual({d.document_id for d in pack.sds_documents}, {"SDS-DTT", "SDS-FA", "SDS-TRY-KO"})
+        self.assertEqual(pack.sop_documents, ())
+        self.assertEqual(pack.missing_coverage, ("facility_sop",))
+
+        first, korean, trypsin = protocol.sections[0].steps
+        guidance = pack.guidance_for_step(first, 0)
+        self.assertEqual({d.document_id for d in guidance.applicable_documents}, {"SDS-DTT", "SDS-FA"})
+        self.assertIn("• 물질 SDS · DTT SDS: Causes skin irritation.", guidance.localized_display_bullets)
+        rendered = json.dumps(
+            {"pack": pack.public_dict(), "step": guidance.public_dict()}, ensure_ascii=False
+        )
+        for text in (
+            "Highly flammable", "피부에 자극", "Toxic if swallowed", "absorbent pads", "allergy or asthma",
+            "Acetonitrile SDS", "디티티 SDS", "Iodoacetamide SDS", "Trypsin SDS", "Solvent spill response",
+        ):
+            self.assertNotIn(text, rendered)
+        # The overdue translation's name binds no step either.
+        self.assertEqual(pack.guidance_for_step(korean, 1).applicable_documents, ())
+        # The current translation stands alone, reached only by its own name.
+        self.assertEqual(
+            pack.guidance_for_step(trypsin, 2).display_bullets,
+            ("• 물질 SDS · 트립신 SDS: 흡입 시 알레르기성 반응을 일으킬 수 있음.",),
+        )
+        self.assertEqual(pack.guidance_for_step(first, 0).citation_label.count("물질 SDS"), 2)
+
+        # Before any date falls due, the same catalog shows every document.
+        self.assertEqual(earlier.review_overdue_documents, ("SDS-IAA:1.0",))
+        self.assertEqual(
+            {d.document_id for d in earlier.sds_documents + earlier.sop_documents},
+            {"SDS-ACN", "SDS-DTT", "SDS-FA", "SDS-TRY", "SOP-SPILL"},
+        )
+        self.assertIn(
+            "• 물질 SDS · DTT SDS: Causes skin irritation.\n  검토된 한국어 번역: 피부에 자극을 일으킴.",
+            earlier.guidance_for_step(first, 0).localized_display_bullets,
+        )
 
 
 if __name__ == "__main__":
