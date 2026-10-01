@@ -1652,6 +1652,46 @@ def get_workspace_experiment_timeline(session_id:str)->dict[str,object]:
 
 
 @app.post(
+    "/api/workspace/experiments/{session_id}/checkpoint-restart",
+    status_code=201,
+)
+async def restart_workspace_experiment_from_checkpoint(
+    session_id:str,request:Request
+)->dict[str,object]:
+    """Start a new experiment where a stopped one stood at a chosen checkpoint.
+
+    The checkpoints are the ones the timeline lists for a stopped experiment.
+    The new session waits paused; the voice session continues it through the
+    ordinary recovery path, which checks the carried steps against the exact
+    protocol revision before anything is restored.
+    """
+
+    payload=await _json_object(request)
+    try:
+        principal,store=_commercial_workspace()
+        try:
+            checkpoint_step_id=payload.get("checkpoint_step_id")
+            expected_version=payload.get("expected_version")
+            if not isinstance(checkpoint_step_id,str):
+                raise WorkspaceError("Checkpoint step identifier is invalid.")
+            if (
+                not isinstance(expected_version,int)
+                or isinstance(expected_version,bool)
+                or expected_version<=0
+            ):
+                raise WorkspaceError("Experiment version is invalid.")
+            return store.restart_experiment_from_checkpoint(
+                principal,session_id,
+                checkpoint_step_id=checkpoint_step_id,
+                expected_version=expected_version,
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+@app.post(
     "/api/workspace/experiments/{session_id}/observations",
     status_code=201,
 )
