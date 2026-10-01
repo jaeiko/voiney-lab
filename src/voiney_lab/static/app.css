@@ -769,6 +769,8 @@
       margin:.35rem 0;
       transition:all .2s ease;
     }
+    /* Author display above beats the UA rule for [hidden]; keep an empty status away. */
+    .turn .filler-status[hidden]{display:none}
 
     .workflow-grid{grid-area:work;display:flex;flex-direction:column;gap:1.25rem}
     .procedure-card{padding:1.5rem}
