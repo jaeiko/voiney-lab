@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # Work happens on feature/** and fix/** branches cut from dev, and reaches
+  # main only through dev (docs/GIT_WORKFLOW.md), so every one of those is
+  # checked. A branch with an open PR into dev runs twice, once per event.
   push:
-    branches: ["main", "refactor/**"]
+    branches: ["main", "dev", "feature/**", "fix/**", "refactor/**"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
 
 jobs:
   python:
