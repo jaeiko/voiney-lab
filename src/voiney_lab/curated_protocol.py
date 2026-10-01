@@ -1494,6 +1494,9 @@ class PendingObservationConfirmation:
     predicate_id: str
     affirmative_outcome: str = "positive"
     negative_outcome: str = "negative"
+    #: How many times this prompt has been asked again after a reply it could
+    #: not read. Bounded by _OBSERVATION_REPROMPT_LIMIT.
+    reprompt_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -1738,7 +1741,7 @@ _AFFIRMATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"go\s+to\s+(?:the\s+)?next\s+step)$"
 )
 # The negative reply to any server-owned yes/no question. _binary_frame_reply
-# reads this same pattern for the observation prompt, so the completion and
+# and _observation_binary_reply read this same pattern, so the completion and
 # observation prompts cannot disagree about whether an answer declined.
 _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"^(?:아니|아니요|아니오|아뇨|아니에요|아닙니다|아니야|"
@@ -1748,6 +1751,105 @@ _NEGATIVE_COMPLETION_CONFIRMATION = re.compile(
     r"아니[요오]?\s+아직\s+안\s*(?:끝났어|했어|했어요)|"
     r"아니[,.]?\s*아직\s*안\s+끝났어|no|not\s+yet|no,?\s+not\s+yet)$"
 )
+# A reply that asks or hedges is not assent, whatever words it shares with a
+# report. These read the transcript as spoken: the utterance key turns "?" into
+# a space, so a guard on the key cannot tell "네?" -- asking to hear the
+# question again -- from "네", or "젤이 투명해?" from "젤이 투명해".
+# "니까" is excluded from the question ending because it is also "because"
+# ("상태니까"), and "아까" because it is "a moment ago".
+_QUESTION_MARKERS = re.compile(
+    r"[?？]"
+    r"|(?:나요|습니까|냐)(?=$|[\s.,!~])"
+    r"|(?<![니아])까요?(?=$|[\s.,!~])"
+    r"|(?:했|됐|되|하|있|없|맞|났|졌|봤)니(?=$|[\s.,!~])"
+    r"|(?:한|된|인|건|는|은)가요?(?=$|[\s.,!~])"
+    r"|뭐(?:야|예요|에요|지|죠|니|냐)|뭔(?:가요|데|지)|무엇|무슨|왜|어떻게|얼마나|언제|어디|몇"
+    r"|알려|설명|의미|(?<!따)뜻"
+    r"|\b(?:what|why|how|when|where|which|explain|meaning)\b"
+)
+_UNCERTAIN_MARKERS = re.compile(
+    r"(?:는|은|인|한|된|건|던)지(?=$|[\s.,!~]|도|를|가|는|요)"
+    r"|모르(?:겠|는)|몰라|잘\s*모르"
+    r"|확인해\s*볼|확인할게|봐야|볼게"
+    r"|(?:해|돼|되어|되|보여|있어|어|아|여)야\s*(?:해|돼|되|하|합|됩)"
+    r"|(?:것|거|듯)\s*같|듯(?:해|하|싶)|같기도"
+    r"|아마|혹시|글쎄|애매|헷갈"
+    r"|\b(?:not\s+sure|unsure|maybe|perhaps|probably|might|whether|should)\b"
+    r"|don(?:'|’)?t\s+know|do\s+not\s+know|\bi\s+think\b|let\s+me\s+check"
+    r"|(?:i(?:'|’)ll|will)\s+check|need\s+to|have\s+to"
+)
+# Reading the source line back ("…탈색될 때까지 2-7단계를 반복합니다") names
+# the endpoint without reporting it.
+_SOURCE_RECITATION = re.compile(
+    r"때까지|\buntil\b|반복(?:합니다|하세요|한다|하십시오|하라)|\brepeat\s+steps?\b"
+)
+# A negation after the endpoint phrase undoes it: "완전히 탈색 안 됐어",
+# "젤이 투명해지지 않았어". A standalone 안/못/덜 only, so 안내 or 잘못 does
+# not read as one.
+_POST_FRAME_NEGATION = re.compile(
+    r"(?<![가-힣])안(?=$|\s|[됐되돼된했해보빠변말])"
+    r"|않"
+    r"|(?<![가-힣])못(?=$|\s|[했해하봤보됐되돼])"
+    r"|(?<![가-힣])덜(?=$|\s|[됐되돼빠말했])"
+    r"|아닌|아니(?!면)"
+)
+_PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
+# What an outstanding observation prompt does with a reply it could not read.
+# Control commands go through as before, and so do record/report commands the
+# person issues on their own. A read-only answer keeps the prompt only for an
+# explicit question: a description the classifier happens to read as a term
+# question ("결과는 탈색돼 있어") is an unread answer, not a question.
+_OBSERVATION_PROMPT_PASS_THROUGH = frozenset({
+    CuratedProtocolAction.STOP,
+    CuratedProtocolAction.PAUSE,
+    CuratedProtocolAction.RESUME,
+    CuratedProtocolAction.START,
+    CuratedProtocolAction.START_TIMER,
+    CuratedProtocolAction.TIMER_STATUS,
+    CuratedProtocolAction.AUDIO_RECOVERY,
+    CuratedProtocolAction.CANCEL_READONLY,
+    CuratedProtocolAction.RECORD_OBSERVATION,
+    CuratedProtocolAction.REPORT_ANOMALY,
+    CuratedProtocolAction.SHOW_REPORT,
+    CuratedProtocolAction.REPORT_HANDOFF,
+})
+_OBSERVATION_PROMPT_READ_ONLY = frozenset({
+    CuratedProtocolAction.QUESTION,
+    CuratedProtocolAction.RELATED_QUESTION,
+    CuratedProtocolAction.FULL_DETAIL,
+    CuratedProtocolAction.CURRENT,
+    CuratedProtocolAction.REPEAT,
+    CuratedProtocolAction.NEXT_INFORMATION,
+    CuratedProtocolAction.COMPLETION_CRITERIA,
+    CuratedProtocolAction.OPERATIONAL_DEVIATION,
+    CuratedProtocolAction.PROTOCOL_QUERY,
+    CuratedProtocolAction.PREVIEW_STEP,
+    CuratedProtocolAction.STEP_RANGE,
+    CuratedProtocolAction.LAB_DOMAIN_QA,
+    CuratedProtocolAction.VISUAL_REQUEST,
+    CuratedProtocolAction.AGENT_META,
+    CuratedProtocolAction.CLARIFY_REFERENCE,
+    CuratedProtocolAction.UNSUPPORTED,
+})
+#: Times an observation prompt is asked again before it is let go.
+_OBSERVATION_REPROMPT_LIMIT = 2
+
+
+def _reply_withholds_assent(transcript: str) -> bool:
+    """True when the spoken reply asks a question or hedges."""
+
+    raw = " ".join(str(transcript).casefold().split())
+    return bool(_QUESTION_MARKERS.search(raw) or _UNCERTAIN_MARKERS.search(raw))
+
+
+def _frame_negated(key: str, match: re.Match[str]) -> bool:
+    """True when a negation sits right after (Korean) or before (English) a frame."""
+
+    tail = key[match.end():match.end() + 12]
+    head = key[max(0, match.start() - 24):match.start()]
+    return bool(
+        _POST_FRAME_NEGATION.search(tail) or _PRE_FRAME_NEGATION_EN.search(head)
+    )
 
 
 def _observation_predicate(step_label: str, transcript: str) -> str | None:
@@ -1757,8 +1859,15 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
     report and bind it to the source endpoint for the current step. Negative
     patterns and question guards run first so phrases such as "not transparent"
     or questions like "투명한가요?" never become a positive result by substring overlap.
+    A question, a hedge, or the source line read back is no report at all, and
+    a negation after a positive phrase makes it a negative one.
     """
     key = _semantic_utterance_key(transcript)
+    if step_label in {"7", "9", "20"} and (
+        _reply_withholds_assent(transcript)
+        or _SOURCE_RECITATION.search(" ".join(str(transcript).casefold().split()))
+    ):
+        return None
     if step_label in {"7"}:
         if re.search(
             r"(?:투명한가요|투명한가\??|투명해져야\s*(?:하나요|해요|돼)|"
@@ -1775,14 +1884,14 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative"
-        if re.search(
+        if positive := re.search(
             r"(?:완전히\s*탈색(?:됐|되었|되어|됐어|됐습니다|된|돼서)?|"
             r"젤(?:이|은|이\s*(?:이제\s*)?)?\s*(?:이제\s*)?(?:완전히\s*)?투명(?:해|합니다|해졌어|해요|해졌습니다)|"
             r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
             r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
             key,
         ):
-            return "positive"
+            return "negative" if _frame_negated(key, positive) else "positive"
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
@@ -1795,13 +1904,13 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative"
-        if re.search(
+        if positive := re.search(
             r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
             r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
-            return "positive"
+            return "negative" if _frame_negated(key, positive) else "positive"
     return None
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
@@ -2628,6 +2737,8 @@ def assess_transcript_plausibility(
 def _binary_frame_reply(value: str) -> str | None:
     """Interpret a short answer only after a server-owned binary question."""
 
+    if _reply_withholds_assent(value):
+        return None
     key = _semantic_utterance_key(value)
     if re.fullmatch(
         r"(?:(?:네|예|응|그래|맞아|맞아요|물론)(?:\s+|$))*"
@@ -2637,6 +2748,30 @@ def _binary_frame_reply(value: str) -> str | None:
         r"|yes(?:\s+i\s+(?:did|finished))?|done|correct|that(?:'|’)s\s+right",
         key,
     ) and key:
+        return "affirmative"
+    if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
+        return "negative"
+    return None
+
+
+#: The only replies that say yes to the endpoint prompt. It asks whether the
+#: source endpoint was seen, and "완료했어요", "했어", "다 했어" say the work
+#: was done -- a different claim -- so they answer the completion prompt only.
+#: The shape is _binary_frame_reply's, cut down: 됐어/됐어요 may only come
+#: last, so every reply read as yes here was already read as yes there.
+_OBSERVATION_AFFIRMATIVE = re.compile(
+    r"(?:(?:네|예|응|맞아|맞아요)\s+){0,2}(?:네|예|응|맞아|맞아요|됐어|됐어요)"
+    r"|yes|correct|that(?:'|’)s\s+right"
+)
+
+
+def _observation_binary_reply(value: str) -> str | None:
+    """Interpret a short answer to the server-owned endpoint prompt."""
+
+    if _reply_withholds_assent(value):
+        return None
+    key = _semantic_utterance_key(value)
+    if _OBSERVATION_AFFIRMATIVE.fullmatch(key):
         return "affirmative"
     if _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key):
         return "negative"
@@ -7145,6 +7280,121 @@ class CuratedProtocolSession:
             return False
         return step_id not in self._endpoint_observations
 
+    def _stated_endpoint(self, index: int) -> tuple[str, int | None, str | None]:
+        """The source's endpoint sentence at a repeat step, its page, and a translation.
+
+        The translation is the verified sidecar of the one fact whose text is
+        that sentence. A sidecar for a longer passage that merely contains
+        the sentence is not a translation of it, so none is returned there.
+        """
+
+        step = self.fixture.steps[index]
+        interval = self.repetition_anchored_at(step.step_id)
+        if interval is None:
+            return "", None, None
+        stated = " ".join(str(interval["source_text"]).split())
+        page = interval.get("source_page_number")
+        sidecar = next(
+            (
+                self._localized_fact(step.step_id, fact.fact_id)
+                for fact in self.fixture.facts_for_step(index)
+                if " ".join(fact.text.split()) == stated
+            ),
+            None,
+        )
+        return stated, page if isinstance(page, int) else None, sidecar
+
+    def _endpoint_answer_record(
+        self, index: int, transcript: str, language: str
+    ) -> str:
+        """The endpoint a yes/no answered, quoted, beside the words spoken."""
+
+        spoken = " ".join(transcript.split())
+        stated, _page, _sidecar = self._stated_endpoint(index)
+        if not stated:
+            return spoken
+        # The report ledger refuses wording over 800 characters
+        # (experiment_reports._clean_text), and a refused write fails the
+        # turn's acknowledgement; a yes/no answer is a few characters.
+        if len(stated) > 600:
+            stated = stated[:599].rstrip() + "…"
+        if language == "en":
+            return f"Source endpoint “{stated}” — answer: {spoken}"
+        return f"원문 종점 “{stated}” — 답: {spoken}"
+
+    def _names_another_step(self, intent: CuratedControlIntent) -> bool:
+        """True for a completion report that names a step other than the current one."""
+
+        return bool(
+            intent.action is CuratedProtocolAction.NEXT
+            and intent.target_step not in (None, "authoritative_current_step")
+            and self.active
+            and 0 <= self.current_index < len(self.fixture.steps)
+            and intent.target_step
+            != self.fixture.steps[self.current_index].source_label
+        )
+
+    def _observation_prompt_reply(
+        self,
+        held: PendingObservationConfirmation,
+        routed: CuratedControlIntent,
+        transcript: str,
+        *,
+        turn_id: int,
+        generation: int | None,
+        language: str,
+        normalized_transcript: str,
+    ) -> CuratedControlIntent:
+        """Keep, ask again, or let go of a prompt this reply did not answer.
+
+        Reached only after the reply was read as neither an endpoint phrase
+        nor a yes/no, with the prompt already cleared. Nothing here advances:
+        a control command -- or a completion naming another step, which is
+        asked about first -- keeps the route it had, an explicit question keeps
+        its read-only answer and the prompt, and anything else asks again --
+        at most _OBSERVATION_REPROMPT_LIMIT times, after which the prompt is
+        let go with no observation recorded.
+        """
+
+        if (
+            routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
+            or self._names_another_step(routed)
+        ):
+            return routed
+        if (
+            routed.action in _OBSERVATION_PROMPT_READ_ONLY
+            and not routed.allows_state_mutation
+            and _QUESTION_MARKERS.search(" ".join(transcript.casefold().split()))
+        ):
+            self._pending_observation_confirmation = replace(
+                held, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            return routed
+        if held.reprompt_count < _OBSERVATION_REPROMPT_LIMIT:
+            self._pending_observation_confirmation = replace(
+                held,
+                requested_turn_id=turn_id,
+                requested_generation=generation,
+                reprompt_count=held.reprompt_count + 1,
+            )
+            return CuratedControlIntent(
+                intent_kind="observation_confirmation_reasked",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                confidence_source="server_pending_observation",
+                language=language,
+                normalized_transcript=normalized_transcript,
+            )
+        return CuratedControlIntent(
+            intent_kind="observation_confirmation_released",
+            action=CuratedProtocolAction.DECLINE_COMPLETION,
+            target_step="authoritative_current_step",
+            confidence_source="server_pending_observation",
+            language=language,
+            normalized_transcript=normalized_transcript,
+        )
+
     def plan(
         self,
         transcript: str,
@@ -7252,6 +7502,10 @@ class CuratedProtocolSession:
         if note_pending is not None and not note_pending_valid:
             self._pending_note_capture = None
         binary_reply = _binary_frame_reply(transcript)
+        # "네?" asks to hear the question again. Its key is "네", so the
+        # confirmation patterns below read the key only when the spoken reply
+        # neither asks nor hedges.
+        reply_withheld = _reply_withholds_assent(transcript)
         pending_language_mismatch = bool(
             (pending_valid or observation_pending_valid or transcript_pending_valid)
             and language == "ko"
@@ -7286,7 +7540,10 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif transcript_pending_valid and (
-            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "affirmative"
         ):
             proposed_tx = transcript_pending.proposed_transcript
@@ -7300,7 +7557,10 @@ class CuratedProtocolSession:
                 generation=generation,
             )
         elif transcript_pending_valid and (
-            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "negative"
         ):
             self._pending_transcript_confirmation = None
@@ -7328,7 +7588,10 @@ class CuratedProtocolSession:
             self._replay[turn_id] = plan
             return plan
         elif pending_valid and (
-            _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "affirmative"
         ):
             self._pending_completion_confirmation = None
@@ -7345,7 +7608,10 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif pending_valid and (
-            _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
             or binary_reply == "negative"
         ):
             self._pending_completion_confirmation = None
@@ -7379,13 +7645,13 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
-        elif observation_pending_valid and binary_reply in {
-            "affirmative", "negative"
-        }:
+        elif observation_pending_valid and (
+            observation_reply := _observation_binary_reply(transcript)
+        ) is not None:
             self._pending_observation_confirmation = None
             observed = (
                 observation_pending.affirmative_outcome
-                if binary_reply == "affirmative"
+                if observation_reply == "affirmative"
                 else observation_pending.negative_outcome
             )
             intent = CuratedControlIntent(
@@ -7394,7 +7660,11 @@ class CuratedProtocolSession:
                 reported_completion=observed == "positive",
                 reported_observation=True,
                 observation_predicate=observed,
-                observation_outcome=normalized_confirmation,
+                # A bare "네" says nothing on its own; the record keeps the
+                # endpoint it answered, quoted, beside the words spoken.
+                observation_outcome=self._endpoint_answer_record(
+                    observation_pending.step_index, transcript, language
+                ),
                 requested_transition=("next" if observed == "positive" else None),
                 requested_followup="describe_new_current_step",
                 target_step="authoritative_current_step",
@@ -7431,6 +7701,18 @@ class CuratedProtocolSession:
             if pending_valid:
                 # A non-answer invalidates the one-turn gate before normal routing.
                 self._pending_completion_confirmation = None
+            # An observation prompt this turn still owns is not given up on a
+            # reply it could not read. Dropping it here sent every unread
+            # description ("결과는 탈색돼 있어") to the general classifier,
+            # where the endpoint's own words -- 탈색, 밴드 -- made it a term
+            # question and the server attached a web search. It is cleared
+            # now and _observation_prompt_reply decides, after routing,
+            # whether it is kept, asked again, or let go.
+            observation_hold = (
+                observation_pending
+                if observation_pending_valid and self._pause_state != "paused"
+                else None
+            )
             if observation_pending is not None:
                 self._pending_observation_confirmation = None
             pending_anomaly = self._pending_anomaly
@@ -7439,6 +7721,7 @@ class CuratedProtocolSession:
                 and self.active
                 and _utterance_looks_like_anomaly_follow_up(transcript)
             ):
+                observation_hold = None
                 intent = CuratedControlIntent(
                     intent_kind="enrich_pending_anomaly",
                     action=CuratedProtocolAction.REPORT_ANOMALY,
@@ -7456,7 +7739,11 @@ class CuratedProtocolSession:
                     repair = classify_contextual_transcript_repair(transcript, step_lbl, language)
                     if repair.status == "safe_autocorrection":
                         transcript = repair.normalized_transcript
-                    elif repair.status == "confirmation_required" and repair.proposed_transcript:
+                    elif (
+                        repair.status == "confirmation_required"
+                        and repair.proposed_transcript
+                        and observation_hold is None
+                    ):
                         self._pending_transcript_confirmation = PendingTranscriptConfirmation(
                             configuration_id=configuration_id,
                             step_id=self.fixture.steps[self.current_index].step_id,
@@ -7511,6 +7798,16 @@ class CuratedProtocolSession:
                             semantic_settings or SemanticIntentSettings()
                         ),
                     )
+                if observation_hold is not None:
+                    intent = self._observation_prompt_reply(
+                        observation_hold,
+                        intent,
+                        transcript,
+                        turn_id=turn_id,
+                        generation=generation,
+                        language=language,
+                        normalized_transcript=normalized_confirmation,
+                    )
         if self.active:
             plausibility = assess_transcript_plausibility(
                 transcript, self.current_step_semantic_frame()
@@ -7559,12 +7856,17 @@ class CuratedProtocolSession:
         # it. That path is label-agnostic, so the gate is releasable on a
         # document this module has never seen, by confirmation rather than by
         # phrase recognition.
+        # A completion naming another step ("8단계 완료했어" at 7) is first
+        # asked which step was meant, as at any other step. Read as an
+        # endpoint question instead, a "네" to it released this step on a
+        # report that was about a different one.
         if (
             self.active
             and self.fixture.steps[self.current_index].step_id
             in self._steps_anchoring_a_repetition()
             and not intent.reported_observation
             and not stale_observation_reply
+            and not self._names_another_step(intent)
         ):
             observed = _observation_predicate(
                 self.fixture.steps[self.current_index].source_label, transcript
@@ -8057,11 +8359,30 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind=intent.intent_kind,
             )
+        elif command is CuratedProtocolAction.PREVIEW_STEP and (
+            self._step_index_for_label(intent.target_step or "1") is None
+        ):
+            # A step the protocol does not have is refused, as the full-detail
+            # lookup refuses it, rather than previewing step 1 in its place.
+            response = {
+                "en": "That step is not present in the selected protocol. The current step did not change.",
+                "vi": "Bước đó không có trong quy trình đã chọn. Bước hiện tại không thay đổi.",
+                "ko": "선택한 절차에 해당 단계가 없습니다. 현재 단계는 변경하지 않았습니다.",
+            }.get(language, "해당 단계를 확인할 수 없습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.PREVIEW_STEP,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                intent_kind=intent.intent_kind,
+                target_step=intent.target_step,
+            )
         elif command is CuratedProtocolAction.PREVIEW_STEP:
-            target_label = intent.target_step or "1"
-            target_idx = self._step_index_for_label(target_label)
-            if target_idx is None:
-                target_idx = 0
+            target_idx = self._step_index_for_label(intent.target_step or "1")
             target_step = steps[target_idx]
             localized = self._localized_fact(target_step.step_id, "current_step")
             instruction = localized if language == "ko" and localized else target_step.instruction_source_text
@@ -8694,12 +9015,7 @@ class CuratedProtocolSession:
                 unresolved_dimensions=("rationale",),
             )
         elif command is CuratedProtocolAction.NEXT:
-            if (
-                intent.target_step not in (None, "authoritative_current_step")
-                and self.active
-                and 0 <= self.current_index < len(steps)
-                and intent.target_step != steps[self.current_index].source_label
-            ):
+            if self._names_another_step(intent):
                 current_label = steps[self.current_index].source_label
                 self._pending_completion_confirmation = PendingCompletionConfirmation(
                     configuration_id=configuration_id,
@@ -9350,6 +9666,7 @@ class CuratedProtocolSession:
                 )
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
+            reask_speech: str | None = None
             if intent.intent_kind == "learning_and_next_preview":
                 learning_display, learning_speech, learning_facts, limitations = (
                     self._step_learning_presentation(language=language)
@@ -9439,6 +9756,35 @@ class CuratedProtocolSession:
                         "이 단계는 관찰 결과가 충족될 때까지 반복하는 단계입니다. "
                         "확인하신 관찰 결과를 말씀해 주셔야 완료를 기록할 수 있어요."
                     )
+            elif intent.intent_kind == "observation_confirmation_reasked":
+                # A description the phrase families could not read is asked
+                # again as a yes/no. The criterion is shown, not rephrased:
+                # the source sentence as quoted, and the verified sidecar
+                # where one translates exactly that sentence. A Korean
+                # question naming the endpoint in new words would be a
+                # criterion the document does not state (principle 8), so
+                # the spoken question points at the screen instead.
+                stated, page, sidecar = self._stated_endpoint(self.current_index)
+                reask_speech = (
+                    "Has the endpoint shown on screen been reached? "
+                    "Please answer yes or no."
+                    if language == "en" else
+                    "화면에 보이는 원문 기준대로 되었나요? 네 또는 아니요로 답해 주세요."
+                ) if stated else (
+                    "Has the observed endpoint been reached? Please answer yes or no."
+                    if language == "en" else
+                    "관찰 결과가 충족되었나요? 네 또는 아니요로 답해 주세요."
+                )
+                cited = f" (PDF p.{page})" if page is not None else ""
+                if not stated:
+                    response = reask_speech
+                elif language == "en":
+                    response = f"Source endpoint{cited}: “{stated}”\n\n{reask_speech}"
+                else:
+                    translated = f"\n검증된 한국어 번역: {sidecar}" if sidecar else ""
+                    response = (
+                        f"원문 기준{cited}: “{stated}”{translated}\n\n{reask_speech}"
+                    )
             else:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
@@ -9462,7 +9808,7 @@ class CuratedProtocolSession:
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.CLARIFY_COMPLETION,
                     display_text=response,
-                    speech_text=response,
+                    speech_text=reask_speech or response,
                     speech_mode=CuratedProtocolSpeechMode.BLOCKED,
                     facts=(),
                     step_label=step.source_label,
@@ -9480,20 +9826,31 @@ class CuratedProtocolSession:
                 )
         elif command is CuratedProtocolAction.DECLINE_COMPLETION:
             step = steps[self.current_index]
-            response = {
-                "en": (
-                    f"Understood. Step {step.source_label} remains current. "
-                    "No completion or report event was recorded."
-                ),
-                "vi": (
-                    f"Đã hiểu. Bước {step.source_label} vẫn là bước hiện tại. "
-                    "Không ghi nhận hoàn thành."
-                ),
-                "ko": (
-                    f"알겠습니다. 현재 {step.source_label}단계를 그대로 유지합니다. "
-                    "완료 처리나 완료 기록은 만들지 않았습니다."
-                ),
-            }.get(language, "현재 단계를 그대로 유지합니다.")
+            if intent.intent_kind == "observation_confirmation_released":
+                # The observation prompt was asked again and still not
+                # answered, so it is let go. Only that fact is said:
+                # restating the endpoint once more, or in other words, would
+                # be a criterion the source does not state.
+                response = {
+                    "en": f"The Step {step.source_label} observation was not recorded.",
+                    "vi": f"Quan sát của bước {step.source_label} chưa được ghi lại.",
+                    "ko": f"{step.source_label}단계 관찰 결과는 기록하지 않았습니다.",
+                }.get(language, f"{step.source_label}단계 관찰 결과는 기록하지 않았습니다.")
+            else:
+                response = {
+                    "en": (
+                        f"Understood. Step {step.source_label} remains current. "
+                        "No completion or report event was recorded."
+                    ),
+                    "vi": (
+                        f"Đã hiểu. Bước {step.source_label} vẫn là bước hiện tại. "
+                        "Không ghi nhận hoàn thành."
+                    ),
+                    "ko": (
+                        f"알겠습니다. 현재 {step.source_label}단계를 그대로 유지합니다. "
+                        "완료 처리나 완료 기록은 만들지 않았습니다."
+                    ),
+                }.get(language, "현재 단계를 그대로 유지합니다.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.DECLINE_COMPLETION,
                 display_text=response,
