@@ -1025,10 +1025,18 @@ def load_curated_protocol_fixture(
     )
 
 
+#: Words of a catalog row that are never the item's name.
+_CATALOG_ROW_WORDS = frozenset({
+    "catalog", "grade", "scientific", "international", "brand",
+})
+
+
 def _resource_is_referenced(resource_text: str, claim_text: str) -> bool:
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", resource_text.casefold())
-    ignored = {"catalog", "grade", "scientific", "international", "brand"}
-    return any(token not in ignored and token in claim_text for token in tokens[:8])
+    return any(
+        token not in _CATALOG_ROW_WORDS and token in claim_text
+        for token in tokens[:8]
+    )
 
 
 def _normalized_transcript(value: str) -> str:
@@ -1464,6 +1472,218 @@ class ProtocolKnowledgeView:
                 ),
                 section.evidence.source_page_number,
             ) for index,section in enumerate(protocol.sections,1)),
+        )
+
+
+#: Lab terms a protocol's own wording may contain. Being listed here sends
+#: nothing to STT: ProtocolVocabulary keeps a candidate only where the active
+#: protocol's text contains it, spelled the way that text spells it. These are
+#: the in-gel (Candidate A) document's terms, which is where the list came
+#: from; any other protocol is heard through its own materials, equipment and
+#: labelled reagents, so it needs no entry here.
+_STT_TERM_CANDIDATES = (
+    "AMBIC", "ammonium bicarbonate", "HPLC water", "acetonitrile",
+    "Solution A", "Solution B", "DTT", "iodoacetamide", "trypsin",
+    "formic acid", "LC-MS", "SDS-PAGE", "gel plug",
+    "stained protein band", "Thermomixer", "rpm", "incubation",
+    "keratin", "contamination", "Evotip",
+)
+#: The xAI STT request takes at most this many keyterms of 1-50 characters.
+_STT_KEYTERM_CAP = 100
+_STT_KEYTERM_MAX_CHARS = 50
+#: Shapes protocol prose gives a technical name whatever the document: a
+#: labelled reagent ("Solution A", "Buffer 2"), an abbreviation defined in
+#: parentheses ("ammonium bicarbonate (AMBIC)") and a hyphenated acronym
+#: ("SDS-PAGE").
+_LABELLED_REAGENT = re.compile(
+    r"(?<![A-Za-z0-9])(?i:solution|buffer|reagent)\s+[A-Z0-9](?![A-Za-z0-9])"
+)
+_DEFINED_ABBREVIATION = re.compile(r"\(([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)\)")
+_HYPHENATED_ACRONYM = re.compile(
+    r"(?<![A-Za-z0-9-])[A-Z]{2,}(?:-[A-Z]{2,})+(?![A-Za-z0-9-])"
+)
+
+
+def _term_pattern(term: str) -> re.Pattern[str]:
+    """Match ``term`` as whole words, with any whitespace and a plural ending."""
+
+    words = r"\s+".join(re.escape(word) for word in term.split())
+    return re.compile(
+        rf"(?<![A-Za-z0-9])({words})(?:e?s)?(?![A-Za-z0-9])", re.IGNORECASE
+    )
+
+
+def _resource_keyterm(name_source_text: str, prose: str) -> str:
+    """The name a protocol's steps use for one material or equipment row.
+
+    A protocols.io row carries vendor, catalog and model text after the name
+    ("Promega trypsin Promega Catalog #V5113"), and an equipment row names its
+    brand on a line of its own, labelled by the next one ("Eppendorf\\nBRAND").
+    The longest run of the row's words that the steps also use is the name the
+    experimenter hears and says, spelled as the steps spell it. A row the steps
+    never name keeps the words before its catalog text.
+    """
+
+    lines = [line.strip() for line in name_source_text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    brands = {
+        lines[index - 1].casefold()
+        for index, line in enumerate(lines)
+        if line.casefold() == "brand" and index > 0
+    }
+    head = re.split(
+        r"\s+(?:catalog|cat\.?|model|sku)\b|\s+#|,", lines[0],
+        maxsplit=1, flags=re.IGNORECASE,
+    )[0]
+    words = [word for word in head.split() if word.casefold() not in brands]
+    for size in range(len(words), 0, -1):
+        for start in range(len(words) - size + 1):
+            phrase = " ".join(words[start:start + size])
+            if len(phrase) < 3 or phrase.casefold() in _CATALOG_ROW_WORDS:
+                continue
+            used = _term_pattern(phrase).search(prose)
+            if used is not None:
+                return " ".join(used.group(1).split())
+    name = ""
+    for word in words:
+        if len(f"{name} {word}".strip()) > _STT_KEYTERM_MAX_CHARS:
+            break
+        name = f"{name} {word}".strip()
+    return name
+
+
+@dataclass(frozen=True)
+class ProtocolTerm:
+    """One technical term, spelled as the active protocol spells it."""
+
+    text: str
+    #: Steps whose facts contain the term. Empty for a term that only the
+    #: protocol's overview (purpose, before-start, materials list) uses.
+    step_indexes: frozenset[int]
+    #: A material or equipment name.
+    resource: bool = False
+
+
+@dataclass(frozen=True)
+class ProtocolVocabulary:
+    """The technical terms one protocol's own text contains.
+
+    Derived from the fixture and nothing else, so one document's vocabulary
+    cannot reach another's speech recognition: a term is here because the
+    protocol's materials, equipment or prose contain it.
+    """
+
+    terms: tuple[ProtocolTerm, ...]
+
+    @classmethod
+    def from_fixture(cls, fixture: CuratedProtocolFixture) -> "ProtocolVocabulary":
+        protocol = fixture.draft.protocol
+        section_titles = {
+            step.step_id: section.title_source_text
+            for section in protocol.sections
+            for step in section.steps
+        }
+        step_texts: list[str] = []
+        prose: list[str] = []
+        for index, step in enumerate(fixture.steps):
+            facts = fixture.facts_for_step(index)
+            title = section_titles.get(step.step_id, "")
+            step_texts.append(" ".join(
+                " ".join((title, *(fact.text for fact in facts))).split()
+            ))
+            if title not in prose:
+                prose.append(title)
+            prose.extend(
+                fact.text for fact in facts
+                if fact.kind not in {"material", "equipment", "prerequisite"}
+            )
+        overview = [item.source_text for item in protocol.before_start]
+        overview.extend(item.name_source_text for item in protocol.materials)
+        overview.extend(item.name_source_text for item in protocol.equipment)
+        overview.append(protocol.metadata.title)
+        if protocol.description is not None:
+            overview.append(protocol.description.source_text)
+        try:
+            view = ProtocolKnowledgeView.from_fixture(fixture)
+        except CuratedProtocolFixtureError:
+            view = None
+        if view is not None:
+            overview.append(view.purpose.text)
+            overview.extend(fact.text for fact in view.safety)
+        prose_text = "\n".join(" ".join(text.split()) for text in prose)
+        corpus = tuple(" ".join(text.split()) for text in (*prose, *overview))
+
+        found: list[tuple[str, bool]] = [
+            (_resource_keyterm(item.name_source_text, prose_text), True)
+            for item in (*protocol.materials, *protocol.equipment)
+        ]
+        found.extend((candidate, False) for candidate in _STT_TERM_CANDIDATES)
+        for text in corpus:
+            found.extend((match.group(0), False) for match in _LABELLED_REAGENT.finditer(text))
+            found.extend(
+                (match.group(1), False)
+                for match in _DEFINED_ABBREVIATION.finditer(text)
+                if sum(char.isupper() for char in match.group(1)) >= 2
+            )
+            found.extend((match.group(0), False) for match in _HYPHENATED_ACRONYM.finditer(text))
+
+        terms: dict[str, ProtocolTerm] = {}
+        for raw, resource in found:
+            key = " ".join(raw.split()).casefold()
+            if not key or key in terms:
+                continue
+            pattern = _term_pattern(raw)
+            spelled = next(
+                (match.group(1) for text in corpus if (match := pattern.search(text))),
+                None,
+            )
+            if spelled is None:
+                # A candidate the protocol never uses is not its vocabulary.
+                if not resource:
+                    continue
+                spelled = raw
+            spelled = " ".join(spelled.split())
+            if not 1 <= len(spelled) <= _STT_KEYTERM_MAX_CHARS:
+                continue
+            terms[key] = ProtocolTerm(
+                text=spelled,
+                step_indexes=frozenset(
+                    index for index, text in enumerate(step_texts)
+                    if pattern.search(text)
+                ),
+                resource=resource,
+            )
+        return cls(terms=tuple(terms.values()))
+
+    def keyterms_near(self, index: int | None) -> tuple[str, ...]:
+        """Every term, the current step's neighbourhood first.
+
+        The terms used in the steps just before, at and after ``index`` come
+        first, then the protocol's materials and equipment, then the rest by
+        distance from ``index``, so the ones the experimenter is about to say
+        survive a cap. ``None`` keeps the protocol's own order.
+        """
+
+        if index is None:
+            return tuple(term.text for term in self.terms)
+
+        def rank(item: tuple[int, ProtocolTerm]) -> tuple[int, int, int]:
+            order, term = item
+            distance = min(
+                (abs(step - index) for step in term.step_indexes),
+                default=None,
+            )
+            if distance is not None and distance <= 1:
+                return (0, distance, order)
+            if term.resource:
+                return (1, 0, order)
+            if distance is not None:
+                return (2, distance, order)
+            return (3, 0, order)
+
+        return tuple(
+            term.text for _, term in sorted(enumerate(self.terms), key=rank)
         )
 
 
@@ -2336,12 +2556,14 @@ _ANOMALY_NON_ASSERTION = re.compile(
 
 
 def _scientific_entity_inventory(value: tuple[str, ...]) -> tuple[str, ...]:
-    defaults = (
-        "ambic", "hplc water", "solution a", "solution b", "acetonitrile",
-        "gel plug", "stained protein band", "dtt", "iodoacetamide", "trypsin",
-        "formic acid", "rpm", "incubation", "contamination",
-    )
-    return tuple(dict.fromkeys(value or defaults))
+    """The entities a near-miss may be repaired toward: only those supplied.
+
+    An empty inventory stays empty. It used to fall back to the in-gel
+    document's entity list, which repaired a near-miss toward an in-gel
+    reagent on a protocol that has none ("trypsun" became trypsin anywhere).
+    """
+
+    return tuple(dict.fromkeys(value))
 
 
 def _edit_distance(left: str, right: str) -> int:
@@ -4472,6 +4694,7 @@ class CuratedProtocolSession:
         self._block_reason: str | None = None
         self._replay: dict[int, CuratedProtocolTurnPlan] = {}
         self._recent_verified_entities: list[str] = []
+        self._vocabulary_cache: tuple[CuratedProtocolFixture, ProtocolVocabulary] | None = None
         self._pending_clarification: str | None = None
         self._last_related_query: str | None = None
         self._last_related_entities: tuple[str, ...] = ()
@@ -4813,33 +5036,49 @@ class CuratedProtocolSession:
             "visual_intents": ("general_reference",),
         }
 
+    def _protocol_vocabulary(self) -> ProtocolVocabulary:
+        """The active fixture's vocabulary, derived once per fixture."""
+
+        cached = self._vocabulary_cache
+        if cached is None or cached[0] is not self.fixture:
+            cached = (self.fixture, ProtocolVocabulary.from_fixture(self.fixture))
+            self._vocabulary_cache = cached
+        return cached[1]
+
     def stt_keyterms(self, *, include_control_terms: bool = False) -> tuple[str, ...]:
-        """Return protocol-wide technical domain terms within xAI's cap.
+        """Return the active protocol's technical terms within xAI's cap.
 
         The STT request receives a bounded technical vocabulary (chemical reagents,
         materials, and scientific nouns), not command sentences or workflow phrases.
         Ordinary command concepts are handled by the intent classifier after transcription.
+
+        The vocabulary is the active protocol's own (``ProtocolVocabulary``):
+        protocol-wide, with the terms around the current step first. The step
+        and control phrases are kept whole and the protocol's terms take the
+        rest of the cap.
         """
 
-        scientific = (
-            "AMBIC", "ammonium bicarbonate", "HPLC water", "acetonitrile",
-            "Solution A", "Solution B", "DTT", "iodoacetamide", "trypsin",
-            "formic acid", "LC-MS", "SDS-PAGE", "gel plug",
-            "stained protein band", "Thermomixer", "rpm", "incubation",
-            "keratin", "contamination", "Evotip",
-        )
         step_tokens: tuple[str, ...] = ()
-        if self.active and 0 <= self.current_index < len(self.fixture.steps):
-            lbl = self.fixture.steps[self.current_index].source_label
+        index = (
+            self.current_index
+            if 0 <= self.current_index < len(self.fixture.steps)
+            else None
+        )
+        if self.active and index is not None:
+            lbl = self.fixture.steps[index].source_label
             step_tokens = (f"{lbl}단계", f"{lbl} 단계", f"현재 {lbl}단계", f"이번 {lbl}단계")
-
+        control_korean: tuple[str, ...] = ()
         if include_control_terms:
             control_korean = (
                 "아니", "네", "현재 단계", "이번 단계", "완료", "완료했어",
                 "시작", "다음 단계", "다시 알려줘",
             )
-            return tuple(dict.fromkeys(scientific + step_tokens + control_korean))[:100]
-        return tuple(dict.fromkeys(scientific + step_tokens))[:100]
+        fixed = tuple(dict.fromkeys(step_tokens + control_korean))
+        scientific = tuple(
+            term for term in self._protocol_vocabulary().keyterms_near(index)
+            if term not in fixed
+        )[:max(0, _STT_KEYTERM_CAP - len(fixed))]
+        return tuple(dict.fromkeys(scientific + fixed))[:_STT_KEYTERM_CAP]
 
     def operator_repetition_counts(self) -> dict[str, dict[str, object]]:
         """Counts an experimenter has supplied in this session, with provenance."""
