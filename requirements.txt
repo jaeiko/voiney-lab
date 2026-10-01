@@ -1,4 +1,5 @@
-fastapi
+# fastapi is held below 0.142; the reason is next to it in pyproject.toml.
+fastapi>=0.141.1,<0.142
 uvicorn[standard]
 openai
 pypdf==6.12.0
