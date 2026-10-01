@@ -287,30 +287,62 @@ class ReadingCheckTests(unittest.TestCase):
 
     def check(self, reading: str) -> str | None:
         return reader_translation_issue(
-            self.SOURCE, reading, required_terms=("acetonitrile",))
+            self.SOURCE, reading, required_terms=("acetonitrile",), step_label="8")
 
     def test_a_faithful_reading_passes(self) -> None:
         self.assertIsNone(self.check(self.READING))
+        for source, reading in (
+            ("Incubate for 15min at 37°C", "15분 동안 37도에서 배양합니다."),
+            ("Incubate for 15 min at 37°C", "37°C에서 15분 동안 배양합니다."),
+            ("Mix by inverting the tube five times.", "튜브를 다섯 번 뒤집어 섞습니다."),
+            ("Do not vortex the sample.", "시료를 볼텍스하지 마세요."),
+            ("Wash the cells with 1,000 µL PBS", "PBS 1000 µL로 세포를 씻습니다."),
+        ):
+            with self.subTest(source=source):
+                self.assertIsNone(reader_translation_issue(source, reading))
+        # The step label may lead the reading even if the statement lacks it.
         self.assertIsNone(reader_translation_issue(
-            "Incubate for 15min at 37°C", "15분 동안 37도에서 배양합니다."))
+            "Add 25 mM AMBIC", "3단계: 25 mM AMBIC를 넣습니다.", step_label="3"))
 
     def test_each_kind_of_drift_is_refused(self) -> None:
         for reading, issue in (
             ("", "empty"),
             ("8 Wash the gel piece with 500 µL acetonitrile", "not_korean"),
-            (self.READING.replace("500", "50"), "numbers_changed"),
-            (self.READING.replace("00:15:00", "00:15:00, 2회"), "numbers_changed"),
-            (self.READING.replace(" rpm", ""), "unit_missing"),
-            (self.READING.replace("µL", "mL"), "unit_missing"),
+            (self.READING.replace("500", "50"), "quantities_changed"),
+            (self.READING.replace("00:15:00", "00:15:00, 2회"), "quantities_changed"),
+            (self.READING.replace(" rpm", ""), "quantities_changed"),
+            (self.READING.replace("µL", "mL"), "quantities_changed"),
             (self.READING.replace("acetonitrile", "아세토니트릴"), "term_missing"),
             (self.READING + " 추가 설명" * 120, "too_long"),
         ):
             with self.subTest(issue=issue, reading=reading[:40]):
                 self.assertEqual(self.check(reading), issue)
-        self.assertEqual(
-            reader_translation_issue("Add 25 mM AMBIC", "25 AMBIC를 넣습니다."),
-            "unit_missing",
-        )
+
+    def test_a_changed_quantity_cannot_hide_behind_its_units(self) -> None:
+        # Each number keeps its own unit, prefixes stay distinct, a Korean
+        # unit word counts only right after its number, and counts written
+        # as words count too.
+        for source, reading in (
+            ("Add 25 mM AMBIC", "25 µM AMBIC를 넣습니다."),
+            ("Add 25 mM AMBIC", "25 AMBIC를 넣습니다."),
+            ("Incubate for 15 min at 37°C", "15°C에서 37분 동안 배양합니다."),
+            ("Use 10 µL and 1 mL", "10 mL와 1 µL를 씁니다."),
+            ("Spin 1 min", "충분히 1 돌립니다."),
+            ("Heat to 60°C", "온도를 60 으로 올립니다."),
+            ("Mix by inverting the tube five times.", "튜브를 열 번 뒤집어 섞습니다."),
+        ):
+            with self.subTest(source=source, reading=reading):
+                self.assertEqual(
+                    reader_translation_issue(source, reading), "quantities_changed")
+
+    def test_a_negation_may_be_neither_added_nor_dropped(self) -> None:
+        for source, reading in (
+            ("Add 10 µL lysozyme.", "10 µL lysozyme을 넣지 마세요."),
+            ("Do not vortex the sample.", "시료를 볼텍스합니다."),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(
+                    reader_translation_issue(source, reading), "negation_changed")
 
 
 class ReadRequestVocabularyTests(unittest.TestCase):

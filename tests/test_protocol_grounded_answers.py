@@ -156,7 +156,9 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
                 _, (plan,) = _run(self.fixture, (utterance,), index=0)
                 self.assertEqual(plan.action, CuratedProtocolAction.RELATED_QUESTION)
                 self.assertEqual(plan.requested_entities, (label,))
-                self.assertIn(f"{label}: 이 프로토콜 원문에서 {step}단계", plan.display_text)
+                # Only the steps whose own statements name it, not the
+                # material rows bound to other steps.
+                self.assertIn(f"{label}: 이 프로토콜 원문에서 {step}단계에 나옵니다.", plan.display_text)
                 index = int(step) - 1
                 self.assertIn(
                     self.fixture.steps[index].instruction_source_text, plan.display_text
@@ -191,6 +193,85 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
         for phrase in REMOVED_PROSE:
             self.assertNotIn(phrase, text)
         self.assertNotIn("Solution A의 1 part", text)
+
+
+class ReviewedEdgeTests(unittest.TestCase):
+    """Edges found in review: names are whole words, and questions keep their kind."""
+
+    def test_an_entity_is_matched_as_a_whole_word(self) -> None:
+        fixture = build_fixture(
+            protocol_id="fictional-fix",
+            title="Fictional cell fixation",
+            steps=(
+                "1 Fix the cells in 100 µL methanol.",
+                "2 Rinse twice with DPBS.",
+                "3 Wash the cells with 1 mL ethanol in phosphate-buffered saline (PBS).",
+            ),
+            materials=(
+                "Methanol Sigma-Aldrich Catalog #34860",
+                "Ethanol absolute VWR Catalog #20821",
+            ),
+        )
+        for utterance, step, absent in (
+            ("ethanol이 뭐야?", "3", "methanol"),
+            ("PBS가 뭐야?", "3", "DPBS"),
+        ):
+            with self.subTest(utterance=utterance):
+                _, (plan,) = _run(fixture, (utterance,), index=0)
+                self.assertIn(f"이 프로토콜 원문에서 {step}단계에 나옵니다.", plan.display_text)
+                self.assertNotIn(absent, plan.display_text)
+
+    def test_a_safety_question_about_a_material_gets_the_safety_answer(self) -> None:
+        _, (plan,) = _run(miniprep_fixture(), ("ethanol 안전해?",), index=2)
+        self.assertIn("안전", plan.display_text)
+        self.assertNotIn("ethanol: 이 프로토콜 원문에서", plan.display_text)
+        self.assertIn("safety", plan.unresolved_dimensions)
+
+    def test_a_completion_report_naming_a_material_is_not_a_term_question(self) -> None:
+        for utterance in ("ethanol 준비됐어 다음으로", "lysozyme 넣었어 다음 단계"):
+            with self.subTest(utterance=utterance):
+                session = CuratedProtocolSession(miniprep_fixture())
+                session.active = True
+                intent = session.deterministic_control_intent(utterance, language="ko")
+                self.assertNotIn("ethanol", intent.requested_entities)
+                self.assertNotIn("lysozyme", intent.requested_entities)
+
+    def test_a_prohibition_note_is_not_an_alternative(self) -> None:
+        from voiney_lab.curated_protocol import _offers_source_alternative
+
+        self.assertTrue(_offers_source_alternative(
+            "If the band is extremely stained you can increase the volume to 1000 µL."))
+        for note in (
+            "Do not use water instead of PBS.",
+            "You may see a white precipitate.",
+            "You can't skip this step.",
+        ):
+            with self.subTest(note=note):
+                self.assertFalse(_offers_source_alternative(note))
+
+    def test_a_solution_is_composed_only_where_the_source_defines_it(self) -> None:
+        used = build_fixture(
+            protocol_id="fictional-beads",
+            title="Fictional bead wash",
+            steps=(
+                "1 Wash the beads with 200 µL Solution A.",
+                "2 Spin the beads for 1 min.",
+            ),
+        )
+        _, (plan,) = _run(used, ("Solution A는 뭐로 만들어?",), index=1)
+        composition = [c for c in plan.claim_requests if c.target_id == "solution_a"]
+        self.assertTrue(all(
+            c.admission_status.value != "local_supported" for c in composition))
+        defined = build_fixture(
+            protocol_id="fictional-buffer",
+            title="Fictional buffer wash",
+            steps=(
+                "1 Prepare Solution A by dissolving 1 g salt in 10 mL water.",
+                "2 Wash the beads with 200 µL Solution A.",
+            ),
+        )
+        _, (plan,) = _run(defined, ("Solution A는 뭐로 만들어?",), index=1)
+        self.assertIn("Prepare Solution A by dissolving 1 g salt in 10 mL water.", _texts(plan))
 
 
 @unittest.skipUnless(
@@ -231,6 +312,10 @@ class InGelHearsItsOwnPdfTests(unittest.TestCase):
         _, (plan,) = _run(self.fixture, ("튜브가 뭐야?",), index=3)
         self.assertIn("1.5 mL 튜브", plan.speech_text)
         self.assertNotIn("Solution A를 제거해 폐기합니다", plan.speech_text)
+
+    def test_step_four_disposal_question_is_not_answered_with_the_recipe(self) -> None:
+        _, (plan,) = _run(self.fixture, ("그거 어떻게 버려?",), index=3)
+        self.assertNotIn("두 세척 용액을 준비합니다", _texts(plan))
 
     def test_step_three_alternative_is_labelled_from_its_own_wording(self) -> None:
         _, (plan,) = _run(self.fixture, ("이 단계 자세히 설명해줘",), index=2)

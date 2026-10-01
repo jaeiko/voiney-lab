@@ -5900,7 +5900,8 @@ async def _request_reader_translation(
 
 async def _apply_reader_translation(
     session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
-    target:tuple[str,str,tuple[str,...]],*,turn_id:int,clock:Callable[[],float],
+    target:tuple[str,str,tuple[str,...]],*,turn_id:int,generation:int,
+    clock:Callable[[],float],
 )->Any:
     """Speak a checked Korean reading of a step the reader asked to hear.
 
@@ -5927,7 +5928,7 @@ async def _apply_reader_translation(
             status=f"provider_{type(exc).__name__}"
         else:
             issue=reader_translation_issue(
-                statement,candidate,required_terms=terms)
+                statement,candidate,required_terms=terms,step_label=label)
             if issue is None:
                 korean=candidate
                 session.reader_translations[key]=korean
@@ -5939,6 +5940,9 @@ async def _apply_reader_translation(
         "reader_translation turn_id=%s status=%s chars=%d elapsed_ms=%d",
         turn_id,status,len(korean or ""),round((clock()-started)*1000),
     )
+    if not session.is_current(turn_id,generation):
+        # Superseded while waiting: the turn's own fences drop it anyway.
+        return plan
     if korean:
         return replace(
             plan,
@@ -7567,7 +7571,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if reader_target is not None:
                 plan=await _apply_reader_translation(
                     session,curated,plan,reader_target,
-                    turn_id=turn_id,clock=clock,
+                    turn_id=turn_id,generation=generation,clock=clock,
                 )
             display_text=plan.display_text
             speech_text=plan.speech_text

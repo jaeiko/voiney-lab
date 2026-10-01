@@ -2661,6 +2661,23 @@ def _edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
+#: A request that reports progress or asks to move is not a term question.
+_WORKFLOW_CUE = re.compile(
+    r"(?:다음|넘어가|넘겨|완료|끝났|끝냈|다\s*했|했어|했습니다|됐어|됐습니다|되었|"
+    r"시작|멈춰|그만|정지|타이머|next|done|finished|complete|start|stop|timer)",
+    re.IGNORECASE,
+)
+_TERM_QUESTION_CUE = re.compile(
+    r"(?:뭐|무엇|무슨|왜|어떻게|어떤|설명|알려|의미|뜻|역할|안전|위험|주의|"
+    r"\?|what|why|how|explain|mean|role|safe)",
+    re.IGNORECASE,
+)
+
+
+def _asks_about_a_term(key: str) -> bool:
+    return bool(_TERM_QUESTION_CUE.search(key)) and not _WORKFLOW_CUE.search(key)
+
+
 def normalize_scientific_request(
     transcript: str,
     *,
@@ -2765,11 +2782,13 @@ def normalize_scientific_request(
             continue
         for match in pattern.finditer(key):
             matches.append((match.start(), match.end(), name))
-    if protocol_vocabulary is not None:
+    if protocol_vocabulary is not None and _asks_about_a_term(key):
         # The active protocol's own terms -- its material and equipment
         # names, labelled reagents and defined abbreviations -- are entities
         # too, named as the protocol spells them, so a question about any
-        # registered PDF's material is answered from that PDF.
+        # registered PDF's material is answered from that PDF. Only a
+        # question: "ethanol 준비됐어 다음으로" keeps reaching the semantic
+        # fallback as before.
         claimed = {
             surface for surfaces in _ENTITY_SOURCE_ALIASES.values()
             for surface in surfaces
@@ -4296,8 +4315,22 @@ def _display_document(
 
 #: A source note that offers the reader another way to do the step.
 _SOURCE_ALTERNATIVE = re.compile(
-    r"\b(?:you\s+(?:can|may)|alternatively|instead|optionally)\b", re.IGNORECASE
+    r"\b(?:alternatively|optionally|you\s+(?:can|may)\s+(?:also\s+)?"
+    r"(?:use|increase|decrease|reduce|extend|replace|substitute|choose|skip|"
+    r"shake|incubate|perform|do|leave|instead)|can\s+be\s+(?:replaced|substituted|"
+    r"used\s+instead))\b",
+    re.IGNORECASE,
 )
+#: A note that forbids something is not an alternative, whatever it names.
+_SOURCE_PROHIBITION = re.compile(
+    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|cannot|can't|avoid)\b",
+    re.IGNORECASE,
+)
+
+
+def _offers_source_alternative(text: str) -> bool:
+    derived = _derived_source_text(text)
+    return bool(_SOURCE_ALTERNATIVE.search(derived)) and not _SOURCE_PROHIBITION.search(derived)
 
 _FACT_POINT_LABELS_EN = {
     "step": "Verified action",
@@ -4324,7 +4357,7 @@ def _fact_point_label(fact: CuratedProtocolFact, *, korean: bool) -> str:
     """Label one admitted statement by its kind; a note offering another way
     to do the step is labelled as the source's own alternative."""
 
-    if fact.kind == "note" and _SOURCE_ALTERNATIVE.search(_derived_source_text(fact.text)):
+    if fact.kind == "note" and _offers_source_alternative(fact.text):
         return "원문이 허용한 대안" if korean else "Source-approved alternative"
     if korean:
         return _FACT_POINT_LABELS.get(fact.kind, "확인된 내용")
@@ -4855,6 +4888,9 @@ _ENTITY_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
     "mass_spectrometry": ("mass spectrometr", "mass spec"),
 }
 
+#: The named solutions a definition statement can be found for.
+_SOLUTION_SURFACES = {"solution_a": "solution a", "solution_b": "solution b"}
+
 #: The spelling to fall back on when the active PDF does not use the entity.
 _ENTITY_FALLBACK_LABELS = {
     "ambic": "AMBIC", "hplc_water": "HPLC water",
@@ -4864,19 +4900,40 @@ _ENTITY_FALLBACK_LABELS = {
 }
 
 
+#: Surfaces that are word stems ("incubat" for incubate/incubation); every
+#: other surface must match as whole words, so "ethanol" is not "methanol"
+#: and "PBS" is not "DPBS".
+_ENTITY_STEMS = frozenset({
+    "incubat", "contaminat", "centrifug", "pipett", "mass spectrometr", "destain",
+})
+
+
 def _entity_surfaces(entity: str) -> tuple[str, ...]:
     return _ENTITY_SOURCE_ALIASES.get(
         entity, (" ".join(entity.replace("_", " ").split()).casefold(),)
     )
 
 
+def _entity_patterns(entity: str) -> tuple[re.Pattern[str], ...]:
+    patterns = []
+    for surface in _entity_surfaces(entity):
+        words = r"\s+".join(re.escape(word) for word in surface.split())
+        tail = r"[a-z]*" if surface in _ENTITY_STEMS else r"(?:e?s)?"
+        patterns.append(re.compile(
+            rf"(?<![0-9A-Za-z]){words}{tail}(?![0-9A-Za-z])", re.IGNORECASE
+        ))
+    return tuple(patterns)
+
+
+def _names_entity(text: str, entity: str) -> bool:
+    derived = _derived_source_text(text)
+    return any(pattern.search(derived) for pattern in _entity_patterns(entity))
+
+
 def _source_spelling(entity: str, texts: tuple[str, ...]) -> str | None:
     """The entity as the protocol itself writes it, from the first statement naming it."""
 
-    for surface in _entity_surfaces(entity):
-        pattern = re.compile(
-            rf"(?<![0-9A-Za-z]){re.escape(surface)}[0-9A-Za-z]*", re.IGNORECASE
-        )
+    for pattern in _entity_patterns(entity):
         for text in texts:
             match = pattern.search(_derived_source_text(text))
             if match:
@@ -4934,20 +4991,73 @@ def _spoken_summary_sentence(summary: str) -> str:
     return f"{text}." if text.endswith("다") else f"{text}입니다."
 
 
-#: Units a reader translation must keep, each with the Korean words that
-#: may stand for it (time, temperature and percent only).
-_READER_UNITS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
-    (re.compile(r"(?<![A-Za-zµμ])(?:µ|μ|u)l(?![a-z])", re.I), ()),
-    (re.compile(r"(?<![A-Za-zµμ])ml(?![a-z])", re.I), ()),
-    (re.compile(r"(?<![A-Za-zµμ])(?:µ|μ|u|n|m)M(?![a-zA-Z])"), ()),
-    (re.compile(r"mg/ml", re.I), ()),
-    (re.compile(r"ng/(?:µ|μ|u)l", re.I), ()),
-    (re.compile(r"°\s*C|(?<=\d)C(?![a-zA-Z])"), ("℃", "도")),
-    (re.compile(r"rpm", re.I), ()),
-    (re.compile(r"(?<![a-z])min(?:ute)?s?(?![a-z])", re.I), ("분",)),
-    (re.compile(r"(?<![a-z])(?:h|hr|hours?)(?![a-z])", re.I), ("시간",)),
-    (re.compile(r"%"), ("퍼센트",)),
+#: Units a reader translation must keep, each with its canonical name.
+#: Prefixes stay distinct (mM is not µM, mL is not µL); a Korean word may
+#: stand for a unit only directly after its number ("15분", "37도").
+_READER_UNIT_FORMS: tuple[tuple[str, str], ...] = (
+    (r"ng\s*/\s*(?:µ|μ|u)[lL]", "ng/µL"),
+    (r"mg\s*/\s*m[lL]", "mg/mL"),
+    (r"(?:µ|μ|u)[lL]", "µL"),
+    (r"m[lL]", "mL"),
+    (r"(?:µ|μ|u)M", "µM"),
+    (r"nM", "nM"),
+    (r"mM", "mM"),
+    (r"M", "M"),
+    (r"mm³", "mm³"),
+    (r"°\s*C|℃|도|C", "°C"),
+    (r"[rR][pP][mM]|분당\s*회전", "rpm"),
+    (r"min(?:ute)?s?|분", "min"),
+    (r"h(?:ours?|rs?)?|시간", "h"),
+    (r"s(?:ec(?:ond)?s?)?|초", "s"),
+    (r"%|퍼센트", "%"),
+    (r"[x×]\s*g", "x g"),
+    (r"parts?", "part"),
+    (r"times?|번|회", "times"),
 )
+_READER_QUANTITY = re.compile(
+    r"(?<![0-9.])(\d+(?:\.\d+)?)\s*(?:("
+    + "|".join(f"(?:{form})" for form, _ in _READER_UNIT_FORMS)
+    + r")(?![A-Za-z]))?"
+)
+_READER_CLOCK = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)")
+_ENGLISH_COUNTS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+}
+_ENGLISH_REPEATS = {"once": "1 times", "twice": "2 times", "thrice": "3 times"}
+_KOREAN_COUNTS = {
+    "한": "1", "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
+    "일곱": "7", "여덟": "8", "아홉": "9", "열": "10",
+}
+_SOURCE_NEGATION = re.compile(
+    r"\b(?:not|no|never|don't|do\s+not|avoid|without|must\s+not|cannot|can't)\b",
+    re.IGNORECASE,
+)
+_KOREAN_NEGATION = re.compile(
+    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피하|못\s|않)"
+)
+
+
+def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
+    """The (number, unit) pairs a statement states, clock times as one each."""
+
+    value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
+    found: list[tuple[str, str | None]] = [
+        (match.group(0), "clock") for match in _READER_CLOCK.finditer(value)
+    ]
+    value = _READER_CLOCK.sub(" ", value)
+    for match in _READER_QUANTITY.finditer(value):
+        unit = None
+        if match.group(2):
+            unit = next(
+                canonical for form, canonical in _READER_UNIT_FORMS
+                if re.fullmatch(form, match.group(2))
+            )
+        number = match.group(1)
+        if "." in number:
+            number = number.rstrip("0").rstrip(".")
+        found.append((number, unit))
+    return sorted(found, key=lambda item: (item[0], item[1] or ""))
 
 
 def reader_translation_issue(
@@ -4955,13 +5065,17 @@ def reader_translation_issue(
     translation: str,
     *,
     required_terms: tuple[str, ...] = (),
+    step_label: str | None = None,
 ) -> str | None:
     """Why a model's Korean reading of one source statement may not be used.
 
-    The check is mechanical and fails closed: every number in the source
-    and no other, every unit (a time or temperature unit may be its Korean
-    word), and every one of the protocol's own terms the statement uses, in
-    its original spelling. ``None`` means the translation may be spoken.
+    The check is mechanical and fails closed. The reading must state the
+    same quantities -- each number with its own unit, prefixes distinct, a
+    Korean unit word only right after its number, counts written as words
+    included -- and no other; it must keep every protocol term the
+    statement uses in its original spelling; and it must neither add nor
+    drop a negation. A leading "N단계:" for the statement's own label is
+    allowed. ``None`` means the reading may be spoken.
     """
 
     text = " ".join(str(translation or "").split())
@@ -4972,19 +5086,25 @@ def reader_translation_issue(
     source = _derived_source_text(" ".join(source_text.split()))
     if len(text) > max(600, 3 * len(source)):
         return "too_long"
-
-    def numbers(value: str) -> list[str]:
-        value = re.sub(r"(?<=\d),(?=\d{3}\b)", "", value)
-        return sorted(re.findall(r"\d+(?:\.\d+)?", value))
-
-    if numbers(source) != numbers(_derived_source_text(text)):
-        return "numbers_changed"
+    reading = _derived_source_text(text)
+    if step_label:
+        reading = re.sub(
+            rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
+        source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
+    for word, digits in _ENGLISH_REPEATS.items():
+        source = re.sub(rf"\b{word}\b", digits, source, flags=re.IGNORECASE)
+    for word, digit in _ENGLISH_COUNTS.items():
+        source = re.sub(rf"\b{word}\b", digit, source, flags=re.IGNORECASE)
+    for word, digit in sorted(_KOREAN_COUNTS.items(), key=lambda item: -len(item[0])):
+        reading = re.sub(
+            rf"(?<![가-힣]){word}\s*(?=(?:번|회|개|방울|조각|배|가지)(?![가-힣]))",
+            f"{digit} ", reading,
+        )
+    if _reader_quantities(source) != _reader_quantities(reading):
+        return "quantities_changed"
+    if bool(_SOURCE_NEGATION.search(source)) != bool(_KOREAN_NEGATION.search(reading)):
+        return "negation_changed"
     folded = text.casefold()
-    for pattern, korean in _READER_UNITS:
-        if pattern.search(source) and not (
-            pattern.search(text) or any(word in text for word in korean)
-        ):
-            return "unit_missing"
     for term in required_terms:
         if term.casefold() not in folded:
             return "term_missing"
@@ -5986,17 +6106,23 @@ class CuratedProtocolSession:
         """
 
         steps = self.fixture.steps
-        surfaces = _entity_surfaces(entity)
 
         def names(fact: CuratedProtocolFact) -> bool:
-            text = _derived_source_text(fact.text).casefold()
-            return any(surface in text for surface in surfaces)
+            return _names_entity(fact.text, entity)
 
-        mentions: list[tuple[int, CuratedProtocolFact]] = []
-        for index in range(len(steps)):
-            for fact in self.fixture.facts_for_step(index):
-                if names(fact):
-                    mentions.append((index, fact))
+        # A step's own statements, not the material rows bound to it.
+        mentions: list[tuple[int, CuratedProtocolFact]] = [
+            (index, fact)
+            for index in range(len(steps))
+            for fact in self.fixture.facts_for_step(index)
+            if fact.kind not in {"material", "equipment"} and names(fact)
+        ]
+        if entity in _SOLUTION_SURFACES:
+            # Where the source defines a named solution is where it is
+            # introduced, whichever step names it first.
+            defining = self._solution_definition(entity)
+            if defining is not None:
+                mentions.sort(key=lambda item: item[1] is not defining[1])
         try:
             knowledge = ProtocolKnowledgeView.from_fixture(self.fixture)
         except CuratedProtocolFixtureError:
@@ -6090,6 +6216,32 @@ class CuratedProtocolSession:
             spoken_detail,
         )
 
+    def _solution_definition(
+        self, entity: str,
+    ) -> tuple[int, CuratedProtocolFact] | None:
+        """The step statement that defines a named solution, if the source has one.
+
+        "Solution A: 2 parts of ...", "Prepare Solution A by ...", "Solution A
+        is/contains/made with ..." -- not a line that only uses it.
+        """
+
+        surface = _SOLUTION_SURFACES.get(entity)
+        if surface is None:
+            return None
+        name = rf"(?<![a-z0-9]){surface}(?![a-z0-9])"
+        defines = re.compile(
+            rf"{name}\s*[:=]|\bprepare\b[^.]*{name}|"
+            rf"{name}[^.]*\b(?:is|consists\s+of|contains|made\s+(?:up\s+)?(?:of|with|in|by))\b",
+            re.IGNORECASE,
+        )
+        for index in range(len(self.fixture.steps)):
+            for fact in self.fixture.facts_for_step(index):
+                if fact.kind in {"material", "equipment"}:
+                    continue
+                if defines.search(_derived_source_text(fact.text).casefold()):
+                    return index, fact
+        return None
+
     def entity_pair_statement(
         self, first: str, second: str, *, language: str,
     ) -> tuple[str, str] | None:
@@ -6100,16 +6252,14 @@ class CuratedProtocolSession:
         """
 
         steps = self.fixture.steps
-        first_surfaces = _entity_surfaces(first)
-        second_surfaces = _entity_surfaces(second)
-        found: list[tuple[int, CuratedProtocolFact]] = []
-        for index in range(len(steps)):
-            for fact in self.fixture.facts_for_step(index):
-                text = _derived_source_text(fact.text).casefold()
-                if any(item in text for item in first_surfaces) and any(
-                    item in text for item in second_surfaces
-                ):
-                    found.append((index, fact))
+        found: list[tuple[int, CuratedProtocolFact]] = [
+            (index, fact)
+            for index in range(len(steps))
+            for fact in self.fixture.facts_for_step(index)
+            if fact.kind not in {"material", "equipment"}
+            and _names_entity(fact.text, first)
+            and _names_entity(fact.text, second)
+        ]
         if not found:
             return None
         index, fact = min(
@@ -6228,14 +6378,21 @@ class CuratedProtocolSession:
         ))
         for entity in intent.requested_entities:
             # What the PDF says about the entity, and nothing it does not say.
-            # A named solution's composition is the line that defines it, so
-            # that is admitted locally; a definition the PDF does not give is
-            # left for the approved and external references.
+            # A named solution's composition is the statement that defines it,
+            # so only that is admitted locally; a definition the PDF does not
+            # give is left for the approved and external references. A safety
+            # question is about safety, which the envelope's safety branch
+            # answers, not about what the entity is.
+            if intent.question_kind == "safety":
+                continue
             found = self.entity_source_answer(entity, language=language, facts=facts)
             if not found.found:
                 continue
-            composition = entity in {"solution_a", "solution_b"}
-            local = composition or found.defined_as is not None
+            composition = entity in _SOLUTION_SURFACES
+            local = (
+                self._solution_definition(entity) is not None if composition
+                else found.defined_as is not None
+            )
             add(
                 ClaimTargetType.ENTITY, entity,
                 "composition" if composition else "definition",
@@ -6655,26 +6812,28 @@ class CuratedProtocolSession:
 
         Read off the source for any protocol: the current step names exactly
         one of the solutions, and the statement that resolves the question is
-        the earliest step statement that names it -- where the source defines
-        it. On in-gel that is step 2, from steps 3 to 6.
+        the step statement that defines it ("Solution A: ...", "Prepare
+        Solution A ..."), never one that only uses it. Only a question about
+        how it is made qualifies. On in-gel that is step 2.
         """
 
         current_text = _derived_source_text(
             self.fixture.steps[self.current_index].instruction_source_text
         ).casefold()
-        surfaces = {"solution_a": "solution a", "solution_b": "solution b"}
         named_here = tuple(
-            name for name, surface in surfaces.items()
+            name for name, surface in _SOLUTION_SURFACES.items()
             if re.search(rf"(?<![a-z0-9]){surface}(?![a-z0-9])", current_text)
         )
         if len(named_here) != 1:
             return None
         key = _semantic_utterance_key(transcript)
+        # Only a question about how the solution is made: "그거 어떻게 버려?"
+        # asks about disposal and is not answered with the recipe.
         if not any(
             term in key
             for term in (
-                "어떻게", "준비", "만들", "조성", "구성", "비율", "뭐가",
-                "무엇이", "들어가", "prepare", "make", "contain",
+                "준비", "만들", "조성", "구성", "비율", "들어가", "뭐로", "무엇으로",
+                "prepare", "make", "contain", "composition",
             )
         ):
             return None
@@ -6695,22 +6854,17 @@ class CuratedProtocolSession:
             "solution_b" if explicit_b else
             named_here[0]
         )
-        surface = surfaces[entity]
-        for source_index in range(len(self.fixture.steps)):
-            if source_index == self.current_index:
-                continue
-            for fact in self.fixture.facts_for_step(source_index):
-                if fact.fact_id != "current_step":
-                    continue
-                text = _derived_source_text(fact.text).casefold()
-                if not re.search(rf"(?<![a-z0-9]){surface}(?![a-z0-9])", text):
-                    continue
-                if mentions_ambic and not (explicit_a or explicit_b or vague) and (
-                    "ambic" not in text
-                ):
-                    return None
-                return source_index, fact, entity
-        return None
+        defining = self._solution_definition(entity)
+        if defining is None or defining[0] == self.current_index:
+            return None
+        source_index, fact = defining
+        if fact.fact_id != "current_step":
+            return None
+        if mentions_ambic and not (explicit_a or explicit_b or vague) and (
+            "ambic" not in _derived_source_text(fact.text).casefold()
+        ):
+            return None
+        return source_index, fact, entity
 
     def _needs_solution_clarification(self, transcript: str) -> bool:
         key = _semantic_utterance_key(transcript)
@@ -7377,7 +7531,7 @@ class CuratedProtocolSession:
             # strand the dimension instead of escalating it.
             locally_supported.add("relationship")
         if any(
-            answer.found and answer.entity in {"solution_a", "solution_b"}
+            answer.found and self._solution_definition(answer.entity) is not None
             for answer in answers
         ):
             locally_supported.add("composition")
@@ -10094,8 +10248,7 @@ class CuratedProtocolSession:
                 source_plan_scopes=(
                     ("ACTIVE_PROTOCOL", "SOURCE_APPROVED_ALTERNATIVE")
                     if any(
-                        fact.kind == "note"
-                        and _SOURCE_ALTERNATIVE.search(_derived_source_text(fact.text))
+                        fact.kind == "note" and _offers_source_alternative(fact.text)
                         for fact in admitted_facts
                     )
                     else ("ACTIVE_PROTOCOL",)
