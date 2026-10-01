@@ -6789,7 +6789,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
         return
     admission = classify_transcription_language(
-        transcription,session.accepted_input_language
+        transcription,session.accepted_input_language,
+        # The protocol's own terms, not one document's list.
+        known_terms=(
+            tuple(stt_keyterms)
+            if session.curated_protocol_session is not None else None
+        ),
     )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
