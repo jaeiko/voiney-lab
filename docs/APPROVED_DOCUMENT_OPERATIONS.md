@@ -83,7 +83,56 @@ The current VM catalog audited on 2026-08-10 contains only two approved, active,
 Korean `demo` records (`FICTIONAL-MOSS-DEMO-SDS-KO` and
 `FICTIONAL-MOSS-DEMO-SOP-KO`, version 1.0). It is suitable only for the fictional
 Moss demo. It cannot support operational Candidate A precautions until an
-appropriate laboratory reference is separately reviewed and configured.
+appropriate laboratory reference is separately reviewed and configured, and the
+pilot launcher refuses it because both records are demo documents.
+
+### The controlled pilot's catalog
+
+`scripts/run_pilot.sh` does not read either variable from `.env`. It fixes the
+catalog at `data/runtime/pilot/approved_safety_catalog.sqlite` (an absolute
+path under the checkout) and the scope at `reference_only`, the one scope a
+pilot without OIDC can run; `README.md` ("Launchers") gives the reasons. Build
+the catalog from a reviewed manifest in a staging path as in §2, audit it with
+`--scope reference_only`, and copy it into place between server runs:
+
+```bash
+.venv/bin/python -B scripts/audit_approved_catalog.py \
+  --db "$candidate_catalog" --scope reference_only
+mkdir -p data/runtime/pilot
+cp "$candidate_catalog" data/runtime/pilot/approved_safety_catalog.sqlite
+./scripts/run_pilot.sh --check-only   # must exit 0
+```
+
+The launcher refuses to start, and `--check-only` exits 1, when the file is
+missing or unreadable, holds any demo document (scope `demo` or `test_only`,
+or a title containing "fictional", counted in any approval state), or has no
+approved, active `reference_only` document. Every pilot document therefore
+needs `usage_scope: reference_only`, `approval_status: approved`,
+`active: true`, a non-`test_fixture` authority, and a title without
+"fictional". Voice safety search returns only documents whose scope equals
+the runtime scope, so a document in another scope would not be found by voice.
+
+What the step safety card shows depends on the manifest:
+
+- Each card line is the step's own PDF warning or an excerpt of one matched
+  document, whole sentences only, about 240 characters at most and marked
+  `…` where the section goes on. Nothing is paraphrased or translated by the
+  server.
+- A matched document contributes one section: the one with the lowest
+  `page_start`. Which section that is follows from what the manifest includes;
+  an SDS's identification section is rarely what a step needs.
+- An SDS reaches a step only when the step's text names its `product_name`,
+  one of its CAS numbers, or an alias with `approved: true` and
+  `generic: false`. Record the names the protocol actually uses as approved
+  aliases (for example `DTT` for a sheet titled "DL-Dithiothreitol", `AMBIC`
+  for ammonium bicarbonate) and mark broad words such as "solvent" `generic`.
+- A Korean translation is shown beside its original only when it is a
+  separate document with `translation_status: human_reviewed`,
+  `translation_of_document_id` naming the original, and the same
+  `section_code`. A `machine_unreviewed` translation is never shown.
+- A facility SOP whose topic or `document_id` contains "general" is put on
+  every step and takes one of the card's three lines; the catalog has no field
+  that limits a document to the whole session.
 
 ## 5. Optional Moss reranking
 

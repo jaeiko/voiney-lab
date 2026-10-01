@@ -87,6 +87,13 @@ export VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES="ko"
 unset VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG VOICE_WORKFLOW_AGENT_PROCEDURE_STORE
 ```
 
+These exports are for a development run (`scripts/run_dev.sh` or Uvicorn
+started by hand). `scripts/run_pilot.sh` ignores an exported
+`VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` or `VOICE_WORKFLOW_AGENT_USAGE_SCOPE`
+with a `[WARN]` line and uses its own fixed catalog in the `reference_only`
+scope, and it refuses to start when that catalog holds a demo document, so
+this demo catalog never reaches a pilot run.
+
 Preview and then create the non-sensitive demo index:
 
 ```bash
@@ -164,6 +171,16 @@ VOICE_WORKFLOW_AGENT_MOSS_REFRESH_SECONDS=600
 정규화하고 중복을 제거한다. 허용값은 `operational`, `demo`,
 `reference_only`뿐이며 빈 집합이나 알 수 없는 값은 거부하고 SQLite
 fallback을 유지한다.
+
+In the controlled pilot Moss stays off unless the operator exports
+`VOICE_WORKFLOW_AGENT_MOSS_ENABLED=true` before `scripts/run_pilot.sh`. The
+pilot's catalog is `data/runtime/pilot/approved_safety_catalog.sqlite` in the
+`reference_only` scope, so its index is built from that path with
+`--usage-scope reference_only`. That catalog holds the laboratory's own SDS and
+SOP text. `sync_moss_index.py` asks for `--allow-sensitive-scope` only for
+`operational`, so it uploads `reference_only` sections without that
+acknowledgement; get the same external-service approval as for operational
+content before removing `--dry-run`.
 
 To use a deliberately approved operational index, the operator must separately
 change:

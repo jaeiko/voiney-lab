@@ -543,6 +543,37 @@ commercial workspace that the reviewer inbox and experiment timeline also
 need, and both stay inert until an admin configures and verifies a connector,
 so the launcher reports them rather than disabling them.
 
+The pilot's approved safety documents are fixed by the launcher, never by a
+`.env`. It exports `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` as the absolute path
+of `data/runtime/pilot/approved_safety_catalog.sqlite` and
+`VOICE_WORKFLOW_AGENT_USAGE_SCOPE=reference_only`; a different value already
+exported in the shell is reported with `[WARN]` and ignored. `reference_only`
+is the one scope a pilot without an identity provider can run: `operational`
+needs OIDC, without which every `/api` and `/ws` request fails identity
+resolution, and `demo` and `test_only` need a document of that scope in the
+catalog, which is demo material by definition. Under `reference_only` the
+server uses development identity and tells the model the material is
+non-operational and must not be described as an approved procedure.
+
+Before it serves, and under `--check-only`, the launcher counts the catalog
+read-only and refuses with exit status 1 when the file is missing, cannot be
+read as a catalog, holds any demo document (scope `demo`/`test_only`, or a
+title containing "fictional", in any approval state), or has no approved,
+active `reference_only` document. `--check-only` exits 0 only when none of
+these holds, so a checkout without a reviewed catalog reports exit 1;
+`docs/APPROVED_DOCUMENT_OPERATIONS.md` §4 describes how to put one in place.
+
+The development launcher differs on each of these points. `run_dev.sh` takes
+the safety catalog and scope from the environment or `.env` (`--test-mode`
+sets the scope to `demo`), keeps its state under
+`data/runtime/candidate-a-live-acceptance/`, and serves on port 8000. With no
+catalog file in the `demo` or `test_only` scope, its step safety card falls
+back to the fictional records in
+`data/fixtures/approved_safety_manual.demo.json`; under `reference_only` or
+`operational` there is no fallback and the card keeps only the step's own PDF
+warning. The pilot never reaches that fallback, because it does not start
+without its catalog.
+
 ### Core configuration
 
 | Variable | Purpose |
@@ -847,6 +878,9 @@ path. The current integration classification is in the
   byte size and SHA-256 before delivery.
 - Audio diagnostics are disabled by default, bounded when enabled, and must stay
   in an ignored runtime directory.
+- uvicorn's access and WebSocket lines keep each query value only as its length
+  (`?search=<5 chars>`); a line in any other shape loses its query string. The
+  handoff worker logs a report's location by length and SHA-256 prefix.
 
 This is not a claim of electronic-signature, GLP/GMP, HIPAA, or other regulatory
 compliance. A controlled deployment still requires an IdP, secrets manager,
