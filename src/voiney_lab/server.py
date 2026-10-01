@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote_plus, urlparse
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -236,6 +236,82 @@ def _load_project_environment(path:Path|None=None)->bool:
 _load_project_environment()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
+
+_LOG_QUERY_KEY=re.compile(r"[A-Za-z0-9_.-]{1,64}")
+_LOG_ANY_QUERY=re.compile(r"\?[^\s\"']+")
+_LOG_QUERY_REMOVED="?<query removed>"
+_UVICORN_ACCESS_LINE='%s - "%s %s HTTP/%s" %d'
+_UVICORN_WEBSOCKET_LINE='%s - "WebSocket %s"'
+
+
+def query_lengths_only(path:str)->str:
+    """``/p?search=abc&page=2`` -> ``/p?search=<3 chars>&page=<1 chars>``.
+
+    A part that is not a plain ``key=value`` drops the whole query string,
+    since a shape this does not expect may carry the very text it removes.
+    """
+    base,separator,query=path.partition("?")
+    if not separator:
+        return path
+    parts=[]
+    for part in query.split("&"):
+        key,equals,value=part.partition("=")
+        if not equals or not _LOG_QUERY_KEY.fullmatch(key):
+            return base+_LOG_QUERY_REMOVED
+        parts.append(f"{key}=<{len(unquote_plus(value))} chars>")
+    return f"{base}?{'&'.join(parts)}"
+
+
+class UvicornQueryStringFilter(logging.Filter):
+    """Keep uvicorn's request lines, but only the length of each query value.
+
+    uvicorn writes the full URL into its access line and its WebSocket line,
+    which would put a typed library search (``?search=``), an uploaded file
+    name (``?filename=``) or a development profile id (``?dev_profile=``) in
+    the log. A record in the shape uvicorn 0.52 emits keeps its path with each
+    value replaced by its length; any other record on these loggers loses
+    every query string it carries, so a format change errs toward removal.
+    """
+
+    def filter(self,record:logging.LogRecord)->bool:
+        args=record.args
+        if (record.msg==_UVICORN_ACCESS_LINE and isinstance(args,tuple)
+                and len(args)==5 and isinstance(args[2],str)):
+            record.args=(*args[:2],query_lengths_only(args[2]),*args[3:])
+        elif (isinstance(record.msg,str) and record.msg.startswith(_UVICORN_WEBSOCKET_LINE)
+                and isinstance(args,tuple) and len(args)>=2 and isinstance(args[1],str)):
+            record.args=(args[0],query_lengths_only(args[1]),*args[2:])
+        else:
+            strip=lambda value:(_LOG_ANY_QUERY.sub(_LOG_QUERY_REMOVED,value)
+                                if isinstance(value,str) else value)
+            if isinstance(args,tuple):
+                record.args=tuple(strip(value) for value in args)
+            elif isinstance(args,dict):
+                record.args={key:strip(value) for key,value in args.items()}
+            if isinstance(record.msg,str) and record.args and "?" in record.msg:
+                # The query may be split between the format and its arguments.
+                try:
+                    record.msg,record.args=strip(record.getMessage()),()
+                except Exception:
+                    record.msg,record.args=strip(record.msg),()
+            else:
+                record.msg=strip(record.msg)
+        return True
+
+
+def install_uvicorn_query_string_filter()->None:
+    """Attach the filter, once, to the loggers uvicorn writes request lines to.
+
+    Importing this module is how uvicorn loads the app, and uvicorn has set up
+    its logging by then; its dictConfig replaces handlers, not filters.
+    """
+    for name in ("uvicorn.access","uvicorn.error"):
+        logger=logging.getLogger(name)
+        if not any(isinstance(item,UvicornQueryStringFilter) for item in logger.filters):
+            logger.addFilter(UvicornQueryStringFilter())
+
+
+install_uvicorn_query_string_filter()
 
 
 def log_effective_vad_configuration(settings:VoiceVadSettings)->None:

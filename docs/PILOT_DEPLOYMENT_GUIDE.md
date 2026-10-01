@@ -51,9 +51,49 @@ At minimum, review the configuration groups in `.env.example`:
 - connector credential-name mapping and allowed scopes;
 - optional reference/visual features, disabled unless approved.
 
-For anything beyond an isolated internal demo, set
-`VOICE_WORKFLOW_AGENT_USAGE_SCOPE=operational` and configure all OIDC values.
-Operational mode refuses development identity fallback.
+Start the pilot with `scripts/run_pilot.sh`, not by hand. It decides the usage
+scope and the approved safety catalog itself and ignores `.env` for both:
+
+- The usage scope is `reference_only` and the approved safety catalog is
+  `data/runtime/pilot/approved_safety_catalog.sqlite`. A different value of
+  `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` or `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG`
+  exported in the shell is reported with `[WARN]` and ignored.
+- The pilot does not run `operational` yet. That scope requires all OIDC
+  values and refuses development identity; without an identity provider every
+  `/api` and `/ws` request fails. `demo` and `test_only` are ruled out because
+  every document of those scopes is demo material, which the launcher refuses.
+  Once an identity provider is configured, moving the pilot to `operational`
+  means changing `PILOT_USAGE_SCOPE` in the launcher and placing at least one
+  approved, active `operational` document in the catalog.
+- The launcher refuses to start, and `--check-only` exits 1, when that catalog
+  is missing or unreadable, holds any demo document (scope `demo`/`test_only`
+  or a title containing "fictional", in any approval state), or has no
+  approved, active `reference_only` document. Build it as
+  `APPROVED_DOCUMENT_OPERATIONS.md` §4 describes and require
+  `./scripts/run_pilot.sh --check-only` to exit 0 before the session.
+
+The launcher does not set the following, so `.env` still decides them. Check
+each one before the session:
+
+- `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE`,
+  `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE` and
+  `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF` are empty; otherwise the
+  Candidate A development fixture loads.
+- `VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG` and
+  `VOICE_WORKFLOW_AGENT_PROCEDURE_STORE` are empty (the older procedure stack
+  described in `CLAUDE.md`).
+- `VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS` is false or unset. Under
+  `reference_only` it would development-activate an analysed upload with no
+  person involved.
+- `VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
+  transcripts and audio are written to disk.
+- `VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES` lists the participants' profiles.
+  Under `reference_only` everyone is a development identity, and with no
+  profiles everyone is the `local-admin` lab administrator.
+- The safety card filters facility SOPs by `VOICE_WORKFLOW_AGENT_FACILITY_ID`
+  only when the SOP itself is in the `operational` scope, so a
+  `reference_only` catalog filters none: put only this laboratory's documents
+  in the pilot catalog.
 
 ## 4. Verify the exact release
 

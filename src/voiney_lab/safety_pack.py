@@ -52,6 +52,13 @@ class SafetyDocumentRef:
     source_uri: str | None
     summary_text: str | None
     is_demo: bool = False
+    #: (language, excerpt) of this section in a human-reviewed translation the
+    #: catalog links to this document; the only translation the card may show.
+    reviewed_translations: tuple[tuple[str, str], ...] = ()
+    #: An SDS's substance as the catalog names it: product name, approved
+    #: non-generic aliases and CAS numbers, casefolded. A step gets the SDS
+    #: only when its own text names one of these.
+    substance_terms: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -164,6 +171,80 @@ class SafetyPack:
 
 def _clean_str(val: Any) -> str:
     return str(val or "").strip()
+
+
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?。])\s+")
+_EXCERPT_CHARS = 240
+#: Marks that the source text goes on past the excerpt.
+EXCERPT_OMISSION = " …"
+#: Translation states whose text is neither the source nor reviewed by a person.
+UNREVIEWED_TRANSLATION_STATUSES = ("machine_unreviewed", "unavailable")
+#: Label the safety card puts before a document's own text, naming its kind.
+_DOCUMENT_LABELS = {
+    "facility_sop": "안전 SOP",
+    "supplier_sds": "물질 SDS",
+    "equipment_manual": "장비 매뉴얼",
+}
+REVIEWED_TRANSLATION_LABEL = "검토된 한국어 번역"
+
+
+def _collapse_whitespace(text: Any) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _match_text(text: Any) -> str:
+    return _collapse_whitespace(text).casefold()
+
+
+_HANGUL = "\uac00-\ud7a3"
+
+
+def mentions_substance(term: str, text: str) -> bool:
+    """Whether ``text`` names ``term`` as a whole name, not inside a longer word.
+
+    Both arguments are already :func:`_match_text`. ``dtt`` is not found in
+    ``wdtt`` and ``75-05-8`` not in ``175-05-8``; a Korean name may still take
+    a particle (``아세토니트릴을``). A one-character term never matches.
+    """
+    if len(term) < 2:
+        return False
+    tail = "" if "\uac00" <= term[-1] <= "\ud7a3" else r"(?![0-9a-z])"
+    return re.search(rf"(?<![0-9a-z{_HANGUL}]){re.escape(term)}{tail}", text) is not None
+
+
+def _step_text(step: Any) -> str:
+    """A step's own words that may name a substance or hazard: instruction, sub-actions, warnings."""
+    instruction = getattr(step, "instruction_source_text", "") or getattr(step, "instruction", "")
+    sub_instructions = [
+        getattr(sub, "instruction_source_text", "")
+        for sub in getattr(step, "sub_actions", ()) or ()
+        if getattr(sub, "instruction_source_text", None)
+    ]
+    warnings = []
+    for w in getattr(step, "warnings", ()) or ():
+        text = getattr(w, "source_text", None) or getattr(w, "text", None) or (w if isinstance(w, str) else "")
+        if text:
+            warnings.append(text)
+    return _match_text(f"{instruction} {' '.join(sub_instructions)} {' '.join(warnings)}")
+
+
+def source_excerpt(text: Any, limit: int = _EXCERPT_CHARS) -> str:
+    """The leading whole sentences of ``text``, within ``limit`` where a sentence allows.
+
+    Never cuts inside a sentence, so a cut cannot drop the "not" or "unless"
+    that ends one; a first sentence longer than ``limit`` is kept whole. When
+    sentences are left out, :data:`EXCERPT_OMISSION` says so.
+    """
+    collapsed = _collapse_whitespace(text)
+    if len(collapsed) <= limit:
+        return collapsed
+    sentences = _SENTENCE_BREAK.split(collapsed)
+    kept = sentences[0]
+    for sentence in sentences[1:]:
+        if len(kept) + 1 + len(sentence) > limit:
+            break
+        kept = f"{kept} {sentence}"
+    return kept if kept == collapsed else f"{kept}{EXCERPT_OMISSION}"
 
 
 #: Catalog usage scopes whose documents are demo material, never facility guidance.
@@ -285,27 +366,15 @@ def resolve_step_safety_context(
     elif hasattr(step, "source_pages") and step.source_pages:
         source_page = step.source_pages[0]
 
-    # Build grounded step text for conservative matching
-    instruction = getattr(step, "instruction_source_text", "") or getattr(step, "instruction", "")
-    sub_instructions = [
-        getattr(sub, "instruction_source_text", "")
-        for sub in getattr(step, "sub_actions", ()) or ()
-        if getattr(sub, "instruction_source_text", None)
-    ]
-    step_text = f"{instruction} {' '.join(sub_instructions)} {' '.join(step_pdf_warnings)}".casefold()
+    step_text = _step_text(step)
 
     matching_docs: list[SafetyDocumentRef] = []
 
     if safety_pack.coverage_status not in ("unavailable", "disabled") and safety_pack.total_document_count > 0:
-        # Match SDS by material name / topic appearing in step text
+        # An SDS belongs to a step that names its own substance, and to no
+        # other: a word such as "buffer" or "solvent" names no substance.
         for sds in safety_pack.sds_documents:
-            title_lower = sds.title.casefold()
-            topic_lower = (sds.topic or "").casefold()
-            summary_lower = (sds.summary_text or "").casefold()
-            # Match grounded chemical terms
-            if any(term in step_text for term in (title_lower, topic_lower)) or any(
-                chem in step_text for chem in ("ambic", "dtt", "iaa", "trypsin", "formic", "acetonitrile", "solvent", "buffer")
-            ):
+            if any(mentions_substance(term, step_text) for term in sds.substance_terms):
                 matching_docs.append(sds)
 
         # Match Equipment manuals
@@ -328,6 +397,8 @@ def resolve_step_safety_context(
                 if any(w in step_text for w in ("spill", "hazard", "toxic", "leak", "유독", "누출", "주의", "solvent")):
                     matching_docs.append(sop)
             elif "general" in topic or "general" in sop.document_id.casefold():
+                # Read off the name: no catalog field says a document applies
+                # to every step, so a "general" SOP takes a card line on each.
                 matching_docs.append(sop)
 
     # Deduplicate matching docs
@@ -356,21 +427,34 @@ def resolve_step_safety_context(
             else:
                 handling.append(doc.summary_text)
 
-    bullets: list[str] = []
+    # Every card line is a source's own words: the step's PDF warning, or a
+    # document's excerpt under a label naming the document. The Korean card
+    # adds a translation only where the catalog holds a human-reviewed one;
+    # nothing is paraphrased, so the card never states what no source says.
+    card_lines: dict[str, str] = {}  # source-language line -> Korean card line
     for w in step_pdf_warnings:
-        cleaned_w = w.strip()
-        if cleaned_w:
-            bullets.append(f"• 주의: {cleaned_w}")
-    if ppe_reqs:
-        bullets.append(f"• 개인보호구(PPE): {', '.join(dict.fromkeys(ppe_reqs))}")
-    if handling:
-        bullets.append(f"• 안전 취급 주의: {' '.join(dict.fromkeys(handling))}")
-
-    localized_bullets = _build_localized_safety_bullets(
-        step_pdf_warnings=step_pdf_warnings,
-        ppe_reqs=ppe_reqs,
-        handling=handling,
-    )
+        text = _collapse_whitespace(w)
+        if text:
+            line = f"• 주의: {text}"
+            card_lines.setdefault(line, line)
+    for doc in unique_docs:
+        if not doc.summary_text:
+            continue
+        label = _DOCUMENT_LABELS.get(doc.document_type, "안전 자료")
+        line = f"• {label} · {doc.title}: {doc.summary_text}"
+        translation = (
+            None
+            if doc.language.casefold().startswith("ko")
+            else next(
+                (text for lang, text in doc.reviewed_translations if lang.casefold().startswith("ko")),
+                None,
+            )
+        )
+        card_lines.setdefault(
+            line, f"{line}\n  {REVIEWED_TRANSLATION_LABEL}: {translation}" if translation else line
+        )
+    bullets = list(card_lines)
+    localized_bullets = tuple(list(card_lines.values())[:3])
 
     return StepSafetyGuidance(
         step_id=step_id,
@@ -383,90 +467,24 @@ def resolve_step_safety_context(
         display_bullets=tuple(bullets[:3]),
         localized_display_bullets=localized_bullets,
         localization_language="ko",
+        # Says which list the card shows, not that every line is Korean: a
+        # line with no reviewed translation stays in its source language.
         localization_status="localized" if localized_bullets else "fallback",
     )
 
 
-def _localize_safety_bullet(text: str) -> str:
-    """Conservatively localize an English safety statement to Korean without inventing extra claims."""
-    cleaned = text.strip()
-    if not cleaned:
-        return ""
-    if any("\uac00" <= ch <= "\ud7a3" for ch in cleaned):
-        return cleaned
-
-    lower = cleaned.casefold()
-
-    if "keratin" in lower or "dust" in lower:
-        if "scalpel" in lower or "fresh" in lower or "clean" in lower:
-            return "오염 방지: 케라틴과 먼지 오염을 방지하기 위해 깨끗한 작업 표면과 도구를 사용하고 장갑을 착용하세요."
-        return "오염 방지: 케라틴 및 먼지 오염을 줄이기 위해 깨끗한 표면에서 작업하세요."
-
-    if "glove" in lower or "gloves" in lower:
-        if "goggles" in lower or "glasses" in lower or "eye" in lower:
-            return "개인보호구(PPE): 실험용 장갑 및 보안경을 착용하세요."
-        if "mask" in lower or "respirat" in lower:
-            return "개인보호구(PPE): 실험용 장갑 및 보호 마스크를 착용하세요."
-        return "개인보호구(PPE): 실험용 장갑을 착용하세요."
-    if "goggles" in lower or "glasses" in lower or "eye protection" in lower:
-        return "개인보호구(PPE): 실험실 보안경을 착용하세요."
-    if "mask" in lower or "respirat" in lower:
-        return "개인보호구(PPE): 적절한 보호 마스크를 착용하세요."
-    if "fume hood" in lower or "hood" in lower or "ventilat" in lower:
-        return "작업 환경: 흄 후드(환기 장치) 내에서 작업하세요."
-
-    if "spill" in lower or "leak" in lower:
-        return "안전 취급: 유기용매 및 화학물질 누출에 주의하고 즉시 방제 절차를 따르세요."
-    if "toxic" in lower or "hazard" in lower or "harmful" in lower or "irritan" in lower:
-        return "안전 주의: 유해 화학물질 취급 시 피부 접촉과 증기 흡입을 피하세요."
-
-    if "dark" in lower or "light" in lower or "protect from light" in lower:
-        return "보관 주의: 빛을 차단한 차광 상태로 보관 및 취급하세요."
-    if "centrifuge" in lower:
-        return "장비 안전: 튜브 균형을 맞춘 후 원심분리기를 작동하세요."
-
-    return f"주의: {cleaned}"
-
-
-def _build_localized_safety_bullets(
-    step_pdf_warnings: list[str],
-    ppe_reqs: list[str],
-    handling: list[str],
-) -> tuple[str, ...]:
-    """Derive natural Korean presentation bullets for the UI safety card."""
-    localized_items: list[str] = []
-
-    ppe_text = " ".join(ppe_reqs).casefold()
-    if ppe_reqs:
-        if "glove" in ppe_text and ("goggle" in ppe_text or "eye" in ppe_text):
-            localized_items.append("• 개인보호구(PPE): 실험용 장갑 및 보안경 착용")
-        elif "glove" in ppe_text:
-            localized_items.append("• 개인보호구(PPE): 실험용 장갑 착용")
-        elif "goggle" in ppe_text or "eye" in ppe_text:
-            localized_items.append("• 개인보호구(PPE): 보안경 착용")
-        elif "mask" in ppe_text:
-            localized_items.append("• 개인보호구(PPE): 보호 마스크 착용")
-        else:
-            localized_items.append("• 개인보호구(PPE): 적절한 실험실 보호구 착용")
-
-    for w in step_pdf_warnings:
-        loc = _localize_safety_bullet(w)
-        if loc:
-            bullet = loc if loc.startswith("•") else f"• {loc}"
-            if bullet not in localized_items:
-                localized_items.append(bullet)
-
-    for h in handling:
-        loc = _localize_safety_bullet(h)
-        if loc:
-            bullet = loc if loc.startswith("•") else f"• {loc}"
-            if bullet not in localized_items:
-                localized_items.append(bullet)
-
-    if not localized_items and (ppe_reqs or handling or step_pdf_warnings):
-        localized_items.append("• 안전 지침: 승인된 실험실 안전 기준 및 보호구 수칙을 준수하세요.")
-
-    return tuple(localized_items[:3])
+def _cas_numbers(row: Any) -> list[str]:
+    """The CAS numbers a catalog row lists; an unreadable list is logged and skipped."""
+    if not row["cas_numbers"]:
+        return []
+    try:
+        return [_clean_str(c) for c in json.loads(row["cas_numbers"]) if _clean_str(c)]
+    except Exception as cas_exc:
+        log.warning(
+            "Ignoring unreadable CAS numbers on safety document %s: %s",
+            _clean_str(row["document_id"]), type(cas_exc).__name__,
+        )
+        return []
 
 
 def unavailable_safety_pack(
@@ -577,6 +595,12 @@ def resolve_safety_pack(
 
     all_materials_lower = {m.casefold() for m in subjects.materials}
     all_equipment_lower = {e.casefold() for e in subjects.equipment}
+    # Where the protocol may name a substance: its materials list and every step.
+    protocol_texts = [_match_text(m) for m in subjects.materials] + [
+        _step_text(step)
+        for section in getattr(protocol, "sections", ()) or ()
+        for step in getattr(section, "steps", ()) or ()
+    ]
 
     try:
         conn = connect(catalog_path)
@@ -593,6 +617,7 @@ def resolve_safety_pack(
                 SELECT d.id, d.document_id, d.document_type, d.title, d.version, d.language,
                        d.facility_id, d.manufacturer, d.product_name, d.product_code,
                        d.cas_numbers, d.usage_scope, d.source_uri, d.source_checksum,
+                       d.translation_status, d.translation_of_document_id,
                        s.section_code, s.section_title, s.page_start, s.content, s.topic, s.keywords
                 FROM documents AS d
                 LEFT JOIN sections AS s ON s.document_row_id = d.id
@@ -601,7 +626,57 @@ def resolve_safety_pack(
                 """
             ).fetchall()
 
+            # A human-reviewed translation is shown beside the section of its
+            # original that has the same code, not as a document of its own.
+            # Unreviewed translation text never reaches the card.
+            originals = {
+                _clean_str(row["document_id"]) for row in rows if not row["translation_of_document_id"]
+            }
+            reviewed: dict[tuple[str, str], list[tuple[str, str]]] = {}
             for row in rows:
+                if (
+                    _clean_str(row["translation_status"]) == "human_reviewed"
+                    and _clean_str(row["translation_of_document_id"]) in originals
+                    and row["content"]
+                ):
+                    reviewed.setdefault(
+                        (_clean_str(row["translation_of_document_id"]), _clean_str(row["section_code"])), []
+                    ).append((_clean_str(row["language"]), source_excerpt(row["content"])))
+
+            try:
+                alias_rows = conn.execute(
+                    "SELECT document_row_id, alias FROM aliases WHERE approved = 1 AND generic = 0"
+                ).fetchall()
+            except sqlite3.Error:
+                alias_rows = []
+            aliases: dict[int, list[str]] = {}
+            for alias_row in alias_rows:
+                aliases.setdefault(alias_row["document_row_id"], []).append(_clean_str(alias_row["alias"]))
+            # An SDS's substance names, its reviewed translations' included.
+            substance_terms: dict[str, set[str]] = {}
+            cas_by_row: dict[int, list[str]] = {}
+            for row in rows:
+                status = _clean_str(row["translation_status"])
+                if _clean_str(row["document_type"]) != "supplier_sds" or status in UNREVIEWED_TRANSLATION_STATUSES:
+                    continue
+                translation_of = _clean_str(row["translation_of_document_id"])
+                owner = translation_of if status == "human_reviewed" and translation_of in originals else _clean_str(
+                    row["document_id"]
+                )
+                if row["id"] not in cas_by_row:
+                    cas_by_row[row["id"]] = _cas_numbers(row)
+                names = [row["product_name"], *cas_by_row[row["id"]], *aliases.get(row["id"], ())]
+                substance_terms.setdefault(owner, set()).update(
+                    term for term in (_match_text(name) for name in names) if term
+                )
+
+            for row in rows:
+                translation_status = _clean_str(row["translation_status"])
+                if translation_status in UNREVIEWED_TRANSLATION_STATUSES or (
+                    translation_status == "human_reviewed"
+                    and _clean_str(row["translation_of_document_id"]) in originals
+                ):
+                    continue
                 doc_type = _clean_str(row["document_type"])
                 doc_id = _clean_str(row["document_id"])
                 doc_facility = row["facility_id"]
@@ -630,8 +705,9 @@ def resolve_safety_pack(
                         section_code=_clean_str(row["section_code"]) or None,
                         page_number=int(row["page_start"] or 1),
                         source_uri=_clean_str(row["source_uri"]) or None,
-                        summary_text=_clean_str(row["content"])[:240] if row["content"] else None,
+                        summary_text=source_excerpt(row["content"]) if row["content"] else None,
                         is_demo=is_demo,
+                        reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
                     )
                     sop_docs.append(ref)
                     if row["topic"]:
@@ -641,20 +717,14 @@ def resolve_safety_pack(
                 elif doc_type == "supplier_sds":
                     prod_name = _clean_str(row["product_name"]).casefold()
                     prod_code = _clean_str(row["product_code"]).casefold()
-                    cas_list = []
-                    if row["cas_numbers"]:
-                        try:
-                            cas_list = [c.casefold() for c in json.loads(row["cas_numbers"])]
-                        except Exception as cas_exc:
-                            log.warning(
-                                "Ignoring unreadable CAS numbers on safety document %s: %s",
-                                doc_id, type(cas_exc).__name__,
-                            )
+                    cas_list = [c.casefold() for c in cas_by_row.get(row["id"], ())]
+                    terms = tuple(sorted(substance_terms.get(doc_id, ())))
 
                     matches_material = (
                         (prod_name and any(m in prod_name or prod_name in m for m in all_materials_lower))
                         or (prod_code and any(prod_code == m for m in all_materials_lower))
                         or any(c in all_materials_lower for c in cas_list)
+                        or any(mentions_substance(t, text) for t in terms for text in protocol_texts)
                     )
                     if matches_material or (is_demo and usage_scope != "operational"):
                         ref = SafetyDocumentRef(
@@ -668,8 +738,10 @@ def resolve_safety_pack(
                             section_code=_clean_str(row["section_code"]) or None,
                             page_number=int(row["page_start"] or 1),
                             source_uri=_clean_str(row["source_uri"]) or None,
-                            summary_text=_clean_str(row["content"])[:240] if row["content"] else None,
+                            summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
+                            reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
+                            substance_terms=terms,
                         )
                         sds_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
@@ -693,8 +765,9 @@ def resolve_safety_pack(
                             section_code=_clean_str(row["section_code"]) or None,
                             page_number=int(row["page_start"] or 1),
                             source_uri=_clean_str(row["source_uri"]) or None,
-                            summary_text=_clean_str(row["content"])[:240] if row["content"] else None,
+                            summary_text=source_excerpt(row["content"]) if row["content"] else None,
                             is_demo=is_demo,
+                            reviewed_translations=tuple(reviewed.get((doc_id, _clean_str(row["section_code"])), ())),
                         )
                         equipment_docs.append(ref)
                         identities.add(f"{doc_id}:{row['version']}")
