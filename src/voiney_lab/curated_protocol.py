@@ -9158,12 +9158,12 @@ class CuratedProtocolSession:
                 checksum = self.fixture.source_pdf_sha256 or "unavailable"
                 if language == "ko":
                     speech = (
-                        f"현재 프로토콜은 {self.fixture.title}, 리비전 {protocol_version}입니다. "
+                        f"현재 프로토콜은 {self.fixture.title}, 실행 버전 {protocol_version}입니다. "
                         f"원문 문서 버전은 {document_version}이며 전체 해시는 화면에 표시했습니다."
                     )
                     display = (
                         f"프로토콜 감사 정보\n- 제목: {self.fixture.title}\n"
-                        f"- 실행 리비전: {protocol_version}\n"
+                        f"- 실행 버전: {protocol_version}\n"
                         f"- 원문 문서 버전: {document_version}\n"
                         f"- 원문 PDF SHA-256: {checksum}\n"
                         f"- 구조화 fixture SHA-256: {self.fixture.fixture_sha256}"
@@ -9720,25 +9720,25 @@ class CuratedProtocolSession:
                     response = {
                         "en": (
                             f"Step {step.source_label} is a repeat-until step, but its observed endpoint is not connected to a supported server completion signal. "
-                            "You cannot satisfy that gate through the current Candidate A development session. The step has not been marked complete, and no transition was made."
+                            "You cannot satisfy that gate through the current development session. The step has not been marked complete, and no transition was made."
                         ),
                         "vi": (
                             f"Bước {step.source_label} yêu cầu lặp lại đến khi đạt điểm kết thúc quan sát, nhưng tín hiệu hoàn thành đó chưa được máy chủ hỗ trợ. Bước vẫn chưa hoàn thành."
                         ),
                         "ko": (
                             f"{step.source_label}단계는 관찰 결과가 충족될 때까지 반복해야 하지만, 그 관찰 종점이 지원되는 서버 완료 신호에 연결되어 있지 않습니다. "
-                            "현재 Candidate A 개발 세션에서는 사용자가 이 게이트를 충족할 수 없습니다. 완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
+                            "현재 개발용 세션에서는 사용자가 이 확인 조건을 충족할 수 없습니다. 완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
                         ),
                     }.get(language, "관찰 기반 반복 종료 신호가 지원되지 않아 진행할 수 없습니다.")
                 else:
                     response = {
                         "en": (
-                            f"Step {step.source_label} contains an unresolved source ambiguity, so Candidate A development mode cannot validate completion. "
+                            f"Step {step.source_label} contains an unresolved source ambiguity, so the current development session cannot validate completion. "
                             "The step has not been marked complete, and no transition was made."
                         ),
                         "vi": f"Bước {step.source_label} còn mơ hồ trong nguồn nên chưa thể xác nhận hoàn thành.",
                         "ko": (
-                            f"{step.source_label}단계는 원문의 실행 의미가 미해결 상태여서 Candidate A 개발 모드에서 완료를 검증할 수 없습니다. "
+                            f"{step.source_label}단계는 원문의 실행 의미가 미해결 상태여서 현재 개발용 세션에서 완료를 검증할 수 없습니다. "
                             "완료 처리되지 않았습니다. 단계 이동도 하지 않았습니다."
                         ),
                     }.get(language, "원문의 실행 의미가 미해결 상태여서 진행할 수 없습니다.")
@@ -10656,7 +10656,7 @@ class CuratedProtocolSession:
                 "hypothetical_completion", "quoted_completion"
             }:
                 response = (
-                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 확인 조건과 관찰 게이트를 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
+                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
                     if language == "ko" else
                     "If you explicitly report the current step complete, the server first checks its approved completion and observation gates. It records completion and advances only when those gates pass. This question did not change state."
                 )
