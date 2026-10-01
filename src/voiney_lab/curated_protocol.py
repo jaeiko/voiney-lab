@@ -1597,6 +1597,8 @@ class ProtocolVocabulary:
     terms: tuple[ProtocolTerm, ...]
     #: Everything the protocol says, whitespace-collapsed and casefolded.
     corpus: str = ""
+    #: Each material row as the steps name it, in the protocol's order.
+    materials: tuple[str, ...] = ()
 
     def mentions(self, surface: str) -> bool:
         """Whether the protocol's text uses ``surface`` as whole words."""
@@ -1651,10 +1653,15 @@ class ProtocolVocabulary:
         prose_text = "\n".join(" ".join(text.split()) for text in prose)
         corpus = tuple(" ".join(text.split()) for text in (*prose, *overview))
 
-        found: list[tuple[str, bool]] = [
+        materials = tuple(
+            _resource_keyterm(item.name_source_text, prose_text)
+            for item in protocol.materials
+        )
+        found: list[tuple[str, bool]] = [(name, True) for name in materials]
+        found.extend(
             (_resource_keyterm(item.name_source_text, prose_text), True)
-            for item in (*protocol.materials, *protocol.equipment)
-        ]
+            for item in protocol.equipment
+        )
         found.extend((candidate, False) for candidate in _STT_TERM_CANDIDATES)
         for text in corpus:
             found.extend((match.group(0), False) for match in _LABELLED_REAGENT.finditer(text))
@@ -1694,6 +1701,7 @@ class ProtocolVocabulary:
         return cls(
             terms=tuple(terms.values()),
             corpus="\n".join(corpus).casefold(),
+            materials=tuple(name for name in materials if name),
         )
 
     def keyterms_near(self, index: int | None) -> tuple[str, ...]:
@@ -5118,6 +5126,20 @@ class CuratedProtocolSession:
             cached = (self.fixture, ProtocolVocabulary.from_fixture(self.fixture))
             self._vocabulary_cache = cached
         return cached[1]
+
+    def research_scope(self) -> dict[str, Any]:
+        """What ``plan_research_query`` needs to judge this protocol's substances.
+
+        Passed as keyword arguments, it lets the query use an in-gel search
+        label only where this protocol has the substance, judged on the whole
+        protocol, and name this protocol's materials as its steps do.
+        """
+
+        vocabulary = self._protocol_vocabulary()
+        return {
+            "protocol_materials": vocabulary.materials,
+            "protocol_text": vocabulary.corpus,
+        }
 
     def stt_keyterms(self, *, include_control_terms: bool = False) -> tuple[str, ...]:
         """Return the active protocol's technical terms within xAI's cap.
