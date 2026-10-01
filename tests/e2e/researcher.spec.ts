@@ -1,6 +1,24 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ timeout: 45_000 });
+
+// The page's own startup ends in loadExperimentSessions() ->
+// loadExperimentTimeline(null), which clears the timeline and resets the
+// start action and the step. A test that renders a timeline itself has to
+// do it after that, or the late reset overwrites its render (on CI it landed
+// 15-90 ms after the test's render). waitForResponse settles on the headers,
+// before the page has read the body, so this also waits for the reset's own
+// row: the first timeline row with a <b>, which the initial row lacks.
+// Call it before page.goto() so the response cannot be missed.
+async function experimentSessionsLoaded(page: Page) {
+  await page.waitForResponse(
+    response => new URL(response.url()).pathname === '/api/workspace/experiments',
+  );
+  await page
+    .locator('#experiment-event-timeline .workspace-row b')
+    .first()
+    .waitFor({ state: 'attached' });
+}
 
 test.describe('Researcher / Bench workspace', () => {
   test('loads with the researcher workspace active and core state visible', async ({ page }) => {
@@ -47,7 +65,9 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('recorded evidence exposes a same-origin opaque download action', async ({ page }) => {
+    const startupDone = experimentSessionsLoaded(page);
     await page.goto('/');
+    await startupDone;
     // This test exercises the local renderer. A large catalog refresh may still
     // be in flight and is not a prerequisite for rendering an evidence event.
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
@@ -141,7 +161,9 @@ test.describe('Researcher / Bench workspace', () => {
   });
 
   test('only explicitly selected open experiments use the resume action', async ({ page }) => {
+    const startupDone = experimentSessionsLoaded(page);
     await page.goto('/');
+    await startupDone;
     await page.waitForFunction(() => typeof renderExperimentTimeline === 'function');
     await page.evaluate(() => renderExperimentTimeline({
       session: {
