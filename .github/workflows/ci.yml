@@ -141,5 +141,10 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          # playwright.ci.config.ts uses the list reporter, so nothing is
+          # written to playwright-report/; the traces and screenshots of
+          # failed tests (trace: retain-on-failure) are in test-results/.
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7
