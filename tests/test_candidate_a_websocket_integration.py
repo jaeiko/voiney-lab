@@ -703,8 +703,16 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             client_factory = AssertionError(
                 "LLM must not run for deterministic workflow control"
             )
+            key_context = nullcontext()
         else:
             listener.semantic_intent_settings = SemanticIntentSettings(enabled=True)
+            # The resolver reads XAI_API_KEY before it builds the client
+            # faked below, so without a key in the environment the turn
+            # failed closed before the fake was ever reached. Stand in for
+            # the key as the other provider-faking tests do; nothing is sent.
+            key_context = patch(
+                "voiney_lab.server.require_env", return_value="offline"
+            )
 
             def client_factory(*_args, **_kwargs):
                 class Client:
@@ -741,7 +749,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         ), patch(
             "voiney_lab.server.AsyncOpenAI",
             side_effect=client_factory,
-        ):
+        ), key_context:
             asyncio.run(run_turn(
                 socket, listener, b"\0\0", turn_id, 1,
                 accepted_transcription=Transcription(transcript, "ko"),

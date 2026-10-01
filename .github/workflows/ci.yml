@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # Work happens on feature/** and fix/** branches cut from dev, and reaches
+  # main only through dev (docs/GIT_WORKFLOW.md), so every one of those is
+  # checked. A branch with an open PR into dev runs twice, once per event.
   push:
-    branches: ["main", "refactor/**"]
+    branches: ["main", "dev", "feature/**", "fix/**", "refactor/**"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
 
 jobs:
   python:
@@ -17,6 +20,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+
+      - name: Install the pdftotext comparator (poppler-utils)
+        # The extraction cross-check compares pypdfium2's text with pdftotext
+        # (README, "PDF text extraction and its cross-check"). Without it
+        # every source is comparator_unavailable and readiness gains
+        # source_text_cross_check_unavailable, so 40 tests that expect the
+        # comparator fail. The hosted runner image does not include it.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
 
       - name: Install package with test extras
         run: python -m pip install -e '.[test]'
@@ -36,18 +47,43 @@ jobs:
           # licensed Candidate A source PDF (byte-exact identity check) -
           # see tests/conftest.py for the same constraint on the pytest side.
           # It is intentionally not committed to the repository, so these
-          # only run where a maintainer has it locally (never in CI).
-          if [ -f /home/student/protocol-test-files/in-gel-digestion.pdf ]; then
+          # only run where a maintainer has it locally (never in CI). The
+          # path is the evaluators' own --source-pdf default.
+          if [ -f data/runtime/candidate-a-source/in-gel-digestion.pdf ]; then
             python scripts/evaluate_candidate_a_grounded_qa.py
-            # evaluate_candidate_a_hardening.py has 2 known pre-existing
-            # failures (safety-general-followup, report-show) confirmed
-            # present since before Phase 10 - see
-            # docs/COMMERCIALIZATION_PASS3_REPORT.md. Run it for visibility
-            # without failing the build on those two.
+            # evaluate_candidate_a_hardening.py does not pass today: on
+            # 2026-10-01 three of its 100 cases fail (safety-general-followup,
+            # report-show, live9-multipart-tube). Run it for visibility
+            # without failing the build on them.
             python scripts/evaluate_candidate_a_hardening.py || true
           else
             echo "Skipping: requires the externally licensed Candidate A source PDF, not present in CI."
           fi
+
+  lint:
+    name: Static check (warning only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pylint
+        run: python -m pip install 'pylint==4.1.1'
+
+      - name: pylint possibly-used-before-assignment (never blocks the build)
+        # A name bound on only some branches and read afterwards raises
+        # NameError on the branch no test took. Each finding becomes a
+        # warning annotation on the run and the PR; continue-on-error keeps
+        # the job green, so this reports and never gates a merge.
+        continue-on-error: true
+        run: >-
+          pylint --disable=all --enable=possibly-used-before-assignment
+          --score=n
+          --msg-template='::warning file={path},line={line},col={column}::{msg_id} {msg} ({symbol})'
+          src scripts tests
 
   e2e:
     name: Playwright browser acceptance
@@ -74,6 +110,20 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Build a fictional demo safety catalog for the CI server
+        # server_config() refuses to answer GET /api/protocols without an
+        # approved safety catalog for the usage scope, and
+        # scripts/run_ci_server.sh sets neither, so every page load got a
+        # 500 there and the 5xx check in empty-states.spec.ts failed on
+        # every run. The manifest is the repository's own pair of
+        # FICTIONAL NON-OPERATIONAL demo-scope records. It is written
+        # outside the checkout, so the launcher's rm -rf of
+        # data/runtime/ci-e2e never touches it.
+        run: >-
+          python scripts/ingest_safety_documents.py
+          --manifest data/moss_demo/approved_documents.ko.json
+          --db "$RUNNER_TEMP/ci-safety-catalog.sqlite"
+
       - name: Playwright tests (CI server, empty protocol catalog)
         run: npx playwright test --config=playwright.ci.config.ts
         env:
@@ -82,10 +132,19 @@ jobs:
           # script's header comment. playwright.config.ts (the local-dev
           # config) still uses the full scripts/run_dev.sh.
           CI: "true"
+          # Read by the server the launcher starts (Playwright's webServer
+          # inherits this environment).
+          VOICE_WORKFLOW_AGENT_SAFETY_CATALOG: ${{ runner.temp }}/ci-safety-catalog.sqlite
+          VOICE_WORKFLOW_AGENT_USAGE_SCOPE: demo
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          # playwright.ci.config.ts uses the list reporter, so nothing is
+          # written to playwright-report/; the traces and screenshots of
+          # failed tests (trace: retain-on-failure) are in test-results/.
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7

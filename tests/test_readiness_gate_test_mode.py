@@ -30,6 +30,7 @@ from unittest.mock import patch
 import httpx
 
 from voiney_lab import experiment_protocol as domain
+from voiney_lab.document_store import ingest_manifest
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.experiment_reports import (
@@ -56,6 +57,7 @@ from tests.test_protocol_catalog import (
     analysis_draft,
     write_text_pdf,
 )
+from tests.test_retrieval import operational_document
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
@@ -266,6 +268,22 @@ class CatalogTestModeTests(_TestModeFixture):
 
 class HttpTestModeTests(_TestModeFixture):
     """The review, activation and catalog endpoints the browser calls."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # GET /api/protocols reads server_config(), which refuses to run
+        # without an approved safety catalog for the usage scope. Only a
+        # maintainer's .env used to supply one, so give the test its own
+        # fictional demo-scope catalog instead of depending on that file.
+        catalog = self.root / "approved.sqlite"
+        ingest_manifest(
+            {"documents": [operational_document(usage_scope="demo")]}, catalog
+        )
+        catalog_patch = patch.dict(
+            os.environ, {"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG": str(catalog)}
+        )
+        catalog_patch.start()
+        self.addCleanup(catalog_patch.stop)
 
     def _request(self, method: str, url: str) -> httpx.Response:
         async def send() -> httpx.Response:

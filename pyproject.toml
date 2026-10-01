@@ -9,7 +9,17 @@ description = "Trusted laboratory protocol knowledge, voice execution, and audit
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi",
+  # fastapi: held on the 0.141 line, the release the last known-good
+  # environment ran (pip freeze, 2026-09-30).  0.142.0 calls
+  # run_in_threadpool(_run_sync_endpoint, function=..., arguments=...),
+  # and the tests' thread-pool fakes
+  # (_dedicated_to_thread in tests/test_protocol_catalog.py, run_inline in
+  # tests/test_experiment_reports.py) take their callable as `function`, so
+  # six endpoint tests fail with "got multiple values for argument
+  # 'function'".  Starlette's own parameter is `func`.  Only fastapi is held:
+  # with every other dependency at its 2026-10-01 latest (Starlette 1.7.0)
+  # the suite gives the same result as the known-good freeze.
+  "fastapi>=0.141.1,<0.142",
   "uvicorn[standard]",
   "openai",
   "PyJWT[crypto]>=2.10,<3",

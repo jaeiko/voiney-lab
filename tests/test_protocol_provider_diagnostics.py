@@ -574,6 +574,8 @@ class ProtocolProviderDiagnosticTests(unittest.TestCase):
         self.assertFalse(telemetry.complete_json_structure)
 
     def test_diagnostic_is_read_only_for_server_owned_protocol_state(self):
+        if not CURATED_SOURCE.is_file():
+            self.skipTest(f"{CURATED_SOURCE.relative_to(ROOT)} is not present.")
         fixture = load_curated_protocol_fixture(
             CURATED_FIXTURE,
             CURATED_PROVENANCE,
