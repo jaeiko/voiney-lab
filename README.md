@@ -605,8 +605,10 @@ analysis, or a failed one, still cannot run. While it is on, the startup log
 and a page-top banner read "테스트 모드: 실행 준비 게이트를 건너뜀", an
 activation made through it carries `test_mode_readiness_gates_skipped` in the
 ledger, and each experiment report opened in such a session starts with a
-`test_mode_readiness_gates_skipped` event. No launcher sets it; set it by hand
-before starting the server.
+`test_mode_readiness_gates_skipped` event. `./scripts/run_dev.sh --test-mode`
+turns it on, together with the `demo` scope; `scripts/run_pilot.sh` always turns
+it off, with a `[WARN]` when the environment had it on. A server started any
+other way reads it from the environment or `.env`.
 
 `PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the

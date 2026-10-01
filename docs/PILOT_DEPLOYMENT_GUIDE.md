@@ -112,11 +112,12 @@ If the externally licensed Candidate A PDF is unavailable, read the explicit
 test skips and use the CI empty-catalog browser launcher. Never substitute an
 unverified PDF to force an integrity test to pass.
 
-Start the candidate process and require:
+Start the pilot with `./scripts/run_pilot.sh`, which serves on port 8080
+unless `PORT` is set, and require:
 
 ```bash
-curl --fail http://127.0.0.1:8000/healthz
-curl --fail http://127.0.0.1:8000/readyz
+curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/readyz
 ```
 
 `/readyz` proves local configuration parsing, including the operational
