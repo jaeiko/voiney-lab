@@ -1074,6 +1074,94 @@ class XaiSupplementalKnowledge:
 
 
 
+#: Search wording for the in-gel document's reagents, each with the protocol
+#: wording it rests on: every group must be met by one of its surfaces. A
+#: label is used only where the active protocol has all of it -- "Solution A"
+#: alone does not make another protocol's Solution A in-gel's
+#: AMBIC/acetonitrile mix.
+_ENTITY_SEARCH_LABELS: dict[str, tuple[str, tuple[tuple[str, ...], ...]]] = {
+    "ambic": ("ammonium bicarbonate AMBIC", (("ambic",), ("ammonium bicarbonate",))),
+    "hplc_water": ("HPLC grade water", (("hplc water",),)),
+    "solution_a": (
+        "Solution A ammonium bicarbonate acetonitrile",
+        (("solution a",), ("ammonium bicarbonate", "ambic"), ("acetonitrile",)),
+    ),
+    "solution_b": (
+        "Solution B ammonium bicarbonate",
+        (("solution b",), ("ammonium bicarbonate", "ambic")),
+    ),
+    "acetonitrile": ("acetonitrile", (("acetonitrile",),)),
+    "gel_plug": ("gel plug in-gel digestion", (("gel plug",), ("in-gel",))),
+    "stained_protein_band": (
+        "stained protein band SDS-PAGE gel", (("stained protein band",),),
+    ),
+    "dtt": ("DTT dithiothreitol", (("dtt", "dithiothreitol"),)),
+    "dithiothreitol": ("DTT dithiothreitol", (("dtt", "dithiothreitol"),)),
+    "iodoacetamide": ("iodoacetamide", (("iodoacetamide",),)),
+    "trypsin": ("trypsin protease digestion", (("trypsin",),)),
+}
+#: Words of a catalog row that are never the item's name.
+_CATALOG_ROW_WORDS = frozenset({
+    "catalog", "grade", "scientific", "international", "brand",
+})
+
+
+def _mentions(text: str, surface: str) -> bool:
+    words = r"\s+".join(re.escape(word) for word in surface.split())
+    return re.search(
+        rf"(?<![a-z0-9]){words}(?:e?s)?(?![a-z0-9])", text, re.IGNORECASE
+    ) is not None
+
+
+def _material_search_name(name_source_text: str) -> str:
+    """A material row without its catalog, model or SKU tail."""
+
+    first = next(
+        (line.strip() for line in name_source_text.splitlines() if line.strip()), ""
+    )
+    head = re.split(
+        r"\s+(?:catalog|cat\.?|model|sku)\b|\s+#|,", first,
+        maxsplit=1, flags=re.IGNORECASE,
+    )[0]
+    return " ".join(head.split())[:80]
+
+
+def _materials_named_in(question: str, protocol_materials: tuple[str, ...]) -> tuple[str, ...]:
+    """The protocol's materials whose own words the question uses."""
+
+    named: list[str] = []
+    for row in protocol_materials:
+        name = _material_search_name(row)
+        words = [
+            word for word in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", name)
+            if word.casefold() not in _CATALOG_ROW_WORDS
+        ]
+        if name and any(_mentions(question, word) for word in words):
+            named.append(name)
+    return tuple(dict.fromkeys(named))
+
+
+def _protocol_search_context(protocol_title: str) -> str:
+    """What the protocol is, for a query: its title up to the word "protocol".
+
+    In-gel's "In-gel digestion protocol for protein identification" gives
+    "in-gel digestion", the wording these queries always used.
+    """
+
+    title = " ".join(protocol_title.split())
+    head = re.split(r"\s+protocol\b", title, maxsplit=1, flags=re.IGNORECASE)[0]
+    head = head.strip(" .,:;-")
+    if not head:
+        return "a laboratory protocol"
+    first, _, rest = head.partition(" ")
+    if first[:1].isupper() and first[1:2].islower():
+        first = first[:1].lower() + first[1:]
+    head = f"{first} {rest}".strip()
+    if len(head) > 80:
+        head = head[:80].rsplit(" ", 1)[0]
+    return head
+
+
 def plan_research_query(
     question: str,
     *,
@@ -1085,35 +1173,54 @@ def plan_research_query(
     question_kind: str | None,
     requested_entities: tuple[str, ...] = (),
     question_dimensions: tuple[str, ...] = (),
+    protocol_materials: tuple[str, ...] = (),
+    protocol_text: str | None = None,
 ) -> str:
-    """Build one bounded search query from verified context, not a raw fragment."""
+    """Build one bounded search query from verified context, not a raw fragment.
+
+    An in-gel search label is used only where the active protocol has the
+    substances it names. That is judged on ``protocol_text`` -- the whole
+    protocol -- when the caller passes it, and otherwise on the verified
+    context it passes anyway: the title, the step and the evidence. An entity
+    the protocol does not have is searched under the names of the protocol's
+    own materials (``protocol_materials``) that the question uses. The query
+    says what the protocol is from its title, not "in-gel digestion".
+    """
 
     dimensions = ", ".join(question_dimensions) or {
         "safety": "chemical handling PPE ventilation exposure spill waste site SDS",
         "scientific_definition": "definition chemical identity workflow role",
         "related_knowledge": "laboratory explanation workflow role",
     }.get(question_kind, "laboratory explanation")
-    entity_labels = {
-        "ambic": "ammonium bicarbonate AMBIC",
-        "hplc_water": "HPLC grade water",
-        "solution_a": "Solution A ammonium bicarbonate acetonitrile",
-        "solution_b": "Solution B ammonium bicarbonate",
-        "acetonitrile": "acetonitrile",
-        "gel_plug": "gel plug in-gel digestion",
-        "stained_protein_band": "stained protein band SDS-PAGE gel",
-        "dtt": "DTT dithiothreitol",
-        "dithiothreitol": "DTT dithiothreitol",
-        "iodoacetamide": "iodoacetamide",
-        "trypsin": "trypsin protease digestion",
-    }
+    scope = protocol_text if protocol_text is not None else "\n".join(
+        (protocol_title, step_text, *evidence_texts)
+    )
     ordered_entities = requested_entities or (
         (requested_entity,) if requested_entity else ()
     )
-    entity = "; ".join(
-        entity_labels.get(item, item) for item in ordered_entities
-    ) or "laboratory protocol"
+    labels: list[str] = []
+    absent = False
+    for item in ordered_entities:
+        entry = _ENTITY_SEARCH_LABELS.get(item)
+        if entry is None:
+            labels.append(item)
+            continue
+        label, required = entry
+        if all(any(_mentions(scope, surface) for surface in group) for group in required):
+            labels.append(label)
+        else:
+            absent = True
+    if absent or not labels:
+        labels.extend(
+            name for name in _materials_named_in(question, protocol_materials)
+            if name not in labels
+        )
+    entity = "; ".join(labels) or "laboratory protocol"
     clean_q = question.strip()[:180]
-    return f"{entity} role in in-gel digestion. Question: {clean_q}"
+    return (
+        f"{entity} role in {_protocol_search_context(protocol_title)}. "
+        f"Question: {clean_q}"
+    )
 
 
 @dataclass(frozen=True)

@@ -259,6 +259,9 @@
             <label class="visually-hidden" for="experiment-session-select">실험 세션</label>
             <select id="experiment-session-select" aria-label="실험 세션"><option value="">진행 중인 실험 없음</option></select>
             <span id="experiment-session-status-badge" class="session-state-badge" hidden></span>
+            <label class="visually-hidden" for="experiment-checkpoint-select">체크포인트</label>
+            <select id="experiment-checkpoint-select" aria-label="체크포인트" hidden></select>
+            <button id="experiment-checkpoint-restart" class="btn-rail-secondary" type="button" hidden>체크포인트에서 새 실험</button>
             <button id="experiment-timeline-refresh" class="btn-rail-secondary" type="button">타임라인 새로고침</button>
           </div>
         </div>
@@ -642,10 +645,11 @@ function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const node=$("experiment-resume-disclosure");if(!node)return false;
  if(!currentExperimentSessionId||!recovery||typeof recovery!=="object"){node.hidden=true;node.textContent="";return false;}
  const restored=recovery.restored&&typeof recovery.restored==="object"?recovery.restored:{},revision=typeof restored.protocol_revision_id==="string"?restored.protocol_revision_id:currentExperimentProtocolRevision,step=typeof restored.current_step_label==="string"?restored.current_step_label:currentExperimentStepLabel,count=Number.isInteger(restored.completed_step_count)&&restored.completed_step_count>=0?restored.completed_step_count:currentExperimentCompletedStepCount,wasRecovered=["session_recovered","session_resumed"].includes(recovery.last_event_type),eligible=recovery.eligible===true;
- const lead=!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
+ const checkpoints=!eligible&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
+ const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
  const durable=`서버가 유지한 상태: 정확한 버전 ${revision||"—"}, 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
  const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`복구하지 않는 항목: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
- const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":"다음 작업: 승인된 프로토콜로 새 실험을 시작하세요.";
+ const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 승인된 프로토콜로 새 실험을 시작하세요.";
  node.textContent=`${lead} ${durable} ${omitted} ${next}`;node.hidden=false;return true;
 }
 function renderExperimentContext(){
@@ -752,6 +756,7 @@ const RESEARCHER_ERROR_MESSAGES=Object.freeze({
  workspace_resource_not_found:"선택한 실험 기록을 찾을 수 없습니다. 타임라인을 새로고침하고 실험을 다시 선택해 주세요.",
  workspace_conflict:"실험 상태가 다른 화면이나 음성 명령으로 변경되었습니다. 타임라인을 새로고침하고 정확한 실험을 다시 선택해 주세요.",
  workspace_error:"실험 기록을 저장하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요.",
+ experiment_checkpoint_unavailable:"선택한 체크포인트로 이어갈 수 없습니다. 타임라인을 새로고침하고 체크포인트를 다시 선택해 주세요.",
  report_persistence_failed:"보조 실험 보고서를 갱신하지 못했습니다. 현재 단계는 실험 세션 타임라인에서 확인해 주세요.",
  "invalid session configuration":"선택한 실험 또는 프로토콜 설정을 확인하지 못했습니다. 타임라인을 새로고침하고 다시 시작해 주세요.",
  "voice turn processing failed":"음성 요청을 처리하지 못했습니다. 단계가 변경되었다고 가정하지 말고 현재 단계를 다시 확인해 주세요."
@@ -770,8 +775,8 @@ let researcherDryLabWorkflowsRequested=false;
 async function ensureResearcherDryLabWorkflows(){if(researcherDryLabWorkflowsRequested)return false;researcherDryLabWorkflowsRequested=true;return loadDryLabWorkflows();}
 async function loadWorkspaceSession(){researcherDryLabWorkflowsRequested=false;try{const response=await workspaceFetch("/api/workspace/session",{cache:"no-store"});if(!response.ok)return false;const data=await response.json(),routes=new Set(data.workspaces||[]);if($("workspace-reviewer"))$("workspace-reviewer").hidden=!routes.has("reviewer");if($("workspace-admin"))$("workspace-admin").hidden=!routes.has("admin");await loadWorkspaceConnectors();await loadQuickProtocolLibrary();await loadExperimentSessions();return true;}catch{return false;}}
 function workspaceRow(title,detail){const row=document.createElement("div"),bold=document.createElement("b"),small=document.createElement("small");row.className="workspace-row";bold.textContent=title;small.textContent=detail;row.append(bold,small);return row;}
-function experimentEventLabel(type){return {session_started:"세션 생성",protocol_started:"프로토콜 시작",session_recovered:"세션 복구",session_resumed:"세션 재개",session_paused:"세션 일시정지",session_stopped:"세션 종료",session_completed:"실험 완료",step_completed:"단계 완료",step_advanced:"단계 이동",observation_recorded:"관찰 기록",evidence_attached:"근거 첨부",reviewer_action:"검토자 작업"}[type]||"이벤트";}
-function experimentEventKind(type){return {session_started:"lifecycle",session_stopped:"lifecycle",session_recovered:"lifecycle",session_resumed:"resume",session_paused:"pause",session_completed:"completion",step_completed:"step",step_advanced:"step",observation_recorded:"observation",evidence_attached:"evidence",reviewer_action:"reviewer-action"}[type]||"other";}
+function experimentEventLabel(type){return {session_restarted_from_checkpoint:"체크포인트에서 시작",step_completion_carried_over:"이전 세션 완료 이어받음",checkpoint_restart_created:"체크포인트로 새 세션 생성",session_started:"세션 생성",protocol_started:"프로토콜 시작",session_recovered:"세션 복구",session_resumed:"세션 재개",session_paused:"세션 일시정지",session_stopped:"세션 종료",session_completed:"실험 완료",step_completed:"단계 완료",step_advanced:"단계 이동",observation_recorded:"관찰 기록",evidence_attached:"근거 첨부",reviewer_action:"검토자 작업"}[type]||"이벤트";}
+function experimentEventKind(type){return {session_restarted_from_checkpoint:"lifecycle",step_completion_carried_over:"step",checkpoint_restart_created:"lifecycle",session_started:"lifecycle",session_stopped:"lifecycle",session_recovered:"lifecycle",session_resumed:"resume",session_paused:"pause",session_completed:"completion",step_completed:"step",step_advanced:"step",observation_recorded:"observation",evidence_attached:"evidence",reviewer_action:"reviewer-action"}[type]||"other";}
 function sessionStateBadgeInfo(status){return {ready:{label:"준비됨",kind:"ready"},in_progress:{label:"진행 중",kind:"active"},paused:{label:"일시정지",kind:"paused"},blocked:{label:"진행 차단",kind:"blocked"},completed:{label:"완료",kind:"completed"},stopped:{label:"종료됨",kind:"stopped"}}[status]||null;}
 function updateSessionStateBadge(status){const badge=$("experiment-session-status-badge");if(!badge)return;const info=status?sessionStateBadgeInfo(status):null;if(!info){badge.hidden=true;badge.textContent="";badge.className="session-state-badge";return;}badge.hidden=false;badge.textContent=info.label;badge.className=`session-state-badge session-state-${info.kind}`;}
 function renderExperimentTimeline(payload){
@@ -807,7 +812,31 @@ function renderExperimentTimeline(payload){
  }else{
   currentExperimentSessionStatus=null;currentExperimentProtocolRevision=null;currentExperimentStepLabel=null;currentExperimentCompletedStepCount=0;currentExperimentRecovery=null;updateSessionStateBadge(null);
  }
- updateStartActionLabel();renderResumeDisclosure();return true;
+ updateStartActionLabel();renderResumeDisclosure();renderCheckpointControls();return true;
+}
+// A stopped experiment is final. Its checkpoints -- each place it stood with
+// every earlier step completed -- start a new session there; the server owns
+// the list and checks the carried steps again when the voice session resumes.
+function renderCheckpointControls(recovery=currentExperimentRecovery){
+ const select=$("experiment-checkpoint-select"),button=$("experiment-checkpoint-restart");if(!select||!button)return false;
+ const checkpoints=currentExperimentSessionStatus==="stopped"&&Array.isArray(recovery?.checkpoints)?recovery.checkpoints.filter(item=>item&&typeof item.step_id==="string"):[];
+ select.replaceChildren();
+ for(const item of checkpoints){const option=document.createElement("option");option.value=item.step_id;option.textContent=`${item.step_label||"—"}단계부터 · 완료 ${Number(item.carried_step_count)||0}개 이어받음${item.stopped_here?" · 종료 지점":""}`;select.appendChild(option);}
+ if(checkpoints.length)select.value=checkpoints[checkpoints.length-1].step_id;
+ select.hidden=!checkpoints.length;button.hidden=!checkpoints.length;setDisabled(button,!checkpoints.length||sessionActive);
+ return checkpoints.length>0;
+}
+async function restartExperimentFromCheckpoint(){
+ const status=$("experiment-capture-status"),button=$("experiment-checkpoint-restart"),stepId=$("experiment-checkpoint-select")?.value||"",fallback="체크포인트에서 새 실험을 만들지 못했습니다. 타임라인을 새로고침한 뒤 다시 시도해 주세요.";
+ if(!currentExperimentSessionId||currentExperimentSessionVersion===null||!stepId){if(status)status.textContent="종료된 실험과 체크포인트를 선택해 주세요.";return false;}
+ setDisabled(button,true);
+ try{
+  const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(currentExperimentSessionId)}/checkpoint-restart`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkpoint_step_id:stepId,expected_version:currentExperimentSessionVersion})}),data=await response.json();
+  if(!response.ok||typeof data.session_id!=="string")throw new Error(researcherErrorMessage(data.detail,fallback));
+  await loadExperimentSessions(data.session_id);
+  if(status)status.textContent=`체크포인트에서 새 실험 세션을 만들었습니다. ‘실험 이어하기’를 누르면 ${data.current_step_label||"—"}단계부터 시작합니다.`;
+  return true;
+ }catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,fallback);setDisabled(button,false);return false;}
 }
 async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
  const target=$("experiment-event-timeline");
@@ -815,7 +844,7 @@ async function loadExperimentTimeline(sessionId=currentExperimentSessionId){
   if(target){target.replaceChildren();target.appendChild(workspaceRow("진행 중인 실험 없음","정확한 승인 프로토콜을 선택해 새 실험을 시작하세요."));}
   const links=$("experiment-workflow-links");if(links)links.replaceChildren();
   currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;currentExperimentProtocolRevision=null;currentExperimentStepLabel=null;currentExperimentCompletedStepCount=0;currentExperimentRecovery=null;
-  updateSessionStateBadge(null);updateStartActionLabel();renderResumeDisclosure();return false;
+  updateSessionStateBadge(null);updateStartActionLabel();renderResumeDisclosure();renderCheckpointControls();return false;
  }
  try{
   const response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(sessionId)}/timeline`,{cache:"no-store"}),data=await response.json();
@@ -2289,6 +2318,7 @@ for(const id of ["elab-confirm","elabftw-connector","elab-protocol-revision"]){$
 $("quick-library-search")?.addEventListener("input",()=>{void loadQuickProtocolLibrary();});
 $("experiment-session-select")?.addEventListener("change",event=>{currentExperimentSessionId=event.target?.value||null;currentExperimentSessionVersion=null;currentExperimentSessionStatus=null;updateStartActionLabel();void loadExperimentTimeline(currentExperimentSessionId);});
 $("experiment-timeline-refresh")?.addEventListener("click",()=>{void loadExperimentSessions(currentExperimentSessionId);});
+$("experiment-checkpoint-restart")?.addEventListener("click",()=>{void restartExperimentFromCheckpoint();});
 $("manual-observation-save")?.addEventListener("click",()=>{void saveManualObservation();});
 $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperimentEvidence();});
 $("experiment-workflow-link")?.addEventListener("click",()=>{void linkDryLabWorkflow();});

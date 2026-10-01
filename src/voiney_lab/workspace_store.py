@@ -79,6 +79,13 @@ _EXPERIMENT_TRANSITIONS = {
     "completed": set(),
     "stopped": set(),
 }
+#: Events that move an experiment from one step to the next, or that carry a
+#: completion over from the experiment a checkpoint session began from.
+_STEP_PROGRESS_EVENTS = frozenset({
+    "step_completed",
+    "step_advanced",
+    "step_completion_carried_over",
+})
 _OBSERVATION_CATEGORIES = {
     "note",
     "appearance",
@@ -105,6 +112,10 @@ class WorkspaceNotFoundError(WorkspaceError):
 
 class WorkspaceConflictError(WorkspaceError):
     code = "workspace_conflict"
+
+
+class ExperimentCheckpointUnavailableError(WorkspaceConflictError):
+    code = "experiment_checkpoint_unavailable"
 
 
 class TranslationIntegrityError(WorkspaceError):
@@ -2008,6 +2019,230 @@ class WorkspaceStore:
             raise
         return self.get_experiment(principal, session_id)
 
+    @staticmethod
+    def _experiment_checkpoints(session: Mapping[str, Any]) -> tuple[dict[str, object], ...]:
+        """The places a stopped experiment can be continued from.
+
+        After each completed step the experiment stood at the next one, which
+        is the step the following progress event names -- or, after the last
+        completion, the step it was stopped at. A place is offered only while
+        every move before it completed its step, so a session started there
+        carries exactly the steps before it; restore_experiment_progress
+        checks that again against the exact protocol revision.
+        """
+
+        if session.get("status") != "stopped":
+            return ()
+        completions = {
+            item["event_id"]: item for item in session.get("completed_steps", ())
+        }
+        carried: tuple[Mapping[str, Any], ...] = ()
+        places: list[dict[str, object]] = []
+
+        def place(step_id: object, step_label: object, *, stopped_here: bool) -> None:
+            if not isinstance(step_id, str) or any(
+                item["step_id"] == step_id for item in carried
+            ):
+                return
+            places.append({
+                "step_id": step_id,
+                "step_label": step_label,
+                "carried_step_count": len(carried),
+                "carried_step_ids": [item["step_id"] for item in carried],
+                "last_carried_step_label": carried[-1]["step_label"],
+                "last_carried_completed_at": carried[-1]["completed_at"],
+                "stopped_here": stopped_here,
+            })
+
+        waiting = False
+        for event in session.get("events", ()):
+            if event.get("event_type") not in _STEP_PROGRESS_EVENTS:
+                continue
+            if waiting:
+                place(event.get("step_id"), event.get("step_label"), stopped_here=False)
+                waiting = False
+            completed = completions.get(event.get("event_id"))
+            if completed is None:
+                # It moved on without completing this step: any later place
+                # would carry over a step that was never done.
+                break
+            carried = (*carried, completed)
+            waiting = True
+        else:
+            if waiting:
+                place(
+                    session.get("current_step_id"),
+                    session.get("current_step_label"),
+                    stopped_here=True,
+                )
+        return tuple(places)
+
+    def restart_experiment_from_checkpoint(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        checkpoint_step_id: str,
+        expected_version: int,
+    ) -> dict[str, object]:
+        """Start a new experiment where a stopped one stood at a checkpoint.
+
+        The stopped experiment stays stopped and keeps its record and report.
+        The new session is bound to the same exact protocol revision, carries
+        the steps completed before the checkpoint -- each pointing back at the
+        completion it came from, with its original time and person -- and
+        waits paused, so the voice session continues it at the checkpoint
+        through the ordinary recovery path. Only the experiment's owner can
+        continue it.
+        """
+
+        row = self._experiment_row(principal, session_id, write=True)
+        if row["owner_principal_id"] != principal.principal_id:
+            raise WorkspaceNotFoundError("Experiment session is not available.")
+        checkpoint_step_id = _identifier(
+            checkpoint_step_id, "Checkpoint step identifier"
+        )
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise WorkspaceError("Experiment version is invalid.")
+        source = self.get_experiment(principal, session_id)
+        if source["status"] != "stopped":
+            raise ExperimentCheckpointUnavailableError(
+                "Only a stopped experiment is continued from a checkpoint."
+            )
+        if int(source["version"]) != expected_version:
+            raise WorkspaceConflictError(
+                "Experiment session changed; refresh before continuing it."
+            )
+        checkpoint = next(
+            (
+                item for item in self._experiment_checkpoints(source)
+                if item["step_id"] == checkpoint_step_id
+            ),
+            None,
+        )
+        if checkpoint is None:
+            raise ExperimentCheckpointUnavailableError(
+                "That checkpoint is not available for this experiment."
+            )
+        carried = [
+            item for step_id in checkpoint["carried_step_ids"]
+            for item in source["completed_steps"] if item["step_id"] == step_id
+        ]
+        new_id = f"experiment-{secrets.token_hex(16)}"
+        step_label = checkpoint["step_label"]
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute(
+                """INSERT INTO experiment_sessions(
+                session_id,organization_id,owner_principal_id,protocol_id,
+                protocol_revision_id,status,current_step_id,current_step_label,
+                version,started_at,paused_at,ended_at,updated_at,
+                last_voice_connection_id
+                ) VALUES(?,?,?,?,?,'paused',?,?,1,?,?,NULL,?,NULL)""",
+                (
+                    new_id,
+                    principal.organization_id,
+                    principal.principal_id,
+                    source["protocol_id"],
+                    source["protocol_revision_id"],
+                    checkpoint_step_id,
+                    step_label,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            self._connection.execute(
+                "INSERT INTO resource_bindings VALUES(?,?,?,?,?)",
+                (
+                    principal.organization_id,
+                    "experiment_session",
+                    new_id,
+                    principal.principal_id,
+                    now,
+                ),
+            )
+            self._append_experiment_event(
+                principal,
+                session_id=new_id,
+                event_key="session-started",
+                event_type="session_started",
+                step_id=checkpoint_step_id,
+                step_label=step_label,
+                payload={
+                    "protocol_id": source["protocol_id"],
+                    "protocol_revision_id": source["protocol_revision_id"],
+                    "voice_bound": False,
+                },
+                created_at=now,
+            )
+            self._append_experiment_event(
+                principal,
+                session_id=new_id,
+                event_key="checkpoint-restart",
+                event_type="session_restarted_from_checkpoint",
+                step_id=checkpoint_step_id,
+                step_label=step_label,
+                payload={
+                    "source_session_id": session_id,
+                    "source_version": expected_version,
+                    "carried_step_count": len(carried),
+                },
+                created_at=now,
+            )
+            for index, item in enumerate(carried, 1):
+                event_id, _ = self._append_experiment_event(
+                    principal,
+                    session_id=new_id,
+                    event_key=f"carried-step-{index}",
+                    event_type="step_completion_carried_over",
+                    step_id=item["step_id"],
+                    step_label=item["step_label"],
+                    payload={
+                        "source_session_id": session_id,
+                        "source_event_id": item["event_id"],
+                        "source_completed_at": item["completed_at"],
+                        "source_completed_by_principal_id": item[
+                            "completed_by_principal_id"
+                        ],
+                    },
+                    created_at=now,
+                )
+                self._connection.execute(
+                    """INSERT INTO experiment_completed_steps(
+                    organization_id,session_id,step_id,step_label,
+                    completed_by_principal_id,completed_at,event_id
+                    ) VALUES(?,?,?,?,?,?,?)""",
+                    (
+                        principal.organization_id,
+                        new_id,
+                        item["step_id"],
+                        item["step_label"],
+                        item["completed_by_principal_id"],
+                        item["completed_at"],
+                        event_id,
+                    ),
+                )
+            self._append_experiment_event(
+                principal,
+                session_id=session_id,
+                event_key=f"checkpoint-restart-{new_id}",
+                event_type="checkpoint_restart_created",
+                step_id=checkpoint_step_id,
+                step_label=step_label,
+                payload={
+                    "new_session_id": new_id,
+                    "carried_step_count": len(carried),
+                },
+                created_at=now,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self.get_experiment(principal, new_id)
+
     def experiment_timeline(
         self, principal: Principal, session_id: str
     ) -> dict[str, object]:
@@ -2061,6 +2296,11 @@ class WorkspaceStore:
             if event.get("event_type") in {"session_recovered", "session_resumed"}
         )
         status = str(session["status"])
+        checkpoints = (
+            self._experiment_checkpoints(session)
+            if session["owner_principal_id"] == principal.principal_id
+            else ()
+        )
         recovery = {
             "eligible": status in {"ready", "in_progress", "paused", "blocked"},
             "last_event_type": (
@@ -2081,9 +2321,13 @@ class WorkspaceStore:
             "next_action": (
                 "resume_voice_session"
                 if status in {"ready", "in_progress", "paused", "blocked"}
+                else "restart_from_checkpoint"
+                if checkpoints
                 else "start_new_experiment"
             ),
         }
+        if status == "stopped":
+            recovery["checkpoints"] = list(checkpoints)
         return {
             "session": {
                 key: session[key]
