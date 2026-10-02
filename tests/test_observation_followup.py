@@ -23,11 +23,13 @@ pause reply and the notice both name the same resume word, '재개'.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from tests.test_voice_pause_resume_persistence import (
     FIXTURE,
     PROVENANCE,
     SOURCE_PDF,
+    VoiceSessionHarness,
 )
 from voiney_lab.curated_protocol import (
     CuratedProtocolAction,
@@ -35,7 +37,19 @@ from voiney_lab.curated_protocol import (
     _observation_predicate,
     load_curated_protocol_fixture,
 )
+from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.runtime_routing import route_curated_runtime_turn
+import voiney_lab.server as server_module
+from voiney_lab.workspace_store import WorkspaceSettings, initialize_workspace_store
+
+#: What is said once the record took the problem, per step.
+RECORDED_REASK = {
+    "7": "이상 사항은 기록했어요. 탈색이 끝났으면 한 번 더 말씀해 주세요.",
+    "9": "이상 사항은 기록했어요. 젤이 하얗게 말랐으면 한 번 더 말씀해 주세요.",
+    "20": "이상 사항은 기록했어요. 젤이 하얗게 말랐으면 한 번 더 말씀해 주세요.",
+}
+#: The record write failing is answered as before.
+RECORD_FAILED = "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다."
 
 
 def _step_index(fixture, label: str) -> int:
@@ -135,6 +149,181 @@ class CompletedInTheSessionTests(_InGelSteps, unittest.TestCase):
                 done = _turn(session, "탈수 완료했어", turn_id)
                 self.assertTrue(done.state_changed)
                 self.assertEqual(session.current_index, at + 1)
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class EndpointWithAProblemNoQuestionTests(_InGelSteps, unittest.TestCase):
+    """Decisions 1 and 2 in the session: no endpoint question is open."""
+
+    def test_the_problem_is_recorded_and_the_endpoint_question_opened(self):
+        for label, said in (
+            ("7", "완전히 탈색됐는데 튜브가 터졌어"),
+            ("7", "탈색 완료했어 근데 시료를 흘렸어"),
+            ("9", "흰색이야 근데 튜브가 터졌어"),
+            ("20", "탈수 완료했어 그런데 장비가 멈췄어"),
+        ):
+            with self.subTest(step=label, said=said):
+                session, at, turn_id = self._at(label)
+                plan = _turn(session, said, turn_id)
+                self.assertEqual(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+                self.assertEqual(plan.intent_kind, "observation_with_anomaly")
+                self.assertTrue(plan.reported_anomaly)
+                self.assertFalse(plan.state_changed)
+                self.assertFalse(plan.reported_observation)
+                self.assertEqual(session.current_index, at)
+                self.assertEqual(session.endpoint_observations(), {})
+                pending = session.pending_observation_confirmation
+                self.assertIsNotNone(pending)
+                self.assertEqual(pending.step_index, at)
+                self.assertFalse(pending.accepts_yes_no)
+                self.assertTrue(plan.speech_text.endswith(
+                    RECORDED_REASK[label].split(". ", 1)[1]
+                ))
+                # Before the record answers, nothing is said to be recorded.
+                self.assertNotIn("기록했어요", plan.speech_text)
+
+    def test_then_a_bare_yes_is_asked_again_and_the_endpoint_advances(self):
+        session, at, turn_id = self._at("7")
+        _turn(session, "완전히 탈색됐는데 튜브가 터졌어", turn_id)
+        yes = _turn(session, "네", turn_id + 1)
+        self.assertFalse(yes.state_changed)
+        self.assertEqual(yes.intent_kind, "observation_confirmation_reasked")
+        self.assertEqual(session.current_index, at)
+        done = _turn(session, "완전히 탈색됐어", turn_id + 2)
+        self.assertTrue(done.state_changed)
+        self.assertEqual(done.observation_predicate, "positive")
+        self.assertEqual(session.current_index, at + 1)
+
+
+def _jump_to(harness, listener, label: str) -> None:
+    """Move the live session and its durable record to ``label``."""
+
+    step_1 = harness.fixture.steps[0]
+    index = _step_index(harness.fixture, label)
+    target = harness.fixture.steps[index]
+    store = initialize_workspace_store(WorkspaceSettings(True, harness.workspace_dir))
+    try:
+        jumped = store.record_experiment_progress(
+            harness.principal, listener.session_id,
+            expected_version=listener.experiment_state_version,
+            expected_voice_connection_id=listener.voice_connection_id,
+            event_key=f"test-setup-step-{label}",
+            event_type="step_advanced",
+            step_id=step_1.step_id, step_label=step_1.source_label,
+            next_step_id=target.step_id,
+            next_step_label=target.source_label,
+            payload={"authority": "test_setup"},
+        )
+    finally:
+        store.close()
+    listener.experiment_state_version = jumped["version"]
+    listener.curated_protocol_session.current_index = index
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
+    """Decisions 1 and 2 over the WebSocket, workspace and report on."""
+
+    def _problem_at_step_7(self, *, asked: bool, extra_patches=()):
+        step_7_index = _step_index(self.fixture, "7")
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            _jump_to(self, listener, "7")
+            if asked:
+                await say(19, "7단계 완료했어")
+            await say(20, "완전히 탈색됐는데 튜브가 터졌어")
+            seen["after"] = self._snapshot(listener)
+            seen["held"] = (
+                listener.curated_protocol_session.pending_observation_confirmation
+            )
+            seen["report_id"] = listener.experiment_report_id
+
+        socket, _ = self._session(scenario, *extra_patches)
+        return socket, seen, step_7_index
+
+    def test_the_question_asked_again_is_heard_and_one_problem_recorded(self):
+        for asked in (True, False):
+            with self.subTest(asked=asked):
+                self._fresh_tenant()
+                socket, seen, at = self._problem_at_step_7(asked=asked)
+                self.assertEqual(self._errors(socket), [])
+                decision = socket.for_turn(20, "turn.route_decision")[-1]
+                self.assertEqual(decision["action"], "report_anomaly")
+                self.assertFalse(decision["state_mutation"])
+                self.assertEqual(socket.reply(20), RECORDED_REASK["7"])
+                self.assertEqual(
+                    socket.for_turn(20, "reply.delta")[-1]["speech_text"],
+                    RECORDED_REASK["7"],
+                )
+                done = socket.for_turn(20, "turn.done")
+                self.assertEqual(len(done), 1)
+                self.assertEqual(done[0]["segment_count"], 1)
+                self.assertEqual(seen["after"]["step_index"], at)
+                self.assertEqual(seen["after"]["durable"]["current_step_label"], "7")
+                self.assertIsNotNone(seen["held"])
+                self.assertFalse(seen["held"].accepts_yes_no)
+                report = ExperimentReportStore(self.report_db).get_report(
+                    seen["report_id"]
+                )
+                anomalies = [
+                    event for event in report["events"]
+                    if event["event_type"] == "anomaly"
+                ]
+                self.assertEqual(len(anomalies), 1)
+                self.assertEqual(
+                    anomalies[0]["step_id"], self.fixture.steps[at].step_id
+                )
+                self.assertIn("튜브가 터졌어", anomalies[0]["user_wording"])
+                self.assertFalse([
+                    event for event in report["events"]
+                    if event["event_type"] == "step_completed"
+                    and event["step_id"] == self.fixture.steps[at].step_id
+                ])
+
+    def test_a_failed_record_says_so_and_not_recorded(self):
+        real = server_module._record_experiment_report_plan
+
+        def refuse_anomaly(session, curated, plan, **kwargs):
+            if plan.action is CuratedProtocolAction.REPORT_ANOMALY:
+                raise RuntimeError("synthetic report failure")
+            return real(session, curated, plan, **kwargs)
+
+        # With the session timeline on, its own acknowledgement follows a
+        # failed report write (server.py, unchanged here); with it off, the
+        # failure is what is said.
+        step_7_index = _step_index(self.fixture, "7")
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            listener.curated_protocol_session.current_index = step_7_index
+            await say(20, "완전히 탈색됐는데 튜브가 터졌어")
+            seen["step_index"] = listener.curated_protocol_session.current_index
+
+        socket, _ = self._session(
+            scenario,
+            patch.dict(
+                "os.environ",
+                {"VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false"},
+                clear=False,
+            ),
+            patch(
+                "voiney_lab.server._record_experiment_report_plan",
+                side_effect=refuse_anomaly,
+            ),
+        )
+        reply = socket.reply(20)
+        self.assertIn(RECORD_FAILED, reply)
+        self.assertNotIn("기록했어요", reply)
+        self.assertEqual(seen["step_index"], step_7_index)
 
 
 if __name__ == "__main__":

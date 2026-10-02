@@ -7685,7 +7685,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                                 if "What kind of color change" in (plan.speech_text or "") else
                                 ""
                             )
-                            if turn_language=="ko":
+                            if plan.intent_kind=="observation_with_anomaly":
+                                # The endpoint was reported with a problem: the
+                                # endpoint question asked again is what is heard.
+                                acknowledged=curated.observation_anomaly_reply(
+                                    plan.step_label,turn_language,recorded=True)
+                            elif turn_language=="ko":
                                 acknowledged=(
                                     f"말씀하신 이상 사항을 현재 {plan.step_label}단계 실험 기록에 남겼습니다. "
                                     "프로토콜 상태는 변경하지 않았습니다."

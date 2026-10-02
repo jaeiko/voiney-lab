@@ -8086,6 +8086,43 @@ class CuratedProtocolSession:
         )
         return stated, page if isinstance(page, int) else None, sidecar
 
+    def observation_anomaly_reply(
+        self, step_label: str | None, language: str, *, recorded: bool
+    ) -> str:
+        """The short reply to an endpoint reported with a problem.
+
+        ``recorded`` only once the experiment record took the problem: the
+        server says it after the write succeeded, and this session, which
+        cannot know, says the problem was taken. Either way the endpoint is
+        asked for again, in that step's own words, so it is heard even where
+        the server replaces the rest of the reply.
+        """
+
+        if language == "en":
+            endpoint = {
+                "7": "Once destaining is complete",
+                "9": "Once the gel looks white and dry",
+                "20": "Once the gel looks white and dry",
+            }.get(step_label or "", "Once the endpoint is reached")
+            opening = (
+                "I recorded the issue." if recorded
+                else "I took the issue to record."
+            )
+            return f"{opening} {endpoint}, please tell me once more."
+        if language == "vi":
+            opening = (
+                "Tôi đã ghi vấn đề." if recorded
+                else "Tôi đã nhận vấn đề để ghi."
+            )
+            return f"{opening} Khi đạt điểm kết thúc, vui lòng nói lại một lần nữa."
+        endpoint = {
+            "7": "탈색이 끝났으면",
+            "9": "젤이 하얗게 말랐으면",
+            "20": "젤이 하얗게 말랐으면",
+        }.get(step_label or "", "종점에 도달했으면")
+        opening = "이상 사항은 기록했어요." if recorded else "이상 사항 기록 요청을 받았어요."
+        return f"{opening} {endpoint} 한 번 더 말씀해 주세요."
+
     def _endpoint_answer_record(
         self, index: int, transcript: str, language: str
     ) -> str:
@@ -8730,7 +8767,26 @@ class CuratedProtocolSession:
             observed = _observation_predicate(
                 self.fixture.steps[self.current_index].source_label, transcript
             )
-            if observed is not None:
+            if observed == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+                normalized_confirmation
+            ):
+                # The endpoint with a problem, said with no question open, is
+                # taken as it is under one: the problem is recorded, nothing
+                # moves, and the endpoint question is opened -- without taking
+                # a bare yes -- once the turn is planned (below). It used to
+                # advance on the endpoint and drop the problem (lane O §8-2).
+                intent = CuratedControlIntent(
+                    intent_kind="observation_with_anomaly",
+                    action=CuratedProtocolAction.REPORT_ANOMALY,
+                    question_kind="anomaly",
+                    target_step="authoritative_current_step",
+                    confidence_source="server_observation_reading",
+                    language=language,
+                    reported_anomaly=True,
+                    anomaly_category=_anomaly_category(normalized_confirmation),
+                    normalized_transcript=normalized_confirmation,
+                )
+            elif observed is not None:
                 intent = replace(
                     intent,
                     action=CuratedProtocolAction.NEXT,
@@ -9436,27 +9492,11 @@ class CuratedProtocolSession:
                     "notes": [transcript.strip()[:800]],
                 }
                 if intent.intent_kind == "observation_with_anomaly":
-                    response = {
-                        "en": (
-                            f"I recognized an issue to record against step {step.source_label}. "
-                            "I will confirm only after the experiment record accepts it. "
-                            "Because of it, the endpoint is not recorded yet and the step "
-                            "has not changed. Please tell me once more whether the endpoint "
-                            "has been reached."
-                        ),
-                        "vi": (
-                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
-                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công. "
-                            "Vì vậy điểm kết thúc chưa được ghi và bước chưa thay đổi. "
-                            "Vui lòng cho biết lại điểm kết thúc đã đạt chưa."
-                        ),
-                        "ko": (
-                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
-                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다. "
-                            "이상 사항이 있어 종점 관찰은 아직 기록하지 않았고 단계도 그대로입니다. "
-                            "종점에 도달했는지 관찰 결과를 한 번 더 말씀해 주세요."
-                        ),
-                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+                    # Short, as it is spoken; nothing is said to be recorded
+                    # before the record has answered.
+                    response = self.observation_anomaly_reply(
+                        step.source_label, language, recorded=False
+                    )
                 elif category == "protocol_block":
                     response = {
                         "en": (
@@ -11203,6 +11243,29 @@ class CuratedProtocolSession:
                     self.current_step_semantic_frame().observation_predicate_id
                     or f"candidate_a_step_{step.source_label}_endpoint"
                 ),
+            )
+        elif (
+            plan.action is CuratedProtocolAction.REPORT_ANOMALY
+            and plan.intent_kind == "observation_with_anomaly"
+            and self._pending_observation_confirmation is None
+        ):
+            # The endpoint was reported with a problem and no question was
+            # open: the question is opened now, as one asked again after a
+            # problem is, so a bare yes does not answer it.
+            step = self.fixture.steps[self.current_index]
+            self._pending_observation_confirmation = PendingObservationConfirmation(
+                configuration_id=configuration_id,
+                step_id=step.step_id,
+                step_index=self.current_index,
+                step_label=step.source_label,
+                workflow_revision=self._revision,
+                requested_turn_id=turn_id,
+                requested_generation=generation,
+                predicate_id=(
+                    self.current_step_semantic_frame().observation_predicate_id
+                    or f"candidate_a_step_{step.source_label}_endpoint"
+                ),
+                accepts_yes_no=False,
             )
         elif plan.action in {
             CuratedProtocolAction.START,
