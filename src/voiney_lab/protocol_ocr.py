@@ -38,6 +38,14 @@ class OcrPage:
     source_page_number: int
     text: str
     confidence: float | None = None
+    #: The engine that produced this page's text, and its version. Optional:
+    #: a provider that reads every page with one engine names it only once,
+    #: on the result.
+    provider: str | None = None
+    provider_version: str | None = None
+    #: True when two engines read this page and their numbers or units
+    #: differ. A mark for the reviewer; it blocks nothing.
+    numeric_review_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,11 +122,22 @@ def validate_ocr_result(
             or not 0 <= float(confidence) <= 1
         ):
             raise ProtocolOcrResultError("OCR page confidence is invalid.")
+        for identity in (page.provider, page.provider_version):
+            if identity is not None and (
+                not isinstance(identity, str)
+                or _SAFE_PROVIDER.fullmatch(identity) is None
+            ):
+                raise ProtocolOcrResultError("OCR page provider identity is invalid.")
+        if not isinstance(page.numeric_review_required, bool):
+            raise ProtocolOcrResultError("OCR page review mark is invalid.")
         canonical_pages.append(
             OcrPage(
                 source_page_number=page.source_page_number,
                 text=page.text,
                 confidence=float(confidence) if confidence is not None else None,
+                provider=page.provider,
+                provider_version=page.provider_version,
+                numeric_review_required=page.numeric_review_required,
             )
         )
     if non_empty == 0:
@@ -155,6 +174,9 @@ def ocr_result_payload(result: OcrResult) -> dict[str, object]:
             "text": page.text,
             "confidence": page.confidence,
             "text_sha256": hashlib.sha256(page.text.encode("utf-8")).hexdigest(),
+            "provider": page.provider,
+            "provider_version": page.provider_version,
+            "numeric_review_required": page.numeric_review_required,
         }
         for page in result.pages
     ]
