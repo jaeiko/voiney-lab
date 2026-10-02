@@ -94,7 +94,7 @@ class PipelineReachesAssemblyTests(unittest.TestCase):
 
     def test_extraction_and_admission(self) -> None:
         self.assertEqual(self.extraction.page_count, 9)
-        self.assertTrue(self.extraction.text_cross_checked)
+        self.assertEqual(self.extraction.ocr_required_page_numbers, ())
         # Five since STEP 26, not three. The planner used to bound a chunk by
         # source bytes as a proxy for how many claims it would owe, and
         # measurement said the proxy was wrong: this document's chunk 0 held

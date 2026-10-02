@@ -784,7 +784,6 @@ class NoParserCorruptionInSourcesTests(unittest.TestCase):
     # Tests may embed a corrupted sample, but only to prove it is detected or
     # repaired.  Any other test file gaining one is a mistake.
     TEST_FILES_ALLOWED = {
-        "tests/test_extraction_cross_check.py",  # asserts the census detects it
         "tests/test_frontend.py",  # asserts the browser normalizer repairs it
     }
 

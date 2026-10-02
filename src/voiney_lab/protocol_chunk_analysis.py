@@ -36,7 +36,6 @@ from voiney_lab.protocol_claim_analysis import (
 )
 from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
-    TextVerification,
     ProtocolPdfPage,
 )
 
@@ -304,15 +303,6 @@ def plan_protocol_chunks(
     ):
         raise ProtocolChunkAdmissionError(
             "Protocol extraction is incomplete."
-        )
-    # A proven disagreement between two extraction engines means the page text
-    # is not the document.  Nothing derived from it may become canonical
-    # evidence, so admission fails closed here rather than downstream.  An
-    # unavailable comparator is a different case: it is unknown rather than
-    # wrong, so it is carried as a readiness reason a reviewer must clear.
-    if extraction.text_verification is TextVerification.MISMATCH:
-        raise ProtocolChunkAdmissionError(
-            "Protocol source text failed independent extraction cross-check."
         )
     if extraction.non_empty_page_count == 0:
         raise ProtocolChunkAdmissionError(

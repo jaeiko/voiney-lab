@@ -23,13 +23,15 @@ dependencies = [
   "uvicorn[standard]",
   "openai",
   "PyJWT[crypto]>=2.10,<3",
-  # pypdf: PDF structure, metadata, encryption detection, and the error
-  # taxonomy below.  Its text extractor is NOT used -- see
-  # experiment_protocol_pdf.py.  BSD-3-Clause.
+  # pypdf: used by curated_protocol.py (development fixture page check) and by
+  # the tests' PDF fixture writers.  Protocol PDF reading no longer uses it.
+  # BSD-3-Clause.
   "pypdf==6.12.0",
-  # pypdfium2: primary page-text extractor.  Binding is Apache-2.0 OR
-  # BSD-3-Clause; the bundled PDFium engine is BSD-3-Clause.
-  "pypdfium2==5.13.0",
+  # pymupdf: the one PDF engine -- page text, blocks, metadata, encryption,
+  # page count, and page images for OCR -- used only through
+  # pdf_text_engine.py.  AGPL-3.0, accepted on 2026-10-02 on the condition
+  # that it stays behind that one module so it can be replaced.
+  "pymupdf==1.28.2",
   "python-dotenv",
   "requests",
   "webrtcvad-wheels==2.0.14",
