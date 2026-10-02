@@ -2187,6 +2187,24 @@ def _frame_negated(key: str, match: re.Match[str]) -> bool:
     )
 
 
+def _endpoint_report_reading(key: str) -> str:
+    """How an utterance holding an endpoint phrase reads as a whole.
+
+    A negation anywhere but an opening "아니" correction makes it a negative,
+    so "탈색이 안 됐어 … 완전히 탈색됐어" is never read as the endpoint
+    reached; and "아직" beside it ("아직 탈색 됐어", an "안" the transcript
+    may have dropped), or a wish or condition ("완전히 탈색되면"), says
+    neither, so it is asked again (``"unread"``).
+    """
+
+    said = _LEADING_CORRECTION.sub("", key)
+    if _POST_FRAME_NEGATION.search(said):
+        return "negative"
+    if re.search(r"(?<![가-힣])아직", said) or _ENDPOINT_CONDITION.search(said):
+        return "unread"
+    return "positive"
+
+
 def _observation_predicate(step_label: str, transcript: str) -> str | None:
     """Classify only explicit source-defined endpoint observations.
 
@@ -2225,24 +2243,16 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
             r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
             key,
-        ):
-            return "negative" if _frame_negated(key, positive) else "positive"
-        if _STEP_7_SPOKEN_ENDPOINT.search(key):
-            # Stricter than the frames above: a negation anywhere but an
-            # opening "아니" correction makes it a negative, so "탈색이 안
-            # 됐어 … 탈색됐어" is never read as the endpoint reached; and
-            # "아직" beside it ("아직 탈색 됐어", an "안" the transcript may
-            # have dropped), or a wish or condition, says neither, so it is
-            # asked again.
-            said = _LEADING_CORRECTION.sub("", key)
-            if _POST_FRAME_NEGATION.search(said):
+        ) or _STEP_7_SPOKEN_ENDPOINT.search(key):
+            # The negation right after the frame is the reading these frames
+            # always had; the whole-utterance reading below was added for the
+            # spoken wordings and then given to these too, since a negation
+            # before the frame ("탈색이 안 됐어 완전히 탈색됐어"), "아직" or a
+            # wish ("완전히 탈색되면") passed them as the endpoint reached.
+            if _frame_negated(key, positive):
                 return "negative"
-            if (
-                re.search(r"(?<![가-힣])아직", said)
-                or _ENDPOINT_CONDITION.search(said)
-            ):
-                return None
-            return "positive"
+            reading = _endpoint_report_reading(key)
+            return None if reading == "unread" else reading
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
