@@ -2100,6 +2100,13 @@ _STEP_7_SPOKEN_ENDPOINT = re.compile(
     r"탈색으로\s*(?:바뀌었|바꼈|변했)" + _STATEMENT_END
     + r"|탈색(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])"
     + r"|탈색이?\s*(?:됐|되었)" + _STATEMENT_END
+    # Pilot log B and C: "탈색돼 있어", "탈색이 완료됐어"; and the bare
+    # "탈색 완료", which is not followed by what would make it a time or a
+    # plan ("탈색 완료 전", "탈색 완료하면", "탈색 완료 시간").
+    + r"|탈색이?\s*(?:돼|되어)\s*있" + _STATEMENT_END
+    + r"|탈색이?\s*완료\s*(?:됐|되었)" + _STATEMENT_END
+    + r"|탈색\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
+    r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))"
 )
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")

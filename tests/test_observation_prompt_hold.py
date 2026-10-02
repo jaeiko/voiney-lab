@@ -13,8 +13,10 @@ fact that nothing was recorded. An explicit question gets its read-only answer
 and keeps the prompt; control commands go through as before.
 
 Since lane M the step-7 reader knows "탈색이 됐어" and "탈색된 상태야", the
-words A and D used, so those two are now read as the endpoint reached -- what
-the person meant. B and C are still not read, and are still held.
+words A and D used, and since lane O "탈색돼 있어" and "탈색이 완료됐어", the
+words B and C used, so all four are now read as the endpoint reached -- what
+the person meant. Replies the reader still cannot place ("색이 좀 변했어",
+"결과 나왔어") take B and C's place in showing that the prompt holds them.
 
 Turns go through ``route_curated_runtime_turn``, the boundary the Cascade
 runtime calls. In-gel's repeat steps need the externally licensed PDF, so the
@@ -49,6 +51,9 @@ REPORT_A = "어, 젤이 완전히 이제 젤 밴드가 투명해졌어. 탈, 아
 REPORT_B = "어, 결과는 탈색, 탈색돼 있어."
 REPORT_C = "아니, 아, 7단계로 완료했다고. 탈색이 완료됐어."
 REPORT_D = "응, 그 관찰 결과는 젤 밴드가 탈색된 상태야. 탈색이 되어 있어."
+#: Replies to the prompt that say something changed or happened, but not
+#: whether the endpoint was reached.
+UNREAD_REPLIES = ("색이 좀 변했어", "결과 나왔어")
 
 #: Routes that answer a question -- and for RELATED_QUESTION, the one the
 #: server attaches a reference or web search to.
@@ -100,13 +105,27 @@ class ObservationPromptHoldTests(unittest.TestCase):
         self.assertNotIn(a.action, QUESTION_ROUTES)
         self.assertEqual(session.current_index, opening + 1)
 
-        # B, C and D answer an open prompt.
-        session = self._session_at("7")
-        opened = self._turn(session, "현재 단계를 완료했어요", 1)
-        self.assertEqual(opened.intent_kind, "observation_confirmation_required")
-        self.assertIsNotNone(session.pending_observation_confirmation)
+        # B and C answer an open prompt, and report the endpoint too.
+        for reply in (REPORT_B, REPORT_C):
+            with self.subTest(reply=reply):
+                session = self._prompted_at("7")
+                self.assertEqual(
+                    probe_curated_semantic_fallback(
+                        session, reply, language="ko"
+                    ).reason_code,
+                    "pending_gate_owns_turn",
+                )
+                plan = self._turn(session, reply, 2)
+                self.assertEqual(plan.intent_kind, "pending_observation_confirmed")
+                self.assertEqual(plan.observation_predicate, "positive")
+                self.assertNotIn(plan.action, QUESTION_ROUTES)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.current_index, opening + 1)
 
-        for turn_id, reply in ((2, REPORT_B), (3, REPORT_C)):
+        # A reply the reader cannot place is held and asked again; D then
+        # answers the prompt.
+        session = self._prompted_at("7")
+        for turn_id, reply in enumerate(UNREAD_REPLIES, start=2):
             with self.subTest(reply=reply):
                 # The model is not consulted while the prompt owns the turn.
                 self.assertEqual(

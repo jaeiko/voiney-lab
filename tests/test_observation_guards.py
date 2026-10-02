@@ -135,5 +135,73 @@ class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
                 )
 
 
+#: The pilot log's B and C, and the wordings they stand for.
+STEP_7_WORDINGS = (
+    "어, 결과는 탈색, 탈색돼 있어.",
+    "아니, 아, 7단계로 완료했다고. 탈색이 완료됐어.",
+    "탈색돼 있어",
+    "탈색돼 있어요",
+    "탈색이 되어 있어",
+    "탈색이 되어 있습니다",
+    "탈색되어 있네",
+    "탈색이 완료됐어",
+    "탈색 완료됐어요",
+    "탈색이 완료되었습니다",
+    "탈색 완료",
+    "탈색 완료야",
+    "탈색 완료입니다",
+    "지금 탈색 완료.",
+)
+
+
+class StepSevenSpokenWordingsTests(unittest.TestCase):
+    def test_the_pilot_wordings_report_the_endpoint(self):
+        for wording in STEP_7_WORDINGS:
+            with self.subTest(wording=wording):
+                self.assertEqual(_observation_predicate("7", wording), "positive")
+
+    def test_they_are_read_as_a_whole_like_the_others(self):
+        for frame in ("탈색돼 있어", "탈색이 완료됐어", "탈색 완료"):
+            for wording in _beside(frame)["negative"] + ("탈색 완료 아니야",):
+                with self.subTest(wording=wording):
+                    self.assertEqual(_observation_predicate("7", wording), "negative")
+            for wording in _beside(frame)["unread"]:
+                with self.subTest(wording=wording):
+                    if wording == "아직 탈색돼 있어":
+                        # Lane E's "아직 … 탈색 … 있어" (still stained) reads
+                        # this first, as a negative.
+                        self.assertEqual(
+                            _observation_predicate("7", wording), "negative"
+                        )
+                    else:
+                        self.assertIsNone(_observation_predicate("7", wording))
+        # A negation inside the wording leaves no wording to read: asked again.
+        self.assertIsNone(_observation_predicate("7", "탈색이 완료 안 됐어"))
+
+    def test_a_plan_a_time_or_a_question_about_it_is_no_report(self):
+        for wording in (
+            "탈색 완료 전이야",
+            "탈색 완료하면 다음 단계야",
+            "탈색 완료 시간은 얼마야",
+            "탈색 완료 여부",
+            "탈색 완료 기준이 뭐야",
+            "탈색이 완료됐으면 좋겠어",
+            "탈색이 완료되면",
+            "탈색 완료됐어?",
+            "탈색돼 있어?",
+            "탈색이 완료됐는지 모르겠어",
+            "탈색돼 있는 것 같아",
+            "탈색이 완료될 때까지 반복합니다",
+        ):
+            with self.subTest(wording=wording):
+                self.assertNotEqual(_observation_predicate("7", wording), "positive")
+
+    def test_they_are_step_7_only(self):
+        for label in ("6", "8", "9", "20"):
+            for wording in ("탈색돼 있어", "탈색이 완료됐어", "탈색 완료"):
+                with self.subTest(step=label, wording=wording):
+                    self.assertIsNone(_observation_predicate(label, wording))
+
+
 if __name__ == "__main__":
     unittest.main()
