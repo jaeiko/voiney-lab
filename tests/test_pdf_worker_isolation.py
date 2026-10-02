@@ -24,7 +24,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import voiney_lab.experiment_protocol_pdf as pdf_module
 import voiney_lab.pdf_text_engine as engine_module
 from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfMalformedError,

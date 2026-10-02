@@ -17,7 +17,7 @@ from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
     # Retired; re-exported only because experiment_protocol_store decodes
     # analyses stored before 2026-10-02 that carry it. Nothing produces it.
-    TextVerification,
+    TextVerification,  # noqa: F401
 )
 
 

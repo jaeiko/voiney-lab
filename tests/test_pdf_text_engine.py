@@ -26,7 +26,6 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 import voiney_lab.experiment_protocol_pdf as pdf_module
 import voiney_lab.pdf_text_engine as engine_module
-from voiney_lab import experiment_protocol as domain
 from voiney_lab.experiment_protocol_pdf import (
     MAX_PROTOCOL_PDF_BYTES,
     OCR_REASON_NO_TEXT,
