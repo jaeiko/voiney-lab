@@ -2496,7 +2496,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(result["status"],"error")
         reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("직접 답변",reply["text"])
+        self.assertIn("HPLC water",reply["text"])
         self.assertIn("HPLC water",reply["primary_text"])
         self.assertNotIn("Catalog #",reply["text"])
         supplement=next(
