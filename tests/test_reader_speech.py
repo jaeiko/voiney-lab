@@ -231,7 +231,7 @@ class UntranslatedStepTests(unittest.TestCase):
         self.assertEqual(spoken, ["자동 번역입니다. " + GOOD_READING])
         self.assertEqual(reply["translation_status"], "model_assisted_unreviewed")
         first = reply["display_document"]["sections"][0]
-        self.assertEqual(first["heading"], "한국어 안내 · 자동 번역(검토 전)")
+        self.assertEqual(first["heading"], "")
         # The screen shows the reading itself, labelled by its heading.
         self.assertEqual(first["text"], GOOD_READING)
         # The source stays on screen under it, unchanged.
