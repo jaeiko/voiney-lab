@@ -176,13 +176,32 @@ accept/reject decision at `POST /api/protocols/{id}/ocr/review`. Acceptance only
 makes the reviewed text eligible for a separate structured-analysis request. It
 does not start analysis, approve a revision, or make anything executable.
 
-No OCR engine is bundled or selected by a client. A deployment that needs scan
-support must inject an adapter as `app.state.protocol_ocr_provider`; without one,
+No OCR engine is selected by a client. At startup the server builds the
+adapter from the environment (`src/voiney_lab/protocol_ocr_providers.py`) and
+injects it as `app.state.protocol_ocr_provider`; an adapter a deployment has
+already injected is kept. Two engines are supported, both over REST with
+`requests`:
+
+| `VOICE_WORKFLOW_AGENT_OCR_PROVIDERS` entry | Engine | Credentials |
+| --- | --- | --- |
+| `clova` | NAVER CLOVA OCR (General, V2), Korean print and handwriting | `VOICE_WORKFLOW_AGENT_CLOVA_OCR_INVOKE_URL` (https), `VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET` (sent as `X-OCR-SECRET`) |
+| `google` | Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, English | `VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY` (sent as `X-Goog-Api-Key`, never in the URL) |
+
+Only the pages the extraction marked `ocr_required` are rendered (PyMuPDF,
+300 dpi PNG, in memory) and sent; the other pages keep their text layer and are
+labelled `pdf-text-layer`. With both engines configured each such page goes to
+both: CLOVA's text is used when Hangul is at least 30% of the letters it read,
+otherwise Google's; if one engine fails or times out the other's text is used;
+if the two read different numbers or units the page carries
+`numeric_review_required` and a warning in the result data, which blocks
+nothing. With one engine configured, that engine is used alone. With none,
 the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
-PDF. The adapter contract is defined in
-`src/voiney_lab/protocol_ocr.py`. This keeps local binaries, cloud OCR
-credentials, and provider choice outside HTTP input and the voice execution
-path.
+PDF. Every page records the engine and version that produced it. Keys,
+secrets and the invoke URL are never logged or returned. These adapters are
+contract-tested against fake transports; neither has been called from this
+repository with real credentials yet. The contract they implement is in
+`src/voiney_lab/protocol_ocr.py`. Credentials and provider choice stay outside
+HTTP input and the voice execution path.
 
 Missing provider configuration is persisted as an actionable failure with retry;
 it is not displayed forever as an unexplained `analysis_required` state.
