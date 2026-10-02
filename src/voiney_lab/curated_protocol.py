@@ -5269,6 +5269,10 @@ class CuratedProtocolSession:
         self._paused_at: float | None = None
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
+        #: Whether this pause's notice was already said aloud. Only the first
+        #: word turned away in a pause is answered by voice; the rest are
+        #: shown only. A new pause starts the count again.
+        self._paused_notice_spoken: bool = False
         self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
@@ -5429,6 +5433,7 @@ class CuratedProtocolSession:
         self._pause_state = "paused"
         self._paused_at = current_time
         self._workflow_status = "paused"
+        self._paused_notice_spoken = False
         return True
 
     def resume_workflow(self, now: float | None = None) -> bool:
@@ -5461,6 +5466,7 @@ class CuratedProtocolSession:
         self._pause_state = "active"
         self._paused_at = None
         self._workflow_status = "active"
+        self._paused_notice_spoken = False
         return True
 
     def _clear_step_timer(self) -> None:
@@ -6998,6 +7004,7 @@ class CuratedProtocolSession:
         self._paused_at = None
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
+        self._paused_notice_spoken = False
         self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
@@ -7084,6 +7091,7 @@ class CuratedProtocolSession:
         self._paused_at = None
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
+        self._paused_notice_spoken = False
         self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
@@ -7302,7 +7310,7 @@ class CuratedProtocolSession:
         dict[str, Any] | None,
         dict[str, Any] | None,
         dict[str, Any],
-        tuple[str, float | None, float, tuple[dict[str, Any], ...]],
+        tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
     ]:
         return (
             self.active,
@@ -7331,6 +7339,7 @@ class CuratedProtocolSession:
                 self._paused_at,
                 self._total_paused_seconds,
                 tuple(dict(interval) for interval in self._pause_intervals),
+                self._paused_notice_spoken,
             ),
         )
 
@@ -7378,8 +7387,14 @@ class CuratedProtocolSession:
                     self._paused_at,
                     self._total_paused_seconds,
                     intervals,
-                ) = checkpoint[21]
+                ) = checkpoint[21][:4]
                 self._pause_intervals = [dict(item) for item in intervals]
+                # Whether the paused notice was said rolls back too: a refused
+                # resume leaves the pause it was said in, so it is not said
+                # again.
+                self._paused_notice_spoken = (
+                    bool(checkpoint[21][4]) if len(checkpoint[21]) >= 5 else False
+                )
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -8860,14 +8875,23 @@ class CuratedProtocolSession:
             CuratedProtocolAction.PAUSE,
         }:
             response = (
-                "현재 실험 안내가 일시정지 상태입니다. '실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+                "현재 실험 안내가 일시정지 상태입니다. '재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
                 if language == "ko" else
                 "Workflow guidance is currently paused. Please say 'resume' or click the resume button to continue."
             )
+            # The first word turned away in a pause is answered aloud, once,
+            # so a researcher who forgot the pause hears why nothing happens;
+            # after that the notice is shown only. Nothing else changes.
+            spoken = "" if self._paused_notice_spoken else (
+                "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+                if language == "ko" else
+                "Guidance is paused right now. Say 'resume' to continue."
+            )
+            self._paused_notice_spoken = True
             return CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,
                 display_text=response,
-                speech_text="",
+                speech_text=spoken,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
@@ -8875,7 +8899,7 @@ class CuratedProtocolSession:
                 state_changed=False,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
-                speech_policy="silent",
+                speech_policy="speak" if spoken else "silent",
             )
 
         if command is CuratedProtocolAction.STOP:
@@ -9087,10 +9111,14 @@ class CuratedProtocolSession:
             # in_progress -> in_progress (2026-10-01 test, "재개해줘").
             # A protocol that has not started has no running record to pause.
             paused = self.pause_workflow() and self.active
+            # The timer is mentioned only when a step timer is running.
+            timer_running = self.timer_status().get("state") == "running"
             response = (
-                "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
+                "일시정지했어요. '재개'라고 하시면 이어서 할게요."
+                + (" 타이머는 실제로는 계속 흐르고 있어요." if timer_running else "")
                 if language == "ko" else
-                "Voice workflow guidance is paused. Any active physical timer continues in the laboratory. When ready, say 'resume protocol'."
+                "Paused. Say 'resume' to continue."
+                + (" The timer is still running in real time." if timer_running else "")
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,

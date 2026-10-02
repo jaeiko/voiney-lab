@@ -41,7 +41,11 @@ from voiney_lab.curated_protocol import (
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 import voiney_lab.server as server_module
-from voiney_lab.workspace_store import WorkspaceSettings, initialize_workspace_store
+from voiney_lab.workspace_store import (
+    WorkspaceConflictError,
+    WorkspaceSettings,
+    initialize_workspace_store,
+)
 
 #: What is said once the record took the problem, per step.
 RECORDED_REASK = {
@@ -51,6 +55,12 @@ RECORDED_REASK = {
 }
 #: The record write failing is answered as before.
 RECORD_FAILED = "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다."
+PAUSED_REPLY = "일시정지했어요. '재개'라고 하시면 이어서 할게요."
+TIMER_RUNS_ON = "타이머는 실제로는 계속 흐르고 있어요."
+PAUSED_SPOKEN = "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+PAUSED_NOTICE = (
+    "현재 실험 안내가 일시정지 상태입니다. '재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+)
 
 
 def _step_index(fixture, label: str) -> int:
@@ -345,6 +355,154 @@ class StepRangeWithoutTranslationTests(unittest.TestCase):
         ])
         for n in (3, 4, 5):
             self.assertIn(f"Label sample tube {n} with the marker.", plan.speech_text)
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class PausedReplyTests(unittest.TestCase):
+    """Decisions 5 and 6 in the session."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
+
+    def _started(self) -> CuratedProtocolSession:
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        _turn(session, "프로토콜 시작해줘", 1)
+        return session
+
+    def test_the_pause_reply_names_resume_and_a_running_timer_only(self):
+        session = self._started()
+        paused = _turn(session, "정지", 2)
+        self.assertEqual(paused.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(paused.speech_text, PAUSED_REPLY)
+        self.assertNotIn(TIMER_RUNS_ON, paused.speech_text)
+
+        session = self._started()
+        session.current_index = _step_index(self.fixture, "3")
+        started, _duration, _message = session.start_timer()
+        self.assertTrue(started)
+        paused = _turn(session, "정지", 2)
+        self.assertEqual(paused.speech_text, f"{PAUSED_REPLY} {TIMER_RUNS_ON}")
+
+    def test_only_the_first_word_in_each_pause_is_spoken(self):
+        session = self._started()
+        _turn(session, "정지", 2)
+        first = _turn(session, "완료했어", 3)
+        self.assertEqual(first.action, CuratedProtocolAction.PAUSE)
+        self.assertFalse(first.state_changed)
+        self.assertEqual(first.speech_policy, "speak")
+        self.assertEqual(first.speech_text, PAUSED_SPOKEN)
+        self.assertEqual(first.display_text, PAUSED_NOTICE)
+        second = _turn(session, "AMBIC가 뭐야?", 4)
+        self.assertEqual(second.speech_policy, "silent")
+        self.assertEqual(second.speech_text, "")
+        self.assertEqual(second.display_text, PAUSED_NOTICE)
+        self.assertEqual(session.current_index, 0)
+        _turn(session, "재개해줘", 5)
+        _turn(session, "정지", 6)
+        again = _turn(session, "완료했어", 7)
+        self.assertEqual(again.speech_policy, "speak")
+        self.assertEqual(again.speech_text, PAUSED_SPOKEN)
+
+    def test_the_spoken_mark_rolls_back_with_the_turn(self):
+        session = self._started()
+        _turn(session, "정지", 2)
+        checkpoint = session._checkpoint()
+        _turn(session, "완료했어", 3)
+        session._restore(checkpoint)
+        self.assertEqual(_turn(session, "완료했어", 3).speech_policy, "speak")
+        checkpoint = session._checkpoint()
+        _turn(session, "재개해줘", 4)
+        session._restore(checkpoint)
+        self.assertEqual(_turn(session, "완료했어", 4).speech_policy, "silent")
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class PausedVoiceTests(VoiceSessionHarness, unittest.TestCase):
+    """Decisions 5 and 6 over the WebSocket, workspace and report on."""
+
+    def _report_events(self, listener) -> int:
+        report_id = listener.experiment_report_id
+        if report_id is None:
+            return 0
+        return len(ExperimentReportStore(self.report_db).get_report(report_id)["events"])
+
+    def _spoken(self, socket, turn_id: int) -> bool:
+        done = socket.for_turn(turn_id, "turn.done")
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["result_kind"], "pause")
+        return done[0]["segment_count"] > 0
+
+    def test_the_first_word_is_spoken_then_silence_until_the_next_pause(self):
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "정지")
+            seen["paused"] = (self._snapshot(listener), self._report_events(listener))
+            await say(3, "완료했어")
+            await say(4, "다음")
+            seen["held"] = (self._snapshot(listener), self._report_events(listener))
+            await say(5, "재개해줘")
+            await say(6, "정지")
+            await say(7, "완료했어")
+            await say(8, "다음")
+
+        socket, _ = self._session(scenario)
+        self.assertEqual(self._errors(socket), [])
+        self.assertEqual(socket.reply(2), PAUSED_REPLY)
+        self.assertTrue(self._spoken(socket, 3))
+        self.assertEqual(socket.for_turn(3, "reply.delta")[-1]["speech_text"], PAUSED_SPOKEN)
+        self.assertEqual(socket.reply(3), PAUSED_NOTICE)
+        self.assertFalse(self._spoken(socket, 4))
+        self.assertEqual(socket.for_turn(4, "reply.delta")[-1]["speech_text"], "")
+        self.assertEqual(socket.reply(4), PAUSED_NOTICE)
+        (paused, paused_events), (held, held_events) = seen["paused"], seen["held"]
+        self.assertEqual(held["step_index"], 0)
+        self.assertEqual(held["pause_state"], "paused")
+        self.assertEqual(held["durable_status"], "paused")
+        self.assertEqual(held["durable"]["completed_steps"], [])
+        self.assertEqual(held["durable"]["version"], paused["durable"]["version"])
+        self.assertEqual(len(held["durable"]["events"]), len(paused["durable"]["events"]))
+        self.assertEqual(held_events, paused_events)
+        # A new pause counts afresh.
+        self.assertTrue(self._spoken(socket, 7))
+        self.assertFalse(self._spoken(socket, 8))
+
+    def test_a_refused_resume_keeps_the_word_already_spoken(self):
+        real_transition = server_module._transition_workspace_experiment
+
+        def refuse_resume(session, *, action, event_key, reason=None):
+            if action == "resume":
+                raise WorkspaceConflictError("synthetic refusal")
+            return real_transition(
+                session, action=action, event_key=event_key, reason=reason
+            )
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "정지")
+            await say(3, "완료했어")
+            await say(4, "재개해줘")
+            await say(5, "완료했어")
+
+        socket, _ = self._session(
+            scenario,
+            patch(
+                "voiney_lab.server._transition_workspace_experiment",
+                side_effect=refuse_resume,
+            ),
+        )
+        self.assertTrue(self._spoken(socket, 3))
+        self.assertIn("실험 세션을 저장하지 못해", socket.reply(4))
+        self.assertFalse(self._spoken(socket, 5))
 
 
 if __name__ == "__main__":
