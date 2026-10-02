@@ -12,6 +12,10 @@ Now the prompt is asked again, at most twice, and then let go with only the
 fact that nothing was recorded. An explicit question gets its read-only answer
 and keeps the prompt; control commands go through as before.
 
+Since lane M the step-7 reader knows "탈색이 됐어" and "탈색된 상태야", the
+words A and D used, so those two are now read as the endpoint reached -- what
+the person meant. B and C are still not read, and are still held.
+
 Turns go through ``route_curated_runtime_turn``, the boundary the Cascade
 runtime calls. In-gel's repeat steps need the externally licensed PDF, so the
 tests skip where it is absent.
@@ -85,12 +89,21 @@ class ObservationPromptHoldTests(unittest.TestCase):
         self.assertIsNotNone(session.pending_observation_confirmation)
         return session
 
-    def test_report_a_to_d_stay_with_the_prompt_and_never_reach_a_term_question(self):
+    def test_report_a_to_d_are_read_or_held_and_never_reach_a_term_question(self):
+        # A, said with no prompt outstanding, reports the endpoint itself.
         session = self._session_at("7")
         opening = session.current_index
-
         a = self._turn(session, REPORT_A, 1)
-        self.assertEqual(a.intent_kind, "observation_confirmation_required")
+        self.assertEqual(a.intent_kind, "direct_positive_observation")
+        self.assertEqual(a.observation_predicate, "positive")
+        self.assertTrue(a.state_changed)
+        self.assertNotIn(a.action, QUESTION_ROUTES)
+        self.assertEqual(session.current_index, opening + 1)
+
+        # B, C and D answer an open prompt.
+        session = self._session_at("7")
+        opened = self._turn(session, "현재 단계를 완료했어요", 1)
+        self.assertEqual(opened.intent_kind, "observation_confirmation_required")
         self.assertIsNotNone(session.pending_observation_confirmation)
 
         for turn_id, reply in ((2, REPORT_B), (3, REPORT_C)):
@@ -107,9 +120,10 @@ class ObservationPromptHoldTests(unittest.TestCase):
                 self.assertNotIn(plan.action, QUESTION_ROUTES)
                 self.assertFalse(plan.state_changed)
                 self.assertIsNotNone(session.pending_observation_confirmation)
+                self.assertEqual(session.current_index, opening)
+                self.assertEqual(session.endpoint_observations(), {})
 
-        # D is the third unread reply: the prompt was asked again twice, so it
-        # is let go, still without a term question or a web search.
+        # D says the endpoint in words the reader knows, after two re-asks.
         self.assertEqual(
             probe_curated_semantic_fallback(
                 session, REPORT_D, language="ko"
@@ -117,13 +131,11 @@ class ObservationPromptHoldTests(unittest.TestCase):
             "pending_gate_owns_turn",
         )
         d = self._turn(session, REPORT_D, 4)
-        self.assertEqual(d.intent_kind, "observation_confirmation_released")
+        self.assertEqual(d.intent_kind, "pending_observation_confirmed")
+        self.assertEqual(d.observation_predicate, "positive")
         self.assertNotIn(d.action, QUESTION_ROUTES)
-        self.assertFalse(d.state_changed)
-        self.assertIsNone(session.pending_observation_confirmation)
-
-        self.assertEqual(session.current_index, opening)
-        self.assertEqual(session.endpoint_observations(), {})
+        self.assertTrue(d.state_changed)
+        self.assertEqual(session.current_index, opening + 1)
 
     def test_the_prompt_is_asked_again_twice_then_let_go_without_a_record(self):
         for label in ("7", "9", "20"):

@@ -1790,6 +1790,10 @@ class PendingObservationConfirmation:
     #: How many times this prompt has been asked again after a reply it could
     #: not read. Bounded by _OBSERVATION_REPROMPT_LIMIT.
     reprompt_count: int = 0
+    #: Whether a bare yes/no answers it. False after an anomaly was recorded
+    #: under it: the last question then was about the problem, so a "네"
+    #: says nothing about the endpoint until the question is asked again.
+    accepts_yes_no: bool = True
 
 
 @dataclass(frozen=True)
@@ -2087,6 +2091,26 @@ _POST_FRAME_NEGATION = re.compile(
     r"|아닌|아니(?!면)"
 )
 _PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
+# How people in the 2026-10-01 voice test said the step-7 endpoint was reached:
+# "탈색으로 바뀌었어", "탈색 상태야", "탈색이 됐어". Each has to end as a
+# statement, so "탈색됐으면 좋겠어" or "탈색으로 바뀌었는지" is not one; the
+# question and hedge guards in _observation_predicate run before this.
+_STATEMENT_END = r"(?:어요|어|습니다|다|네요|네|음)(?=$|[\s.,!~])"
+_STEP_7_SPOKEN_ENDPOINT = re.compile(
+    r"탈색으로\s*(?:바뀌었|바꼈|변했)" + _STATEMENT_END
+    + r"|탈색(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])"
+    + r"|탈색이?\s*(?:됐|되었)" + _STATEMENT_END
+)
+# "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
+_LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
+# A wish or a condition beside it ("탈색되면", "탈색이 됐으면 좋겠어",
+# "바뀌었다면", "될 거야") says what should happen, not what was seen.
+_ENDPOINT_CONDITION = re.compile(
+    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌)으?면"
+    r"|(?:됐|되었|바뀌었|바꼈|변했)다면"
+    r"|(?:되|바뀌|변하)(?:길|기를|도록|려면|기\s*전)"
+    r"|(?:될|바뀔|변할)\s*(?:때|거|것|수)"
+)
 # What an outstanding observation prompt does with a reply it could not read.
 # Control commands go through as before, and so do record/report commands the
 # person issues on their own. A read-only answer keeps the prompt only for an
@@ -2124,6 +2148,19 @@ _OBSERVATION_PROMPT_READ_ONLY = frozenset({
     CuratedProtocolAction.CLARIFY_REFERENCE,
     CuratedProtocolAction.UNSUPPORTED,
 })
+#: While an observation prompt is open, an anomaly is taken only from words
+#: that say something went wrong. The anomaly reader alone also takes a plain
+#: description of a change ("결과는 탈색으로 바뀌었어" matched "결과 … 바뀌"),
+#: which is the observation the prompt asked for, not a problem.
+_OBSERVATION_PROMPT_PROBLEM = re.compile(
+    r"이상(?:해|하(?!지\s*않)|한|했|함|\s*(?:상황|현상|발생|사항|있|생겼))|뭔가\s*이상"
+    r"|문제(?!(?:\s*(?:가|는|도))?\s*(?:전혀\s*)?(?:없|안\s*(?:돼|되)))"
+    r"|(?:예상|생각)(?:과|이랑|하고|했던\s*(?:것|거)(?:과|랑)?)\s*(?:달라|다르|다른|틀려)"
+    r"|잘못|실수"
+    r"|터졌|흘렸|쏟았|쏟아졌|깨졌|부서졌|금이\s*갔|튀었|누출|새고\s*있|샜"
+    r"|오염|고장|멈췄"
+    r"|\b(?:wrong|problem|issue|anomal\w*|abnormal|unexpected\w*|spill\w*|broke\w*|leak\w*|contaminat\w*)\b"
+)
 #: Times an observation prompt is asked again before it is let go.
 _OBSERVATION_REPROMPT_LIMIT = 2
 #: Asking to hear the observation question again ("다시 말해줘"). It is not
@@ -2190,6 +2227,22 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative" if _frame_negated(key, positive) else "positive"
+        if _STEP_7_SPOKEN_ENDPOINT.search(key):
+            # Stricter than the frames above: a negation anywhere but an
+            # opening "아니" correction makes it a negative, so "탈색이 안
+            # 됐어 … 탈색됐어" is never read as the endpoint reached; and
+            # "아직" beside it ("아직 탈색 됐어", an "안" the transcript may
+            # have dropped), or a wish or condition, says neither, so it is
+            # asked again.
+            said = _LEADING_CORRECTION.sub("", key)
+            if _POST_FRAME_NEGATION.search(said):
+                return "negative"
+            if (
+                re.search(r"(?<![가-힣])아직", said)
+                or _ENDPOINT_CONDITION.search(said)
+            ):
+                return None
+            return "positive"
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
@@ -7211,6 +7264,8 @@ class CuratedProtocolSession:
         float | None,
         dict[str, Any] | None,
         dict[str, Any] | None,
+        dict[str, Any],
+        tuple[str, float | None, float, tuple[dict[str, Any], ...]],
     ]:
         return (
             self.active,
@@ -7234,6 +7289,12 @@ class CuratedProtocolSession:
             self._pending_anomaly,
             self._pending_note_capture,
             dict(self._endpoint_observations),
+            (
+                self._pause_state,
+                self._paused_at,
+                self._total_paused_seconds,
+                tuple(dict(interval) for interval in self._pause_intervals),
+            ),
         )
 
     def _restore(
@@ -7270,6 +7331,18 @@ class CuratedProtocolSession:
             # nothing durable behind it, which is the hole this closes.
             if len(checkpoint) >= 21:
                 self._endpoint_observations = dict(checkpoint[20])
+            # The pause itself rolls back with the workflow status. Restoring
+            # the status alone left a refused voice resume "paused" by status
+            # but not by pause state, so the paused guard stopped catching
+            # turns and "완료했어" got the scope reminder (2026-10-01 test).
+            if len(checkpoint) >= 22:
+                (
+                    self._pause_state,
+                    self._paused_at,
+                    self._total_paused_seconds,
+                    intervals,
+                ) = checkpoint[21]
+                self._pause_intervals = [dict(item) for item in intervals]
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -8028,7 +8101,35 @@ class CuratedProtocolSession:
         let go with no observation recorded.
         """
 
-        if (
+        if routed.action is CuratedProtocolAction.REPORT_ANOMALY:
+            if _OBSERVATION_PROMPT_PROBLEM.search(normalized_transcript):
+                # A problem is recorded, and the endpoint is still owed: the
+                # question stays open. Recording it used to let it go, so the
+                # next description had nothing to answer (2026-10-01 test).
+                self._pending_observation_confirmation = replace(
+                    held, requested_turn_id=turn_id,
+                    requested_generation=generation, accepts_yes_no=False,
+                )
+                return routed
+            if not held.accepts_yes_no and isinstance(self._pending_anomaly, dict):
+                # The problem just recorded under this question was answered
+                # with "어떤 종류의 색 변화를 보셨나요?"; a change described
+                # now answers that, and is added to it rather than asked past.
+                self._pending_observation_confirmation = replace(
+                    held, requested_turn_id=turn_id,
+                    requested_generation=generation, accepts_yes_no=False,
+                )
+                return replace(
+                    routed,
+                    intent_kind="enrich_pending_anomaly",
+                    anomaly_category=str(
+                        self._pending_anomaly.get("category") or "protocol_block"
+                    ),
+                    normalized_transcript=_utterance_key(transcript),
+                )
+            # Otherwise a change described without a problem is an answer
+            # this reader could not place, not an anomaly: it is asked again.
+        elif (
             routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
             or self._names_another_step(routed)
         ):
@@ -8038,6 +8139,7 @@ class CuratedProtocolSession:
             # of times it was asked again stays where it was.
             self._pending_observation_confirmation = replace(
                 held, requested_turn_id=turn_id, requested_generation=generation,
+                accepts_yes_no=True,
             )
             return CuratedControlIntent(
                 intent_kind="observation_confirmation_repeated",
@@ -8063,6 +8165,7 @@ class CuratedProtocolSession:
                 requested_turn_id=turn_id,
                 requested_generation=generation,
                 reprompt_count=held.reprompt_count + 1,
+                accepts_yes_no=True,
             )
             return CuratedControlIntent(
                 intent_kind="observation_confirmation_reasked",
@@ -8332,7 +8435,7 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
-        elif observation_pending_valid and (
+        elif observation_pending_valid and observation_pending.accepts_yes_no and (
             observation_reply := _observation_binary_reply(transcript)
         ) is not None:
             self._pending_observation_confirmation = None
@@ -8408,6 +8511,14 @@ class CuratedProtocolSession:
                 and self.active
                 and _utterance_looks_like_anomaly_follow_up(transcript)
             ):
+                if observation_hold is not None:
+                    # Detail added to a problem recorded under an open
+                    # endpoint question leaves that question open, still
+                    # without taking a bare yes.
+                    self._pending_observation_confirmation = replace(
+                        observation_hold, requested_turn_id=turn_id,
+                        requested_generation=generation, accepts_yes_no=False,
+                    )
                 observation_hold = None
                 intent = CuratedControlIntent(
                     intent_kind="enrich_pending_anomaly",
@@ -8598,6 +8709,26 @@ class CuratedProtocolSession:
                 confidence=None,
                 confidence_source="provider_metadata",
                 language=language,
+            )
+        if (
+            self._pause_state == "paused"
+            and intent.action is CuratedProtocolAction.START
+            and any(
+                pattern.search(intent.normalized_transcript or "")
+                for pattern in _RESUME_PATTERNS
+            )
+        ):
+            # "재개", "프로토콜 재개" and "resume" are in the workflow-command
+            # table as START, which is looked up before the resume patterns
+            # that also claim them. While paused, START is turned away by the
+            # paused guard below -- silently -- so a bare "재개" got no answer
+            # where "재개해줘" resumed (2026-10-01 test). Paused, they resume.
+            intent = replace(
+                intent,
+                intent_kind="resume_workflow",
+                action=CuratedProtocolAction.RESUME,
+                requested_transition=None,
+                requested_followup=None,
             )
         command = intent.action
         steps = self.fixture.steps
@@ -8832,7 +8963,13 @@ class CuratedProtocolSession:
                 question_kind="agent_meta",
             )
         elif command is CuratedProtocolAction.PAUSE:
-            self.pause_workflow()
+            # A pause the running protocol actually took is a state change, as
+            # the bench button's is, so the server mirrors it into the durable
+            # experiment record. Reported as unchanged, the record stayed
+            # in_progress and the voice resume that followed was refused as
+            # in_progress -> in_progress (2026-10-01 test, "재개해줘").
+            # A protocol that has not started has no running record to pause.
+            paused = self.pause_workflow() and self.active
             response = (
                 "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
                 if language == "ko" else
@@ -8846,12 +8983,17 @@ class CuratedProtocolSession:
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
                 final_step=self.active and self.current_index == len(steps) - 1,
-                state_changed=False,
+                state_changed=paused,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
             )
         elif command is CuratedProtocolAction.RESUME:
-            self.resume_workflow()
+            # A resume changes state only when it lifts a pause or starts a
+            # protocol that was not running. "계속 진행" mid-step used to
+            # report a change anyway, and the server's resume mirror was then
+            # refused by a record that was never paused.
+            was_active = self.active
+            resumed = self.resume_workflow() or not was_active
             step = steps[self.current_index]
             timer_info = self.timer_status()
             timer_suffix = ""
@@ -8881,7 +9023,7 @@ class CuratedProtocolSession:
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
-                state_changed=True,
+                state_changed=resumed,
                 primary_text=primary,
                 source_texts=sources,
                 source_pages=pages,
