@@ -34,6 +34,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.development_activation import development_activation_recorded
+from tests.test_frontend import run_node_harness
 from voiney_lab.curated_protocol import load_curated_protocol_fixture
 from voiney_lab.identity import Principal, Role
 from voiney_lab.server import (
@@ -458,6 +459,57 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         self.assertNotIn("저장하지 못해", socket.reply(3))
         self.assertEqual(seen["end"]["workflow_status"], "active")
         self.assertEqual(seen["end"]["durable_status"], "in_progress")
+
+class SilentTurnPageTests(unittest.TestCase):
+    """The page's side of a silent turn, run on the production script.
+
+    Fed the events the server now sends for the paused notice -- no audio
+    segment, segment_count 0 -- the page shows the notice in the turn's card,
+    reports playback ended for that turn, and goes back to listening. Nothing
+    in static/ changed for this; the events simply used to never arrive.
+    """
+
+    def test_the_paused_notice_is_shown_and_the_page_returns_to_listening(self):
+        html = (ROOT / "src/voiney_lab/static/index.html").read_text(encoding="utf-8")
+        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        notice = (
+            "현재 실험 안내가 일시정지 상태입니다. "
+            "'실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+        )
+        harness = r"""
+const assert=(ok,message)=>{if(!ok)throw new Error(message)};
+class Element{constructor(){this.children=[];this.fields={};this.textContent="";this.disabled=false;this.hidden=false;this.removed=false;this.dataset={};this.options=[]}set innerHTML(v){for(const c of ["transcript","reply","turn-status","filler-status","server-operation","tools","turn-visual","stats","error"]){const item=new Element();item.textContent=c==="transcript"?"듣는 중…":"";this.fields[c]=item}}querySelector(s){return this.fields[s.slice(1)]}prepend(n){this.children.unshift(n)}replaceChildren(){this.children=[];this.options=this.children}appendChild(n){this.children.push(n);this.options=this.children}remove(){this.removed=true}addEventListener(){}setAttribute(){}}
+const ids=new Proxy({}, {get:(target,id)=>target[id]??=new Element()});
+ids["language-mode"].value="manual";ids["manual-language"].value="ko";ids["pipeline-mode"].value="cascade";ids["protocol-id"].value="candidate-a-curated-development-v1";
+globalThis.document={getElementById:id=>ids[id],createElement:()=>new Element()};globalThis.location={protocol:"http:",host:"test"};
+class WS{static OPEN=1;static CLOSING=2;constructor(){this.readyState=1;this.sent=[]}send(value){this.sent.push(value)}close(){this.readyState=3}}
+globalThis.WebSocket=WS;Object.defineProperty(globalThis,"navigator",{value:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[]})}},configurable:true});globalThis.AudioContext=class{};
+""" + script + r"""
+(async()=>{
+ const current=socket,browserGeneration=sessionGeneration,configuration_id=51,base={configuration_id,turn_id:3,generation:10};
+ const NOTICE=""" + json.dumps(notice, ensure_ascii=False) + r""";
+ acceptedSessionConfiguration={configuration_id,mode:"cascade",language:"ko",protocol_id:"candidate-a-curated-development-v1"};sessionActive=true;pipelineMode="cascade";
+ const say=async message=>onMessage({data:JSON.stringify(message)},browserGeneration,current);
+ await say({type:"speech.start",turn_id:3,generation:10});
+ let revision=0;for(const state of ["listening","transcribing","routing"])await say({type:"turn.state",...base,revision:++revision,state});
+ await say({type:"transcript",turn_id:3,generation:10,text:"완료했어"});
+ await say({type:"turn.state",...base,revision:++revision,state:"checking_protocol",route:"curated_protocol"});
+ await say({type:"reply.delta",...base,segment_index:0,text:NOTICE,speech_text:""});
+ await say({type:"state.changed",...base,state:"PROCESSING"});
+ await say({type:"reply.complete",...base,text:NOTICE});
+ await say({type:"audio.complete",...base,segment_count:0});
+ await say({type:"turn.done",...base,segment_count:0,output_frames:0,route:"curated_protocol",result_kind:"pause",timings_ms:{total_ms:5}});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ const node=turnNode(3,browserGeneration);
+ assert(node.querySelector(".reply").textContent.includes("일시정지 상태입니다"),"paused notice not shown: "+node.querySelector(".reply").textContent);
+ const ended=current.sent.filter(item=>typeof item==="string").map(item=>JSON.parse(item)).filter(item=>item.type==="playback.ended");
+ assert(ended.length===1&&ended[0].turn_id===3,"page did not report the silent turn ended");
+ assert(visibleState==="LISTENING","page did not return to listening: "+visibleState);
+})().catch(error=>{console.error(error);process.exit(1)});
+"""
+        result = run_node_harness(harness)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
