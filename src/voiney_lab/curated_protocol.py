@@ -2105,16 +2105,19 @@ _STEP_7_SPOKEN_ENDPOINT = re.compile(
     # plan ("탈색 완료 전", "탈색 완료하면", "탈색 완료 시간").
     + r"|탈색이?\s*(?:돼|되어)\s*있" + _STATEMENT_END
     + r"|탈색이?\s*완료\s*(?:됐|되었)" + _STATEMENT_END
+    # Lane O §7-4: "탈색 완료했어" was asked again where "탈색 완료" was not.
+    + r"|탈색(?:을|이)?\s*완료\s*(?:했|하였)" + _STATEMENT_END
     + r"|탈색\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
     r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))"
 )
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
 # A wish or a condition beside it ("탈색되면", "탈색이 됐으면 좋겠어",
-# "바뀌었다면", "될 거야") says what should happen, not what was seen.
+# "바뀌었다면", "될 거야", "탈색 완료했으면") says what should happen, not
+# what was seen.
 _ENDPOINT_CONDITION = re.compile(
-    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌)으?면"
-    r"|(?:됐|되었|바뀌었|바꼈|변했)다면"
+    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌|했|하였)으?면"
+    r"|(?:됐|되었|바뀌었|바꼈|변했|했|하였)다면"
     r"|(?:되|바뀌|변하)(?:길|기를|도록|려면|기\s*전)"
     r"|(?:될|바뀔|변할)\s*(?:때|거|것|수)"
 )
@@ -2275,6 +2278,7 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
         if positive := re.search(
             r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
             r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
+            r"탈수(?:를|가)?\s*완료\s*(?:했|하였)" + _STATEMENT_END + r"|"
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
