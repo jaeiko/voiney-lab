@@ -4815,8 +4815,11 @@ TURN_PROGRESS_TRANSITIONS={
         "checking_protocol","checking_approved_information","composing",
         "synthesizing","cancelled","error",
     }),
+    # A silent curated turn (the paused notice) has no audio, so it ends
+    # straight from checking_protocol instead of through playing.
     "checking_protocol":frozenset({
-        "checking_approved_information","synthesizing","cancelled","error",
+        "checking_approved_information","synthesizing","complete","blocked",
+        "cancelled","error",
     }),
     "checking_approved_information":frozenset({
         "composing","synthesizing","cancelled","error",
@@ -5860,7 +5863,10 @@ READER_TRANSLATION_PROMPT=(
     "condition or advice the text does not state, and do not leave out any "
     "instruction. Return only the JSON object."
 )
-READER_TRANSLATION_HEADING="한국어 안내 · 자동 번역(검토 전)"
+# No label on the reading itself: the page says once, at the head of the
+# protocol card, that Korean it shows is an automatic translation, and the
+# spoken lead below still says so before it is heard.
+READER_TRANSLATION_HEADING=""
 # Said before an unreviewed reading, so it is never heard as a reviewed one.
 READER_TRANSLATION_SPOKEN_LEAD="자동 번역입니다."
 READER_TRANSLATION_UNAVAILABLE=(
@@ -5868,8 +5874,118 @@ READER_TRANSLATION_UNAVAILABLE=(
 )
 
 
+#: Where a safety-box line comes from, as the box prints it beside the line.
+_SAFETY_DOCUMENT_KINDS={
+    "facility_sop":"안전 SOP",
+    "supplier_sds":"물질 SDS",
+    "equipment_manual":"장비 매뉴얼",
+}
+
+
+def _safety_translation(source:str,translation:str|None)->tuple[str|None,str]:
+    """A safety line's Korean, or None with why it may not be shown.
+
+    The same mechanical check a reader translation passes -- every number
+    with its unit, and a negation neither dropped nor added -- run on each
+    line on its own, so one bad line falls back to its source alone.
+    """
+
+    if not isinstance(translation,str) or not translation.strip():
+        return None,"missing"
+    issue=reader_translation_issue(source,translation)
+    if issue is not None:
+        return None,issue
+    return " ".join(translation.split()),"passed"
+
+
+def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
+    """Every safety line for the current step, for the one safety box.
+
+    The step's own PDF warnings first, then each approved safety document the
+    safety pack matched to the step. Nothing is cut short: the box shows all
+    of them. A line carries Korean only where a reviewed translation exists
+    and passes the check; otherwise ``primary_text`` is None and the page
+    shows the source itself.
+    """
+
+    steps=curated.fixture.steps
+    show_step=curated.active or (
+        curated.workflow_status in {"preview","ready"}
+        and 0<=curated.current_index<len(steps))
+    if not show_step:
+        return []
+    step=steps[curated.current_index]
+    items:list[dict[str,Any]]=[]
+    seen:set[str]=set()
+    for index,warning in enumerate(step.warnings,1):
+        source=" ".join(str(warning.source_text or "").split())
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        primary,check=_safety_translation(
+            source,curated.fixture.localized_fact(step.step_id,f"warning_{index}"))
+        page=warning.evidence.source_page_number
+        items.append({
+            "kind":"pdf_warning","origin":f"PDF p.{page}",
+            "source_text":source,"source_language":"en",
+            "primary_text":primary,"translation_check":check,
+        })
+    pack=getattr(curated,"safety_pack",None)
+    if pack is None:
+        return items
+    guidance=pack.guidance_for_step(step,curated.current_index)
+    for warning in guidance.warnings:
+        source=" ".join(str(warning or "").split())
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        items.append({
+            "kind":"pdf_warning","origin":f"PDF p.{step.evidence.source_page_number}",
+            "source_text":source,"source_language":"en",
+            "primary_text":None,"translation_check":"missing",
+        })
+    for doc in guidance.applicable_documents:
+        source=" ".join(str(doc.summary_text or "").split())
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        kind=_SAFETY_DOCUMENT_KINDS.get(doc.document_type,"안전 자료")
+        if doc.language.casefold().startswith("ko"):
+            primary,check=source,"source_is_korean"
+        else:
+            primary,check=_safety_translation(source,next(
+                (text for language,text in doc.reviewed_translations
+                 if language.casefold().startswith("ko")),None))
+        items.append({
+            "kind":"safety_document","origin":f"안전 문서 · {kind}",
+            "document_title":doc.title,
+            "source_text":source,"source_language":doc.language,
+            "primary_text":primary,"translation_check":check,
+        })
+    return items
+
+
+def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
+    """What the page draws beside a fixture state: the one safety list.
+
+    Sent next to ``state``, not in it, so the state stays the session's own.
+    ``translation_source`` says where the Korean on the step card comes from
+    -- ``reviewed`` for a reviewed sidecar, ``none`` when there is none -- so
+    the page can put its one line at the head of the card. No machine
+    translation is stored for a protocol revision yet, so ``machine`` is not
+    produced here.
+    """
+
+    return {
+        "safety_items":curated_safety_items(curated),
+        "translation_source":(
+            "reviewed" if getattr(curated.fixture,"localizations",None)
+            else "none"),
+    }
+
+
 def _with_reader_section(document:Any,heading:str,text:str)->Any:
-    """The reply's document with one labelled section first; otherwise unchanged."""
+    """The reply's document with one section first; otherwise unchanged."""
 
     if not isinstance(document,dict):
         return document
@@ -5927,9 +6043,11 @@ async def _apply_reader_translation(
     Only for a step with no reviewed translation, only when the read-only
     model roles are enabled, and only a reading that keeps every number,
     unit and protocol term (``reader_translation_issue``). The reading is
-    spoken after "자동 번역입니다." and labelled as an unreviewed automatic
-    translation on screen, above the unchanged source; a failed or refused reading says so, and the source is
-    read as before. No workflow state is involved.
+    spoken after "자동 번역입니다." and shown above the unchanged source with
+    no label of its own -- the page says once, at the head of the protocol
+    card, that its Korean is an automatic translation; a failed or refused
+    reading says so, and the source is read as before. No workflow state is
+    involved.
     """
 
     settings=session.multi_brain_settings
@@ -5966,8 +6084,7 @@ async def _apply_reader_translation(
         return replace(
             plan,
             speech_text=f"{READER_TRANSLATION_SPOKEN_LEAD} {korean}",
-            display_text=(
-                f"{READER_TRANSLATION_HEADING}\n{korean}\n\n{plan.display_text}"),
+            display_text=f"{korean}\n\n{plan.display_text}",
             display_document=_with_reader_section(
                 plan.display_document,READER_TRANSLATION_HEADING,korean),
             translation_status="model_assisted_unreviewed",
@@ -5977,7 +6094,7 @@ async def _apply_reader_translation(
         speech_text=f"{READER_TRANSLATION_UNAVAILABLE} {plan.speech_text}",
         display_text=f"{READER_TRANSLATION_UNAVAILABLE}\n\n{plan.display_text}",
         display_document=_with_reader_section(
-            plan.display_document,"한국어 안내",READER_TRANSLATION_UNAVAILABLE),
+            plan.display_document,"",READER_TRANSLATION_UNAVAILABLE),
     )
 
 
@@ -7175,6 +7292,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         brain_terminals={}
         answer_output=None
         brain_snapshot=None
+        source_boundary_note=None
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
             await progress("checking_protocol",route="curated_protocol")
@@ -7441,13 +7559,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
                 speech=envelope.speech_summary
-                display=(
-                    f"직접 답변\n{envelope.direct_answer}\n\n"
-                    "근거 경계\n활성 프로토콜의 확인된 내용이며, "
+                # The answer alone is the reply. Where it came from is a
+                # development detail: it goes beside the reply, folded, and
+                # only in development test mode (never a pilot run).
+                display=envelope.direct_answer
+                source_boundary_note=(
+                    "근거 경계: 활성 프로토콜의 확인된 내용이며, "
                     "활성화된 경우에만 부족한 설명을 읽기 전용 참고자료에서 확인합니다."
                     if turn_language=="ko" else
-                    f"Direct answer\n{envelope.direct_answer}\n\nSource boundary\n"
-                    "The active protocol remains authoritative; missing explanation is checked read-only."
+                    "Source boundary: the active protocol remains authoritative; "
+                    "missing explanation is checked read-only."
                 )
                 plan=replace(
                     plan,display_text=display,speech_text=speech,
@@ -7474,6 +7595,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         ))),
                         translation_status="answer_brain_grounded",
                     )
+                    source_boundary_note=None
                 research_context={
                     "query":resolved_query,"reference_query":reference_query,
                     "step":step,"facts":tuple(facts),
@@ -7945,6 +8067,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "protocol.fixture.state",turn_id=turn_id,
             configuration_id=session.accepted_configuration_id,
             state=curated.state(spoken_summary=plan.spoken_summary),
+            screen=curated_screen_fields(curated),
             action=plan.action.value)
         operation_labels={
             CuratedProtocolAction.START:"protocol_start",
@@ -8041,7 +8164,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             question_dimensions=list(plan.question_dimensions),
             source_plan_scopes=list(plan.source_plan_scopes),
             unresolved_dimensions=list(plan.unresolved_dimensions),
-            display_document=getattr(plan, "display_document", None))
+            display_document=getattr(plan, "display_document", None),
+            # Only in development test mode, which run_pilot.sh forces off:
+            # a development-only protocol alone does not mean a development
+            # run, since the pilot's reference_only scope may activate one.
+            development_note=(
+                source_boundary_note
+                if _test_mode_skips_readiness_gates() else None))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         if speech_policy=="speak":
@@ -8080,6 +8209,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # its reply and turn.done are out. Ended before them, each was
             # dropped as no longer current and the page waited on "절차 확인
             # 중…" with no answer (2026-10-01 voice test, the paused notice).
+            # Its card reaches the end state here too: with no playback there
+            # is no playback.ended to carry it there.
+            await progress(session.turn_terminal_outcome(turn_id,generation))
             session.complete_without_playback(turn_id)
         _record_workspace_metric(
             category="workflow",metric_name="turn",
@@ -9257,6 +9389,7 @@ async def voice_socket(websocket:WebSocket):
                         "protocol.fixture.state",
                         configuration_id=session.accepted_configuration_id,
                         state=session.curated_protocol_session.state(),
+                        screen=curated_screen_fields(session.curated_protocol_session),
                         action="attached",
                     ))
                 await websocket.send_text(event("session.started",state=session.state.value,
@@ -9321,7 +9454,9 @@ async def voice_socket(websocket:WebSocket):
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
                     fixture_state = session.curated_protocol_session.state()
-                    await websocket.send_text(event("protocol.fixture.state", state=fixture_state))
+                    await websocket.send_text(event(
+                        "protocol.fixture.state", state=fixture_state,
+                        screen=curated_screen_fields(session.curated_protocol_session)))
                 else:
                     await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
@@ -9396,6 +9531,7 @@ async def voice_socket(websocket:WebSocket):
                         configuration_id=session.accepted_configuration_id,
                         action="pause",
                         state=fixture_state,
+                        screen=curated_screen_fields(session.curated_protocol_session),
                     ))
             elif control["type"]=="workflow.resume":
                 if session.active and session.curated_protocol_session is not None:
@@ -9433,6 +9569,7 @@ async def voice_socket(websocket:WebSocket):
                         configuration_id=session.accepted_configuration_id,
                         action="resume",
                         state=fixture_state,
+                        screen=curated_screen_fields(session.curated_protocol_session),
                     ))
             elif control["type"]=="client.audio_constraints":
                 requested=control["requested"]

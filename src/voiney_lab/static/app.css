@@ -79,66 +79,23 @@
     .btn-rail-ghost{background:transparent;border:1px solid var(--border);color:var(--muted);padding:.35rem .65rem;border-radius:var(--radius-sm);font-size:.76rem;font-weight:700;cursor:pointer;transition:all .15s}
     .btn-rail-ghost:hover{color:var(--ink);border-color:var(--muted)}
 
-    .safety-guidance-box{
-      margin:.85rem 0 0;
-      padding:.85rem 1rem;
-      border-radius:var(--radius-sm);
-      background:rgba(240,178,50,.08);
-      border:1px solid rgba(240,178,50,.32);
-      color:#fff;
-    }
-    .safety-guidance-head{
-      display:flex;
-      align-items:center;
-      gap:.45rem;
-      font-size:.78rem;
-      color:var(--amber);
-      font-weight:800;
-      margin-bottom:.35rem;
-    }
-    .safety-citation{
-      margin-left:auto;
-      font-size:.72rem;
-      color:var(--muted);
-      font-weight:600;
-    }
-    .safety-guidance-body{
-      font-size:.82rem;
-      line-height:1.55;
-      color:#f8fafc;
-    }
-    .safety-bullets-text{
-      white-space:pre-wrap;
-      margin-bottom:.35rem;
-    }
-    .safety-source-details{
-      margin-top:.45rem;
-      font-size:.75rem;
-      color:var(--muted);
-      border-top:1px dashed rgba(240,178,50,.2);
-      padding-top:.35rem;
-    }
-    .safety-source-details summary{
-      cursor:pointer;
-      user-select:none;
-      font-weight:700;
-      color:var(--amber);
-      opacity:.85;
-      font-size:.74rem;
-    }
-    .safety-source-details summary:hover{
-      opacity:1;
-    }
-    .safety-source-body{
-      margin-top:.3rem;
-      padding:.45rem .65rem;
-      background:rgba(0,0,0,.25);
-      border-radius:var(--radius-sm);
-      color:var(--subtext);
-      font-size:.73rem;
-      line-height:1.45;
-      white-space:pre-wrap;
-    }
+    /* One line at the head of the protocol card, only when its Korean is an
+       automatic translation or there is none. */
+    .translation-note{margin-top:.25rem;font-size:.72rem;color:var(--muted)}
+    .step-body{margin:.35rem 0 0;font-size:1rem;line-height:1.55;color:var(--ink);white-space:pre-wrap}
+    /* One folded source per block, small, closed by default. */
+    .source-toggle{margin:.3rem 0 0;font-size:.75rem;color:var(--muted)}
+    .source-toggle summary{cursor:pointer;user-select:none;font-weight:700;color:var(--muted)}
+    .source-toggle summary:hover{color:var(--subtext)}
+    .source-toggle-body,.source-toggle p{margin:.3rem 0 0;white-space:pre-wrap;line-height:1.5}
+    .step-warning .safety-box-head{font-size:.78rem;font-weight:800;color:var(--amber);margin-bottom:.35rem}
+    .safety-item{padding:.35rem 0;border-top:1px dashed rgba(240,178,50,.2)}
+    .safety-item:first-of-type{border-top:0}
+    .safety-origin{display:block;font-size:.68rem;font-weight:700;color:var(--muted)}
+    .safety-text{margin:.1rem 0 0;white-space:pre-wrap;line-height:1.5}
+    .dev-info{margin-top:.5rem;font-size:.72rem;color:var(--muted)}
+    .dev-info summary{cursor:pointer;font-weight:700}
+    .dev-info-body{margin-top:.25rem;white-space:pre-wrap}
 
     .modal-backdrop{
       position:fixed;
