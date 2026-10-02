@@ -165,27 +165,20 @@
             <div class="label" style="color:var(--magenta);font-weight:800;font-size:.74rem;letter-spacing:.08em;">지금 할 일 📄</div>
             <strong id="procedure-title">연결된 절차 없음</strong>
             <div id="procedure-meta">서버가 승인 절차 상태를 전송하면 표시됩니다.</div>
+            <div id="procedure-translation-note" class="translation-note" hidden></div>
           </div>
           <div id="procedure-status">대기</div>
         </div>
         <div id="procedure-progress"></div>
         <p id="procedure-step-title"></p>
-        <p id="procedure-instruction"></p>
+        <p id="procedure-primary" class="step-body"></p>
+        <details id="procedure-source-toggle" class="source-toggle" hidden><summary>원문</summary><p id="procedure-instruction"></p></details>
         <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
-        <div id="step-safety-guidance" class="safety-guidance-box" hidden>
-          <div class="safety-guidance-head">
-            <span class="safety-icon">🛡️</span>
-            <strong>안전 지침 및 PPE 기준</strong>
-            <span id="step-safety-citation" class="safety-citation"></span>
-          </div>
-          <div id="step-safety-text" class="safety-guidance-body"></div>
-        </div>
 
         <div class="task-body-split">
           <div class="task-body-left">
             <div class="spoken-summary">
               <b>짧은 음성 안내</b>
-              <p id="procedure-primary" style="margin:0 0 .35rem;white-space:pre-wrap;"></p>
               <span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span>
             </div>
             <p id="voice-command-hint" class="voice-command-hint">말씀하시면 음성 안내를 반복하거나 다음 단계로 안전하게 전환합니다.</p>
@@ -539,6 +532,7 @@ const turnProgress=new Map(),turnServerGenerations=new Map();
 let acknowledgedLanguageMode="manual",acknowledgedLanguage="ko";
 let nextConfigurationId=0,pendingSessionConfiguration=null,acceptedSessionConfiguration=null;
 let procedureState={attached:false},curatedProtocolState={attached:false},curatedStateRevision=-1;
+let curatedScreenFields=null,autoTranslationShown=false,testModeReadinessGatesSkipped=false;
 const protocolCatalog=new Map();
 let workflowTimerHandle=null,lastReportId=null,lastReportStatus=null,reportPollHandle=null;
 let currentExperimentSessionId=null,currentExperimentSessionVersion=null,currentExperimentSessionStatus=null,currentExperimentProtocolRevision=null,currentExperimentStepLabel=null,currentExperimentCompletedStepCount=0,currentExperimentRecovery=null;
@@ -940,7 +934,7 @@ function rejectCascadeInterruption(message){if(cascadeInterruption.state!=="cand
 function resetCascadePlayback(){if(activeSource){activeSource.onended=null;try{activeSource.stop();}catch(_){}try{activeSource.disconnect();}catch(_){}activeSource=null;}clearFillerPlayback();receiving=null;receivedFrames=[];queued.clear();activeTurn=null;activeCascadeGeneration=null;audioComplete=false;turnComplete=false;playing=false;nextSegment=0;resetCascadeInterruption();}
 function clearPlayback(){playbackEpoch++;resetCascadePlayback();if(replaySource){replaySource.onended=null;try{replaySource.stop();}catch(_){}try{replaySource.disconnect();}catch(_){}replaySource=null;}}
 function interruptCascadePlayback(turnId,generation){if(turnId!==activeTurn||!Number.isInteger(generation)||generation!==activeCascadeGeneration)return false;playbackEpoch++;resetCascadePlayback();return true;}
-function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;renderProcedureState({attached:false});}
+function invalidateCuratedProtocolState(){curatedProtocolState={attached:false};curatedStateRevision=-1;curatedScreenFields=null;autoTranslationShown=false;renderProcedureState({attached:false});}
 function catalogStatus(entry){if(!entry)return{kind:"none",label:"프로토콜을 선택해 주세요."};if(entry.lifecycle_state==="revoked")return{kind:"failed",label:"승인 취소됨 · 새 세션 실행 불가"};if(entry.available_for_execution===true)return{kind:"ready",label:entry.development_only?(entry.development_activation?.activated===true?"개발 활성화 기록됨 · 개발용 실행 가능 · 최종 승인 아님":"개발용 실행 가능 · 최종 승인 아님"):"승인 버전 · 실행 준비됨"};if(entry.execution_blocked_reason==="development_activation_not_recorded")return{kind:"review",label:"개발 활성화 기록 없음 · 실행 불가"};if(entry.execution_blocked_reason==="readiness_gates_blocked")return{kind:"failed",label:"실행 준비 조건 미충족 · 실행 불가"};if(entry.execution_blocked_reason==="usage_scope_not_development")return{kind:"review",label:"운영 범위에서는 개발 활성화 불가 · 실행 불가"};if(entry.analysis_status==="ocr_required")return{kind:"ocr",label:"OCR 필요 · 실행 불가"};if(entry.analysis_status==="ocr_in_progress")return{kind:"ocr",label:"OCR 추출 중 · 실행 불가"};if(entry.analysis_status==="ocr_review_required")return{kind:"review",label:"OCR 원문 대조 검토 필요 · 실행 불가"};if(entry.analysis_status==="ocr_rejected")return{kind:"failed",label:"OCR 결과 거절됨 · 재추출 필요 · 실행 불가"};if(entry.analysis_status==="ocr_failed")return{kind:"failed",label:"OCR 추출 실패 · 실행 불가"};if(entry.lifecycle_state==="analysis_pending")return{kind:"analysis",label:"분석 대기 · 원문 보존됨"};if(entry.lifecycle_state==="analyzing")return{kind:"analysis",label:"문서 처리 중 · 실행 불가"};if(entry.lifecycle_state==="blocked")return{kind:"failed",label:"분석 또는 안전 검토 차단 · 조치 필요"};if(["analysis_failed","chunk_analysis_failed"].includes(entry.analysis_status))return{kind:"failed",label:"분석 실패 · 실행 불가"};if(entry.analysis_status==="merge_conflict")return{kind:"failed",label:"병합 충돌 · 검토 필요 · 실행 불가"};if(["chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(entry.analysis_status))return{kind:"analysis",label:"대형 문서 분석 진행 중 · 실행 불가"};if(entry.analysis_status==="chunked_analysis_required")return{kind:"deferred",label:"대형 문서 분석 요청 대기 · 실행 불가"};if(entry.analysis_status==="structured_analysis_ready")return{kind:"analysis",label:"구조화 분석 요청 대기 · 실행 불가"};return{kind:"review",label:"검토·승인 필요 · 실행 불가"};}
 function renderSelectedProtocolContext(){const entry=protocolCatalog.get($("protocol-id")?.value),status=catalogStatus(entry);$("protocol-readiness").textContent=status.label;$("protocol-revision").textContent=entry?.revision_id||"—";renderState(visibleState);}
 function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entries)?entries.find(item=>item?.analysis_run&&Number.isInteger(item.analysis_run.total_chunks)&&item.analysis_run.total_chunks>0):null,output=$("protocol-analysis-progress");if(!output)return;if(!target){output.textContent="대형 문서 분석 상태 없음";return;}const run=target.analysis_run,total=run.total_chunks,completed=Number.isInteger(run.completed_chunks)?run.completed_chunks:0,failed=Number.isInteger(run.failed_chunks)?run.failed_chunks:0,pending=Number.isInteger(run.pending_chunks)?run.pending_chunks:Math.max(0,total-completed-failed),ranges=Array.isArray(run.chunks)?run.chunks.filter(chunk=>Number.isInteger(chunk?.source_page_start)&&Number.isInteger(chunk?.source_page_end)&&typeof chunk?.status==="string").map(chunk=>`p.${chunk.source_page_start}-${chunk.source_page_end} ${chunk.status}`).join(" · "):"";output.textContent=`대형 문서 분석 · ${run.state} · 전체 ${total} / 완료 ${completed} / 실패 ${failed} / 대기 ${pending}${ranges?` · ${ranges}`:""} · 검토·승인 전 실행 불가`;}
@@ -1120,69 +1114,62 @@ function renderSafetyPack(pack){
  }
  updateStepSafetyGuidance();
 }
-function updateStepSafetyGuidance(){
- const box=$("step-safety-guidance"),citation=$("step-safety-citation"),body=$("step-safety-text");
- if(!box||!body)return;
- const stepGuidanceState = curatedProtocolState?.step_safety_guidance;
- const stepLabel = curatedProtocolState?.current_step_label ? String(curatedProtocolState.current_step_label) : null;
- const stepGuidanceList = activeSafetyPack?.step_guidance || [];
- const found = (stepGuidanceState && (!stepLabel || String(stepGuidanceState.step_label) === stepLabel))
-   ? stepGuidanceState
-   : (stepLabel ? stepGuidanceList.find(g => String(g.step_label) === stepLabel) : null);
- if(found){
-  let bits=[];
-  if(Array.isArray(found.localized_display_bullets)&&found.localized_display_bullets.length){
-   bits=found.localized_display_bullets.slice(0,3);
-  }else if(Array.isArray(found.display_bullets)&&found.display_bullets.length){
-   bits=found.display_bullets.slice(0,3);
-  }else{
-   const warnings=found.warnings||[];
-   const ppe=found.ppe_requirements||[];
-   const handling=found.handling_precautions||found.precautions||[];
-   for(const w of warnings){if(w&&w.trim())bits.push(`• 주의: ${w.trim()}`);}
-   if(ppe.length)bits.push(`• 개인보호구(PPE): ${Array.from(new Set(ppe)).join(", ")}`);
-   if(handling.length)bits.push(`• 안전 취급 주의: ${Array.from(new Set(handling)).join(" ")}`);
-   bits=bits.slice(0,3);
-  }
-  if(bits.length){
-   box.hidden=false;
-   if(citation)citation.textContent=found.citation_label||(activeSafetyPack?.coverage_status==="demo_only"?"데모 안전 기준":"안전 SOP · SDS 적용됨");
-
-   const rawBits=[];
-   if(Array.isArray(found.warnings)){
-    for(const w of found.warnings){if(w&&w.trim())rawBits.push(`• Protocol Warning: ${w.trim()}`);}
-   }
-   if(Array.isArray(found.ppe_requirements)&&found.ppe_requirements.length){
-    rawBits.push(`• PPE: ${Array.from(new Set(found.ppe_requirements)).join(", ")}`);
-   }
-   if(Array.isArray(found.handling_precautions)&&found.handling_precautions.length){
-    rawBits.push(`• Precautions: ${Array.from(new Set(found.handling_precautions)).join(" ")}`);
-   }
-   const rawSource=rawBits.join("\n").trim();
-   const localizedText=bits.join("\n");
-
-   body.innerHTML="";
-   const bulletsEl=document.createElement("div");
-   bulletsEl.className="safety-bullets-text";
-   bulletsEl.textContent=localizedText;
-   body.appendChild(bulletsEl);
-
-   if(rawSource && rawSource !== localizedText){
-    const detailsEl=document.createElement("details");
-    detailsEl.className="safety-source-details";
-    const summaryEl=document.createElement("summary");
-    summaryEl.textContent="원문 안전 근거 보기";
-    const sourceBodyEl=document.createElement("div");
-    sourceBodyEl.className="safety-source-body";
-    sourceBodyEl.textContent=rawSource;
-    detailsEl.appendChild(summaryEl);
-    detailsEl.appendChild(sourceBodyEl);
-    body.appendChild(detailsEl);
-   }
-   return;
-  }
+// Screen-text rules (2026-10-01 voice test): the reader's language is the
+// body; the source sits under it in one folded "원문" per block; no block
+// carries a translation label; the card head says once when its Korean is an
+// automatic translation. Safety is one box holding every line.
+const AUTO_TRANSLATION_NOTE="한국어는 자동 번역입니다. 정확한 내용은 원문을 확인하세요.";
+const NO_TRANSLATION_NOTE="한국어 번역이 없어 원문으로 보여 드립니다.";
+function koreanIsBody(){return (acceptedSessionConfiguration?.input_language??acceptedSessionConfiguration?.language??"ko")!=="en";}
+function developmentRun(){return curatedProtocolState?.development_only===true||testModeReadinessGatesSkipped===true;}
+function sourceToggle(text,{open=false}={}){const details=document.createElement("details");details.className="source-toggle";details.open=open;const summary=document.createElement("summary");summary.textContent="원문";const body=document.createElement("div");body.className="source-toggle-body";body.textContent=normalizePresentationText(text);details.appendChild(summary);details.appendChild(body);return details;}
+function renderTranslationNote(){
+ const note=$("procedure-translation-note");if(!note)return;
+ const value=curatedProtocolState,shown=value?.attached===true&&nonemptyText(value.current_step_id);
+ let text="";
+ if(shown&&koreanIsBody()){
+  if(curatedScreenFields?.translation_source==="machine"||autoTranslationShown)text=AUTO_TRANSLATION_NOTE;
+  else if(!nonemptyText(value.primary_summary))text=NO_TRANSLATION_NOTE;
  }
- box.hidden=true;
+ note.textContent=text;note.hidden=!text;
+}
+function nonemptyText(v){return typeof v==="string"&&v.trim().length>0;}
+// The server's list when it sent one: each line with its Korean already
+// checked (numbers with units, negation kept). Otherwise every line the
+// state names, as its source: unchecked Korean is never shown.
+function currentSafetyItems(){
+ const value=curatedProtocolState;
+ if(!value||value.attached!==true||!nonemptyText(value.current_step_id))return [];
+ if(Array.isArray(curatedScreenFields?.safety_items))return curatedScreenFields.safety_items.filter(item=>item&&typeof item==="object"&&nonemptyText(item.source_text));
+ const items=[],seen=new Set(),add=(origin,text)=>{const clean=String(text||"").trim();if(clean&&!seen.has(clean)){seen.add(clean);items.push({origin,source_text:clean,primary_text:null,translation_check:"unchecked"});}};
+ for(const item of Array.isArray(value.warning_presentations)?value.warning_presentations:[])if(item&&typeof item==="object")add(Number.isInteger(item.source_page)?`PDF p.${item.source_page}`:"PDF",item.source_text);
+ for(const text of [...(Array.isArray(value.warning_texts)?value.warning_texts:[]),...(Array.isArray(value.critical_warning_texts)?value.critical_warning_texts:[])])add("PDF",text);
+ const label=nonemptyText(value.current_step_label)?String(value.current_step_label):null,guidance=value.step_safety_guidance&&(!label||String(value.step_safety_guidance.step_label)===label)?value.step_safety_guidance:(label?(activeSafetyPack?.step_guidance||[]).find(g=>String(g.step_label)===label):null);
+ if(guidance){for(const text of guidance.warnings||[])add("PDF",text);for(const doc of guidance.applicable_documents||[])if(doc&&typeof doc==="object")add("안전 문서",doc.summary_text);}
+ return items;
+}
+function updateStepSafetyGuidance(){
+ const box=$("procedure-warning");if(!box)return;
+ const items=currentSafetyItems();
+ if(!items.length){box.textContent="";box.hidden=true;return;}
+ box.hidden=false;
+ if(!Array.isArray(curatedScreenFields?.safety_items)){
+  // No checked list arrived: the sources themselves, all of them.
+  box.textContent=normalizePresentationText(items.map(item=>`${item.origin} · ${item.source_text}`).join("\n"));return;
+ }
+ box.replaceChildren();
+ const head=document.createElement("div");head.className="safety-box-head";head.textContent="안전";box.appendChild(head);
+ const korean=koreanIsBody();
+ for(const item of items){
+  const row=document.createElement("div");row.className="safety-item";
+  const origin=document.createElement("span");origin.className="safety-origin";origin.textContent=item.origin||"";row.appendChild(origin);
+  const checked=["passed","source_is_korean"].includes(item.translation_check)&&nonemptyText(item.primary_text);
+  const useKorean=korean&&checked;
+  const body=document.createElement("p");body.className=useKorean?"safety-text":"safety-text source-as-body";
+  body.textContent=normalizePresentationText(useKorean?item.primary_text:item.source_text);row.appendChild(body);
+  if(useKorean&&item.translation_check!=="source_is_korean")row.appendChild(sourceToggle(item.source_text));
+  box.appendChild(row);
+ }
 }
 
 function renderCuratedProtocolState(message){
@@ -1195,7 +1182,7 @@ function renderCuratedProtocolState(message){
  if(!valid||!activeValid||value.revision<curatedStateRevision)return;
  const previousBlockReason=curatedProtocolState?.attached===true?curatedProtocolState.block_reason:null;
  if(Number.isInteger(message.turn_id)&&Number.isInteger(message.generation))turnHold(turnProgressKey(message.turn_id,message.generation)).observationGateSet=value.block_reason===OBSERVATION_HOLD_REASON&&previousBlockReason!==OBSERVATION_HOLD_REASON;
- curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
+ curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
  $("procedure-meta").textContent=value.development_only?`개발용 · 최종 승인 아님 · ${value.protocol_id} · ${value.revision_id}`:`승인 버전 · ${value.protocol_id} · ${value.revision_id}`;
@@ -1204,12 +1191,13 @@ function renderCuratedProtocolState(message){
  $("procedure-progress").textContent=(value.active||previewValid)?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
  if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`Step ${value.current_step_label} / ${value.total_steps}`:"대기";
  $("procedure-step-title").textContent=(value.active||previewValid)?`Step ${value.current_step_label}`:"";
- const warnings=Array.isArray(value.warning_texts)?value.warning_texts.filter(nonempty):[],criticalWarnings=Array.isArray(value.critical_warning_texts)?value.critical_warning_texts.filter(nonempty):[],warningPresentations=Array.isArray(value.warning_presentations)?value.warning_presentations.filter(item=>item&&typeof item==="object"&&nonempty(item.source_text)):[];
- setText("procedure-primary",(value.active||previewValid)&&nonempty(value.primary_summary)?normalizePresentationText(`안내 · 한국어 참고 번역\n${value.primary_summary}`):(value.active||previewValid)?"검증된 한국어 참고 번역을 사용할 수 없습니다.":"");
- $("procedure-instruction").textContent=(value.active||previewValid)&&nonempty(value.display_summary)?normalizePresentationText(`원문 · English\n${value.display_summary}`):"";
- const warningText=normalizePresentationText(warningPresentations.length?warningPresentations.map(item=>`${nonempty(item.primary_text)?`주의 · 한국어 참고 번역\n${item.primary_text}\n`:""}원문 · English\n${item.source_text}\n출처 · ${item.evidence_id} · p.${item.source_page}`).join("\n\n"):[...warnings.map(item=>`주의 원문: ${item}`),...criticalWarnings.filter(item=>!warnings.includes(item)).map(item=>`중요 경고 원문: ${item}`)].join("\n"));
- $("procedure-warning").textContent=warningText;$("procedure-warning").hidden=!warningText;
- updateStepSafetyGuidance();
+ // Korean body with the source folded under it; with no Korean, or for an
+ // English reader, the source is the body and nothing is folded.
+ const stepShown=value.active||previewValid,koreanStep=koreanIsBody()&&nonempty(value.primary_summary);
+ setText("procedure-primary",stepShown?normalizePresentationText(koreanStep?value.primary_summary:(value.display_summary||"")):"");
+ $("procedure-instruction").textContent=stepShown&&koreanStep&&nonempty(value.display_summary)?normalizePresentationText(value.display_summary):"";
+ const sourceToggleNode=$("procedure-source-toggle");if(sourceToggleNode){sourceToggleNode.hidden=!(stepShown&&koreanStep&&nonempty(value.display_summary));sourceToggleNode.open=false;}
+ updateStepSafetyGuidance();renderTranslationNote();
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
@@ -1241,6 +1229,8 @@ function renderProcedureState(value){
   $("procedure-status").textContent="대기";$("procedure-status").className="";
   $("procedure-progress").textContent="";$("procedure-step-title").textContent="";
   setText("procedure-primary","");$("procedure-instruction").textContent="";
+  if($("procedure-source-toggle"))$("procedure-source-toggle").hidden=true;
+  if($("procedure-translation-note")){$("procedure-translation-note").textContent="";$("procedure-translation-note").hidden=true;}
   $("procedure-warning").textContent="";$("procedure-warning").hidden=true;
   $("procedure-spoken-summary").textContent="현재 단계가 시작되면 표시됩니다.";
   $("procedure-source").textContent="—";$("procedure-timer").textContent="—";
@@ -1263,6 +1253,9 @@ function renderProcedureState(value){
  $("procedure-step-title").textContent=value.status==="completed"?"모든 단계 완료":value.current_step_title;
  setText("procedure-primary","");
  $("procedure-instruction").textContent=value.approved_current_instruction||"";
+ // The older approved-procedure lane has no translation: its instruction is
+ // the body, so its fold stays open.
+ if($("procedure-source-toggle")){$("procedure-source-toggle").hidden=!value.approved_current_instruction;$("procedure-source-toggle").open=true;}
  $("procedure-warning").textContent=value.warning_text||"";
  $("procedure-warning").hidden=!value.warning_text;
  $("procedure-spoken-summary").textContent=value.spoken_instruction||"짧은 음성 안내가 준비되면 표시됩니다.";
@@ -1335,6 +1328,37 @@ function turnNode(id,browserGeneration=sessionGeneration){
  return node;
 }
 
+// Label lines the protocol layer still writes into a reply's text. The page
+// reads them as block boundaries and prints none of them: the answer is the
+// body, the source goes under one folded "원문" with its citation, and the
+// grounding boundary shows only in a development run, folded as "개발 정보".
+const ANSWER_LABEL_LINES=[
+ [/^(?:직접 답변|Direct answer|답변 · 한국어 참고 번역|답변 · 한국어|답변|한국어 안내 · 자동 번역\(검토 전\)|한국어 안내|한국어 참고 번역|세부 항목)$/,"body"],
+ [/^(?:원문 · English|원문|Original)(?: · PDF p\.\d+)?$/,"source"],
+ [/^(?:출처|Sources?)$/,"citation"],
+ [/^(?:근거 경계|Source boundary|PDF 기준)$/,"dev"],
+];
+// A sentence that only says no Korean is available: dropped, and the source
+// is then shown open as the body (fail closed).
+const NO_KOREAN_SENTENCES=["검증된 한국어 번역을 사용할 수 없어 원문을 함께 확인해 주세요.","검증된 한국어 참고 번역을 사용할 수 없습니다.","검증된 한국어 번역을 사용할 수 없습니다.","원문에 적힌 실험 목적입니다."];
+function splitAnswerText(text){
+ const blocks={body:[],source:[],citation:[],dev:[]};let kind="body",sourceOpen=false;
+ for(const raw of String(text??"").split("\n")){
+  const line=raw.trim(),label=ANSWER_LABEL_LINES.find(([pattern])=>pattern.test(line));
+  if(label){kind=label[1];continue;}
+  const inline=/^(?:출처|Source) · (.+)$/.exec(line);
+  if(inline){blocks.citation.push(inline[1]);continue;}
+  let kept=raw.replace(/^(\s*)검증된 한국어 번역:\s*/,"$1");for(const sentence of NO_KOREAN_SENTENCES)if(kept.includes(sentence)){kept=kept.replace(sentence,"");sourceOpen=true;}
+  if(kept.trim()||blocks[kind].length)blocks[kind].push(kept.trimEnd());
+ }
+ const join=list=>list.join("\n").trim();
+ const result={body:join(blocks.body),source:join(blocks.source),citation:join(blocks.citation),dev:join(blocks.dev)};
+ result.sourceOpen=sourceOpen||(!result.body&&!!result.source);
+ return result;
+}
+function developmentInfo(text){const details=document.createElement("details");details.className="dev-info";const summary=document.createElement("summary");summary.textContent="개발 정보";const body=document.createElement("div");body.className="dev-info-body";body.textContent=text;details.appendChild(summary);details.appendChild(body);return details;}
+function answerSourceToggle(source,citation,open){const details=sourceToggle(source||"",{open});if(citation){const line=document.createElement("div");line.className="answer-citation";line.textContent=citation;details.appendChild(line);}return details;}
+
 function renderStructuredReply(node,message){
  const target=node?.querySelector?.(".reply");if(!target)return false;
  const snapshot=beginChatPatch(node);
@@ -1345,50 +1369,60 @@ function renderStructuredReply(node,message){
  const sources=structured?message.sources:Array.isArray(message.source_texts)?message.source_texts:null;
  const pages=structured?message.source_pages:null,evidence=structured?message.evidence_ids:null,citations=reference?message.citations:null;
  if(message.is_delta || message.type==="reply.delta"){
-  target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(message.text)+" ";
+  // What the delta carries beside its text is kept for the final render,
+  // whose reply.complete holds the text alone.
+  node.replyExtras={...(node.replyExtras||{}),...(typeof message.development_note==="string"?{development_note:message.development_note}:{}),...(typeof message.translation_status==="string"?{translation_status:message.translation_status}:{})};
+  if(message.translation_status==="model_assisted_unreviewed"){autoTranslationShown=true;renderTranslationNote();}
+  const parts=splitAnswerText(message.text);
+  target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(parts.body||parts.source)+" ";
   finishChatPatch(snapshot);return false;
  }
  target.replaceChildren();
  const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}renderMarkdownToContainer(block,text);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
 
+ let parsedSource=false;
  if(message.display_document && Array.isArray(message.display_document.sections) && message.display_document.sections.length > 0){
+  const bodyHeading=heading=>typeof heading==="string"&&!ANSWER_LABEL_LINES.some(([pattern,kind])=>kind==="body"&&pattern.test(heading.trim()))?heading:"";
   for(const sec of message.display_document.sections){
    if(sec.kind==="lead" && sec.text){
     const leadBlock=document.createElement("div");leadBlock.className="answer-block answer-lead";
     const p=document.createElement("p");p.textContent=normalizePresentationText(sec.text);leadBlock.appendChild(p);target.appendChild(leadBlock);
    }else if(sec.kind==="bullets" && Array.isArray(sec.items) && sec.items.length){
     const bulletBlock=document.createElement("div");bulletBlock.className="answer-block answer-primary";
-    if(sec.heading){const heading=document.createElement("b");heading.textContent=sec.heading;bulletBlock.appendChild(heading);}
+    if(bodyHeading(sec.heading)){const heading=document.createElement("b");heading.textContent=sec.heading;bulletBlock.appendChild(heading);}
     const ul=document.createElement("ul");ul.className="answer-bullet-list";
     for(const item of sec.items){
      const li=document.createElement("li");renderMarkdownToContainer(li,item);ul.appendChild(li);
     }
     bulletBlock.appendChild(ul);target.appendChild(bulletBlock);
    }else if(sec.kind==="source" && sec.text){
-    const details=document.createElement("details");details.className="reference-details";
-    const summary=document.createElement("summary");summary.textContent=sec.heading||"원문 · English";
-    const body=document.createElement("div");body.className="evidence-detail-body";
-    add(body,"answer-source","원문 · English",sec.text);
-    details.appendChild(summary);details.appendChild(body);target.appendChild(details);
+    const citation=message.display_document.sections.find(item=>item?.kind==="citation"&&item.text);
+    target.appendChild(answerSourceToggle(sec.text,citation?citation.text:"",false));
    }else if(sec.kind==="citation" && sec.text){
-    add(target,"answer-citation",sec.heading||"출처",sec.text);
+    if(!message.display_document.sections.some(item=>item?.kind==="source"&&item.text))target.appendChild(answerSourceToggle("",sec.text,false));
    }else if(sec.text){
-    add(target,"answer-primary",sec.heading||"답변",sec.text);
+    add(target,"answer-primary",bodyHeading(sec.heading),sec.text);
    }
   }
  }else{
-  const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":message.translation_status==="verified_sidecar"||message.translation_status==="grounded_model"?"답변 · 한국어":"답변";
+  // Where the answer came from is named only when it is not the protocol.
+  const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":"";
   let cleanPrimary = primary || message.text || "";
   if(message.answer_origin==="external_authoritative_reference") cleanPrimary = sanitizeExternalResearchAnswer(cleanPrimary);
-  add(target,"answer-primary",originLabel,cleanPrimary);
+  const parts=splitAnswerText(cleanPrimary);
+  if(parts.body)add(target,"answer-primary",originLabel,parts.body);
+  if(parts.source||parts.citation){target.appendChild(answerSourceToggle(parts.source,parts.citation,parts.sourceOpen));parsedSource=true;}
+  if(parts.dev&&developmentRun())target.appendChild(developmentInfo(parts.dev));
  }
+ const developmentNote=typeof message.development_note==="string"?message.development_note:node.replyExtras?.development_note;
+ if(nonemptyText(developmentNote)&&developmentRun())target.appendChild(developmentInfo(developmentNote));
 
  if(structured||reference){
   const details=document.createElement("details");details.className="reference-details";
   const summary=document.createElement("summary");summary.textContent="원문·근거·검색 세부정보";
   const body=document.createElement("div");body.className="evidence-detail-body";
-  if(sources?.length&&(!message.display_document||!message.display_document.sections.some(s=>s.kind==="source")))add(body,"answer-source","원문 · English",sources.join("\n\n"));
+  if(sources?.length&&!parsedSource&&(!message.display_document||!message.display_document.sections.some(s=>s.kind==="source")))add(body,"answer-source","원문",sources.join("\n\n"));
   if(structured&&evidence?.length&&pages?.length)add(body,"answer-citation","출처",evidence.map((id,index)=>`${id} · p.${pages[index]}`).join(", "));
   if(reference){
    const line=document.createElement("div");line.className="reference-citations";
@@ -1751,7 +1785,7 @@ async function loadProtocolCatalog(preferredProtocolId=null){
   const response=await fetch("/api/protocols",{headers:{Accept:"application/json"},redirect:"error"});
   if(!response.ok)throw new Error("catalog unavailable");
   const payload=await response.json(),entries=Array.isArray(payload.protocols)?payload.protocols:[];
-  const testModeBanner=$("test-mode-banner");if(testModeBanner)testModeBanner.hidden=payload.test_mode?.readiness_gates_skipped!==true;
+  testModeReadinessGatesSkipped=payload.test_mode?.readiness_gates_skipped===true;const testModeBanner=$("test-mode-banner");if(testModeBanner)testModeBanner.hidden=!testModeReadinessGatesSkipped;
   protocolCatalog.clear();selector.replaceChildren();
   const empty=document.createElement("option");empty.value="";empty.textContent="프로토콜을 선택하지 않음";selector.appendChild(empty);
   for(const item of entries){
