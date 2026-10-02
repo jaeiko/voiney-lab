@@ -11009,7 +11009,10 @@ class CuratedProtocolSession:
             speech_bits = []
             for s in target_steps:
                 localized = self._localized_fact(s.step_id, "current_step")
-                desc = localized if localized else s.text
+                # With no reviewed Korean, the source line itself. ``s.text``
+                # is no field of a source step, so a protocol without a
+                # translation failed here with an AttributeError.
+                desc = localized if localized else s.instruction_source_text.strip()
                 bullet_lines.append(f"• {s.source_label}단계: {desc}")
                 speech_bits.append(f"{s.source_label}단계: {desc}")
             header_text = (

@@ -25,6 +25,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from tests.test_digit_step_numbers import _fixture as _ninety_nine_step_fixture
 from tests.test_voice_pause_resume_persistence import (
     FIXTURE,
     PROVENANCE,
@@ -324,6 +325,26 @@ class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
         self.assertIn(RECORD_FAILED, reply)
         self.assertNotIn("기록했어요", reply)
         self.assertEqual(seen["step_index"], step_7_index)
+
+
+class StepRangeWithoutTranslationTests(unittest.TestCase):
+    """Decision 4: a range on a protocol that has no Korean translation."""
+
+    def test_the_source_lines_are_read(self):
+        fixture = _ninety_nine_step_fixture()
+        session = CuratedProtocolSession(fixture)
+        session.active = True
+        session.current_index = 0
+        plan = session.plan("3단계부터 5단계까지 알려줘", turn_id=1, language="ko")
+        self.assertEqual(plan.action, CuratedProtocolAction.STEP_RANGE)
+        self.assertFalse(plan.state_changed)
+        lines = [line for line in plan.display_text.splitlines() if line.startswith("•")]
+        self.assertEqual(lines, [
+            f"• {n}단계: {n}. Label sample tube {n} with the marker."
+            for n in (3, 4, 5)
+        ])
+        for n in (3, 4, 5):
+            self.assertIn(f"Label sample tube {n} with the marker.", plan.speech_text)
 
 
 if __name__ == "__main__":
