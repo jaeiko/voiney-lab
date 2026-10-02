@@ -329,11 +329,8 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         resume' notice, not spoken -- and the state does not move. The
         completion is taken only after a resume.
 
-        What is checked is the server's decision. The notice itself does not
-        reach the browser today: a silent turn calls complete_without_playback
-        before its reply is sent, so the reply and turn.done are dropped, and
-        the page renders a reply only for a turn that played audio. That needs
-        static/ and is reported, not pinned here.
+        What is checked here is the server's decision; that the notice is
+        delivered is the next test.
         """
 
         seen = {}
@@ -364,6 +361,42 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
             [item["step_id"] for item in seen["end"]["durable"]["completed_steps"]],
             ["candidate-a-step-01"],
         )
+
+    def test_the_paused_notice_reaches_the_socket_and_the_turn_ends(self):
+        """A silent turn still sends its reply and turn.done, then ends.
+
+        It used to end first: complete_without_playback cleared the active
+        turn, so every later event was dropped as no longer current, and the
+        page -- which had set the turn active on speech.start -- sat on "절차
+        확인 중…" with no answer and never went back to listening (2026-10-01
+        test, turn 9). The notice is not spoken; only its text is sent.
+        """
+
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "정지")
+            await say(3, "완료했어")
+            seen["state"] = listener.state
+            seen["active_turn_id"] = listener.active_turn_id
+
+        socket, _ = self._session(scenario)
+        done = socket.for_turn(3, "turn.done")
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["result_kind"], "pause")
+        self.assertEqual(done[0]["segment_count"], 0)
+        self.assertEqual(done[0]["output_frames"], 0)
+        reply = socket.reply(3)
+        self.assertIn("일시정지 상태입니다", reply)
+        self.assertIn("'실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
+        self.assertEqual(socket.for_turn(3, "reply.delta")[-1]["speech_text"], "")
+        self.assertEqual(socket.for_turn(3, "audio.complete")[-1]["segment_count"], 0)
+        self.assertEqual(socket.for_turn(3, "audio.replay.available"), [])
+        kinds = [item["type"] for item in socket.sent if item.get("turn_id") == 3]
+        self.assertLess(kinds.index("reply.complete"), kinds.index("turn.done"))
+        self.assertIsNone(seen["active_turn_id"])
+        self.assertNotEqual(seen["state"], TurnState.PROCESSING)
 
     def test_a_refused_resume_leaves_the_session_fully_paused(self):
         """A resume the record refuses is rolled back whole: the session is

@@ -7924,7 +7924,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 frames=[]
                 if filler is not None:
                     await filler.cancel()
-                session.complete_without_playback(turn_id)
         except asyncio.CancelledError:
             if brain_run is not None:
                 brain_run.cancel()
@@ -8076,6 +8075,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 role:{"status":terminal.status,"elapsed_ms":terminal.elapsed_ms}
                 for role,terminal in brain_terminals.items()
             })
+        if speech_policy!="speak":
+            # A silent turn has no playback to end it, so it ends here, once
+            # its reply and turn.done are out. Ended before them, each was
+            # dropped as no longer current and the page waited on "절차 확인
+            # 중…" with no answer (2026-10-01 voice test, the paused notice).
+            session.complete_without_playback(turn_id)
         _record_workspace_metric(
             category="workflow",metric_name="turn",
             metric_value=float(timings.get("total_ms",0)),
