@@ -2548,6 +2548,17 @@ _ANOMALY_PATTERNS = (
     (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
     (re.compile(r"(?:깨졌|부서졌|금이\s*갔|터졌)"), "sample_deviation"),
 )
+
+
+def _anomaly_category(key: str) -> str:
+    """The anomaly reader's category for an utterance, or the catch-all."""
+
+    return next(
+        (category for pattern, category in _ANOMALY_PATTERNS if pattern.search(key)),
+        "protocol_block",
+    )
+
+
 _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:소리가\s*안\s*(?:나|나요|나요)|안\s*들려|음성이\s*재생되지\s*않았어)$"),
     re.compile(r"^(?:방금\s*)?(?:답변|음성).*(?:다시\s*)?(?:들려|재생해)"),
@@ -8440,7 +8451,30 @@ class CuratedProtocolSession:
             observed := _observation_predicate(
                 observation_pending.step_label, transcript
             )
-        ) is not None:
+        ) == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+            normalized_confirmation
+        ):
+            # "완전히 탈색됐는데 튜브가 터졌어": the endpoint is reported in
+            # the same breath as something going wrong. Reading the endpoint
+            # first used to advance on it and drop the problem. Now the
+            # problem is recorded and nothing moves; the question stays open,
+            # without taking a bare yes, and the endpoint is asked for again.
+            self._pending_observation_confirmation = replace(
+                observation_pending, requested_turn_id=turn_id,
+                requested_generation=generation, accepts_yes_no=False,
+            )
+            intent = CuratedControlIntent(
+                intent_kind="observation_with_anomaly",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                target_step="authoritative_current_step",
+                confidence_source="server_pending_observation",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=_anomaly_category(normalized_confirmation),
+                normalized_transcript=normalized_confirmation,
+            )
+        elif observation_pending_valid and observed is not None:
             self._pending_observation_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="pending_observation_confirmed",
@@ -8685,6 +8719,7 @@ class CuratedProtocolSession:
             and self.fixture.steps[self.current_index].step_id
             in self._steps_anchoring_a_repetition()
             and not intent.reported_observation
+            and intent.intent_kind != "observation_with_anomaly"
             and not stale_observation_reply
             and not self._names_another_step(intent)
         ):
@@ -9396,7 +9431,29 @@ class CuratedProtocolSession:
                     "step_id": step.step_id,
                     "notes": [transcript.strip()[:800]],
                 }
-                if category == "protocol_block":
+                if intent.intent_kind == "observation_with_anomaly":
+                    response = {
+                        "en": (
+                            f"I recognized an issue to record against step {step.source_label}. "
+                            "I will confirm only after the experiment record accepts it. "
+                            "Because of it, the endpoint is not recorded yet and the step "
+                            "has not changed. Please tell me once more whether the endpoint "
+                            "has been reached."
+                        ),
+                        "vi": (
+                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
+                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công. "
+                            "Vì vậy điểm kết thúc chưa được ghi và bước chưa thay đổi. "
+                            "Vui lòng cho biết lại điểm kết thúc đã đạt chưa."
+                        ),
+                        "ko": (
+                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
+                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다. "
+                            "이상 사항이 있어 종점 관찰은 아직 기록하지 않았고 단계도 그대로입니다. "
+                            "종점에 도달했는지 관찰 결과를 한 번 더 말씀해 주세요."
+                        ),
+                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+                elif category == "protocol_block":
                     response = {
                         "en": (
                             f"I recognized an issue to record against step {step.source_label}. "

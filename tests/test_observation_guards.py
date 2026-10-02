@@ -12,13 +12,33 @@ a condition is asked again.
 
 The pilot log's "탈색돼 있어" and "탈색이 완료됐어" are now the step-7
 endpoint too, under the same reading.
+
+An endpoint reported in the same breath as a problem, while the endpoint
+question is open ("완전히 탈색됐는데 튜브가 터졌어"), used to advance on the
+endpoint and drop the problem. Now the problem is recorded, nothing moves, and
+the question stays open -- without taking a bare "네" -- until the endpoint is
+reported again.
 """
 
 from __future__ import annotations
 
 import unittest
 
-from voiney_lab.curated_protocol import _observation_predicate
+from tests.test_voice_pause_resume_persistence import (
+    FIXTURE,
+    PROVENANCE,
+    SOURCE_PDF,
+    VoiceSessionHarness,
+)
+from voiney_lab.curated_protocol import (
+    CuratedProtocolAction,
+    CuratedProtocolSession,
+    _observation_predicate,
+    load_curated_protocol_fixture,
+)
+from voiney_lab.experiment_reports import ExperimentReportStore
+from voiney_lab.runtime_routing import route_curated_runtime_turn
+from voiney_lab.workspace_store import WorkspaceSettings, initialize_workspace_store
 
 #: Lane E's step-7 wordings, which read as before on their own.
 STEP_7_FRAMES = (
@@ -201,6 +221,195 @@ class StepSevenSpokenWordingsTests(unittest.TestCase):
             for wording in ("탈색돼 있어", "탈색이 완료됐어", "탈색 완료"):
                 with self.subTest(step=label, wording=wording):
                     self.assertIsNone(_observation_predicate(label, wording))
+
+
+def _step_index(fixture, label: str) -> int:
+    return next(
+        index for index, step in enumerate(fixture.steps)
+        if step.source_label == label
+    )
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class EndpointWithAProblemTests(unittest.TestCase):
+    """The session's own decisions while the endpoint question is open."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
+
+    @staticmethod
+    def _turn(session, text, turn_id):
+        return route_curated_runtime_turn(
+            session, text, turn_id=turn_id, language="ko",
+            configuration_id=1, generation=1,
+        ).plan
+
+    def _asked(self, label: str, *before: str) -> tuple[CuratedProtocolSession, int, int]:
+        """A session at ``label`` with its endpoint question open, the step
+        index, and the turn id the question is open for."""
+
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        self._turn(session, "프로토콜 시작해줘", 1)
+        session.current_index = _step_index(self.fixture, label)
+        asked = self._turn(session, f"{label}단계 완료했어", 19)
+        self.assertEqual(asked.intent_kind, "observation_confirmation_required")
+        for turn_id, text in enumerate(before, start=20):
+            self._turn(session, text, turn_id)
+        self.assertIsNotNone(session.pending_observation_confirmation)
+        return session, session.current_index, 20 + len(before)
+
+    def _assert_recorded_and_held(self, session, at, plan):
+        self.assertEqual(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+        self.assertEqual(plan.intent_kind, "observation_with_anomaly")
+        self.assertTrue(plan.reported_anomaly)
+        self.assertFalse(plan.state_changed)
+        self.assertFalse(plan.reported_observation)
+        self.assertEqual(session.current_index, at)
+        self.assertEqual(session.endpoint_observations(), {})
+        pending = session.pending_observation_confirmation
+        self.assertIsNotNone(pending)
+        self.assertFalse(pending.accepts_yes_no)
+        self.assertIn("종점", plan.display_text)
+
+    def test_the_problem_is_recorded_and_the_endpoint_asked_again(self):
+        cases = (
+            ("7", "완전히 탈색됐는데 튜브가 터졌어", "sample_deviation"),
+            ("7", "탈색 상태야 근데 시료를 흘렸어", "sample_deviation"),
+            ("7", "젤이 투명해 그런데 결과가 예상과 달라", "protocol_block"),
+            ("7", "탈색돼 있어 근데 뭔가 이상해", "protocol_block"),
+            ("9", "흰색이야 근데 튜브가 터졌어", "sample_deviation"),
+            ("20", "탈수됐어 그런데 장비가 멈췄어", "equipment_issue"),
+        )
+        for label, reply, category in cases:
+            for before in ((), ("시료를 흘렸어",)):
+                with self.subTest(step=label, reply=reply, after_anomaly=bool(before)):
+                    session, at, turn_id = self._asked(label, *before)
+                    plan = self._turn(session, reply, turn_id)
+                    self._assert_recorded_and_held(session, at, plan)
+                    self.assertEqual(plan.anomaly_category, category)
+                    self.assertEqual(plan.anomaly_text, reply)
+
+    def test_a_bare_yes_then_does_not_release_the_endpoint(self):
+        session, at, _turn_id = self._asked("7")
+        self._turn(session, "완전히 탈색됐는데 튜브가 터졌어", 20)
+        yes = self._turn(session, "네", 21)
+        self.assertFalse(yes.state_changed)
+        self.assertEqual(yes.intent_kind, "observation_confirmation_reasked")
+        self.assertEqual(session.current_index, at)
+        self.assertEqual(session.endpoint_observations(), {})
+
+    def test_the_endpoint_said_again_advances_with_the_observation(self):
+        session, at, _turn_id = self._asked("7")
+        self._turn(session, "완전히 탈색됐는데 튜브가 터졌어", 20)
+        done = self._turn(session, "완전히 탈색됐어", 21)
+        self.assertEqual(done.action, CuratedProtocolAction.NEXT)
+        self.assertTrue(done.state_changed)
+        self.assertTrue(done.reported_observation)
+        self.assertEqual(done.observation_predicate, "positive")
+        self.assertEqual(session.current_index, at + 1)
+        self.assertEqual(
+            session.endpoint_observations()[self.fixture.steps[at].step_id]["utterance"],
+            "완전히 탈색됐어",
+        )
+
+    def test_saying_there_is_no_problem_still_reports_the_endpoint(self):
+        session, at, _turn_id = self._asked("7")
+        plan = self._turn(session, "완전히 탈색됐어 문제가 없어", 20)
+        self.assertEqual(plan.intent_kind, "pending_observation_confirmed")
+        self.assertTrue(plan.state_changed)
+        self.assertEqual(session.current_index, at + 1)
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
+    def test_the_report_keeps_the_problem_and_step_7_completes_only_later(self):
+        step_1 = self.fixture.steps[0]
+        step_7_index = _step_index(self.fixture, "7")
+        step_7 = self.fixture.steps[step_7_index]
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, self.workspace_dir)
+            )
+            try:
+                jumped = store.record_experiment_progress(
+                    self.principal, listener.session_id,
+                    expected_version=listener.experiment_state_version,
+                    expected_voice_connection_id=listener.voice_connection_id,
+                    event_key="test-setup-step-7",
+                    event_type="step_advanced",
+                    step_id=step_1.step_id, step_label=step_1.source_label,
+                    next_step_id=step_7.step_id,
+                    next_step_label=step_7.source_label,
+                    payload={"authority": "test_setup"},
+                )
+            finally:
+                store.close()
+            listener.experiment_state_version = jumped["version"]
+            listener.curated_protocol_session.current_index = step_7_index
+            await say(19, "7단계 완료했어")
+            await say(20, "완전히 탈색됐는데 튜브가 터졌어")
+            seen["after_20"] = self._snapshot(listener)
+            seen["held_20"] = (
+                listener.curated_protocol_session.pending_observation_confirmation
+            )
+            await say(21, "완전히 탈색됐어")
+            seen["end"] = self._snapshot(listener)
+            seen["report_id"] = listener.experiment_report_id
+
+        socket, _ = self._session(scenario)
+        decision_20 = socket.for_turn(20, "turn.route_decision")[-1]
+        self.assertEqual(decision_20["action"], "report_anomaly")
+        self.assertFalse(decision_20["state_mutation"])
+        # The words said here are the server's record acknowledgement, which
+        # replaces the session's reply once the report accepts the anomaly
+        # (server.py, REPORT_ANOMALY). The question itself is held.
+        self.assertIsNotNone(seen["held_20"])
+        self.assertFalse(seen["held_20"].accepts_yes_no)
+        self.assertEqual(self._errors(socket), [])
+
+        after_20 = seen["after_20"]
+        self.assertEqual(after_20["step_index"], step_7_index)
+        self.assertEqual(after_20["durable"]["current_step_label"], "7")
+        # The anomaly is on the timeline as a deviation; no appearance
+        # (endpoint) observation is.
+        self.assertEqual(
+            [
+                event["payload"]["category"]
+                for event in after_20["durable"]["events"]
+                if event["event_type"] == "observation_recorded"
+            ],
+            ["deviation"],
+        )
+        end = seen["end"]
+        self.assertEqual(end["step_index"], step_7_index + 1)
+        self.assertEqual(end["durable"]["current_step_label"], "8")
+
+        report = ExperimentReportStore(self.report_db).get_report(seen["report_id"])
+        anomalies = [
+            event for event in report["events"] if event["event_type"] == "anomaly"
+        ]
+        self.assertEqual(len(anomalies), 1)
+        self.assertEqual(anomalies[0]["step_id"], step_7.step_id)
+        self.assertIn("튜브가 터졌어", anomalies[0]["user_wording"])
+        completed = [
+            event for event in report["events"]
+            if event["event_type"] == "step_completed"
+            and event["step_id"] == step_7.step_id
+        ]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["payload"]["observation_predicate"], "positive")
+        self.assertEqual(completed[0]["user_wording"], "완전히 탈색됐어")
 
 
 if __name__ == "__main__":
