@@ -95,5 +95,45 @@ class StepSevenFramesReadAsAWholeTests(unittest.TestCase):
         self.assertEqual(_observation_predicate("7", "not fully destained"), "negative")
 
 
+class StepNineAndTwentyFramesReadAsAWholeTests(unittest.TestCase):
+    def test_the_frames_alone_and_after_a_correction_still_report_it(self):
+        for label in ("9", "20"):
+            for frame in STEP_9_FRAMES:
+                for wording in (frame, f"아니 {frame}", f"어 {frame}"):
+                    with self.subTest(step=label, wording=wording):
+                        self.assertEqual(
+                            _observation_predicate(label, wording), "positive"
+                        )
+
+    def test_a_negation_anywhere_makes_it_a_negative(self):
+        for label in ("9", "20"):
+            for frame in STEP_9_FRAMES:
+                for wording in _beside(frame)["negative"]:
+                    with self.subTest(step=label, wording=wording):
+                        self.assertEqual(
+                            _observation_predicate(label, wording), "negative"
+                        )
+
+    def test_not_yet_a_wish_or_a_condition_is_asked_again(self):
+        for label in ("9", "20"):
+            for frame in STEP_9_FRAMES:
+                for wording in _beside(frame)["unread"] + (
+                    "흰색이 됐으면 좋겠어",
+                    "흰색으로 변했다면",
+                ):
+                    with self.subTest(step=label, wording=wording):
+                        self.assertIsNone(_observation_predicate(label, wording))
+
+    def test_the_english_frames_read_as_before(self):
+        for label in ("9", "20"):
+            with self.subTest(step=label):
+                self.assertEqual(
+                    _observation_predicate(label, "it turned white"), "positive"
+                )
+                self.assertEqual(
+                    _observation_predicate(label, "not white yet"), "negative"
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

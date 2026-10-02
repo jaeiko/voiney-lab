@@ -2271,7 +2271,12 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
-            return "negative" if _frame_negated(key, positive) else "positive"
+            # Read as a whole as at step 7: "안 됐어 흰색이야", "흰색이야
+            # 아직" and "흰색이 됐으면 좋겠어" passed as the endpoint reached.
+            if _frame_negated(key, positive):
+                return "negative"
+            reading = _endpoint_report_reading(key)
+            return None if reading == "unread" else reading
     return None
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
