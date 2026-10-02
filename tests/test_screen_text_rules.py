@@ -164,9 +164,12 @@ assert(note.textContent==="한국어는 자동 번역입니다. 정확한 내용
 class AnswerTextPageTests(unittest.TestCase):
     """Principles 2, 3 and 6 for chat answers."""
 
-    def _reply(self, development_only: bool, text: str, note: str | None) -> str:
+    def _reply(self, test_mode: bool, text: str, note: str | None) -> str:
+        # The protocol is development-only in both cases: in a pilot run that
+        # alone must not show development info.
         return PAGE_SETUP + r"""
-await send({...baseState,development_only:""" + json.dumps(development_only) + r"""},{safety_items:[],translation_source:"reviewed"});
+testModeReadinessGatesSkipped=""" + json.dumps(test_mode) + r""";
+await send({...baseState,development_only:true},{safety_items:[],translation_source:"reviewed"});
 await onMessage({data:JSON.stringify({type:"speech.start",turn_id:4,generation:0})},sessionGeneration,socket);
 const message={configuration_id:7,turn_id:4,generation:0,text:""" + json.dumps(text, ensure_ascii=False) + r""",development_note:""" + json.dumps(note, ensure_ascii=False) + r"""};
 await onMessage({data:JSON.stringify({type:"reply.delta",segment_index:0,...message})},sessionGeneration,socket);
@@ -187,7 +190,7 @@ assert(devs.length===0,"development info shown in a pilot run");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_a_development_run_folds_the_boundary_under_development_info(self):
+    def test_development_test_mode_folds_the_boundary_under_development_info(self):
         boundary = "근거 경계: 활성 프로토콜의 확인된 내용입니다."
         result = run_page_script(self._reply(True, "HPLC water는 2단계에 나옵니다.", boundary) + r"""
 assert(devs.length===1&&devs[0].open===false&&devs[0].children[0].textContent==="개발 정보","development info not folded");
@@ -342,17 +345,30 @@ class SafetyItemsServerTests(unittest.TestCase):
 
 @unittest.skipUnless(SOURCE_PDF.is_file(), "requires the licensed Candidate A source PDF")
 class PilotAnswerServerTests(unittest.TestCase):
-    """The related-question reply of a non-development protocol carries no boundary."""
+    """A related-question reply carries no boundary text; the note only in test mode."""
 
-    def test_no_boundary_text_or_note_for_a_non_development_protocol(self):
+    def test_no_boundary_text_and_the_note_only_in_test_mode(self):
         from dataclasses import replace
 
         from tests.test_curated_protocol_cascade import CuratedProtocolServerCascadeTests, Socket
         from voiney_lab.server import Transcription, run_turn
 
         CuratedProtocolServerCascadeTests.setUpClass()
-        for development_only in (True, False):
-            with self.subTest(development_only=development_only):
+        cases = (
+            # (test mode as run_dev.sh --test-mode sets it, development-only)
+            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
+              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "true"}, True),
+            # run_pilot.sh: reference_only, test mode forced off -- even a
+            # development-activated protocol gets no note.
+            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "reference_only",
+              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "false"}, True),
+            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "reference_only",
+              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "false"}, False),
+        )
+        for environment, development_only in cases:
+            test_mode = environment["VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES"] == "true"
+            with self.subTest(test_mode=test_mode, development_only=development_only), \
+                    patch.dict("os.environ", environment):
                 harness = CuratedProtocolServerCascadeTests()
                 harness.fixture = replace(
                     CuratedProtocolServerCascadeTests.fixture,
@@ -393,7 +409,7 @@ class PilotAnswerServerTests(unittest.TestCase):
                     self.assertNotIn("근거 경계", text)
                     self.assertNotIn("직접 답변", text)
                 self.assertIn("HPLC water", reply["text"])
-                if development_only:
+                if test_mode:
                     self.assertIn("근거 경계", reply["development_note"])
                 else:
                     self.assertIsNone(reply["development_note"])

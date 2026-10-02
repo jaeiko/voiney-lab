@@ -1121,7 +1121,10 @@ function renderSafetyPack(pack){
 const AUTO_TRANSLATION_NOTE="한국어는 자동 번역입니다. 정확한 내용은 원문을 확인하세요.";
 const NO_TRANSLATION_NOTE="한국어 번역이 없어 원문으로 보여 드립니다.";
 function koreanIsBody(){return (acceptedSessionConfiguration?.input_language??acceptedSessionConfiguration?.language??"ko")!=="en";}
-function developmentRun(){return curatedProtocolState?.development_only===true||testModeReadinessGatesSkipped===true;}
+// A development run is told apart by the one value a pilot never has: the
+// test-mode flag run_pilot.sh forces off. A development-only protocol is not
+// enough -- the pilot's reference_only scope may activate one.
+function developmentRun(){return testModeReadinessGatesSkipped===true;}
 function sourceToggle(text,{open=false}={}){const details=document.createElement("details");details.className="source-toggle";details.open=open;const summary=document.createElement("summary");summary.textContent="원문";const body=document.createElement("div");body.className="source-toggle-body";body.textContent=normalizePresentationText(text);details.appendChild(summary);details.appendChild(body);return details;}
 function renderTranslationNote(){
  const note=$("procedure-translation-note");if(!note)return;
@@ -1331,7 +1334,7 @@ function turnNode(id,browserGeneration=sessionGeneration){
 // Label lines the protocol layer still writes into a reply's text. The page
 // reads them as block boundaries and prints none of them: the answer is the
 // body, the source goes under one folded "원문" with its citation, and the
-// grounding boundary shows only in a development run, folded as "개발 정보".
+// grounding boundary shows only in development test mode, folded as "개발 정보".
 const ANSWER_LABEL_LINES=[
  [/^(?:직접 답변|Direct answer|답변 · 한국어 참고 번역|답변 · 한국어|답변|한국어 안내 · 자동 번역\(검토 전\)|한국어 안내|한국어 참고 번역|세부 항목)$/,"body"],
  [/^(?:원문 · English|원문|Original)(?: · PDF p\.\d+)?$/,"source"],

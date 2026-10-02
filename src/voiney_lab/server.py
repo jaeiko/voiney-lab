@@ -7561,7 +7561,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 speech=envelope.speech_summary
                 # The answer alone is the reply. Where it came from is a
                 # development detail: it goes beside the reply, folded, and
-                # only for a development-only protocol (never a pilot run).
+                # only in development test mode (never a pilot run).
                 display=envelope.direct_answer
                 source_boundary_note=(
                     "근거 경계: 활성 프로토콜의 확인된 내용이며, "
@@ -8165,9 +8165,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             source_plan_scopes=list(plan.source_plan_scopes),
             unresolved_dimensions=list(plan.unresolved_dimensions),
             display_document=getattr(plan, "display_document", None),
+            # Only in development test mode, which run_pilot.sh forces off:
+            # a development-only protocol alone does not mean a development
+            # run, since the pilot's reference_only scope may activate one.
             development_note=(
                 source_boundary_note
-                if curated.fixture.development_only else None))
+                if _test_mode_skips_readiness_gates() else None))
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         if speech_policy=="speak":
