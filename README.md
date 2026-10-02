@@ -443,42 +443,51 @@ instructions are withheld by default. Cross-origin `Location` responses are
 rejected before PATCH to prevent follow-up SSRF. See the
 [eLabFTW API v2 documentation](https://doc.elabftw.net/api/v2/).
 
-## PDF text extraction and its cross-check
+## PDF text extraction
 
-Two PDF libraries are used for different jobs, and the split is deliberate.
+One PDF engine reads every Protocol PDF, behind one module.
 
 | Component | Job | Licence |
 | --- | --- | --- |
-| `pypdf` | File structure, encryption detection, document metadata, parser-warning taxonomy. Its text extractor is **not** used. | BSD-3-Clause |
-| `pypdfium2` | Primary page-text extraction. | Binding: Apache-2.0 **or** BSD-3-Clause. Bundled PDFium engine: BSD-3-Clause. Bundled build dependencies (freetype, libjpeg-turbo, libpng, libtiff, zlib, icu, lcms, openjpeg, …) carry their own permissive licences, shipped in the wheel. |
-| `pdftotext` (poppler-utils, optional) | Independent comparison engine for the extraction cross-check. Invoked as a separate process, never linked. | GPL — separate process only |
+| `pymupdf` (PyMuPDF / MuPDF), only through `src/voiney_lab/pdf_text_engine.py` | Page count, encryption, document metadata, page text, text blocks (coordinates, font size, bold), and page images for OCR. Runs in a child process per document. | AGPL-3.0 — accepted on 2026-10-02 on the condition that it stays behind that one module, so it can be replaced there without touching the rest of the server |
+| `pypdf` | Not used to read Protocol PDFs. Still used by `curated_protocol.py` and by the tests' PDF fixture writers. | BSD-3-Clause |
 
-`pypdf`'s text extractor silently substituted private-use glyphs for real
-characters: `(50:49:1)` came back as `50491)` and `00:30:00`
-as `003000`. Exact-evidence validation cannot catch that, because
-the corrupted text is self-consistent and hashes cleanly, and its alphanumeric
-content is unchanged — `50491` either way.
+What `experiment_protocol_pdf.py` records about a source, independently of the
+engine: the file type, the 64 MiB bound (checked before the engine runs), the
+SHA-256 of the exact bytes, and a refusal when the file changes or is replaced
+while it is being read. A PDF whose cross-reference table MuPDF has to rebuild
+is refused as malformed.
 
-Because a silent substitution is invisible to every downstream check, extracted
-text is compared against an independent engine before it can become canonical
-evidence. The comparison is an order-independent character census that
-normalizes away line breaking, control padding, hyphen variants and Unicode
-noncharacters, and deliberately keeps private-use characters and structural
-punctuation. Three outcomes:
+Page text is MuPDF's own characters, with one layout rule: a line that overlaps
+the previous line vertically by at least half its height and starts to its
+right is the same printed line and is joined to it with one space, so a step
+number set apart from its instruction stays on the instruction's line. Measured
+on 2026-10-02 over the four local sources (33 pages), PyMuPDF and the previous
+engine (pypdfium2) gave the same characters on every page; only whitespace
+differed, and the numbered-step trigger found the same labels on every page.
 
-- **verified** — the engines agree; the source may become canonical evidence.
-- **mismatch** — proven disagreement. Chunk admission refuses it outright, and
-  `source_text_cross_check_failed` blocks readiness. It cannot be acknowledged
-  away.
-- **comparator_unavailable** — no comparison engine on this host. This is
-  *unknown*, not *wrong*: admission still proceeds, but
-  `source_text_cross_check_unavailable` blocks execution readiness until a
-  named reviewer clears it through `acknowledge_readiness_gate`, which writes
-  the actor, role, comment and timestamp to the append-only ledger. An
-  environment without the comparator therefore never passes quietly.
+There is no engine cross-check any more. Until 2026-10-02 pdfium's text was
+compared with poppler's `pdftotext`, unmapped glyphs were read back from the
+document's ToUnicode map, one page's disagreement refused the whole document
+(`source_text_cross_check_failed`), and a host without `pdftotext` sent every
+source to a reviewer (`source_text_cross_check_unavailable`). All of that is
+removed; the two readiness codes are no longer produced. Evidence still has to
+appear verbatim on its cited page — that check now runs against PyMuPDF's text,
+with the same whitespace normalization as before.
 
-Installing the comparator (`apt-get install poppler-utils`, or the equivalent
-in the container image) is what keeps that gate from firing on every source.
+A page with no text layer (a scan), or one where at least 5% of the visible
+characters are U+FFFD, private-use or unassigned code points, is marked
+`ocr_required` with `ocr_reason` `no_text_layer` or `unreadable_glyphs`. The
+document is not refused; the extraction lists those pages in
+`ocr_required_page_numbers` and in a warning. Text blocks are recorded on each
+page for the next structure measurement; nothing decides on them yet.
+
+Changing the engine changes page text byte for byte, so it changes every page
+hash and every evidence segment ID (`seg-…`) derived from it. Analyses stored
+before 2026-10-02 cite pdfium-derived IDs and page hashes; whether they are
+re-analysed or re-pointed is an open decision, not something this change does. The curated Candidate A timer manifest was
+re-pointed to the new segment IDs (same pages, same literals, same
+non-whitespace segment text).
 
 ## Setup
 
@@ -746,11 +755,9 @@ reproduces the documented numbers without editing `.env`. In a tree with no
 `.env` in scope (CI, a fresh worktree) they are a no-op, so passing them is
 always safe and never wrong.
 
-The suite also expects the `pdftotext` comparator (poppler-utils) on `PATH`;
-see [PDF text extraction and its cross-check](#pdf-text-extraction-and-its-cross-check).
-Without it every source comes back `comparator_unavailable`, readiness gains
-`source_text_cross_check_unavailable`, and 40 tests that expect the comparator
-fail (condition B, measured 2026-10-01 at `2e59706`). CI installs it.
+The suite needs no system PDF tools: PyMuPDF is a Python wheel, and the
+`pdftotext` comparator the suite used to expect is gone (see
+[PDF text extraction](#pdf-text-extraction)).
 
 Browser acceptance coverage for the researcher/reviewer/admin workspaces (desktop
 and mobile viewports) lives under `tests/e2e/` and runs separately via
@@ -766,7 +773,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main`,
 `dev`, `feature/**`, `fix/**` and `refactor/**`, and on every pull request into
 `main` or `dev`. It has three jobs:
 
-- **Python tests** — installs poppler-utils, then runs the pytest command above
+- **Python tests** — runs the pytest command above
   under condition B (no licensed PDF, no `.env`), `compileall`, the
   deterministic replay, and the Candidate A evaluators, which skip because the
   PDF is absent.
