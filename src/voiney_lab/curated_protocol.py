@@ -2103,6 +2103,14 @@ _STEP_7_SPOKEN_ENDPOINT = re.compile(
 )
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
+# A wish or a condition beside it ("탈색되면", "탈색이 됐으면 좋겠어",
+# "바뀌었다면", "될 거야") says what should happen, not what was seen.
+_ENDPOINT_CONDITION = re.compile(
+    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌)으?면"
+    r"|(?:됐|되었|바뀌었|바꼈|변했)다면"
+    r"|(?:되|바뀌|변하)(?:길|기를|도록|려면|기\s*전)"
+    r"|(?:될|바뀔|변할)\s*(?:때|거|것|수)"
+)
 # What an outstanding observation prompt does with a reply it could not read.
 # Control commands go through as before, and so do record/report commands the
 # person issues on their own. A read-only answer keeps the prompt only for an
@@ -2224,11 +2232,17 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             # opening "아니" correction makes it a negative, so "탈색이 안
             # 됐어 … 탈색됐어" is never read as the endpoint reached; and
             # "아직" beside it ("아직 탈색 됐어", an "안" the transcript may
-            # have dropped) says neither, so it is asked again.
+            # have dropped), or a wish or condition, says neither, so it is
+            # asked again.
             said = _LEADING_CORRECTION.sub("", key)
             if _POST_FRAME_NEGATION.search(said):
                 return "negative"
-            return None if re.search(r"(?<![가-힣])아직", said) else "positive"
+            if (
+                re.search(r"(?<![가-힣])아직", said)
+                or _ENDPOINT_CONDITION.search(said)
+            ):
+                return None
+            return "positive"
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",

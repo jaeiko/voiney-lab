@@ -109,6 +109,21 @@ class EndpointWordingTests(unittest.TestCase):
             with self.subTest(wording=wording):
                 self.assertNotEqual(_observation_predicate("7", wording), "positive")
 
+    def test_a_wish_or_condition_beside_the_new_wordings_is_not_a_report(self):
+        # Found by the lane M combination check: each half reads alone, and
+        # together they say what should happen, not what was seen.
+        for wording in (
+            "탈색됐어 탈색되면",
+            "탈색되면 탈색 상태야",
+            "탈색이 됐으면 좋겠어 탈색됐어",
+            "탈색으로 바뀌었으면 좋겠어 탈색이 됐어",
+            "탈색됐다면 탈색 상태야",
+            "탈색이 될 거야 탈색 상태야",
+            "탈색되길 바라 탈색됐어",
+        ):
+            with self.subTest(wording=wording):
+                self.assertIsNone(_observation_predicate("7", wording))
+
     def test_the_new_wordings_are_step_7_only(self):
         for label in ("6", "8", "9", "20"):
             for wording in REPORTED_ENDPOINT[:3]:
