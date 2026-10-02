@@ -4815,8 +4815,11 @@ TURN_PROGRESS_TRANSITIONS={
         "checking_protocol","checking_approved_information","composing",
         "synthesizing","cancelled","error",
     }),
+    # A silent curated turn (the paused notice) has no audio, so it ends
+    # straight from checking_protocol instead of through playing.
     "checking_protocol":frozenset({
-        "checking_approved_information","synthesizing","cancelled","error",
+        "checking_approved_information","synthesizing","complete","blocked",
+        "cancelled","error",
     }),
     "checking_approved_information":frozenset({
         "composing","synthesizing","cancelled","error",
@@ -8080,6 +8083,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             # its reply and turn.done are out. Ended before them, each was
             # dropped as no longer current and the page waited on "절차 확인
             # 중…" with no answer (2026-10-01 voice test, the paused notice).
+            # Its card reaches the end state here too: with no playback there
+            # is no playback.ended to carry it there.
+            await progress(session.turn_terminal_outcome(turn_id,generation))
             session.complete_without_playback(turn_id)
         _record_workspace_metric(
             category="workflow",metric_name="turn",
