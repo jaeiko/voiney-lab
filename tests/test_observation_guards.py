@@ -18,6 +18,11 @@ question is open ("완전히 탈색됐는데 튜브가 터졌어"), used to adva
 endpoint and drop the problem. Now the problem is recorded, nothing moves, and
 the question stays open -- without taking a bare "네" -- until the endpoint is
 reported again.
+
+A problem left pending for detail at one step used to stay pending after the
+step changed: at step 9, "하얗게 변했어" was added to step 7's spill, and the
+step-9 endpoint question then would not take a "네". The invitation to add
+detail now ends when the step does; what was recorded stays recorded.
 """
 
 from __future__ import annotations
@@ -410,6 +415,137 @@ class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["payload"]["observation_predicate"], "positive")
         self.assertEqual(completed[0]["user_wording"], "완전히 탈색됐어")
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class PendingAnomalyEndsWithTheStepTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
+
+    @staticmethod
+    def _turn(session, text, turn_id):
+        return route_curated_runtime_turn(
+            session, text, turn_id=turn_id, language="ko",
+            configuration_id=1, generation=1,
+        ).plan
+
+    def _at_step_9_after_a_step_7_anomaly(self) -> CuratedProtocolSession:
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        self._turn(session, "프로토콜 시작해줘", 1)
+        session.current_index = _step_index(self.fixture, "7")
+        self._turn(session, "7단계 완료했어", 2)
+        anomaly = self._turn(session, "시료를 흘렸어", 3)
+        self.assertTrue(anomaly.reported_anomaly)
+        self.assertTrue(session.awaiting_server_confirmation)
+        self._turn(session, "완전히 탈색됐어", 4)
+        self.assertEqual(session.current_index, _step_index(self.fixture, "8"))
+        return session
+
+    def test_the_pending_anomaly_ends_when_the_step_changes(self):
+        session = self._at_step_9_after_a_step_7_anomaly()
+        self.assertIsNone(session._pending_anomaly)
+        # Nothing is left for the server to own the next turn with.
+        self.assertFalse(session.awaiting_server_confirmation)
+
+    def test_a_yes_to_the_next_endpoint_question_is_not_held_back(self):
+        session = self._at_step_9_after_a_step_7_anomaly()
+        self._turn(session, "8단계 완료했어", 5)
+        step_9 = _step_index(self.fixture, "9")
+        self.assertEqual(session.current_index, step_9)
+        asked = self._turn(session, "9단계 완료했어", 6)
+        self.assertEqual(asked.intent_kind, "observation_confirmation_required")
+        described = self._turn(session, "하얗게 변했어", 7)
+        self.assertNotEqual(described.intent_kind, "enrich_pending_anomaly")
+        self.assertFalse(described.reported_anomaly)
+        self.assertEqual(described.intent_kind, "observation_confirmation_reasked")
+        self.assertTrue(session.pending_observation_confirmation.accepts_yes_no)
+        yes = self._turn(session, "네", 8)
+        self.assertEqual(yes.intent_kind, "pending_observation_confirmed")
+        self.assertTrue(yes.state_changed)
+        self.assertEqual(session.current_index, step_9 + 1)
+
+    def test_detail_at_the_same_step_is_still_added_to_it(self):
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        self._turn(session, "프로토콜 시작해줘", 1)
+        session.current_index = _step_index(self.fixture, "7")
+        self._turn(session, "7단계 완료했어", 2)
+        self._turn(session, "결과가 예상과 달라", 3)
+        detail = self._turn(session, "노란색으로 변했어", 4)
+        self.assertEqual(detail.intent_kind, "enrich_pending_anomaly")
+        self.assertIsNotNone(session._pending_anomaly)
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class PendingAnomalyEndsWithTheStepVoiceTests(VoiceSessionHarness, unittest.TestCase):
+    def test_the_step_7_anomaly_stays_recorded_and_step_9_completes_on_yes(self):
+        step_1 = self.fixture.steps[0]
+        step_7_index = _step_index(self.fixture, "7")
+        step_7 = self.fixture.steps[step_7_index]
+        step_9 = self.fixture.steps[_step_index(self.fixture, "9")]
+        seen = {}
+
+        async def scenario(socket, listener, say):
+            await say(1, "프로토콜 시작해줘")
+            store = initialize_workspace_store(
+                WorkspaceSettings(True, self.workspace_dir)
+            )
+            try:
+                jumped = store.record_experiment_progress(
+                    self.principal, listener.session_id,
+                    expected_version=listener.experiment_state_version,
+                    expected_voice_connection_id=listener.voice_connection_id,
+                    event_key="test-setup-step-7",
+                    event_type="step_advanced",
+                    step_id=step_1.step_id, step_label=step_1.source_label,
+                    next_step_id=step_7.step_id,
+                    next_step_label=step_7.source_label,
+                    payload={"authority": "test_setup"},
+                )
+            finally:
+                store.close()
+            listener.experiment_state_version = jumped["version"]
+            listener.curated_protocol_session.current_index = step_7_index
+            for turn_id, text in (
+                (19, "7단계 완료했어"),
+                (20, "시료를 흘렸어"),
+                (21, "완전히 탈색됐어"),
+                (22, "8단계 완료했어"),
+                (23, "9단계 완료했어"),
+                (24, "하얗게 변했어"),
+                (25, "네"),
+            ):
+                await say(turn_id, text)
+            seen["end"] = self._snapshot(listener)
+            seen["report_id"] = listener.experiment_report_id
+
+        socket, _ = self._session(scenario)
+        self.assertEqual(self._errors(socket), [])
+        self.assertEqual(socket.for_turn(24, "turn.route_decision")[-1]["action"], "clarify_completion")
+        self.assertTrue(socket.for_turn(25, "turn.route_decision")[-1]["state_mutation"])
+        self.assertEqual(seen["end"]["durable"]["current_step_label"], "10")
+
+        report = ExperimentReportStore(self.report_db).get_report(seen["report_id"])
+        anomalies = [
+            event for event in report["events"] if event["event_type"] == "anomaly"
+        ]
+        self.assertEqual(
+            [(event["step_id"], event["user_wording"]) for event in anomalies],
+            [(step_7.step_id, "시료를 흘렸어")],
+        )
+        completed = {
+            event["step_id"] for event in report["events"]
+            if event["event_type"] == "step_completed"
+        }
+        self.assertLessEqual({step_7.step_id, step_9.step_id}, completed)
 
 
 if __name__ == "__main__":

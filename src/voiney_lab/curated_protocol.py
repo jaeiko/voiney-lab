@@ -10175,6 +10175,14 @@ class CuratedProtocolSession:
                         "Step advance was refused after its gates had passed."
                     )
                 self._block_reason = None
+                # Detail said at the new step is about the new step. A problem
+                # left pending from the last one took it ("하얗게 변했어" at
+                # step 9 was added to step 7's spill) and kept the endpoint
+                # question there from taking a "네". What was recorded stays
+                # recorded; only the open invitation to add to it ends here.
+                # (Here and not in advance_one_step, which writes nothing but
+                # the index.)
+                self._pending_anomaly = None
                 changed = True
                 prefix = "Advanced once."
                 step = steps[self.current_index]
