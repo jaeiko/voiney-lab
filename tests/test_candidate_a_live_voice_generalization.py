@@ -389,7 +389,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         paused = session.plan("잠깐 일시 중지할게", turn_id=4, language="ko")
         self.assertEqual(paused.action, CuratedProtocolAction.PAUSE)
         self.assertEqual(session.workflow_status, "paused")
-        self.assertIn("일시 중지", paused.primary_text or "")
+        self.assertIn("일시정지했어요", paused.primary_text or "")
 
         # Resume workflow
         resumed = session.plan("다시 시작할게", turn_id=5, language="ko")

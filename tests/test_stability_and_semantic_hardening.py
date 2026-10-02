@@ -304,7 +304,7 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         plan_pause = self.session.plan("잠시 일시정지할게", turn_id=2, language="ko")
         self.assertEqual(plan_pause.action, CuratedProtocolAction.PAUSE)
         self.assertEqual(self.session._pause_state, "paused")
-        self.assertIn("일시 중지", plan_pause.display_text)
+        self.assertIn("일시정지했어요", plan_pause.display_text)
 
         # 2. Utterance while paused: returns pause prompt without mutating procedure
         plan_during = self.session.plan("AMBIC가 뭐야?", turn_id=3, language="ko")
@@ -408,15 +408,20 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.session.plan("잠시 일시정지", turn_id=2, language="ko")
         self.assertEqual(self.session._pause_state, "paused")
 
+        # The first utterance in a pause is answered aloud, once (lane Q).
+        plan_first = self.session.plan("완료했어", turn_id=3, language="ko")
+        self.assertEqual(plan_first.action, CuratedProtocolAction.PAUSE)
+        self.assertNotEqual(plan_first.speech_text, "")
+
         # Utterance while paused
-        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=3, language="ko")
+        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=4, language="ko")
         self.assertEqual(plan_mute.action, CuratedProtocolAction.PAUSE)
         self.assertFalse(plan_mute.state_changed)
         self.assertEqual(plan_mute.speech_text, "")
         self.assertIn("일시정지 상태입니다", plan_mute.display_text)
 
         # Resume restores speech
-        plan_resume = self.session.plan("실험 재개", turn_id=4, language="ko")
+        plan_resume = self.session.plan("실험 재개", turn_id=5, language="ko")
         self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
         self.assertEqual(self.session._pause_state, "active")
         self.assertNotEqual(plan_resume.speech_text, "")
@@ -428,21 +433,26 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.session.plan("잠시 일시정지", turn_id=2, language="ko")
         self.assertEqual(self.session._pause_state, "paused")
 
+        # The first utterance in a pause is answered aloud, once (lane Q).
+        plan_first = self.session.plan("완료했어", turn_id=3, language="ko")
+        self.assertEqual(plan_first.action, CuratedProtocolAction.PAUSE)
+        self.assertEqual(plan_first.speech_policy, "speak")
+
         # Non-resume utterance while paused
-        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=3, language="ko")
+        plan_mute = self.session.plan("Solution A가 뭐야?", turn_id=4, language="ko")
         self.assertEqual(plan_mute.action, CuratedProtocolAction.PAUSE)
         self.assertEqual(plan_mute.speech_policy, "silent")
         self.assertEqual(plan_mute.speech_text, "")
         self.assertIn("일시정지 상태입니다", plan_mute.display_text)
 
         # Another random speech utterance while paused
-        plan_mute2 = self.session.plan("어 혹시 거기 누구 오셨나요?", turn_id=4, language="ko")
+        plan_mute2 = self.session.plan("어 혹시 거기 누구 오셨나요?", turn_id=5, language="ko")
         self.assertEqual(plan_mute2.action, CuratedProtocolAction.PAUSE)
         self.assertEqual(plan_mute2.speech_policy, "silent")
         self.assertEqual(plan_mute2.speech_text, "")
 
         # Resume restores speech_policy="speak" and concise spoken text
-        plan_resume = self.session.plan("실험 재개할게", turn_id=5, language="ko")
+        plan_resume = self.session.plan("실험 재개할게", turn_id=6, language="ko")
         self.assertEqual(plan_resume.action, CuratedProtocolAction.RESUME)
         self.assertEqual(plan_resume.speech_policy, "speak")
         self.assertEqual(self.session._pause_state, "active")

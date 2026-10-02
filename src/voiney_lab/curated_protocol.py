@@ -2105,16 +2105,19 @@ _STEP_7_SPOKEN_ENDPOINT = re.compile(
     # plan ("탈색 완료 전", "탈색 완료하면", "탈색 완료 시간").
     + r"|탈색이?\s*(?:돼|되어)\s*있" + _STATEMENT_END
     + r"|탈색이?\s*완료\s*(?:됐|되었)" + _STATEMENT_END
+    # Lane O §7-4: "탈색 완료했어" was asked again where "탈색 완료" was not.
+    + r"|탈색(?:을|이)?\s*완료\s*(?:했|하였)" + _STATEMENT_END
     + r"|탈색\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
     r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))"
 )
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
 # A wish or a condition beside it ("탈색되면", "탈색이 됐으면 좋겠어",
-# "바뀌었다면", "될 거야") says what should happen, not what was seen.
+# "바뀌었다면", "될 거야", "탈색 완료했으면") says what should happen, not
+# what was seen.
 _ENDPOINT_CONDITION = re.compile(
-    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌)으?면"
-    r"|(?:됐|되었|바뀌었|바꼈|변했)다면"
+    r"(?:되|됐|되었|돼|바뀌|바뀌었|바꼈|변하|변했|빠지|빠졌|해지|해졌|했|하였)으?면"
+    r"|(?:됐|되었|바뀌었|바꼈|변했|했|하였)다면"
     r"|(?:되|바뀌|변하)(?:길|기를|도록|려면|기\s*전)"
     r"|(?:될|바뀔|변할)\s*(?:때|거|것|수)"
 )
@@ -2275,6 +2278,7 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
         if positive := re.search(
             r"(?:흰색(?:으로\s*변했|이\s*됐|이야|입니다|으로\s*바뀌|으로\s*변함)|"
             r"탈수(?:됐|되었|됐어|됐습니다)|완전히\s*말랐|"
+            r"탈수(?:를|가)?\s*완료\s*(?:했|하였)" + _STATEMENT_END + r"|"
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
@@ -5265,6 +5269,10 @@ class CuratedProtocolSession:
         self._paused_at: float | None = None
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
+        #: Whether this pause's notice was already said aloud. Only the first
+        #: word turned away in a pause is answered by voice; the rest are
+        #: shown only. A new pause starts the count again.
+        self._paused_notice_spoken: bool = False
         self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
@@ -5425,6 +5433,7 @@ class CuratedProtocolSession:
         self._pause_state = "paused"
         self._paused_at = current_time
         self._workflow_status = "paused"
+        self._paused_notice_spoken = False
         return True
 
     def resume_workflow(self, now: float | None = None) -> bool:
@@ -5457,6 +5466,7 @@ class CuratedProtocolSession:
         self._pause_state = "active"
         self._paused_at = None
         self._workflow_status = "active"
+        self._paused_notice_spoken = False
         return True
 
     def _clear_step_timer(self) -> None:
@@ -6994,6 +7004,7 @@ class CuratedProtocolSession:
         self._paused_at = None
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
+        self._paused_notice_spoken = False
         self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
@@ -7080,6 +7091,7 @@ class CuratedProtocolSession:
         self._paused_at = None
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
+        self._paused_notice_spoken = False
         self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
@@ -7298,7 +7310,7 @@ class CuratedProtocolSession:
         dict[str, Any] | None,
         dict[str, Any] | None,
         dict[str, Any],
-        tuple[str, float | None, float, tuple[dict[str, Any], ...]],
+        tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
     ]:
         return (
             self.active,
@@ -7327,6 +7339,7 @@ class CuratedProtocolSession:
                 self._paused_at,
                 self._total_paused_seconds,
                 tuple(dict(interval) for interval in self._pause_intervals),
+                self._paused_notice_spoken,
             ),
         )
 
@@ -7374,8 +7387,14 @@ class CuratedProtocolSession:
                     self._paused_at,
                     self._total_paused_seconds,
                     intervals,
-                ) = checkpoint[21]
+                ) = checkpoint[21][:4]
                 self._pause_intervals = [dict(item) for item in intervals]
+                # Whether the paused notice was said rolls back too: a refused
+                # resume leaves the pause it was said in, so it is not said
+                # again.
+                self._paused_notice_spoken = (
+                    bool(checkpoint[21][4]) if len(checkpoint[21]) >= 5 else False
+                )
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -8082,6 +8101,43 @@ class CuratedProtocolSession:
         )
         return stated, page if isinstance(page, int) else None, sidecar
 
+    def observation_anomaly_reply(
+        self, step_label: str | None, language: str, *, recorded: bool
+    ) -> str:
+        """The short reply to an endpoint reported with a problem.
+
+        ``recorded`` only once the experiment record took the problem: the
+        server says it after the write succeeded, and this session, which
+        cannot know, says the problem was taken. Either way the endpoint is
+        asked for again, in that step's own words, so it is heard even where
+        the server replaces the rest of the reply.
+        """
+
+        if language == "en":
+            endpoint = {
+                "7": "Once destaining is complete",
+                "9": "Once the gel looks white and dry",
+                "20": "Once the gel looks white and dry",
+            }.get(step_label or "", "Once the endpoint is reached")
+            opening = (
+                "I recorded the issue." if recorded
+                else "I took the issue to record."
+            )
+            return f"{opening} {endpoint}, please tell me once more."
+        if language == "vi":
+            opening = (
+                "Tôi đã ghi vấn đề." if recorded
+                else "Tôi đã nhận vấn đề để ghi."
+            )
+            return f"{opening} Khi đạt điểm kết thúc, vui lòng nói lại một lần nữa."
+        endpoint = {
+            "7": "탈색이 끝났으면",
+            "9": "젤이 하얗게 말랐으면",
+            "20": "젤이 하얗게 말랐으면",
+        }.get(step_label or "", "종점에 도달했으면")
+        opening = "이상 사항은 기록했어요." if recorded else "이상 사항 기록 요청을 받았어요."
+        return f"{opening} {endpoint} 한 번 더 말씀해 주세요."
+
     def _endpoint_answer_record(
         self, index: int, transcript: str, language: str
     ) -> str:
@@ -8726,7 +8782,26 @@ class CuratedProtocolSession:
             observed = _observation_predicate(
                 self.fixture.steps[self.current_index].source_label, transcript
             )
-            if observed is not None:
+            if observed == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+                normalized_confirmation
+            ):
+                # The endpoint with a problem, said with no question open, is
+                # taken as it is under one: the problem is recorded, nothing
+                # moves, and the endpoint question is opened -- without taking
+                # a bare yes -- once the turn is planned (below). It used to
+                # advance on the endpoint and drop the problem (lane O §8-2).
+                intent = CuratedControlIntent(
+                    intent_kind="observation_with_anomaly",
+                    action=CuratedProtocolAction.REPORT_ANOMALY,
+                    question_kind="anomaly",
+                    target_step="authoritative_current_step",
+                    confidence_source="server_observation_reading",
+                    language=language,
+                    reported_anomaly=True,
+                    anomaly_category=_anomaly_category(normalized_confirmation),
+                    normalized_transcript=normalized_confirmation,
+                )
+            elif observed is not None:
                 intent = replace(
                     intent,
                     action=CuratedProtocolAction.NEXT,
@@ -8800,14 +8875,23 @@ class CuratedProtocolSession:
             CuratedProtocolAction.PAUSE,
         }:
             response = (
-                "현재 실험 안내가 일시정지 상태입니다. '실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+                "현재 실험 안내가 일시정지 상태입니다. '재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
                 if language == "ko" else
                 "Workflow guidance is currently paused. Please say 'resume' or click the resume button to continue."
             )
+            # The first word turned away in a pause is answered aloud, once,
+            # so a researcher who forgot the pause hears why nothing happens;
+            # after that the notice is shown only. Nothing else changes.
+            spoken = "" if self._paused_notice_spoken else (
+                "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+                if language == "ko" else
+                "Guidance is paused right now. Say 'resume' to continue."
+            )
+            self._paused_notice_spoken = True
             return CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,
                 display_text=response,
-                speech_text="",
+                speech_text=spoken,
                 speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
@@ -8815,7 +8899,7 @@ class CuratedProtocolSession:
                 state_changed=False,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
-                speech_policy="silent",
+                speech_policy="speak" if spoken else "silent",
             )
 
         if command is CuratedProtocolAction.STOP:
@@ -9027,10 +9111,14 @@ class CuratedProtocolSession:
             # in_progress -> in_progress (2026-10-01 test, "재개해줘").
             # A protocol that has not started has no running record to pause.
             paused = self.pause_workflow() and self.active
+            # The timer is mentioned only when a step timer is running.
+            timer_running = self.timer_status().get("state") == "running"
             response = (
-                "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
+                "일시정지했어요. '재개'라고 하시면 이어서 할게요."
+                + (" 타이머는 실제로는 계속 흐르고 있어요." if timer_running else "")
                 if language == "ko" else
-                "Voice workflow guidance is paused. Any active physical timer continues in the laboratory. When ready, say 'resume protocol'."
+                "Paused. Say 'resume' to continue."
+                + (" The timer is still running in real time." if timer_running else "")
             )
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,
@@ -9432,27 +9520,11 @@ class CuratedProtocolSession:
                     "notes": [transcript.strip()[:800]],
                 }
                 if intent.intent_kind == "observation_with_anomaly":
-                    response = {
-                        "en": (
-                            f"I recognized an issue to record against step {step.source_label}. "
-                            "I will confirm only after the experiment record accepts it. "
-                            "Because of it, the endpoint is not recorded yet and the step "
-                            "has not changed. Please tell me once more whether the endpoint "
-                            "has been reached."
-                        ),
-                        "vi": (
-                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
-                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công. "
-                            "Vì vậy điểm kết thúc chưa được ghi và bước chưa thay đổi. "
-                            "Vui lòng cho biết lại điểm kết thúc đã đạt chưa."
-                        ),
-                        "ko": (
-                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
-                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다. "
-                            "이상 사항이 있어 종점 관찰은 아직 기록하지 않았고 단계도 그대로입니다. "
-                            "종점에 도달했는지 관찰 결과를 한 번 더 말씀해 주세요."
-                        ),
-                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+                    # Short, as it is spoken; nothing is said to be recorded
+                    # before the record has answered.
+                    response = self.observation_anomaly_reply(
+                        step.source_label, language, recorded=False
+                    )
                 elif category == "protocol_block":
                     response = {
                         "en": (
@@ -10965,7 +11037,10 @@ class CuratedProtocolSession:
             speech_bits = []
             for s in target_steps:
                 localized = self._localized_fact(s.step_id, "current_step")
-                desc = localized if localized else s.text
+                # With no reviewed Korean, the source line itself. ``s.text``
+                # is no field of a source step, so a protocol without a
+                # translation failed here with an AttributeError.
+                desc = localized if localized else s.instruction_source_text.strip()
                 bullet_lines.append(f"• {s.source_label}단계: {desc}")
                 speech_bits.append(f"{s.source_label}단계: {desc}")
             header_text = (
@@ -11199,6 +11274,29 @@ class CuratedProtocolSession:
                     self.current_step_semantic_frame().observation_predicate_id
                     or f"candidate_a_step_{step.source_label}_endpoint"
                 ),
+            )
+        elif (
+            plan.action is CuratedProtocolAction.REPORT_ANOMALY
+            and plan.intent_kind == "observation_with_anomaly"
+            and self._pending_observation_confirmation is None
+        ):
+            # The endpoint was reported with a problem and no question was
+            # open: the question is opened now, as one asked again after a
+            # problem is, so a bare yes does not answer it.
+            step = self.fixture.steps[self.current_index]
+            self._pending_observation_confirmation = PendingObservationConfirmation(
+                configuration_id=configuration_id,
+                step_id=step.step_id,
+                step_index=self.current_index,
+                step_label=step.source_label,
+                workflow_revision=self._revision,
+                requested_turn_id=turn_id,
+                requested_generation=generation,
+                predicate_id=(
+                    self.current_step_semantic_frame().observation_predicate_id
+                    or f"candidate_a_step_{step.source_label}_endpoint"
+                ),
+                accepts_yes_no=False,
             )
         elif plan.action in {
             CuratedProtocolAction.START,

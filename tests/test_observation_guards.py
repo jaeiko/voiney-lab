@@ -279,7 +279,7 @@ class EndpointWithAProblemTests(unittest.TestCase):
         pending = session.pending_observation_confirmation
         self.assertIsNotNone(pending)
         self.assertFalse(pending.accepts_yes_no)
-        self.assertIn("종점", plan.display_text)
+        self.assertIn("한 번 더 말씀해 주세요", plan.display_text)
 
     def test_the_problem_is_recorded_and_the_endpoint_asked_again(self):
         cases = (
