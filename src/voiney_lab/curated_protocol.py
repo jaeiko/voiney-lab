@@ -2100,6 +2100,13 @@ _STEP_7_SPOKEN_ENDPOINT = re.compile(
     r"탈색으로\s*(?:바뀌었|바꼈|변했)" + _STATEMENT_END
     + r"|탈색(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])"
     + r"|탈색이?\s*(?:됐|되었)" + _STATEMENT_END
+    # Pilot log B and C: "탈색돼 있어", "탈색이 완료됐어"; and the bare
+    # "탈색 완료", which is not followed by what would make it a time or a
+    # plan ("탈색 완료 전", "탈색 완료하면", "탈색 완료 시간").
+    + r"|탈색이?\s*(?:돼|되어)\s*있" + _STATEMENT_END
+    + r"|탈색이?\s*완료\s*(?:됐|되었)" + _STATEMENT_END
+    + r"|탈색\s*완료(?:야|예요|에요|요|입니다|이다|임)?"
+    r"(?=$|[.,!~]|\s+(?!전|후|시|때|하|되|될|까지|여부|조건|기준|라고|라는|인지|단계))"
 )
 # "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
 _LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
@@ -2187,6 +2194,24 @@ def _frame_negated(key: str, match: re.Match[str]) -> bool:
     )
 
 
+def _endpoint_report_reading(key: str) -> str:
+    """How an utterance holding an endpoint phrase reads as a whole.
+
+    A negation anywhere but an opening "아니" correction makes it a negative,
+    so "탈색이 안 됐어 … 완전히 탈색됐어" is never read as the endpoint
+    reached; and "아직" beside it ("아직 탈색 됐어", an "안" the transcript
+    may have dropped), or a wish or condition ("완전히 탈색되면"), says
+    neither, so it is asked again (``"unread"``).
+    """
+
+    said = _LEADING_CORRECTION.sub("", key)
+    if _POST_FRAME_NEGATION.search(said):
+        return "negative"
+    if re.search(r"(?<![가-힣])아직", said) or _ENDPOINT_CONDITION.search(said):
+        return "unread"
+    return "positive"
+
+
 def _observation_predicate(step_label: str, transcript: str) -> str | None:
     """Classify only explicit source-defined endpoint observations.
 
@@ -2225,24 +2250,16 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             r"색(?:이|은)?\s*(?:완전히\s*)?(?:빠졌|빠졌어|빠졌습니다)|"
             r"fully\s+destained|gel\s+is\s+(?:now\s+)?transparent|color\s+is\s+(?:now\s+)?gone)",
             key,
-        ):
-            return "negative" if _frame_negated(key, positive) else "positive"
-        if _STEP_7_SPOKEN_ENDPOINT.search(key):
-            # Stricter than the frames above: a negation anywhere but an
-            # opening "아니" correction makes it a negative, so "탈색이 안
-            # 됐어 … 탈색됐어" is never read as the endpoint reached; and
-            # "아직" beside it ("아직 탈색 됐어", an "안" the transcript may
-            # have dropped), or a wish or condition, says neither, so it is
-            # asked again.
-            said = _LEADING_CORRECTION.sub("", key)
-            if _POST_FRAME_NEGATION.search(said):
+        ) or _STEP_7_SPOKEN_ENDPOINT.search(key):
+            # The negation right after the frame is the reading these frames
+            # always had; the whole-utterance reading below was added for the
+            # spoken wordings and then given to these too, since a negation
+            # before the frame ("탈색이 안 됐어 완전히 탈색됐어"), "아직" or a
+            # wish ("완전히 탈색되면") passed them as the endpoint reached.
+            if _frame_negated(key, positive):
                 return "negative"
-            if (
-                re.search(r"(?<![가-힣])아직", said)
-                or _ENDPOINT_CONDITION.search(said)
-            ):
-                return None
-            return "positive"
+            reading = _endpoint_report_reading(key)
+            return None if reading == "unread" else reading
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
@@ -2261,7 +2278,12 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             r"(?:turned|is)\s+(?:white|whitish)|fully\s+(?:dehydrated|dry))",
             key,
         ):
-            return "negative" if _frame_negated(key, positive) else "positive"
+            # Read as a whole as at step 7: "안 됐어 흰색이야", "흰색이야
+            # 아직" and "흰색이 됐으면 좋겠어" passed as the endpoint reached.
+            if _frame_negated(key, positive):
+                return "negative"
+            reading = _endpoint_report_reading(key)
+            return None if reading == "unread" else reading
     return None
 _NON_MUTATING_COMPLETION = (
     ("completion_criteria_question", re.compile(
@@ -2526,6 +2548,17 @@ _ANOMALY_PATTERNS = (
     (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
     (re.compile(r"(?:깨졌|부서졌|금이\s*갔|터졌)"), "sample_deviation"),
 )
+
+
+def _anomaly_category(key: str) -> str:
+    """The anomaly reader's category for an utterance, or the catch-all."""
+
+    return next(
+        (category for pattern, category in _ANOMALY_PATTERNS if pattern.search(key)),
+        "protocol_block",
+    )
+
+
 _AUDIO_RECOVERY_PATTERNS = (
     re.compile(r"^(?:소리가\s*안\s*(?:나|나요|나요)|안\s*들려|음성이\s*재생되지\s*않았어)$"),
     re.compile(r"^(?:방금\s*)?(?:답변|음성).*(?:다시\s*)?(?:들려|재생해)"),
@@ -8418,7 +8451,30 @@ class CuratedProtocolSession:
             observed := _observation_predicate(
                 observation_pending.step_label, transcript
             )
-        ) is not None:
+        ) == "positive" and _OBSERVATION_PROMPT_PROBLEM.search(
+            normalized_confirmation
+        ):
+            # "완전히 탈색됐는데 튜브가 터졌어": the endpoint is reported in
+            # the same breath as something going wrong. Reading the endpoint
+            # first used to advance on it and drop the problem. Now the
+            # problem is recorded and nothing moves; the question stays open,
+            # without taking a bare yes, and the endpoint is asked for again.
+            self._pending_observation_confirmation = replace(
+                observation_pending, requested_turn_id=turn_id,
+                requested_generation=generation, accepts_yes_no=False,
+            )
+            intent = CuratedControlIntent(
+                intent_kind="observation_with_anomaly",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                target_step="authoritative_current_step",
+                confidence_source="server_pending_observation",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=_anomaly_category(normalized_confirmation),
+                normalized_transcript=normalized_confirmation,
+            )
+        elif observation_pending_valid and observed is not None:
             self._pending_observation_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="pending_observation_confirmed",
@@ -8663,6 +8719,7 @@ class CuratedProtocolSession:
             and self.fixture.steps[self.current_index].step_id
             in self._steps_anchoring_a_repetition()
             and not intent.reported_observation
+            and intent.intent_kind != "observation_with_anomaly"
             and not stale_observation_reply
             and not self._names_another_step(intent)
         ):
@@ -9374,7 +9431,29 @@ class CuratedProtocolSession:
                     "step_id": step.step_id,
                     "notes": [transcript.strip()[:800]],
                 }
-                if category == "protocol_block":
+                if intent.intent_kind == "observation_with_anomaly":
+                    response = {
+                        "en": (
+                            f"I recognized an issue to record against step {step.source_label}. "
+                            "I will confirm only after the experiment record accepts it. "
+                            "Because of it, the endpoint is not recorded yet and the step "
+                            "has not changed. Please tell me once more whether the endpoint "
+                            "has been reached."
+                        ),
+                        "vi": (
+                            f"Tôi đã nhận yêu cầu ghi vấn đề ở bước {step.source_label}. "
+                            "Tôi chỉ xác nhận sau khi bản ghi thí nghiệm lưu thành công. "
+                            "Vì vậy điểm kết thúc chưa được ghi và bước chưa thay đổi. "
+                            "Vui lòng cho biết lại điểm kết thúc đã đạt chưa."
+                        ),
+                        "ko": (
+                            f"현재 {step.source_label}단계의 이상 사항 기록 요청을 확인했습니다. "
+                            "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다. "
+                            "이상 사항이 있어 종점 관찰은 아직 기록하지 않았고 단계도 그대로입니다. "
+                            "종점에 도달했는지 관찰 결과를 한 번 더 말씀해 주세요."
+                        ),
+                    }.get(language, "이상 사항 기록 요청을 확인했습니다.")
+                elif category == "protocol_block":
                     response = {
                         "en": (
                             f"I recognized an issue to record against step {step.source_label}. "
@@ -10096,6 +10175,14 @@ class CuratedProtocolSession:
                         "Step advance was refused after its gates had passed."
                     )
                 self._block_reason = None
+                # Detail said at the new step is about the new step. A problem
+                # left pending from the last one took it ("하얗게 변했어" at
+                # step 9 was added to step 7's spill) and kept the endpoint
+                # question there from taking a "네". What was recorded stays
+                # recorded; only the open invitation to add to it ends here.
+                # (Here and not in advance_one_step, which writes nothing but
+                # the index.)
+                self._pending_anomaly = None
                 changed = True
                 prefix = "Advanced once."
                 step = steps[self.current_index]
