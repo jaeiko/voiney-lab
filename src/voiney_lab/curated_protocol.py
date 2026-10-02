@@ -7211,6 +7211,8 @@ class CuratedProtocolSession:
         float | None,
         dict[str, Any] | None,
         dict[str, Any] | None,
+        dict[str, Any],
+        tuple[str, float | None, float, tuple[dict[str, Any], ...]],
     ]:
         return (
             self.active,
@@ -7234,6 +7236,12 @@ class CuratedProtocolSession:
             self._pending_anomaly,
             self._pending_note_capture,
             dict(self._endpoint_observations),
+            (
+                self._pause_state,
+                self._paused_at,
+                self._total_paused_seconds,
+                tuple(dict(interval) for interval in self._pause_intervals),
+            ),
         )
 
     def _restore(
@@ -7270,6 +7278,18 @@ class CuratedProtocolSession:
             # nothing durable behind it, which is the hole this closes.
             if len(checkpoint) >= 21:
                 self._endpoint_observations = dict(checkpoint[20])
+            # The pause itself rolls back with the workflow status. Restoring
+            # the status alone left a refused voice resume "paused" by status
+            # but not by pause state, so the paused guard stopped catching
+            # turns and "완료했어" got the scope reminder (2026-10-01 test).
+            if len(checkpoint) >= 22:
+                (
+                    self._pause_state,
+                    self._paused_at,
+                    self._total_paused_seconds,
+                    intervals,
+                ) = checkpoint[21]
+                self._pause_intervals = [dict(item) for item in intervals]
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -8599,6 +8619,26 @@ class CuratedProtocolSession:
                 confidence_source="provider_metadata",
                 language=language,
             )
+        if (
+            self._pause_state == "paused"
+            and intent.action is CuratedProtocolAction.START
+            and any(
+                pattern.search(intent.normalized_transcript or "")
+                for pattern in _RESUME_PATTERNS
+            )
+        ):
+            # "재개", "프로토콜 재개" and "resume" are in the workflow-command
+            # table as START, which is looked up before the resume patterns
+            # that also claim them. While paused, START is turned away by the
+            # paused guard below -- silently -- so a bare "재개" got no answer
+            # where "재개해줘" resumed (2026-10-01 test). Paused, they resume.
+            intent = replace(
+                intent,
+                intent_kind="resume_workflow",
+                action=CuratedProtocolAction.RESUME,
+                requested_transition=None,
+                requested_followup=None,
+            )
         command = intent.action
         steps = self.fixture.steps
         opening_projection = (
@@ -8832,7 +8872,13 @@ class CuratedProtocolSession:
                 question_kind="agent_meta",
             )
         elif command is CuratedProtocolAction.PAUSE:
-            self.pause_workflow()
+            # A pause the running protocol actually took is a state change, as
+            # the bench button's is, so the server mirrors it into the durable
+            # experiment record. Reported as unchanged, the record stayed
+            # in_progress and the voice resume that followed was refused as
+            # in_progress -> in_progress (2026-10-01 test, "재개해줘").
+            # A protocol that has not started has no running record to pause.
+            paused = self.pause_workflow() and self.active
             response = (
                 "음성 안내 워크플로를 일시 중지했습니다. 진행 중인 물리적 타이머가 있다면 실제 환경에서 계속 측정됩니다. 준비되시면 '다시 시작할게' 또는 '재개해줘'라고 말씀해 주세요."
                 if language == "ko" else
@@ -8846,12 +8892,17 @@ class CuratedProtocolSession:
                 facts=(),
                 step_label=(steps[self.current_index].source_label if self.active else None),
                 final_step=self.active and self.current_index == len(steps) - 1,
-                state_changed=False,
+                state_changed=paused,
                 primary_text=response,
                 intent_kind=intent.intent_kind,
             )
         elif command is CuratedProtocolAction.RESUME:
-            self.resume_workflow()
+            # A resume changes state only when it lifts a pause or starts a
+            # protocol that was not running. "계속 진행" mid-step used to
+            # report a change anyway, and the server's resume mirror was then
+            # refused by a record that was never paused.
+            was_active = self.active
+            resumed = self.resume_workflow() or not was_active
             step = steps[self.current_index]
             timer_info = self.timer_status()
             timer_suffix = ""
@@ -8881,7 +8932,7 @@ class CuratedProtocolSession:
                 facts=self.fixture.facts_for_step(self.current_index),
                 step_label=step.source_label,
                 final_step=self.current_index == len(steps) - 1,
-                state_changed=True,
+                state_changed=resumed,
                 primary_text=primary,
                 source_texts=sources,
                 source_pages=pages,
