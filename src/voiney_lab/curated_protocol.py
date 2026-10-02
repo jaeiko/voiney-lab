@@ -2146,7 +2146,7 @@ _OBSERVATION_PROMPT_READ_ONLY = frozenset({
 #: which is the observation the prompt asked for, not a problem.
 _OBSERVATION_PROMPT_PROBLEM = re.compile(
     r"이상(?:해|하(?!지\s*않)|한|했|함|\s*(?:상황|현상|발생|사항|있|생겼))|뭔가\s*이상"
-    r"|문제(?!\s*(?:없|안\s*(?:돼|되)))"
+    r"|문제(?!(?:\s*(?:가|는|도))?\s*(?:전혀\s*)?(?:없|안\s*(?:돼|되)))"
     r"|(?:예상|생각)(?:과|이랑|하고|했던\s*(?:것|거)(?:과|랑)?)\s*(?:달라|다르|다른|틀려)"
     r"|잘못|실수"
     r"|터졌|흘렸|쏟았|쏟아졌|깨졌|부서졌|금이\s*갔|튀었|누출|새고\s*있|샜"

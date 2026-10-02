@@ -152,6 +152,20 @@ class OpenEndpointQuestionTests(unittest.TestCase):
         self.assertIsNotNone(session.pending_observation_confirmation)
         self.assertEqual(session.current_index, step_7)
 
+    def test_saying_there_is_no_problem_is_not_a_reported_problem(self):
+        for wording in (
+            "결과 색이 바뀌었는데 문제가 없어",
+            "결과 색이 바뀌었는데 문제는 없어",
+            "결과 색이 바뀌었는데 문제없어",
+        ):
+            with self.subTest(wording=wording):
+                session, step_7 = self._asked()
+                plan = self._turn(session, wording, 20)
+                self.assertNotEqual(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+                self.assertEqual(plan.intent_kind, "observation_confirmation_reasked")
+                self.assertIsNotNone(session.pending_observation_confirmation)
+                self.assertEqual(session.current_index, step_7)
+
     def test_a_reported_problem_is_recorded_and_the_question_stays_open(self):
         for problem in (
             "결과가 예상과 달라",
