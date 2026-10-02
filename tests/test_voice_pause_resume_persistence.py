@@ -116,11 +116,13 @@ class _QueuedSocket:
         return self.for_turn(turn_id, "reply.complete")[-1]["text"]
 
 
-@unittest.skipUnless(
-    SOURCE_PDF.is_file(),
-    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
-)
-class VoicePauseResumeTests(unittest.TestCase):
+class VoiceSessionHarness:
+    """One real voice session per scenario, workspace and report store on.
+
+    A mixin, so another file's TestCase can reuse the session without
+    collecting these tests a second time.
+    """
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
@@ -260,6 +262,12 @@ class VoicePauseResumeTests(unittest.TestCase):
             if item["type"] in {"experiment.session.error", "error"}
         ]
 
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
     def test_pause_resume_next_complete_runs_to_the_end_for_every_resume_phrase(self):
         for phrase in RESUME_PHRASES:
             with self.subTest(resume=phrase):

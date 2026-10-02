@@ -1790,6 +1790,10 @@ class PendingObservationConfirmation:
     #: How many times this prompt has been asked again after a reply it could
     #: not read. Bounded by _OBSERVATION_REPROMPT_LIMIT.
     reprompt_count: int = 0
+    #: Whether a bare yes/no answers it. False after an anomaly was recorded
+    #: under it: the last question then was about the problem, so a "네"
+    #: says nothing about the endpoint until the question is asked again.
+    accepts_yes_no: bool = True
 
 
 @dataclass(frozen=True)
@@ -2087,6 +2091,18 @@ _POST_FRAME_NEGATION = re.compile(
     r"|아닌|아니(?!면)"
 )
 _PRE_FRAME_NEGATION_EN = re.compile(r"\b(?:not|never)\b|n(?:'|’)t\b")
+# How people in the 2026-10-01 voice test said the step-7 endpoint was reached:
+# "탈색으로 바뀌었어", "탈색 상태야", "탈색이 됐어". Each has to end as a
+# statement, so "탈색됐으면 좋겠어" or "탈색으로 바뀌었는지" is not one; the
+# question and hedge guards in _observation_predicate run before this.
+_STATEMENT_END = r"(?:어요|어|습니다|다|네요|네|음)(?=$|[\s.,!~])"
+_STEP_7_SPOKEN_ENDPOINT = re.compile(
+    r"탈색으로\s*(?:바뀌었|바꼈|변했)" + _STATEMENT_END
+    + r"|탈색(?:된|이\s*된)?\s*상태(?:야|예요|에요|이에요|입니다|이다|임)(?=$|[\s.,!~])"
+    + r"|탈색이?\s*(?:됐|되었)" + _STATEMENT_END
+)
+# "아니, 아니. … 지금 탈색 상태야" opens with a correction, not a negation.
+_LEADING_CORRECTION = re.compile(r"^(?:(?:아니(?:요|야|에요)?|아뇨)\s*)+")
 # What an outstanding observation prompt does with a reply it could not read.
 # Control commands go through as before, and so do record/report commands the
 # person issues on their own. A read-only answer keeps the prompt only for an
@@ -2124,6 +2140,19 @@ _OBSERVATION_PROMPT_READ_ONLY = frozenset({
     CuratedProtocolAction.CLARIFY_REFERENCE,
     CuratedProtocolAction.UNSUPPORTED,
 })
+#: While an observation prompt is open, an anomaly is taken only from words
+#: that say something went wrong. The anomaly reader alone also takes a plain
+#: description of a change ("결과는 탈색으로 바뀌었어" matched "결과 … 바뀌"),
+#: which is the observation the prompt asked for, not a problem.
+_OBSERVATION_PROMPT_PROBLEM = re.compile(
+    r"이상(?:해|하(?!지\s*않)|한|했|함|\s*(?:상황|현상|발생|사항|있|생겼))|뭔가\s*이상"
+    r"|문제(?!\s*(?:없|안\s*(?:돼|되)))"
+    r"|(?:예상|생각)(?:과|이랑|하고|했던\s*(?:것|거)(?:과|랑)?)\s*(?:달라|다르|다른|틀려)"
+    r"|잘못|실수"
+    r"|터졌|흘렸|쏟았|쏟아졌|깨졌|부서졌|금이\s*갔|튀었|누출|새고\s*있|샜"
+    r"|오염|고장|멈췄"
+    r"|\b(?:wrong|problem|issue|anomal\w*|abnormal|unexpected\w*|spill\w*|broke\w*|leak\w*|contaminat\w*)\b"
+)
 #: Times an observation prompt is asked again before it is let go.
 _OBSERVATION_REPROMPT_LIMIT = 2
 #: Asking to hear the observation question again ("다시 말해줘"). It is not
@@ -2190,6 +2219,16 @@ def _observation_predicate(step_label: str, transcript: str) -> str | None:
             key,
         ):
             return "negative" if _frame_negated(key, positive) else "positive"
+        if _STEP_7_SPOKEN_ENDPOINT.search(key):
+            # Stricter than the frames above: a negation anywhere but an
+            # opening "아니" correction makes it a negative, so "탈색이 안
+            # 됐어 … 탈색됐어" is never read as the endpoint reached; and
+            # "아직" beside it ("아직 탈색 됐어", an "안" the transcript may
+            # have dropped) says neither, so it is asked again.
+            said = _LEADING_CORRECTION.sub("", key)
+            if _POST_FRAME_NEGATION.search(said):
+                return "negative"
+            return None if re.search(r"(?<![가-힣])아직", said) else "positive"
     if step_label in {"9", "20"}:
         if re.search(
             r"(?:흰색인가요|탈수된\s*건가요|is\s+it\s+white|is\s+it\s+dehydrated)\??",
@@ -8048,7 +8087,35 @@ class CuratedProtocolSession:
         let go with no observation recorded.
         """
 
-        if (
+        if routed.action is CuratedProtocolAction.REPORT_ANOMALY:
+            if _OBSERVATION_PROMPT_PROBLEM.search(normalized_transcript):
+                # A problem is recorded, and the endpoint is still owed: the
+                # question stays open. Recording it used to let it go, so the
+                # next description had nothing to answer (2026-10-01 test).
+                self._pending_observation_confirmation = replace(
+                    held, requested_turn_id=turn_id,
+                    requested_generation=generation, accepts_yes_no=False,
+                )
+                return routed
+            if not held.accepts_yes_no and isinstance(self._pending_anomaly, dict):
+                # The problem just recorded under this question was answered
+                # with "어떤 종류의 색 변화를 보셨나요?"; a change described
+                # now answers that, and is added to it rather than asked past.
+                self._pending_observation_confirmation = replace(
+                    held, requested_turn_id=turn_id,
+                    requested_generation=generation, accepts_yes_no=False,
+                )
+                return replace(
+                    routed,
+                    intent_kind="enrich_pending_anomaly",
+                    anomaly_category=str(
+                        self._pending_anomaly.get("category") or "protocol_block"
+                    ),
+                    normalized_transcript=_utterance_key(transcript),
+                )
+            # Otherwise a change described without a problem is an answer
+            # this reader could not place, not an anomaly: it is asked again.
+        elif (
             routed.action in _OBSERVATION_PROMPT_PASS_THROUGH
             or self._names_another_step(routed)
         ):
@@ -8058,6 +8125,7 @@ class CuratedProtocolSession:
             # of times it was asked again stays where it was.
             self._pending_observation_confirmation = replace(
                 held, requested_turn_id=turn_id, requested_generation=generation,
+                accepts_yes_no=True,
             )
             return CuratedControlIntent(
                 intent_kind="observation_confirmation_repeated",
@@ -8083,6 +8151,7 @@ class CuratedProtocolSession:
                 requested_turn_id=turn_id,
                 requested_generation=generation,
                 reprompt_count=held.reprompt_count + 1,
+                accepts_yes_no=True,
             )
             return CuratedControlIntent(
                 intent_kind="observation_confirmation_reasked",
@@ -8352,7 +8421,7 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
-        elif observation_pending_valid and (
+        elif observation_pending_valid and observation_pending.accepts_yes_no and (
             observation_reply := _observation_binary_reply(transcript)
         ) is not None:
             self._pending_observation_confirmation = None
@@ -8428,6 +8497,14 @@ class CuratedProtocolSession:
                 and self.active
                 and _utterance_looks_like_anomaly_follow_up(transcript)
             ):
+                if observation_hold is not None:
+                    # Detail added to a problem recorded under an open
+                    # endpoint question leaves that question open, still
+                    # without taking a bare yes.
+                    self._pending_observation_confirmation = replace(
+                        observation_hold, requested_turn_id=turn_id,
+                        requested_generation=generation, accepts_yes_no=False,
+                    )
                 observation_hold = None
                 intent = CuratedControlIntent(
                     intent_kind="enrich_pending_anomaly",
