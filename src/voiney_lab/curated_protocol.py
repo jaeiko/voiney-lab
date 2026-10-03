@@ -2476,6 +2476,14 @@ _START_COMMAND_PATTERNS = (
         re.I,
     ),
 )
+#: "자 이제 1단계부터 해볼까", "첫 단계부터 하자": read as a start only
+#: before the experiment has started (lane R3, decision 8).
+_FIRST_STEP_START = re.compile(
+    r"^(?:(?:자|그럼|그러면|그래|좋아|이제|응|네)\s*,?\s*)*"
+    r"(?:1|일|첫|처음|첫\s*번째)\s*단계부터\s*"
+    r"(?:해\s*볼까(?:요)?|해\s*보자|하자|할까(?:요)?|시작\s*하자|시작\s*할까(?:요)?|"
+    r"시작\s*해\s*볼까(?:요)?|시작해\s*보자)\??$"
+)
 _HANDOFF_PATTERNS = (
     re.compile(r"(?:교수님|교수|안전관리자|관리자|지도교수).*(?:보고서|이상사항|기록|이메일).*(?:보내|전송|인계|전달)"),
     re.compile(r"(?:보고서|이상사항|기록).*(?:교수님|교수|안전관리자|관리자|지도교수).*(?:보내|전송|인계|전달)"),
@@ -2550,6 +2558,12 @@ OUTSIDE_PDF_SPOKEN_LEAD = {
     "en": "The PDF does not explain this.",
 }
 #: Said when a model answer was dropped by a check and the rules had none.
+#: A hand-off asked of the voice (decision 1 of 2026-10-03, D8): reports are
+#: sent from the screen, never by voice, and nothing is recorded.
+HANDOFF_ON_SCREEN_REPLY = {
+    "ko": "보고서는 화면에서 보내 주세요.",
+    "en": "Please send the report from the screen.",
+}
 ANSWER_NOT_CONFIRMED = {
     "ko": "PDF에서 확인할 수 없어요.",
     "en": "I could not confirm that in the PDF.",
@@ -2620,6 +2634,12 @@ FRONT_RULES: dict[str, str] = {
     "start_command": "an explicit start of an experiment that has never "
                      "started, and any start or resume after it ended, "
                      "which is not restarted by voice (decision 2, 2026-10-03)",
+    "server_value_query": "the protocol's number, hash, version or title, its "
+                          "step count, or the current step: values only the "
+                          "server holds (lane R3, decision 3)",
+    "step_lookup": "a lookup that points at a step -- a numbered, the last or "
+                   "the next step, or the current step read out -- read from "
+                   "the source as it is (lane R3, decision 4)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2632,7 +2652,15 @@ _FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
     CuratedProtocolAction.REPEAT: "repeat_last_reply",
     CuratedProtocolAction.AUDIO_RECOVERY: "repeat_last_reply",
     CuratedProtocolAction.CANCEL_READONLY: "cancel_background_job",
+    CuratedProtocolAction.PREVIEW_STEP: "step_lookup",
+    CuratedProtocolAction.NEXT_INFORMATION: "step_lookup",
+    CuratedProtocolAction.FULL_DETAIL: "step_lookup",
 }
+#: The protocol-query scopes that are server values (decision 3); purpose,
+#: overview, materials and the like stay with the model.
+_SERVER_VALUE_SCOPES = frozenset({
+    "version", "total_steps", "current_position", "remaining_steps",
+})
 
 
 @dataclass(frozen=True)
@@ -2863,7 +2891,16 @@ _NATURAL_STOP_PATTERNS = (
     re.compile(r"^(?:프로토콜(?:을)?\s*)?종료(?:해\s*줘|할게|할게요|하겠습니다)?$"),
 )
 _PROTOCOL_SCOPE_PATTERNS = (
-    ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|how\s+many\s+steps")),
+    # The protocol's own identity -- number, hash, version, title -- which
+    # the audit answer states from the server (lane R3, decision 3).
+    ("version", re.compile(
+        r"(?:프로토콜|실험|절차)\s*(?:의\s*)?(?:번호|해시|버전|아이디|id|제목|이름)|"
+        r"실행\s*버전|리\s*비전|해시|체크섬|"
+        r"\bprotocol\s+(?:number|id|version|revision|title|name|hash)\b|"
+        r"\b(?:revision|hash|checksum)\b",
+        re.I,
+    )),
+    ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|(?:전체|모든)\s*단계\s*(?:의\s*)?(?:수|개수)|how\s+many\s+steps")),
     ("current_position", re.compile(r"(?:현재|지금)\s*(?:몇\s*번째|몇)\s*단계|where\s+am\s+i")),
     ("remaining_steps", re.compile(r"몇\s*단계\s*남|남은\s*단계|steps?\s+(?:are\s+)?remaining")),
     ("purpose", re.compile(
@@ -2883,8 +2920,10 @@ _PROTOCOL_SCOPE_PATTERNS = (
     ("safety", re.compile(r"전체\s*(?:안전\s*수칙|주의\s*사항|경고)|protocol.*(?:safety|warnings)")),
 )
 _SPECIFIC_STEP_PATTERN = re.compile(
-    r"^(?:(?P<ko>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?))"
-    r"(?:는|은|를)?\s*(?:뭐야|무엇|알려|설명|show|explain|what).*$"
+    r"^(?:(?P<ko>[1-9][0-9]?)\s*단계|step\s*(?P<en>[1-9][0-9]?)|"
+    r"(?P<word>마지막|최종|첫|처음|첫\s*번째)\s*단계)"
+    r"(?:는|은|를|가|이)?\s*(?:뭐야|무엇|알려|설명|뭐\s*해|뭘\s*해|뭐\s*하는|뭐\s*하지|"
+    r"show|explain|what).*$"
 )
 _SOURCE_REQUEST_PATTERNS = (
     re.compile(r"^(?:방금\s*)?(?:답변의\s*)?(?:출처|근거)(?:를)?\s*(?:보여줘|알려줘|열어줘)$"),
@@ -2964,6 +3003,13 @@ _NAVIGATION_PATTERNS = (
     ),
 )
 _NEXT_INFORMATION_PATTERNS = (
+    # "다음엔 뭐 해?", "what's next?" (lane R3, decision 4).
+    re.compile(
+        r"^(?:(?:이제|그럼|혹시|그)\s*)?다음(?:엔|에는|은|으로는)\s*"
+        r"(?:뭐|무엇을?|뭘)\s*(?:해|하지|하나|해야\s*(?:돼|해|하지)|하면\s*(?:돼|되지))(?:요)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^(?:so\s+|and\s+|then\s+)?what(?:'s|’s|\s+is|\s+comes)\s+next\??$", re.IGNORECASE),
     re.compile(
         r"^(?:(?:이제|그럼|혹시)\s*)?"
         r"(?:다음\s*(?:단계|스텝)|next\s*step)"
@@ -3881,7 +3927,9 @@ def classify_curated_control_intent(
                 normalized_transcript=key,
             )
     if match := _SPECIFIC_STEP_PATTERN.fullmatch(key):
-        label = match.group("ko") or match.group("en")
+        label = match.group("ko") or match.group("en") or (
+            str(max_steps) if match.group("word") in {"마지막", "최종"} else "1"
+        )
         return CuratedControlIntent(
             intent_kind="specific_step_lookup",
             action=CuratedProtocolAction.FULL_DETAIL,
@@ -4539,7 +4587,7 @@ _FULL_DETAIL_COMMANDS = frozenset({
 #: reads a step's content; moving between steps keeps its short sentence.
 #: "원문 그대로 읽어줘" is not one -- it asks for the English, not Korean.
 _READ_ALOUD_REQUEST = re.compile(
-    r"(?:(?:이|현재|지금)\s*)?(?:단계\s*)?(?:(?:내용|전체|안내)(?:을|를)?\s*)?"
+    r"(?:(?:이|현재|지금)\s*)?(?:단계\s*)?(?:(?:전체|상세)\s*)?(?:(?:내용|전체|안내)(?:을|를)?\s*)?"
     r"(?:한국어로\s*)?(?:다시\s*)?(?:소리\s*내(?:어|서)\s*)?"
     r"읽어\s*(?:줘|줘요|주세요|줄래|줄래요|줄래\?)"
 )
@@ -5441,6 +5489,26 @@ _SOURCE_NEGATION = re.compile(
 _KOREAN_NEGATION = re.compile(
     r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피(?:하|합|해|했|할)|못\s|않)"
 )
+#: A source word negated by its "un-" prefix ("uninoculated", "unlabelled",
+#: "unopened"), not a word that merely begins with "un" ("until", "uniform",
+#: "unit", "under", "unique", "universal", "union", "unless").
+_SOURCE_UN_WORD = re.compile(
+    r"\bun(?!til\b|der|it|iform|ique|ivers|ion|less\b)[a-z]{3,}", re.IGNORECASE,
+)
+#: The Korean that renders one: "접종하지 않은", "붙지 않은", "처리되지 않은".
+_KOREAN_UN_RENDERING = re.compile(r"지\s*않은")
+
+
+def _without_un_renderings(source: str, reading: str) -> str:
+    """The reading with one "~지 않은" taken out per "un-" word of the source.
+
+    Lane R3, decision 9: "uninoculated" read as "접종하지 않은" (or "비접종")
+    says the same thing, so it is not a negation the reading added. Each
+    "un-" word covers one rendering only; a further negation still counts.
+    """
+
+    count = len(_SOURCE_UN_WORD.findall(source))
+    return _KOREAN_UN_RENDERING.sub(" ", reading, count=count) if count else reading
 #: Protocol terms a Korean reading may put in Korean. The terms a reading
 #: must keep in their original spelling are the names of reagents,
 #: materials and equipment (resource names, "Solution A", defined
@@ -5550,7 +5618,8 @@ def reader_translation_issue(
     if _count_quantities(_normalized_counts(source)) != _count_quantities(
             _normalized_counts(reading)):
         return "quantities_changed"
-    if bool(_SOURCE_NEGATION.search(source)) != bool(_KOREAN_NEGATION.search(reading)):
+    if bool(_SOURCE_NEGATION.search(source)) != bool(
+            _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
         return "negation_changed"
     folded = text.casefold()
     for term in required_terms:
@@ -5633,6 +5702,8 @@ class CuratedProtocolSession:
         self._pending_note_capture: dict[str, Any] | None = None
         self._pause_state: str = "active"
         self._paused_at: float | None = None
+        #: The workflow status a pause replaced, for undo_pause().
+        self._status_before_pause: str = "preview"
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
         #: Whether this pause's notice was already said aloud. Only the first
@@ -5810,18 +5881,50 @@ class CuratedProtocolSession:
             "intervals": list(self._pause_intervals),
         }
 
+    @property
+    def experiment_ended(self) -> bool:
+        """The experiment ran and ended (stopped or completed): it is not running.
+
+        Nothing pauses or resumes it any more (decision 2 of 2026-10-03, lane
+        R3); the next experiment is chosen on the screen.
+        """
+
+        return not self.active and self._experiment_ended()
+
     def pause_workflow(self, now: float | None = None) -> bool:
         current_time = time.time() if now is None else now
-        if self._pause_state == "paused":
+        if self._pause_state == "paused" or self.experiment_ended:
             return False
+        self._status_before_pause = self._workflow_status
         self._pause_state = "paused"
         self._paused_at = current_time
         self._workflow_status = "paused"
         self._paused_notice_spoken = False
         return True
 
+    def undo_pause(self) -> None:
+        """Take back a pause the durable record refused, and nothing else.
+
+        The bench button's rollback. It used to call resume_workflow(), which
+        also starts a protocol that is not running -- from step 1. This only
+        puts the pause state back as it was before pause_workflow(); no pause
+        interval is recorded, because none was kept.
+        """
+
+        if self._pause_state != "paused":
+            return
+        self._pause_state = "active"
+        self._paused_at = None
+        self._workflow_status = self._status_before_pause
+        self._paused_notice_spoken = False
+
     def resume_workflow(self, now: float | None = None) -> bool:
         current_time = time.time() if now is None else now
+        if self.experiment_ended:
+            # An ended experiment is not run again from step 1 (decision 2):
+            # the bench pause's rollback used to come through here and
+            # restart it while its durable record stayed stopped.
+            return False
         if not self.active:
             self.active = True
             self.current_index = 0
@@ -7528,6 +7631,22 @@ class CuratedProtocolSession:
             and self._discourse_context.workflow_revision == self._revision
             else None
         )
+        if (
+            not self.active
+            and self._experiment_started_at is None
+            and _FIRST_STEP_START.fullmatch(_utterance_key(transcript))
+        ):
+            # Before the start, "1단계부터 해 볼까 / 하자 / 시작하자" starts
+            # the experiment (lane R3, decision 8; R004 was missed).
+            return CuratedControlIntent(
+                intent_kind="workflow_command",
+                action=CuratedProtocolAction.START,
+                requested_transition="start",
+                requested_followup="describe_new_current_step",
+                language=language,
+                allows_state_mutation=True,
+                normalized_transcript=_utterance_key(transcript),
+            )
         shared_decision = arbitration or arbitrate_request(transcript)
         return _front_control_intent(transcript, language) or curated_intent_from_arbitration(
             shared_decision,
@@ -8953,6 +9072,11 @@ class CuratedProtocolSession:
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
+        if (
+            intent.action is CuratedProtocolAction.PROTOCOL_QUERY
+            and intent.protocol_scope in _SERVER_VALUE_SCOPES
+        ):
+            return "server_value_query"
         if not self.active and (
             (
                 intent.action in {
@@ -9924,14 +10048,17 @@ class CuratedProtocolSession:
         reasked_question: dict[str, Any] | None = None
 
         if (
-            command in {CuratedProtocolAction.START, CuratedProtocolAction.RESUME}
-            and not self.active
-            and self._experiment_ended()
+            command in {
+                CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
+                CuratedProtocolAction.PAUSE,
+            }
+            and self.experiment_ended
         ):
             # Decision 2 (2026-10-03): an ended experiment is not started
             # again by voice -- a start used to begin it over from step 1,
             # and a resume did the same through resume_workflow(). Nothing
-            # changes; the next experiment is chosen on the screen.
+            # changes; the next experiment is chosen on the screen. Nor is
+            # it paused (lane R3): there is nothing running to pause.
             response = EXPERIMENT_ENDED_START_REPLY.get(
                 language, EXPERIMENT_ENDED_START_REPLY["ko"]
             )
@@ -9945,7 +10072,11 @@ class CuratedProtocolSession:
                 final_step=False,
                 state_changed=False,
                 primary_text=response,
-                intent_kind="start_after_experiment_ended",
+                intent_kind=(
+                    "pause_after_experiment_ended"
+                    if command is CuratedProtocolAction.PAUSE
+                    else "start_after_experiment_ended"
+                ),
             )
 
         if self._pause_state == "paused" and command not in {
@@ -12672,6 +12803,11 @@ class CuratedProtocolSession:
             if reading:
                 localized[fact_id] = reading
                 item["ko"] = reading
+                source = getattr(self.fixture, "localization_source", None)
+                if callable(source) and source(step_id, fact.fact_id) == "machine":
+                    # Lane R3, decision 7: a stored machine translation is
+                    # marked; a reviewed reading carries no mark.
+                    item["localization_source"] = "machine"
             return item
 
         near = []
@@ -12697,6 +12833,18 @@ class CuratedProtocolSession:
                          *view.equipment, *view.safety):
                 protocol_facts.append(entry(f"P.{fact.fact_id}", fact, None))
         terms = tuple(term.text for term in self._protocol_vocabulary().terms)
+        # Decision 6 (lane R3): the words an outside-PDF explanation may be
+        # about are the protocol's own -- every step, its facts (warnings
+        # included), materials and equipment, and their Korean readings.
+        text_parts: list[str] = []
+        for at, step in enumerate(steps):
+            text_parts.append(step.instruction_source_text)
+            for fact in self.fixture.facts_for_step(at):
+                text_parts.append(fact.text)
+                reading = self._localized_fact(step.step_id, fact.fact_id)
+                if reading:
+                    text_parts.append(reading)
+        text_parts.extend(item["text"] for item in protocol_facts)
         protocol = {
             "title": self.fixture.title,
             "step_count": len(steps),
@@ -12739,6 +12887,7 @@ class CuratedProtocolSession:
         return RouterContext(
             snapshot=snapshot, protocol=protocol, evidence=evidence,
             localized=localized, terms=terms,
+            protocol_text="\n".join(text_parts),
             server_values=ServerValues(
                 title=self.fixture.title,
                 revision_id=self.fixture.revision_id,
@@ -12854,6 +13003,30 @@ class CuratedProtocolSession:
             plan, display_text=text, speech_text=text, primary_text=text,
             source_texts=(), source_pages=(), evidence_ids=(), display_document=None,
             intent_kind="router_answer_not_confirmed",
+        )
+        self._replay[turn_id] = replaced
+        return replaced
+
+    def handoff_on_screen(
+        self, *, turn_id: int, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """"보고서는 화면에서 보내 주세요." in place of the rules' voice hand-off.
+
+        Router only (decision 1 of 2026-10-03, lane R3, with D8): when the
+        router falls back to the rules on a hand-off request, the rules'
+        reply asks to send the report to a placeholder address by voice.
+        The router says to send it from the screen instead, and leaves no
+        hand-off question open. Any other rules' reply stands.
+        """
+
+        plan = self._replay.get(turn_id)
+        if plan is None or plan.action is not CuratedProtocolAction.REPORT_HANDOFF or plan.state_changed:
+            return None
+        self._pending_handoff_confirmation = None
+        text = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
+        replaced = replace(
+            plan, display_text=text, speech_text=text, primary_text=text,
+            intent_kind="handoff_on_screen",
         )
         self._replay[turn_id] = replaced
         return replaced
@@ -13244,7 +13417,12 @@ class CuratedProtocolSession:
         label = facts.current_step_label or ""
         ko = language == "ko"
         action = CuratedProtocolAction.UNSUPPORTED
-        if code == "workflow_not_active":
+        speech_mode = CuratedProtocolSpeechMode.BLOCKED
+        if code == "handoff_not_by_voice":
+            action = CuratedProtocolAction.REPORT_HANDOFF
+            speech_mode = CuratedProtocolSpeechMode.CONTROL
+            response = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
+        elif code == "workflow_not_active":
             action = CuratedProtocolAction.INACTIVE
             if self._workflow_status in {"preview", "ready"}:
                 response = (
@@ -13323,7 +13501,7 @@ class CuratedProtocolSession:
             action=action,
             display_text=response,
             speech_text=response,
-            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+            speech_mode=speech_mode,
             facts=(),
             step_label=(label or None) if self.active else None,
             final_step=self.active and self.current_index == len(self.fixture.steps) - 1,

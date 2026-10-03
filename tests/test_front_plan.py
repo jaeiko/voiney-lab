@@ -186,18 +186,21 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
     def test_everything_else_is_handed_on_untouched(self) -> None:
         for said in (
             "다 했어", "완료했어", "끝났어", "다음 단계", "다음 단계로 넘어가자", "넘어가",
-            "5단계 완료", "자 이제 다음 거 하자", "지금 몇 단계야", "이 단계 왜 해?",
+            "5단계 완료", "자 이제 다음 거 하자", "이 단계 왜 해?",
             "자세히 알려줘", "타이머 시작해줘", "버퍼 1은 뭐야?", "어디까지 했지?",
             "오늘 점심 뭐 먹지", "메모해줘 튜브 라벨 A-17",
         ):
             with self.subTest(said=said):
                 self.assert_handed_on((said,), step_index=3)
+        # Decision 3 (lane R3): the current step is a server value.
+        self.assert_front(("지금 몇 단계야",), "server_value_query", step_index=3)
 
     def test_before_the_start_only_front_words_are_taken(self) -> None:
         # Decision 2 (2026-10-03): an explicit start of an experiment that
         # never started is a front rule.
         self.assert_front(("프로토콜 시작해줘",), "start_command", step_index=None)
-        self.assert_handed_on(("자 이제 1단계부터 해볼까",), step_index=None)
+        # Decision 8 (lane R3): "1단계부터 해 볼까" before the start starts it.
+        self.assert_front(("자 이제 1단계부터 해볼까",), "start_command", step_index=None)
         self.assert_front(("잠깐",), "pause", step_index=None)
 
     def test_an_unanswered_question_is_put_back(self) -> None:
@@ -233,7 +236,7 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "stt_unreliable", "pause", "end_command", "yes_no_open_question",
             "observation_reply", "timer_remaining", "coreference_clarify",
             "repeat_last_reply", "cancel_background_job", "targeted_completion",
-            "start_command",
+            "start_command", "server_value_query", "step_lookup",
         })
 
 

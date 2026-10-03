@@ -104,10 +104,40 @@ STATE_CHANGE_CLAIM = re.compile(
     r"|(?:시작|종료|일시\s*정지|일시\s*중지|재개)(?:했습니다|했어요|했어|했다|됐습니다|되었습니다)"
     r"|타이머(?:를|가)?\s*(?:시작|켰|맞췄|맞춰\s*두었)"
     r"|완료\s*처리(?:했|됐|되었|하였)"
+    # Promising a hand-off (lane R3, decision 1 with D8): nothing is sent
+    # by voice, so "보내 드릴게요" is false.
+    r"|(?:전달|전송|보내)\s*(?:해\s*)?(?:드릴게요|드리겠습니다|줄게요|할게요|하겠습니다|드렸습니다|했습니다)"
     r"|\b(?:moved\s+(?:you\s+)?on|advanced|i(?:'|’)ve\s+(?:started|stopped|paused|resumed|ended))\b"
     r"|\b(?:timer\s+(?:is\s+)?(?:started|running\s+now))\b",
     re.I,
 )
+
+
+#: A question only the server asks (lane R3, decision 5): whether a step is
+#: done, whether to end, record, move on, start, pause or resume. The server
+#: opens these and takes the "네" that answers them; an answer that asks one
+#: is heard as the server's question, and the next "네" would answer nothing.
+SERVER_QUESTION = re.compile(
+    r"(?:완료|마치|끝내|끝마치)\S*\s*(?:하지\s*)?(?:않으셨|않았|하셨|셨|했|됐|되었)\S*(?:나요|까요|습니까|어요|니)\s*\?"
+    r"|(?:완료|마무리)\s*(?:하셨|했|되었|됐)(?:나요|어요|습니까|니)"
+    r"|(?:종료|기록|시작|재개|일시\s*정지|저장|이동|진행)\s*(?:을|를)?\s*(?:할|하실|해\s*드릴|해도\s*될)까요"
+    r"|(?:종료|기록|시작|재개|일시\s*정지|저장|이동|진행)\s*하시겠(?:어요|습니까|나요)"
+    r"|넘어갈까요|넘어가시겠(?:어요|습니까)|(?:으로|로)\s*기록할까요"
+    # The hand-off question ("…로 보고서를 전송할까요?"), which only the
+    # server asks -- and, by decision 1 (D8), no longer by voice.
+    r"|(?:전달|전송|보내)\s*(?:해\s*)?(?:드릴|할|줄)까요|(?:전달|전송)\s*하시겠(?:어요|습니까)"
+    r"|\b(?:did|have)\s+you\s+(?:finish|finished|complete|completed|done)\b"
+    r"|\bis\s+(?:the\s+|this\s+)?step\s+(?:\d+\s+)?(?:done|complete|finished)\s*\?"
+    r"|\b(?:shall|should)\s+i\s+(?:end|stop|record|log|start|move|go|pause|resume|save)\b"
+    r"|\bdo\s+you\s+want\s+(?:me\s+)?to\s+(?:end|stop|record|log|start|move\s+on|pause|resume)\b",
+    re.I,
+)
+
+
+def asks_server_question(text: str) -> bool:
+    """The answer asks a question only the server asks (lane R3, decision 5)."""
+
+    return SERVER_QUESTION.search(text) is not None
 
 
 def claims_mutation(text: str) -> bool:
@@ -235,12 +265,25 @@ def _term_key(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _in_protocol_text(term: str, protocol_text: str) -> bool:
+    """``term`` is a word (or words) of the active protocol's text, not a part of one."""
+
+    key = _term_key(term)
+    if len(key) < 2 or not protocol_text:
+        return False
+    text = _term_key(protocol_text)
+    if re.fullmatch(r"[0-9a-z][0-9a-z .\-+/]*", key):
+        return re.search(rf"(?<![0-9a-z]){re.escape(key)}(?![0-9a-z])", text) is not None
+    return key in text
+
+
 def outside_pdf_violations(
     answer: str,
     *,
     question: str,
     term: str | None,
     protocol_terms: Iterable[str],
+    protocol_text: str = "",
 ) -> tuple[str, ...]:
     """Why an outside-PDF explanation may not be used; empty when it may.
 
@@ -249,12 +292,18 @@ def outside_pdf_violations(
     reagent or piece of equipment is used (its role or purpose) -- at most
     120 characters, with no number and nothing about quantities, method,
     safety or completion, and shown with the same outside-PDF mark (which the
-    server adds, not the model).
+    server adds, not the model). "A word of the active Protocol" is one of
+    its terms or (lane R3, decision 6) any word of ``protocol_text``, its
+    steps, materials and warnings.
     """
 
     violations: list[str] = []
     terms = {_term_key(item) for item in protocol_terms if item and item.strip()}
-    if not term or _term_key(term) not in terms:
+    # The term list, or (lane R3, decision 6) a word of the active
+    # protocol's own text: its steps, materials and warnings.
+    if not term or (
+        _term_key(term) not in terms and not _in_protocol_text(term, protocol_text)
+    ):
         violations.append("term_not_in_active_protocol")
     if not (_MEANING_QUESTION.search(question) or _PURPOSE_QUESTION.search(question)):
         violations.append("question_not_meaning_or_purpose")
@@ -306,6 +355,13 @@ _REVISION_CLAIM = re.compile(
     r"(?:실행\s*버전|리비전|revision)\s*[:은는]?\s*([0-9A-Za-z][0-9A-Za-z._-]*)",
     re.I,
 )
+#: "프로토콜 번호는 25단계" (lane R3, decision 3): the protocol's number or id
+#: said as anything with a digit in it that is not the server's revision.
+_PROTOCOL_NUMBER_CLAIM = re.compile(
+    r"(?:프로토콜|실험|절차)\s*(?:의\s*)?(?:번호|아이디|ID|버전)\s*(?:은|는|이|가|:)?\s*(\S+)"
+    r"|\bprotocol\s+(?:number|id|version)\s+(?:is\s+|:\s*)?(\S+)",
+    re.I,
+)
 _TITLE_CLAIM = re.compile(r"(?:제목|title)\s*[:：]\s*([^\n]+)", re.I)
 
 
@@ -338,6 +394,11 @@ def server_value_violations(text: str, values: ServerValues) -> tuple[str, ...]:
     for match in _REVISION_CLAIM.finditer(text):
         if match.group(1).rstrip(".") != values.revision_id:
             violations.append("revision_not_server_value")
+            break
+    for match in _PROTOCOL_NUMBER_CLAIM.finditer(text):
+        stated = _first_group(match).strip(".,;:!?\"'“”‘’")
+        if re.search(r"\d", stated) and values.revision_id not in stated:
+            violations.append("protocol_number_not_server_value")
             break
     for match in _TITLE_CLAIM.finditer(text):
         stated = match.group(1).strip().strip("\"'“”‘’「」『』")

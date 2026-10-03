@@ -365,10 +365,10 @@ class SemanticParaphraseCorpusTests(SemanticFallbackTestCase):
         Case("지금 어디까지 했어?", Stage.SEMANTIC, CuratedProtocolAction.CURRENT,
              False, "semantic_current_step", intent=SemanticIntent.CURRENT_STEP),
         # --- next preview (read-only, never completion) --------------------
-        Case("그 다음엔 뭐해?", Stage.SEMANTIC,
+        # Lane R3 (decision 4): the rules read this one themselves now.
+        Case("그 다음엔 뭐해?", Stage.DETERMINISTIC,
              CuratedProtocolAction.NEXT_INFORMATION, False,
-             "semantic_next_step_information",
-             intent=SemanticIntent.NEXT_STEP_INFORMATION),
+             "deterministic_route_resolved"),
         Case("다음에 뭘 해야 돼?", Stage.SEMANTIC,
              CuratedProtocolAction.NEXT_INFORMATION, False,
              "semantic_next_step_information",
