@@ -595,7 +595,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             "1단계 끝났어",
             "이 단계 완료했어",
             "이 단계 마쳤어",
-            "다 했어",
         ):
             with self.subTest(utterance=utterance):
                 session = CuratedProtocolSession(self.fixture)
@@ -610,6 +609,20 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 self.assertEqual(completed.action, CuratedProtocolAction.NEXT)
                 self.assertTrue(completed.state_changed)
                 self.assertEqual(session.current_index, 1)
+
+        # Lane R0 (decision 4): "다 했어" names no step, so it asks
+        # "1단계 완료하셨나요?" first and the yes moves on, once.
+        session = CuratedProtocolSession(self.fixture)
+        session.activate_configured()
+        session.plan("프로토콜 시작해줘", turn_id=1, language="ko")
+        asked = session.plan("다 했어", turn_id=2, language="ko")
+        self.assertEqual(asked.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+        self.assertFalse(asked.state_changed)
+        self.assertEqual(session.current_index, 0)
+        confirmed = session.plan("네", turn_id=3, language="ko")
+        self.assertEqual(confirmed.action, CuratedProtocolAction.NEXT)
+        self.assertTrue(confirmed.state_changed)
+        self.assertEqual(session.current_index, 1)
 
         for utterance in (
             "이 단계 완료 조건이 뭐야?",

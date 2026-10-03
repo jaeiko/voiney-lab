@@ -1098,6 +1098,8 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
         return False
     if key in _WORKFLOW_COMMANDS or key in _FULL_DETAIL_COMMANDS:
         return True
+    if _front_control_intent(transcript, "ko") is not None:
+        return True
     if _READ_ALOUD_REQUEST.fullmatch(key):
         return True
     if _SPECIFIC_STEP_PATTERN.fullmatch(key):
@@ -2020,6 +2022,34 @@ _COMPLETION_CLAIM = re.compile(
     r"|this\s+step\s+is\s+done"
     r")"
 )
+#: A completion said with no step named: "완료했어", "다 했어", "끝났어",
+#: "마쳤어", "다했다", and the endings people put on them. It is asked about
+#: once ("N단계 완료하셨나요?") instead of completing a step nobody named.
+_UNTARGETED_COMPLETION = re.compile(
+    r"(?:(?:벌써|이미|방금|아까|지금|여기까지|모두|전부)\s*)?"
+    r"(?:완료|(?:완료했|끝냈|끝났|끝낫|마쳤|다\s*했|모두\s*했)"
+    r"(?:어|어요|어용|습니다|다|음|지|네|네요|심더|당께|슈|소))"
+)
+#: The words that name the step a completion is about: "현재 단계", "이번
+#: 단계", "이 단계", "4단계", "step 4", "this step". Such a completion is
+#: taken as said.
+_COMPLETION_NAMES_A_STEP = re.compile(
+    r"(?:현재|지금|이번|이)\s*(?:단계|작업)|[0-9]+\s*단계|"
+    r"(?:[이삼사오육칠팔구]?십[일이삼사오육칠팔구]?|[일이삼사오육칠팔구])\s*단계|"
+    r"\bstep\s*[0-9]|(?:this|the\s+current)\s+step",
+    re.I,
+)
+_UNTARGETED_COMPLETION_KINDS = frozenset({
+    "report_completion_untargeted", "completion_and_next_untargeted",
+})
+
+
+def _completion_intent_kind(key: str, kind: str) -> str:
+    """``kind``, or its untargeted form when no step is named in ``key``."""
+
+    return kind if _COMPLETION_NAMES_A_STEP.search(key) else f"{kind}_untargeted"
+
+
 _NEXT_STEP_REQUEST = re.compile(
     r"(?:다음(?:\s*단계)?|next(?:\s+step|\s+one)|what\s+comes\s+next)"
     r".*(?:안내|알려|넘어|진행|가자|show|tell|move|go|proceed)?"
@@ -2413,10 +2443,89 @@ _UNDERSPECIFIED_RESULT_PATTERNS = (
 _PAUSE_PATTERNS = (
     re.compile(r"(?:잠깐|잠시)?\s*(?:실험|프로토콜|안내)?\s*(?:일시\s*중지|일시\s*정지|멈춰|잠깐\s*멈|잠시\s*멈|나갔다\s*올게|나가\s*있을게)"),
     # "그만" and "정지" said on their own pause, as "멈춰" does: the place in
-    # the protocol is kept. Ending the session takes "종료" or "중지".
+    # the protocol is kept. Ending the session takes "종료".
     re.compile(r"^(?:그만|정지)(?:해(?:줘|요)?)?$"),
     re.compile(r"^(?:pause(?:\s+(?:the\s+)?(?:protocol|experiment))?|take\s+a\s+break|hold\s+on)$", re.I),
 )
+#: The pause words decided on 2026-10-02, read ahead of every other rule: a
+#: pause that is missed, or waits on a slower reading, is a bench hazard.
+#: Matched whole against the utterance key, so a sentence that merely
+#: contains one of them ("정지 버튼이 뭐야") is not a pause. "중지" and "stop"
+#: pause; ending the session takes "종료" (_END_COMMAND).
+_FRONT_PAUSE_COMMAND = re.compile(
+    r"(?:(?:잠깐|잠깐만|잠시|잠시만)\s+)?"
+    r"(?:(?:실험|프로토콜|안내|절차)(?:을|를)?\s*)?"
+    r"(?:잠깐(?:만(?:요|예)?)?|잠시만(?:요)?|멈춰|멈처|정지|일시\s*정지|일시\s*중지|"
+    r"중지|중단|스톱|stop|pause)"
+    r"(?:\s*(?:봐|봐요|줘|줘요|요|해|해요|해줘|해\s*줘|주세요|해\s*주세요))?",
+    re.I,
+)
+#: Wanting to stop without saying "종료": the session pauses and says how to
+#: end it, instead of ending on a word that never asked for that.
+_END_REQUEST_WITHOUT_END_WORD = re.compile(
+    r"(?:(?:오늘은|오늘|이제|그럼|자)\s*)*(?:여기서\s*)?"
+    r"(?:(?:실험|프로토콜)(?:을|를|은|는)?\s*)?"
+    r"(?:그만(?:할래|할래요|할게|할게요|하자|합시다|하겠습니다|둘래|둘게)|"
+    r"끝낼게(?:요)?|끝낼래(?:요)?|끝내자|끝냅시다|끝내겠습니다)"
+    r"|(?:오늘은\s*)?여기까지(?:\s*(?:할게|할게요|하자|합시다|만\s*할게))?"
+    r"|stop\s+(?:the\s+)?(?:protocol|experiment)|(?:i(?:'|’)ll\s+|let(?:'|’)s\s+)?stop\s+here",
+    re.I,
+)
+#: The commands that end the session: "종료" said, or "end session". They are
+#: asked about once ("실험을 종료할까요?") before anything ends.
+_END_COMMAND = re.compile(
+    r"(?:(?:오늘은|오늘|이제|그럼)\s*)*(?:여기서\s*)?"
+    r"(?:(?:실험|프로토콜|세션|절차)(?:을|를)?\s*)?종료"
+    r"(?:\s*(?:해|해요|해줘|해\s*줘|할게|할게요|하자|합시다|할래|하겠습니다))?"
+    r"|end\s+(?:the\s+)?(?:session|experiment|protocol)",
+    re.I,
+)
+#: A question about pausing or ending ("멈춰도 돼?", "중지해야 돼?") is not
+#: the command. Read on the transcript as spoken, since the key drops "?".
+_CONTROL_QUESTION = re.compile(
+    r"[?？]|(?:도|면)\s*(?:돼|되|될|괜찮)|해야|할까|나요|(?:되|돼)\s*(?:나|니)"
+)
+END_CONFIRMATION_QUESTION = {
+    "ko": "실험을 종료할까요?",
+    "en": "Do you want to end the experiment?",
+}
+END_REQUEST_HINT = {
+    "ko": "실험을 끝내려면 '실험 종료'라고 말씀해 주세요.",
+    "en": "To end the experiment, say 'end session'.",
+}
+
+
+def _completion_question(step_label: str) -> str:
+    """The completion question, naming the step it asks about."""
+
+    return f"{step_label}단계 완료하셨나요?"
+
+
+def _front_control_intent(transcript: str, language: str) -> CuratedControlIntent | None:
+    """Pause, end-request and end commands, read before any other rule."""
+
+    key = _utterance_key(transcript)
+    if not key or _CONTROL_QUESTION.search(" ".join(transcript.casefold().split())):
+        return None
+    if _FRONT_PAUSE_COMMAND.fullmatch(key):
+        return CuratedControlIntent(
+            intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
+            language=language, normalized_transcript=key,
+        )
+    if _END_REQUEST_WITHOUT_END_WORD.fullmatch(key):
+        return CuratedControlIntent(
+            intent_kind="end_request_paused", action=CuratedProtocolAction.PAUSE,
+            language=language, normalized_transcript=key,
+        )
+    if _END_COMMAND.fullmatch(key):
+        return CuratedControlIntent(
+            intent_kind="workflow_command", action=CuratedProtocolAction.STOP,
+            language=language, allows_state_mutation=True,
+            normalized_transcript=key,
+        )
+    return None
+
+
 _RESUME_PATTERNS = (
     re.compile(r"(?:다시\s*(?:시작|진행)|재개|계속\s*(?:하자|할게|해줘)|계속\s*진행)"),
     re.compile(r"^(?:resume(?:\s+(?:the\s+)?(?:protocol|experiment))?|continue(?:\s+the\s+protocol)?)$", re.I),
@@ -2576,11 +2685,11 @@ _UNRELIABLE_TRANSCRIPT_PATTERNS = (
     re.compile(r"^[\u3040-\u30ff]{2,12}$"),
     re.compile(r"^(?:yes,?\s+you\s+go|how\s+many\s+months\??\s*it\s+was\s+a\s+year)$"),
 )
+# Only "종료" ends the session (2026-10-02). "중단", "중지" and "stop" pause,
+# and "그만할래", "여기서 끝낼게", "stop here" pause and say how to end; all of
+# them are read first, by _front_control_intent.
 _NATURAL_STOP_PATTERNS = (
-    re.compile(r"^(?:프로토콜(?:을)?\s*)?(?:종료|중단|중지)(?:해\s*줘|할게|할게요|하겠습니다)?$"),
-    re.compile(r"^(?:여기서\s*)?(?:끝낼게|끝낼게요|그만할래|그만할게|그만할게요)$"),
-    re.compile(r"^(?:please\s+)?stop(?:\s+the\s+protocol)?$"),
-    re.compile(r"^(?:i(?:'|’)ll\s+)?stop\s+here$"),
+    re.compile(r"^(?:프로토콜(?:을)?\s*)?종료(?:해\s*줘|할게|할게요|하겠습니다)?$"),
 )
 _PROTOCOL_SCOPE_PATTERNS = (
     ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|how\s+many\s+steps")),
@@ -3213,7 +3322,7 @@ def _binary_frame_reply(value: str) -> str | None:
         return None
     key = _semantic_utterance_key(value)
     if re.fullmatch(
-        r"(?:(?:네|예|응|그래|맞아|맞아요|물론)(?:\s+|$))*"
+        r"(?:(?:네|예|응응|응|그래|맞아|맞아요|물론)(?:\s+|$))*"
         r"(?:(?:전부|모두)\s*)?(?:다\s*(?:했어|했어요|끝냈어|끝냈어요)|"
         r"마쳤어|마쳤어요|끝냈어|끝냈어요|"
         r"완료(?:했어|했어요|했습니다)?|했어|했어요|됐어|됐어요)?"
@@ -3364,6 +3473,8 @@ def classify_curated_control_intent(
 ) -> CuratedControlIntent:
     """Classify reviewed workflow shapes before any knowledge or model route."""
 
+    if front := _front_control_intent(transcript, language):
+        return front
     if meta_intent := classify_agent_meta_intent(transcript, language=language):
         return meta_intent
 
@@ -3523,7 +3634,9 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS):
+    if any(pattern.search(key) for pattern in _PAUSE_PATTERNS) and not _CONTROL_QUESTION.search(
+        " ".join(transcript.casefold().split())
+    ):
         return CuratedControlIntent(
             intent_kind="pause_workflow",
             action=CuratedProtocolAction.PAUSE,
@@ -3610,7 +3723,14 @@ def classify_curated_control_intent(
         None,
     )
     decision = resolve_korean_completion_decision(transcript, language=language)
-    completion_claimed = bool(_COMPLETION_CLAIM.search(key)) or decision.is_completion
+    completion_claimed = (
+        bool(_COMPLETION_CLAIM.search(key))
+        or decision.is_completion
+        or (
+            bool(_UNTARGETED_COMPLETION.fullmatch(key))
+            and not _reply_withholds_assent(transcript)
+        )
+    )
     next_requested = bool(_NEXT_STEP_REQUEST.search(key))
     if any(pattern.search(key) for pattern in _AMBIGUOUS_COMPLETION_PATTERNS):
         return CuratedControlIntent(
@@ -3641,7 +3761,9 @@ def classify_curated_control_intent(
         )
     if completion_claimed:
         target_step = "authoritative_current_step"
-        intent_kind = "completion_and_next" if next_requested else "report_completion"
+        intent_kind = _completion_intent_kind(
+            key, "completion_and_next" if next_requested else "report_completion"
+        )
         if decision.is_completion and decision.target_kind == "explicit_step" and decision.target_step_label:
             target_step = decision.target_step_label
         return CuratedControlIntent(
@@ -3701,7 +3823,7 @@ def classify_curated_control_intent(
         )
     if any(pattern.search(key) for pattern in _COMPLETION_AND_NEXT_PATTERNS):
         return CuratedControlIntent(
-            intent_kind="completion_and_next",
+            intent_kind=_completion_intent_kind(key, "completion_and_next"),
             action=CuratedProtocolAction.NEXT,
             reported_completion=True,
             requested_transition="next",
@@ -3712,7 +3834,7 @@ def classify_curated_control_intent(
         )
     if any(pattern.search(key) for pattern in _COMPLETION_ONLY_PATTERNS):
         return CuratedControlIntent(
-            intent_kind="report_completion",
+            intent_kind=_completion_intent_kind(key, "report_completion"),
             action=CuratedProtocolAction.NEXT,
             reported_completion=True,
             requested_transition="next",
@@ -4225,15 +4347,11 @@ _WORKFLOW_COMMANDS = {
     "다음 단계로 진행해줘": CuratedProtocolAction.NEXT,
     "다음 단계 진행해줘": CuratedProtocolAction.NEXT,
     "next": CuratedProtocolAction.NEXT,
+    # "중지" and "stop" pause now; only "종료" ends (_front_control_intent).
     "종료": CuratedProtocolAction.STOP,
-    "중지": CuratedProtocolAction.STOP,
     "프로토콜 종료": CuratedProtocolAction.STOP,
     "프로토콜을 종료해줘": CuratedProtocolAction.STOP,
     "프로토콜 종료해줘": CuratedProtocolAction.STOP,
-    "중지해줘": CuratedProtocolAction.STOP,
-    "프로토콜을 중지해줘": CuratedProtocolAction.STOP,
-    "절차를 중지해줘": CuratedProtocolAction.STOP,
-    "stop": CuratedProtocolAction.STOP,
     "end session": CuratedProtocolAction.STOP,
 }
 
@@ -5273,6 +5391,13 @@ class CuratedProtocolSession:
         #: word turned away in a pause is answered by voice; the rest are
         #: shown only. A new pause starts the count again.
         self._paused_notice_spoken: bool = False
+        #: The one-turn "실험을 종료할까요?" question: a "종료" command asks it,
+        #: and only a yes to it on the next turn ends the session.
+        self._pending_stop_confirmation: dict[str, Any] | None = None
+        #: A completion, observation or end question that was open when a
+        #: voice pause was taken. It is asked again when the pause is lifted
+        #: by voice, and dropped by anything else that ends the pause.
+        self._frozen_question: dict[str, Any] | None = None
         self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
@@ -5305,6 +5430,7 @@ class CuratedProtocolSession:
             self._pending_completion_confirmation is not None,
             self._pending_observation_confirmation is not None,
             self._pending_transcript_confirmation is not None,
+            self._pending_stop_confirmation is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
         ))
@@ -5467,6 +5593,9 @@ class CuratedProtocolSession:
         self._paused_at = None
         self._workflow_status = "active"
         self._paused_notice_spoken = False
+        # A question held through the pause is asked again only by the voice
+        # resume in plan(), which takes it before calling this.
+        self._frozen_question = None
         return True
 
     def _clear_step_timer(self) -> None:
@@ -7005,6 +7134,8 @@ class CuratedProtocolSession:
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
         self._paused_notice_spoken = False
+        self._pending_stop_confirmation = None
+        self._frozen_question = None
         self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
@@ -7092,6 +7223,8 @@ class CuratedProtocolSession:
         self._total_paused_seconds = 0.0
         self._pause_intervals.clear()
         self._paused_notice_spoken = False
+        self._pending_stop_confirmation = None
+        self._frozen_question = None
         self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
@@ -7126,7 +7259,7 @@ class CuratedProtocolSession:
             else None
         )
         shared_decision = arbitration or arbitrate_request(transcript)
-        return curated_intent_from_arbitration(
+        return _front_control_intent(transcript, language) or curated_intent_from_arbitration(
             shared_decision,
             language=language,
         ) or classify_curated_control_intent(
@@ -7311,6 +7444,7 @@ class CuratedProtocolSession:
         dict[str, Any] | None,
         dict[str, Any],
         tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
+        tuple[dict[str, Any] | None, dict[str, Any] | None],
     ]:
         return (
             self.active,
@@ -7340,6 +7474,14 @@ class CuratedProtocolSession:
                 self._total_paused_seconds,
                 tuple(dict(interval) for interval in self._pause_intervals),
                 self._paused_notice_spoken,
+            ),
+            # The end question and a question held through a pause roll back
+            # with the turn, as the completion question does.
+            (
+                dict(self._pending_stop_confirmation)
+                if self._pending_stop_confirmation is not None else None,
+                dict(self._frozen_question)
+                if self._frozen_question is not None else None,
             ),
         )
 
@@ -7395,11 +7537,20 @@ class CuratedProtocolSession:
                 self._paused_notice_spoken = (
                     bool(checkpoint[21][4]) if len(checkpoint[21]) >= 5 else False
                 )
+            stop_pending, frozen = (
+                checkpoint[22] if len(checkpoint) >= 23 else (None, None)
+            )
+            self._pending_stop_confirmation = (
+                dict(stop_pending) if stop_pending is not None else None
+            )
+            self._frozen_question = dict(frozen) if frozen is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
             self._pending_anomaly = None
             self._pending_note_capture = None
+            self._pending_stop_confirmation = None
+            self._frozen_question = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -8274,6 +8425,61 @@ class CuratedProtocolSession:
             normalized_transcript=normalized_transcript,
         )
 
+    def _ask_held_question_again(
+        self,
+        plan: CuratedProtocolTurnPlan,
+        held: dict[str, Any],
+        *,
+        turn_id: int,
+        generation: int | None,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Reopen the question a pause held, and say it after the resume.
+
+        The question is reopened for the turn after this one, at the revision
+        the resume left, so the answer it gets is read as it would have been
+        before the pause.
+        """
+
+        kind = held["kind"]
+        pending = held["pending"]
+        if kind == "stop":
+            self._pending_stop_confirmation = {
+                **pending, "requested_turn_id": turn_id,
+                "requested_generation": generation,
+            }
+            question = END_CONFIRMATION_QUESTION.get(
+                language, END_CONFIRMATION_QUESTION["ko"]
+            )
+            shown = question
+        elif kind == "completion":
+            self._pending_completion_confirmation = replace(
+                pending, requested_turn_id=turn_id,
+                requested_generation=generation,
+                workflow_revision=self._revision,
+            )
+            question = (
+                _completion_question(self.fixture.steps[self.current_index].source_label)
+                if language == "ko" else
+                "Have you completed the current step? No state has changed."
+            )
+            shown = question
+        else:
+            self._pending_observation_confirmation = replace(
+                pending, requested_turn_id=turn_id,
+                requested_generation=generation,
+                workflow_revision=self._revision,
+            )
+            question = held.get("speech") or ""
+            shown = held.get("display") or question
+            if not question:
+                return plan
+        return replace(
+            plan,
+            display_text=f"{plan.display_text}\n\n{shown}",
+            speech_text=f"{plan.speech_text} {question}".strip(),
+        )
+
     def plan(
         self,
         transcript: str,
@@ -8372,6 +8578,41 @@ class CuratedProtocolSession:
                 or generation >= note_pending.get("requested_generation")
             )
         )
+        stop_pending = self._pending_stop_confirmation
+        stop_pending_valid = bool(
+            stop_pending is not None
+            and turn_id == stop_pending.get("requested_turn_id", -2) + 1
+            and (
+                stop_pending.get("configuration_id") is None
+                or configuration_id == stop_pending.get("configuration_id")
+            )
+            and (
+                stop_pending.get("requested_generation") is None
+                or generation is None
+                or generation >= stop_pending.get("requested_generation")
+            )
+        )
+        if stop_pending is not None and not stop_pending_valid:
+            self._pending_stop_confirmation = None
+        # The question this turn could answer, kept aside in case the turn is
+        # a pause: the pause holds it, and the voice resume asks it again.
+        open_question: dict[str, Any] | None = None
+        if pending_valid and pending is not None:
+            open_question = {
+                "kind": "completion", "pending": pending,
+                "step_index": pending.step_index, "step_id": pending.step_id,
+            }
+        elif observation_pending_valid and observation_pending is not None:
+            asked = self._replay.get(observation_pending.requested_turn_id)
+            open_question = {
+                "kind": "observation", "pending": observation_pending,
+                "step_index": observation_pending.step_index,
+                "step_id": observation_pending.step_id,
+                "speech": asked.speech_text if asked is not None else None,
+                "display": asked.display_text if asked is not None else None,
+            }
+        elif stop_pending_valid and stop_pending is not None:
+            open_question = {"kind": "stop", "pending": dict(stop_pending)}
         if pending is not None and not pending_valid:
             self._pending_completion_confirmation = None
         if observation_pending is not None and not observation_pending_valid:
@@ -8401,7 +8642,59 @@ class CuratedProtocolSession:
         stale_observation_reply = (
             observation_pending is not None and not observation_pending_valid
         )
-        if (
+        stop_reply = (
+            (
+                "affirmative"
+                if (
+                    not reply_withheld
+                    and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+                )
+                or binary_reply == "affirmative"
+                or _END_COMMAND.fullmatch(command_key)
+                else "negative"
+                if (
+                    not reply_withheld
+                    and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+                )
+                or binary_reply == "negative"
+                else None
+            )
+            if stop_pending_valid else None
+        )
+        if stop_reply == "affirmative":
+            self._pending_stop_confirmation = None
+            intent = CuratedControlIntent(
+                intent_kind="stop_confirmed",
+                action=CuratedProtocolAction.STOP,
+                confidence_source="server_pending_stop_confirmation",
+                allows_state_mutation=True,
+                language=language,
+                normalized_transcript=normalized_confirmation,
+            )
+        elif stop_reply == "negative":
+            self._pending_stop_confirmation = None
+            response = {
+                "ko": "알겠습니다. 실험을 종료하지 않았습니다.",
+                "en": "Understood. The experiment has not been ended.",
+            }.get(language, "알겠습니다. 실험을 종료하지 않았습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.DECLINE_COMPLETION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(
+                    self.fixture.steps[self.current_index].source_label
+                    if self.active else None
+                ),
+                final_step=self.active and self.current_index == len(self.fixture.steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="stop_confirmation_declined",
+            )
+            self._replay[turn_id] = plan
+            return plan
+        elif (
             note_pending_valid
             and not _utterance_looks_like_new_command(transcript)
             and transcript.strip()
@@ -8597,6 +8890,9 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         else:
+            if stop_pending_valid:
+                # Anything but a yes or a no leaves the end question unanswered.
+                self._pending_stop_confirmation = None
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
                 self._pending_note_capture = None
@@ -8828,11 +9124,34 @@ class CuratedProtocolSession:
                     allows_state_mutation=False,
                 )
         if (
+            intent.action is CuratedProtocolAction.NEXT
+            and intent.intent_kind in _UNTARGETED_COMPLETION_KINDS
+        ):
+            # "완료했어" names no step: asked about once, "N단계 완료하셨나요?",
+            # rather than completing whatever step is current. A step with an
+            # observed endpoint asked for the observation above instead.
+            intent = replace(
+                intent,
+                intent_kind="next_step_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                reported_completion=False,
+                requested_transition="next",
+                requested_followup="confirm_current_step_completion",
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                allows_state_mutation=False,
+            )
+        if (
             transcript_quality is not None
-            and intent.action not in {
-                CuratedProtocolAction.STOP,
-                CuratedProtocolAction.AUDIO_RECOVERY,
-            }
+            and (
+                intent.action not in {
+                    CuratedProtocolAction.STOP,
+                    CuratedProtocolAction.AUDIO_RECOVERY,
+                }
+                # A yes that would end the session is not taken from a
+                # transcript the provider was unsure of.
+                or intent.intent_kind == "stop_confirmed"
+            )
         ):
             intent = CuratedControlIntent(
                 intent_kind="transcript_unreliable",
@@ -8868,6 +9187,9 @@ class CuratedProtocolSession:
             self.active, self.current_index, self._block_reason, self._workflow_status,
         )
         changed = False
+        # Set when a voice resume lifts a pause that held a question; asked
+        # again once the turn is planned.
+        reasked_question: dict[str, Any] | None = None
 
         if self._pause_state == "paused" and command not in {
             CuratedProtocolAction.RESUME,
@@ -8902,7 +9224,36 @@ class CuratedProtocolSession:
                 speech_policy="speak" if spoken else "silent",
             )
 
-        if command is CuratedProtocolAction.STOP:
+        if command is CuratedProtocolAction.STOP and intent.intent_kind != "stop_confirmed" and (
+            self.active
+            or (
+                self._experiment_started_at is not None
+                and self._experiment_ended_at is None
+            )
+        ):
+            # Ending closes the experiment record, so a "종료" command is
+            # asked about once; only a yes on the next turn ends it.
+            self._pending_stop_confirmation = {
+                "configuration_id": configuration_id,
+                "requested_turn_id": turn_id,
+                "requested_generation": generation,
+            }
+            response = END_CONFIRMATION_QUESTION.get(
+                language, END_CONFIRMATION_QUESTION["ko"]
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.STOP,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=(steps[self.current_index].source_label if self.active else None),
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="stop_confirmation_required",
+            )
+        elif command is CuratedProtocolAction.STOP:
             changed = self.active or self._experiment_started_at is not None
             self.active = False
             self._block_reason = None
@@ -8910,6 +9261,8 @@ class CuratedProtocolSession:
             self._stop_experiment_clock()
             self._clear_step_timer()
             self._pending_anomaly = None
+            self._pending_stop_confirmation = None
+            self._frozen_question = None
             action = CuratedProtocolAction.STOP
             response = {
                 "en": "The protocol session has ended without a completion claim.",
@@ -9120,6 +9473,14 @@ class CuratedProtocolSession:
                 "Paused. Say 'resume' to continue."
                 + (" The timer is still running in real time." if timer_running else "")
             )
+            if intent.intent_kind == "end_request_paused":
+                # "그만할래" wants to stop but did not say "종료": the place is
+                # kept, and how to end is said.
+                response += " " + END_REQUEST_HINT.get(language, END_REQUEST_HINT["ko"])
+            if paused and open_question is not None:
+                # The question that was open is held, not dropped: the voice
+                # resume asks it again (decision D10).
+                self._frozen_question = open_question
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.PAUSE,
                 display_text=response,
@@ -9138,7 +9499,22 @@ class CuratedProtocolSession:
             # report a change anyway, and the server's resume mirror was then
             # refused by a record that was never paused.
             was_active = self.active
-            resumed = self.resume_workflow() or not was_active
+            frozen = self._frozen_question
+            lifted = self.resume_workflow()
+            resumed = lifted or not was_active
+            if (
+                lifted
+                and frozen is not None
+                and self.active
+                and (
+                    frozen["kind"] == "stop"
+                    or (
+                        self.current_index == frozen["step_index"]
+                        and steps[self.current_index].step_id == frozen["step_id"]
+                    )
+                )
+            ):
+                reasked_question = frozen
             step = steps[self.current_index]
             timer_info = self.timer_status()
             timer_suffix = ""
@@ -10804,7 +11180,7 @@ class CuratedProtocolSession:
                 response = ({
                 "en": "Have you completed the current step? No state has changed.",
                 "vi": "Bạn đã hoàn thành bước hiện tại chưa? Trạng thái chưa thay đổi.",
-                "ko": "현재 단계를 완료하셨나요? 아직 상태는 변경하지 않았습니다.",
+                "ko": _completion_question(step.source_label),
             } if intent.intent_kind == "next_step_confirmation_required" else {
                 "en": (
                     f"Please confirm whether step {step.source_label} is complete "
@@ -11238,6 +11614,11 @@ class CuratedProtocolSession:
             self._workflow_status,
         ):
             self._revision += 1
+        if reasked_question is not None:
+            plan = self._ask_held_question_again(
+                plan, reasked_question, turn_id=turn_id,
+                generation=generation, language=language,
+            )
         if (
             plan.action is CuratedProtocolAction.CLARIFY_COMPLETION
             and plan.intent_kind in {

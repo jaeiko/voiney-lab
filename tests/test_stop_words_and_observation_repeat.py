@@ -2,8 +2,8 @@
 
 "그만" used to end the protocol session, after which "다시 시작" began again
 at step 1, while "멈춰" paused and kept the place and "정지" was not
-understood at all. All of them now pause, as "멈춰" did; "종료" and "중지"
-still end the session.
+understood at all. All of them now pause, as "멈춰" did; "종료" still ends
+the session, after asking once ("중지" pauses too since lane R0).
 
 While an observation prompt is outstanding, "다시 말해줘", "다시 들려줘" and
 "한 번 더 말해줘" say the question again as it was last asked and do not count
@@ -58,12 +58,22 @@ class StopWordTests(unittest.TestCase):
                 self.assertEqual(resumed.step_label, "3")
 
     def test_ending_the_session_still_takes_an_explicit_word(self) -> None:
-        for word in ("종료", "중지", "프로토콜 종료"):
+        # Lane R0 (2026-10-02): "중지" pauses, and "종료" asks
+        # "실험을 종료할까요?" once before the session ends.
+        for word in ("종료", "프로토콜 종료"):
             with self.subTest(word=word):
                 session = self._session_at_step_3()
-                stopped = _turn(session, word, 2)
+                asked = _turn(session, word, 2)
+                self.assertEqual(asked.action, CuratedProtocolAction.STOP)
+                self.assertFalse(asked.state_changed)
+                self.assertTrue(session.active)
+                stopped = _turn(session, "네", 3)
                 self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
                 self.assertFalse(session.active)
+        session = self._session_at_step_3()
+        paused = _turn(session, "중지", 2)
+        self.assertEqual(paused.action, CuratedProtocolAction.PAUSE)
+        self.assertTrue(session.active)
 
     def test_a_sentence_that_mentions_stopping_is_not_a_pause(self) -> None:
         for sentence in ("정지 버튼이 뭐야?", "반응을 정지시키는 시약이 뭐야?", "그만큼 넣으면 돼?"):

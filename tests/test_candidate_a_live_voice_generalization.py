@@ -323,9 +323,7 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
             "Okay, 현재 현재 단계로 완료했어",
             "어 음 지금 지금 단계를 완료했어",
             "네 현재 단계는 완료했습니다",
-            "좋아 completed 했어",
             "This step is done, let's move on",
-            "다 했으니까 다음으로 넘어가줘",
         ):
             with self.subTest(utterance=stutter_utterance):
                 session = self.session("1")
@@ -335,6 +333,18 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                     language="en" if "done" in stutter_utterance else "ko",
                 )
                 self.assertTrue(plan.state_changed)
+                self.assertEqual(session.current_index, 1)
+        # Lane R0 (decision 4): naming no step, these ask first; the yes
+        # moves on.
+        for untargeted in ("좋아 completed 했어", "다 했으니까 다음으로 넘어가줘"):
+            with self.subTest(utterance=untargeted):
+                session = self.session("1")
+                plan = session.plan(untargeted, turn_id=2, language="ko")
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(plan.speech_text, "1단계 완료하셨나요?")
+                self.assertEqual(session.current_index, 0)
+                confirmed = session.plan("네", turn_id=3, language="ko")
+                self.assertTrue(confirmed.state_changed)
                 self.assertEqual(session.current_index, 1)
 
     def test_multilingual_underspecified_result_query_parity(self) -> None:

@@ -509,7 +509,10 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         replay = session.plan("네.", turn_id=5, language="ko")
         self.assertEqual(advanced, replay)
         self.assertEqual(session.state()["current_step_label"], "2")
-        stopped = session.plan("종료", turn_id=6, language="ko")
+        # Lane R0: "종료" asks once; the yes on the next turn ends.
+        session.plan("종료", turn_id=6, language="ko")
+        self.assertTrue(session.state()["active"])
+        stopped = session.plan("네", turn_id=7, language="ko")
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.state()["active"])
 
@@ -519,9 +522,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             "현재 단계를 완료했어. 다음 단계로 안내해 줘.",
             "이 단계 끝냈어요. 다음으로 넘어가요.",
             "이 단계 끝났어 다음 단계로 알려줘",
-            "다 했어. 다음 단계 알려줘.",
             "현재 작업 완료. 다음 단계 진행해 줘.",
-            "여기까지 했고 이제 다음으로 가자.",
             "I finished this step. Take me to the next one.",
             "This step is complete; what comes next?",
         )
@@ -552,6 +553,28 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     turn_id=turn_id,
                     language=intent.language,
                 ), plan)
+                self.assertEqual(session.current_index, 1)
+
+    def test_compound_completion_naming_no_step_asks_first(self):
+        # Lane R0 (decision 4): these were in the list above and advanced at
+        # once; naming no step, they now ask "1단계 완료하셨나요?" first.
+        for turn_id, phrase in enumerate((
+            "다 했어. 다음 단계 알려줘.",
+            "여기까지 했고 이제 다음으로 가자.",
+        ), 520):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.activate_configured()
+                session.active = True
+                intent = classify_curated_control_intent(phrase, language="ko")
+                self.assertEqual(intent.intent_kind, "completion_and_next_untargeted")
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(plan.speech_text, "1단계 완료하셨나요?")
+                self.assertEqual(session.current_index, 0)
+                confirmed = session.plan("네", turn_id=turn_id + 1, language="ko")
+                self.assertEqual(confirmed.action, CuratedProtocolAction.NEXT)
                 self.assertEqual(session.current_index, 1)
 
     def test_real_voice_scientific_normalization_and_navigation_are_bounded(self):
@@ -777,9 +800,13 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         ), advanced)
         self.assertEqual(session.state()["current_step_label"], "2")
 
-        stopped = session.plan(
+        # Lane R0: "종료" asks once; the yes on the next turn ends.
+        asked = session.plan(
             "프로토콜을 종료해 줘", turn_id=8, language="ko"
         )
+        self.assertEqual(asked.action, CuratedProtocolAction.STOP)
+        self.assertFalse(asked.state_changed)
+        stopped = session.plan("네", turn_id=9, language="ko")
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.state()["active"])
         self.assertEqual(session.state()["revision"], 3)
@@ -872,7 +899,9 @@ class CuratedProtocolSessionTests(unittest.TestCase):
     def test_stopped_protocol_requires_an_explicit_restart(self):
         session = CuratedProtocolSession(self.fixture)
         session.activate_configured()
-        session.plan("중지해 줘.", turn_id=1, language="ko")
+        # Lane R0: "중지" pauses now; ending takes "종료" and a yes.
+        session.plan("종료해 줘.", turn_id=0, language="ko")
+        session.plan("네", turn_id=1, language="ko")
 
         unrelated = session.plan("아무 관련 없는 말", turn_id=2, language="ko")
         self.assertEqual(unrelated.action, CuratedProtocolAction.INACTIVE)
@@ -1030,8 +1059,12 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             ),
             (
                 CuratedProtocolAction.STOP,
+                ("프로토콜을 종료해 줘", "프로토콜 종료해줘"),
+            ),
+            (
+                # Lane R0 (2026-10-02): "중지" pauses; only "종료" ends.
+                CuratedProtocolAction.PAUSE,
                 (
-                    "프로토콜을 종료해 줘", "프로토콜 종료해줘",
                     "중지해 줘", "중지해줘", "중지해 주세요", "중지해주세요",
                     "프로토콜을 중지해 줘", "프로토콜을 중지해줘",
                     "절차를 중지해 줘", "절차를 중지해줘",
@@ -1343,9 +1376,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         phrases = (
             "현재 단계를 완료했어요.",
             "이 단계 완료했어.",
-            "여기까지 다 했어요.",
             "지금 단계는 끝났습니다.",
-            "방금 작업 마쳤어.",
             "I completed the current step.",
             "This step is finished.",
         )
@@ -1363,6 +1394,19 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                     session.plan(phrase, turn_id=turn_id, language="ko"), plan
                 )
                 self.assertEqual(session.current_index, 2)
+
+    def test_real_voice_completion_naming_no_step_asks_first(self):
+        # Lane R0 (decision 4): these were in the list above and advanced at
+        # once; naming no step, they now ask "2단계 완료하셨나요?" first.
+        for turn_id, phrase in enumerate(("여기까지 다 했어요.", "방금 작업 마쳤어."), 910):
+            with self.subTest(phrase=phrase):
+                session = CuratedProtocolSession(self.fixture)
+                session.active = True
+                session.current_index = 1
+                plan = session.plan(phrase, turn_id=turn_id, language="ko")
+                self.assertEqual(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+                self.assertEqual(plan.speech_text, "2단계 완료하셨나요?")
+                self.assertEqual(session.current_index, 1)
 
     def test_completion_only_preserves_ambiguous_and_readiness_boundaries(self):
         ambiguous = CuratedProtocolSession(self.fixture)
@@ -1514,10 +1558,16 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         )
         session = CuratedProtocolSession(self.fixture)
         session.active = True
-        stopped = session.plan(
+        # Lane R0: the stop command still gets through a low-confidence
+        # transcript, as the question "실험을 종료할까요?"; the yes that ends
+        # the session must itself be heard clearly.
+        asked = session.plan(
             "프로토콜 종료해줘", turn_id=951, language="ko",
             transcript_quality="provider_low_confidence",
         )
+        self.assertEqual(asked.action, CuratedProtocolAction.STOP)
+        self.assertTrue(session.active)
+        stopped = session.plan("네", turn_id=952, language="ko")
         self.assertEqual(stopped.action, CuratedProtocolAction.STOP)
         self.assertFalse(session.active)
 
@@ -2340,19 +2390,28 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             )
             curated = session.curated_protocol_session
             opening_index = curated.current_index
-            first = curated.plan(
+            # Lane R0: "종료" asks "실험을 종료할까요?" first; the yes ends,
+            # and that is the stop recorded. The question records nothing.
+            asked = curated.plan(
                 "프로토콜을 종료할게", turn_id=1, language="ko"
             )
+            _record_experiment_report_plan(
+                session, curated, asked, turn_id=1,
+                generation=session.generation,
+                pre_transition_index=opening_index,
+            )
+            self.assertFalse(asked.state_changed)
+            first = curated.plan("네", turn_id=2, language="ko")
             first_report = _record_experiment_report_plan(
-                session, curated, first, turn_id=1,
+                session, curated, first, turn_id=2,
                 generation=session.generation,
                 pre_transition_index=opening_index,
             )
             second = curated.plan(
-                "프로토콜 종료할게요", turn_id=2, language="ko"
+                "프로토콜 종료할게요", turn_id=3, language="ko"
             )
             second_report = _record_experiment_report_plan(
-                session, curated, second, turn_id=2,
+                session, curated, second, turn_id=3,
                 generation=session.generation,
                 pre_transition_index=opening_index,
             )
@@ -3251,11 +3310,16 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             item["text"] for item in stop_socket.text
             if item["type"] == "reply.delta"
         )
+        # Lane R0 (2026-10-02): "중지" pauses and keeps the place; ending
+        # takes "종료".
         self.assertEqual(
             (stop_done["route"], stop_done["result_kind"]),
-            ("curated_protocol", "stop"),
+            ("curated_protocol", "pause"),
         )
-        self.assertFalse(stop_session.curated_protocol_session.active)
+        self.assertTrue(stop_session.curated_protocol_session.active)
+        self.assertEqual(
+            stop_session.curated_protocol_session.workflow_status, "paused"
+        )
         self.assertTrue(stop_session.active)
         self.assertNotIn("허용된 답변이 없습니다", stop_reply)
         self.assertNotIn("completed", stop_session.curated_protocol_session.state())
@@ -3847,7 +3911,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 None,
                 True,
             ),
-            (2, "프로토콜 종료해줘", "stop", None, False),
+            # Lane R0: "종료" asks "실험을 종료할까요?" first; nothing ends
+            # until the yes on the next turn.
+            (2, "프로토콜 종료해줘", "stop", None, True),
         )
 
         async def immediate(function, *args, **kwargs):
@@ -4028,7 +4094,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "용액 A는 어떻게 준비해?",
             "현재 단계를 완료했어. 단계로 넘어가죠",
             "프로토콜 종료해줘",
+            "네",
         )
+        # Lane R0: "종료" asks "실험을 종료할까요?" first; the yes ends.
         expected = (
             ("start", True, "1", 1, None),
             ("current", True, "1", 1, None),
@@ -4036,6 +4104,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ("off_topic", True, "1", 1, None),
             ("related_question", True, "1", 1, None),
             ("next", True, "2", 2, None),
+            ("stop", True, "2", 2, None),
             ("stop", False, None, 3, None),
         )
 
@@ -4169,6 +4238,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "현재 단계 전체를 읽어줘",
             "프로토콜 전체 재료 목록을 알려줘",
             "프로토콜 종료해줘",
+            # Lane R0: "종료" asks first; the yes ends.
+            "네",
         )
 
         async def immediate(function, *args, **kwargs):
@@ -4252,6 +4323,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("full_detail", None),
                 ("protocol_query", None),
                 ("stop", None),
+                ("stop", None),
             ],
         )
         self.assertEqual(
@@ -4265,6 +4337,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 "verified_fact",
                 "full_detail",
                 "verified_fact",
+                "control",
                 "stop",
             ],
         )
@@ -4292,6 +4365,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 self.fixture.steps[1].step_id, "current_step"
             ),
             "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
+            "실험을 종료할까요?",
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:5])
@@ -4338,8 +4412,9 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             item for item in socket.text if item["type"] == "reply.delta"
         ][6]
         self.assertIn(step_two, related_reply["source_texts"])
+        self.assertEqual(replies[7], "실험을 종료할까요?")
         self.assertEqual(
-            replies[7],
+            replies[8],
             "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
         )
         states = [
@@ -4366,6 +4441,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
                 ("question", True, "2", 3, None),
                 ("full_detail", True, "2", 3, None),
                 ("protocol_query", True, "2", 3, None),
+                ("stop", True, "2", 3, None),
                 ("stop", False, None, 4, None),
             ],
         )
