@@ -45,6 +45,8 @@ from voiney_lab.llm_router import (
     RECORD_LOG,
     ProposalBasis,
     ProposalVerdict,
+    RouterAnswer,
+    RouterContext,
     RouterTurnFacts,
     ToolProposal,
     validate_tool_proposals,
@@ -12523,6 +12525,168 @@ class CuratedProtocolSession:
             ),
             transcript_unreliable=transcript_quality is not None,
         )
+
+    def router_context(
+        self,
+        *,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+    ) -> RouterContext:
+        """What the router model is shown this turn (design §3-1, D13). Reads only.
+
+        The snapshot is the server's state now; the protocol part is the
+        current step with the two on either side and their facts, every
+        step's label and title, the protocol-wide facts and the protocol's
+        terms. Each fact carries an id ("S7.current_step", "P.protocol_purpose")
+        an answer cites, and its reviewed Korean reading where there is one.
+        """
+
+        steps = self.fixture.steps
+        index = self.current_index if 0 <= self.current_index < len(steps) else 0
+        titles = {
+            step.step_id: section.title_source_text
+            for section in self.fixture.draft.protocol.sections
+            for step in section.steps
+        }
+        evidence: dict[str, tuple[str, int]] = {}
+        localized: dict[str, str] = {}
+
+        def entry(fact_id: str, fact: CuratedProtocolFact, step_id: str | None) -> dict[str, Any]:
+            evidence[fact_id] = (fact.text, fact.source_page)
+            item: dict[str, Any] = {
+                "id": fact_id, "kind": fact.kind, "text": fact.text, "page": fact.source_page,
+            }
+            reading = self._localized_fact(step_id, fact.fact_id) if step_id else None
+            if reading:
+                localized[fact_id] = reading
+                item["ko"] = reading
+            return item
+
+        near = []
+        for at in range(max(0, index - 2), min(len(steps), index + 3)):
+            step = steps[at]
+            near.append({
+                "label": step.source_label,
+                "title": titles.get(step.step_id, ""),
+                "current": bool(self.active and at == index),
+                "source_timer_seconds": self.timer_seconds_for_step(at) or None,
+                "facts": [
+                    entry(f"S{step.source_label}.{fact.fact_id}", fact, step.step_id)
+                    for fact in self.fixture.facts_for_step(at)
+                ],
+            })
+        protocol_facts: list[dict[str, Any]] = []
+        try:
+            view = ProtocolKnowledgeView.from_fixture(self.fixture)
+        except CuratedProtocolFixtureError:
+            view = None
+        if view is not None:
+            for fact in (view.purpose, *view.before_start, *view.materials,
+                         *view.equipment, *view.safety):
+                protocol_facts.append(entry(f"P.{fact.fact_id}", fact, None))
+        terms = tuple(term.text for term in self._protocol_vocabulary().terms)
+        protocol = {
+            "title": self.fixture.title,
+            "step_count": len(steps),
+            "steps_near_current": near,
+            "all_steps": [
+                {
+                    "label": step.source_label,
+                    "title": titles.get(step.step_id, ""),
+                    "summary": " ".join(step.instruction_source_text.split())[:80],
+                }
+                for step in steps
+            ],
+            "protocol_facts": protocol_facts,
+            "terms": list(terms),
+        }
+        if self.active:
+            phase = "paused" if self._pause_state == "paused" else "active"
+        elif self._experiment_ended():
+            phase = "completed" if self._workflow_status == "completed" else "stopped"
+        else:
+            phase = "not_started"
+        timer = self.timer_status()
+        snapshot = {
+            "protocol_title": self.fixture.title,
+            "step_count": len(steps),
+            "phase": phase,
+            "current_step": steps[index].source_label if self.active else None,
+            "open_question": self._open_questions(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ).first_open,
+            "step_timer": {
+                "state": timer.get("state"),
+                "step": timer.get("step_label"),
+                "remaining_seconds": timer.get("remaining_seconds"),
+                "duration_seconds": timer.get("duration_seconds"),
+            },
+            "workflow_revision": self._revision,
+            "reply_language": language,
+        }
+        return RouterContext(
+            snapshot=snapshot, protocol=protocol, evidence=evidence,
+            localized=localized, terms=terms,
+        )
+
+    def apply_router_answer(
+        self,
+        answer: RouterAnswer,
+        context: RouterContext,
+        *,
+        turn_id: int,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """A model's checked answer as this turn's plan. Nothing changes.
+
+        Reached only for a turn front_plan() handed on, after the server's
+        checks passed. A one-turn question left open lapses, as it does when
+        plan() reads any reply that is not its answer.
+        """
+
+        if turn_id in self._replay:
+            return self._replay[turn_id]
+        self._last_semantic_decision = None
+        self._last_front_rule = None
+        self._pending_completion_confirmation = None
+        self._pending_transcript_confirmation = None
+        self._pending_note_capture = None
+        self._pending_stop_confirmation = None
+        self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
+        cited = tuple(item for item in answer.evidence_ids if item in context.evidence)
+        facts = tuple(
+            CuratedProtocolFact(item, "router_evidence", *context.evidence[item])
+            for item in cited
+        )
+        display = answer.display or answer.spoken
+        step = self.fixture.steps[self.current_index] if self.active else None
+        plan = CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.QUESTION,
+            display_text=display,
+            speech_text=answer.spoken,
+            speech_mode=(
+                CuratedProtocolSpeechMode.VERIFIED_FACT
+                if answer.source_kind == "pdf" else CuratedProtocolSpeechMode.CONTROL
+            ),
+            facts=facts,
+            step_label=step.source_label if step is not None else None,
+            final_step=bool(step is not None and self.current_index == len(self.fixture.steps) - 1),
+            state_changed=False,
+            fact_id=cited[0] if cited else None,
+            primary_text=display,
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=cited,
+            translation_status="llm_router_answer",
+            intent_kind="llm_router_answer",
+        )
+        self._replay[turn_id] = plan
+        if len(self._replay) > 64:
+            self._replay.pop(next(iter(self._replay)))
+        return plan
 
     def apply_tool_proposal(
         self,

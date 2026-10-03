@@ -19,6 +19,7 @@ from voiney_lab.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
+    RouterTurnRecord,
     SentenceSegment,
     answer_approved_reference_question,
     answer_curated_protocol_question,
@@ -175,7 +176,13 @@ from voiney_lab.procedures import (
     unattached_procedure_state,
 )
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
+from voiney_lab.llm_router import (
+    LlmRouterSettings,
+    RouterTurnOutcome,
+    route_turn_with_llm_router,
+)
 from voiney_lab.runtime_routing import (
+    CuratedRuntimeRoute,
     route_curated_runtime_turn_with_semantics,
 )
 from voiney_lab.semantic_intent import (
@@ -4846,7 +4853,9 @@ TURN_PROGRESS_TRANSITIONS={
         "composing","synthesizing","cancelled","error",
     }),
     "composing":frozenset({
-        "checking_approved_information","synthesizing","cancelled","error",
+        # A router answer the server could not use falls back to the rules.
+        "checking_approved_information","checking_protocol","synthesizing",
+        "cancelled","error",
     }),
     "synthesizing":frozenset({"playing","cancelled","error"}),
     "playing":frozenset({"complete","blocked","cancelled","error"}),
@@ -4869,7 +4878,8 @@ class ListenerSession:
                  web_visual_settings:WebVisualSettings|None=None,
                  generated_visual_settings:GeneratedVisualSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
-                 semantic_intent_settings:SemanticIntentSettings|None=None)->None:
+                 semantic_intent_settings:SemanticIntentSettings|None=None,
+                 llm_router_settings:LlmRouterSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
         self.framer=FrameBuffer(); self.next_turn_id=1; self.active_turn_id=None
@@ -4897,6 +4907,9 @@ class ListenerSession:
         self.filler_memory=FillerSessionMemory()
         self.semantic_intent_settings=(
             semantic_intent_settings or SemanticIntentSettings())
+        #: The lane R router (off by default): a turn the front rules hand on
+        #: goes to the model, and to the rules when the model cannot be used.
+        self.llm_router_settings=llm_router_settings or LlmRouterSettings()
         self.experiment_report_id:str|None=None
         self.test_mode_readiness_gates_skipped=False
         self.session_id=new_session_id()
@@ -6991,6 +7004,124 @@ def _claim_admitted_answer(
     )
 
 
+def _router_state(curated:CuratedProtocolSession)->tuple[str|None,str]:
+    """The step and status a router history bundle records (design §4-2)."""
+
+    label=(
+        curated.fixture.steps[curated.current_index].source_label
+        if curated.active else None
+    )
+    return label,curated.workflow_status
+
+
+def _router_server_result(outcome:RouterTurnOutcome,plan:Any)->str:
+    """What the server did with a router turn, for its history bundle."""
+
+    if outcome.handled_by=="fallback_rules" and outcome.fallback_reason:
+        if outcome.fallback_reason.startswith("refused:"):
+            return outcome.fallback_reason
+    kind=getattr(plan,"intent_kind",None)
+    if kind in {"next_step_confirmation_required","observation_confirmation_required"}:
+        return (
+            "observation_prompt_opened"
+            if kind=="observation_confirmation_required" else "confirm_opened"
+        )
+    if kind=="stop_confirmation_required":
+        return "stop_prompt_opened"
+    if kind=="timer_duration_confirmation_required":
+        return "timer_prompt_opened"
+    if kind=="anomaly_record_confirmation_required":
+        return "anomaly_prompt_opened"
+    if getattr(plan,"reported_anomaly",False) or (
+        getattr(plan,"reported_observation",False)
+        and plan.action is not CuratedProtocolAction.NEXT
+    ):
+        return "recorded"
+    if getattr(plan,"state_changed",False):
+        return "executed"
+    return "none"
+
+
+def _record_router_history(
+    session:"ListenerSession",curated:CuratedProtocolSession,
+    outcome:RouterTurnOutcome,before:tuple[str|None,str],*,
+    user:str,plan:Any,interrupted:bool=False,
+)->None:
+    """Keep one routed turn in the router's history (D14), front turns too."""
+
+    proposal=next(
+        (item for item in outcome.proposals if not isinstance(item,str)),None)
+    try:
+        session.history.record_router_turn(RouterTurnRecord(
+            at_step=before[0],status=before[1],user=user,
+            handled_by=outcome.handled_by,
+            assistant=(None if plan is None else plan.speech_text or plan.display_text),
+            proposal_tool=proposal.tool if proposal is not None else None,
+            proposal_kind=(
+                (proposal.action if proposal.tool=="change_state" else proposal.log_type)
+                if proposal is not None else None
+            ),
+            server_result=(None if plan is None else _router_server_result(outcome,plan)),
+            state_after=_router_state(curated),
+            interrupted=interrupted,
+        ))
+    except ValueError:
+        log.warning("router history bundle rejected handled_by=%s",outcome.handled_by)
+
+
+def _router_route_fields(
+    outcome:RouterTurnOutcome,settings:LlmRouterSettings,
+)->dict[str,object]:
+    """What turn.route_decision says about a routed turn (router on only)."""
+
+    usage=dict(outcome.reply.usage or {}) if outcome.reply is not None else {}
+    return {
+        "router":{
+            "handled_by":outcome.handled_by,
+            "fallback_reason":outcome.fallback_reason,
+            "model":settings.model if outcome.model_called else None,
+            "verdict":(
+                outcome.verdict.reason_code if outcome.verdict is not None else None),
+            "timings_ms":dict(outcome.timings_ms),
+            "usage":usage,
+        },
+    }
+
+
+async def _route_with_llm_router(
+    session:"ListenerSession",curated:CuratedProtocolSession,transcript:str,*,
+    turn_id:int,language:str,generation:int,transcript_quality:str|None,
+    arbitration:Any,actor_principal_id:str|None,actor_role:str,
+    rules_route:Callable[[],Awaitable[CuratedRuntimeRoute]],
+    progress:Callable[...,Awaitable[bool]],clock:Callable[[],float],
+)->RouterTurnOutcome:
+    """Route one turn through the lane R router (only when it is enabled)."""
+
+    settings=session.llm_router_settings
+
+    def client()->AsyncOpenAI:
+        return AsyncOpenAI(
+            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+            max_retries=0)
+
+    async def said(state:str)->None:
+        await progress(
+            state,
+            route=("brain" if state=="composing" else "curated_protocol"),
+        )
+
+    return await route_turn_with_llm_router(
+        curated,transcript,turn_id=turn_id,language=language,
+        settings=settings,client_factory=client,rule_route=rules_route,
+        history=session.history.router_history(),
+        transcript_quality=transcript_quality,
+        configuration_id=session.accepted_configuration_id,
+        generation=generation,arbitration=arbitration,
+        actor_principal_id=actor_principal_id,actor_role=actor_role,
+        on_progress=said,clock=clock,
+    )
+
+
 async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,turn_id:int,
                    input_frames:int,voiced_frames:int=0,
                    retained_prefix_frames:int=0,
@@ -7385,23 +7516,52 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         answer_output=None
         brain_snapshot=None
         source_boundary_note=None
+        router_outcome:RouterTurnOutcome|None=None
+        router_before=(
+            _router_state(curated)
+            if session.llm_router_settings.enabled else None
+        )
         try:
             timings["protocol_lookup_started_ms"]=round((clock()-endpoint)*1000)
-            await progress("checking_protocol",route="curated_protocol")
+            if not session.llm_router_settings.enabled:
+                await progress("checking_protocol",route="curated_protocol")
             pre_transition_index=curated.current_index
             turn_actor_principal_id,turn_actor_role=_voice_turn_actor()
-            routed_turn=await route_curated_runtime_turn_with_semantics(
-                curated,
-                transcript,turn_id=turn_id,language=turn_language,
-                transcript_quality=transcription_quality_issue(transcription),
-                configuration_id=session.accepted_configuration_id,
-                generation=generation,
-                arbitration=request_arbitration,
-                resolver=semantic_intent_resolver(
-                    session.semantic_intent_settings),
-                semantic_settings=session.semantic_intent_settings,
-                actor_principal_id=turn_actor_principal_id,
-                actor_role=turn_actor_role)
+            async def rules_route()->CuratedRuntimeRoute:
+                return await route_curated_runtime_turn_with_semantics(
+                    curated,
+                    transcript,turn_id=turn_id,language=turn_language,
+                    transcript_quality=transcription_quality_issue(transcription),
+                    configuration_id=session.accepted_configuration_id,
+                    generation=generation,
+                    arbitration=request_arbitration,
+                    resolver=semantic_intent_resolver(
+                        session.semantic_intent_settings),
+                    semantic_settings=session.semantic_intent_settings,
+                    actor_principal_id=turn_actor_principal_id,
+                    actor_role=turn_actor_role)
+            if session.llm_router_settings.enabled:
+                router_outcome=await _route_with_llm_router(
+                    session,curated,transcript,turn_id=turn_id,
+                    language=turn_language,generation=generation,
+                    transcript_quality=transcription_quality_issue(transcription),
+                    arbitration=request_arbitration,
+                    actor_principal_id=turn_actor_principal_id,
+                    actor_role=turn_actor_role,rules_route=rules_route,
+                    progress=progress,clock=clock)
+                routed_turn=(
+                    router_outcome.rule_route
+                    if router_outcome.rule_route is not None else
+                    CuratedRuntimeRoute(
+                        arbitration=request_arbitration,
+                        runtime_router="llm_router",
+                        plan=router_outcome.plan,
+                    )
+                )
+                for name,value in router_outcome.timings_ms.items():
+                    timings[f"router_{name}"]=value
+            else:
+                routed_turn=await rules_route()
             plan=routed_turn.plan
             semantic_outcome=(
                 routed_turn.semantic.public_payload()
@@ -7427,6 +7587,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     else None
                 ),
                 semantic_fallback=semantic_outcome,
+                **(
+                    _router_route_fields(router_outcome,session.llm_router_settings)
+                    if router_outcome is not None else {}
+                ),
             )
             log.info(
                 "turn.route_decision turn_id=%s generation=%s text_sha256=%s "
@@ -8158,6 +8322,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 brain_run.cancel()
             if not workflow_mutation_committed:
                 curated._restore(checkpoint)
+            if router_outcome is not None and router_before is not None:
+                _record_router_history(
+                    session,curated,router_outcome,router_before,
+                    user=transcript,plan=None,interrupted=True,
+                )
             raise
         except BaseException:
             if brain_run is not None:
@@ -8286,6 +8455,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "reply.complete",turn_id=turn_id,text=display_text)
         await current_text(
             "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
+        if (
+            router_outcome is not None and router_before is not None
+            and session.is_current(turn_id,generation)
+        ):
+            _record_router_history(
+                session,curated,router_outcome,router_before,
+                user=transcript,plan=plan,
+            )
         if plan.action is CuratedProtocolAction.AUDIO_RECOVERY:
             await current_text(
                 "audio.replay.request",turn_id=turn_id,
@@ -9007,6 +9184,7 @@ async def voice_socket(websocket:WebSocket):
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
         semantic_intent_settings=SemanticIntentSettings.from_environment()
+        llm_router_settings=LlmRouterSettings.from_environment()
         web_visual_settings=WebVisualSettings.from_environment(external_settings)
         generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
@@ -9030,6 +9208,8 @@ async def voice_socket(websocket:WebSocket):
         "multi_brain":multi_brain_settings.public_capability(),
         "semantic_intent_fallback":semantic_intent_settings.public_capability(),
     }
+    if llm_router_settings.enabled:
+        research_capabilities["llm_router"]=llm_router_settings.public_capability()
     report_store=(
         ExperimentReportStore(report_settings.database_path)
         if report_settings.enabled and report_settings.database_path is not None
@@ -9044,6 +9224,7 @@ async def voice_socket(websocket:WebSocket):
         generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
         semantic_intent_settings=semantic_intent_settings,
+        llm_router_settings=llm_router_settings,
     ); task=None; trusted_config=None; procedure_store=None
     curated_fixture=None
     sender=LockedSender(websocket); pipeline="cascade"
