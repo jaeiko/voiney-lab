@@ -236,6 +236,10 @@ class ProtocolVisualAsset:
         }
 
 
+#: The fact key a translation of the protocol's purpose is stored under.
+PURPOSE_FACT_KEY = "protocol/protocol_purpose"
+
+
 @dataclass(frozen=True)
 class WorkflowExecutionFingerprint:
     protocol_id: str
@@ -277,6 +281,10 @@ class CuratedProtocolFixture:
     #: entry the loader verified against the source. Empty when no manifest is
     #: present, which is why one document's timings cannot reach another's.
     timer_manifest: dict[str, int] | None = None
+    #: "<step_id>/<fact_id>" -> a stored machine translation that passed the
+    #: mechanical check for this revision. Used only where ``localizations``
+    #: (reviewed) has nothing; never presented as reviewed.
+    machine_localizations: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -367,9 +375,24 @@ class CuratedProtocolFixture:
         return tuple(facts)
 
     def localized_fact(self, step_id: str, fact_id: str) -> str | None:
-        if self.localizations is None:
-            return None
-        return self.localizations.get(f"{step_id}/{fact_id}")
+        """Reviewed Korean first, then a stored machine translation, else None."""
+
+        key = f"{step_id}/{fact_id}"
+        if self.localizations is not None and key in self.localizations:
+            return self.localizations[key]
+        if self.machine_localizations is not None:
+            return self.machine_localizations.get(key)
+        return None
+
+    def localization_source(self, step_id: str, fact_id: str) -> str | None:
+        """``reviewed``, ``machine`` or None for what ``localized_fact`` returns."""
+
+        key = f"{step_id}/{fact_id}"
+        if self.localizations is not None and key in self.localizations:
+            return "reviewed"
+        if self.machine_localizations is not None and key in self.machine_localizations:
+            return "machine"
+        return None
 
     def visual_for_step(self, index: int) -> ProtocolVisualAsset | None:
         """Return only an explicitly selected, verified source crop."""
@@ -4798,7 +4821,15 @@ def _protocol_query_presentation(
         # The purpose is the document's own statement of it, for every
         # protocol: nothing here may say what one particular PDF is for.
         page=knowledge.purpose.source_page
-        if language=="ko":
+        step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
+        korean = fixture.localized_fact(step_id, fact_id)
+        if language=="ko" and korean:
+            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            display=(
+                f"실험 목적\n{korean}\n\n원문 · English · PDF p.{page}\n"
+                f"{knowledge.purpose.text}"
+            )
+        elif language=="ko":
             speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
             display=(
                 f"실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.{page}\n"
@@ -5329,17 +5360,82 @@ _ENGLISH_COUNTS = {
     "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
 }
 _ENGLISH_REPEATS = {"once": "1 times", "twice": "2 times", "thrice": "3 times"}
+#: "Once" opening a sentence as a conjunction ("Once your gel is dry" --
+#: "~하면") is not a count. The words that can follow it there.
+_ONCE_CONJUNCTION = re.compile(
+    r"(?:^|(?<=[.!?;:]\s)|(?<=^\d\s)|(?<=^\d\d\s))once"
+    r"(?=\s+(?:you|your|the|it|its|they|their|we|our|this|these|that|those|"
+    r"all|each|every|everything|a|an|he|she|samples?|cells?|gels?|bands?)\b)",
+    re.IGNORECASE | re.MULTILINE,
+)
+#: Korean counts, counted the same way on both sides. 하나·둘·셋·넷 are
+#: counts wherever they stand as a word; 두·세·네 and 다섯-아홉 before any
+#: following word ("두 세척 용액", "세 번"); 한 and 열 only before a counter,
+#: because "~을 한 후" and "열 블록" are not counts.
+_KOREAN_STANDALONE_COUNTS = {"하나": "1", "둘": "2", "셋": "3", "넷": "4"}
 _KOREAN_COUNTS = {
-    "한": "1", "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
-    "일곱": "7", "여덟": "8", "아홉": "9", "열": "10",
+    "두": "2", "세": "3", "네": "4", "다섯": "5", "여섯": "6",
+    "일곱": "7", "여덟": "8", "아홉": "9",
 }
+_KOREAN_COUNTER_ONLY = {"한": "1", "열": "10"}
+_KOREAN_COUNTERS = (
+    r"(?:번|회|개|방울|조각|배|가지|알|장|쌍|병|통|줄|칸|판|사이클|시간|분|초)"
+)
 _SOURCE_NEGATION = re.compile(
-    r"\b(?:not|no|never|don't|do\s+not|avoid|without|must\s+not|cannot|can't)\b",
+    r"\b(?:not|no|never|don't|do\s+not|avoid(?:s|ing|ed)?|without|must\s+not|"
+    r"cannot|can't)\b",
     re.IGNORECASE,
 )
 _KOREAN_NEGATION = re.compile(
-    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피하|못\s|않)"
+    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피(?:하|합|해|했|할)|못\s|않)"
 )
+#: Protocol terms a Korean reading may put in Korean. The terms a reading
+#: must keep in their original spelling are the names of reagents,
+#: materials and equipment (resource names, "Solution A", defined
+#: abbreviations, acronyms); these are general nouns and descriptions that
+#: the protocol vocabulary picks up for speech recognition, and the
+#: reviewed in-gel Korean already writes them in Korean (젤 조각, 염색된
+#: 단백질 밴드, 배양, 오염, 케라틴).
+_TRANSLATABLE_TERMS = frozenset({
+    "gel plug", "stained protein band", "incubation", "contamination",
+    "keratin", "rpm",
+})
+
+
+def _normalized_counts(value: str) -> str:
+    """Count words as digits, the same rules for a source and a reading."""
+
+    value = _ONCE_CONJUNCTION.sub("when", value)
+    for word, digits in _ENGLISH_REPEATS.items():
+        value = re.sub(rf"\b{word}\b", digits, value, flags=re.IGNORECASE)
+    for word, digit in _ENGLISH_COUNTS.items():
+        value = re.sub(rf"\b{word}\b", digit, value, flags=re.IGNORECASE)
+    for word, digit in _KOREAN_STANDALONE_COUNTS.items():
+        value = re.sub(
+            rf"(?<![가-힣]){word}(?=(?:를|가|이|의|와|과|씩|로|에|만|도|는|은)?(?![가-힣]))",
+            f"{digit} ", value,
+        )
+    for word, digit in sorted(_KOREAN_COUNTS.items(), key=lambda item: -len(item[0])):
+        value = re.sub(rf"(?<![가-힣]){word}\s+(?=[가-힣])", f"{digit} ", value)
+        value = re.sub(
+            rf"(?<![가-힣]){word}\s*(?={_KOREAN_COUNTERS}(?![가-힣]))", f"{digit} ", value)
+    for word, digit in _KOREAN_COUNTER_ONLY.items():
+        value = re.sub(
+            rf"(?<![가-힣]){word}\s*(?={_KOREAN_COUNTERS})", f"{digit} ", value)
+    return value
+
+
+def _count_quantities(value: str) -> list[tuple[str, str | None]]:
+    """``_reader_quantities`` with a repeat count the same as a bare count.
+
+    "two cycles" and "두 번의 사이클", "twice" and "2", say the same number.
+    """
+
+    return sorted(
+        ((number, None if unit == "times" else unit)
+         for number, unit in _reader_quantities(value)),
+        key=lambda item: (item[0], item[1] or ""),
+    )
 
 
 def _reader_quantities(value: str) -> list[tuple[str, str | None]]:
@@ -5376,10 +5472,14 @@ def reader_translation_issue(
     The check is mechanical and fails closed. The reading must state the
     same quantities -- each number with its own unit, prefixes distinct, a
     Korean unit word only right after its number, counts written as words
-    included -- and no other; it must keep every protocol term the
-    statement uses in its original spelling; and it must neither add nor
-    drop a negation. A leading "N단계:" for the statement's own label is
-    allowed. ``None`` means the reading may be spoken.
+    included, counted by the same rules on both sides ("Once" opening a
+    sentence is a conjunction, not a count; a repeat count is a count) --
+    and no other; it must keep every reagent, material and equipment name
+    the statement uses in its original spelling (general nouns in
+    ``_TRANSLATABLE_TERMS`` may be Korean); and it must neither add nor
+    drop a negation ("avoid" in any form pairs with "피하"). A leading
+    "N단계:" for the statement's own label is allowed. ``None`` means the
+    reading may be spoken.
     """
 
     text = " ".join(str(translation or "").split())
@@ -5395,21 +5495,15 @@ def reader_translation_issue(
         reading = re.sub(
             rf"^\s*{re.escape(step_label)}\s*단계\s*[:：]?\s*", "", reading)
         source = re.sub(rf"^\s*{re.escape(step_label)}(?![0-9.])\s*", "", source)
-    for word, digits in _ENGLISH_REPEATS.items():
-        source = re.sub(rf"\b{word}\b", digits, source, flags=re.IGNORECASE)
-    for word, digit in _ENGLISH_COUNTS.items():
-        source = re.sub(rf"\b{word}\b", digit, source, flags=re.IGNORECASE)
-    for word, digit in sorted(_KOREAN_COUNTS.items(), key=lambda item: -len(item[0])):
-        reading = re.sub(
-            rf"(?<![가-힣]){word}\s*(?=(?:번|회|개|방울|조각|배|가지)(?![가-힣]))",
-            f"{digit} ", reading,
-        )
-    if _reader_quantities(source) != _reader_quantities(reading):
+    if _count_quantities(_normalized_counts(source)) != _count_quantities(
+            _normalized_counts(reading)):
         return "quantities_changed"
     if bool(_SOURCE_NEGATION.search(source)) != bool(_KOREAN_NEGATION.search(reading)):
         return "negation_changed"
     folded = text.casefold()
     for term in required_terms:
+        if term.casefold() in _TRANSLATABLE_TERMS:
+            continue
         if term.casefold() not in folded:
             return "term_missing"
     return None
@@ -5430,6 +5524,9 @@ class CuratedProtocolSession:
 
     def __init__(self, fixture: CuratedProtocolFixture) -> None:
         self.fixture = fixture
+        #: Presentation only: a stored machine translation has been shown in
+        #: this session, so the page keeps its automatic-translation line.
+        self.machine_translation_shown = False
         self.active = False
         self.current_index = 0
         self._revision = 0

@@ -157,3 +157,39 @@ metadata-only. A legacy workflow revision that does not contain the fixed
 non-execution metadata is not eligible for a new link and should be re-imported
 from its pinned GitHub commit as a new review-required revision. Revoked workflow
 revisions remain revoked; re-enabling requires a new immutable source revision.
+
+## Commercial workspace schema 6 → 7
+
+Schema 7 adds two append-only tables for Protocol translations made once per
+executable revision (`protocol_translation.py`):
+
+- `protocol_fact_translations`: one row per sentence the step card, the safety
+  box and the answers draw -- revision ID, fact key (`<step_id>/<fact_id>`, or
+  `protocol/protocol_purpose`), language, SHA-256 of the source sentence,
+  translated text, status (`machine` or `reviewed`), mechanical check result
+  (`passed` or the refusal reason from `reader_translation_issue`), model,
+  model version and creation time. A refused row is kept so it is not
+  requested again; it is never shown. Unique per (revision, fact, language,
+  source hash, status), so a changed source sentence or a new revision is
+  translated anew.
+- `protocol_translation_glossaries`: one per (revision, language), the Korean
+  form the revision's translation fixes for the words it repeats, as JSON
+  entries `{"source", "korean", "keep_english"}`.
+
+The revision ID is the executable catalog or development-fixture revision a
+session runs, not a `protocol_lineage_revisions` foreign key, and the rows are
+service-level like the protocol catalog (no tenant column). Update and delete
+triggers make both tables append-only.
+
+The existing whole-revision `protocol_translations` rows are untouched by the
+migration and stay readable through `WorkspaceStore.revision_translations`; a
+revision-wide text cannot be split into sentences, so they are not copied into
+the new table. A schema-6 fixture with one such row verifies that it survives.
+
+### Operator procedure
+
+Follow the schema 3 → 4 procedure (stop, back up the SQLite file with its
+WAL/SHM files, start one instance), then confirm
+`schema_metadata.schema_version = 7`. A revision made executable before this
+version has no translations until a session opens on it (or it is activated or
+approved again), which starts its generation once.
