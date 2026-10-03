@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, time
+import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -219,6 +219,11 @@ from voiney_lab.eln_connectors import (
     ElnConnectorError,
     ExperimentWriteback,
     Observation as ElnObservation,
+)
+from voiney_lab.protocol_translation import (
+    generate_revision_translations,
+    openai_batch_translator,
+    with_stored_translations,
 )
 from voiney_lab.workspace_store import (
     ApprovalReplayError,
@@ -1014,7 +1019,129 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
         raise ProtocolCatalogUnavailableError("Protocol catalog is disabled.")
     store=initialize_protocol_store(settings)
     return ProtocolCatalog(
-        store,skip_readiness_gates=_test_mode_skips_readiness_gates()),store
+        store,skip_readiness_gates=_test_mode_skips_readiness_gates(),
+        on_execution_authorized=_translate_authorized_revision),store
+
+
+def _revision_translation_store():
+    """The workspace store that holds sentence translations, or None."""
+
+    settings=_workspace_settings()
+    if not settings.enabled:
+        return None
+    return initialize_workspace_store(settings)
+
+
+def _revision_translation_fixture(
+    catalog:ProtocolCatalog,protocol_id:str,
+)->CuratedProtocolFixture:
+    """The fixture a session will run for this protocol, as sessions load it."""
+
+    config=server_config()
+    candidate=_configured_candidate_fixture(config)
+    if candidate is not None and candidate.protocol_id==protocol_id:
+        return candidate
+    return catalog.load_executable_fixture(protocol_id)
+
+
+def _translate_authorized_revision(
+    catalog:ProtocolCatalog,protocol_id:str,
+)->None:
+    """Translate an executable revision's sentences once, off the request.
+
+    Runs only where a stored translation can be kept and read (the tenant
+    workspace is enabled) and the read-only answer model role the per-turn
+    reader translation uses is enabled with a key. ``app.state`` may carry
+    ``revision_translation_runner`` (a callable taking the fixture) in its
+    place.
+    """
+
+    runner=getattr(app.state,"revision_translation_runner",None)
+    if runner is None:
+        settings=MultiBrainSettings.from_environment()
+        if (not _workspace_settings().enabled
+                or not settings.answer_brain_enabled
+                or not os.environ.get("XAI_API_KEY","").strip()):
+            return
+        runner=_start_revision_translation
+    runner(_revision_translation_fixture(catalog,protocol_id))
+
+
+_REVISION_TRANSLATIONS_RUNNING:set[str]=set()
+_REVISION_TRANSLATIONS_LOCK=threading.Lock()
+
+
+async def store_revision_translations(
+    fixture:CuratedProtocolFixture,translate:Any,*,model:str,
+)->Any:
+    """Generate what this revision still lacks and append it to the store."""
+
+    store=_revision_translation_store()
+    if store is None:
+        return None
+    try:
+        report=await generate_revision_translations(
+            fixture,translate,model=model,
+            stored=store.fact_translations(fixture.revision_id,"ko"),
+        )
+        store.record_fact_translations(report.records)
+        return report
+    finally:
+        store.close()
+
+
+def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
+    """Run the generation in its own thread, one at a time per revision."""
+
+    with _REVISION_TRANSLATIONS_LOCK:
+        if fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING:
+            return
+        _REVISION_TRANSLATIONS_RUNNING.add(fixture.revision_id)
+    settings=MultiBrainSettings.from_environment()
+    model=settings.answer_brain_model or settings.model
+    translate=openai_batch_translator(
+        lambda:AsyncOpenAI(
+            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
+            max_retries=0),
+        model,
+    )
+
+    def work()->None:
+        try:
+            asyncio.run(store_revision_translations(fixture,translate,model=model))
+        except Exception as exc:  # noqa: BLE001 - nothing stored, retried next time
+            log.warning(
+                "revision_translation failed revision=%s error=%s",
+                fixture.revision_id,type(exc).__name__)
+        finally:
+            with _REVISION_TRANSLATIONS_LOCK:
+                _REVISION_TRANSLATIONS_RUNNING.discard(fixture.revision_id)
+
+    threading.Thread(
+        target=work,name=f"revision-translation-{fixture.revision_id[:24]}",
+        daemon=True).start()
+
+
+def _with_revision_translations(
+    fixture:CuratedProtocolFixture,
+)->CuratedProtocolFixture:
+    """The fixture carrying its revision's stored translations, if any."""
+
+    try:
+        store=_revision_translation_store()
+    except Exception as exc:  # noqa: BLE001 - the source is shown instead
+        log.warning("revision_translation read_failed error=%s",type(exc).__name__)
+        return fixture
+    if store is None:
+        return fixture
+    try:
+        return with_stored_translations(
+            fixture,store.fact_translations(fixture.revision_id,"ko"))
+    except Exception as exc:  # noqa: BLE001 - the source is shown instead
+        log.warning("revision_translation read_failed error=%s",type(exc).__name__)
+        return fixture
+    finally:
+        store.close()
 
 class ServerConfigurationError(RuntimeError):
     """Invalid server policy with safe environment field names for diagnostics."""
@@ -4893,6 +5020,9 @@ class ListenerSession:
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
         self.reader_translations:dict[tuple[str,str,str],str]={}
+        # "자동 번역입니다." is said once a session, before the first
+        # unreviewed Korean it speaks; the page carries the label after that.
+        self.auto_translation_announced=False
         # Waiting-status sentences already said and made in this session.
         self.filler_memory=FillerSessionMemory()
         self.semantic_intent_settings=(
@@ -5945,11 +6075,15 @@ def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
         seen.add(source)
         primary,check=_safety_translation(
             source,curated.fixture.localized_fact(step.step_id,f"warning_{index}"))
+        lookup=getattr(curated.fixture,"localization_source",None)
         page=warning.evidence.source_page_number
         items.append({
             "kind":"pdf_warning","origin":f"PDF p.{page}",
             "source_text":source,"source_language":"en",
             "primary_text":primary,"translation_check":check,
+            "translation_source":(
+                lookup(step.step_id,f"warning_{index}") if callable(lookup)
+                else None),
         })
     pack=getattr(curated,"safety_pack",None)
     if pack is None:
@@ -5992,17 +6126,87 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     Sent next to ``state``, not in it, so the state stays the session's own.
     ``translation_source`` says where the Korean on the step card comes from
     -- ``reviewed`` for a reviewed sidecar, ``none`` when there is none -- so
-    the page can put its one line at the head of the card. No machine
-    translation is stored for a protocol revision yet, so ``machine`` is not
-    produced here.
+    the page can put its one line at the head of the card, and ``machine``
+    once a stored machine translation has been shown in this session (on the
+    card, in the safety box, or in a reply).
     """
 
-    return {
-        "safety_items":curated_safety_items(curated),
-        "translation_source":(
-            "reviewed" if getattr(curated.fixture,"localizations",None)
-            else "none"),
-    }
+    items=curated_safety_items(curated)
+    fixture=curated.fixture
+    machine_on_card=any(
+        item.get("translation_source")=="machine" and item.get("primary_text")
+        for item in items)
+    steps=fixture.steps
+    if 0<=curated.current_index<len(steps):
+        lookup=getattr(fixture,"localization_source",None)
+        if callable(lookup) and (curated.active or curated.workflow_status in {
+                "preview","ready"}):
+            machine_on_card=machine_on_card or lookup(
+                steps[curated.current_index].step_id,"current_step")=="machine"
+    if machine_on_card:
+        curated.machine_translation_shown=True
+    if getattr(curated,"machine_translation_shown",False):
+        source="machine"
+    elif getattr(fixture,"localizations",None):
+        source="reviewed"
+    else:
+        source="none"
+    return {"safety_items":items,"translation_source":source}
+
+
+#: Statuses that would call a stored machine translation something else.
+_MACHINE_RELABELLED_STATUSES=frozenset({
+    "verified_sidecar","deterministic_protocol_structure",
+    "source_language","unavailable",
+})
+
+
+def _machine_text_marks(text:str)->tuple[str,...]:
+    """Forms a stored machine translation takes inside a reply."""
+
+    core=re.sub(r"^\s*[0-9A-Za-z.]+\s*단계\s*[:：]\s*","",text).strip()
+    marks={text.strip(),core}
+    if len(core)>24:
+        marks.add(core[:24])
+    return tuple(mark for mark in marks if len(mark)>=6)
+
+
+def _label_machine_translation(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
+)->Any:
+    """Name a reply carrying a stored machine translation as unreviewed.
+
+    The curated session picks reviewed Korean, then a stored machine
+    translation, and its replies call either one ``verified_sidecar``. Here
+    a reply showing a machine translation is relabelled
+    ``model_assisted_unreviewed`` (the page then puts its one line at the
+    head of the card), and when the speech carries it, "자동 번역입니다." is
+    said first -- once a session.
+    """
+
+    machine=getattr(curated.fixture,"machine_localizations",None)
+    if not machine:
+        return plan
+    display=plan.display_text if isinstance(plan.display_text,str) else ""
+    speech=plan.speech_text if isinstance(plan.speech_text,str) else ""
+    shown=spoken=False
+    for text in machine.values():
+        marks=_machine_text_marks(text)
+        if any(mark in display for mark in marks):
+            shown=True
+        if any(mark in speech for mark in marks):
+            shown=spoken=True
+    if not shown:
+        return plan
+    curated.machine_translation_shown=True
+    changes:dict[str,Any]={}
+    if plan.translation_status in _MACHINE_RELABELLED_STATUSES:
+        changes["translation_status"]="model_assisted_unreviewed"
+    if spoken and not session.auto_translation_announced:
+        changes["speech_text"]=f"{READER_TRANSLATION_SPOKEN_LEAD} {speech}"
+    if spoken:
+        session.auto_translation_announced=True
+    return replace(plan,**changes) if changes else plan
 
 
 def _with_reader_section(document:Any,heading:str,text:str)->Any:
@@ -6102,9 +6306,13 @@ async def _apply_reader_translation(
         # Superseded while waiting: the turn's own fences drop it anyway.
         return plan
     if korean:
+        lead=(
+            "" if session.auto_translation_announced
+            else f"{READER_TRANSLATION_SPOKEN_LEAD} ")
+        session.auto_translation_announced=True
         return replace(
             plan,
-            speech_text=f"{READER_TRANSLATION_SPOKEN_LEAD} {korean}",
+            speech_text=f"{lead}{korean}",
             display_text=f"{korean}\n\n{plan.display_text}",
             display_document=_with_reader_section(
                 plan.display_document,READER_TRANSLATION_HEADING,korean),
@@ -7740,6 +7948,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     session,curated,plan,reader_target,
                     turn_id=turn_id,generation=generation,clock=clock,
                 )
+            plan=_label_machine_translation(session,curated,plan)
             display_text=plan.display_text
             speech_text=plan.speech_text
             speech_policy=getattr(plan,"speech_policy","speak")
@@ -9259,6 +9468,9 @@ async def voice_socket(websocket:WebSocket):
                     session.test_mode_readiness_gates_skipped=bool(
                         selected_curated_fixture is not None
                         and _test_mode_skips_readiness_gates())
+                    if selected_curated_fixture is not None:
+                        selected_curated_fixture=_with_revision_translations(
+                            selected_curated_fixture)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
                     recovery_session_id=control.get("experiment_session_id")
                     recovery_version=control.get("experiment_session_version")
