@@ -451,7 +451,12 @@ class LocalSourceTextTests(unittest.TestCase):
         text = "".join(page.text for page in extraction.pages)
         self.assertFalse([c for c in text if c == "\ufffd" or 0xE000 <= ord(c) <= 0xF8FF])
         self.assertIn("72 h at 65", extraction.pages[2].text)
-        self.assertIn("alpha-amylase and enough", extraction.pages[8].text)
+        # The source sets "alpha-" at a line end; PyMuPDF keeps that line break.
+        # The hyphen is the word's own, so only whitespace is set aside here.
+        self.assertIn(
+            "alpha-amylaseandenough",
+            "".join(extraction.pages[8].text.split()),
+        )
 
     def test_ankom_page_3_needs_ocr_for_the_glyphs_it_cannot_map(self) -> None:
         """Two glyphs before a duration have no Unicode mapping in the document.
