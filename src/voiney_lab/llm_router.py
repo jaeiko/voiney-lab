@@ -1110,6 +1110,9 @@ async def route_turn_with_llm_router(
         await progress("checking_protocol")
         route = await rule_route()
         plan = route.plan
+        # A hand-off is not done by voice (decision 1, D8): the rules' e-mail
+        # question gives way to "보고서는 화면에서 보내 주세요.".
+        plan = session.handoff_on_screen(turn_id=turn_id, language=language) or plan
         if unconfirmed:
             # The model's answer was dropped and the rules have none either:
             # "PDF에서 확인할 수 없어요." instead of a scope reminder.

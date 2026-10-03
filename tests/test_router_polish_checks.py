@@ -88,6 +88,8 @@ SERVER_QUESTIONS = (
     "타이머를 시작할까요?",
     "Did you finish step 4?",
     "Shall I end the experiment?",
+    "안전관리자에게 이상사항을 전달해 드릴까요?",
+    "교수님께 보고서를 전송할까요?",
 )
 NOT_SERVER_QUESTIONS = (
     "완료 기준은 PDF에서 확인할 수 없어요.",
@@ -203,6 +205,37 @@ class HandoffTests(unittest.TestCase):
         self.assertIsNone(session._pending_handoff_confirmation)
         self.assertFalse(session.awaiting_server_confirmation)
         self.assertNotIn("@", outcome.plan.speech_text)
+
+
+    def test_a_dropped_answer_to_a_handoff_is_not_an_email_question(self) -> None:
+        session = _session()
+        said = "안전관리자에게 이상사항 전달해줘"
+        outcome = _route(session, said, FakeRouterClient(answer_reply(
+            "안전관리자에게 이상사항을 전달해 드릴까요?", source_kind="none",
+        )))
+        self.assertEqual(outcome.handled_by, "fallback_rules")
+        self.assertIs(outcome.rule_route.plan.action, CuratedProtocolAction.REPORT_HANDOFF)
+        self.assertEqual(outcome.plan.speech_text, HANDOFF_REPLY)
+        self.assertIsNone(session._pending_handoff_confirmation)
+
+    def test_an_answer_promising_a_handoff_is_dropped(self) -> None:
+        context = _session().router_context(turn_id=2, language="ko")
+        for spoken in ("교수님께 보고서를 보내드릴게요.", "안전관리자에게 전달하겠습니다."):
+            with self.subTest(spoken):
+                self.assertIn("claims_state_change", answer_check_failures(
+                    _answer(spoken), context, utterance="교수님께 보고서 보내줘"))
+        self.assertEqual(answer_check_failures(
+            _answer("보고서는 화면에서 보내 주세요."), context, utterance="교수님께 보고서 보내줘"), ())
+
+    def test_the_rules_alone_keep_their_handoff_reply(self) -> None:
+        # Router off: the rules' path is not changed by lane R3.
+        session = _session()
+        plan = route_curated_runtime_turn(
+            session, "안전관리자에게 이상사항 전달해줘", turn_id=2, language="ko",
+            configuration_id=1, generation=1,
+        ).plan
+        self.assertIs(plan.action, CuratedProtocolAction.REPORT_HANDOFF)
+        self.assertNotEqual(plan.speech_text, HANDOFF_REPLY)
 
 
 class ServerValueCheckTests(unittest.TestCase):

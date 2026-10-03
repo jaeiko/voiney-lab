@@ -13007,6 +13007,30 @@ class CuratedProtocolSession:
         self._replay[turn_id] = replaced
         return replaced
 
+    def handoff_on_screen(
+        self, *, turn_id: int, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """"보고서는 화면에서 보내 주세요." in place of the rules' voice hand-off.
+
+        Router only (decision 1 of 2026-10-03, lane R3, with D8): when the
+        router falls back to the rules on a hand-off request, the rules'
+        reply asks to send the report to a placeholder address by voice.
+        The router says to send it from the screen instead, and leaves no
+        hand-off question open. Any other rules' reply stands.
+        """
+
+        plan = self._replay.get(turn_id)
+        if plan is None or plan.action is not CuratedProtocolAction.REPORT_HANDOFF or plan.state_changed:
+            return None
+        self._pending_handoff_confirmation = None
+        text = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
+        replaced = replace(
+            plan, display_text=text, speech_text=text, primary_text=text,
+            intent_kind="handoff_on_screen",
+        )
+        self._replay[turn_id] = replaced
+        return replaced
+
     def apply_tool_proposal(
         self,
         proposals: Sequence[ToolProposal | str],

@@ -104,6 +104,9 @@ STATE_CHANGE_CLAIM = re.compile(
     r"|(?:시작|종료|일시\s*정지|일시\s*중지|재개)(?:했습니다|했어요|했어|했다|됐습니다|되었습니다)"
     r"|타이머(?:를|가)?\s*(?:시작|켰|맞췄|맞춰\s*두었)"
     r"|완료\s*처리(?:했|됐|되었|하였)"
+    # Promising a hand-off (lane R3, decision 1 with D8): nothing is sent
+    # by voice, so "보내 드릴게요" is false.
+    r"|(?:전달|전송|보내)\s*(?:해\s*)?(?:드릴게요|드리겠습니다|줄게요|할게요|하겠습니다|드렸습니다|했습니다)"
     r"|\b(?:moved\s+(?:you\s+)?on|advanced|i(?:'|’)ve\s+(?:started|stopped|paused|resumed|ended))\b"
     r"|\b(?:timer\s+(?:is\s+)?(?:started|running\s+now))\b",
     re.I,
@@ -120,6 +123,9 @@ SERVER_QUESTION = re.compile(
     r"|(?:종료|기록|시작|재개|일시\s*정지|저장|이동|진행)\s*(?:을|를)?\s*(?:할|하실|해\s*드릴|해도\s*될)까요"
     r"|(?:종료|기록|시작|재개|일시\s*정지|저장|이동|진행)\s*하시겠(?:어요|습니까|나요)"
     r"|넘어갈까요|넘어가시겠(?:어요|습니까)|(?:으로|로)\s*기록할까요"
+    # The hand-off question ("…로 보고서를 전송할까요?"), which only the
+    # server asks -- and, by decision 1 (D8), no longer by voice.
+    r"|(?:전달|전송|보내)\s*(?:해\s*)?(?:드릴|할|줄)까요|(?:전달|전송)\s*하시겠(?:어요|습니까)"
     r"|\b(?:did|have)\s+you\s+(?:finish|finished|complete|completed|done)\b"
     r"|\bis\s+(?:the\s+|this\s+)?step\s+(?:\d+\s+)?(?:done|complete|finished)\s*\?"
     r"|\b(?:shall|should)\s+i\s+(?:end|stop|record|log|start|move|go|pause|resume|save)\b"
