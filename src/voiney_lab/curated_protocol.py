@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -39,6 +40,14 @@ from voiney_lab.intent_arbitration import (
     RequestArbitration,
     RequestIntent,
     arbitrate_request,
+)
+from voiney_lab.llm_router import (
+    RECORD_LOG,
+    ProposalBasis,
+    ProposalVerdict,
+    RouterTurnFacts,
+    ToolProposal,
+    validate_tool_proposals,
 )
 from voiney_lab.semantic_intent import (
     SemanticIntent,
@@ -2570,13 +2579,47 @@ class _OpenQuestions:
     transcript: bool
     note: bool
     stop: bool
+    timer: bool
 
     @property
-    def any_open(self) -> bool:
-        return (
-            self.completion or self.observation or self.transcript
-            or self.note or self.stop
-        )
+    def first_open(self) -> str | None:
+        """The name of the question this turn can answer, or None."""
+
+        for name in ("completion", "observation", "transcript", "note", "stop", "timer"):
+            if getattr(self, name):
+                return name
+        return None
+
+
+@dataclass(frozen=True)
+class AppliedToolProposal:
+    """A turn's tool proposals as the server ruled on them, and what it did."""
+
+    verdict: ProposalVerdict
+    plan: CuratedProtocolTurnPlan
+
+
+def _duration_words(seconds: int, language: str) -> str:
+    """A timer length as said aloud: "15분", "1분 30초", "45초"."""
+
+    minutes, rest = divmod(int(seconds), 60)
+    if language == "ko":
+        if minutes and rest:
+            return f"{minutes}분 {rest}초"
+        return f"{minutes}분" if minutes else f"{rest}초"
+    if minutes and rest:
+        return f"{minutes} min {rest} s"
+    return f"{minutes} min" if minutes else f"{rest} s"
+
+
+def _with_ro(word: str) -> str:
+    """``word`` with 으로/로, as its last syllable takes it ("15분으로", "45초로")."""
+
+    last = word[-1]
+    if "가" <= last <= "힣":
+        final = (ord(last) - ord("가")) % 28
+        return f"{word}{'로' if final in (0, 8) else '으로'}"
+    return f"{word}로"
 
 
 _RESUME_PATTERNS = (
@@ -5454,6 +5497,10 @@ class CuratedProtocolSession:
         #: voice pause was taken. It is asked again when the pause is lifted
         #: by voice, and dropped by anything else that ends the pause.
         self._frozen_question: dict[str, Any] | None = None
+        #: The one-turn "원문은 15분입니다. 15분으로 시작할까요?" question
+        #: (decision D6): a tool proposal that names a duration other than
+        #: the source's asks it, and only a yes to it starts the timer.
+        self._pending_timer_confirmation: dict[str, Any] | None = None
         self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
@@ -5487,6 +5534,7 @@ class CuratedProtocolSession:
             self._pending_observation_confirmation is not None,
             self._pending_transcript_confirmation is not None,
             self._pending_stop_confirmation is not None,
+            self._pending_timer_confirmation is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
         ))
@@ -7192,6 +7240,7 @@ class CuratedProtocolSession:
         self._paused_notice_spoken = False
         self._pending_stop_confirmation = None
         self._frozen_question = None
+        self._pending_timer_confirmation = None
         self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
@@ -7281,6 +7330,7 @@ class CuratedProtocolSession:
         self._paused_notice_spoken = False
         self._pending_stop_confirmation = None
         self._frozen_question = None
+        self._pending_timer_confirmation = None
         self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
@@ -7506,7 +7556,7 @@ class CuratedProtocolSession:
         dict[str, Any] | None,
         dict[str, Any],
         tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
-        tuple[dict[str, Any] | None, dict[str, Any] | None],
+        tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None],
     ]:
         return (
             self.active,
@@ -7537,13 +7587,16 @@ class CuratedProtocolSession:
                 tuple(dict(interval) for interval in self._pause_intervals),
                 self._paused_notice_spoken,
             ),
-            # The end question and a question held through a pause roll back
-            # with the turn, as the completion question does.
+            # The end question, a question held through a pause and the timer
+            # duration question roll back with the turn, as the completion
+            # question does.
             (
                 dict(self._pending_stop_confirmation)
                 if self._pending_stop_confirmation is not None else None,
                 dict(self._frozen_question)
                 if self._frozen_question is not None else None,
+                dict(self._pending_timer_confirmation)
+                if self._pending_timer_confirmation is not None else None,
             ),
         )
 
@@ -7599,13 +7652,16 @@ class CuratedProtocolSession:
                 self._paused_notice_spoken = (
                     bool(checkpoint[21][4]) if len(checkpoint[21]) >= 5 else False
                 )
-            stop_pending, frozen = (
-                checkpoint[22] if len(checkpoint) >= 23 else (None, None)
-            )
+            held = checkpoint[22] if len(checkpoint) >= 23 else (None, None)
+            stop_pending, frozen = held[:2]
+            timer_pending = held[2] if len(held) >= 3 else None
             self._pending_stop_confirmation = (
                 dict(stop_pending) if stop_pending is not None else None
             )
             self._frozen_question = dict(frozen) if frozen is not None else None
+            self._pending_timer_confirmation = (
+                dict(timer_pending) if timer_pending is not None else None
+            )
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -7613,6 +7669,7 @@ class CuratedProtocolSession:
             self._pending_note_capture = None
             self._pending_stop_confirmation = None
             self._frozen_question = None
+            self._pending_timer_confirmation = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -8526,6 +8583,16 @@ class CuratedProtocolSession:
                 "Have you completed the current step? No state has changed."
             )
             shown = question
+        elif kind == "timer":
+            self._pending_timer_confirmation = {
+                **pending, "requested_turn_id": turn_id,
+                "requested_generation": generation,
+                "workflow_revision": self._revision,
+            }
+            question = str(pending.get("question") or "")
+            shown = question
+            if not question:
+                return plan
         else:
             self._pending_observation_confirmation = replace(
                 pending, requested_turn_id=turn_id,
@@ -8562,6 +8629,7 @@ class CuratedProtocolSession:
         transcript_pending = self._pending_transcript_confirmation
         note_pending = self._pending_note_capture
         stop_pending = self._pending_stop_confirmation
+        timer_pending = self._pending_timer_confirmation
         pending_valid = bool(
             pending is not None
             and self.active
@@ -8645,12 +8713,31 @@ class CuratedProtocolSession:
                 or generation >= stop_pending.get("requested_generation")
             )
         )
+        timer_pending_valid = bool(
+            timer_pending is not None
+            and self.active
+            and self.current_index == timer_pending.get("step_index")
+            and self.fixture.steps[self.current_index].step_id
+            == timer_pending.get("step_id")
+            and self._revision == timer_pending.get("workflow_revision")
+            and turn_id == timer_pending.get("requested_turn_id", -2) + 1
+            and (
+                timer_pending.get("configuration_id") is None
+                or configuration_id == timer_pending.get("configuration_id")
+            )
+            and (
+                timer_pending.get("requested_generation") is None
+                or generation is None
+                or generation >= timer_pending.get("requested_generation")
+            )
+        )
         return _OpenQuestions(
             completion=pending_valid,
             observation=observation_pending_valid,
             transcript=transcript_pending_valid,
             note=note_pending_valid,
             stop=stop_pending_valid,
+            timer=timer_pending_valid,
         )
 
     def _front_rule_for(
@@ -8797,6 +8884,7 @@ class CuratedProtocolSession:
             self._pending_transcript_confirmation,
             self._pending_note_capture,
             self._pending_stop_confirmation,
+            self._pending_timer_confirmation,
         ) if front_only else None
         self._last_semantic_decision = None
         # The front rule that owns this turn, once one does (FRONT_RULES).
@@ -8822,6 +8910,10 @@ class CuratedProtocolSession:
         stop_pending_valid = open_questions.stop
         if stop_pending is not None and not stop_pending_valid:
             self._pending_stop_confirmation = None
+        timer_pending = self._pending_timer_confirmation
+        timer_pending_valid = open_questions.timer
+        if timer_pending is not None and not timer_pending_valid:
+            self._pending_timer_confirmation = None
         # The question this turn could answer, kept aside in case the turn is
         # a pause: the pause holds it, and the voice resume asks it again.
         open_question: dict[str, Any] | None = None
@@ -8841,6 +8933,12 @@ class CuratedProtocolSession:
             }
         elif stop_pending_valid and stop_pending is not None:
             open_question = {"kind": "stop", "pending": dict(stop_pending)}
+        elif timer_pending_valid and timer_pending is not None:
+            open_question = {
+                "kind": "timer", "pending": dict(timer_pending),
+                "step_index": timer_pending.get("step_index"),
+                "step_id": timer_pending.get("step_id"),
+            }
         if pending is not None and not pending_valid:
             self._pending_completion_confirmation = None
         if observation_pending is not None and not observation_pending_valid:
@@ -8920,6 +9018,52 @@ class CuratedProtocolSession:
                 state_changed=False,
                 primary_text=response,
                 intent_kind="stop_confirmation_declined",
+            )
+            self._last_front_rule = "yes_no_open_question"
+            self._replay[turn_id] = plan
+            return plan
+        elif timer_pending_valid and (
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "affirmative"
+        ):
+            # A yes to "원문은 15분입니다. 15분으로 시작할까요?" starts the
+            # source timer (decision D6).
+            front_rule = "yes_no_open_question"
+            self._pending_timer_confirmation = None
+            intent = CuratedControlIntent(
+                intent_kind="pending_timer_confirmed",
+                action=CuratedProtocolAction.START_TIMER,
+                confidence_source="server_pending_timer_confirmation",
+                allows_state_mutation=True,
+                language=language,
+                normalized_transcript=normalized_confirmation,
+            )
+        elif timer_pending_valid and (
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "negative"
+        ):
+            self._pending_timer_confirmation = None
+            response = {
+                "ko": "알겠습니다. 타이머를 시작하지 않았습니다.",
+                "en": "Understood. The timer was not started.",
+            }.get(language, "알겠습니다. 타이머를 시작하지 않았습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.TIMER_STATUS,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=self.fixture.steps[self.current_index].source_label,
+                final_step=self.current_index == len(self.fixture.steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="pending_timer_declined",
             )
             self._last_front_rule = "yes_no_open_question"
             self._replay[turn_id] = plan
@@ -9133,6 +9277,9 @@ class CuratedProtocolSession:
             if stop_pending_valid:
                 # Anything but a yes or a no leaves the end question unanswered.
                 self._pending_stop_confirmation = None
+            if timer_pending_valid:
+                # And the timer duration question.
+                self._pending_timer_confirmation = None
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
                 self._pending_note_capture = None
@@ -9441,8 +9588,44 @@ class CuratedProtocolSession:
                 self._pending_transcript_confirmation,
                 self._pending_note_capture,
                 self._pending_stop_confirmation,
+                self._pending_timer_confirmation,
             ) = untouched
             return None
+        return self._execute_turn_intent(
+            intent,
+            transcript=transcript,
+            command_key=command_key,
+            turn_id=turn_id,
+            language=language,
+            configuration_id=configuration_id,
+            generation=generation,
+            actor_principal_id=actor_principal_id,
+            actor_role=actor_role,
+            open_question=open_question,
+        )
+
+    def _execute_turn_intent(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        transcript: str,
+        command_key: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+        open_question: dict[str, Any] | None,
+    ) -> CuratedProtocolTurnPlan:
+        """Carry out what a turn was read as: its branch, then the turn's gates.
+
+        plan() reaches this once the rules have read the turn, and so does a
+        tool proposal the server accepted (apply_tool_proposal): one set of
+        branches and one set of post-turn gates for both, never a second
+        state machine. ``open_question`` is the question a pause would hold.
+        """
+
         command = intent.action
         steps = self.fixture.steps
         opening_projection = (
@@ -12057,6 +12240,496 @@ class CuratedProtocolSession:
         if len(self._replay) > 64:
             self._replay.pop(next(iter(self._replay)))
         return plan
+
+    def proposal_basis(self, *, turn_id: int, generation: int | None) -> ProposalBasis:
+        """What a model is shown for this turn, to fence its proposal with."""
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps) else None
+        )
+        return ProposalBasis(
+            turn_id=turn_id,
+            generation=generation,
+            workflow_revision=self._revision,
+            step_id=step.step_id if step is not None else None,
+        )
+
+    def router_turn_facts(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None = None,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+    ) -> RouterTurnFacts:
+        """The server-owned facts a tool proposal for this turn is ruled on."""
+
+        step = (
+            self.fixture.steps[self.current_index]
+            if 0 <= self.current_index < len(self.fixture.steps) else None
+        )
+        timer = self.timer_status()
+        return RouterTurnFacts(
+            utterance=transcript,
+            language=language,
+            turn_id=turn_id,
+            generation=generation,
+            workflow_revision=self._revision,
+            step_id=step.step_id if step is not None else None,
+            current_step_label=step.source_label if step is not None else None,
+            workflow_active=bool(self.active),
+            workflow_status=self.workflow_status,
+            paused=self._pause_state == "paused",
+            experiment_started=self._experiment_started_at is not None,
+            experiment_running=(
+                self._experiment_started_at is not None
+                and self._experiment_ended_at is None
+            ),
+            open_question=self._open_questions(
+                turn_id=turn_id,
+                configuration_id=configuration_id,
+                generation=generation,
+            ).first_open,
+            observation_step=bool(
+                self.active and step is not None
+                and step.step_id in self._steps_anchoring_a_repetition()
+            ),
+            step_timer_seconds=(
+                self.timer_seconds_for_step(self.current_index) if self.active else 0
+            ),
+            timer_running=(
+                timer.get("state") == "running"
+                and timer.get("step_index") == self.current_index
+            ),
+            control_question=bool(
+                _CONTROL_QUESTION.search(" ".join(transcript.casefold().split()))
+            ),
+            transcript_unreliable=transcript_quality is not None,
+        )
+
+    def apply_tool_proposal(
+        self,
+        proposals: Sequence[ToolProposal | str],
+        *,
+        transcript: str,
+        basis: ProposalBasis,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None = None,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+    ) -> AppliedToolProposal:
+        """Rule on a model's tool proposals for a turn, and carry out what passes.
+
+        Reached only for a turn front_plan() handed on. ``proposals`` are the
+        turn's parsed tool calls (llm_router.parse_tool_call; a string is a
+        call it rejected) and ``basis`` is what the model was shown. The
+        server's validation (llm_router.validate_tool_proposals) decides; a
+        proposal that passes becomes a CuratedControlIntent with
+        ``confidence_source="llm_tool_proposal"`` and runs through the same
+        branches and post-turn gates as a rules turn, so "next" opens the
+        completion or endpoint question and "stop" the end question exactly
+        as the rules do. A refused proposal changes nothing and gets a reply
+        the server writes; if a question was open it is asked again. Every
+        reply is the server's, never the model's text.
+        """
+
+        if turn_id in self._replay:
+            # The turn was already planned; a late proposal is dropped.
+            return AppliedToolProposal(
+                ProposalVerdict("refuse", "stale_proposal"), self._replay[turn_id]
+            )
+        facts = self.router_turn_facts(
+            transcript,
+            turn_id=turn_id,
+            language=language,
+            transcript_quality=transcript_quality,
+            configuration_id=configuration_id,
+            generation=generation,
+        )
+        verdict = validate_tool_proposals(proposals, facts, basis)
+        self._last_semantic_decision = None
+        self._last_front_rule = None
+        if verdict.effect == "refuse" and facts.open_question is not None:
+            plan = self._ask_open_question_again(
+                facts.open_question, turn_id=turn_id, generation=generation,
+                language=language,
+            )
+            return AppliedToolProposal(verdict, plan)
+        # No question is open for this turn: whatever is left over has gone
+        # stale and lapses, as it does when plan() reads a turn.
+        self._pending_completion_confirmation = None
+        self._pending_observation_confirmation = None
+        self._pending_transcript_confirmation = None
+        self._pending_note_capture = None
+        self._pending_stop_confirmation = None
+        self._pending_timer_confirmation = None
+        execute = dict(
+            transcript=transcript,
+            command_key=_utterance_key(transcript),
+            turn_id=turn_id,
+            language=language,
+            configuration_id=configuration_id,
+            generation=generation,
+            actor_principal_id=actor_principal_id,
+            actor_role=actor_role,
+            open_question=None,
+        )
+        common = dict(
+            language=language,
+            normalized_transcript=_utterance_key(transcript),
+            confidence_source="llm_tool_proposal",
+        )
+        if verdict.reason_code == "completion_not_reached":
+            # "덜 됐는데 그냥 넘어가자" (decision D7): the step stays, and its
+            # source completion criterion is said.
+            plan = self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="completion_not_reached",
+                    action=CuratedProtocolAction.COMPLETION_CRITERIA,
+                    target_step="authoritative_current_step",
+                    **common,
+                ),
+                **execute,
+            )
+            label = plan.step_label or ""
+            stay = (
+                f"아직 끝나지 않았다고 하셔서 {label}단계에 머뭅니다. "
+                if language == "ko" else
+                f"You said it is not done, so Step {label} stays current. "
+            )
+            plan = replace(
+                plan,
+                display_text=stay + plan.display_text,
+                speech_text=stay + plan.speech_text,
+            )
+            self._replay[turn_id] = plan
+            return AppliedToolProposal(verdict, plan)
+        if verdict.effect == "refuse":
+            plan = self._refused_proposal_plan(verdict, facts, language=language)
+            self._replay[turn_id] = plan
+            return AppliedToolProposal(verdict, plan)
+        if verdict.question == "timer":
+            plan = self._ask_timer_duration(
+                facts, turn_id=turn_id, generation=generation,
+                configuration_id=configuration_id, language=language,
+            )
+            return AppliedToolProposal(verdict, plan)
+        intent = self._intent_for_proposal(verdict, common)
+        return AppliedToolProposal(verdict, self._execute_turn_intent(intent, **execute))
+
+    def _intent_for_proposal(
+        self, verdict: ProposalVerdict, common: dict[str, Any]
+    ) -> CuratedControlIntent:
+        """The intent an accepted proposal is carried out as -- the rules' own."""
+
+        proposal = verdict.proposal
+        assert proposal is not None
+        if proposal.tool == RECORD_LOG:
+            if proposal.log_type == "observation":
+                # Recorded as a note: a model's reading never reports an
+                # endpoint, so it can never release a repeat-until step.
+                return CuratedControlIntent(
+                    intent_kind="record_observation",
+                    action=CuratedProtocolAction.RECORD_OBSERVATION,
+                    target_step="authoritative_current_step",
+                    reported_observation=True,
+                    observation_predicate="note",
+                    observation_outcome=proposal.value,
+                    **common,
+                )
+            return CuratedControlIntent(
+                intent_kind="record_anomaly",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                reported_anomaly=True,
+                anomaly_category=_anomaly_category(common["normalized_transcript"]),
+                **common,
+            )
+        if proposal.action == "next":
+            return CuratedControlIntent(
+                intent_kind=(
+                    "observation_confirmation_required"
+                    if verdict.question == "observation"
+                    else "next_step_confirmation_required"
+                ),
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                requested_transition="next",
+                requested_followup="confirm_current_step_completion",
+                target_step="authoritative_current_step",
+                requires_confirmation=True,
+                allows_state_mutation=False,
+                **common,
+            )
+        if proposal.action == "stop":
+            # The STOP branch asks "실험을 종료할까요?" for anything but a yes
+            # to that question (decision D5).
+            return CuratedControlIntent(
+                intent_kind="workflow_command",
+                action=CuratedProtocolAction.STOP,
+                allows_state_mutation=True,
+                **common,
+            )
+        if proposal.action == "pause":
+            return CuratedControlIntent(
+                intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
+                **common,
+            )
+        if proposal.action == "resume":
+            return CuratedControlIntent(
+                intent_kind="resume_workflow", action=CuratedProtocolAction.RESUME,
+                allows_state_mutation=True, **common,
+            )
+        if proposal.action == "start":
+            return CuratedControlIntent(
+                intent_kind="workflow_command",
+                action=CuratedProtocolAction.START,
+                requested_transition="start",
+                requested_followup="describe_new_current_step",
+                allows_state_mutation=True,
+                **common,
+            )
+        return CuratedControlIntent(
+            intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER,
+            **common,
+        )
+
+    def _ask_timer_duration(
+        self,
+        facts: RouterTurnFacts,
+        *,
+        turn_id: int,
+        generation: int | None,
+        configuration_id: int | None,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """"원문은 15분입니다. 15분으로 시작할까요?" -- nothing starts (D6)."""
+
+        step = self.fixture.steps[self.current_index]
+        spoken = _duration_words(facts.step_timer_seconds, language)
+        question = (
+            f"원문은 {spoken}입니다. {_with_ro(spoken)} 시작할까요?"
+            if language == "ko" else
+            f"The source timer for this step is {spoken}. Start {spoken}?"
+        )
+        self._pending_timer_confirmation = {
+            "configuration_id": configuration_id,
+            "requested_turn_id": turn_id,
+            "requested_generation": generation,
+            "workflow_revision": self._revision,
+            "step_index": self.current_index,
+            "step_id": step.step_id,
+            "duration_seconds": facts.step_timer_seconds,
+            "question": question,
+        }
+        plan = CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            display_text=question,
+            speech_text=question,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=self.fixture.facts_for_step(self.current_index),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=question,
+            intent_kind="timer_duration_confirmation_required",
+        )
+        self._replay[turn_id] = plan
+        return plan
+
+    def _ask_open_question_again(
+        self,
+        kind: str,
+        *,
+        turn_id: int,
+        generation: int | None,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """A refused proposal leaves the open question open, and asks it again."""
+
+        step = self.fixture.steps[self.current_index] if self.active else None
+        label = step.source_label if step is not None else ""
+        action = CuratedProtocolAction.CLARIFY_COMPLETION
+        if kind == "completion":
+            pending = self._pending_completion_confirmation
+            self._pending_completion_confirmation = replace(
+                pending, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            question = (
+                _completion_question(label) if language == "ko" else
+                "Have you completed the current step? No state has changed."
+            )
+        elif kind == "observation":
+            pending = self._pending_observation_confirmation
+            asked = self._replay.get(pending.requested_turn_id)
+            self._pending_observation_confirmation = replace(
+                pending, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            question = (asked.speech_text if asked is not None else "") or (
+                "확인하신 관찰 결과를 말씀해 주세요." if language == "ko" else
+                "Please tell me what you observed."
+            )
+        elif kind == "transcript":
+            pending = self._pending_transcript_confirmation
+            self._pending_transcript_confirmation = replace(
+                pending, requested_turn_id=turn_id, requested_generation=generation,
+            )
+            question = (
+                f"‘{pending.proposed_transcript}’라고 말씀하신 건가요?"
+                if language == "ko" else
+                f"Did you say '{pending.proposed_transcript}'?"
+            )
+        elif kind == "note":
+            self._pending_note_capture = {
+                **(self._pending_note_capture or {}),
+                "requested_turn_id": turn_id, "requested_generation": generation,
+            }
+            action = CuratedProtocolAction.RECORD_OBSERVATION
+            question = (
+                "어떤 관찰 내용을 기록할까요? 프로토콜 상태는 변경하지 않았습니다."
+                if language == "ko" else
+                "What should I record as the observation? No protocol state has changed."
+            )
+        elif kind == "stop":
+            self._pending_stop_confirmation = {
+                **(self._pending_stop_confirmation or {}),
+                "requested_turn_id": turn_id, "requested_generation": generation,
+            }
+            action = CuratedProtocolAction.STOP
+            question = END_CONFIRMATION_QUESTION.get(language, END_CONFIRMATION_QUESTION["ko"])
+        else:
+            self._pending_timer_confirmation = {
+                **(self._pending_timer_confirmation or {}),
+                "requested_turn_id": turn_id, "requested_generation": generation,
+            }
+            action = CuratedProtocolAction.CLARIFY_PARAMETER
+            question = str((self._pending_timer_confirmation or {}).get("question") or "")
+        lead = (
+            "먼저 질문에 답해 주세요. " if language == "ko" else
+            "Please answer the question first. "
+        )
+        plan = CuratedProtocolTurnPlan(
+            action=action,
+            display_text=lead + question,
+            speech_text=lead + question,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=(),
+            step_label=label or None,
+            final_step=self.active and self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=lead + question,
+            intent_kind="open_question_asked_again",
+        )
+        self._replay[turn_id] = plan
+        return plan
+
+    def _refused_proposal_plan(
+        self,
+        verdict: ProposalVerdict,
+        facts: RouterTurnFacts,
+        *,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """The server's reply to a refused proposal. Nothing changes."""
+
+        code = verdict.reason_code
+        label = facts.current_step_label or ""
+        ko = language == "ko"
+        action = CuratedProtocolAction.UNSUPPORTED
+        if code == "workflow_not_active":
+            action = CuratedProtocolAction.INACTIVE
+            if self._workflow_status in {"preview", "ready"}:
+                response = (
+                    "아직 실험을 시작하지 않았습니다. 프로토콜을 시작해 주세요. 시작하면 1단계부터 진행합니다."
+                    if ko else
+                    "The experiment has not started yet. Please say start protocol to begin."
+                )
+            else:
+                response = (
+                    "프로토콜 세션이 중지되었습니다. 상태는 바꾸지 않았습니다."
+                    if ko else
+                    "The protocol session is stopped. Nothing was changed."
+                )
+        elif code in {"workflow_paused", "already_paused"}:
+            action = CuratedProtocolAction.PAUSE
+            response = (
+                "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+                if ko else
+                "Guidance is paused right now. Say 'resume' to continue."
+            )
+        elif code == "not_paused":
+            action = CuratedProtocolAction.RESUME
+            response = (
+                f"지금은 일시정지 상태가 아닙니다. 현재 {label}단계입니다."
+                if ko else
+                f"Guidance is not paused. The current step is Step {label}."
+            )
+        elif code == "already_started":
+            response = (
+                f"이미 {label}단계를 진행 중입니다. 처음부터 다시 시작하지 않았습니다."
+                if ko else
+                f"Step {label} is already in progress. Nothing was restarted."
+            )
+        elif code == "session_ended":
+            response = (
+                "이미 끝난 실험이라 처음부터 다시 시작하지 않았습니다."
+                if ko else
+                "This experiment has ended, so it was not restarted from step 1."
+            )
+        elif code == "end_word_missing":
+            response = END_REQUEST_HINT.get(language, END_REQUEST_HINT["ko"]) + (
+                " 지금은 그대로 둡니다." if ko else " Nothing has changed."
+            )
+        elif code == "no_step_timer":
+            action = CuratedProtocolAction.TIMER_STATUS
+            response = (
+                f"현재 {label}단계에는 프로토콜에 정의된 별도 타이머가 없습니다. 상태는 바꾸지 않았습니다."
+                if ko else
+                f"Step {label} has no protocol-defined timer. Nothing was changed."
+            )
+        elif code == "target_not_current_step":
+            response = (
+                f"현재 {label}단계가 아닌 단계로는 옮기지 않습니다. 상태는 바꾸지 않았습니다."
+                if ko else
+                f"I only act on the current step, Step {label}. Nothing was changed."
+            )
+        elif code == "value_not_in_utterance":
+            response = (
+                "말씀하신 내용과 기록할 값이 달라 기록하지 않았습니다. 기록할 내용을 다시 말씀해 주세요."
+                if ko else
+                "What would be recorded is not what you said, so nothing was recorded. Please say it again."
+            )
+        elif code == "transcript_unreliable":
+            action = CuratedProtocolAction.TRANSCRIPT_UNRELIABLE
+            response = (
+                "방금 음성을 정확히 인식하지 못했습니다. 짧게 다시 말씀해 주세요. 프로토콜 상태는 변경하지 않았습니다."
+                if ko else
+                "I could not reliably recognize that utterance. Please repeat it clearly. No procedure state changed."
+            )
+        else:
+            response = (
+                "말씀만으로는 바꿀 내용을 확인하지 못해 상태를 바꾸지 않았습니다."
+                if ko else
+                "I could not confirm a change from what was said, so nothing was changed."
+            )
+        return CuratedProtocolTurnPlan(
+            action=action,
+            display_text=response,
+            speech_text=response,
+            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+            facts=(),
+            step_label=(label or None) if self.active else None,
+            final_step=self.active and self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=response,
+            intent_kind="tool_proposal_refused",
+            limitations=(f"refused:{code}",),
+        )
 
     def apply_grounded_answer(
         self,
