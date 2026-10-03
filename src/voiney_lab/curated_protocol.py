@@ -2354,6 +2354,18 @@ _REPEAT_PATTERNS = (
     re.compile(r"(?:방금|아까)\s*(?:말|설명|안내).*(?:반복|다시)"),
     re.compile(r"(?:설명|안내).*(?:반복해줘|다시\s*말해줘)"),
     re.compile(r"(?:say|explain|tell).*(?:again|repeat)|repeat.*(?:that|guidance)"),
+    # F8 (lane R part 2-b): "한 번 더 말해 줄래요", "뭐라고?", "방금 거 다시".
+    # Whole utterances only: "뭐라고 써 있어?" asks what is written, and stays
+    # a question.
+    re.compile(
+        r"^(?:한\s*번\s*더|다시\s*한\s*번)\s*(?:말|얘기|설명|안내)\s*(?:해|하)?\s*"
+        r"(?:줘|줘요|줄래|줄래요|주세요|줄\s*수\s*있어(?:요)?)?$"
+    ),
+    re.compile(r"^뭐라고(?:요|\s*(?:했어|했어요|하셨어요|하셨죠|그랬어|그랬어요))?$"),
+    re.compile(
+        r"^(?:방금|아까)\s*(?:거|것|말|답|답변|안내)?\s*다시"
+        r"(?:\s*(?:말해|들려|해)\s*(?:줘|줘요|줄래|줄래요|주세요)?)?$"
+    ),
 )
 _STEP_ELABORATION_PATTERNS = (
     re.compile(
@@ -2465,7 +2477,9 @@ _FRONT_PAUSE_COMMAND = re.compile(
     r"(?:(?:잠깐|잠깐만|잠시|잠시만)\s+)?"
     r"(?:(?:실험|프로토콜|안내|절차)(?:을|를)?\s*)?"
     r"(?:잠깐(?:만(?:요|예)?)?|잠시만(?:요)?|멈춰|멈처|정지|일시\s*정지|일시\s*중지|"
-    r"중지|중단|스톱|stop|pause)"
+    r"중지|중단|스톱|stop|pause|"
+    # "쫌만 기다려 봐", "잠깐 기다려 줘" (lane R part 2-b).
+    r"(?:(?:쫌|좀|조금|잠깐|잠시)\s*만?\s*)?기다려)"
     r"(?:\s*(?:봐|봐요|줘|줘요|요|해|해요|해줘|해\s*줘|주세요|해\s*주세요))?",
     re.I,
 )
@@ -2501,6 +2515,16 @@ END_CONFIRMATION_QUESTION = {
 END_REQUEST_HINT = {
     "ko": "실험을 끝내려면 '실험 종료'라고 말씀해 주세요.",
     "en": "To end the experiment, say 'end session'.",
+}
+#: A start said after the experiment ended (decision 2, 2026-10-03): an ended
+#: experiment is never started again by voice; the next one is chosen on the
+#: screen.
+EXPERIMENT_ENDED_START_REPLY = {
+    "ko": "이 실험은 이미 끝났어요. 다음 실험은 화면에서 프로토콜이나 세션을 골라 시작해 주세요.",
+    "en": (
+        "This experiment has already ended. To run the next one, choose a "
+        "protocol or session on the screen and start it there."
+    ),
 }
 
 
@@ -2555,6 +2579,9 @@ FRONT_RULES: dict[str, str] = {
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
+    "start_command": "an explicit start of an experiment that has never "
+                     "started, and any start or resume after it ended, "
+                     "which is not restarted by voice (decision 2, 2026-10-03)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2636,6 +2663,13 @@ _TIMER_QUERY_PATTERNS = (
     re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
     re.compile(r"^타임\s*(?:얼마나\s*남았어|몇\s*(?:분|초)\s*남았어|남은\s*시간\s*알려\s*(?:줘|주세요))$"),
     re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
+    # F6 (lane R part 2-b): "시간 얼마나 남았지", "Time 얼마나 남았어?". Whole
+    # utterances only: "시간이 얼마나 걸려?" asks the protocol, not the timer.
+    re.compile(
+        r"^(?:시간|타임|time)\s*(?:이|은)?\s*(?:얼마나|몇\s*분|몇\s*초)\s*(?:더\s*)?"
+        r"남았(?:지|어|어요|나|나요|니|습니까)?$",
+        re.I,
+    ),
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
 )
 _PREVIEW_STEP_PATTERNS = (
@@ -5713,6 +5747,14 @@ class CuratedProtocolSession:
         if self._experiment_ended_at is None:
             self._experiment_ended_at = time.time() if now is None else now
 
+    def _experiment_ended(self) -> bool:
+        """The experiment ran and has ended: stopped, or every step completed."""
+
+        return (
+            self._experiment_started_at is not None
+            and self._experiment_ended_at is not None
+        )
+
     def _start_experiment_clock_once(self, now: float | None = None) -> bool:
         if self._experiment_started_at is not None:
             return False
@@ -8758,6 +8800,20 @@ class CuratedProtocolSession:
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
+        if not self.active and (
+            (
+                intent.action in {
+                    CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
+                }
+                and self._experiment_ended()
+            )
+            or (
+                intent.action is CuratedProtocolAction.START
+                and intent.intent_kind == "workflow_command"
+                and self._experiment_started_at is None
+            )
+        ):
+            return "start_command"
         if (
             classified is not None
             and classified.action is CuratedProtocolAction.NEXT
@@ -8832,8 +8888,9 @@ class CuratedProtocolSession:
         commands, F4 a yes/no to an open question, F5 a reply while an
         endpoint question is open or an endpoint stated at a repeat-until
         step (D9), F6 time left, F7 "그거" (D3), F8 say it again, F9 cancel a
-        lookup, and a completion naming the current step (D2). F1, the
-        emergency gate, stays in server.py ahead of all planning.
+        lookup, a completion naming the current step (D2), and a start of an
+        experiment never started or already ended (decision 2, 2026-10-03).
+        F1, the emergency gate, stays in server.py ahead of all planning.
 
         This is plan() itself, stopped once the rules have read the turn. A
         front rule's turn is planned by the very branches plan() uses, so the
@@ -9636,6 +9693,31 @@ class CuratedProtocolSession:
         # again once the turn is planned.
         reasked_question: dict[str, Any] | None = None
 
+        if (
+            command in {CuratedProtocolAction.START, CuratedProtocolAction.RESUME}
+            and not self.active
+            and self._experiment_ended()
+        ):
+            # Decision 2 (2026-10-03): an ended experiment is not started
+            # again by voice -- a start used to begin it over from step 1,
+            # and a resume did the same through resume_workflow(). Nothing
+            # changes; the next experiment is chosen on the screen.
+            response = EXPERIMENT_ENDED_START_REPLY.get(
+                language, EXPERIMENT_ENDED_START_REPLY["ko"]
+            )
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.INACTIVE,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=None,
+                final_step=False,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="start_after_experiment_ended",
+            )
+
         if self._pause_state == "paused" and command not in {
             CuratedProtocolAction.RESUME,
             CuratedProtocolAction.STOP,
@@ -9700,6 +9782,10 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.STOP:
             changed = self.active or self._experiment_started_at is not None
+            stopped_at = (
+                steps[self.current_index].source_label
+                if self.active and 0 <= self.current_index < len(steps) else None
+            )
             self.active = False
             self._block_reason = None
             self._workflow_status = "stopped"
@@ -9709,11 +9795,27 @@ class CuratedProtocolSession:
             self._pending_stop_confirmation = None
             self._frozen_question = None
             action = CuratedProtocolAction.STOP
-            response = {
-                "en": "The protocol session has ended without a completion claim.",
-                "vi": "Phiên quy trình đã kết thúc mà không xác nhận hoàn thành.",
-                "ko": "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
-            }.get(language, "프로토콜 세션을 종료했습니다.")
+            if changed and stopped_at is not None:
+                # Decision 2: how the experiment ended, said as it happened.
+                # Whether the record was saved is the server's to add, once
+                # the report store has answered.
+                response = {
+                    "en": f"The experiment was ended at step {stopped_at}.",
+                    "vi": f"Thí nghiệm đã kết thúc ở bước {stopped_at}.",
+                    "ko": f"{stopped_at}단계에서 실험을 종료했습니다.",
+                }.get(language, f"{stopped_at}단계에서 실험을 종료했습니다.")
+            elif changed:
+                response = {
+                    "en": "The experiment was ended.",
+                    "vi": "Thí nghiệm đã kết thúc.",
+                    "ko": "실험을 종료했습니다.",
+                }.get(language, "실험을 종료했습니다.")
+            else:
+                response = {
+                    "en": "The protocol session has ended without a completion claim.",
+                    "vi": "Phiên quy trình đã kết thúc mà không xác nhận hoàn thành.",
+                    "ko": "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
+                }.get(language, "프로토콜 세션을 종료했습니다.")
             plan = CuratedProtocolTurnPlan(
                 action=action,
                 display_text=response,
@@ -11139,21 +11241,15 @@ class CuratedProtocolSession:
                 self._block_reason = "final_step_boundary"
                 self._pending_anomaly = None
                 step = steps[self.current_index]
+                # Decision 2 (2026-10-03): the experiment ended by finishing
+                # every step. Whether the record was saved is the server's to
+                # add, once the report store has answered.
                 if language == "ko":
-                    speech = (
-                        f"마지막 {step.source_label}단계까지 진행했습니다. "
-                        "실험을 완료로 기록하고 전체 경과 시간을 멈췄습니다."
-                    )
+                    speech = "모든 단계를 마쳐 실험이 끝났습니다."
                 elif language == "vi":
-                    speech = (
-                        f"Đã đến bước cuối {step.source_label}. "
-                        "Phiên được ghi là hoàn thành và đồng hồ thí nghiệm đã dừng."
-                    )
+                    speech = "Đã hoàn thành tất cả các bước, thí nghiệm đã kết thúc."
                 else:
-                    speech = (
-                        f"The final step {step.source_label} has been reached. "
-                        "The experiment is recorded as completed and the overall timer has stopped."
-                    )
+                    speech = "Every step is done, so the experiment has ended."
                 response = _step_reply(
                     language,
                     step.source_label,
@@ -12676,10 +12772,9 @@ class CuratedProtocolSession:
                 f"Step {label} is already in progress. Nothing was restarted."
             )
         elif code == "session_ended":
-            response = (
-                "이미 끝난 실험이라 처음부터 다시 시작하지 않았습니다."
-                if ko else
-                "This experiment has ended, so it was not restarted from step 1."
+            action = CuratedProtocolAction.INACTIVE
+            response = EXPERIMENT_ENDED_START_REPLY.get(
+                language, EXPERIMENT_ENDED_START_REPLY["ko"]
             )
         elif code == "end_word_missing":
             response = END_REQUEST_HINT.get(language, END_REQUEST_HINT["ko"]) + (

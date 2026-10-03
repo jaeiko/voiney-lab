@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, contextvars, copy, hashlib, hmac, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, time
+import asyncio, contextvars, copy, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -6679,7 +6679,78 @@ _EXPERIMENT_REPORT_ACTIONS=frozenset({
 })
 
 
+def _experiment_end_kind(plan:Any)->str|None:
+    """How a turn ended the experiment: "completed", "stopped", or None."""
+
+    if plan.action is CuratedProtocolAction.STOP and plan.state_changed:
+        return "stopped"
+    if (
+        plan.action is CuratedProtocolAction.NEXT
+        and plan.state_changed
+        and plan.final_step
+        and plan.speech_mode is CuratedProtocolSpeechMode.STOP
+    ):
+        return "completed"
+    return None
+
+
+def _report_download_sentence(language:str)->str:
+    """The report formats the screen offers now, said after a saved report.
+
+    Markdown is always exported; Word only when python-docx is importable.
+    A format the screen cannot give is not mentioned (decision 2).
+    """
+
+    word=importlib.util.find_spec("docx") is not None
+    if language=="ko":
+        return (
+            "화면에서 Word나 마크다운 파일로 받을 수 있어요."
+            if word else "화면에서 마크다운 파일로 받을 수 있어요."
+        )
+    return (
+        "You can download it from the screen as Word or Markdown."
+        if word else "You can download it from the screen as Markdown."
+    )
+
+
+def _with_experiment_end_sentence(plan:Any,sentence:str)->Any:
+    """The end-of-experiment reply with ``sentence`` said right after it."""
+
+    speech=plan.speech_text or ""
+    display=plan.display_text or ""
+    if speech and display.startswith(speech):
+        display=f"{speech} {sentence}{display[len(speech):]}"
+    else:
+        display=f"{display}\n\n{sentence}" if display else sentence
+    return replace(
+        plan,display_text=display,speech_text=f"{speech} {sentence}".strip())
+
+
 def _acknowledge_report_persistence(plan:Any,language:str)->Any:
+    end=_experiment_end_kind(plan)
+    if end is not None:
+        # Decision 2 (2026-10-03): said only once the report store has taken
+        # the experiment's end -- how it ended, then that it was saved.
+        if language=="ko":
+            saved=(
+                "실험 기록을 보고서로 저장했어요."
+                if end=="completed" else
+                "지금까지의 기록을 보고서로 저장했어요."
+            )
+        else:
+            saved=(
+                "The experiment record was saved as a report."
+                if end=="completed" else
+                "The record so far was saved as a report."
+            )
+        sentence=f"{saved} {_report_download_sentence(language)}"
+        if end=="completed" and plan.reported_observation:
+            sentence=(
+                "말씀한 관찰 결과도 실험 기록에 반영했습니다. "
+                if language=="ko" else
+                "The reported observation was added to the experiment record. "
+            )+sentence
+        return _with_experiment_end_sentence(plan,sentence)
     if (
         plan.action is CuratedProtocolAction.NEXT
         and plan.state_changed
@@ -8028,16 +8099,26 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         pre_transition_index=pre_transition_index,
                     )
                 except Exception:
-                    warning=(
-                        "실험 세션의 상태 변경은 저장되었지만 보조 실험 보고서를 갱신하지 못했습니다. 현재 단계는 실험 세션 타임라인에서 확인해 주세요."
-                        if turn_language=="ko" else
-                        "The experiment-session change was saved, but the auxiliary experiment report could not be updated. Verify the current step in the experiment timeline."
-                    )
-                    plan=replace(
-                        plan,
-                        display_text=f"{warning}\n\n{plan.display_text}",
-                        speech_text=f"{warning} {plan.speech_text}",
-                    )
+                    if _experiment_end_kind(plan) is not None:
+                        # Decision 2: the experiment did end (the session
+                        # record holds it); only the report was not saved.
+                        plan=_with_experiment_end_sentence(
+                            plan,
+                            "실험은 끝났지만 기록 저장에 실패했어요. 화면에서 다시 시도해 주세요."
+                            if turn_language=="ko" else
+                            "The experiment has ended, but saving its record failed. Please try again on the screen.",
+                        )
+                    else:
+                        warning=(
+                            "실험 세션의 상태 변경은 저장되었지만 보조 실험 보고서를 갱신하지 못했습니다. 현재 단계는 실험 세션 타임라인에서 확인해 주세요."
+                            if turn_language=="ko" else
+                            "The experiment-session change was saved, but the auxiliary experiment report could not be updated. Verify the current step in the experiment timeline."
+                        )
+                        plan=replace(
+                            plan,
+                            display_text=f"{warning}\n\n{plan.display_text}",
+                            speech_text=f"{warning} {plan.speech_text}",
+                        )
                     log.warning(
                         "experiment report update failed after workspace commit turn_id=%s",
                         turn_id,

@@ -194,7 +194,9 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
                 self.assert_handed_on((said,), step_index=3)
 
     def test_before_the_start_only_front_words_are_taken(self) -> None:
-        self.assert_handed_on(("프로토콜 시작해줘",), step_index=None)
+        # Decision 2 (2026-10-03): an explicit start of an experiment that
+        # never started is a front rule.
+        self.assert_front(("프로토콜 시작해줘",), "start_command", step_index=None)
         self.assert_handed_on(("자 이제 1단계부터 해볼까",), step_index=None)
         self.assert_front(("잠깐",), "pause", step_index=None)
 
@@ -231,6 +233,7 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "stt_unreliable", "pause", "end_command", "yes_no_open_question",
             "observation_reply", "timer_remaining", "coreference_clarify",
             "repeat_last_reply", "cancel_background_job", "targeted_completion",
+            "start_command",
         })
 
 

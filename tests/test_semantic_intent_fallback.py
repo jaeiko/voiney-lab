@@ -274,7 +274,7 @@ class DeterministicFastPathTests(SemanticFallbackTestCase):
         workflow = self.workflow()
         workflow.start_timer()
         probe = probe_curated_semantic_fallback(
-            workflow, "Time 얼마나 남았어?", language="ko"
+            workflow, "Timer, 얼마나 남았어?", language="ko"
         )
         self.assertTrue(probe.needed)
         self.assertEqual(probe.reason_code, "deterministic_off_topic")
@@ -323,10 +323,10 @@ class SemanticParaphraseCorpusTests(SemanticFallbackTestCase):
 
     CORPUS = (
         # --- timer status -------------------------------------------------
-        Case("Time 얼마나 남았어?", Stage.SEMANTIC,
-             CuratedProtocolAction.TIMER_STATUS, False, "semantic_timer_status",
-             intent=SemanticIntent.TIMER_STATUS, evidence="얼마나 남았",
-             running_timer=True),
+        # Lane R part 2-b (F6): the rules read this one themselves now.
+        Case("Time 얼마나 남았어?", Stage.DETERMINISTIC,
+             CuratedProtocolAction.TIMER_STATUS, False,
+             "deterministic_route_resolved", running_timer=True),
         Case("Timer, 얼마나 남았어?", Stage.SEMANTIC,
              CuratedProtocolAction.TIMER_STATUS, False, "semantic_timer_status",
              intent=SemanticIntent.TIMER_STATUS, evidence="얼마나 남았",
@@ -624,7 +624,7 @@ class SemanticAmbiguityAndFailClosedTests(SemanticFallbackTestCase):
 
         workflow = self.workflow()
         before = canonical_state(workflow)
-        routed = self.route(workflow, "Time 얼마나 남았어?", unavailable)
+        routed = self.route(workflow, "Timer, 얼마나 남았어?", unavailable)
         self.assertEqual(routed.plan.action, CuratedProtocolAction.OFF_TOPIC)
         self.assertFalse(routed.plan.state_changed)
         self.assertEqual(canonical_state(workflow), before)
@@ -850,7 +850,7 @@ class SemanticProviderFailureTests(SemanticFallbackTestCase):
         workflow.start_timer()
         before = canonical_state(workflow)
         routed = self.route(
-            workflow, "Time 얼마나 남았어?", resolver, settings=settings
+            workflow, "Timer, 얼마나 남았어?", resolver, settings=settings
         )
         self.assertEqual(routed.plan.action, CuratedProtocolAction.OFF_TOPIC)
         self.assertFalse(routed.plan.state_changed)
@@ -973,7 +973,7 @@ class SemanticProductionBoundaryTests(SemanticFallbackTestCase):
         before = canonical_state(workflow)
         socket = self.run_socket_turn(
             session,
-            "Time 얼마나 남았어?",
+            "Timer, 얼마나 남았어?",
             client_factory=self.proposal_client({
                 "intent": "timer_status",
                 "target": None,
@@ -1104,7 +1104,7 @@ class SemanticProductionBoundaryTests(SemanticFallbackTestCase):
         session = self.listener(workflow, enabled=False)
         socket = self.run_socket_turn(
             session,
-            "Time 얼마나 남았어?",
+            "Timer, 얼마나 남았어?",
             client_factory=AssertionError(
                 "a disabled fallback must not build a provider client"
             ),

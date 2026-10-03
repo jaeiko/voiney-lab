@@ -351,7 +351,16 @@ class ApplyToolProposalTests(unittest.TestCase):
         _say(session, 3, "실험 종료")
         _say(session, 4, "네")
         self.assertFalse(session.active)
+        # Decision 2 (2026-10-03): a start after the end is a front rule's
+        # turn, and a proposal that still reaches the server is refused.
         verdict, _ = _propose(session, 5, "실험 다시 시작하자", _change("start", "실험 다시 시작하자"))
+        self.assertIsNone(verdict)
+        applied = session.apply_tool_proposal(
+            [_change("start", "실험 다시 시작하자")], transcript="실험 다시 시작하자",
+            basis=session.proposal_basis(turn_id=6, generation=1),
+            turn_id=6, language="ko", configuration_id=1, generation=1,
+        )
+        verdict = applied.verdict
         self.assertEqual(verdict.reason_code, "session_ended")
         self.assertFalse(session.active)
 
