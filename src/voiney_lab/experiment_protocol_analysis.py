@@ -766,8 +766,15 @@ class _DomainDecoder:
         )
 
 
+#: Hyphens after which a line break is layout, not content. An en dash or a
+#: minus sign is not among them: those are characters of a range or a value.
+_LINE_END_HYPHENS = frozenset("-‐‑")
+
+
 def _normalized_text_with_bounds(
     value: str,
+    *,
+    join_line_end_hyphens: bool = False,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -775,6 +782,12 @@ def _normalized_text_with_bounds(
     substitutions such as circled numbers or alternate unit glyphs. Soft
     hyphens are layout controls, and whitespace runs are representation-only.
     Accepted excerpts are always projected back to the original source span.
+
+    With ``join_line_end_hyphens`` a whitespace run that holds a line break
+    and follows a hyphen is dropped and the hyphen kept, so a source line
+    ending "5-" before "10" compares as "5-10" (human decision 2026-10-03).
+    It is a comparison form only: page text, its hash and evidence identities
+    are untouched, and the hyphen itself is never removed.
     """
 
     normalized: list[str] = []
@@ -787,6 +800,13 @@ def _normalized_text_with_bounds(
             start = index
             while index < len(value) and value[index].isspace():
                 index += 1
+            if (
+                join_line_end_hyphens
+                and units
+                and units[-1][0] in _LINE_END_HYPHENS
+                and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
             units.append((" ", start, index, True))
             continue
         if value[index] == "\u00ad":
@@ -819,23 +839,31 @@ def _canonical_match_spans(
     source_text: str,
     excerpt: str,
 ) -> tuple[tuple[int, int], ...]:
-    canonical_source, starts, ends = _normalized_text_with_bounds(source_text)
-    canonical_excerpt, _, _ = _normalized_text_with_bounds(excerpt)
-    if not canonical_excerpt:
-        return ()
+    # Both forms are tried, so every excerpt accepted before the line-end
+    # hyphen rule is still accepted ("5- 10" for a source "5-" / "10"), and a
+    # span found by both is the same source span, counted once.
     spans: list[tuple[int, int]] = []
-    offset = 0
-    while True:
-        match_index = canonical_source.find(canonical_excerpt, offset)
-        if match_index < 0:
-            break
-        spans.append(
-            (
-                starts[match_index],
-                ends[match_index + len(canonical_excerpt) - 1],
-            )
+    for join in (False, True):
+        canonical_source, starts, ends = _normalized_text_with_bounds(
+            source_text, join_line_end_hyphens=join
         )
-        offset = match_index + 1
+        canonical_excerpt, _, _ = _normalized_text_with_bounds(
+            excerpt, join_line_end_hyphens=join
+        )
+        if not canonical_excerpt:
+            return ()
+        offset = 0
+        while True:
+            match_index = canonical_source.find(canonical_excerpt, offset)
+            if match_index < 0:
+                break
+            spans.append(
+                (
+                    starts[match_index],
+                    ends[match_index + len(canonical_excerpt) - 1],
+                )
+            )
+            offset = match_index + 1
     return tuple(dict.fromkeys(spans))
 
 
@@ -1078,9 +1106,16 @@ def _claim_occurs_on_evidence_page(
 def _claim_occurs_in_text(claim: str, source_text: str) -> bool:
     if claim in source_text:
         return True
-    normalized_page, _, _ = _normalized_text_with_bounds(source_text)
-    normalized_claim, _, _ = _normalized_text_with_bounds(claim)
-    return bool(normalized_claim) and normalized_claim in normalized_page
+    for join in (False, True):
+        normalized_page, _, _ = _normalized_text_with_bounds(
+            source_text, join_line_end_hyphens=join
+        )
+        normalized_claim, _, _ = _normalized_text_with_bounds(
+            claim, join_line_end_hyphens=join
+        )
+        if normalized_claim and normalized_claim in normalized_page:
+            return True
+    return False
 
 
 def _source_label_is_at_excerpt_start(
