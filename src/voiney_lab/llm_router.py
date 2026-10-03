@@ -354,7 +354,12 @@ def _bounded_text(value: object, limit: int) -> bool:
 
 _NEXT_WORD = re.compile(r"다음|\bnext\b", re.I)
 _END_WORD = re.compile(r"종료|\bend\s+(?:the\s+)?(?:session|experiment|protocol)\b", re.I)
-_START_WORD = re.compile(r"시작|개시|\bstart\b|\bbegin\b", re.I)
+_START_WORD = re.compile(
+    # "1단계부터 해 볼까 / 하자" before the start (lane R3, decision 8).
+    r"시작|개시|(?:1|일|첫|처음)\s*단계부터\s*(?:해\s*볼까|해\s*보자|하자)|"
+    r"\bstart\b|\bbegin\b",
+    re.I,
+)
 _PAUSE_WORD = re.compile(
     r"잠깐|잠시|멈|정지|중지|중단|스톱|기다려|\bstop\b|\bpause\b|\bhold\s+on\b|\bwait\b",
     re.I,

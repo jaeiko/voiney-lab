@@ -162,8 +162,9 @@ class ValidationTests(unittest.TestCase):
              _facts("12단계로 넘어가자")),
             ("no_completion_word", [_change("next", "버퍼 1 넣었어")], _facts("버퍼 1 넣었어")),
             ("end_word_missing", [_change("stop", "그만 끝내자")], _facts("그만 끝내자")),
-            ("no_start_word", [_change("start", "1단계부터 해볼까")],
-             _facts("자 이제 1단계부터 해볼까", workflow_active=False, workflow_status="ready",
+            # "1단계부터 해볼까" is a start word since decision 8 (lane R3).
+            ("no_start_word", [_change("start", "이제 해볼까")],
+             _facts("자 이제 해볼까", workflow_active=False, workflow_status="ready",
                     experiment_started=False, experiment_running=False)),
             ("no_start_word", [_change("start", "타이머 시작해줘")],
              _facts("타이머 시작해줘", workflow_active=False, workflow_status="ready",
