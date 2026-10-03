@@ -181,10 +181,10 @@ class SentencesTranslatedTests(unittest.TestCase):
     def test_sentences_go_in_batches_not_one_call_each(self) -> None:
         translator = FakeTranslator()
         report = generate(rich_fixture(), translator)
-        # 11 sentences (one is Korean) in one call.
+        # 11 sentences, one of them Korean: 10 in two calls of at most 8.
         self.assertEqual(report.units, 11)
-        self.assertEqual(report.calls, 1)
-        self.assertEqual(len(translator.batches[0]), 10)
+        self.assertEqual(report.calls, 2)
+        self.assertEqual([len(batch) for batch in translator.batches], [8, 2])
         self.assertEqual(report.prompt_tokens, 1000)
         self.assertEqual(report.completion_tokens, 400)
 
@@ -695,7 +695,7 @@ class ActivationTests(unittest.TestCase):
             report = asyncio.run(server_module.store_revision_translations(
                 fixture, translator, model="grok-test"))
             attached = server_module._with_revision_translations(fixture)
-        self.assertEqual(report.calls, 1)
+        self.assertEqual(report.calls, 2)
         self.assertEqual(attached.localized_fact("step-2", "current_step"),
                          good_korean(MINIPREP_STEPS[1]))
 
@@ -715,7 +715,7 @@ class ActivationTests(unittest.TestCase):
 
     def test_a_failed_batch_stores_nothing_so_it_is_tried_again(self) -> None:
         report = generate(rich_fixture(), FakeTranslator(error=TimeoutError()))
-        self.assertEqual(report.failed_calls, 1)
+        self.assertEqual(report.failed_calls, 2)
         self.assertEqual(report.records, [])
 
 

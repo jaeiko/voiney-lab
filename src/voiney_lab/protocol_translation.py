@@ -44,9 +44,13 @@ PROMPT_VERSION = "revision_translation_v1"
 TRANSLATED_KINDS = (
     "step", "sub_action", "warning", "note", "expected_result", "prerequisite",
 )
-#: How much one model call carries.
-BATCH_MAX_ITEMS = 16
-BATCH_MAX_CHARACTERS = 3500
+#: How much one model call carries. Measured 2026-10-03 on grok-4.6: one
+#: sentence took about 48 s and a 16-sentence call did not return in 60 s,
+#: so a call carries at most 8 sentences and is allowed 180 s. Generation
+#: runs off the request, so nobody waits on it.
+BATCH_MAX_ITEMS = 8
+BATCH_MAX_CHARACTERS = 2000
+BATCH_TIMEOUT_SECONDS = 180.0
 
 REVISION_TRANSLATION_PROMPT = (
     "You translate sentences of one laboratory protocol for a researcher who "
@@ -317,7 +321,8 @@ def with_stored_translations(
 
 
 def openai_batch_translator(
-    client_factory: Callable[[], Any], model: str, *, timeout: float = 60.0,
+    client_factory: Callable[[], Any], model: str, *,
+    timeout: float = BATCH_TIMEOUT_SECONDS,
 ) -> BatchTranslator:
     """One structured chat call per batch, on the reader translation's model."""
 
