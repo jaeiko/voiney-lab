@@ -370,6 +370,24 @@ def _review_value(value: object) -> object:
     return value
 
 
+def _ocr_needed(extraction: ProtocolPdfExtraction) -> bool:
+    """Whether any page of this source has to come from OCR.
+
+    Wider than ``_analysis_state(...) == "ocr_required"``, which is the whole
+    document having too little text to analyse at all. A readable document
+    with one page the text layer cannot supply is analysed as it stands, and
+    still needs this route for that page: until the page's OCR text has been
+    accepted, readiness keeps the Protocol out of execution
+    (``source_page_requires_ocr``). The OCR provider reads only the marked
+    pages and keeps every other page's text layer.
+    """
+
+    return (
+        _analysis_state(extraction) == "ocr_required"
+        or bool(extraction.ocr_required_page_numbers)
+    )
+
+
 def _analysis_state(extraction: ProtocolPdfExtraction) -> str:
     extracted_chars = sum(len(page.text.strip()) for page in extraction.pages)
     if extraction.non_empty_page_count == 0 or extracted_chars < 32:
@@ -547,7 +565,7 @@ class ProtocolCatalog:
         *,
         include_text: bool,
     ) -> dict[str, object]:
-        if _analysis_state(extraction) != "ocr_required":
+        if not _ocr_needed(extraction):
             return {
                 "state": "not_required",
                 "review_required": False,
@@ -731,7 +749,7 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
-        if _analysis_state(extraction) != "ocr_required":
+        if not _ocr_needed(extraction):
             raise ProtocolOcrReviewError("Protocol PDF does not require OCR.")
         current = self._ocr_projection(
             revision, extraction, include_text=False
@@ -1715,6 +1733,12 @@ class ProtocolCatalog:
         domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value: {
             "kind": "reviewer_can_clear",
             "action": "acknowledge_gate",
+        },
+        # Not an acknowledgement: a reviewer clears it by accepting the
+        # page's OCR text, after which a new analysis no longer carries it.
+        domain.ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR.value: {
+            "kind": "reviewer_can_clear",
+            "action": "run_ocr",
         },
         domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value: {
             "kind": "reviewer_can_clear",

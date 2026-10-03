@@ -17,6 +17,14 @@ pages), PyMuPDF and the previous engine produced the same characters on every
 page, differing only in whitespace. Text that cannot be read -- a scan, or a
 page whose glyphs have no Unicode mapping -- is marked per page as needing OCR
 instead of refusing the document.
+
+A glyph the engine reports as U+FFFD is a character nobody can read, and one is
+enough to mark its page: on 2026-10-03 the only two in the five local sources
+stood directly before a duration value on ANKOM page 3, where the previous engine had
+dropped them without a word. Nothing is put in their place -- they are left
+out of the page text, the page warning says how many, and the page waits for
+OCR. ``experiment_protocol.assess_readiness`` keeps a Protocol analysed from
+such a page out of execution until that OCR text has been accepted.
 """
 
 from __future__ import annotations
@@ -144,13 +152,16 @@ class TextVerification(str, Enum):
 
 OCR_REASON_NO_TEXT = "no_text_layer"
 OCR_REASON_UNREADABLE_GLYPHS = "unreadable_glyphs"
-#: Share of a page's non-space characters that are U+FFFD, private use or
-#: unassigned, at or above which the page is treated as unreadable and needing
-#: OCR. Measured on 2026-10-02 the four local sources hold none at all with
-#: PyMuPDF; the one glyph the previous engine could not map (1 of 1303 on a
-#: page) is the kind of stray this keeps from flagging a whole page.
+#: Share of a page's non-space characters that are private use or unassigned,
+#: at or above which the page is treated as unreadable and needing OCR. A
+#: private-use character can be a font's own bullet, so one among many is a
+#: warning rather than an OCR page. U+FFFD is not under this rule: see
+#: ``page_ocr_reason``. Measured on 2026-10-03 the five local sources (73
+#: pages) hold no private-use or unassigned character at all with PyMuPDF.
 UNREADABLE_PAGE_RATIO = 0.05
 _UNREADABLE_CATEGORIES = frozenset({"Co", "Cn"})
+#: What the engine reports for a glyph with no Unicode mapping.
+UNMAPPED_GLYPH = "\ufffd"
 
 
 def unreadable_character_count(text: str) -> int:
@@ -159,17 +170,24 @@ def unreadable_character_count(text: str) -> int:
     return sum(
         1
         for character in text
-        if character == "\ufffd"
+        if character == UNMAPPED_GLYPH
         or unicodedata.category(character) in _UNREADABLE_CATEGORIES
     )
 
 
 def page_ocr_reason(text: str) -> str | None:
-    """Why a page needs OCR, or None when its text layer is usable."""
+    """Why a page needs OCR, or None when its text layer is usable.
+
+    One U+FFFD is enough. It stands for a glyph whose character the document
+    does not declare, and it can sit inside a value or a unit as easily as
+    anywhere else, so no share of the page makes it safe to read past.
+    """
 
     visible = sum(1 for character in text if not character.isspace())
     if visible == 0:
         return OCR_REASON_NO_TEXT
+    if UNMAPPED_GLYPH in text:
+        return OCR_REASON_UNREADABLE_GLYPHS
     if unreadable_character_count(text) / visible >= UNREADABLE_PAGE_RATIO:
         return OCR_REASON_UNREADABLE_GLYPHS
     return None
@@ -301,6 +319,24 @@ def _pages_from_engine(
             text = ""
             warning = "Page text could not be extracted; the page was retained as empty text."
         band = engine_page.bottom_band_offset
+        reason = page_ocr_reason(text)
+        unmapped = text.count(UNMAPPED_GLYPH)
+        blocks = engine_page.blocks
+        if unmapped:
+            # Left out, never replaced: what stood there is unknown. The page
+            # is already marked for OCR above, and the footer offset moves by
+            # the characters removed before it.
+            if band is not None:
+                band -= text.count(UNMAPPED_GLYPH, 0, band)
+            text = text.replace(UNMAPPED_GLYPH, "")
+            blocks = tuple(
+                block._replace(text=block.text.replace(UNMAPPED_GLYPH, ""))
+                for block in blocks
+            )
+            warning = (
+                f"{unmapped} character(s) on this page have no Unicode mapping "
+                "in the PDF and were left out of its text; the page needs OCR."
+            )
         if band is not None and 0 < band <= len(text):
             # Snap to the start of the line the boundary lands in. Measured on
             # ANKOM page 3 the band cut two characters into "protocols.io"
@@ -310,7 +346,6 @@ def _pages_from_engine(
             band = text.rfind("\n", 0, band) + 1
         if band is not None and (band > len(text) or not text[band:].strip()):
             band = None
-        reason = page_ocr_reason(text)
         unreadable = unreadable_character_count(text)
         if warning is None and reason is None and unreadable:
             warning = (
@@ -326,7 +361,7 @@ def _pages_from_engine(
                 bottom_band_offset=band,
                 ocr_required=reason is not None,
                 ocr_reason=reason,
-                blocks=engine_page.blocks,
+                blocks=blocks,
             )
         )
     return tuple(pages)

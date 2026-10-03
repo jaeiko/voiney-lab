@@ -200,9 +200,41 @@ class OcrRequiredPageTests(_TempDir):
             ),
         )
         extraction = extract_protocol_pdf(path)
-        self.assertIn("\ufffd", extraction.pages[1].text)
+        # The page is marked; the unreadable characters are not carried as text.
+        self.assertNotIn("\ufffd", extraction.pages[1].text)
         self.assertEqual(extraction.pages[1].ocr_reason, OCR_REASON_UNREADABLE_GLYPHS)
         self.assertEqual(extraction.ocr_required_page_numbers, (2,))
+
+    def test_one_unmapped_glyph_marks_the_page_and_never_reaches_the_text(self) -> None:
+        """ANKOM page 3 in miniature: one unmapped glyph right before a value.
+
+        A 5% share rule let this through -- one glyph in a page of text is far
+        below it -- and the U+FFFD went into the text analysis reads. What
+        stood there is unknown, so the page needs OCR and the text carries
+        nothing in its place.
+        """
+
+        path = self.root / "one-glyph.pdf"
+        _write_raw_pages(
+            path,
+            (
+                "BT /F1 12 Tf 72 720 Td (1 Add 5 ml of buffer and mix well.) Tj ET",
+                "BT /F1 12 Tf 72 720 Td (2 Incubate for \\20030 min at 37 C, then cool.) Tj ET"
+                " BT /F1 10 Tf 72 20 Td (Page 2 footer) Tj ET",
+            ),
+        )
+        extraction = extract_protocol_pdf(path)
+        page = extraction.pages[1]
+        self.assertTrue(page.ocr_required)
+        self.assertEqual(page.ocr_reason, OCR_REASON_UNREADABLE_GLYPHS)
+        self.assertEqual(extraction.ocr_required_page_numbers, (2,))
+        self.assertFalse(extraction.pages[0].ocr_required)
+        self.assertEqual(page.text, "2 Incubate for 30 min at 37 C, then cool.\nPage 2 footer")
+        self.assertFalse([b for b in page.blocks if "\ufffd" in b.text])
+        # The footer offset still points at the footer once the glyph is gone.
+        self.assertEqual(page.text[page.bottom_band_offset :], "Page 2 footer")
+        self.assertIn("1 character(s)", page.warning or "")
+        self.assertTrue(any("need OCR: 2" in item for item in extraction.warnings))
 
     def test_a_document_with_an_ocr_page_is_still_admitted_for_analysis(self) -> None:
         path = self.root / "mixed.pdf"
@@ -238,8 +270,13 @@ class OcrRequiredPageTests(_TempDir):
         self.assertEqual(page_ocr_reason(""), OCR_REASON_NO_TEXT)
         self.assertEqual(page_ocr_reason(" \n\t"), OCR_REASON_NO_TEXT)
         self.assertIsNone(page_ocr_reason("Add 5 ml."))
-        # One stray glyph among many is a warning, not an OCR page.
-        self.assertIsNone(page_ocr_reason("A" * 99 + "\ufffd"))
+        # One U+FFFD is a character nobody can read: the page needs OCR.
+        self.assertEqual(
+            page_ocr_reason("A" * 999 + "\ufffd"), OCR_REASON_UNREADABLE_GLYPHS
+        )
+        # Private use and unassigned keep the share rule: one among many is a
+        # warning, not an OCR page.
+        self.assertIsNone(page_ocr_reason("A" * 99 + "\ue081"))
         self.assertEqual(
             page_ocr_reason("Add" + "\ufffd" * 3), OCR_REASON_UNREADABLE_GLYPHS
         )
@@ -414,7 +451,32 @@ class LocalSourceTextTests(unittest.TestCase):
         text = "".join(page.text for page in extraction.pages)
         self.assertFalse([c for c in text if c == "\ufffd" or 0xE000 <= ord(c) <= 0xF8FF])
         self.assertIn("72 h at 65", extraction.pages[2].text)
-        self.assertIn("alpha-amylase and enough", extraction.pages[8].text)
+        # The source sets "alpha-" at a line end; PyMuPDF keeps that line break.
+        # The hyphen is the word's own, so only whitespace is set aside here.
+        self.assertIn(
+            "alpha-amylaseandenough",
+            "".join(extraction.pages[8].text.split()),
+        )
+
+    def test_ankom_page_3_needs_ocr_for_the_glyphs_it_cannot_map(self) -> None:
+        """Two glyphs before a duration have no Unicode mapping in the document.
+
+        Measured 2026-10-03: code 0x00 of a Type3 font, glyph /g0 -- the
+        font's missing-glyph box -- absent from the font's ToUnicode. The
+        previous engine dropped them without a word. Nothing the document
+        declares says what they were, so page 3 waits for OCR.
+        """
+
+        if not ANKOM.is_file():
+            self.skipTest(f"{ANKOM} is not present.")
+        extraction = extract_protocol_pdf(ANKOM)
+        page = extraction.pages[2]
+        self.assertTrue(page.ocr_required)
+        self.assertEqual(page.ocr_reason, OCR_REASON_UNREADABLE_GLYPHS)
+        self.assertEqual(extraction.ocr_required_page_numbers, (3,))
+        self.assertNotIn("�", page.text)
+        self.assertFalse([b for b in page.blocks if "�" in b.text])
+        self.assertIn("2 character(s)", page.warning or "")
 
 
 if __name__ == "__main__":  # pragma: no cover
