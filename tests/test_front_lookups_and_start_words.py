@@ -87,7 +87,9 @@ def _session(step_index: int | None = 3) -> CuratedProtocolSession:
     session.activate_configured()
     if step_index is not None:
         session.plan("시작", turn_id=1, language="ko", configuration_id=1, generation=1)
-        session.current_index = min(step_index, len(fixture.steps) - 1)
+        # The in-gel protocol has 25 steps, the miniprep stand-in (no PDF,
+        # as in CI) 5; leave a step after the current one either way.
+        session.current_index = min(step_index, len(fixture.steps) - 2)
     return session
 
 
@@ -134,7 +136,8 @@ class StepLookupFrontTests(unittest.TestCase):
             with self.subTest(said=said):
                 session = _session(4)
                 steps = session.fixture.steps
-                if target == "21" and len(steps) < 21:
+                current = session.current_index
+                if target.isdigit() and int(target) > len(steps):
                     continue
                 before = (session.current_index, session.workflow_status)
                 plan = _front(session, said)
@@ -144,7 +147,7 @@ class StepLookupFrontTests(unittest.TestCase):
                 self.assertFalse(plan.state_changed)
                 self.assertEqual((session.current_index, session.workflow_status), before)
                 expected = {
-                    "LAST": steps[-1], "NEXT": steps[5], "CURRENT": steps[4],
+                    "LAST": steps[-1], "NEXT": steps[current + 1], "CURRENT": steps[current],
                 }.get(target) or steps[int(target) - 1]
                 self.assertIn(
                     " ".join(expected.instruction_source_text.split())[:20],
@@ -177,9 +180,10 @@ class FirstStepStartTests(unittest.TestCase):
         for said in FIRST_STEP_STARTS:
             with self.subTest(said=said):
                 session = _session(6)
+                at = session.current_index
                 plan = _rules(session, said)
                 self.assertFalse(plan.state_changed)
-                self.assertEqual((session.active, session.current_index), (True, 6))
+                self.assertEqual((session.active, session.current_index), (True, at))
                 self.assertNotEqual(session.last_front_rule, "start_command")
 
     def test_a_model_start_with_these_words_is_accepted(self) -> None:
