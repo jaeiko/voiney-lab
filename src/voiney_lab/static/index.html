@@ -566,7 +566,7 @@ const turnHoldEvidence=new Map();
 function turnHold(serverKey){if(!turnHoldEvidence.has(serverKey))turnHoldEvidence.set(serverKey,{observationGateSet:false,failed:false,done:null});return turnHoldEvidence.get(serverKey);}
 function turnHeldForObservation(serverKey){const evidence=turnHoldEvidence.get(serverKey);return Boolean(evidence&&evidence.observationGateSet&&!evidence.failed&&evidence.done?.route==="curated_protocol"&&evidence.done.result_kind==="next"&&evidence.done.speech_mode==="blocked");}
 const TURN_ROUTE_LABELS={approved_information:"승인된 정보",brain:"일반 응답",curated_protocol:"개발용 절차",deterministic_emergency:"긴급 응답",deterministic_procedure:"승인 절차",language_clarification:"언어 확인"};
-const TURN_STATE_TRANSITIONS={listening:new Set(["transcribing","cancelled","error"]),transcribing:new Set(["routing","cancelled","error"]),routing:new Set(["checking_protocol","checking_approved_information","composing","synthesizing","cancelled","error"]),checking_protocol:new Set(["checking_approved_information","synthesizing","complete","blocked","cancelled","error"]),checking_approved_information:new Set(["composing","synthesizing","cancelled","error"]),composing:new Set(["checking_approved_information","synthesizing","cancelled","error"]),synthesizing:new Set(["playing","cancelled","error"]),playing:new Set(["complete","blocked","cancelled","error"])};
+const TURN_STATE_TRANSITIONS={listening:new Set(["transcribing","cancelled","error"]),transcribing:new Set(["routing","cancelled","error"]),routing:new Set(["checking_protocol","checking_approved_information","composing","synthesizing","cancelled","error"]),checking_protocol:new Set(["checking_approved_information","synthesizing","complete","blocked","cancelled","error"]),checking_approved_information:new Set(["composing","synthesizing","cancelled","error"]),composing:new Set(["checking_approved_information","checking_protocol","synthesizing","cancelled","error"]),synthesizing:new Set(["playing","cancelled","error"]),playing:new Set(["complete","blocked","cancelled","error"])};
 const TOOL_ERROR_LABELS={observation_evidence_mismatch:"음성 원문과 관찰값 불일치",observation_required:"필수 관찰값 없음",timer_not_configured:"현재 단계에 타이머 없음",timer_not_started:"타이머 시작 필요",timer_not_elapsed:"타이머 진행 중",procedure_blocked_for_handoff:"관리자 인계로 진행 차단",explicit_confirmation_required:"명시적 단계 완료 확인 필요",step_mismatch:"현재 단계 불일치",observation_not_allowed:"현재 단계에서 관찰 기록 불가",observation_value_invalid:"관찰값 형식 오류",procedure_store_unavailable:"워크플로 저장소 오류",no_active_procedure:"진행 중인 워크플로 없음"};
 const REPORT_LABELS={awaiting_user_confirmation:"사용자 제출 확인 대기",submitting:"보고서 제출 중",confirmed:"제출 확인됨",submission_failed:"제출에 실패했습니다. 다시 승인하거나 취소할 수 있습니다.",cancelled:"보고 초안 취소됨",queued_for_handoff:"관리자 인계 대기",processing:"관리자 인계문 작성 중",retry_pending:"인계문 작성 재시도 대기",handoff_ready:"관리자 인계문 준비 완료",failed:"인계문 작성 실패",lookup_failed:"상태 조회 실패"};
 // Every server status code this page translates, in one place. A group is one
@@ -1388,7 +1388,11 @@ function renderStructuredReply(node,message){
  if(message.display_document && Array.isArray(message.display_document.sections) && message.display_document.sections.length > 0){
   const bodyHeading=heading=>typeof heading==="string"&&!ANSWER_LABEL_LINES.some(([pattern,kind])=>kind==="body"&&pattern.test(heading.trim()))?heading:"";
   for(const sec of message.display_document.sections){
-   if(sec.kind==="lead" && sec.text){
+   if(sec.kind==="notice" && sec.text){
+    // The server's own mark above an explanation the PDF does not give.
+    const notice=document.createElement("div");notice.className="answer-block answer-notice";
+    notice.textContent=sec.text;target.appendChild(notice);
+   }else if(sec.kind==="lead" && sec.text){
     const leadBlock=document.createElement("div");leadBlock.className="answer-block answer-lead";
     const p=document.createElement("p");p.textContent=normalizePresentationText(sec.text);leadBlock.appendChild(p);target.appendChild(leadBlock);
    }else if(sec.kind==="bullets" && Array.isArray(sec.items) && sec.items.length){

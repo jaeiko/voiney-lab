@@ -242,7 +242,7 @@ ROUTER_HISTORY_ASSISTANT_CHARS = 200
 _ROUTER_HANDLERS = frozenset({"llm", "llm+tool", "fallback_rules"})
 _ROUTER_RESULTS = frozenset({
     "executed", "confirm_opened", "observation_prompt_opened", "stop_prompt_opened",
-    "timer_prompt_opened", "recorded", "record_failed", "none",
+    "timer_prompt_opened", "anomaly_prompt_opened", "recorded", "record_failed", "none",
 })
 #: The first line of a block the screen shows apart from the reply: the
 #: source, its citation, development information. None of it is history.

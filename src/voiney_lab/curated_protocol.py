@@ -41,10 +41,13 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
 )
+from voiney_lab.answer_checks import ServerValues
 from voiney_lab.llm_router import (
     RECORD_LOG,
     ProposalBasis,
     ProposalVerdict,
+    RouterAnswer,
+    RouterContext,
     RouterTurnFacts,
     ToolProposal,
     validate_tool_proposals,
@@ -2377,6 +2380,18 @@ _REPEAT_PATTERNS = (
     re.compile(r"(?:방금|아까)\s*(?:말|설명|안내).*(?:반복|다시)"),
     re.compile(r"(?:설명|안내).*(?:반복해줘|다시\s*말해줘)"),
     re.compile(r"(?:say|explain|tell).*(?:again|repeat)|repeat.*(?:that|guidance)"),
+    # F8 (lane R part 2-b): "한 번 더 말해 줄래요", "뭐라고?", "방금 거 다시".
+    # Whole utterances only: "뭐라고 써 있어?" asks what is written, and stays
+    # a question.
+    re.compile(
+        r"^(?:한\s*번\s*더|다시\s*한\s*번)\s*(?:말|얘기|설명|안내)\s*(?:해|하)?\s*"
+        r"(?:줘|줘요|줄래|줄래요|주세요|줄\s*수\s*있어(?:요)?)?$"
+    ),
+    re.compile(r"^뭐라고(?:요|\s*(?:했어|했어요|하셨어요|하셨죠|그랬어|그랬어요))?$"),
+    re.compile(
+        r"^(?:방금|아까)\s*(?:거|것|말|답|답변|안내)?\s*다시"
+        r"(?:\s*(?:말해|들려|해)\s*(?:줘|줘요|줄래|줄래요|주세요)?)?$"
+    ),
 )
 _STEP_ELABORATION_PATTERNS = (
     re.compile(
@@ -2488,7 +2503,9 @@ _FRONT_PAUSE_COMMAND = re.compile(
     r"(?:(?:잠깐|잠깐만|잠시|잠시만)\s+)?"
     r"(?:(?:실험|프로토콜|안내|절차)(?:을|를)?\s*)?"
     r"(?:잠깐(?:만(?:요|예)?)?|잠시만(?:요)?|멈춰|멈처|정지|일시\s*정지|일시\s*중지|"
-    r"중지|중단|스톱|stop|pause)"
+    r"중지|중단|스톱|stop|pause|"
+    # "쫌만 기다려 봐", "잠깐 기다려 줘" (lane R part 2-b).
+    r"(?:(?:쫌|좀|조금|잠깐|잠시)\s*만?\s*)?기다려)"
     r"(?:\s*(?:봐|봐요|줘|줘요|요|해|해요|해줘|해\s*줘|주세요|해\s*주세요))?",
     re.I,
 )
@@ -2524,6 +2541,28 @@ END_CONFIRMATION_QUESTION = {
 END_REQUEST_HINT = {
     "ko": "실험을 끝내려면 '실험 종료'라고 말씀해 주세요.",
     "en": "To end the experiment, say 'end session'.",
+}
+#: The marks the server puts on an explanation the PDF does not give
+#: (decision D4): on the screen above it, and said before it.
+OUTSIDE_PDF_NOTICE = {"ko": "PDF 밖 설명이니 유의", "en": "Not from the PDF -- take care"}
+OUTSIDE_PDF_SPOKEN_LEAD = {
+    "ko": "PDF에는 따로 설명이 없어요.",
+    "en": "The PDF does not explain this.",
+}
+#: Said when a model answer was dropped by a check and the rules had none.
+ANSWER_NOT_CONFIRMED = {
+    "ko": "PDF에서 확인할 수 없어요.",
+    "en": "I could not confirm that in the PDF.",
+}
+#: A start said after the experiment ended (decision 2, 2026-10-03): an ended
+#: experiment is never started again by voice; the next one is chosen on the
+#: screen.
+EXPERIMENT_ENDED_START_REPLY = {
+    "ko": "이 실험은 이미 끝났어요. 다음 실험은 화면에서 프로토콜이나 세션을 골라 시작해 주세요.",
+    "en": (
+        "This experiment has already ended. To run the next one, choose a "
+        "protocol or session on the screen and start it there."
+    ),
 }
 
 
@@ -2578,6 +2617,9 @@ FRONT_RULES: dict[str, str] = {
     "repeat_last_reply": "F8 say it again, or the sound did not play",
     "cancel_background_job": "F9 cancel a read-only lookup",
     "targeted_completion": "a completion that names the current step (D2)",
+    "start_command": "an explicit start of an experiment that has never "
+                     "started, and any start or resume after it ended, "
+                     "which is not restarted by voice (decision 2, 2026-10-03)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2603,12 +2645,15 @@ class _OpenQuestions:
     note: bool
     stop: bool
     timer: bool
+    anomaly: bool = False
 
     @property
     def first_open(self) -> str | None:
         """The name of the question this turn can answer, or None."""
 
-        for name in ("completion", "observation", "transcript", "note", "stop", "timer"):
+        for name in (
+            "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
+        ):
             if getattr(self, name):
                 return name
         return None
@@ -2659,6 +2704,13 @@ _TIMER_QUERY_PATTERNS = (
     re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
     re.compile(r"^타임\s*(?:얼마나\s*남았어|몇\s*(?:분|초)\s*남았어|남은\s*시간\s*알려\s*(?:줘|주세요))$"),
     re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
+    # F6 (lane R part 2-b): "시간 얼마나 남았지", "Time 얼마나 남았어?". Whole
+    # utterances only: "시간이 얼마나 걸려?" asks the protocol, not the timer.
+    re.compile(
+        r"^(?:시간|타임|time)\s*(?:이|은)?\s*(?:얼마나|몇\s*분|몇\s*초)\s*(?:더\s*)?"
+        r"남았(?:지|어|어요|나|나요|니|습니까)?$",
+        re.I,
+    ),
     re.compile(r"^(?:how\s+much\s+time\s+(?:is\s+)?left|timer\s+status|how\s+long\s+remaining)\??$", re.I),
 )
 _PREVIEW_STEP_PATTERNS = (
@@ -5598,6 +5650,10 @@ class CuratedProtocolSession:
         #: (decision D6): a tool proposal that names a duration other than
         #: the source's asks it, and only a yes to it starts the timer.
         self._pending_timer_confirmation: dict[str, Any] | None = None
+        #: "이상 사항으로 기록할까요?" (decision 1), asked about an anomaly a
+        #: model proposed in words the rules do not read as a problem. Only
+        #: apply_tool_proposal opens it; a yes on the next turn records them.
+        self._pending_anomaly_confirmation: dict[str, Any] | None = None
         self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
@@ -5632,6 +5688,7 @@ class CuratedProtocolSession:
             self._pending_transcript_confirmation is not None,
             self._pending_stop_confirmation is not None,
             self._pending_timer_confirmation is not None,
+            self._pending_anomaly_confirmation is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
         ))
@@ -5809,6 +5866,14 @@ class CuratedProtocolSession:
             return
         if self._experiment_ended_at is None:
             self._experiment_ended_at = time.time() if now is None else now
+
+    def _experiment_ended(self) -> bool:
+        """The experiment ran and has ended: stopped, or every step completed."""
+
+        return (
+            self._experiment_started_at is not None
+            and self._experiment_ended_at is not None
+        )
 
     def _start_experiment_clock_once(self, now: float | None = None) -> bool:
         if self._experiment_started_at is not None:
@@ -7338,6 +7403,7 @@ class CuratedProtocolSession:
         self._pending_stop_confirmation = None
         self._frozen_question = None
         self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
         self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
@@ -7428,6 +7494,7 @@ class CuratedProtocolSession:
         self._pending_stop_confirmation = None
         self._frozen_question = None
         self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
         self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
@@ -7694,6 +7761,8 @@ class CuratedProtocolSession:
                 if self._frozen_question is not None else None,
                 dict(self._pending_timer_confirmation)
                 if self._pending_timer_confirmation is not None else None,
+                dict(self._pending_anomaly_confirmation)
+                if self._pending_anomaly_confirmation is not None else None,
             ),
         )
 
@@ -7752,6 +7821,10 @@ class CuratedProtocolSession:
             held = checkpoint[22] if len(checkpoint) >= 23 else (None, None)
             stop_pending, frozen = held[:2]
             timer_pending = held[2] if len(held) >= 3 else None
+            anomaly_pending = held[3] if len(held) >= 4 else None
+            self._pending_anomaly_confirmation = (
+                dict(anomaly_pending) if anomaly_pending is not None else None
+            )
             self._pending_stop_confirmation = (
                 dict(stop_pending) if stop_pending is not None else None
             )
@@ -7767,6 +7840,7 @@ class CuratedProtocolSession:
             self._pending_stop_confirmation = None
             self._frozen_question = None
             self._pending_timer_confirmation = None
+            self._pending_anomaly_confirmation = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -8680,12 +8754,16 @@ class CuratedProtocolSession:
                 "Have you completed the current step? No state has changed."
             )
             shown = question
-        elif kind == "timer":
-            self._pending_timer_confirmation = {
+        elif kind in {"timer", "anomaly"}:
+            reopened = {
                 **pending, "requested_turn_id": turn_id,
                 "requested_generation": generation,
                 "workflow_revision": self._revision,
             }
+            if kind == "timer":
+                self._pending_timer_confirmation = reopened
+            else:
+                self._pending_anomaly_confirmation = reopened
             question = str(pending.get("question") or "")
             shown = question
             if not question:
@@ -8727,6 +8805,7 @@ class CuratedProtocolSession:
         note_pending = self._pending_note_capture
         stop_pending = self._pending_stop_confirmation
         timer_pending = self._pending_timer_confirmation
+        anomaly_pending = self._pending_anomaly_confirmation
         pending_valid = bool(
             pending is not None
             and self.active
@@ -8828,6 +8907,24 @@ class CuratedProtocolSession:
                 or generation >= timer_pending.get("requested_generation")
             )
         )
+        anomaly_pending_valid = bool(
+            anomaly_pending is not None
+            and self.active
+            and self.current_index == anomaly_pending.get("step_index")
+            and self.fixture.steps[self.current_index].step_id
+            == anomaly_pending.get("step_id")
+            and self._revision == anomaly_pending.get("workflow_revision")
+            and turn_id == anomaly_pending.get("requested_turn_id", -2) + 1
+            and (
+                anomaly_pending.get("configuration_id") is None
+                or configuration_id == anomaly_pending.get("configuration_id")
+            )
+            and (
+                anomaly_pending.get("requested_generation") is None
+                or generation is None
+                or generation >= anomaly_pending.get("requested_generation")
+            )
+        )
         return _OpenQuestions(
             completion=pending_valid,
             observation=observation_pending_valid,
@@ -8835,6 +8932,7 @@ class CuratedProtocolSession:
             note=note_pending_valid,
             stop=stop_pending_valid,
             timer=timer_pending_valid,
+            anomaly=anomaly_pending_valid,
         )
 
     def _front_rule_for(
@@ -8855,6 +8953,20 @@ class CuratedProtocolSession:
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
+        if not self.active and (
+            (
+                intent.action in {
+                    CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
+                }
+                and self._experiment_ended()
+            )
+            or (
+                intent.action is CuratedProtocolAction.START
+                and intent.intent_kind == "workflow_command"
+                and self._experiment_started_at is None
+            )
+        ):
+            return "start_command"
         if (
             classified is not None
             and classified.action is CuratedProtocolAction.NEXT
@@ -8929,8 +9041,9 @@ class CuratedProtocolSession:
         commands, F4 a yes/no to an open question, F5 a reply while an
         endpoint question is open or an endpoint stated at a repeat-until
         step (D9), F6 time left, F7 "그거" (D3), F8 say it again, F9 cancel a
-        lookup, and a completion naming the current step (D2). F1, the
-        emergency gate, stays in server.py ahead of all planning.
+        lookup, a completion naming the current step (D2), and a start of an
+        experiment never started or already ended (decision 2, 2026-10-03).
+        F1, the emergency gate, stays in server.py ahead of all planning.
 
         This is plan() itself, stopped once the rules have read the turn. A
         front rule's turn is planned by the very branches plan() uses, so the
@@ -8982,6 +9095,7 @@ class CuratedProtocolSession:
             self._pending_note_capture,
             self._pending_stop_confirmation,
             self._pending_timer_confirmation,
+            self._pending_anomaly_confirmation,
         ) if front_only else None
         self._last_semantic_decision = None
         # The front rule that owns this turn, once one does (FRONT_RULES).
@@ -9011,6 +9125,10 @@ class CuratedProtocolSession:
         timer_pending_valid = open_questions.timer
         if timer_pending is not None and not timer_pending_valid:
             self._pending_timer_confirmation = None
+        anomaly_pending = self._pending_anomaly_confirmation
+        anomaly_pending_valid = open_questions.anomaly
+        if anomaly_pending is not None and not anomaly_pending_valid:
+            self._pending_anomaly_confirmation = None
         # The question this turn could answer, kept aside in case the turn is
         # a pause: the pause holds it, and the voice resume asks it again.
         open_question: dict[str, Any] | None = None
@@ -9035,6 +9153,12 @@ class CuratedProtocolSession:
                 "kind": "timer", "pending": dict(timer_pending),
                 "step_index": timer_pending.get("step_index"),
                 "step_id": timer_pending.get("step_id"),
+            }
+        elif anomaly_pending_valid and anomaly_pending is not None:
+            open_question = {
+                "kind": "anomaly", "pending": dict(anomaly_pending),
+                "step_index": anomaly_pending.get("step_index"),
+                "step_id": anomaly_pending.get("step_id"),
             }
         if pending is not None and not pending_valid:
             self._pending_completion_confirmation = None
@@ -9161,6 +9285,68 @@ class CuratedProtocolSession:
                 state_changed=False,
                 primary_text=response,
                 intent_kind="pending_timer_declined",
+            )
+            self._last_front_rule = "yes_no_open_question"
+            self._replay[turn_id] = plan
+            return plan
+        elif anomaly_pending_valid and transcript_quality is None and (
+            (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "affirmative"
+        ):
+            # A yes to "이상 사항으로 기록할까요?" (decision 1) records the
+            # words the question was asked about -- not this "네" -- as the
+            # model's anomaly would have been recorded.
+            said = str((anomaly_pending or {}).get("utterance") or "")
+            self._pending_anomaly_confirmation = None
+            self._last_front_rule = "yes_no_open_question"
+            key = _utterance_key(said)
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="pending_anomaly_confirmed",
+                    action=CuratedProtocolAction.REPORT_ANOMALY,
+                    question_kind="anomaly",
+                    reported_anomaly=True,
+                    anomaly_category=_anomaly_category(key),
+                    confidence_source="server_pending_anomaly_confirmation",
+                    language=language,
+                    normalized_transcript=key,
+                ),
+                transcript=said,
+                command_key=key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
+        elif anomaly_pending_valid and (
+            (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "negative"
+        ):
+            self._pending_anomaly_confirmation = None
+            response = {
+                "ko": "알겠습니다. 이상 사항으로 기록하지 않았습니다.",
+                "en": "Understood. Nothing was recorded as an issue.",
+            }.get(language, "알겠습니다. 이상 사항으로 기록하지 않았습니다.")
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.DECLINE_COMPLETION,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=self.fixture.steps[self.current_index].source_label,
+                final_step=self.current_index == len(self.fixture.steps) - 1,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="pending_anomaly_declined",
             )
             self._last_front_rule = "yes_no_open_question"
             self._replay[turn_id] = plan
@@ -9377,6 +9563,9 @@ class CuratedProtocolSession:
             if timer_pending_valid:
                 # And the timer duration question.
                 self._pending_timer_confirmation = None
+            if anomaly_pending_valid:
+                # And "이상 사항으로 기록할까요?".
+                self._pending_anomaly_confirmation = None
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
                 self._pending_note_capture = None
@@ -9686,6 +9875,7 @@ class CuratedProtocolSession:
                 self._pending_note_capture,
                 self._pending_stop_confirmation,
                 self._pending_timer_confirmation,
+                self._pending_anomaly_confirmation,
             ) = untouched
             return None
         return self._execute_turn_intent(
@@ -9732,6 +9922,31 @@ class CuratedProtocolSession:
         # Set when a voice resume lifts a pause that held a question; asked
         # again once the turn is planned.
         reasked_question: dict[str, Any] | None = None
+
+        if (
+            command in {CuratedProtocolAction.START, CuratedProtocolAction.RESUME}
+            and not self.active
+            and self._experiment_ended()
+        ):
+            # Decision 2 (2026-10-03): an ended experiment is not started
+            # again by voice -- a start used to begin it over from step 1,
+            # and a resume did the same through resume_workflow(). Nothing
+            # changes; the next experiment is chosen on the screen.
+            response = EXPERIMENT_ENDED_START_REPLY.get(
+                language, EXPERIMENT_ENDED_START_REPLY["ko"]
+            )
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.INACTIVE,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=None,
+                final_step=False,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="start_after_experiment_ended",
+            )
 
         if self._pause_state == "paused" and command not in {
             CuratedProtocolAction.RESUME,
@@ -9797,6 +10012,10 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.STOP:
             changed = self.active or self._experiment_started_at is not None
+            stopped_at = (
+                steps[self.current_index].source_label
+                if self.active and 0 <= self.current_index < len(steps) else None
+            )
             self.active = False
             self._block_reason = None
             self._workflow_status = "stopped"
@@ -9806,11 +10025,27 @@ class CuratedProtocolSession:
             self._pending_stop_confirmation = None
             self._frozen_question = None
             action = CuratedProtocolAction.STOP
-            response = {
-                "en": "The protocol session has ended without a completion claim.",
-                "vi": "Phiên quy trình đã kết thúc mà không xác nhận hoàn thành.",
-                "ko": "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
-            }.get(language, "프로토콜 세션을 종료했습니다.")
+            if changed and stopped_at is not None:
+                # Decision 2: how the experiment ended, said as it happened.
+                # Whether the record was saved is the server's to add, once
+                # the report store has answered.
+                response = {
+                    "en": f"The experiment was ended at step {stopped_at}.",
+                    "vi": f"Thí nghiệm đã kết thúc ở bước {stopped_at}.",
+                    "ko": f"{stopped_at}단계에서 실험을 종료했습니다.",
+                }.get(language, f"{stopped_at}단계에서 실험을 종료했습니다.")
+            elif changed:
+                response = {
+                    "en": "The experiment was ended.",
+                    "vi": "Thí nghiệm đã kết thúc.",
+                    "ko": "실험을 종료했습니다.",
+                }.get(language, "실험을 종료했습니다.")
+            else:
+                response = {
+                    "en": "The protocol session has ended without a completion claim.",
+                    "vi": "Phiên quy trình đã kết thúc mà không xác nhận hoàn thành.",
+                    "ko": "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
+                }.get(language, "프로토콜 세션을 종료했습니다.")
             plan = CuratedProtocolTurnPlan(
                 action=action,
                 display_text=response,
@@ -11236,21 +11471,15 @@ class CuratedProtocolSession:
                 self._block_reason = "final_step_boundary"
                 self._pending_anomaly = None
                 step = steps[self.current_index]
+                # Decision 2 (2026-10-03): the experiment ended by finishing
+                # every step. Whether the record was saved is the server's to
+                # add, once the report store has answered.
                 if language == "ko":
-                    speech = (
-                        f"마지막 {step.source_label}단계까지 진행했습니다. "
-                        "실험을 완료로 기록하고 전체 경과 시간을 멈췄습니다."
-                    )
+                    speech = "모든 단계를 마쳐 실험이 끝났습니다."
                 elif language == "vi":
-                    speech = (
-                        f"Đã đến bước cuối {step.source_label}. "
-                        "Phiên được ghi là hoàn thành và đồng hồ thí nghiệm đã dừng."
-                    )
+                    speech = "Đã hoàn thành tất cả các bước, thí nghiệm đã kết thúc."
                 else:
-                    speech = (
-                        f"The final step {step.source_label} has been reached. "
-                        "The experiment is recorded as completed and the overall timer has stopped."
-                    )
+                    speech = "Every step is done, so the experiment has ended."
                 response = _step_reply(
                     language,
                     step.source_label,
@@ -12407,6 +12636,228 @@ class CuratedProtocolSession:
             transcript_unreliable=transcript_quality is not None,
         )
 
+    def router_context(
+        self,
+        *,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+    ) -> RouterContext:
+        """What the router model is shown this turn (design §3-1, D13). Reads only.
+
+        The snapshot is the server's state now; the protocol part is the
+        current step with the two on either side and their facts, every
+        step's label and title, the protocol-wide facts and the protocol's
+        terms. Each fact carries an id ("S7.current_step", "P.protocol_purpose")
+        an answer cites, and its reviewed Korean reading where there is one.
+        """
+
+        steps = self.fixture.steps
+        index = self.current_index if 0 <= self.current_index < len(steps) else 0
+        titles = {
+            step.step_id: section.title_source_text
+            for section in self.fixture.draft.protocol.sections
+            for step in section.steps
+        }
+        evidence: dict[str, tuple[str, int]] = {}
+        localized: dict[str, str] = {}
+
+        def entry(fact_id: str, fact: CuratedProtocolFact, step_id: str | None) -> dict[str, Any]:
+            evidence[fact_id] = (fact.text, fact.source_page)
+            item: dict[str, Any] = {
+                "id": fact_id, "kind": fact.kind, "text": fact.text, "page": fact.source_page,
+            }
+            reading = self._localized_fact(step_id, fact.fact_id) if step_id else None
+            if reading:
+                localized[fact_id] = reading
+                item["ko"] = reading
+            return item
+
+        near = []
+        for at in range(max(0, index - 2), min(len(steps), index + 3)):
+            step = steps[at]
+            near.append({
+                "label": step.source_label,
+                "title": titles.get(step.step_id, ""),
+                "current": bool(self.active and at == index),
+                "source_timer_seconds": self.timer_seconds_for_step(at) or None,
+                "facts": [
+                    entry(f"S{step.source_label}.{fact.fact_id}", fact, step.step_id)
+                    for fact in self.fixture.facts_for_step(at)
+                ],
+            })
+        protocol_facts: list[dict[str, Any]] = []
+        try:
+            view = ProtocolKnowledgeView.from_fixture(self.fixture)
+        except CuratedProtocolFixtureError:
+            view = None
+        if view is not None:
+            for fact in (view.purpose, *view.before_start, *view.materials,
+                         *view.equipment, *view.safety):
+                protocol_facts.append(entry(f"P.{fact.fact_id}", fact, None))
+        terms = tuple(term.text for term in self._protocol_vocabulary().terms)
+        protocol = {
+            "title": self.fixture.title,
+            "step_count": len(steps),
+            "steps_near_current": near,
+            "all_steps": [
+                {
+                    "label": step.source_label,
+                    "title": titles.get(step.step_id, ""),
+                    "summary": " ".join(step.instruction_source_text.split())[:80],
+                }
+                for step in steps
+            ],
+            "protocol_facts": protocol_facts,
+            "terms": list(terms),
+        }
+        if self.active:
+            phase = "paused" if self._pause_state == "paused" else "active"
+        elif self._experiment_ended():
+            phase = "completed" if self._workflow_status == "completed" else "stopped"
+        else:
+            phase = "not_started"
+        timer = self.timer_status()
+        snapshot = {
+            "protocol_title": self.fixture.title,
+            "step_count": len(steps),
+            "phase": phase,
+            "current_step": steps[index].source_label if self.active else None,
+            "open_question": self._open_questions(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ).first_open,
+            "step_timer": {
+                "state": timer.get("state"),
+                "step": timer.get("step_label"),
+                "remaining_seconds": timer.get("remaining_seconds"),
+                "duration_seconds": timer.get("duration_seconds"),
+            },
+            "workflow_revision": self._revision,
+            "reply_language": language,
+        }
+        return RouterContext(
+            snapshot=snapshot, protocol=protocol, evidence=evidence,
+            localized=localized, terms=terms,
+            server_values=ServerValues(
+                title=self.fixture.title,
+                revision_id=self.fixture.revision_id,
+                hashes=tuple(
+                    item for item in (
+                        self.fixture.fixture_sha256, self.fixture.source_pdf_sha256,
+                    ) if item
+                ),
+                step_count=len(steps),
+                current_step_label=steps[index].source_label if self.active else None,
+            ),
+        )
+
+    def apply_router_answer(
+        self,
+        answer: RouterAnswer,
+        context: RouterContext,
+        *,
+        turn_id: int,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """A model's checked answer as this turn's plan. Nothing changes.
+
+        Reached only for a turn front_plan() handed on, after the server's
+        checks passed. A one-turn question left open lapses, as it does when
+        plan() reads any reply that is not its answer.
+        """
+
+        if turn_id in self._replay:
+            return self._replay[turn_id]
+        self._last_semantic_decision = None
+        self._last_front_rule = None
+        self._pending_completion_confirmation = None
+        self._pending_transcript_confirmation = None
+        self._pending_note_capture = None
+        self._pending_stop_confirmation = None
+        self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
+        cited = tuple(item for item in answer.evidence_ids if item in context.evidence)
+        facts = tuple(
+            CuratedProtocolFact(item, "router_evidence", *context.evidence[item])
+            for item in cited
+        )
+        body = answer.display or answer.spoken
+        spoken = answer.spoken
+        outside = answer.source_kind == "outside_pdf"
+        # The body, its source, the citation and the outside-PDF mark go to
+        # the screen as separate values: no label is written into the text
+        # (lane N's screen draws them).
+        sections: list[dict[str, Any]] = []
+        if outside:
+            # Decision D4: the server's own marks, never the model's words.
+            sections.append({"kind": "notice", "text": OUTSIDE_PDF_NOTICE.get(
+                language, OUTSIDE_PDF_NOTICE["ko"])})
+            spoken = f"{OUTSIDE_PDF_SPOKEN_LEAD.get(language, OUTSIDE_PDF_SPOKEN_LEAD['ko'])} {spoken}"
+        sections.append({"kind": "section", "heading": "", "text": body})
+        if facts:
+            sections.append({"kind": "source", "text": "\n\n".join(fact.text for fact in facts)})
+            sections.append({"kind": "citation", "text": ", ".join(
+                f"{fact.fact_id} · p.{fact.source_page}" for fact in facts
+            )})
+        step = self.fixture.steps[self.current_index] if self.active else None
+        plan = CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.QUESTION,
+            display_text=body,
+            speech_text=spoken,
+            speech_mode=(
+                CuratedProtocolSpeechMode.VERIFIED_FACT
+                if answer.source_kind == "pdf" else CuratedProtocolSpeechMode.CONTROL
+            ),
+            facts=facts,
+            step_label=step.source_label if step is not None else None,
+            final_step=bool(step is not None and self.current_index == len(self.fixture.steps) - 1),
+            state_changed=False,
+            fact_id=cited[0] if cited else None,
+            primary_text=body,
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=cited,
+            translation_status="llm_router_answer",
+            intent_kind="llm_router_answer",
+            answer_origin=(
+                "supplemental_model_knowledge" if outside else "current_protocol"
+            ),
+            limitations=(("outside_pdf_explanation",) if outside else ()),
+            display_document={
+                "title": f"{step.source_label}단계" if step is not None else "",
+                "sections": sections,
+            },
+        )
+        self._replay[turn_id] = plan
+        if len(self._replay) > 64:
+            self._replay.pop(next(iter(self._replay)))
+        return plan
+
+    def answer_not_confirmed(
+        self, *, turn_id: int, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """"PDF에서 확인할 수 없어요." for a turn whose model answer was dropped.
+
+        Only where the rules had no answer either -- a scope reminder or an
+        unsupported question that changed nothing; any other rules' reply
+        stands.
+        """
+
+        plan = self._replay.get(turn_id)
+        if plan is None or plan.state_changed or plan.action not in {
+            CuratedProtocolAction.OFF_TOPIC, CuratedProtocolAction.UNSUPPORTED,
+        }:
+            return None
+        text = ANSWER_NOT_CONFIRMED.get(language, ANSWER_NOT_CONFIRMED["ko"])
+        replaced = replace(
+            plan, display_text=text, speech_text=text, primary_text=text,
+            source_texts=(), source_pages=(), evidence_ids=(), display_document=None,
+            intent_kind="router_answer_not_confirmed",
+        )
+        self._replay[turn_id] = replaced
+        return replaced
+
     def apply_tool_proposal(
         self,
         proposals: Sequence[ToolProposal | str],
@@ -12466,6 +12917,7 @@ class CuratedProtocolSession:
         self._pending_note_capture = None
         self._pending_stop_confirmation = None
         self._pending_timer_confirmation = None
+        self._pending_anomaly_confirmation = None
         execute = dict(
             transcript=transcript,
             command_key=_utterance_key(transcript),
@@ -12514,6 +12966,12 @@ class CuratedProtocolSession:
         if verdict.question == "timer":
             plan = self._ask_timer_duration(
                 facts, turn_id=turn_id, generation=generation,
+                configuration_id=configuration_id, language=language,
+            )
+            return AppliedToolProposal(verdict, plan)
+        if verdict.question == "anomaly":
+            plan = self._ask_anomaly_record(
+                transcript, turn_id=turn_id, generation=generation,
                 configuration_id=configuration_id, language=language,
             )
             return AppliedToolProposal(verdict, plan)
@@ -12639,6 +13097,47 @@ class CuratedProtocolSession:
         self._replay[turn_id] = plan
         return plan
 
+    def _ask_anomaly_record(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        generation: int | None,
+        configuration_id: int | None,
+        language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """"이상 사항으로 기록할까요?" -- nothing is recorded yet (decision 1)."""
+
+        step = self.fixture.steps[self.current_index]
+        question = (
+            "이상 사항으로 기록할까요?" if language == "ko" else
+            "Should I record this as an issue?"
+        )
+        self._pending_anomaly_confirmation = {
+            "configuration_id": configuration_id,
+            "requested_turn_id": turn_id,
+            "requested_generation": generation,
+            "workflow_revision": self._revision,
+            "step_index": self.current_index,
+            "step_id": step.step_id,
+            "utterance": transcript.strip()[:800],
+            "question": question,
+        }
+        plan = CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            display_text=question,
+            speech_text=question,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=(),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=question,
+            intent_kind="anomaly_record_confirmation_required",
+        )
+        self._replay[turn_id] = plan
+        return plan
+
     def _ask_open_question_again(
         self,
         kind: str,
@@ -12699,6 +13198,13 @@ class CuratedProtocolSession:
             }
             action = CuratedProtocolAction.STOP
             question = END_CONFIRMATION_QUESTION.get(language, END_CONFIRMATION_QUESTION["ko"])
+        elif kind == "anomaly":
+            self._pending_anomaly_confirmation = {
+                **(self._pending_anomaly_confirmation or {}),
+                "requested_turn_id": turn_id, "requested_generation": generation,
+            }
+            action = CuratedProtocolAction.CLARIFY_PARAMETER
+            question = str((self._pending_anomaly_confirmation or {}).get("question") or "")
         else:
             self._pending_timer_confirmation = {
                 **(self._pending_timer_confirmation or {}),
@@ -12773,10 +13279,9 @@ class CuratedProtocolSession:
                 f"Step {label} is already in progress. Nothing was restarted."
             )
         elif code == "session_ended":
-            response = (
-                "이미 끝난 실험이라 처음부터 다시 시작하지 않았습니다."
-                if ko else
-                "This experiment has ended, so it was not restarted from step 1."
+            action = CuratedProtocolAction.INACTIVE
+            response = EXPERIMENT_ENDED_START_REPLY.get(
+                language, EXPERIMENT_ENDED_START_REPLY["ko"]
             )
         elif code == "end_word_missing":
             response = END_REQUEST_HINT.get(language, END_REQUEST_HINT["ko"]) + (

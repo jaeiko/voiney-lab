@@ -13,20 +13,28 @@ source-linked protocol evidence.
    through a tool call -- passes the server's identity, revision, observation,
    timer, confirmation, and safety gates, and is carried out by the existing
    curated state machine (`CuratedProtocolSession`), never by a second one.
-3. Deterministic front rules read every turn first and never wait on a model:
-   the emergency gate in `server.py`, then `CuratedProtocolSession.front_plan`
-   (transcript quality, pause and "종료" words, a yes/no to an open question,
-   replies while an endpoint question is open, timer status, "그거", repeat,
-   cancel, and a completion naming the current step). Behind them, intent judgment belongs to one LLM
-   router: it answers, or proposes one change through its two tools
-   (`change_state`, `record_log` in `llm_router.py`); the server validates the
-   proposal (`validate_tool_proposals`) and carries it out through
-   `CuratedProtocolSession.apply_tool_proposal`. Until that router is wired and
-   enabled (it is not yet), the shared `RequestArbitration` boundary and the
-   curated rules remain the classification path for learning, audit, history,
-   uncertainty, combined, visual, current-step, and state-control requests. Do
-   not add any other competing intent classifier in a helper or prompt.
-   (Decision D1, 2026-10-02.)
+3. A turn is routed along one line: deterministic front rules, then the LLM
+   router, then server validation. The front rules read every turn first and
+   never wait on a model: the emergency gate in `server.py`, then
+   `CuratedProtocolSession.front_plan` (transcript quality, pause and "종료"
+   words, a yes/no to an open question, replies while an endpoint question is
+   open, timer status, "그거", repeat, cancel, a completion naming the current
+   step, and a start of an experiment never started or already ended).
+   Behind them, intent judgment belongs to the LLM router
+   (`llm_router.route_turn_with_llm_router`): it answers, or proposes one
+   change through its two tools (`change_state`, `record_log`); the server
+   validates the proposal (`validate_tool_proposals`) and carries it out
+   through `CuratedProtocolSession.apply_tool_proposal`. Use the router
+   actively within this line, including choosing the model or tool for the
+   situation. The one thing forbidden is two different paths each deciding the
+   same turn's state change on their own: do not add a parallel router,
+   classifier or prompt that decides state apart from this line. The rules'
+   own path (the shared `RequestArbitration` boundary and the curated rules)
+   is the classification path when the router is off
+   (`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED`, false by default), and with it
+   on it is the same turn's fallback when the model is late, fails, is
+   refused, or its answer fails a check -- never a second decision beside the
+   model's. (Decision D1, 2026-10-02; decision of 2026-10-03.)
 4. A read-only request must leave all workflow checkpoints unchanged. Combined
    “explain + next” requests stage an explicit completion confirmation.
 5. Provider/model failures are visible, bounded, and non-mutating. External web
@@ -53,8 +61,10 @@ source-linked protocol evidence.
 - `curated_protocol.py`: source-bounded plan and checkpoint state machine;
   `front_plan` (the front rules) and `apply_tool_proposal` (a validated
   router proposal through the same branches).
-- `llm_router.py`: the LLM router's two tool schemas and the server's
-  validation of a proposal; no model call, no state, not wired yet.
+- `llm_router.py`: the LLM router -- its setting (off by default), the two
+  tool schemas and the answer function, the one model call per turn, the
+  server's validation of a proposal and the answer checks it applies, and
+  the fallback to the rules' path; no state of its own.
 - `answer_checks.py`: server checks on a model-written answer (numbers,
   state-change claims, display labels, outside-PDF explanations, server
   values), shared by every answering role.

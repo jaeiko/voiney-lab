@@ -4366,7 +4366,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             ),
             "시작 전에는 깨끗한 작업면과 도구를 준비하고, 화면의 검증된 재료와 장비 목록을 확인해 주세요.",
             "실험을 종료할까요?",
-            "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
+            "2단계에서 실험을 종료했습니다.",
         ])
         self.assertNotIn(step_one, spoken[:5])
         self.assertNotIn(step_two, spoken[:5])
@@ -4415,7 +4415,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(replies[7], "실험을 종료할까요?")
         self.assertEqual(
             replies[8],
-            "완료로 처리하지 않고 프로토콜 세션을 종료했습니다.",
+            "2단계에서 실험을 종료했습니다.",
         )
         states = [
             item for item in socket.text
