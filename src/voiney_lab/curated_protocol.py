@@ -5483,6 +5483,26 @@ _SOURCE_NEGATION = re.compile(
 _KOREAN_NEGATION = re.compile(
     r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피(?:하|합|해|했|할)|못\s|않)"
 )
+#: A source word negated by its "un-" prefix ("uninoculated", "unlabelled",
+#: "unopened"), not a word that merely begins with "un" ("until", "uniform",
+#: "unit", "under", "unique", "universal", "union", "unless").
+_SOURCE_UN_WORD = re.compile(
+    r"\bun(?!til\b|der|it|iform|ique|ivers|ion|less\b)[a-z]{3,}", re.IGNORECASE,
+)
+#: The Korean that renders one: "접종하지 않은", "붙지 않은", "처리되지 않은".
+_KOREAN_UN_RENDERING = re.compile(r"지\s*않은")
+
+
+def _without_un_renderings(source: str, reading: str) -> str:
+    """The reading with one "~지 않은" taken out per "un-" word of the source.
+
+    Lane R3, decision 9: "uninoculated" read as "접종하지 않은" (or "비접종")
+    says the same thing, so it is not a negation the reading added. Each
+    "un-" word covers one rendering only; a further negation still counts.
+    """
+
+    count = len(_SOURCE_UN_WORD.findall(source))
+    return _KOREAN_UN_RENDERING.sub(" ", reading, count=count) if count else reading
 #: Protocol terms a Korean reading may put in Korean. The terms a reading
 #: must keep in their original spelling are the names of reagents,
 #: materials and equipment (resource names, "Solution A", defined
@@ -5592,7 +5612,8 @@ def reader_translation_issue(
     if _count_quantities(_normalized_counts(source)) != _count_quantities(
             _normalized_counts(reading)):
         return "quantities_changed"
-    if bool(_SOURCE_NEGATION.search(source)) != bool(_KOREAN_NEGATION.search(reading)):
+    if bool(_SOURCE_NEGATION.search(source)) != bool(
+            _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
         return "negation_changed"
     folded = text.casefold()
     for term in required_terms:
