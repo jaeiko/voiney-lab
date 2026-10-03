@@ -18,7 +18,13 @@ import unittest
 from unittest.mock import patch
 
 from tests.protocol_vocabulary_support import SOURCE_PDF, miniprep_fixture
-from tests.router_fakes import FakeRouterClient, answer_reply, text_reply, tool_reply
+from tests.router_fakes import (
+    FakeRouterClient,
+    answer_call_reply,
+    answer_reply,
+    text_reply,
+    tool_reply,
+)
 from tests.test_voice_pause_resume_persistence import VoiceSessionHarness
 from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
 from voiney_lab.llm_router import (
@@ -119,9 +125,9 @@ class RoutingTests(unittest.TestCase):
         request = client.requests[0]
         self.assertEqual(request["model"], "fake-router-model")
         self.assertEqual([tool["function"]["name"] for tool in request["tools"]],
-                         ["change_state", "record_log"])
+                         ["answer", "change_state", "record_log"])
         self.assertEqual((request["tool_choice"], request["temperature"], request["stream"]),
-                         ("auto", 0, True))
+                         ("required", 0, True))
         roles = [message["role"] for message in request["messages"]]
         self.assertEqual(roles, ["system", "system", "system", "system", "user"])
         self.assertEqual(request["messages"][0]["content"], ROUTER_SYSTEM_PROMPT)
@@ -253,6 +259,45 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(outcome.reply.usage["prompt_tokens"], 1200)
         self.assertIn("first_token_ms", outcome.timings_ms)
         self.assertIn("model_ms", outcome.timings_ms)
+
+
+class AnswerCallTests(unittest.TestCase):
+    """The answer offered as a function, one call required (after the first
+    real evaluation run, where a model called change_state for questions)."""
+
+    def test_an_answer_call_is_an_answer(self) -> None:
+        session = _session()
+        seen = []
+
+        async def progress(state):
+            seen.append(state)
+
+        outcome, _ = _route(session, "뭘로 용출해?", FakeRouterClient(answer_call_reply(
+            "50 µL water로 용출합니다.", evidence_ids=("S4.current_step",),
+        )), progress=progress)
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, "50 µL water로 용출합니다.")
+        self.assertEqual(seen, ["composing"])
+
+    def test_a_state_tool_beside_an_answer_is_what_is_ruled_on(self) -> None:
+        session = _session()
+        both = tool_reply(
+            ("answer", {"spoken": "네", "source_kind": "none", "evidence_ids": []}),
+            ("record_log", {"type": "anomaly", "value": "원심분리기에서 이상한 소리가 나",
+                            "evidence": "원심분리기에서 이상한 소리가 나"}),
+        )
+        outcome, _ = _route(session, "원심분리기에서 이상한 소리가 나", FakeRouterClient(both))
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+
+    def test_two_answers_are_unreadable(self) -> None:
+        session = _session()
+        two = tool_reply(
+            ("answer", {"spoken": "하나", "source_kind": "none", "evidence_ids": []}),
+            ("answer", {"spoken": "둘", "source_kind": "none", "evidence_ids": []}),
+        )
+        outcome, _ = _route(session, "버퍼 1은 뭐야?", FakeRouterClient(two))
+        self.assertEqual(outcome.fallback_reason, "answer_unreadable")
 
 
 class _FakeAsyncOpenAI:

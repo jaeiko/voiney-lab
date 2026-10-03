@@ -46,6 +46,45 @@ def introduces_numbers(answer: str, evidence: str) -> bool:
     return not numbers_in(answer).issubset(numbers_in(evidence))
 
 
+#: Any number, whatever follows it: "15분", "37도", "800 rpm", "0.5", "1,000".
+#: NUMERIC above knows only Latin units, so "20분" passed it unread.
+_BARE_NUMBER = re.compile(r"(?<![\d.,])\d+(?:[.,]\d+)*")
+#: A reference to a step by its number: "3단계", "3번째 단계", "step 3".
+_STEP_REFERENCE = re.compile(r"(\d+)\s*(?:번째\s*)?단계|\bsteps?\s+(\d+)", re.I)
+
+
+def _bare_numbers(value: str) -> set[str]:
+    found = set()
+    for match in _BARE_NUMBER.findall(unicodedata.normalize("NFKC", value)):
+        number = match.replace(",", "")
+        if "." in number:
+            number = number.rstrip("0").rstrip(".") or "0"
+        found.add(number.lstrip("0") or "0")
+    return found
+
+
+def introduces_bare_numbers(
+    answer: str, evidence: str, *, step_labels: Iterable[str] = (),
+) -> bool:
+    """True when ``answer`` says any number ``evidence`` does not (lane R).
+
+    Stricter than introduces_numbers: the unit does not matter, so "15분"
+    needs a 15 in the evidence ("15min", "00:15:00"). A step named by a
+    label the protocol has ("3단계") is a reference, not a quantity.
+    """
+
+    labels = {str(label) for label in step_labels}
+
+    def drop_step_reference(match: re.Match[str]) -> str:
+        label = next(group for group in match.groups() if group is not None)
+        return "" if label in labels else match.group(0)
+
+    said = _bare_numbers(
+        _STEP_REFERENCE.sub(drop_step_reference, unicodedata.normalize("NFKC", answer))
+    )
+    return not said.issubset(_bare_numbers(evidence))
+
+
 # --- Claims that state changed -------------------------------------------------
 
 #: The answer says it saved, recorded or completed something. Moved unchanged

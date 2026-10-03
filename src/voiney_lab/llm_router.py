@@ -54,6 +54,7 @@ from voiney_lab.answer_checks import (
     ServerValues,
     claims_state_change,
     display_label_violations,
+    introduces_bare_numbers,
     introduces_numbers,
     outside_pdf_violations,
     server_value_violations,
@@ -151,6 +152,38 @@ RECORD_LOG_TOOL: dict[str, Any] = {
 
 #: The tools offered to the model, in the order they are advertised.
 ROUTER_TOOLS: tuple[dict[str, Any], ...] = (CHANGE_STATE_TOOL, RECORD_LOG_TOOL)
+
+ANSWER = "answer"
+#: The answer, offered as a function beside the two tools so that a reply is
+#: always exactly one call. It is an output format, not a tool: calling it
+#: changes nothing, and the server checks what it carries like any answer.
+ANSWER_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": ANSWER,
+        "description": (
+            "Answer the researcher. Use this for every question and remark: "
+            "it changes nothing. 'spoken' is what is said aloud."
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "spoken": {"type": "string", "minLength": 1, "maxLength": 400},
+                "display": {"type": "string", "maxLength": 1200},
+                "source_kind": {
+                    "type": "string",
+                    "enum": ["pdf", "outside_pdf", "server_state", "none"],
+                },
+                "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                "outside_pdf_term": {"type": "string"},
+            },
+            "required": ["spoken", "source_kind", "evidence_ids"],
+        },
+    },
+}
+#: What a router call offers: the answer and the two tools, one call required.
+ROUTER_CALL_TOOLS: tuple[dict[str, Any], ...] = (ANSWER_TOOL, *ROUTER_TOOLS)
 
 #: Every reason a proposal can be refused, with what it means. A verdict
 #: carries one of these, or "accepted".
@@ -644,12 +677,11 @@ Each turn you get, in this order:
 
 Most turns are questions or remarks: answer them. A question -- anything asking what, which, how much, how long, at what temperature, why, or whether -- is always answered and never acted on, even when it mentions a timer, a step, starting, finishing or ending. Use a tool only when the researcher tells you, in this turn, to do something now.
 
-Do exactly one of these.
+Reply with exactly one function call: answer, change_state or record_log.
 
 1. Call change_state when, in THIS turn, the researcher asks to start the experiment, says the current step is done or asks to go to the next step, asks to end the experiment (only with 종료), to pause, to resume, or to start the step timer. evidence = the exact words from this turn that ask for it. The server asks the researcher to confirm "next" and "stop"; never call next when they say the step is not done.
 2. Call record_log when the researcher asks to write something down (메모, 기록, 관찰, 적어, note, record) or reports a problem or anomaly. value = their own words, unchanged.
-3. Otherwise answer with ONE JSON object and nothing else:
-{"spoken": "...", "display": "...", "source_kind": "pdf" | "outside_pdf" | "server_state" | "none", "evidence_ids": ["..."], "outside_pdf_term": null}
+3. Otherwise call answer: spoken, display, source_kind ("pdf" | "outside_pdf" | "server_state" | "none"), evidence_ids, and outside_pdf_term only for an outside_pdf answer.
 
 Never call a tool for a question, a hypothetical, a plan or wish, a step other than the current one, or to skip steps. At most one tool call.
 
@@ -766,16 +798,17 @@ async def call_router_model(
 ) -> RouterModelReply:
     """One streamed chat completion with the two tools offered.
 
-    ``on_first_content`` runs once, when the first answer text (not a tool
-    call) arrives, so the caller can say it is composing.
+    ``on_first_content`` runs once, when the answer starts to arrive -- the
+    answer function's name, or answer text -- so the caller can say it is
+    composing. A state tool call never triggers it.
     """
 
     started = clock()
     stream = await client.chat.completions.create(
         model=model,
         messages=list(messages),
-        tools=list(ROUTER_TOOLS),
-        tool_choice="auto",
+        tools=list(ROUTER_CALL_TOOLS),
+        tool_choice="required",
         temperature=0,
         max_tokens=max_output_tokens,
         stream=True,
@@ -809,6 +842,12 @@ async def call_router_model(
                 if function is not None:
                     slot[0] += getattr(function, "name", None) or ""
                     slot[1] += getattr(function, "arguments", None) or ""
+                    if (
+                        slot[0] == ANSWER and not composing_said
+                        and on_first_content is not None
+                    ):
+                        composing_said = True
+                        await on_first_content()
     return RouterModelReply(
         content="".join(content).strip(),
         tool_calls=tuple((name, arguments) for name, arguments in (
@@ -838,14 +877,17 @@ class RouterAnswer:
     outside_pdf_term: str | None
 
 
-def parse_router_answer(content: str) -> RouterAnswer | None:
-    """The answer object, or None when the reply is not one."""
+def parse_router_answer(content: str | Mapping[str, Any]) -> RouterAnswer | None:
+    """The answer object (the answer call's arguments, or a JSON reply), or None."""
 
-    text = _FENCE.sub("", content.strip())
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        return None
+    if isinstance(content, Mapping):
+        value: object = content
+    else:
+        text = _FENCE.sub("", content.strip())
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(value, Mapping):
         return None
     spoken = value.get("spoken")
@@ -891,15 +933,21 @@ def answer_check_failures(
         failures.append("evidence_id_unknown")
     if answer.source_kind == "pdf" and not cited:
         failures.append("pdf_answer_without_evidence")
-    # A number may only be one the cited source says (or, for the state, the
-    # snapshot); an answer citing nothing may say none.
+    # A number may only be one the cited source says; an answer that cites
+    # nothing may only repeat a number it was shown (the snapshot, or a
+    # fact, as in "Buffer 1"); an outside-PDF one may say none (D4, below).
     if answer.source_kind == "pdf":
         grounding = context.evidence_text(cited)
-    elif answer.source_kind == "server_state":
-        grounding = json.dumps(context.snapshot, ensure_ascii=False)
-    else:
+    elif answer.source_kind == "outside_pdf":
         grounding = ""
-    if introduces_numbers(body, grounding):
+    else:
+        grounding = "\n".join((
+            json.dumps(context.snapshot, ensure_ascii=False), context.evidence_text(),
+        ))
+    labels = [str(step.get("label")) for step in context.protocol.get("all_steps", ())]
+    if introduces_numbers(body, grounding) or introduces_bare_numbers(
+        body, grounding, step_labels=labels,
+    ):
         failures.append("number_not_in_source")
     if claims_state_change(body):
         failures.append("claims_state_change")
@@ -1046,8 +1094,11 @@ async def route_turn_with_llm_router(
     if reply.first_token_ms is not None:
         timings["first_token_ms"] = reply.first_token_ms
 
-    if reply.tool_calls:
-        proposals = tuple(parse_tool_call(name, arguments) for name, arguments in reply.tool_calls)
+    state_calls = tuple(item for item in reply.tool_calls if item[0] != ANSWER)
+    answer_calls = tuple(item for item in reply.tool_calls if item[0] == ANSWER)
+    if state_calls:
+        # A state tool beside an answer: the proposal is what is ruled on.
+        proposals = tuple(parse_tool_call(name, arguments) for name, arguments in state_calls)
         facts = session.router_turn_facts(
             transcript, turn_id=turn_id, language=language,
             transcript_quality=transcript_quality, configuration_id=configuration_id,
@@ -1072,9 +1123,11 @@ async def route_turn_with_llm_router(
             proposals=proposals, reply=reply, timings_ms=timings,
         )
 
-    if not reply.content:
+    if len(answer_calls) > 1:
+        return await fall_back("answer_unreadable", reply=reply)
+    if not answer_calls and not reply.content:
         return await fall_back("no_reply", reply=reply)
-    answer = parse_router_answer(reply.content)
+    answer = parse_router_answer(answer_calls[0][1] if answer_calls else reply.content)
     if answer is None:
         return await fall_back("answer_unreadable", reply=reply)
     failures = list(answer_check_failures(answer, context, utterance=transcript))

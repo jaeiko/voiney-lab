@@ -46,6 +46,25 @@ def answer_reply(
     return [_chunk(content=text[:half]), _chunk(content=text[half:]), _chunk(usage=_usage())]
 
 
+def answer_call_reply(
+    spoken: str,
+    *,
+    display: str = "",
+    source_kind: str = "pdf",
+    evidence_ids: tuple[str, ...] = (),
+    outside_pdf_term: str | None = None,
+) -> list:
+    """The chunks of an answer given as a call to the answer function."""
+
+    arguments: dict[str, Any] = {
+        "spoken": spoken, "display": display, "source_kind": source_kind,
+        "evidence_ids": list(evidence_ids),
+    }
+    if outside_pdf_term is not None:
+        arguments["outside_pdf_term"] = outside_pdf_term
+    return tool_reply(("answer", arguments))
+
+
 def text_reply(text: str) -> list:
     return [_chunk(content=text), _chunk(usage=_usage())]
 

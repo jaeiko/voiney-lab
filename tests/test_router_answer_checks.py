@@ -98,6 +98,18 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(self.failures(_answer("500 µL로 씻습니다.", ids=("S3.current_step",))), ())
         self.assertIn("number_not_in_source",
                       self.failures(_answer("보통 37°C에서 해요.", kind="none", ids=())))
+        # Citing nothing, a number the model was shown may be repeated.
+        self.assertEqual(self.failures(_answer("Buffer 1은 PDF에 설명이 없어요.", kind="none", ids=())), ())
+
+    def test_every_number_whatever_its_unit(self) -> None:
+        # Found by the first real calls: "20분", "37도" carry no Latin unit,
+        # so the moved NUMERIC check never read them.
+        self.assertEqual(self.failures(_answer("50 µL 물로 용출해요. 4단계예요.")), ())
+        for spoken in ("40분 동안 용출해요.", "70도에서 용출해요.", "60 µL로 용출해요."):
+            with self.subTest(spoken):
+                self.assertIn("number_not_in_source", self.failures(_answer(spoken)))
+        self.assertIn("number_not_in_source",
+                      self.failures(_answer("지금 12단계예요.", kind="server_state", ids=())))
 
     def test_no_claim_that_anything_changed(self) -> None:
         for spoken in ("5단계로 넘어갔습니다.", "말씀하신 내용을 기록했습니다.", "타이머를 시작했어요."):
@@ -145,6 +157,26 @@ class CheckTests(unittest.TestCase):
             "outside_pdf_term_without_outside_pdf",
             self.failures(_answer("50 µL water로 용출합니다.", term="lysozyme")),
         )
+
+
+class BareNumberTests(unittest.TestCase):
+    def test_numbers_are_compared_without_their_units(self) -> None:
+        from voiney_lab.answer_checks import introduces_bare_numbers
+
+        source = "Incubate for 15min at 37°C. 800 rpm, 37°C, 00:15:00. Add 1,000 µL."
+        labels = [str(item) for item in range(1, 26)]
+        for said, new in (
+            ("37°C에서 15분 동안 배양합니다.", False),
+            ("37도, 800 알피엠", False),
+            ("1000 µL 넣어요.", False),
+            ("3단계에서 15분", False),
+            ("실온에서 20분", True),
+            ("37도에서 30분", True),
+            ("0.5 mL", True),
+            ("40단계", True),
+        ):
+            with self.subTest(said):
+                self.assertIs(introduces_bare_numbers(said, source, step_labels=labels), new)
 
 
 class RoutedAnswerTests(unittest.TestCase):
