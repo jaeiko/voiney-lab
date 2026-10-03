@@ -50,7 +50,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from voiney_lab.answer_checks import claims_state_change, introduces_numbers
+from voiney_lab.answer_checks import (
+    ServerValues,
+    claims_state_change,
+    display_label_violations,
+    introduces_numbers,
+    outside_pdf_violations,
+    server_value_violations,
+)
 from voiney_lab.semantic_intent import (
     evidence_fence_rejection,
     has_completion_evidence,
@@ -673,12 +680,16 @@ class RouterContext:
     localized: Mapping[str, str] = field(default_factory=dict)
     #: The active protocol's terms (D4: what an outside-PDF explanation may be about).
     terms: tuple[str, ...] = ()
+    #: The identifiers an answer may only repeat exactly (title, step count, ...).
+    server_values: ServerValues | None = None
 
-    def evidence_text(self) -> str:
-        """Every fact the model was given, source and reviewed reading."""
+    def evidence_text(self, ids: Sequence[str] | None = None) -> str:
+        """The facts ``ids`` name (all when None), source and reviewed reading."""
 
+        chosen = list(self.evidence) if ids is None else [i for i in ids if i in self.evidence]
         return "\n".join(
-            [text for text, _page in self.evidence.values()] + list(self.localized.values())
+            [self.evidence[item][0] for item in chosen]
+            + [self.localized[item] for item in chosen if item in self.localized]
         )
 
 
@@ -860,15 +871,58 @@ def parse_router_answer(content: str) -> RouterAnswer | None:
     )
 
 
-def answer_check_failures(answer: RouterAnswer, context: RouterContext) -> tuple[str, ...]:
-    """Why the server may not use a model answer; empty when it may."""
+def answer_check_failures(
+    answer: RouterAnswer,
+    context: RouterContext,
+    *,
+    utterance: str,
+) -> tuple[str, ...]:
+    """Why the server may not use a model answer; empty when it may (design §5-2).
+
+    Each check reads the answer and the server's own values; none rewrites
+    the answer. The source, its citation and the outside-PDF marks are the
+    server's to attach, so an answer that writes them is refused too.
+    """
 
     failures: list[str] = []
     body = f"{answer.spoken}\n{answer.display}"
-    if introduces_numbers(body, context.evidence_text()):
+    cited = [item for item in answer.evidence_ids if item in context.evidence]
+    if len(cited) != len(answer.evidence_ids):
+        failures.append("evidence_id_unknown")
+    if answer.source_kind == "pdf" and not cited:
+        failures.append("pdf_answer_without_evidence")
+    # A number may only be one the cited source says (or, for the state, the
+    # snapshot); an answer citing nothing may say none.
+    if answer.source_kind == "pdf":
+        grounding = context.evidence_text(cited)
+    elif answer.source_kind == "server_state":
+        grounding = json.dumps(context.snapshot, ensure_ascii=False)
+    else:
+        grounding = ""
+    if introduces_numbers(body, grounding):
         failures.append("number_not_in_source")
     if claims_state_change(body):
         failures.append("claims_state_change")
+    if display_label_violations(body):
+        failures.append("display_label")
+    if context.server_values is not None and server_value_violations(body, context.server_values):
+        failures.append("server_value")
+    if answer.source_kind == "outside_pdf":
+        found = list(outside_pdf_violations(
+            answer.spoken, question=utterance, term=answer.outside_pdf_term,
+            protocol_terms=context.terms,
+        ))
+        if answer.display and answer.display != answer.spoken:
+            found.extend(
+                item for item in outside_pdf_violations(
+                    answer.display, question=utterance, term=answer.outside_pdf_term,
+                    protocol_terms=context.terms,
+                ) if item not in found
+            )
+        if found:
+            failures.append("outside_pdf:" + "+".join(found))
+    elif answer.outside_pdf_term is not None:
+        failures.append("outside_pdf_term_without_outside_pdf")
     return tuple(failures)
 
 
@@ -946,16 +1000,26 @@ async def route_turn_with_llm_router(
             timings_ms=timings,
         )
 
-    async def fall_back(reason: str, **kept: Any) -> RouterTurnOutcome:
+    async def fall_back(
+        reason: str, *, unconfirmed: bool = False, **kept: Any,
+    ) -> RouterTurnOutcome:
         await progress("checking_protocol")
         route = await rule_route()
+        plan = route.plan
+        if unconfirmed:
+            # The model's answer was dropped and the rules have none either:
+            # "PDF에서 확인할 수 없어요." instead of a scope reminder.
+            plan = session.answer_not_confirmed(
+                turn_id=turn_id, language=language,
+            ) or plan
         timings["total_ms"] = round((clock() - started) * 1000, 1)
         return RouterTurnOutcome(
-            plan=route.plan, handled_by="fallback_rules", fallback_reason=reason,
+            plan=plan, handled_by="fallback_rules", fallback_reason=reason,
             rule_route=route, timings_ms=timings, **kept,
         )
 
     basis = session.proposal_basis(turn_id=turn_id, generation=generation)
+    status_at_call = session.workflow_status
     context = session.router_context(
         turn_id=turn_id, language=language, configuration_id=configuration_id,
         generation=generation,
@@ -1013,10 +1077,18 @@ async def route_turn_with_llm_router(
     answer = parse_router_answer(reply.content)
     if answer is None:
         return await fall_back("answer_unreadable", reply=reply)
-    failures = answer_check_failures(answer, context)
+    failures = list(answer_check_failures(answer, context, utterance=transcript))
+    if (
+        session.proposal_basis(turn_id=turn_id, generation=generation) != basis
+        or session.workflow_status != status_at_call
+    ):
+        # The state moved while the model wrote (a button, another turn):
+        # an answer written for the old state is dropped.
+        failures.append("state_changed_during_answer")
     if failures:
         return await fall_back(
-            "answer_rejected:" + ",".join(failures), answer=answer, reply=reply,
+            "answer_rejected:" + ",".join(failures), unconfirmed=True,
+            answer=answer, reply=reply,
         )
     plan = session.apply_router_answer(
         answer, context, turn_id=turn_id, language=language,

@@ -7069,6 +7069,22 @@ def _record_router_history(
         log.warning("router history bundle rejected handled_by=%s",outcome.handled_by)
 
 
+def _router_development_note(
+    outcome:RouterTurnOutcome,settings:LlmRouterSettings,
+)->str:
+    """The folded development line under a router answer (test mode only)."""
+
+    answer=outcome.answer
+    parts=[f"LLM 라우터 · {settings.model}"]
+    if answer is not None:
+        parts.append(f"근거 종류 {answer.source_kind}")
+        if answer.evidence_ids:
+            parts.append("근거 "+", ".join(answer.evidence_ids))
+    if "total_ms" in outcome.timings_ms:
+        parts.append(f"{round(outcome.timings_ms['total_ms'])} ms")
+    return " · ".join(parts)
+
+
 def _router_route_fields(
     outcome:RouterTurnOutcome,settings:LlmRouterSettings,
 )->dict[str,object]:
@@ -7550,7 +7566,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     actor_role=turn_actor_role,rules_route=rules_route,
                     progress=progress,clock=clock)
                 routed_turn=(
-                    router_outcome.rule_route
+                    replace(router_outcome.rule_route,plan=router_outcome.plan)
                     if router_outcome.rule_route is not None else
                     CuratedRuntimeRoute(
                         arbitration=request_arbitration,
@@ -7558,6 +7574,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         plan=router_outcome.plan,
                     )
                 )
+                if router_outcome.handled_by=="llm":
+                    # Development information about the answer, beside it
+                    # and folded; shown only in development test mode.
+                    source_boundary_note=_router_development_note(
+                        router_outcome,session.llm_router_settings)
                 for name,value in router_outcome.timings_ms.items():
                     timings[f"router_{name}"]=value
             else:

@@ -41,6 +41,7 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
 )
+from voiney_lab.answer_checks import ServerValues
 from voiney_lab.llm_router import (
     RECORD_LOG,
     ProposalBasis,
@@ -2517,6 +2518,18 @@ END_CONFIRMATION_QUESTION = {
 END_REQUEST_HINT = {
     "ko": "실험을 끝내려면 '실험 종료'라고 말씀해 주세요.",
     "en": "To end the experiment, say 'end session'.",
+}
+#: The marks the server puts on an explanation the PDF does not give
+#: (decision D4): on the screen above it, and said before it.
+OUTSIDE_PDF_NOTICE = {"ko": "PDF 밖 설명이니 유의", "en": "Not from the PDF -- take care"}
+OUTSIDE_PDF_SPOKEN_LEAD = {
+    "ko": "PDF에는 따로 설명이 없어요.",
+    "en": "The PDF does not explain this.",
+}
+#: Said when a model answer was dropped by a check and the rules had none.
+ANSWER_NOT_CONFIRMED = {
+    "ko": "PDF에서 확인할 수 없어요.",
+    "en": "I could not confirm that in the PDF.",
 }
 #: A start said after the experiment ended (decision 2, 2026-10-03): an ended
 #: experiment is never started again by voice; the next one is chosen on the
@@ -12629,6 +12642,17 @@ class CuratedProtocolSession:
         return RouterContext(
             snapshot=snapshot, protocol=protocol, evidence=evidence,
             localized=localized, terms=terms,
+            server_values=ServerValues(
+                title=self.fixture.title,
+                revision_id=self.fixture.revision_id,
+                hashes=tuple(
+                    item for item in (
+                        self.fixture.fixture_sha256, self.fixture.source_pdf_sha256,
+                    ) if item
+                ),
+                step_count=len(steps),
+                current_step_label=steps[index].source_label if self.active else None,
+            ),
         )
 
     def apply_router_answer(
@@ -12661,12 +12685,29 @@ class CuratedProtocolSession:
             CuratedProtocolFact(item, "router_evidence", *context.evidence[item])
             for item in cited
         )
-        display = answer.display or answer.spoken
+        body = answer.display or answer.spoken
+        spoken = answer.spoken
+        outside = answer.source_kind == "outside_pdf"
+        # The body, its source, the citation and the outside-PDF mark go to
+        # the screen as separate values: no label is written into the text
+        # (lane N's screen draws them).
+        sections: list[dict[str, Any]] = []
+        if outside:
+            # Decision D4: the server's own marks, never the model's words.
+            sections.append({"kind": "notice", "text": OUTSIDE_PDF_NOTICE.get(
+                language, OUTSIDE_PDF_NOTICE["ko"])})
+            spoken = f"{OUTSIDE_PDF_SPOKEN_LEAD.get(language, OUTSIDE_PDF_SPOKEN_LEAD['ko'])} {spoken}"
+        sections.append({"kind": "section", "heading": "", "text": body})
+        if facts:
+            sections.append({"kind": "source", "text": "\n\n".join(fact.text for fact in facts)})
+            sections.append({"kind": "citation", "text": ", ".join(
+                f"{fact.fact_id} · p.{fact.source_page}" for fact in facts
+            )})
         step = self.fixture.steps[self.current_index] if self.active else None
         plan = CuratedProtocolTurnPlan(
             action=CuratedProtocolAction.QUESTION,
-            display_text=display,
-            speech_text=answer.spoken,
+            display_text=body,
+            speech_text=spoken,
             speech_mode=(
                 CuratedProtocolSpeechMode.VERIFIED_FACT
                 if answer.source_kind == "pdf" else CuratedProtocolSpeechMode.CONTROL
@@ -12676,17 +12717,49 @@ class CuratedProtocolSession:
             final_step=bool(step is not None and self.current_index == len(self.fixture.steps) - 1),
             state_changed=False,
             fact_id=cited[0] if cited else None,
-            primary_text=display,
+            primary_text=body,
             source_texts=tuple(fact.text for fact in facts),
             source_pages=tuple(fact.source_page for fact in facts),
             evidence_ids=cited,
             translation_status="llm_router_answer",
             intent_kind="llm_router_answer",
+            answer_origin=(
+                "supplemental_model_knowledge" if outside else "current_protocol"
+            ),
+            limitations=(("outside_pdf_explanation",) if outside else ()),
+            display_document={
+                "title": f"{step.source_label}단계" if step is not None else "",
+                "sections": sections,
+            },
         )
         self._replay[turn_id] = plan
         if len(self._replay) > 64:
             self._replay.pop(next(iter(self._replay)))
         return plan
+
+    def answer_not_confirmed(
+        self, *, turn_id: int, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """"PDF에서 확인할 수 없어요." for a turn whose model answer was dropped.
+
+        Only where the rules had no answer either -- a scope reminder or an
+        unsupported question that changed nothing; any other rules' reply
+        stands.
+        """
+
+        plan = self._replay.get(turn_id)
+        if plan is None or plan.state_changed or plan.action not in {
+            CuratedProtocolAction.OFF_TOPIC, CuratedProtocolAction.UNSUPPORTED,
+        }:
+            return None
+        text = ANSWER_NOT_CONFIRMED.get(language, ANSWER_NOT_CONFIRMED["ko"])
+        replaced = replace(
+            plan, display_text=text, speech_text=text, primary_text=text,
+            source_texts=(), source_pages=(), evidence_ids=(), display_document=None,
+            intent_kind="router_answer_not_confirmed",
+        )
+        self._replay[turn_id] = replaced
+        return replaced
 
     def apply_tool_proposal(
         self,

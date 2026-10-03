@@ -94,6 +94,7 @@
     .safety-origin{display:block;font-size:.68rem;font-weight:700;color:var(--muted)}
     .safety-text{margin:.1rem 0 0;white-space:pre-wrap;line-height:1.5}
     .dev-info{margin-top:.5rem;font-size:.72rem;color:var(--muted)}
+    .answer-notice{font-size:.72rem;font-weight:700;color:var(--muted);margin-bottom:.15rem}
     .dev-info summary{cursor:pointer;font-weight:700}
     .dev-info-body{margin-top:.25rem;white-space:pre-wrap}
 
