@@ -494,9 +494,14 @@ removed; the two readiness codes are no longer produced. Evidence still has to
 appear verbatim on its cited page — that check now runs against PyMuPDF's text,
 with the same whitespace normalization as before.
 
-A page with no text layer (a scan), or one where at least 5% of the visible
-characters are U+FFFD, private-use or unassigned code points, is marked
-`ocr_required` with `ocr_reason` `no_text_layer` or `unreadable_glyphs`. The
+A page with no text layer (a scan), one with any U+FFFD (a glyph the PDF gives
+no Unicode mapping), or one where at least 5% of the visible characters are
+private-use or unassigned code points, is marked `ocr_required` with
+`ocr_reason` `no_text_layer` or `unreadable_glyphs`. U+FFFD characters are left
+out of the page text and its blocks -- never replaced -- and the page warning
+says how many. One is enough: on ANKOM page 3 two such glyphs (code 0 of a
+Type3 font, its missing-glyph box, absent from its ToUnicode) stand directly
+before a duration value, where the previous engine dropped them silently. The
 document is not refused; the extraction lists those pages in
 `ocr_required_page_numbers` and in a warning. Text blocks are recorded on each
 page for the next structure measurement; nothing decides on them yet.
