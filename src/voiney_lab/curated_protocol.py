@@ -5633,6 +5633,8 @@ class CuratedProtocolSession:
         self._pending_note_capture: dict[str, Any] | None = None
         self._pause_state: str = "active"
         self._paused_at: float | None = None
+        #: The workflow status a pause replaced, for undo_pause().
+        self._status_before_pause: str = "preview"
         self._total_paused_seconds: float = 0.0
         self._pause_intervals: list[dict[str, Any]] = []
         #: Whether this pause's notice was already said aloud. Only the first
@@ -5810,18 +5812,50 @@ class CuratedProtocolSession:
             "intervals": list(self._pause_intervals),
         }
 
+    @property
+    def experiment_ended(self) -> bool:
+        """The experiment ran and ended (stopped or completed): it is not running.
+
+        Nothing pauses or resumes it any more (decision 2 of 2026-10-03, lane
+        R3); the next experiment is chosen on the screen.
+        """
+
+        return not self.active and self._experiment_ended()
+
     def pause_workflow(self, now: float | None = None) -> bool:
         current_time = time.time() if now is None else now
-        if self._pause_state == "paused":
+        if self._pause_state == "paused" or self.experiment_ended:
             return False
+        self._status_before_pause = self._workflow_status
         self._pause_state = "paused"
         self._paused_at = current_time
         self._workflow_status = "paused"
         self._paused_notice_spoken = False
         return True
 
+    def undo_pause(self) -> None:
+        """Take back a pause the durable record refused, and nothing else.
+
+        The bench button's rollback. It used to call resume_workflow(), which
+        also starts a protocol that is not running -- from step 1. This only
+        puts the pause state back as it was before pause_workflow(); no pause
+        interval is recorded, because none was kept.
+        """
+
+        if self._pause_state != "paused":
+            return
+        self._pause_state = "active"
+        self._paused_at = None
+        self._workflow_status = self._status_before_pause
+        self._paused_notice_spoken = False
+
     def resume_workflow(self, now: float | None = None) -> bool:
         current_time = time.time() if now is None else now
+        if self.experiment_ended:
+            # An ended experiment is not run again from step 1 (decision 2):
+            # the bench pause's rollback used to come through here and
+            # restart it while its durable record stayed stopped.
+            return False
         if not self.active:
             self.active = True
             self.current_index = 0
@@ -9924,14 +9958,17 @@ class CuratedProtocolSession:
         reasked_question: dict[str, Any] | None = None
 
         if (
-            command in {CuratedProtocolAction.START, CuratedProtocolAction.RESUME}
-            and not self.active
-            and self._experiment_ended()
+            command in {
+                CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
+                CuratedProtocolAction.PAUSE,
+            }
+            and self.experiment_ended
         ):
             # Decision 2 (2026-10-03): an ended experiment is not started
             # again by voice -- a start used to begin it over from step 1,
             # and a resume did the same through resume_workflow(). Nothing
-            # changes; the next experiment is chosen on the screen.
+            # changes; the next experiment is chosen on the screen. Nor is
+            # it paused (lane R3): there is nothing running to pause.
             response = EXPERIMENT_ENDED_START_REPLY.get(
                 language, EXPERIMENT_ENDED_START_REPLY["ko"]
             )
@@ -9945,7 +9982,11 @@ class CuratedProtocolSession:
                 final_step=False,
                 state_changed=False,
                 primary_text=response,
-                intent_kind="start_after_experiment_ended",
+                intent_kind=(
+                    "pause_after_experiment_ended"
+                    if command is CuratedProtocolAction.PAUSE
+                    else "start_after_experiment_ended"
+                ),
             )
 
         if self._pause_state == "paused" and command not in {

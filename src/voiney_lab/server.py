@@ -7049,6 +7049,47 @@ def _experiment_end_kind(plan:Any)->str|None:
     return None
 
 
+def _experiment_ended_event(
+    session:"ListenerSession",curated:Any,plan:Any,*,report:str,
+)->dict[str,Any]|None:
+    """What ``experiment.ended`` tells the screen, or None when nothing ended.
+
+    Sent once, after the turn's ``protocol.fixture.state``, for the turn that
+    ended the experiment -- the end confirmed by voice, or the last step
+    completed -- and only when that end stands (a rolled-back end changed
+    nothing). Lane R3 (decision 2 of 2026-10-03) fixes its name and content;
+    what the screen does with it is the screen's work:
+
+    * ``status``: "stopped" or "completed", as the session holds it;
+    * ``step_label``: the step it ended at; ``step_count``: the protocol's;
+    * ``ended_at``: ISO time from the session's experiment clock;
+    * ``experiment_session_id``: the durable experiment, or None without one;
+    * ``report``: "saved", "failed" (the end stands, the report did not
+      save) or "not_recorded" (no report store);
+    * ``bench_controls``: pause and resume are both refused from now on.
+    """
+
+    end=_experiment_end_kind(plan)
+    if end is None or not plan.state_changed or not curated.experiment_ended:
+        return None
+    clock=curated.experiment_timer_status()
+    return {
+        "configuration_id":session.accepted_configuration_id,
+        "status":curated.workflow_status,
+        "step_label":plan.step_label or (
+            curated.fixture.steps[curated.current_index].source_label
+            if 0<=curated.current_index<len(curated.fixture.steps) else None
+        ),
+        "step_count":len(curated.fixture.steps),
+        "ended_at":clock.get("ended_at"),
+        "experiment_session_id":(
+            session.session_id if session.experiment_state_version is not None else None
+        ),
+        "report":report,
+        "bench_controls":{"pause":False,"resume":False},
+    }
+
+
 def _report_download_sentence(language:str)->str:
     """The report formats the screen offers now, said after a saved report.
 
@@ -7866,6 +7907,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         checkpoint=curated._checkpoint()
         curated_tools_used=[]
         report_prepared=False
+        #: The report store refused the experiment's end after it committed.
+        end_report_failed=False
         workflow_mutation_committed=False
         plan=None
         brain_run=None
@@ -8630,6 +8673,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     if _experiment_end_kind(plan) is not None:
                         # Decision 2: the experiment did end (the session
                         # record holds it); only the report was not saved.
+                        end_report_failed=True
                         plan=_with_experiment_end_sentence(
                             plan,
                             "실험은 끝났지만 기록 저장에 실패했어요. 화면에서 다시 시도해 주세요."
@@ -8709,6 +8753,16 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             state=curated.state(spoken_summary=plan.spoken_summary),
             screen=curated_screen_fields(curated),
             action=plan.action.value)
+        ended=_experiment_ended_event(
+            session,curated,plan,
+            report=(
+                "saved" if report_prepared
+                else "failed" if end_report_failed
+                else "not_recorded"
+            ),
+        )
+        if ended is not None:
+            await current_text("experiment.ended",turn_id=turn_id,**ended)
         operation_labels={
             CuratedProtocolAction.START:"protocol_start",
             CuratedProtocolAction.CURRENT:"current_step_read",
@@ -10148,6 +10202,22 @@ async def voice_socket(websocket:WebSocket):
                             "experiment.session.state",state=experiment_state))
                 pipeline="cascade"
                 session.stop(); await websocket.send_text(event("session.stopped",state=session.state.value))
+            elif control["type"] in {"workflow.pause","workflow.resume"} and (
+                session.active and session.curated_protocol_session is not None
+                and session.curated_protocol_session.experiment_ended
+            ):
+                # Decision 2 (lane R3): an ended experiment takes no bench
+                # pause or resume. The pause used to succeed in the session,
+                # be refused by the durable record, and be rolled back through
+                # resume_workflow() -- which ran the experiment again from
+                # step 1. Nothing changes; the screen is told why.
+                await websocket.send_text(event(
+                    "workflow.control.refused",
+                    configuration_id=session.accepted_configuration_id,
+                    action=control["type"].partition(".")[2],
+                    reason="experiment_ended",
+                    status=session.curated_protocol_session.workflow_status,
+                ))
             elif control["type"]=="workflow.pause":
                 if session.active and session.curated_protocol_session is not None:
                     changed=session.curated_protocol_session.pause_workflow()
@@ -10170,7 +10240,9 @@ async def voice_socket(websocket:WebSocket):
                                     "event_kind":"session_paused",
                                 },
                             )
-                            session.curated_protocol_session.resume_workflow()
+                            # Only the pause is taken back: resume_workflow()
+                            # would also start a protocol that is not running.
+                            session.curated_protocol_session.undo_pause()
                             await websocket.send_text(event(
                                 "error",message=getattr(
                                     exc,"code","workspace_error")))
