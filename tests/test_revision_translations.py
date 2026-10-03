@@ -123,9 +123,11 @@ class FakeTranslator:
         self.wrong = wrong or {}
         self.error = error
         self.batches: list[list[str]] = []
+        self.contexts: list[dict] = []
 
-    async def __call__(self, batch):
+    async def __call__(self, batch, context=None):
         self.batches.append([unit.fact_key for unit in batch])
+        self.contexts.append(context)
         if self.error is not None:
             raise self.error
         return BatchResult(
@@ -336,6 +338,7 @@ class StorageTests(unittest.TestCase):
         try:
             store._connection.executescript(
                 "DROP TABLE protocol_fact_translations;"
+                "DROP TABLE protocol_translation_glossaries;"
                 "DROP TABLE schema_metadata;"
                 "CREATE TABLE schema_metadata(schema_version INTEGER PRIMARY KEY "
                 "CHECK(schema_version=6));"
@@ -706,12 +709,13 @@ class ActivationTests(unittest.TestCase):
         model = _BatchModel()
         translate = openai_batch_translator(lambda: model, "grok-answer")
         unit = TranslationUnit("step-1/current_step", "step", MINIPREP_STEPS[0])
-        result = asyncio.run(translate([unit]))
+        result = asyncio.run(translate([unit], {"title": "t"}))
         self.assertEqual(model.calls[0]["model"], "grok-answer")
         self.assertEqual(model.calls[0]["temperature"], 0)
         request = json.loads(model.calls[0]["messages"][1]["content"])
-        self.assertEqual(request, {"items": [
-            {"id": "step-1/current_step", "source_text": MINIPREP_STEPS[0]}]})
+        self.assertEqual(request, {"title": "t", "items": [
+            {"id": "step-1/current_step", "kind": "step", "step_label": None,
+             "source_text": MINIPREP_STEPS[0]}]})
         self.assertEqual(result.translations, {"step-1/current_step": "번역"})
         self.assertEqual((result.prompt_tokens, result.completion_tokens), (12, 3))
         self.assertEqual(result.model_version, "grok-answer-0928")

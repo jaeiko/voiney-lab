@@ -220,6 +220,23 @@ class FactTranslationRecord:
 
 
 @dataclass(frozen=True)
+class TranslationGlossaryRecord:
+    """The Korean form one revision's translation fixes for its words.
+
+    ``entries_json`` is a list of {"source", "korean", "keep_english"}.
+    One per revision and language: every sentence of the revision is
+    translated with it.
+    """
+
+    revision_id: str
+    language: str
+    entries_json: str
+    model: str
+    model_version: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class LabAdaptationRevision:
     adaptation_id: str
     organization_id: str
@@ -800,6 +817,21 @@ CREATE INDEX protocol_fact_translations_revision
 CREATE TRIGGER fact_translations_no_update BEFORE UPDATE ON protocol_fact_translations
  BEGIN SELECT RAISE(ABORT,'append-only'); END;
 CREATE TRIGGER fact_translations_no_delete BEFORE DELETE ON protocol_fact_translations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE protocol_translation_glossaries(
+ glossary_id TEXT PRIMARY KEY,
+ revision_id TEXT NOT NULL,
+ language TEXT NOT NULL,
+ entries_json TEXT NOT NULL,
+ model TEXT NOT NULL,
+ model_version TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ UNIQUE(revision_id,language)
+);
+CREATE TRIGGER translation_glossaries_no_update BEFORE UPDATE ON protocol_translation_glossaries
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER translation_glossaries_no_delete BEFORE DELETE ON protocol_translation_glossaries
  BEGIN SELECT RAISE(ABORT,'append-only'); END;
 
 CREATE TABLE schema_metadata_next(
@@ -3318,6 +3350,59 @@ class WorkspaceStore:
                 "WHERE revision_id=? AND language=? ORDER BY created_at,rowid",
                 (revision_id, language),
             )
+        )
+
+    def record_translation_glossary(self, record: TranslationGlossaryRecord) -> bool:
+        """Keep a revision's glossary; one already held is kept as is."""
+
+        for value, label in (
+            (record.revision_id, "Glossary revision"),
+            (record.language, "Glossary language"),
+            (record.model, "Glossary model"),
+            (record.model_version, "Glossary model version"),
+            (record.created_at, "Glossary time"),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value) > 400:
+                raise WorkspaceError(f"{label} is invalid.")
+        try:
+            entries = json.loads(record.entries_json)
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceError("Glossary entries are invalid.") from exc
+        if not isinstance(entries, list) or len(record.entries_json) > 200000:
+            raise WorkspaceError("Glossary entries are invalid.")
+        glossary_id = "glossary-" + hashlib.sha256(
+            f"{record.revision_id}:{record.language}".encode("utf-8")
+        ).hexdigest()[:32]
+        before = self._connection.total_changes
+        try:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO protocol_translation_glossaries"
+                "(glossary_id,revision_id,language,entries_json,model,"
+                "model_version,created_at) VALUES(?,?,?,?,?,?,?)",
+                (glossary_id, record.revision_id, record.language,
+                 record.entries_json, record.model, record.model_version,
+                 record.created_at),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self._connection.total_changes > before
+
+    def translation_glossary(
+        self, revision_id: str, language: str
+    ) -> TranslationGlossaryRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM protocol_translation_glossaries "
+            "WHERE revision_id=? AND language=?",
+            (revision_id, language),
+        ).fetchone()
+        if row is None:
+            return None
+        return TranslationGlossaryRecord(
+            revision_id=row["revision_id"], language=row["language"],
+            entries_json=row["entries_json"], model=row["model"],
+            model_version=row["model_version"], created_at=row["created_at"],
         )
 
     def revision_translations(
