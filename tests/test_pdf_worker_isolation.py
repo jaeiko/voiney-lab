@@ -1,7 +1,7 @@
 """Kill the parser and the server keeps its footing.
 
-On 2026-09-04 and again on 2026-09-05 the whole server died inside
-``libpdfium.so`` -- SIGABRT once, SIGSEGV once -- while serving a reviewer's
+The PDF engine runs in a child process (pdf_text_engine). On 2026-09-04 and
+again on 2026-09-05 the whole server died inside ``libpdfium.so`` -- SIGABRT once, SIGSEGV once -- while serving a reviewer's
 diff. Nothing downstream could have caught it: by the time a ``-fno-exceptions``
 C++ build is aborting there is no Python frame left to fail closed in. That was
 fail *dead*, and this is the difference.
@@ -24,14 +24,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import voiney_lab.experiment_protocol_pdf as pdf_module
+import voiney_lab.pdf_text_engine as engine_module
 from voiney_lab.experiment_protocol_pdf import (
+    ProtocolPdfMalformedError,
     ProtocolPdfWorkerError,
     ProtocolPdfWorkerTimeoutError,
     clear_protocol_pdf_cache,
     extract_protocol_pdf,
 )
-from voiney_lab.pdf_text_worker import read_page_texts
+from voiney_lab.pdf_text_engine import (
+    PdfEngineDocumentError,
+    read_document_in_process,
+)
 
 from tests.test_protocol_catalog import write_text_pdf
 
@@ -57,13 +61,11 @@ class WorkerDeathTests(unittest.TestCase):
         real = subprocess.run
 
         def substitute(command, **kwargs):
-            if command[1:] == ("-m", "voiney_lab.pdf_text_worker") or list(
-                command[1:]
-            ) == ["-m", "voiney_lab.pdf_text_worker"]:
+            if list(command[1:]) == ["-m", "voiney_lab.pdf_text_engine"]:
                 return real([sys.executable, "-c", script], **kwargs)
             return real(command, **kwargs)
 
-        return patch.object(pdf_module.subprocess, "run", substitute)
+        return patch.object(engine_module.subprocess, "run", substitute)
 
     def test_a_worker_killed_by_a_signal_raises_and_leaves_us_alive(self) -> None:
         killer = "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)"
@@ -77,8 +79,8 @@ class WorkerDeathTests(unittest.TestCase):
         extraction = extract_protocol_pdf(self.source)
         self.assertEqual(extraction.page_count, 1)
 
-    def test_a_worker_that_aborts_the_way_pdfium_does_raises(self) -> None:
-        """SIGABRT is the 2026-09-04 signature."""
+    def test_a_worker_that_aborts_the_way_pdfium_did_raises(self) -> None:
+        """SIGABRT is the 2026-09-04 pdfium signature; any C parser can do it."""
 
         killer = "import os, signal; os.kill(os.getpid(), signal.SIGABRT)"
         with self._worker_replaced_by(killer):
@@ -91,7 +93,7 @@ class WorkerDeathTests(unittest.TestCase):
                 extract_protocol_pdf(self.source)
 
     def test_a_worker_that_hangs_is_killed_and_raises_a_timeout(self) -> None:
-        with patch.object(pdf_module, "_worker_timeout_seconds", lambda: 1.0):
+        with patch.object(engine_module, "_worker_timeout_seconds", lambda: 1.0):
             with self._worker_replaced_by("import time; time.sleep(30)"):
                 with self.assertRaises(ProtocolPdfWorkerTimeoutError) as caught:
                     extract_protocol_pdf(self.source)
@@ -110,12 +112,16 @@ class WorkerDeathTests(unittest.TestCase):
                         extract_protocol_pdf(self.source)
 
     def test_a_reply_about_the_wrong_number_of_pages_raises(self) -> None:
-        """The parent counts the pages; the child is not asked to agree."""
+        """The reply must hold exactly the pages it says the document has."""
 
         script = (
             "import sys, json; "
+            "page = {'text': 'a', 'bottom_band_offset': None, 'blocks': []}; "
             "sys.stdout.write(json.dumps("
-            "{'status': 'ok', 'page_texts': ['a', 'b', 'c']}))"
+            "{'status': 'ok', 'page_count': 1, 'encrypted': False, "
+            "'metadata': {k: None for k in ('title', 'author', 'subject', "
+            "'creator', 'producer', 'creation_date', 'modification_date')}, "
+            "'warnings': [], 'pages': [page, page, page]}))"
         )
         with self._worker_replaced_by(script):
             with self.assertRaises(ProtocolPdfWorkerError):
@@ -125,7 +131,11 @@ class WorkerDeathTests(unittest.TestCase):
         script = (
             "import sys, json; "
             "sys.stdout.write(json.dumps("
-            "{'status': 'ok', 'page_texts': [17]}))"
+            "{'status': 'ok', 'page_count': 1, 'encrypted': False, "
+            "'metadata': {k: None for k in ('title', 'author', 'subject', "
+            "'creator', 'producer', 'creation_date', 'modification_date')}, "
+            "'warnings': [], "
+            "'pages': [{'text': 17, 'bottom_band_offset': None, 'blocks': []}]}))"
         )
         with self._worker_replaced_by(script):
             with self.assertRaises(ProtocolPdfWorkerError):
@@ -138,10 +148,6 @@ class WorkerDeathTests(unittest.TestCase):
         a library fault, and the 422 a caller receives would say the document
         is invalid when it is not.
         """
-
-        from voiney_lab.experiment_protocol_pdf import (
-            ProtocolPdfMalformedError,
-        )
 
         self.assertFalse(issubclass(ProtocolPdfWorkerError, ProtocolPdfMalformedError))
         self.assertTrue(issubclass(ProtocolPdfWorkerTimeoutError, ProtocolPdfWorkerError))
@@ -172,28 +178,34 @@ class WorkerContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_an_unopenable_file_is_still_every_page_unreadable(self) -> None:
+    def test_an_unopenable_file_is_a_document_fault(self) -> None:
         """A document fault stays a document fault, not a worker fault."""
 
         missing = Path(self.temp.name) / "absent.pdf"
-        texts, bands = read_page_texts(missing, 3)
-        self.assertEqual(texts, [None, None, None])
-        # No text means no geometry either: a band offset without the text it
-        # indexes into would be a boundary in a document nobody read.
-        self.assertEqual(bands, [None, None, None])
+        with self.assertRaises(PdfEngineDocumentError) as caught:
+            read_document_in_process(missing)
+        self.assertEqual(caught.exception.kind, "malformed")
+
+        # And through the child process it reaches the caller as a malformed
+        # document, never as a worker failure.
+        corrupt = Path(self.temp.name) / "corrupt.pdf"
+        corrupt.write_bytes(b"%PDF-1.4\n" + b"\x00" * 64)
+        clear_protocol_pdf_cache()
+        with self.assertRaises(ProtocolPdfMalformedError):
+            extract_protocol_pdf(corrupt)
 
     def test_the_child_reports_a_capped_address_space_without_crashing(self):
         """The cap is real: with an impossible one the child fails cleanly."""
 
         request = json.dumps(
             {
+                "operation": "read",
                 "path": str(self.source),
-                "page_count": 1,
                 "address_space_bytes": 8 * 1024 * 1024,
             }
         )
         completed = subprocess.run(
-            [sys.executable, "-m", "voiney_lab.pdf_text_worker"],
+            [sys.executable, "-m", "voiney_lab.pdf_text_engine"],
             input=request.encode("utf-8"),
             capture_output=True,
             timeout=60,
@@ -214,7 +226,7 @@ class WorkerContractTests(unittest.TestCase):
             os.environ.pop(
                 "VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS", None
             )
-            self.assertEqual(pdf_module._worker_timeout_seconds(), 30.0)
+            self.assertEqual(engine_module._worker_timeout_seconds(), 30.0)
         # A host may say its machine needs longer; nonsense is ignored rather
         # than obeyed, so a typo cannot silently remove the bound.
         for raw, expected in (
@@ -226,11 +238,11 @@ class WorkerContractTests(unittest.TestCase):
                     {"VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS": raw},
                 ):
                     self.assertEqual(
-                        pdf_module._worker_timeout_seconds(), expected
+                        engine_module._worker_timeout_seconds(), expected
                     )
-        self.assertEqual(pdf_module.PDF_WORKER_TIMEOUT_SECONDS, 30.0)
+        self.assertEqual(engine_module.PDF_WORKER_TIMEOUT_SECONDS, 30.0)
         self.assertEqual(
-            pdf_module.PDF_WORKER_ADDRESS_SPACE_BYTES, 1024 * 1024 * 1024
+            engine_module.PDF_WORKER_ADDRESS_SPACE_BYTES, 1024 * 1024 * 1024
         )
 
 

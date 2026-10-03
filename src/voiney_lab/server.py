@@ -363,6 +363,7 @@ async def lifespan(_: FastAPI):
     log_cascade_filler_configuration()
     log_readiness_gate_test_mode()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
+    _install_protocol_ocr_provider()
     await asyncio.to_thread(start_moss_runtime_from_environment)
     try:
         yield
@@ -974,6 +975,26 @@ class ServerConfig:
 
 def _protocol_store_settings()->ProtocolPersistenceSettings:
     return ProtocolPersistenceSettings.from_environment()
+
+
+def _install_protocol_ocr_provider(environ=None)->None:
+    """Build the OCR engines the deployment configured and inject them once.
+
+    Reads VOICE_WORKFLOW_AGENT_OCR_PROVIDERS and the engines' credentials; an
+    adapter already injected (a deployment hook or a test) is kept. Only
+    engine names are logged, never a key, secret or URL.
+    """
+
+    if getattr(app.state,"protocol_ocr_provider",None) is not None:
+        return
+    from voiney_lab.protocol_ocr_providers import ocr_provider_from_environment
+
+    provider=ocr_provider_from_environment(environ)
+    if provider is None:
+        log.info("protocol_ocr configured=false")
+        return
+    app.state.protocol_ocr_provider=provider
+    log.info("protocol_ocr configured=true engines=%s",",".join(provider.engine_names))
 
 
 def _protocol_ocr_provider()->ProtocolOcrProvider:

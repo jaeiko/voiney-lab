@@ -15,7 +15,9 @@ from typing import TypeAlias
 from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     ProtocolPdfExtraction,
-    TextVerification,
+    # Retired; re-exported only because experiment_protocol_store decodes
+    # analyses stored before 2026-10-02 that carry it. Nothing produces it.
+    TextVerification,  # noqa: F401
 )
 
 
@@ -81,6 +83,9 @@ class FeatureCode(str, Enum):
 
 class ReadinessReasonCode(str, Enum):
     INVALID_PROTOCOL = "invalid_protocol"
+    # Retired with the engine cross-check on 2026-10-02 and never produced
+    # now. Kept because stored assessments and protocol_catalog's gate table
+    # name them.
     SOURCE_TEXT_CROSS_CHECK_FAILED = "source_text_cross_check_failed"
     SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE = "source_text_cross_check_unavailable"
     NO_EXECUTABLE_STEPS = "no_executable_steps"
@@ -1787,34 +1792,6 @@ def assess_readiness(
         )
 
     reasons: list[ReadinessReason] = []
-    # Evidence integrity comes first: if the extracted source text was not
-    # confirmed by an independent engine, nothing derived from it is
-    # trustworthy, however well formed it looks.
-    verification = getattr(
-        protocol.metadata.pdf, "text_verification", None
-    )
-    if verification is TextVerification.MISMATCH:
-        reasons.append(
-            ReadinessReason(
-                code=ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_FAILED,
-                message=(
-                    "Extracted source text disagreed with an independent "
-                    "extraction engine and cannot support execution."
-                ),
-            )
-        )
-    elif verification is TextVerification.COMPARATOR_UNAVAILABLE:
-        reasons.append(
-            ReadinessReason(
-                code=ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE,
-                message=(
-                    "Extracted source text was not cross-checked because no "
-                    "comparison engine was available. A reviewer must confirm "
-                    "this source before execution."
-                ),
-            )
-        )
-
     if not any(section.steps for section in protocol.sections):
         reasons.append(
             ReadinessReason(

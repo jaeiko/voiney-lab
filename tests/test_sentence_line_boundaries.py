@@ -180,11 +180,15 @@ class SentenceLineBoundaryTests(unittest.TestCase):
                 for index, page in enumerate(extraction.pages)
             ),
         )
+        # Re-pinned on 2026-10-02 when page text moved from pdfium to
+        # PyMuPDF. The segmentation rules did not change: PyMuPDF keeps the
+        # three spaces this corpus writes in "v3   Page 4 of 9", which pdfium
+        # collapsed to one, and that whitespace is inside a segment's text.
         self.assertEqual(
             (EVIDENCE_SEGMENT_VERSION, self._composition_fingerprint(banded)),
             (
                 6,
-                "f51173d64140c3d47bddd40dc77fcaf891190db607bfcb0a1370dd9b63b04e8c",
+                "bec39039f7fcd57f57616b774a6d866a8d3fe59567a1cd6df818558edd763f1d",
             ),
             "segment composition changed; see this test's docstring",
         )
@@ -206,11 +210,15 @@ class SentenceLineBoundaryTests(unittest.TestCase):
             self.skipTest(f"{source} is not present.")
         extraction = extract_protocol_pdf(source)
         self.assertEqual(extraction.page_count, 9)
+        # Re-pinned on 2026-10-02 when page text moved from pdfium to
+        # PyMuPDF. Measured that day, every page's segments hold the same
+        # non-whitespace text in the same order under both engines; PyMuPDF
+        # keeps the spaces and line breaks the page itself carries.
         self.assertEqual(
             (EVIDENCE_SEGMENT_VERSION, self._composition_fingerprint(extraction)),
             (
                 6,
-                "e1aa0a4c2498e376d19f0e0a71be30b65118a1eedefe9f0aac6f26e23ab4854c",
+                "eae8fe69869153ae4f7bbc4bee6ca813485862b237f07d0a2337e2d1eb85585d",
             ),
             "segment composition changed; see the previous test's docstring",
         )

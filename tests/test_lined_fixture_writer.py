@@ -7,10 +7,7 @@ import unittest
 from pathlib import Path
 
 from tests.test_protocol_claim_analysis import write_lined_pages, write_pages
-from voiney_lab.experiment_protocol_pdf import (
-    TextVerification,
-    extract_protocol_pdf,
-)
+from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 
 _PAGE = (
     "1 Prepare the acid solution.",
@@ -56,13 +53,6 @@ class LinedFixtureWriterTests(unittest.TestCase):
         write_pages(path, ("Preparation 1. Add buffer.",))
         text = extract_protocol_pdf(path).pages[0].text
         self.assertEqual(text.count("\n"), 0)
-
-    def test_lined_pages_pass_the_extraction_cross_check(self) -> None:
-        path = self.root / "lined.pdf"
-        write_lined_pages(path, (_PAGE,))
-        extraction = extract_protocol_pdf(path)
-        self.assertIs(extraction.text_verification, TextVerification.VERIFIED)
-        self.assertEqual(extraction.divergent_page_numbers, ())
 
     def test_multiple_pages_stay_separate(self) -> None:
         path = self.root / "two.pdf"
