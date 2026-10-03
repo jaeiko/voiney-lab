@@ -242,7 +242,8 @@ class UntranslatedStepTests(unittest.TestCase):
         self.assertEqual(request, {"step_label": "1", "source_text": MINIPREP_STEPS[0]})
         # Read again: the checked reading is reused, not requested twice.
         spoken_again, _, _ = _turn(session, "다시 읽어줘", 2, model)
-        self.assertEqual(spoken_again, ["자동 번역입니다. " + GOOD_READING])
+        # "자동 번역입니다." is said once a session, not before every reading.
+        self.assertEqual(spoken_again, [GOOD_READING])
         self.assertEqual(len(model.calls), 1)
 
     def test_only_an_accepted_unreviewed_reading_is_announced_as_automatic(self) -> None:
