@@ -26,6 +26,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 import voiney_lab.experiment_protocol_pdf as pdf_module
 import voiney_lab.pdf_text_engine as engine_module
+from voiney_lab import experiment_protocol as domain
 from voiney_lab.experiment_protocol_pdf import (
     MAX_PROTOCOL_PDF_BYTES,
     OCR_REASON_NO_TEXT,
@@ -245,6 +246,51 @@ class OcrRequiredPageTests(_TempDir):
         self.assertEqual(
             page_ocr_reason("Add" + "\ue081" * 3), OCR_REASON_UNREADABLE_GLYPHS
         )
+
+
+class StoredHandlesFromThePreviousEngineTests(_TempDir):
+    """An analysis stored under pdfium is refused, never mis-pointed.
+
+    A segment id hashes the page text, the segment's index and its text, so a
+    handle made from the previous engine's text can only resolve to the
+    identical segment of an identical page, or to nothing. Measured on
+    2026-10-03 over the four local sources: 187 pdfium-era handles, 22
+    resolved (all on byte-identical pages, to identical text), 165 refused,
+    0 resolved to different text.
+    """
+
+    def test_a_previous_engine_handle_resolves_identically_or_is_refused(self) -> None:
+        from voiney_lab.experiment_protocol_analysis import ProtocolAnalysisEvidenceError
+        from voiney_lab.protocol_claim_analysis import (
+            generate_page_evidence_segments,
+            reopen_evidence_span,
+        )
+
+        path = self.root / "lined.pdf"
+        write_lined_pages(path, (("1 Add 5 ml of buffer.", "2 Mix well."),))
+        current = extract_protocol_pdf(path)
+        page = current.pages[0]
+        # The previous engine's reading: the same characters, other whitespace.
+        previous = replace(
+            current,
+            pages=(replace(page, text=page.text.replace("\n", " \n")),),
+        )
+        for reading, resolves in ((previous, False), (current, True)):
+            for segment in generate_page_evidence_segments(
+                reading, source_revision="pdf-1", page_number=1
+            ):
+                stored = domain.SourceEvidence(
+                    1, segment.text, evidence_segment_ids=(segment.segment_id,)
+                )
+                with self.subTest(resolves=resolves, index=segment.segment_index):
+                    if resolves:
+                        self.assertEqual(
+                            reopen_evidence_span(current, stored, source_revision="pdf-1"),
+                            segment.text,
+                        )
+                    else:
+                        with self.assertRaises(ProtocolAnalysisEvidenceError):
+                            reopen_evidence_span(current, stored, source_revision="pdf-1")
 
 
 class ByteIdentityIsUnchangedTests(_TempDir):
