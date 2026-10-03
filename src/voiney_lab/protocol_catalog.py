@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import threading
@@ -17,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
@@ -497,7 +498,13 @@ class ProtocolCatalog:
     """Catalog facade over immutable source, analysis, and approval records."""
 
     def __init__(
-        self, store: ProtocolStore, *, skip_readiness_gates: bool = False
+        self,
+        store: ProtocolStore,
+        *,
+        skip_readiness_gates: bool = False,
+        on_execution_authorized: (
+            Callable[["ProtocolCatalog", str], None] | None
+        ) = None,
     ) -> None:
         """``skip_readiness_gates`` is the development test-mode switch.
 
@@ -511,6 +518,22 @@ class ProtocolCatalog:
 
         self.store = store
         self.skip_readiness_gates = skip_readiness_gates
+        #: Told the protocol id after an activation or approval leaves the
+        #: latest revision executable -- the moment its sentences are
+        #: translated once (``protocol_translation``). It adds no authority
+        #: and its failure never undoes the decision already recorded.
+        self.on_execution_authorized = on_execution_authorized
+
+    def _execution_authorized(self, entry: ProtocolCatalogEntry) -> None:
+        if self.on_execution_authorized is None or not entry.available_for_execution:
+            return
+        try:
+            self.on_execution_authorized(self, entry.protocol_id)
+        except Exception as exc:  # noqa: BLE001 - see on_execution_authorized
+            logging.getLogger(__name__).warning(
+                "protocol.execution_authorized.hook_failed protocol_id=%s error=%s",
+                entry.protocol_id, type(exc).__name__,
+            )
 
     def _latest_protocol_revision(self, protocol_id: str) -> ProtocolRevisionRecord:
         if not _STABLE_PROTOCOL_ID.fullmatch(protocol_id):
@@ -3453,7 +3476,9 @@ class ProtocolCatalog:
             payload,
             analysis_revision_number=analysis_revision_number,
         )
-        return self.get_entry(protocol_id)
+        entry = self.get_entry(protocol_id)
+        self._execution_authorized(entry)
+        return entry
 
     def _development_activation_ordinal(
         self,
@@ -3537,7 +3562,9 @@ class ProtocolCatalog:
             payload,
             analysis_revision_number=analysis.analysis_revision_number,
         )
-        return self.get_entry(protocol_id)
+        entry = self.get_entry(protocol_id)
+        self._execution_authorized(entry)
+        return entry
 
     def deactivate_development(
         self,

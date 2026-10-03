@@ -227,6 +227,10 @@ class ProtocolVisualAsset:
         }
 
 
+#: The fact key a translation of the protocol's purpose is stored under.
+PURPOSE_FACT_KEY = "protocol/protocol_purpose"
+
+
 @dataclass(frozen=True)
 class WorkflowExecutionFingerprint:
     protocol_id: str
@@ -268,6 +272,10 @@ class CuratedProtocolFixture:
     #: entry the loader verified against the source. Empty when no manifest is
     #: present, which is why one document's timings cannot reach another's.
     timer_manifest: dict[str, int] | None = None
+    #: "<step_id>/<fact_id>" -> a stored machine translation that passed the
+    #: mechanical check for this revision. Used only where ``localizations``
+    #: (reviewed) has nothing; never presented as reviewed.
+    machine_localizations: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -358,9 +366,24 @@ class CuratedProtocolFixture:
         return tuple(facts)
 
     def localized_fact(self, step_id: str, fact_id: str) -> str | None:
-        if self.localizations is None:
-            return None
-        return self.localizations.get(f"{step_id}/{fact_id}")
+        """Reviewed Korean first, then a stored machine translation, else None."""
+
+        key = f"{step_id}/{fact_id}"
+        if self.localizations is not None and key in self.localizations:
+            return self.localizations[key]
+        if self.machine_localizations is not None:
+            return self.machine_localizations.get(key)
+        return None
+
+    def localization_source(self, step_id: str, fact_id: str) -> str | None:
+        """``reviewed``, ``machine`` or None for what ``localized_fact`` returns."""
+
+        key = f"{step_id}/{fact_id}"
+        if self.localizations is not None and key in self.localizations:
+            return "reviewed"
+        if self.machine_localizations is not None and key in self.machine_localizations:
+            return "machine"
+        return None
 
     def visual_for_step(self, index: int) -> ProtocolVisualAsset | None:
         """Return only an explicitly selected, verified source crop."""
@@ -4702,7 +4725,15 @@ def _protocol_query_presentation(
         # The purpose is the document's own statement of it, for every
         # protocol: nothing here may say what one particular PDF is for.
         page=knowledge.purpose.source_page
-        if language=="ko":
+        step_id, _, fact_id = PURPOSE_FACT_KEY.partition("/")
+        korean = fixture.localized_fact(step_id, fact_id)
+        if language=="ko" and korean:
+            speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
+            display=(
+                f"실험 목적\n{korean}\n\n원문 · English · PDF p.{page}\n"
+                f"{knowledge.purpose.text}"
+            )
+        elif language=="ko":
             speech="원문에 적힌 실험 목적을 화면에 표시했습니다."
             display=(
                 f"실험 목적\n원문에 적힌 실험 목적입니다.\n\n원문 · English · PDF p.{page}\n"
@@ -5334,6 +5365,9 @@ class CuratedProtocolSession:
 
     def __init__(self, fixture: CuratedProtocolFixture) -> None:
         self.fixture = fixture
+        #: Presentation only: a stored machine translation has been shown in
+        #: this session, so the page keeps its automatic-translation line.
+        self.machine_translation_shown = False
         self.active = False
         self.current_index = 0
         self._revision = 0
