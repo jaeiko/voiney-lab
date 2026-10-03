@@ -393,11 +393,12 @@ class SemanticParaphraseCorpusTests(SemanticFallbackTestCase):
              "semantic_complete_current_step",
              intent=SemanticIntent.COMPLETE_CURRENT_STEP,
              mutation_requested=True, evidence="완료됐어"),
-        Case("끝났어", Stage.SEMANTIC,
+        # Lane R0 (decision 4, 2026-10-02): the rule path now asks
+        # "N단계 완료하셨나요?" for "끝났어" itself, so the semantic stage is
+        # never consulted; the action and the unchanged state are the same.
+        Case("끝났어", Stage.DETERMINISTIC,
              CuratedProtocolAction.CLARIFY_COMPLETION, False,
-             "semantic_complete_current_step",
-             intent=SemanticIntent.COMPLETE_CURRENT_STEP,
-             mutation_requested=True, evidence="끝났어"),
+             "deterministic_route_resolved"),
     )
 
     def test_paraphrases_resolve_to_the_bounded_action_they_mean(self) -> None:
