@@ -123,6 +123,18 @@ class ReadinessReasonCode(str, Enum):
     #: but the value that went missing keeps the Protocol out of execution
     #: until a person has looked at it.
     SOURCE_PAGE_NOT_FULLY_READ = "source_page_not_fully_read"
+    #: A source page the PDF text layer could not supply -- no text, or a
+    #: glyph with no Unicode mapping -- and whose OCR text has not been
+    #: accepted.
+    #:
+    #: The page is marked, not the document, so the readable pages are still
+    #: analysed. What was on the marked page is unknown, and it can be a value
+    #: or a whole step: on ANKOM page 3 two unmappable glyphs stand directly
+    #: before a duration. A signature does not make that page readable, so this is
+    #: deliberately not an acknowledgeable gate. It clears the way the page
+    #: gets read: OCR, a reviewer accepting the OCR text, and an analysis of
+    #: that text -- whose pages no longer carry the mark.
+    SOURCE_PAGE_REQUIRES_OCR = "source_page_requires_ocr"
     #: The analysis declined a segment that states a value inside a numbered
     #: step -- it read the segment and recorded that it holds no claim.
     #:
@@ -1653,6 +1665,7 @@ _REASON_ORDER = {
             ReadinessReasonCode.UNRESOLVED_EXECUTION_VALUE_CONFLICT,
             ReadinessReasonCode.SAFETY_CRITICAL_CONFLICT,
             ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS,
+            ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR,
             ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ,
             ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED,
             ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES,
@@ -1775,6 +1788,11 @@ def assess_readiness(
     ``uncaptured_repeat_instructions`` names ranges the source says to repeat
     and the analysis has no repetition for. Read from the document's own text,
     never inferred.
+
+    Pages that need OCR are read from the Protocol's own source extraction,
+    ``protocol.metadata.pdf``, which is the extraction the analysis read. Text
+    accepted from OCR replaces those pages before analysis, so a Protocol
+    analysed from it carries no marked page and no such reason.
     """
 
     try:
@@ -1835,6 +1853,21 @@ def assess_readiness(
                     "A reviewer must confirm this Protocol's safety warnings "
                     "before execution. Extracted warnings are model judgement "
                     "and do not discharge the review by themselves."
+                ),
+            )
+        )
+
+    ocr_pages = protocol.metadata.pdf.ocr_required_page_numbers
+    if ocr_pages:
+        reasons.append(
+            ReadinessReason(
+                code=ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR,
+                message=(
+                    "Source page(s) "
+                    + ", ".join(str(page) for page in ocr_pages)
+                    + " could not be read from the PDF text layer and need "
+                    "OCR. Execution waits until a reviewer accepts their OCR "
+                    "text and the Protocol is analysed from it."
                 ),
             )
         )

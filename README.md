@@ -176,6 +176,14 @@ accept/reject decision at `POST /api/protocols/{id}/ocr/review`. Acceptance only
 makes the reviewed text eligible for a separate structured-analysis request. It
 does not start analysis, approve a revision, or make anything executable.
 
+A readable PDF with only some pages marked `ocr_required` does not pause: its
+readable pages are analysed as usual, and the same OCR route
+(`GET`/`POST /api/protocols/{id}/ocr`, then review) is open for the marked
+pages. Until a reviewer has accepted their OCR text and the Protocol has been
+analysed again from it, readiness carries `source_page_requires_ocr` naming
+those pages, so the Protocol is not guidance-ready. No gate acknowledgement
+clears it.
+
 No OCR engine is selected by a client. At startup the server builds the
 adapter from the environment (`src/voiney_lab/protocol_ocr_providers.py`) and
 injects it as `app.state.protocol_ocr_provider`; an adapter a deployment has
