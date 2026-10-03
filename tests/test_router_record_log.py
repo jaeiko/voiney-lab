@@ -37,11 +37,15 @@ from voiney_lab.llm_router import (
 ASK = "이상 사항으로 기록할까요?"
 RECORD_WORDS = (
     ("메모해 줘 튜브 라벨 A-170", "튜브 라벨 A-170"),
-    ("관찰 기록 젤이 투명해졌어", "젤이 투명해졌어"),
+    # Lane R3 (decision 1 narrowed): a request to record, not the noun.
+    ("관찰 기록해 줘 젤이 투명해졌어", "젤이 투명해졌어"),
     ("적어줘 버퍼 1 넣은 시간 3시 10분", "버퍼 1 넣은 시간 3시 10분"),
     ("note the pellet looks loose", "the pellet looks loose"),
 )
-NOT_RECORD_WORDS = ("자세히 알려줘", "다 했어", "튜브 라벨 A-170", "젤이 투명해졌어")
+NOT_RECORD_WORDS = (
+    "자세히 알려줘", "다 했어", "튜브 라벨 A-170", "젤이 투명해졌어",
+    "관찰 기록 젤이 투명해졌어",
+)
 PROBLEMS = ("튜브가 터졌어", "원심분리기에서 이상한 소리가 나", "시료를 흘렸어", "예상과 달라")
 NOT_PROBLEMS = ("튜브 뚜껑이 좀 헐거워", "젤 조각이 바닥에 붙었어", "다 했어", "자세히 알려줘")
 

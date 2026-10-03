@@ -2558,6 +2558,12 @@ OUTSIDE_PDF_SPOKEN_LEAD = {
     "en": "The PDF does not explain this.",
 }
 #: Said when a model answer was dropped by a check and the rules had none.
+#: A hand-off asked of the voice (decision 1 of 2026-10-03, D8): reports are
+#: sent from the screen, never by voice, and nothing is recorded.
+HANDOFF_ON_SCREEN_REPLY = {
+    "ko": "보고서는 화면에서 보내 주세요.",
+    "en": "Please send the report from the screen.",
+}
 ANSWER_NOT_CONFIRMED = {
     "ko": "PDF에서 확인할 수 없어요.",
     "en": "I could not confirm that in the PDF.",
@@ -12797,6 +12803,11 @@ class CuratedProtocolSession:
             if reading:
                 localized[fact_id] = reading
                 item["ko"] = reading
+                source = getattr(self.fixture, "localization_source", None)
+                if callable(source) and source(step_id, fact.fact_id) == "machine":
+                    # Lane R3, decision 7: a stored machine translation is
+                    # marked; a reviewed reading carries no mark.
+                    item["localization_source"] = "machine"
             return item
 
         near = []
@@ -12822,6 +12833,18 @@ class CuratedProtocolSession:
                          *view.equipment, *view.safety):
                 protocol_facts.append(entry(f"P.{fact.fact_id}", fact, None))
         terms = tuple(term.text for term in self._protocol_vocabulary().terms)
+        # Decision 6 (lane R3): the words an outside-PDF explanation may be
+        # about are the protocol's own -- every step, its facts (warnings
+        # included), materials and equipment, and their Korean readings.
+        text_parts: list[str] = []
+        for at, step in enumerate(steps):
+            text_parts.append(step.instruction_source_text)
+            for fact in self.fixture.facts_for_step(at):
+                text_parts.append(fact.text)
+                reading = self._localized_fact(step.step_id, fact.fact_id)
+                if reading:
+                    text_parts.append(reading)
+        text_parts.extend(item["text"] for item in protocol_facts)
         protocol = {
             "title": self.fixture.title,
             "step_count": len(steps),
@@ -12864,6 +12887,7 @@ class CuratedProtocolSession:
         return RouterContext(
             snapshot=snapshot, protocol=protocol, evidence=evidence,
             localized=localized, terms=terms,
+            protocol_text="\n".join(text_parts),
             server_values=ServerValues(
                 title=self.fixture.title,
                 revision_id=self.fixture.revision_id,
@@ -13369,7 +13393,12 @@ class CuratedProtocolSession:
         label = facts.current_step_label or ""
         ko = language == "ko"
         action = CuratedProtocolAction.UNSUPPORTED
-        if code == "workflow_not_active":
+        speech_mode = CuratedProtocolSpeechMode.BLOCKED
+        if code == "handoff_not_by_voice":
+            action = CuratedProtocolAction.REPORT_HANDOFF
+            speech_mode = CuratedProtocolSpeechMode.CONTROL
+            response = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
+        elif code == "workflow_not_active":
             action = CuratedProtocolAction.INACTIVE
             if self._workflow_status in {"preview", "ready"}:
                 response = (
@@ -13448,7 +13477,7 @@ class CuratedProtocolSession:
             action=action,
             display_text=response,
             speech_text=response,
-            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+            speech_mode=speech_mode,
             facts=(),
             step_label=(label or None) if self.active else None,
             final_step=self.active and self.current_index == len(self.fixture.steps) - 1,

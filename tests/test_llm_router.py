@@ -182,6 +182,10 @@ class ValidationTests(unittest.TestCase):
             # Decision 1 (2026-10-03): an observation needs a word of recording.
             ("no_record_word", [_record("observation", "튜브 라벨 A-170", "튜브 라벨 A-170")],
              _facts("튜브 라벨 A-170")),
+            # Lane R3 (decision 1): a hand-off is not recorded by voice.
+            ("handoff_not_by_voice",
+             [_record("anomaly", "이상사항", "안전관리자에게 이상사항 전달해줘")],
+             _facts("안전관리자에게 이상사항 전달해줘")),
         )
         seen = set()
         for code, proposals, facts in cases:
@@ -419,7 +423,9 @@ class ApplyToolProposalTests(unittest.TestCase):
     def test_record_log_takes_only_the_researchers_own_words(self) -> None:
         session = _session(self.fixture)
         verdict, plan = _propose(
-            session, 2, "메모 튜브 라벨 A-170", _record("observation", "튜브 라벨 A-170", "메모 튜브 라벨 A-170")
+            # A request to record (decision 1 as narrowed by lane R3).
+            session, 2, "메모해 줘 튜브 라벨 A-170",
+            _record("observation", "튜브 라벨 A-170", "메모해 줘 튜브 라벨 A-170"),
         )
         self.assertEqual(verdict.effect, "execute")
         self.assertIs(plan.action, CuratedProtocolAction.RECORD_OBSERVATION)

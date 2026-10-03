@@ -27,12 +27,16 @@ people running the pilot decided them on 2026-10-02:
 * ``pause`` runs at once; ``resume`` only lifts a pause; ``start`` only
   starts a protocol that has never started.
 
-and as they decided on 2026-10-03 (decision 1): ``record_log`` takes an
-observation only with a word of recording in its evidence ("메모", "기록",
-"관찰", "적어", "note", "record", ...) -- a reply to the open observation
+and as they decided on 2026-10-03 (decision 1, narrowed for lane R3):
+``record_log`` takes an observation only when its evidence asks for one in
+so many words ("기록해 줘", "적어", "메모해", "남겨", "note this", "record
+this"; the noun "기록" is not a request) -- a reply to the open observation
 question is the front rules' (F5) and never reaches a proposal -- and an
-anomaly only when the words read as a problem by the rules' own tables; any
-other anomaly is asked about once, "이상 사항으로 기록할까요?".
+anomaly only when the words read as a problem by the rules' own tables and
+do not ask for a hand-off ("~에게 전달해줘", answered "보고서는 화면에서
+보내 주세요."); any other anomaly is asked about once, "이상 사항으로
+기록할까요?". An answer is also checked for a question only the server asks,
+and an outside-PDF explanation may be about any word of the protocol's text.
 
 server.py routes a turn here only when VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED
 is true; it is false by default, and off, every turn takes the rules' path
@@ -52,6 +56,7 @@ from typing import Any
 
 from voiney_lab.answer_checks import (
     ServerValues,
+    asks_server_question,
     claims_state_change,
     display_label_violations,
     introduces_bare_numbers,
@@ -215,7 +220,8 @@ REFUSAL_REASONS: Mapping[str, str] = {
     "not_paused": "resume while not paused",
     "no_step_timer": "the current step has no source timer",
     "value_not_in_utterance": "the recorded value is not the researcher's words",
-    "no_record_word": "an observation without a word of recording (decision 1)",
+    "no_record_word": "an observation without a request to record it (decision 1)",
+    "handoff_not_by_voice": "an anomaly asked to be handed to someone: not by voice (D8, decision 1)",
 }
 
 
@@ -372,11 +378,28 @@ _TIMER_WORD = re.compile(
     r"\btimer\b|\btime\s+(?:it|this|the\s+step)\b",
     re.I,
 )
-#: Asking for something to be written down (decision 1): an observation is
-#: recorded only when its evidence says so.
+#: Asking for something to be written down (decision 1, narrowed by lane R3):
+#: an observation is recorded only when its evidence asks for it in so many
+#: words -- "기록해 (줘)", "적어 (줘)", "메모해", "남겨 (줘)", "note this",
+#: "record this". The noun ("실험 기록 보여줘", "기록 열어줘", "메모 A-170") is
+#: not a request, nor are look-alikes ("적어도", "남겨진").
 _RECORD_WORD = re.compile(
-    r"메모|기록|관찰|적어|남겨\s*(?:줘|둬|놔|주세요)|"
-    r"\bnote\b|\brecord\b|\blog\b|\bjot\b|\bwrite\s+(?:it\s+|that\s+)?down\b",
+    r"기록\s*(?:좀\s*)?해|메모\s*(?:좀\s*)?해|"
+    r"적어\s*(?:줘|둬|놔|놓|두|주세요|줄래)|남겨\s*(?:줘|둬|놔|놓|두|주세요|줄래)|"
+    r"\b(?:note|record|log|jot)\s+(?:this|that|it)\b|"
+    r"\b(?:write|jot)\s+(?:this|that|it)\s+down\b|\bnote\s+down\b|"
+    r"\b(?:make|take)\s+a\s+note\b|^(?:please\s+)?(?:note|record)\s+(?:that|the)\b",
+    re.I,
+)
+#: Asking for something to be handed to someone ("안전관리자에게 이상사항
+#: 전달해줘", "교수님께 알려줘", "send the anomaly to the safety officer").
+#: Hand-off is not done by voice (D8); such an anomaly is not recorded
+#: (decision 1 of 2026-10-03, lane R3), and the reply points to the screen.
+_HANDOFF_REQUEST = re.compile(
+    r"(?:에게|께|한테)\s*(?:\S+\s*){0,3}?(?:전달|보내|알려|공유|보고|전송|인계)|"
+    r"(?:전달|전송|인계)\s*(?:좀\s*)?(?:해|부탁)|"
+    r"\b(?:send|forward|email|report|pass)\b.{0,40}\bto\s+(?:the\s+|my\s+)?"
+    r"(?:professor|advisor|supervisor|safety\s+officer|manager|pi)\b",
     re.I,
 )
 #: The step is said not to be done: "덜 됐는데", "아직", "안 끝났어", "not yet".
@@ -535,6 +558,9 @@ def validate_tool_proposal(
             if _RECORD_WORD.search(evidence):
                 return ProposalVerdict("execute", "accepted", proposal)
             return refuse("no_record_word")
+        if is_handoff_request(facts.utterance):
+            # Problem words or not, a hand-off is not recorded by voice.
+            return refuse("handoff_not_by_voice")
         if reports_a_problem(facts.utterance):
             return ProposalVerdict("execute", "accepted", proposal)
         # Not read as a problem: asked about once (decision 1).
@@ -577,6 +603,21 @@ def validate_tool_proposal(
             question="timer", stated_duration_seconds=stated,
         )
     return ProposalVerdict("execute", "accepted", proposal)
+
+
+def is_handoff_request(utterance: str) -> bool:
+    """The words ask for something to be handed to someone (decision 1, lane R3).
+
+    The router's own pattern, and the rules' hand-off table read as the rules
+    read it.
+    """
+
+    from voiney_lab import curated_protocol as rules
+
+    if _HANDOFF_REQUEST.search(" ".join(utterance.split())):
+        return True
+    key = rules._utterance_key(utterance)
+    return any(pattern.search(key) for pattern in rules._HANDOFF_PATTERNS)
 
 
 def reports_a_problem(utterance: str) -> bool:
@@ -685,7 +726,7 @@ Most turns are questions or remarks: answer them. A question -- anything asking 
 Reply with exactly one function call: answer, change_state or record_log.
 
 1. Call change_state when, in THIS turn, the researcher asks to start the experiment, says the current step is done or asks to go to the next step, asks to end the experiment (only with 종료), to pause, to resume, or to start the step timer. evidence = the exact words from this turn that ask for it. The server asks the researcher to confirm "next" and "stop"; never call next when they say the step is not done.
-2. Call record_log when the researcher asks to write something down (메모, 기록, 관찰, 적어, note, record) or reports a problem or anomaly. value = their own words, unchanged.
+2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: reports are sent from the screen.
 3. Otherwise call answer: spoken, display, source_kind ("pdf" | "outside_pdf" | "server_state" | "none"), evidence_ids, and outside_pdf_term only for an outside_pdf answer.
 
 Never call a tool for a question, a hypothetical, a plan or wish, a step other than the current one, or to skip steps. At most one tool call.
@@ -694,9 +735,11 @@ Answer rules:
 - Answer in the researcher's language: Korean unless they spoke English. "spoken" is what is said aloud: one or two short sentences, at most about 120 characters. "display" may add a little detail for the screen; leave it "" to show "spoken".
 - Amounts, temperatures, times, speeds, concentrations, methods, safety and when a step is done come ONLY from PROTOCOL CONTEXT facts. Copy their numbers and units exactly, put the fact ids in evidence_ids, and use source_kind "pdf". If the protocol does not say it, answer "PDF에서 확인할 수 없어요." with source_kind "none".
 - The current step, progress and the timer come only from SERVER SNAPSHOT (source_kind "server_state"). Never guess time left.
-- source_kind "outside_pdf" is allowed only to say what a term listed in PROTOCOL CONTEXT "terms" means, or what it is for (its role or purpose), when the protocol does not explain it: at most 120 characters, no numbers, nothing about amounts, methods, safety or when a step is done. Put that term in outside_pdf_term. Do not mark it yourself; the server adds the mark.
+- A "ko" reading with "localization_source": "machine" is an automatic translation, not a reviewed one; the English "text" is the source.
+- source_kind "outside_pdf" is allowed only to say what a word of the protocol (a listed term, or a word of its steps, materials or warnings) means, or what it is for (its role or purpose), when the protocol does not explain it: at most 120 characters, no numbers, nothing about amounts, methods, safety or when a step is done. Put that term in outside_pdf_term. Do not mark it yourself; the server adds the mark.
 - Never say that something was done (moved on, started, ended, paused, resumed, recorded, saved, timer started). You only answer.
 - Never write screen labels such as 직접 답변, 답변 · 한국어, 원문, 출처, 근거 경계, 개발 정보, PDF 밖.
+- Never ask the researcher to confirm anything (whether a step is done, whether to end, record, move on or start): only the server asks those.
 - Never approve a change to the protocol ("X 대신 Y 써도 돼?"): say what the protocol states, and that a change needs approval.
 - If you cannot tell what "그거" or "that" means, ask which one, briefly.
 """
@@ -719,6 +762,10 @@ class RouterContext:
     terms: tuple[str, ...] = ()
     #: The identifiers an answer may only repeat exactly (title, step count, ...).
     server_values: ServerValues | None = None
+    #: The active protocol's own text -- every step, its facts (warnings
+    #: included), materials and equipment, with their Korean readings: what
+    #: an outside-PDF explanation may be about (lane R3, decision 6).
+    protocol_text: str = ""
 
     def evidence_text(self, ids: Sequence[str] | None = None) -> str:
         """The facts ``ids`` name (all when None), source and reviewed reading."""
@@ -956,6 +1003,10 @@ def answer_check_failures(
         failures.append("number_not_in_source")
     if claims_state_change(body):
         failures.append("claims_state_change")
+    if asks_server_question(body):
+        # Decision 5 (lane R3): "…완료하셨나요?", "종료할까요?" are the
+        # server's questions; asked by an answer, the next "네" answers none.
+        failures.append("server_question")
     if display_label_violations(body):
         failures.append("display_label")
     if context.server_values is not None and server_value_violations(body, context.server_values):
@@ -963,13 +1014,13 @@ def answer_check_failures(
     if answer.source_kind == "outside_pdf":
         found = list(outside_pdf_violations(
             answer.spoken, question=utterance, term=answer.outside_pdf_term,
-            protocol_terms=context.terms,
+            protocol_terms=context.terms, protocol_text=context.protocol_text,
         ))
         if answer.display and answer.display != answer.spoken:
             found.extend(
                 item for item in outside_pdf_violations(
                     answer.display, question=utterance, term=answer.outside_pdf_term,
-                    protocol_terms=context.terms,
+                    protocol_terms=context.terms, protocol_text=context.protocol_text,
                 ) if item not in found
             )
         if found:
@@ -1110,7 +1161,7 @@ async def route_turn_with_llm_router(
             generation=generation,
         )
         verdict = validate_tool_proposals(proposals, facts, basis)
-        if not verdict.accepted:
+        if not verdict.accepted and verdict.reason_code != "handoff_not_by_voice":
             return await fall_back(
                 f"refused:{verdict.reason_code}", verdict=verdict,
                 proposals=proposals, reply=reply,
