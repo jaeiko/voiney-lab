@@ -2526,6 +2526,59 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
     return None
 
 
+#: The front rules: the turns the server plans by rule without waiting on a
+#: model (lane R design §1-2, decisions D2, D3, D5, D9 of 2026-10-02). The
+#: names are the ones the lane R evaluation set uses. F1, the emergency gate,
+#: runs in server.py before any planning and is not listed here.
+FRONT_RULES: dict[str, str] = {
+    "stt_unreliable": "F2 the transcript cannot be trusted: provider quality, "
+                      "a reply in another language, a word that needs repair",
+    "pause": "F3 a pause word, or wanting to stop without saying 종료",
+    "end_command": "F3 a command with 종료 in it, asked about once (D5)",
+    "yes_no_open_question": "F4 a yes or no to an open completion, end or "
+                            "transcript question",
+    "observation_reply": "F5 any reply while an endpoint question is open, an "
+                         "endpoint stated at a repeat-until step with no "
+                         "question open (D9), and the reply to a note or "
+                         "problem the server is waiting on",
+    "timer_remaining": "F6 the step timer's time left, from the server clock",
+    "coreference_clarify": "F7 '그거' and other references asked back (D3)",
+    "repeat_last_reply": "F8 say it again, or the sound did not play",
+    "cancel_background_job": "F9 cancel a read-only lookup",
+    "targeted_completion": "a completion that names the current step (D2)",
+}
+
+#: The front rule an action the rules read belongs to, whatever its wording.
+_FRONT_RULE_BY_ACTION: dict[CuratedProtocolAction, str] = {
+    CuratedProtocolAction.TRANSCRIPT_UNRELIABLE: "stt_unreliable",
+    CuratedProtocolAction.PAUSE: "pause",
+    CuratedProtocolAction.STOP: "end_command",
+    CuratedProtocolAction.TIMER_STATUS: "timer_remaining",
+    CuratedProtocolAction.CLARIFY_REFERENCE: "coreference_clarify",
+    CuratedProtocolAction.REPEAT: "repeat_last_reply",
+    CuratedProtocolAction.AUDIO_RECOVERY: "repeat_last_reply",
+    CuratedProtocolAction.CANCEL_READONLY: "cancel_background_job",
+}
+
+
+@dataclass(frozen=True)
+class _OpenQuestions:
+    """Which one-turn server questions the turn being planned can answer."""
+
+    completion: bool
+    observation: bool
+    transcript: bool
+    note: bool
+    stop: bool
+
+    @property
+    def any_open(self) -> bool:
+        return (
+            self.completion or self.observation or self.transcript
+            or self.note or self.stop
+        )
+
+
 _RESUME_PATTERNS = (
     re.compile(r"(?:다시\s*(?:시작|진행)|재개|계속\s*(?:하자|할게|해줘)|계속\s*진행)"),
     re.compile(r"^(?:resume(?:\s+(?:the\s+)?(?:protocol|experiment))?|continue(?:\s+the\s+protocol)?)$", re.I),
@@ -5350,6 +5403,9 @@ class CuratedProtocolSession:
         self._pending_transcript_confirmation: PendingTranscriptConfirmation | None = None
         self._workflow_status: str = "preview"
         self._last_semantic_decision: SemanticIntentDecision | None = None
+        #: The front rule (FRONT_RULES) that planned the last turn, or None
+        #: when no front rule owned it. Telemetry only; never rolled back.
+        self._last_front_rule: str | None = None
         self._operator_repetition_counts: dict[str, dict[str, object]] = {}
         # Experiment-session facts, not reviewer findings: cleared on reset
         # with the rest of the session, and never written to the approval
@@ -7332,6 +7388,12 @@ class CuratedProtocolSession:
 
         return self._last_semantic_decision
 
+    @property
+    def last_front_rule(self) -> str | None:
+        """The FRONT_RULES name that planned the last turn, for telemetry only."""
+
+        return self._last_front_rule
+
     def _apply_semantic_intent_fallback(
         self,
         intent: CuratedControlIntent,
@@ -8480,33 +8542,26 @@ class CuratedProtocolSession:
             speech_text=f"{plan.speech_text} {question}".strip(),
         )
 
-    def plan(
+    def _open_questions(
         self,
-        transcript: str,
         *,
         turn_id: int,
-        language: str,
-        transcript_quality: str | None = None,
-        configuration_id: int | None = None,
-        generation: int | None = None,
-        arbitration: RequestArbitration | None = None,
-        semantic_proposal: SemanticIntentProposal | None = None,
-        semantic_settings: SemanticIntentSettings | None = None,
-        #: Who is speaking, for the endpoint-observation record. Optional
-        #: because a session may run with no workspace and therefore no
-        #: principal; the record then names the role and leaves the identity
-        #: empty rather than inventing one.
-        actor_principal_id: str | None = None,
-        actor_role: str = "voice_operator",
-    ) -> CuratedProtocolTurnPlan:
-        if turn_id in self._replay:
-            return self._replay[turn_id]
-        self._last_semantic_decision = None
-        command_key = _utterance_key(transcript)
+        configuration_id: int | None,
+        generation: int | None,
+    ) -> _OpenQuestions:
+        """Which server questions this turn can answer. Reads, never writes.
+
+        A question is answerable only on the turn right after it was asked,
+        at the step, revision, configuration and generation it was asked at.
+        plan() reads its open questions here, and so does a tool proposal's
+        validation: a turn an open question owns is the front rules' turn.
+        """
+
         pending = self._pending_completion_confirmation
         observation_pending = self._pending_observation_confirmation
         transcript_pending = self._pending_transcript_confirmation
         note_pending = self._pending_note_capture
+        stop_pending = self._pending_stop_confirmation
         pending_valid = bool(
             pending is not None
             and self.active
@@ -8524,7 +8579,6 @@ class CuratedProtocolSession:
                 or generation >= pending.requested_generation
             )
         )
-        normalized_confirmation = _semantic_utterance_key(transcript)
         observation_pending_valid = bool(
             observation_pending is not None
             and self.active
@@ -8578,7 +8632,6 @@ class CuratedProtocolSession:
                 or generation >= note_pending.get("requested_generation")
             )
         )
-        stop_pending = self._pending_stop_confirmation
         stop_pending_valid = bool(
             stop_pending is not None
             and turn_id == stop_pending.get("requested_turn_id", -2) + 1
@@ -8592,6 +8645,181 @@ class CuratedProtocolSession:
                 or generation >= stop_pending.get("requested_generation")
             )
         )
+        return _OpenQuestions(
+            completion=pending_valid,
+            observation=observation_pending_valid,
+            transcript=transcript_pending_valid,
+            note=note_pending_valid,
+            stop=stop_pending_valid,
+        )
+
+    def _front_rule_for(
+        self,
+        intent: CuratedControlIntent,
+        classified: CuratedControlIntent | None,
+    ) -> str | None:
+        """The front rule a turn the rules read falls under, or None.
+
+        ``intent`` is the turn's final reading; ``classified`` is what the
+        rules made of the words before the step's own gates adjusted it
+        (None when an open question, not the words, decided the turn).
+        """
+
+        if intent.confidence_source == "semantic_intent_fallback":
+            # A model's reading is never a front rule.
+            return None
+        rule = _FRONT_RULE_BY_ACTION.get(intent.action)
+        if rule is not None:
+            return rule
+        if (
+            classified is not None
+            and classified.action is CuratedProtocolAction.NEXT
+            and classified.reported_completion
+            and classified.intent_kind not in _UNTARGETED_COMPLETION_KINDS
+            and not self._names_another_step(classified)
+            and (
+                intent.action is CuratedProtocolAction.NEXT
+                # At a repeat-until step the step is held for its endpoint.
+                or intent.intent_kind == "observation_confirmation_required"
+            )
+        ):
+            return "targeted_completion"
+        return None
+
+    def plan(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None = None,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        arbitration: RequestArbitration | None = None,
+        semantic_proposal: SemanticIntentProposal | None = None,
+        semantic_settings: SemanticIntentSettings | None = None,
+        #: Who is speaking, for the endpoint-observation record. Optional
+        #: because a session may run with no workspace and therefore no
+        #: principal; the record then names the role and leaves the identity
+        #: empty rather than inventing one.
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+    ) -> CuratedProtocolTurnPlan:
+        """Plan one turn by the rules: the front rules, then all the others."""
+
+        planned = self._plan(
+            transcript,
+            turn_id=turn_id,
+            language=language,
+            transcript_quality=transcript_quality,
+            configuration_id=configuration_id,
+            generation=generation,
+            arbitration=arbitration,
+            semantic_proposal=semantic_proposal,
+            semantic_settings=semantic_settings,
+            actor_principal_id=actor_principal_id,
+            actor_role=actor_role,
+            front_only=False,
+        )
+        if planned is None:
+            raise CuratedProtocolFixtureError("A turn was left unplanned.")
+        return planned
+
+    def front_plan(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None = None,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        arbitration: RequestArbitration | None = None,
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+    ) -> CuratedProtocolTurnPlan | None:
+        """The turn as a front rule plans it, or None with nothing touched.
+
+        The front rules (FRONT_RULES) are the turns that never wait on a
+        model: F2 an untrustworthy transcript, F3 pause words and "종료"
+        commands, F4 a yes/no to an open question, F5 a reply while an
+        endpoint question is open or an endpoint stated at a repeat-until
+        step (D9), F6 time left, F7 "그거" (D3), F8 say it again, F9 cancel a
+        lookup, and a completion naming the current step (D2). F1, the
+        emergency gate, stays in server.py ahead of all planning.
+
+        This is plan() itself, stopped once the rules have read the turn. A
+        front rule's turn is planned by the very branches plan() uses, so the
+        plan is the one plan() would have made, and last_front_rule names the
+        rule. Any other turn returns None before anything is acted on, with
+        the open questions the reading cleared put back: the session is as it
+        was, for plan() or a validated tool proposal to take the turn.
+        A turn already planned is answered from the replay, as plan() does.
+        """
+
+        return self._plan(
+            transcript,
+            turn_id=turn_id,
+            language=language,
+            transcript_quality=transcript_quality,
+            configuration_id=configuration_id,
+            generation=generation,
+            arbitration=arbitration,
+            actor_principal_id=actor_principal_id,
+            actor_role=actor_role,
+            front_only=True,
+        )
+
+    def _plan(
+        self,
+        transcript: str,
+        *,
+        turn_id: int,
+        language: str,
+        transcript_quality: str | None = None,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+        arbitration: RequestArbitration | None = None,
+        semantic_proposal: SemanticIntentProposal | None = None,
+        semantic_settings: SemanticIntentSettings | None = None,
+        actor_principal_id: str | None = None,
+        actor_role: str = "voice_operator",
+        front_only: bool,
+    ) -> CuratedProtocolTurnPlan | None:
+        if turn_id in self._replay:
+            return self._replay[turn_id]
+        # What reading the turn may clear before the rules know who owns it.
+        # A front-only reading that hands the turn on puts these back.
+        untouched = (
+            self._last_semantic_decision,
+            self._pending_completion_confirmation,
+            self._pending_observation_confirmation,
+            self._pending_transcript_confirmation,
+            self._pending_note_capture,
+            self._pending_stop_confirmation,
+        ) if front_only else None
+        self._last_semantic_decision = None
+        # The front rule that owns this turn, once one does (FRONT_RULES).
+        front_rule: str | None = None
+        # What the rules made of the words, before the step's gates.
+        classified: CuratedControlIntent | None = None
+        command_key = _utterance_key(transcript)
+        pending = self._pending_completion_confirmation
+        observation_pending = self._pending_observation_confirmation
+        transcript_pending = self._pending_transcript_confirmation
+        note_pending = self._pending_note_capture
+        open_questions = self._open_questions(
+            turn_id=turn_id,
+            configuration_id=configuration_id,
+            generation=generation,
+        )
+        pending_valid = open_questions.completion
+        normalized_confirmation = _semantic_utterance_key(transcript)
+        observation_pending_valid = open_questions.observation
+        transcript_pending_valid = open_questions.transcript
+        note_pending_valid = open_questions.note
+        stop_pending = self._pending_stop_confirmation
+        stop_pending_valid = open_questions.stop
         if stop_pending is not None and not stop_pending_valid:
             self._pending_stop_confirmation = None
         # The question this turn could answer, kept aside in case the turn is
@@ -8662,6 +8890,7 @@ class CuratedProtocolSession:
             if stop_pending_valid else None
         )
         if stop_reply == "affirmative":
+            front_rule = "yes_no_open_question"
             self._pending_stop_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="stop_confirmed",
@@ -8692,6 +8921,7 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind="stop_confirmation_declined",
             )
+            self._last_front_rule = "yes_no_open_question"
             self._replay[turn_id] = plan
             return plan
         elif (
@@ -8699,6 +8929,7 @@ class CuratedProtocolSession:
             and not _utterance_looks_like_new_command(transcript)
             and transcript.strip()
         ):
+            front_rule = "observation_reply"
             self._pending_note_capture = None
             intent = CuratedControlIntent(
                 intent_kind="pending_observation_note_received",
@@ -8720,7 +8951,7 @@ class CuratedProtocolSession:
         ):
             proposed_tx = transcript_pending.proposed_transcript
             self._pending_transcript_confirmation = None
-            return self.plan(
+            confirmed = self.plan(
                 proposed_tx,
                 turn_id=turn_id,
                 language=language,
@@ -8728,6 +8959,8 @@ class CuratedProtocolSession:
                 configuration_id=configuration_id,
                 generation=generation,
             )
+            self._last_front_rule = "yes_no_open_question"
+            return confirmed
         elif transcript_pending_valid and (
             (
                 not reply_withheld
@@ -8757,6 +8990,7 @@ class CuratedProtocolSession:
                 intent_kind="pending_transcript_declined",
                 target_step="authoritative_current_step",
             )
+            self._last_front_rule = "yes_no_open_question"
             self._replay[turn_id] = plan
             return plan
         elif pending_valid and (
@@ -8766,6 +9000,7 @@ class CuratedProtocolSession:
             )
             or binary_reply == "affirmative"
         ):
+            front_rule = "yes_no_open_question"
             self._pending_completion_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="pending_completion_confirmed",
@@ -8786,6 +9021,7 @@ class CuratedProtocolSession:
             )
             or binary_reply == "negative"
         ):
+            front_rule = "yes_no_open_question"
             self._pending_completion_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="pending_completion_declined",
@@ -8808,6 +9044,7 @@ class CuratedProtocolSession:
             # first used to advance on it and drop the problem. Now the
             # problem is recorded and nothing moves; the question stays open,
             # without taking a bare yes, and the endpoint is asked for again.
+            front_rule = "observation_reply"
             self._pending_observation_confirmation = replace(
                 observation_pending, requested_turn_id=turn_id,
                 requested_generation=generation, accepts_yes_no=False,
@@ -8824,6 +9061,7 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif observation_pending_valid and observed is not None:
+            front_rule = "observation_reply"
             self._pending_observation_confirmation = None
             intent = CuratedControlIntent(
                 intent_kind="pending_observation_confirmed",
@@ -8843,6 +9081,7 @@ class CuratedProtocolSession:
         elif observation_pending_valid and observation_pending.accepts_yes_no and (
             observation_reply := _observation_binary_reply(transcript)
         ) is not None:
+            front_rule = "observation_reply"
             self._pending_observation_confirmation = None
             observed = (
                 observation_pending.affirmative_outcome
@@ -8869,6 +9108,7 @@ class CuratedProtocolSession:
                 normalized_transcript=normalized_confirmation,
             )
         elif pending_language_mismatch:
+            front_rule = "stt_unreliable"
             if pending_valid and pending is not None:
                 self._pending_completion_confirmation = replace(
                     pending, requested_turn_id=turn_id,
@@ -8928,6 +9168,7 @@ class CuratedProtocolSession:
                         requested_generation=generation, accepts_yes_no=False,
                     )
                 observation_hold = None
+                front_rule = "observation_reply"
                 intent = CuratedControlIntent(
                     intent_kind="enrich_pending_anomaly",
                     action=CuratedProtocolAction.REPORT_ANOMALY,
@@ -8980,6 +9221,7 @@ class CuratedProtocolSession:
                             intent_kind="corrupted_completion_confirmation_required",
                             target_step=step_lbl,
                         )
+                        self._last_front_rule = "stt_unreliable"
                         self._replay[turn_id] = plan
                         return plan
 
@@ -8989,6 +9231,7 @@ class CuratedProtocolSession:
                     language=language,
                     arbitration=shared_decision,
                 )
+                classified = intent
                 # The deterministic result above is the fast path and the
                 # default.  A semantic proposal only ever gets to replace a
                 # catch-all outcome, and only after server-owned policy accepts
@@ -9005,6 +9248,8 @@ class CuratedProtocolSession:
                         ),
                     )
                 if observation_hold is not None:
+                    # An open endpoint question owns the whole turn (F5).
+                    front_rule = "observation_reply"
                     intent = self._observation_prompt_reply(
                         observation_hold,
                         intent,
@@ -9086,6 +9331,7 @@ class CuratedProtocolSession:
                 # moves, and the endpoint question is opened -- without taking
                 # a bare yes -- once the turn is planned (below). It used to
                 # advance on the endpoint and drop the problem (lane O §8-2).
+                front_rule = "observation_reply"
                 intent = CuratedControlIntent(
                     intent_kind="observation_with_anomaly",
                     action=CuratedProtocolAction.REPORT_ANOMALY,
@@ -9098,6 +9344,7 @@ class CuratedProtocolSession:
                     normalized_transcript=normalized_confirmation,
                 )
             elif observed is not None:
+                front_rule = "observation_reply"
                 intent = replace(
                     intent,
                     action=CuratedProtocolAction.NEXT,
@@ -9153,6 +9400,7 @@ class CuratedProtocolSession:
                 or intent.intent_kind == "stop_confirmed"
             )
         ):
+            front_rule = "stt_unreliable"
             intent = CuratedControlIntent(
                 intent_kind="transcript_unreliable",
                 action=CuratedProtocolAction.TRANSCRIPT_UNRELIABLE,
@@ -9181,6 +9429,20 @@ class CuratedProtocolSession:
                 requested_transition=None,
                 requested_followup=None,
             )
+        if front_rule is None:
+            front_rule = self._front_rule_for(intent, classified)
+        self._last_front_rule = front_rule
+        if front_only and front_rule is None:
+            # No front rule owns this turn: it is handed on untouched.
+            (
+                self._last_semantic_decision,
+                self._pending_completion_confirmation,
+                self._pending_observation_confirmation,
+                self._pending_transcript_confirmation,
+                self._pending_note_capture,
+                self._pending_stop_confirmation,
+            ) = untouched
+            return None
         command = intent.action
         steps = self.fixture.steps
         opening_projection = (
