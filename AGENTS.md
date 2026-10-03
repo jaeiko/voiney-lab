@@ -8,11 +8,25 @@ source-linked protocol evidence.
 
 1. Never invent protocol steps, quantities, units, timers, chemical properties,
    safety limits, observations, history, approval, or completion.
-2. LLM output never mutates workflow state. Every mutation passes deterministic
-   intent, identity, revision, observation, timer, confirmation, and safety gates.
-3. Learning, audit, history, uncertainty, combined, visual, current-step, and
-   state-control requests must use the shared `RequestArbitration` boundary. Do
-   not add a competing intent classifier in a helper or prompt.
+2. LLM output never mutates workflow state: a model may only *propose* a
+   change. Every mutation -- read by the deterministic front rules or proposed
+   through a tool call -- passes the server's identity, revision, observation,
+   timer, confirmation, and safety gates, and is carried out by the existing
+   curated state machine (`CuratedProtocolSession`), never by a second one.
+3. Deterministic front rules read every turn first and never wait on a model:
+   the emergency gate in `server.py`, then `CuratedProtocolSession.front_plan`
+   (transcript quality, pause and "종료" words, a yes/no to an open question,
+   replies while an endpoint question is open, timer status, "그거", repeat,
+   cancel, and a completion naming the current step). Behind them, intent judgment belongs to one LLM
+   router: it answers, or proposes one change through its two tools
+   (`change_state`, `record_log` in `llm_router.py`); the server validates the
+   proposal (`validate_tool_proposals`) and carries it out through
+   `CuratedProtocolSession.apply_tool_proposal`. Until that router is wired and
+   enabled (it is not yet), the shared `RequestArbitration` boundary and the
+   curated rules remain the classification path for learning, audit, history,
+   uncertainty, combined, visual, current-step, and state-control requests. Do
+   not add any other competing intent classifier in a helper or prompt.
+   (Decision D1, 2026-10-02.)
 4. A read-only request must leave all workflow checkpoints unchanged. Combined
    “explain + next” requests stage an explicit completion confirmation.
 5. Provider/model failures are visible, bounded, and non-mutating. External web
@@ -34,8 +48,16 @@ source-linked protocol evidence.
 - `runtime_routing.py`: production curated-protocol routing boundary.
 - `semantic_intent.py`: bounded read-only semantic intent fallback vocabulary
   and server-owned proposal policy; it holds no mutation authority and is
-  consulted only when deterministic routing returns a catch-all.
-- `curated_protocol.py`: source-bounded plan and checkpoint state machine.
+  consulted only when deterministic routing returns a catch-all. Its evidence
+  and target fences are shared with the LLM router.
+- `curated_protocol.py`: source-bounded plan and checkpoint state machine;
+  `front_plan` (the front rules) and `apply_tool_proposal` (a validated
+  router proposal through the same branches).
+- `llm_router.py`: the LLM router's two tool schemas and the server's
+  validation of a proposal; no model call, no state, not wired yet.
+- `answer_checks.py`: server checks on a model-written answer (numbers,
+  state-change claims, display labels, outside-PDF explanations, server
+  values), shared by every answering role.
 - `protocol_catalog.py`: immutable PDF/catalog lifecycle and source-linked review.
 - `experiment_protocol*.py`: structured analysis model, validation, readiness,
   persistence, and fail-closed advanced constructs.

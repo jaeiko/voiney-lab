@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+
+from voiney_lab.answer_checks import claims_mutation, numbers_in
 
 
 ALLOWED_SOURCE_SCOPES = (
@@ -46,17 +47,6 @@ def _content(response: Any) -> str:
     if not isinstance(content, str):
         raise RuntimeError("brain response has no text")
     return content
-
-
-_NUMERIC = re.compile(
-    r"(?:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?\s*"
-    r"(?:mg/mL|ng/uL|mm3|mm³|µL|uL|mL|ml|mM|°C|rpm|min|v/v|C|h|%))",
-    re.I,
-)
-
-
-def _numbers(value: str) -> frozenset[str]:
-    return frozenset(item.casefold().replace(" ", "").replace("μ", "µ") for item in _NUMERIC.findall(value))
 
 
 @dataclass(frozen=True)
@@ -423,19 +413,13 @@ class HybridMultiBrain:
             ):
                 raise RuntimeError("answer brain claim section failed admission")
             section_evidence = "\n".join(fact_map[item] for item in section_ids)
-            if not _numbers(text).issubset(_numbers(section_evidence)):
+            if not numbers_in(text).issubset(numbers_in(section_evidence)):
                 raise RuntimeError("answer brain claim section introduced a number")
             sections.append((claim_id, text.strip(), tuple(section_ids)))
         admitted = "\n".join(fact_map[item] for item in ids)
-        if not _numbers(spoken + "\n" + display).issubset(_numbers(admitted)):
+        if not numbers_in(spoken + "\n" + display).issubset(numbers_in(admitted)):
             raise RuntimeError("answer brain introduced a number or unit")
-        forbidden = re.compile(
-            r"(?:I|제가|내가).{0,40}(?:saved|recorded|persisted|저장|기록)"
-            r"|(?:저장|기록)(?:했|됐|되었|했습니다)"
-            r"|(?:step|단계).*(?:completed|완료 처리)",
-            re.I,
-        )
-        if forbidden.search(spoken) or forbidden.search(display):
+        if claims_mutation(spoken) or claims_mutation(display):
             raise RuntimeError("answer brain claimed workflow/report mutation")
         return AnswerBrainOutput(
             spoken.strip(), display.strip(), tuple(ids), tuple(limitations),
