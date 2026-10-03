@@ -438,11 +438,14 @@ class InGelPickingTests(unittest.TestCase):
     def test_reviewed_sentences_are_kept_and_the_purpose_is_filled(self) -> None:
         fixture = in_gel_fixture()
         reviewed = dict(fixture.localizations)
-        # "Once" counts as 1 for the check, so a faithful reading says 한 번.
+        # A faithful house-style reading: "Once" opening a sentence,
+        # "avoiding" (피하는) and "contamination" (오염) no longer refuse it.
         translator = FakeTranslator(wrong={PURPOSE_FACT_KEY: (
-            "시설에서 쓰는 in-gel 프로토콜입니다. 한 번 소화를 마치면 Evotip에 "
-            "시료를 올립니다. keratin contamination을 막는 팁은 Warning 절을 "
-            "보세요.")})
+            "시설에서 사용하는 in-gel 프로토콜이며, 직접 in-gel digest를 준비할 때 "
+            "사용할 수 있습니다. 소화를 마치면 시료를 Evotip에 로드해 mass spec "
+            "분석을 할 수 있습니다. 수동으로 하거나 피펫팅 로봇을 사용할 수 "
+            "있습니다. in-gel digest의 케라틴 오염을 피하는 방법은 \"Warning\" "
+            "절을 참고합니다.")})
         report = generate(fixture, translator)
         sent = {key for batch in translator.batches for key in batch}
         self.assertEqual(report.skipped_reviewed, len(reviewed))
