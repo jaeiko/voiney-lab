@@ -378,27 +378,31 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         async def scenario(socket, listener, say):
             await say(1, "프로토콜 시작해줘")
             await say(2, "정지")
-            await say(3, "완료했어")
+            # The first word in a pause is answered aloud, once (lane Q); the
+            # silent notice is the one after it.
+            await say(3, "다음")
+            await say(4, "완료했어")
             seen["state"] = listener.state
             seen["active_turn_id"] = listener.active_turn_id
 
         socket, _ = self._session(scenario)
-        done = socket.for_turn(3, "turn.done")
+        self.assertEqual(socket.for_turn(3, "turn.done")[-1]["segment_count"], 1)
+        done = socket.for_turn(4, "turn.done")
         self.assertEqual(len(done), 1)
         self.assertEqual(done[0]["result_kind"], "pause")
         self.assertEqual(done[0]["segment_count"], 0)
         self.assertEqual(done[0]["output_frames"], 0)
-        reply = socket.reply(3)
+        reply = socket.reply(4)
         self.assertIn("일시정지 상태입니다", reply)
-        self.assertIn("'실험 재개'라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
-        self.assertEqual(socket.for_turn(3, "reply.delta")[-1]["speech_text"], "")
-        self.assertEqual(socket.for_turn(3, "audio.complete")[-1]["segment_count"], 0)
-        self.assertEqual(socket.for_turn(3, "audio.replay.available"), [])
-        kinds = [item["type"] for item in socket.sent if item.get("turn_id") == 3]
+        self.assertIn("'재개'라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
+        self.assertEqual(socket.for_turn(4, "reply.delta")[-1]["speech_text"], "")
+        self.assertEqual(socket.for_turn(4, "audio.complete")[-1]["segment_count"], 0)
+        self.assertEqual(socket.for_turn(4, "audio.replay.available"), [])
+        kinds = [item["type"] for item in socket.sent if item.get("turn_id") == 4]
         self.assertLess(kinds.index("reply.complete"), kinds.index("turn.done"))
         # The card is carried to its end state; there is no playback.ended
         # for a silent turn, so nothing else would (2026-10-01, line M).
-        states = [item["state"] for item in socket.for_turn(3, "turn.state")]
+        states = [item["state"] for item in socket.for_turn(4, "turn.state")]
         self.assertEqual(states[-2:], ["checking_protocol", "complete"])
         self.assertIsNone(seen["active_turn_id"])
         self.assertNotEqual(seen["state"], TurnState.PROCESSING)
