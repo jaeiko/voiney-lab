@@ -6,8 +6,9 @@ proposal is evidence, never authorization. This module holds the two tool
 schemas, parses a tool call, and rules on it against server-owned facts the
 session supplies; ``CuratedProtocolSession.apply_tool_proposal`` carries an
 accepted proposal out through the same plan() branches the rules use, so
-there is no second state machine. Nothing here calls a model, holds state,
-or imports the workflow machine.
+there is no second state machine. Nothing here calls a model or holds
+state; the workflow machine is never imported at load time (only the rules'
+problem-word tables are read, when an anomaly is ruled on).
 
 The rules follow the lane R design (``~/reports/lane_r_design.md`` §2) as the
 people running the pilot decided them on 2026-10-02:
@@ -22,6 +23,13 @@ people running the pilot decided them on 2026-10-02:
   (D6).
 * ``pause`` runs at once; ``resume`` only lifts a pause; ``start`` only
   starts a protocol that has never started.
+
+and as they decided on 2026-10-03 (decision 1): ``record_log`` takes an
+observation only with a word of recording in its evidence ("메모", "기록",
+"관찰", "적어", "note", "record", ...) -- a reply to the open observation
+question is the front rules' (F5) and never reaches a proposal -- and an
+anomaly only when the words read as a problem by the rules' own tables; any
+other anomaly is asked about once, "이상 사항으로 기록할까요?".
 
 Not wired: server.py calls none of this yet (lane R part 2-b).
 """
@@ -158,6 +166,7 @@ REFUSAL_REASONS: Mapping[str, str] = {
     "not_paused": "resume while not paused",
     "no_step_timer": "the current step has no source timer",
     "value_not_in_utterance": "the recorded value is not the researcher's words",
+    "no_record_word": "an observation without a word of recording (decision 1)",
 }
 
 
@@ -309,6 +318,13 @@ _TIMER_WORD = re.compile(
     r"\btimer\b|\btime\s+(?:it|this|the\s+step)\b",
     re.I,
 )
+#: Asking for something to be written down (decision 1): an observation is
+#: recorded only when its evidence says so.
+_RECORD_WORD = re.compile(
+    r"메모|기록|관찰|적어|남겨\s*(?:줘|둬|놔|주세요)|"
+    r"\bnote\b|\brecord\b|\blog\b|\bjot\b|\bwrite\s+(?:it\s+|that\s+)?down\b",
+    re.I,
+)
 #: The step is said not to be done: "덜 됐는데", "아직", "안 끝났어", "not yet".
 _NOT_DONE = re.compile(
     r"덜|아직|안\s*(?:됐|되었|돼|끝났|끝냈|했)|못\s*(?:했|끝냈|끝났)|미완|"
@@ -458,7 +474,19 @@ def validate_tool_proposal(
             return refuse("workflow_paused")
         if not _observation_matches_transcript(proposal.value, utterance):
             return refuse("value_not_in_utterance")
-        return ProposalVerdict("execute", "accepted", proposal)
+        if proposal.log_type == "observation":
+            # While the observation question is open the front rules own
+            # the turn (F5) and the fence above refuses any proposal, so
+            # here only the word of recording admits one.
+            if _RECORD_WORD.search(evidence):
+                return ProposalVerdict("execute", "accepted", proposal)
+            return refuse("no_record_word")
+        if reports_a_problem(facts.utterance):
+            return ProposalVerdict("execute", "accepted", proposal)
+        # Not read as a problem: asked about once (decision 1).
+        return ProposalVerdict(
+            "ask", "anomaly_needs_confirmation", proposal, question="anomaly",
+        )
     if action == "next":
         if facts.paused:
             return refuse("workflow_paused")
@@ -495,6 +523,23 @@ def validate_tool_proposal(
             question="timer", stated_duration_seconds=stated,
         )
     return ProposalVerdict("execute", "accepted", proposal)
+
+
+def reports_a_problem(utterance: str) -> bool:
+    """The words read as a problem by the rules' own tables (decision 1).
+
+    The tables are the endpoint question's problem words
+    (``_OBSERVATION_PROMPT_PROBLEM``) and the anomaly reader's
+    (``_ANOMALY_PATTERNS``), read as the rules read them. They are looked up
+    when called: curated_protocol imports this module, not the reverse.
+    """
+
+    from voiney_lab import curated_protocol as rules
+
+    if rules._OBSERVATION_PROMPT_PROBLEM.search(rules._semantic_utterance_key(utterance)):
+        return True
+    key = rules._utterance_key(utterance)
+    return any(pattern.search(key) for pattern, _category in rules._ANOMALY_PATTERNS)
 
 
 def _missing_action_word(action: str | None, evidence: str) -> str | None:

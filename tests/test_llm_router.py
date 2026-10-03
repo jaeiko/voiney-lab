@@ -178,6 +178,9 @@ class ValidationTests(unittest.TestCase):
             ("no_step_timer", [_change("start_timer", "타이머 시작해줘")], _facts("타이머 시작해줘")),
             ("value_not_in_utterance", [_record("observation", "A-17", "메모 튜브 라벨 A-170")],
              _facts("메모 튜브 라벨 A-170")),
+            # Decision 1 (2026-10-03): an observation needs a word of recording.
+            ("no_record_word", [_record("observation", "튜브 라벨 A-170", "튜브 라벨 A-170")],
+             _facts("튜브 라벨 A-170")),
         )
         seen = set()
         for code, proposals, facts in cases:
@@ -563,7 +566,8 @@ class InGelEndpointProposalTests(unittest.TestCase):
         session = _session(self.fixture, step_index=self.step_7)
         verdict, plan = _propose(
             session, 2, "탈색이 됐는지 모르겠어 일단 메모해 줘",
-            _record("observation", "탈색이 됐는지 모르겠어", "탈색이 됐는지 모르겠어"),
+            # Decision 1: the evidence carries the word of recording.
+            _record("observation", "탈색이 됐는지 모르겠어", "탈색이 됐는지 모르겠어 일단 메모해 줘"),
         )
         self.assertEqual(plan.observation_predicate, "note")
         self.assertEqual(session.endpoint_observations(), {})
