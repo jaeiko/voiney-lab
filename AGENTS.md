@@ -13,11 +13,11 @@ source-linked protocol evidence.
    through a tool call -- passes the server's identity, revision, observation,
    timer, confirmation, and safety gates, and is carried out by the existing
    curated state machine (`CuratedProtocolSession`), never by a second one.
-3. Deterministic front rules read every turn first and never wait on a model
-   (`CuratedProtocolSession.front_plan`: emergency, transcript quality, pause
-   and "종료" words, a yes/no to an open question, replies while an endpoint
-   question is open, timer status, "그거", repeat, cancel, and a completion
-   naming the current step). Behind them, intent judgment belongs to one LLM
+3. Deterministic front rules read every turn first and never wait on a model:
+   the emergency gate in `server.py`, then `CuratedProtocolSession.front_plan`
+   (transcript quality, pause and "종료" words, a yes/no to an open question,
+   replies while an endpoint question is open, timer status, "그거", repeat,
+   cancel, and a completion naming the current step). Behind them, intent judgment belongs to one LLM
    router: it answers, or proposes one change through its two tools
    (`change_state`, `record_log` in `llm_router.py`); the server validates the
    proposal (`validate_tool_proposals`) and carries it out through
