@@ -230,6 +230,143 @@ class SentenceChunker:
         return segment
 
 
+#: The lane R router's history (design §4, decision D14): at most this many
+#: turn bundles, and about this many tokens in all. The oldest bundle goes
+#: first, whole.
+ROUTER_HISTORY_MAX_TURNS = 6
+ROUTER_HISTORY_MAX_TOKENS = 1200
+#: What a bundle keeps of the words said and the reply spoken.
+ROUTER_HISTORY_USER_CHARS = 300
+ROUTER_HISTORY_ASSISTANT_CHARS = 200
+
+_ROUTER_HANDLERS = frozenset({"llm", "llm+tool", "fallback_rules"})
+_ROUTER_RESULTS = frozenset({
+    "executed", "confirm_opened", "observation_prompt_opened", "stop_prompt_opened",
+    "timer_prompt_opened", "recorded", "record_failed", "none",
+})
+#: The first line of a block the screen shows apart from the reply: the
+#: source, its citation, development information. None of it is history.
+_SCREEN_BLOCK_LINE = re.compile(
+    r"^(?:원문|Original|출처|Sources?|근거 경계|Source boundary|개발 정보|"
+    r"답변 · |한국어 참고 번역|직접 답변|Direct answer)"
+)
+_HANGUL_OR_WIDE = re.compile(r"[\u1100-\u11ff\u3000-\u9fff\uac00-\ud7a3\uff00-\uffef]")
+
+
+def estimate_tokens(text: str) -> int:
+    """A deliberately high token estimate without a tokenizer.
+
+    A Hangul syllable or other wide character counts as one token, and the
+    rest as a token per four characters: an over-count for Korean on the
+    tokenizers in use, so a history under the limit here is under it there.
+    """
+
+    wide = len(_HANGUL_OR_WIDE.findall(text))
+    return wide + -(-(len(text) - wide) // 4)
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _spoken_body(text: str) -> str:
+    """The reply as spoken, without the blocks the screen shows apart."""
+
+    kept: list[str] = []
+    for line in text.splitlines():
+        if _SCREEN_BLOCK_LINE.match(line.strip()):
+            break
+        kept.append(line)
+    return _clip("\n".join(kept), ROUTER_HISTORY_ASSISTANT_CHARS)
+
+
+@dataclass(frozen=True)
+class RouterTurnRecord:
+    """One turn as the lane R router remembers it (design §4-2).
+
+    History is what was talked about, never what the state is: the router
+    reads the state from each call's server snapshot, and a tool proposal's
+    evidence is checked against this turn's words only. So a bundle keeps the
+    step it was said at (a stale "@7" is visibly stale), the words said, who
+    handled them, the proposal's tool and action -- never its evidence or
+    value, which a later turn must not reuse -- the server's result, and at
+    most 200 characters of the reply spoken. It never keeps the source text,
+    discarded drafts, model reasoning, audio, identities, keys, paths,
+    latencies or evidence ids; an emergency reply is not kept, so it is not
+    imitated; an interrupted reply is kept as ``interrupted`` with no text.
+    """
+
+    at_step: str | None
+    status: str
+    user: str
+    handled_by: str
+    assistant: str | None = None
+    corrected_from: str | None = None
+    proposal_tool: str | None = None
+    proposal_kind: str | None = None
+    server_result: str | None = None
+    state_after: tuple[str | None, str] | None = None
+    interrupted: bool = False
+
+    def __post_init__(self) -> None:
+        if not (
+            self.handled_by in _ROUTER_HANDLERS
+            or (self.handled_by.startswith("front:") and len(self.handled_by) > 6)
+        ):
+            raise ValueError(f"unknown handler {self.handled_by!r}")
+        if self.server_result is not None and not (
+            self.server_result in _ROUTER_RESULTS
+            or (self.server_result.startswith("refused:") and len(self.server_result) > 8)
+        ):
+            raise ValueError(f"unknown server result {self.server_result!r}")
+        if (self.proposal_tool is None) != (self.proposal_kind is None):
+            raise ValueError("a proposal is a tool and its action or type")
+        object.__setattr__(self, "user", _clip(self.user, ROUTER_HISTORY_USER_CHARS))
+        if self.corrected_from is not None:
+            object.__setattr__(
+                self, "corrected_from", _clip(self.corrected_from, ROUTER_HISTORY_USER_CHARS)
+            )
+        if (
+            self.interrupted
+            or self.handled_by == "front:emergency"
+            or self.assistant is None
+        ):
+            object.__setattr__(self, "assistant", None)
+        else:
+            object.__setattr__(self, "assistant", _spoken_body(self.assistant))
+
+    def prompt_payload(self) -> dict[str, Any]:
+        """The bundle as the router's prompt carries it."""
+
+        payload: dict[str, Any] = {
+            "at_step": self.at_step,
+            "status": self.status,
+            "user": self.user,
+            "handled_by": self.handled_by,
+        }
+        if self.corrected_from is not None:
+            payload["corrected_from"] = self.corrected_from
+        if self.proposal_tool is not None:
+            key = "action" if self.proposal_tool == "change_state" else "type"
+            payload["proposal"] = {"tool": self.proposal_tool, key: self.proposal_kind}
+        if self.server_result is not None:
+            server: dict[str, Any] = {"result": self.server_result}
+            if self.state_after is not None:
+                step, status = self.state_after
+                server["state_after"] = {"step": step, "status": status}
+            payload["server"] = server
+        payload["assistant"] = self.assistant
+        if self.interrupted:
+            payload["interrupted"] = True
+        return payload
+
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(
+            json.dumps(self.prompt_payload(), ensure_ascii=False, separators=(",", ":"))
+        )
+
+
 class ConversationHistory:
     """In-memory history trimmed only at complete turn-group boundaries."""
 
@@ -238,11 +375,28 @@ class ConversationHistory:
         self.groups: list[list[dict[str, Any]]] = []
         self.pending_report: dict[str, Any] | None = None
         self.source_references: list[dict[str, Any]] = []
+        #: The lane R router's turn bundles. Nothing writes them until the
+        #: router is wired and enabled; messages() never includes them.
+        self.router_turns: list[RouterTurnRecord] = []
 
     def reset(self) -> None:
         self.groups.clear()
         self.pending_report = None
         self.source_references.clear()
+        self.router_turns.clear()
+
+    def record_router_turn(self, record: RouterTurnRecord) -> None:
+        """Keep one router turn bundle; trim whole bundles, oldest first (D14)."""
+
+        turns = [*self.router_turns, record][-ROUTER_HISTORY_MAX_TURNS:]
+        while len(turns) > 1 and sum(item.estimated_tokens() for item in turns) > ROUTER_HISTORY_MAX_TOKENS:
+            turns.pop(0)
+        self.router_turns = turns
+
+    def router_history(self) -> list[dict[str, Any]]:
+        """The router's history, oldest first, as its prompt carries it."""
+
+        return [record.prompt_payload() for record in self.router_turns]
 
     def messages(self) -> list[dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT}] + [
