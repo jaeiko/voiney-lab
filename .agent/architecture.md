@@ -69,8 +69,8 @@ protocol, revision/source hash, and job identity before emission.
 learning, audit, history/resume, uncertainty, combined learning+next, visual,
 current-step, general QA, and unknown requests on the running path.
 `completion_intent.py` and other legacy helpers are compatibility projections.
-Once the LLM router below is wired and enabled, it takes the turns the front
-rules hand on (AGENTS rule 3).
+With the LLM router below enabled, it takes the turns the front rules hand
+on (AGENTS rule 3); off (the default), every turn takes the rules' path.
 
 `runtime_routing.py` is the production curated boundary. `curated_protocol.py`
 returns a plan with explicit action, answer origin, checkpoint mutation, claim
@@ -78,26 +78,37 @@ requests, and limitations. Read-only plans must compare equal before/after at th
 checkpoint level. A combined learning+next plan stages a pending completion frame;
 only a later explicit confirmation can advance.
 
-### LLM router (decision D1; built in parts, not wired)
+### LLM router (decisions D1 and 2026-10-03; wired behind a setting, off by default)
 
 Decision D1 (2026-10-02) moves intent judgment behind the front rules to one
 LLM router, while state changes stay a tool proposal plus server validation:
-the model proposes, it never changes state. What runs today is unchanged: the
-router is not called from `server.py`, there is no setting for it yet, and the
-classification path is still `RequestArbitration` plus the curated rules.
-What exists:
+the model proposes, it never changes state. The decision of 2026-10-03 makes
+the router the line every turn goes along -- front rules, router, server
+validation -- and allows it to choose the model or tool per situation; what
+is forbidden is two paths separately deciding the same turn's state change.
+
+`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED` (default `false`), `..._MODEL`
+(default `grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default
+2.5). Off, `run_turn` calls `route_curated_runtime_turn_with_semantics` as
+before and nothing below runs. On:
 
 ```text
 STT → emergency gate (server.py, F1)
-    → CuratedProtocolSession.front_plan()      F2–F9, D2, D9: planned by rule
+    → CuratedProtocolSession.front_plan()      F2–F9, D2, D9, start: planned by rule
          │ None (the turn is handed on, session untouched)
          ▼
-      LLM router (not built yet: lane R part 2-b)
-         ├─ answer → answer_checks.py gates → server attaches source/citation
-         └─ tool call → llm_router.parse_tool_call
-                      → llm_router.validate_tool_proposals   (server facts only)
+      llm_router.route_turn_with_llm_router: one streamed call,
+        tools = answer | change_state | record_log, one call required,
+        context = server snapshot + protocol context (D13) + router history (D14)
+         ├─ answer → answer_check_failures (answer_checks.py gates)
+         │           → CuratedProtocolSession.apply_router_answer (read-only)
+         └─ change_state / record_log → llm_router.validate_tool_proposals
                       → CuratedProtocolSession.apply_tool_proposal
                            → _execute_turn_intent  (the same branches plan() uses)
+      timeout · provider error · nothing usable · refused · answer rejected
+         → the rules' own route (route_curated_runtime_turn_with_semantics);
+           a rejected answer the rules cannot answer either says
+           "PDF에서 확인할 수 없어요."
 ```
 
 - `front_plan()` is `plan()` stopped once the rules have read the turn. A
@@ -107,32 +118,52 @@ STT → emergency gate (server.py, F1)
   and "종료" commands, F4 a yes/no to an open question, F5 any reply while an
   endpoint question is open and an endpoint stated at a repeat-until step with
   no question open (D9), F6 time left, F7 "그거" (D3), F8 repeat, F9 cancel a
-  lookup, and a completion naming the current step (D2).
-- `llm_router.py` holds the two tools (`change_state`: start, next, stop,
-  pause, resume, start_timer; `record_log`: observation, anomaly) and rules on
-  a proposal: one per turn; made for this turn, generation, revision and step;
-  no open question; evidence verbatim in this turn's words and carrying the
-  action's own word; no question or hypothetical; the current step only.
-  `next` only ever opens the completion question, or the endpoint question at a
-  repeat-until step, and is refused with the step's completion criterion when
-  said with "not done yet" (D7); `stop` needs "종료" and asks once (D5);
-  `start_timer` runs the source duration and asks before any other (D6);
-  `resume` only lifts a pause; `start` only starts a protocol that never
-  started. Every refusal has a code (`REFUSAL_REASONS`) and a server-written
-  reply; an open question is asked again rather than lost.
+  lookup, a completion naming the current step (D2), and `start_command`: a
+  start of an experiment never started, or any start after it ended, which
+  is answered "이 실험은 이미 끝났어요. 다음 실험은 화면에서 프로토콜이나 세션을
+  골라 시작해 주세요." and changes nothing (decision 2, 2026-10-03).
+- The model is shown the server snapshot (phase, current step, open question,
+  timer, revision), the current step and two either side with their facts
+  (each with an id such as `S7.current_step`), every step's label and title,
+  the protocol-wide facts and terms -- as data blocks, never instructions --
+  and the router history. The answer is a function call (`answer`) beside the
+  two tools, so a reply is always exactly one call.
+- `llm_router.py` rules on a proposal: one per turn; made for this turn,
+  generation, revision and step; no open question; evidence verbatim in this
+  turn's words and carrying the action's own word; no question or
+  hypothetical; the current step only. `next` only ever opens the completion
+  question, or the endpoint question at a repeat-until step (D2); `stop` needs
+  "종료" and asks once (D5); `start_timer` runs the source duration and asks
+  before any other (D6); `resume` only lifts a pause; `start` only starts a
+  protocol that never started. `record_log` takes an observation only with a
+  word of recording in its evidence and an anomaly only when the words read
+  as a problem; any other anomaly is asked about once, "이상 사항으로
+  기록할까요?" (decision 1, 2026-10-03). A refused proposal takes the rules'
+  route; `apply_tool_proposal` keeps its server-written refusal replies for
+  direct callers.
 - `apply_tool_proposal()` turns an accepted proposal into a
   `CuratedControlIntent` (`confidence_source="llm_tool_proposal"`) and runs it
   through `_execute_turn_intent`, the branches and post-turn gates `plan()`
-  uses. The D6 duration question is a one-turn question like the end question:
-  answered by a front yes/no, held through a pause (D10), in the checkpoint.
-- `ConversationHistory.record_router_turn()` keeps the router's history:
-  per turn the step, the words, the handler, the proposal's tool and action
-  (never its evidence or value), the server's result and at most 200
-  characters of the spoken reply; six bundles and about 1,200 tokens (D14).
-  State is read from each call's server snapshot, never from history.
-- `answer_checks.py` holds the answer gates (numbers, state-change claims,
-  display labels, outside-PDF explanations under D4, server values); the
-  Answer Brain in `multi_brain.py` already uses its number and claim checks.
+  uses. The D6 duration question and the decision-1 anomaly question are
+  one-turn questions like the end question: answered by a front yes/no, held
+  through a pause (D10), in the checkpoint.
+- An answer is used only when `answer_check_failures` passes: numbers (with
+  or without a unit) only from the cited facts, a `pdf` answer cites given
+  facts, no state-change claim, no screen label, server values exact, an
+  outside-PDF explanation within D4, and the state unchanged while the model
+  wrote. `apply_router_answer()` sends it as separate values (body text,
+  `display_document` source and citation sections, development information
+  only in test mode); an outside-PDF answer gets the server's marks: a "PDF 밖
+  설명이니 유의" notice section and "PDF에는 따로 설명이 없어요." said first.
+- `ConversationHistory.record_router_turn()` keeps every routed turn, front
+  ones too: the step, the words, the handler (`front:<rule>`, `llm`,
+  `llm+tool`, `fallback_rules`), the proposal's tool and action (never its
+  evidence or value), the server's result and at most 200 characters of the
+  spoken reply; six bundles and about 1,200 tokens (D14). State is read from
+  each call's server snapshot, never from history.
+- `turn.state` says `composing` once the answer starts to stream;
+  `turn.route_decision` carries a `router` field (handler, fallback reason,
+  model, verdict, timings, token usage) only when the router ran.
 
 ## Protocol lifecycle
 

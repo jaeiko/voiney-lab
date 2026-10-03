@@ -61,10 +61,18 @@ changes and running dev servers don't collide.
 The server is the only workflow authority. Model/voice output never advances
 a protocol step, marks completion, approves a protocol revision, converts an
 observation into an instruction, resumes a blocked experiment, or writes to
-an ELN without explicit user confirmation. Do not add a second router, a
-duplicate workflow state machine, another `ExperimentSession` authority, a
-parallel approval subsystem, or a parallel protocol store — see `AGENTS.md`
-rule 2–3 for the full boundary. (A pre-existing, older `procedures.py` /
+an ELN without explicit user confirmation.
+
+A turn is routed along one line: deterministic front rules → the LLM router
+(which chooses the tool, and may choose the model, for the situation) →
+server validation. Use the router actively within that line, including
+choosing models and tools per situation. On routing, the one thing forbidden
+is two different paths each deciding the same turn's state change on their
+own — so no parallel router, classifier or prompt that decides state apart
+from that line. Separately, do not add a duplicate workflow state machine,
+another `ExperimentSession` authority, a parallel approval subsystem, or a
+parallel protocol store — see `AGENTS.md` rules 2–3 for the full boundary.
+(Decision of 2026-10-03.) (A pre-existing, older `procedures.py` /
 `procedure_store.py` workflow stack runs alongside the production
 `ExperimentSession` / `CuratedProtocolSession` stack. It is explicitly
 config-gated off by default — the module docstring at the top of

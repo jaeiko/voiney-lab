@@ -76,8 +76,9 @@ deterministic routing returns a catch-all, it may *propose* one of the existing
 bounded workflow actions, and server-owned policy in the same boundary decides
 whether that proposal is used. It never mutates workflow state - see
 [Semantic intent fallback](#semantic-intent-fallback). An LLM router that
-will take over intent judgment behind deterministic front rules is built in
-parts but not wired - see [LLM router (not wired)](#llm-router-not-wired).
+takes over intent judgment behind deterministic front rules is wired behind a
+setting that is off by default - see
+[LLM router (off by default)](#llm-router-off-by-default).
 Tenant/RBAC logic is in
 `identity.py` and `workspace_store.py`. Protocol source adapters are in
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
@@ -352,42 +353,54 @@ Every turn publishes a privacy-safe ruling on `turn.route_decision` under
 `confidence`, `latency_ms`) - reason codes and enum values only, never
 utterance text or model prose.
 
-## LLM router (not wired)
+## LLM router (off by default)
 
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
 intent judgment moves to one LLM router; a state change stays a tool proposal
-that the server validates and carries out. **None of it runs yet.** `server.py`
-does not call it, there is no setting for it, no model is called, and every
-test is offline and fake-backed. The voice path is exactly the one described
-above. What is in the tree for the next step (lane R part 2-b):
+that the server validates and carries out. **It is off unless
+`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED=true`** (no launcher sets it; turning
+it on in development or the pilot is decided by the people running it, from
+the lane R evaluation). Off, the voice path is exactly the one described
+above. `VOICE_WORKFLOW_AGENT_LLM_ROUTER_MODEL` (default
+`grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default 2.5) choose
+the model and how long a turn waits for it; it needs `XAI_API_KEY`.
 
-- **Front rules** — `CuratedProtocolSession.front_plan()` returns the plan a
-  front rule makes (pause and "종료" words, a yes/no to an open question,
-  replies while an endpoint question is open, an endpoint stated at a
-  repeat-until step, timer status, "그거", repeat, cancel, transcript quality,
-  a completion naming the current step) or `None` with the session untouched.
-  It is `plan()` stopped early, so its plans are identical to `plan()`'s.
-- **Two tools** — `llm_router.py`: `change_state` (start, next, stop, pause,
-  resume, start_timer) and `record_log` (observation, anomaly), and the
-  server's ruling on a proposal. `next` never moves on: it opens the
-  completion question (or the endpoint question) and only the researcher's
-  answer moves on; "덜 됐는데 그냥 넘어가자" is refused with the step's
-  completion criterion. `stop` needs "종료" and asks "실험을 종료할까요?".
-  `start_timer` runs the source duration and asks "원문은 15분입니다.
-  15분으로 시작할까요?" when another duration is said.
-- **Carrying out** — `CuratedProtocolSession.apply_tool_proposal()` runs an
-  accepted proposal through the same branches `plan()` uses; a refused one
-  changes nothing and gets a server-written reply.
-- **History** — `ConversationHistory.record_router_turn()`: six turn bundles,
-  about 1,200 tokens, no proposal evidence, no source text.
-- **Answer checks** — `answer_checks.py`: numbers, state-change claims,
-  display labels, outside-PDF explanations (a word's meaning or a reagent's
-  role, at most 120 characters, no numbers), server-owned values.
+On, a turn goes:
 
-With a fake model that proposes `next`, `stop` or `start` on every turn the
-front rules hand on, using the whole utterance as its evidence, no step is
-moved, no session ended and no protocol restarted (`tests/test_llm_router.py`,
-`AdversarialModelTests`).
+- **Front rules** — `CuratedProtocolSession.front_plan()` plans pause and
+  "종료" words, a yes/no to an open question, replies while an endpoint
+  question is open, an endpoint stated at a repeat-until step, timer status,
+  "그거", repeat, cancel, transcript quality, a completion naming the current
+  step, and a start of an experiment never started or already ended. These
+  never wait on a model.
+- **One model call** — otherwise `llm_router.route_turn_with_llm_router` sends
+  the server snapshot, the nearby protocol steps with their facts, and the
+  router history, and the model replies with exactly one call: `answer`,
+  `change_state` (start, next, stop, pause, resume, start_timer) or
+  `record_log` (observation, anomaly).
+- **Server ruling** — a proposal is validated and carried out through the same
+  branches `plan()` uses. `next` never moves on: it opens the completion
+  question (or the endpoint question) and only the researcher's answer moves
+  on. `stop` needs "종료" and asks "실험을 종료할까요?". `start_timer` runs the
+  source duration and asks "원문은 15분입니다. 15분으로 시작할까요?" when
+  another is said. An observation is recorded only when the words ask for
+  it (메모, 기록, 관찰, 적어, ...); an anomaly that does not read as a problem is
+  asked about first, "이상 사항으로 기록할까요?".
+- **Answer checks** — an answer is used only if its numbers come from the cited
+  facts, it claims no state change, writes no screen label, repeats server
+  values exactly, and (for an explanation the PDF does not give) explains a
+  term of the protocol in at most 120 characters with no numbers, method,
+  safety or completion content. The server marks such an answer "PDF 밖
+  설명이니 유의" on the screen and says "PDF에는 따로 설명이 없어요." first.
+- **Fallback** — when the model is late, fails, says nothing usable, is
+  refused, or its answer fails a check, the turn takes the rules' own path,
+  exactly as with the router off ("PDF에서 확인할 수 없어요." where the rules
+  have no answer to a rejected one).
+
+Every test is offline and fake-backed (`tests/router_fakes.py`); with a fake
+model that proposes `next`, `stop` or `start` on every turn the front rules
+hand on, no step is moved, no session ended and no protocol restarted
+(`tests/test_llm_router.py`, `AdversarialModelTests`).
 
 ## Workspace identity and authorization
 
