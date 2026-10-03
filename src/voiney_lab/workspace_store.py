@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from voiney_lab.identity import (
     AuthorizationDeniedError,
@@ -27,7 +27,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 6
+WORKSPACE_SCHEMA_VERSION = 7
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -192,6 +192,31 @@ class ProtocolLineageRevision:
     language: str
     translation_status: str
     content: dict[str, object]
+
+
+@dataclass(frozen=True)
+class FactTranslationRecord:
+    """One sentence of one Protocol revision in another language.
+
+    ``revision_id`` names the executable revision a session runs (a catalog
+    revision or a development fixture revision), not a workspace lineage
+    revision, so a changed revision never reuses another's sentences.
+    ``source_sha256`` is the hash of the source sentence the translation was
+    made from. ``check_result`` is ``passed`` or the reason the mechanical
+    check refused it; a refused sentence is kept so it is not requested
+    again, and is never shown.
+    """
+
+    revision_id: str
+    fact_key: str
+    language: str
+    source_sha256: str
+    translated_text: str
+    status: str
+    check_result: str
+    model: str
+    model_version: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -750,6 +775,37 @@ CREATE TABLE schema_metadata_next(
  schema_version INTEGER PRIMARY KEY CHECK(schema_version=6)
 );
 INSERT INTO schema_metadata_next(schema_version) VALUES(6);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+
+MIGRATION_6_TO_7 = """
+CREATE TABLE protocol_fact_translations(
+ translation_id TEXT PRIMARY KEY,
+ revision_id TEXT NOT NULL,
+ fact_key TEXT NOT NULL,
+ language TEXT NOT NULL,
+ source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
+ translated_text TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('machine','reviewed')),
+ check_result TEXT NOT NULL,
+ model TEXT NOT NULL,
+ model_version TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ UNIQUE(revision_id,fact_key,language,source_sha256,status)
+);
+CREATE INDEX protocol_fact_translations_revision
+ ON protocol_fact_translations(revision_id,language);
+CREATE TRIGGER fact_translations_no_update BEFORE UPDATE ON protocol_fact_translations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER fact_translations_no_delete BEFORE DELETE ON protocol_fact_translations
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=7)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(7);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
@@ -3181,6 +3237,110 @@ class WorkspaceStore:
         self._connection.commit()
         return translation_id
 
+    def record_fact_translations(
+        self, records: Iterable[FactTranslationRecord]
+    ) -> int:
+        """Append sentence translations; a sentence already held is kept as is.
+
+        Service-level, like the protocol catalog the revisions come from: the
+        rows are derived from a revision's own text at activation, not
+        entered by a tenant member. Returns how many rows were new.
+        """
+
+        rows = []
+        for record in records:
+            if record.status not in {"machine", "reviewed"}:
+                raise WorkspaceError("Translation status is invalid.")
+            if _SHA256.fullmatch(record.source_sha256) is None:
+                raise WorkspaceError("Translation source hash is invalid.")
+            for value, label in (
+                (record.revision_id, "Translation revision"),
+                (record.fact_key, "Translation fact"),
+                (record.language, "Translation language"),
+                (record.check_result, "Translation check"),
+                (record.model, "Translation model"),
+                (record.model_version, "Translation model version"),
+                (record.created_at, "Translation time"),
+            ):
+                if not isinstance(value, str) or not value.strip() or len(value) > 400:
+                    raise WorkspaceError(f"{label} is invalid.")
+            if not isinstance(record.translated_text, str) or len(
+                record.translated_text
+            ) > 20000:
+                raise WorkspaceError("Translation text is invalid.")
+            identity = (
+                f"{record.revision_id}:{record.fact_key}:{record.language}:"
+                f"{record.source_sha256}:{record.status}"
+            )
+            rows.append((
+                "fact-translation-"
+                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32],
+                record.revision_id, record.fact_key, record.language,
+                record.source_sha256, record.translated_text, record.status,
+                record.check_result, record.model, record.model_version,
+                record.created_at,
+            ))
+        before = self._connection.total_changes
+        try:
+            self._connection.executemany(
+                "INSERT OR IGNORE INTO protocol_fact_translations"
+                "(translation_id,revision_id,fact_key,language,source_sha256,"
+                "translated_text,status,check_result,model,model_version,"
+                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                rows,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return self._connection.total_changes - before
+
+    def fact_translations(
+        self, revision_id: str, language: str
+    ) -> tuple[FactTranslationRecord, ...]:
+        """Every stored sentence translation of one revision, oldest first."""
+
+        return tuple(
+            FactTranslationRecord(
+                revision_id=row["revision_id"],
+                fact_key=row["fact_key"],
+                language=row["language"],
+                source_sha256=row["source_sha256"],
+                translated_text=row["translated_text"],
+                status=row["status"],
+                check_result=row["check_result"],
+                model=row["model"],
+                model_version=row["model_version"],
+                created_at=row["created_at"],
+            )
+            for row in self._connection.execute(
+                "SELECT * FROM protocol_fact_translations "
+                "WHERE revision_id=? AND language=? ORDER BY created_at,rowid",
+                (revision_id, language),
+            )
+        )
+
+    def revision_translations(
+        self, principal: Principal, revision_id: str
+    ) -> tuple[dict[str, str], ...]:
+        """The whole-revision translations ``add_translation`` recorded."""
+
+        self.get_revision(principal, revision_id)
+        return tuple(
+            {
+                "translation_id": row["translation_id"],
+                "language": row["language"],
+                "status": row["status"],
+                "content_text": row["content_text"],
+                "created_at": row["created_at"],
+            }
+            for row in self._connection.execute(
+                "SELECT * FROM protocol_translations WHERE revision_id=? "
+                "AND organization_id=? ORDER BY created_at,rowid",
+                (revision_id, principal.organization_id),
+            )
+        )
+
     def record_approval(
         self,
         principal: Principal,
@@ -4686,6 +4846,21 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 6
+    if version == 6:
+        # The whole-revision rows in protocol_translations stay where they
+        # are and are still read by add_translation's callers; sentences get
+        # their own table because a revision-wide text cannot be split.
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_6_TO_7 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 7
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")
