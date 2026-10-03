@@ -223,6 +223,7 @@ from voiney_lab.eln_connectors import (
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
     openai_batch_translator,
+    openai_glossary_maker,
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
@@ -1044,48 +1045,162 @@ def _revision_translation_fixture(
     return catalog.load_executable_fixture(protocol_id)
 
 
-def _translate_authorized_revision(
-    catalog:ProtocolCatalog,protocol_id:str,
-)->None:
-    """Translate an executable revision's sentences once, off the request.
+def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None:
+    """Who generates a revision's translations here, or None when nobody may.
 
-    Runs only where a stored translation can be kept and read (the tenant
-    workspace is enabled) and the read-only answer model role the per-turn
-    reader translation uses is enabled with a key. ``app.state`` may carry
-    ``revision_translation_runner`` (a callable taking the fixture) in its
-    place.
+    Generation runs only where a stored translation can be kept and read
+    (the tenant workspace is enabled) and the read-only answer model role
+    the per-turn reader translation uses is enabled with a key.
+    ``app.state.revision_translation_runner`` (a callable taking the
+    fixture) stands in for it.
     """
 
     runner=getattr(app.state,"revision_translation_runner",None)
-    if runner is None:
-        settings=MultiBrainSettings.from_environment()
-        if (not _workspace_settings().enabled
-                or not settings.answer_brain_enabled
-                or not os.environ.get("XAI_API_KEY","").strip()):
-            return
-        runner=_start_revision_translation
-    runner(_revision_translation_fixture(catalog,protocol_id))
+    if runner is not None:
+        return runner
+    settings=MultiBrainSettings.from_environment()
+    if (not _workspace_settings().enabled
+            or not settings.answer_brain_enabled
+            or not os.environ.get("XAI_API_KEY","").strip()):
+        return None
+    return _start_revision_translation
+
+
+def _translate_authorized_revision(
+    catalog:ProtocolCatalog,protocol_id:str,
+)->None:
+    """Translate an executable revision's sentences once, off the request."""
+
+    runner=_revision_translation_runner()
+    if runner is not None:
+        runner(_revision_translation_fixture(catalog,protocol_id))
 
 
 _REVISION_TRANSLATIONS_RUNNING:set[str]=set()
 _REVISION_TRANSLATIONS_LOCK=threading.Lock()
 
 
+@dataclass(eq=False)
+class _TranslationSubscriber:
+    """An open session showing one revision, and where to tell it."""
+
+    session:Any
+    sender:Any
+    loop:asyncio.AbstractEventLoop
+
+
+#: revision id -> the open sessions showing it. A batch of translations
+#: reaches them as soon as it is stored.
+_TRANSLATION_SUBSCRIBERS:dict[str,list[_TranslationSubscriber]]={}
+
+
+def _subscribe_translations(session:Any,sender:Any)->None:
+    """Register an open session for its revision's translations (or none)."""
+
+    _unsubscribe_translations(session)
+    curated=getattr(session,"curated_protocol_session",None)
+    if curated is None:
+        return
+    subscriber=_TranslationSubscriber(session,sender,asyncio.get_running_loop())
+    with _REVISION_TRANSLATIONS_LOCK:
+        _TRANSLATION_SUBSCRIBERS.setdefault(
+            curated.fixture.revision_id,[]).append(subscriber)
+
+
+def _unsubscribe_translations(session:Any)->None:
+    with _REVISION_TRANSLATIONS_LOCK:
+        for revision_id in list(_TRANSLATION_SUBSCRIBERS):
+            kept=[item for item in _TRANSLATION_SUBSCRIBERS[revision_id]
+                  if item.session is not session]
+            if kept:
+                _TRANSLATION_SUBSCRIBERS[revision_id]=kept
+            else:
+                del _TRANSLATION_SUBSCRIBERS[revision_id]
+
+
+def _subscribers(revision_id:str)->list[_TranslationSubscriber]:
+    with _REVISION_TRANSLATIONS_LOCK:
+        return list(_TRANSLATION_SUBSCRIBERS.get(revision_id,()))
+
+
+def _open_session_steps(revision_id:str)->list[int]:
+    """The current and next step of every open session on this revision."""
+
+    steps:list[int]=[]
+    for subscriber in _subscribers(revision_id):
+        curated=getattr(subscriber.session,"curated_protocol_session",None)
+        if curated is None or curated.fixture.revision_id!=revision_id:
+            continue
+        index=curated.current_index
+        steps.extend((index,index+1))
+    return steps
+
+
+async def _apply_translations(
+    subscriber:_TranslationSubscriber,revision_id:str,rows:list[Any],
+)->None:
+    """Put a stored batch on an open session's fixture and redraw its card.
+
+    Presentation only: the session's fixture gains the rows that pass, and
+    the page is sent the same state with the new Korean. No workflow state
+    changes.
+    """
+
+    session=subscriber.session
+    curated=getattr(session,"curated_protocol_session",None)
+    if curated is None or curated.fixture.revision_id!=revision_id:
+        return
+    updated=with_stored_translations(curated.fixture,rows)
+    if updated is curated.fixture:
+        return
+    curated.fixture=updated
+    if not session.active or session.accepted_configuration_id is None:
+        return
+    try:
+        await subscriber.sender.text(
+            "protocol.fixture.state",
+            configuration_id=session.accepted_configuration_id,
+            action="translation_update",
+            state=curated.state(),
+            screen=curated_screen_fields(curated),
+        )
+    except Exception as exc:  # noqa: BLE001 - a closed page misses a redraw
+        log.info("revision_translation redraw_skipped error=%s",type(exc).__name__)
+
+
+async def _publish_translations(revision_id:str,rows:list[Any])->None:
+    running=asyncio.get_running_loop()
+    for subscriber in _subscribers(revision_id):
+        if subscriber.loop is running:
+            await _apply_translations(subscriber,revision_id,rows)
+        elif not subscriber.loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                _apply_translations(subscriber,revision_id,rows),subscriber.loop)
+
+
 async def store_revision_translations(
     fixture:CuratedProtocolFixture,translate:Any,*,model:str,
+    make_glossary:Any=None,
 )->Any:
-    """Generate what this revision still lacks and append it to the store."""
+    """Generate what this revision still lacks, storing and showing each batch."""
 
     store=_revision_translation_store()
     if store is None:
         return None
     try:
-        report=await generate_revision_translations(
+        async def stored_batch(rows:list[Any])->None:
+            store.record_fact_translations(rows)
+            await _publish_translations(fixture.revision_id,rows)
+
+        return await generate_revision_translations(
             fixture,translate,model=model,
             stored=store.fact_translations(fixture.revision_id,"ko"),
+            glossary=store.translation_glossary(fixture.revision_id,"ko"),
+            make_glossary=make_glossary,
+            priority_steps=lambda:_open_session_steps(fixture.revision_id),
+            on_glossary=store.record_translation_glossary,
+            on_batch=stored_batch,
         )
-        store.record_fact_translations(report.records)
-        return report
     finally:
         store.close()
 
@@ -1099,16 +1214,19 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
         _REVISION_TRANSLATIONS_RUNNING.add(fixture.revision_id)
     settings=MultiBrainSettings.from_environment()
     model=settings.answer_brain_model or settings.model
-    translate=openai_batch_translator(
-        lambda:AsyncOpenAI(
+
+    def client()->Any:
+        return AsyncOpenAI(
             base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-            max_retries=0),
-        model,
-    )
+            max_retries=0)
+
+    translate=openai_batch_translator(client,model)
+    make_glossary=openai_glossary_maker(client,model)
 
     def work()->None:
         try:
-            asyncio.run(store_revision_translations(fixture,translate,model=model))
+            asyncio.run(store_revision_translations(
+                fixture,translate,model=model,make_glossary=make_glossary))
         except Exception as exc:  # noqa: BLE001 - nothing stored, retried next time
             log.warning(
                 "revision_translation failed revision=%s error=%s",
@@ -1125,7 +1243,12 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
 def _with_revision_translations(
     fixture:CuratedProtocolFixture,
 )->CuratedProtocolFixture:
-    """The fixture carrying its revision's stored translations, if any."""
+    """The fixture carrying its revision's stored translations, if any.
+
+    A revision with nothing stored that is not being translated -- one made
+    executable before translations existed -- starts its generation here,
+    once; the session picks up each batch as it is stored.
+    """
 
     try:
         store=_revision_translation_store()
@@ -1135,13 +1258,24 @@ def _with_revision_translations(
     if store is None:
         return fixture
     try:
-        return with_stored_translations(
-            fixture,store.fact_translations(fixture.revision_id,"ko"))
+        rows=store.fact_translations(fixture.revision_id,"ko")
+        attached=with_stored_translations(fixture,rows)
     except Exception as exc:  # noqa: BLE001 - the source is shown instead
         log.warning("revision_translation read_failed error=%s",type(exc).__name__)
         return fixture
     finally:
         store.close()
+    if not rows:
+        with _REVISION_TRANSLATIONS_LOCK:
+            running=fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING
+        runner=None if running else _revision_translation_runner()
+        if runner is not None:
+            try:
+                runner(fixture)
+            except Exception as exc:  # noqa: BLE001 - the source is shown instead
+                log.warning(
+                    "revision_translation start_failed error=%s",type(exc).__name__)
+    return attached
 
 class ServerConfigurationError(RuntimeError):
     """Invalid server policy with safe environment field names for diagnostics."""
@@ -9472,6 +9606,7 @@ async def voice_socket(websocket:WebSocket):
                         selected_curated_fixture=_with_revision_translations(
                             selected_curated_fixture)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
+                    _subscribe_translations(session,sender)
                     recovery_session_id=control.get("experiment_session_id")
                     recovery_version=control.get("experiment_session_version")
                     if recovery_session_id is not None and not _workspace_settings().enabled:
@@ -9968,6 +10103,7 @@ async def voice_socket(websocket:WebSocket):
             task.cancel()
             try: await task
             except (asyncio.CancelledError, WebSocketDisconnect): pass
+        _unsubscribe_translations(session)
         session.stop()
         if procedure_store is not None: procedure_store.close()
         if workspace_context_token is not None:
