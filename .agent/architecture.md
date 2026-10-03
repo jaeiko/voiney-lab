@@ -67,14 +67,72 @@ protocol, revision/source hash, and job identity before emission.
 
 `intent_arbitration.py` is the only classifier authority for workflow control,
 learning, audit, history/resume, uncertainty, combined learning+next, visual,
-current-step, general QA, and unknown requests. `completion_intent.py` and other
-legacy helpers are compatibility projections.
+current-step, general QA, and unknown requests on the running path.
+`completion_intent.py` and other legacy helpers are compatibility projections.
+Once the LLM router below is wired and enabled, it takes the turns the front
+rules hand on (AGENTS rule 3).
 
 `runtime_routing.py` is the production curated boundary. `curated_protocol.py`
 returns a plan with explicit action, answer origin, checkpoint mutation, claim
 requests, and limitations. Read-only plans must compare equal before/after at the
 checkpoint level. A combined learning+next plan stages a pending completion frame;
 only a later explicit confirmation can advance.
+
+### LLM router (decision D1; built in parts, not wired)
+
+Decision D1 (2026-10-02) moves intent judgment behind the front rules to one
+LLM router, while state changes stay a tool proposal plus server validation:
+the model proposes, it never changes state. What runs today is unchanged: the
+router is not called from `server.py`, there is no setting for it yet, and the
+classification path is still `RequestArbitration` plus the curated rules.
+What exists:
+
+```text
+STT → emergency gate (server.py, F1)
+    → CuratedProtocolSession.front_plan()      F2–F9, D2, D9: planned by rule
+         │ None (the turn is handed on, session untouched)
+         ▼
+      LLM router (not built yet: lane R part 2-b)
+         ├─ answer → answer_checks.py gates → server attaches source/citation
+         └─ tool call → llm_router.parse_tool_call
+                      → llm_router.validate_tool_proposals   (server facts only)
+                      → CuratedProtocolSession.apply_tool_proposal
+                           → _execute_turn_intent  (the same branches plan() uses)
+```
+
+- `front_plan()` is `plan()` stopped once the rules have read the turn. A
+  front rule's turn (`FRONT_RULES`) is planned by plan()'s own branches, so the
+  plan is identical; any other turn returns `None` with the one-turn questions
+  it cleared put back. The front rules: F2 transcript quality, F3 pause words
+  and "종료" commands, F4 a yes/no to an open question, F5 any reply while an
+  endpoint question is open and an endpoint stated at a repeat-until step with
+  no question open (D9), F6 time left, F7 "그거" (D3), F8 repeat, F9 cancel a
+  lookup, and a completion naming the current step (D2).
+- `llm_router.py` holds the two tools (`change_state`: start, next, stop,
+  pause, resume, start_timer; `record_log`: observation, anomaly) and rules on
+  a proposal: one per turn; made for this turn, generation, revision and step;
+  no open question; evidence verbatim in this turn's words and carrying the
+  action's own word; no question or hypothetical; the current step only.
+  `next` only ever opens the completion question, or the endpoint question at a
+  repeat-until step, and is refused with the step's completion criterion when
+  said with "not done yet" (D7); `stop` needs "종료" and asks once (D5);
+  `start_timer` runs the source duration and asks before any other (D6);
+  `resume` only lifts a pause; `start` only starts a protocol that never
+  started. Every refusal has a code (`REFUSAL_REASONS`) and a server-written
+  reply; an open question is asked again rather than lost.
+- `apply_tool_proposal()` turns an accepted proposal into a
+  `CuratedControlIntent` (`confidence_source="llm_tool_proposal"`) and runs it
+  through `_execute_turn_intent`, the branches and post-turn gates `plan()`
+  uses. The D6 duration question is a one-turn question like the end question:
+  answered by a front yes/no, held through a pause (D10), in the checkpoint.
+- `ConversationHistory.record_router_turn()` keeps the router's history:
+  per turn the step, the words, the handler, the proposal's tool and action
+  (never its evidence or value), the server's result and at most 200
+  characters of the spoken reply; six bundles and about 1,200 tokens (D14).
+  State is read from each call's server snapshot, never from history.
+- `answer_checks.py` holds the answer gates (numbers, state-change claims,
+  display labels, outside-PDF explanations under D4, server values); the
+  Answer Brain in `multi_brain.py` already uses its number and claim checks.
 
 ## Protocol lifecycle
 

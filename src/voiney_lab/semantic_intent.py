@@ -562,19 +562,13 @@ def _mutation_evidence_rejection(
         return "pending_gate_owns_turn"
     if not proposal.mutation_requested:
         return "mutation_not_requested"
-    evidence = proposal.explicit_action_evidence
-    if not evidence or evidence.casefold() not in context.utterance.casefold():
-        return "evidence_not_verbatim"
-    if (
-        _INTERROGATIVE_EVIDENCE.search(context.utterance)
-        and not (
-            tier is SemanticIntentTier.BOUNDED_CONTROL
-            and _POLITE_ACTION_REQUEST.search(context.utterance)
-        )
-    ):
-        return "interrogative_not_authorized"
-    if _HYPOTHETICAL_EVIDENCE.search(context.utterance):
-        return "hypothetical_not_authorized"
+    rejection = evidence_fence_rejection(
+        utterance=context.utterance,
+        evidence=proposal.explicit_action_evidence,
+        bounded_control=tier is SemanticIntentTier.BOUNDED_CONTROL,
+    )
+    if rejection is not None:
+        return rejection
     if not _targets_authoritative_current_step(
         proposal.target, context, intent=proposal.intent
     ):
@@ -582,6 +576,40 @@ def _mutation_evidence_rejection(
         # authoritative current step is the only thing it can speak about.
         return "target_not_current_step"
     return None
+
+
+def evidence_fence_rejection(
+    *,
+    utterance: str,
+    evidence: str,
+    bounded_control: bool,
+) -> str | None:
+    """The first evidence fence a proposed change fails, or ``None``.
+
+    Shared by every model proposal that would change state -- this module's
+    semantic proposal and the lane R router's tool proposals: the action has
+    to be visible in what the researcher said (``evidence`` verbatim in
+    ``utterance``, which is ``normalize_semantic_utterance`` text), a question
+    authorizes nothing except a polite request for bounded control ("멈춰
+    줄래?"), and a hypothetical authorizes nothing at all.
+    """
+
+    if not evidence or evidence.casefold() not in utterance.casefold():
+        return "evidence_not_verbatim"
+    if (
+        _INTERROGATIVE_EVIDENCE.search(utterance)
+        and not (bounded_control and _POLITE_ACTION_REQUEST.search(utterance))
+    ):
+        return "interrogative_not_authorized"
+    if _HYPOTHETICAL_EVIDENCE.search(utterance):
+        return "hypothetical_not_authorized"
+    return None
+
+
+def has_completion_evidence(utterance: str) -> bool:
+    """True when the words name finishing or moving on ("완료", "다 했", "넘어가")."""
+
+    return _COMPLETION_EVIDENCE.search(utterance) is not None
 
 
 def _normalized_semantic_target(target: str) -> str:
@@ -599,15 +627,37 @@ def _targets_authoritative_current_step(
 ) -> bool:
     """True only when a proposal targets the current step or its own timer."""
 
+    return targets_current_step(
+        target,
+        current_step_label=context.current_step_label,
+        timer_available=context.timer_available,
+        timer_target=intent is SemanticIntent.START_TIMER,
+    )
+
+
+def targets_current_step(
+    target: str | None,
+    *,
+    current_step_label: str | None,
+    timer_available: bool = False,
+    timer_target: bool = False,
+) -> bool:
+    """True only when ``target`` names the current step, or its timer.
+
+    A model proposal may never redirect a change onto another step: no target,
+    "현재 단계", "this step" and the current step's own label are the current
+    step; with ``timer_target`` and a timer to speak of, so is its timer.
+    """
+
     if not target:
         return True
     normalized = _normalized_semantic_target(target)
     if normalized in _CURRENT_STEP_TARGETS:
         return True
-    label = (context.current_step_label or "").strip().casefold()
+    label = (current_step_label or "").strip().casefold()
     if label and normalized in {label, f"{label}단계", f"step {label}"}:
         return True
-    if intent is not SemanticIntent.START_TIMER or not context.timer_available:
+    if not timer_target or not timer_available:
         return False
     timer_targets = set(_CURRENT_STEP_TIMER_TARGETS)
     if label:

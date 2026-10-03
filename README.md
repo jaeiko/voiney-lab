@@ -75,7 +75,10 @@ semantic intent fallback (`semantic_intent.py`) sits behind it: when
 deterministic routing returns a catch-all, it may *propose* one of the existing
 bounded workflow actions, and server-owned policy in the same boundary decides
 whether that proposal is used. It never mutates workflow state - see
-[Semantic intent fallback](#semantic-intent-fallback). Tenant/RBAC logic is in
+[Semantic intent fallback](#semantic-intent-fallback). An LLM router that
+will take over intent judgment behind deterministic front rules is built in
+parts but not wired - see [LLM router (not wired)](#llm-router-not-wired).
+Tenant/RBAC logic is in
 `identity.py` and `workspace_store.py`. Protocol source adapters are in
 `protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
 ELN boundary is in `eln_connectors.py`.
@@ -348,6 +351,43 @@ Every turn publishes a privacy-safe ruling on `turn.route_decision` under
 `semantic_fallback` (`status`, `reason_code`, `proposed_intent`, `accepted`,
 `confidence`, `latency_ms`) - reason codes and enum values only, never
 utterance text or model prose.
+
+## LLM router (not wired)
+
+Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
+intent judgment moves to one LLM router; a state change stays a tool proposal
+that the server validates and carries out. **None of it runs yet.** `server.py`
+does not call it, there is no setting for it, no model is called, and every
+test is offline and fake-backed. The voice path is exactly the one described
+above. What is in the tree for the next step (lane R part 2-b):
+
+- **Front rules** — `CuratedProtocolSession.front_plan()` returns the plan a
+  front rule makes (pause and "종료" words, a yes/no to an open question,
+  replies while an endpoint question is open, an endpoint stated at a
+  repeat-until step, timer status, "그거", repeat, cancel, transcript quality,
+  a completion naming the current step) or `None` with the session untouched.
+  It is `plan()` stopped early, so its plans are identical to `plan()`'s.
+- **Two tools** — `llm_router.py`: `change_state` (start, next, stop, pause,
+  resume, start_timer) and `record_log` (observation, anomaly), and the
+  server's ruling on a proposal. `next` never moves on: it opens the
+  completion question (or the endpoint question) and only the researcher's
+  answer moves on; "덜 됐는데 그냥 넘어가자" is refused with the step's
+  completion criterion. `stop` needs "종료" and asks "실험을 종료할까요?".
+  `start_timer` runs the source duration and asks "원문은 15분입니다.
+  15분으로 시작할까요?" when another duration is said.
+- **Carrying out** — `CuratedProtocolSession.apply_tool_proposal()` runs an
+  accepted proposal through the same branches `plan()` uses; a refused one
+  changes nothing and gets a server-written reply.
+- **History** — `ConversationHistory.record_router_turn()`: six turn bundles,
+  about 1,200 tokens, no proposal evidence, no source text.
+- **Answer checks** — `answer_checks.py`: numbers, state-change claims,
+  display labels, outside-PDF explanations (a word's meaning or a reagent's
+  role, at most 120 characters, no numbers), server-owned values.
+
+With a fake model that proposes `next`, `stop` or `start` on every turn the
+front rules hand on, using the whole utterance as its evidence, no step is
+moved, no session ended and no protocol restarted (`tests/test_llm_router.py`,
+`AdversarialModelTests`).
 
 ## Workspace identity and authorization
 
