@@ -99,9 +99,9 @@ revision does not make it an SOP.
 ```bash
 python -m venv .venv && source .venv/bin/activate && pip install -e '.[test]'
 python scripts/replay_turns.py
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check

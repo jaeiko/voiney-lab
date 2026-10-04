@@ -79,19 +79,19 @@ class MultiBrainSettings:
 
     @classmethod
     def from_environment(cls) -> "MultiBrainSettings":
-        enabled = os.environ.get("VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
-        model = os.environ.get("VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL", "grok-4.6").strip()
-        answer_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        answer_model = os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_MODEL", model).strip() or model or "grok-4.6"
-        source_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_SOURCE_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        source_model = os.environ.get("VOICE_WORKFLOW_AGENT_SOURCE_BRAIN_MODEL", model).strip() or model or "grok-4.6"
-        visual_enabled = os.environ.get("VOICE_WORKFLOW_AGENT_VISUAL_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        visual_model = os.environ.get("VOICE_WORKFLOW_AGENT_VISUAL_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        enabled = os.environ.get("VOINEY_LAB_MULTI_BRAIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
+        model = os.environ.get("VOINEY_LAB_MULTI_BRAIN_MODEL", "grok-4.6").strip()
+        answer_enabled = os.environ.get("VOINEY_LAB_ANSWER_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        answer_model = os.environ.get("VOINEY_LAB_ANSWER_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        source_enabled = os.environ.get("VOINEY_LAB_SOURCE_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        source_model = os.environ.get("VOINEY_LAB_SOURCE_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        visual_enabled = os.environ.get("VOINEY_LAB_VISUAL_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
+        visual_model = os.environ.get("VOINEY_LAB_VISUAL_BRAIN_MODEL", model).strip() or model or "grok-4.6"
 
         overall_enabled = enabled or answer_enabled or source_enabled or visual_enabled
-        answer = float(os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS", "8"))
-        planner = float(os.environ.get("VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS", "6"))
-        primary = float(os.environ.get("VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS", "1.25"))
+        answer = float(os.environ.get("VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS", "8"))
+        planner = float(os.environ.get("VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS", "6"))
+        primary = float(os.environ.get("VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS", "1.25"))
         if overall_enabled and not model and not (answer_model or source_model or visual_model):
             raise ValueError("multi-brain model is required when enabled")
         if not 1 <= answer <= 15 or not 1 <= planner <= 12:

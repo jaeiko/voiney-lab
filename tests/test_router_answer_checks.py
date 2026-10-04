@@ -265,7 +265,7 @@ class ScreenTests(unittest.TestCase):
 )
 class RouterAnswerVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def test_the_reply_carries_the_structure_and_the_marks(self) -> None:
-        self.environment["VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED"] = "true"
+        self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
         self.environment["XAI_API_KEY"] = "test-only-not-a-key"
         _FakeAsyncOpenAI.client = FakeRouterClient(answer_reply(
             "젤 조각을 담는 작은 시험관이에요.", source_kind="outside_pdf",

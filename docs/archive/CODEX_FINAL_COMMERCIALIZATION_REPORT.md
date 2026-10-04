@@ -48,7 +48,7 @@ workflow semantics are missing.
   action-specific questions so shared routing does not erase entity or claim
   detail.
 - Standardized the current product on Cascade STT → agent → TTS with one canonical
-  `TTS_VOICE` setting and `leo` default. Removed active documentation/configuration
+  `VOINEY_LAB_TTS_VOICE` setting and `leo` default. Removed active documentation/configuration
   claims for a nonexistent Native path.
 
 ### Arbitrary PDF onboarding

@@ -26,7 +26,7 @@ LAUNCHER = Path("scripts/run_dev.sh")
 class TheUiIsServedTheHandBuiltFixtureTests(unittest.TestCase):
     def test_the_launcher_points_the_server_at_the_hand_built_file(self) -> None:
         script = LAUNCHER.read_text()
-        self.assertIn("VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE", script)
+        self.assertIn("VOINEY_LAB_CURATED_PROTOCOL_FIXTURE", script)
         self.assertIn("candidate_a_curated_analysis.json", script)
 
     def test_that_branch_is_consulted_before_the_catalog(self) -> None:

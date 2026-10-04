@@ -25,7 +25,7 @@
 | Q4 | 브라우저 테스트를 [검증]에 넣나 | 넣지 않는다. 대신 서버 기동 확인을 한다 (§5 2-4) | 기존 Playwright 설정 두 개는 모두 `data/runtime/` 에 쓴다. `run_ci_server.sh:25` 는 `rm -rf data/runtime/ci-e2e` 를 하고, `run_candidate_a.sh` 는 파일럿 저장소 `data/runtime/candidate-a-live-acceptance` 에 fixture 를 넣는다. |
 | Q5 | `.env` 가 바뀌는 경로를 가리키나 | **사람만 확인할 수 있다.** 아래 명령의 결과가 있는지만 알려 달라 | 나는 `.env` 를 읽지 않는다. 결과가 없으면 영향도 없다. 결과가 있으면 `.env` 수정은 사람이 한다. 답이 없으면 "사람이 할 후속 작업"으로 넘기고 진행한다. |
 | Q6 | 날짜가 박힌 기록 문서도 고치나 | 고치지 않는다 | `docs/ANALYSIS_2026_09_11.md` 는 스스로 "`bfc292b` 에서 잰 읽기 전용 조사"라고 밝힌 기록이다. `PILOT_READINESS_PACKAGE.md:161-162` 는 옛 모듈 경로로 한 실제 xAI 호출 기록이라, 바꾸면 존재하지 않던 경로로 호출한 것처럼 된다. 목록은 §6. |
-| Q7 | `GIT_WORKFLOW.md` 는 어떻게 하나 | 건드리지 않는다 | 지시문은 `docs/GIT_WORKFLOW.md` 라고 했지만 그런 파일은 없다. 루트의 `GIT_WORKFLOW.md` 는 오늘 14:22 에 만들어진 추적 안 된 파일이다. 내용에 바꿀 곳도 없다 (`VOICE_WORKFLOW_AGENT_` 환경변수만 있다). 둘 곳과 커밋은 사람이 정한다. |
+| Q7 | `GIT_WORKFLOW.md` 는 어떻게 하나 | 건드리지 않는다 | 지시문은 `docs/GIT_WORKFLOW.md` 라고 했지만 그런 파일은 없다. 루트의 `GIT_WORKFLOW.md` 는 오늘 14:22 에 만들어진 추적 안 된 파일이다. 내용에 바꿀 곳도 없다 (`VOINEY_LAB_` 환경변수만 있다). 둘 곳과 커밋은 사람이 정한다. |
 | Q8 | `tests/fixtures/candidate_a_grounded_voice_eval.json` 도 옮기나 | 옮긴다 → `data/fixtures/evaluation/` | 이 파일은 테스트가 쓰지 않는다. 평가 스크립트 `evaluate_candidate_a_grounded_qa.py:44` 만 쓴다. 짝이 되는 평가 파일과 한곳에 두는 편이 맞다. |
 | Q9 | B-2 자리에 설명 주석을 다나 | 단다. 영어 한 줄씩, `curated_protocol.py:868` 과 `moss_retrieval.py:256` 두 곳 | 옛 이름이 왜 남아 있는지 적어 두지 않으면, 나중에 누가 "놓친 곳"으로 보고 고쳐서 fixture 로드나 MOSS 색인을 깨뜨린다. 주석은 동작을 바꾸지 않는다. |
 | Q10 | `data/development_cache/` → `data/cache/` 는 | 이번에는 하지 않는다 (판단 불가, §8) | git 밖에 있어 `git mv` 로 옮길 수 없다. `.env` 설정도 확인할 수 없다. 캐시를 못 찾으면 다음 분석에서 provider 호출에 다시 돈을 쓴다. |
@@ -55,9 +55,9 @@ grep -nE 'src/voice_workflow_agent|development_protocols|data/evaluation|approve
 ### 0-2. pytest 기준
 
 ```bash
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 ```
 
@@ -160,7 +160,7 @@ PDF 가 필요한 테스트는 임시 디렉터리에 합성 PDF 를 만들어 �
 | `data/development_protocols/*` | `scripts/run_candidate_a.sh:6,7`, `scripts/derive_timer_manifest.py:27,29`, `scripts/evaluate_candidate_a_grounded_qa.py:39`, `scripts/evaluate_candidate_a_hardening.py:42,43`, `scripts/score_extraction.py:26,27` (사용 예시 docstring) | R |
 | 〃 | `tests/test_candidate_a_acceptance_phase2.py:17`, `test_candidate_a_final_hardening.py:27`, `test_candidate_a_live_voice_generalization.py:26,27`, `test_candidate_a_research_hardening.py:41,42`, `test_candidate_a_websocket_integration.py:115,116`, `test_curated_protocol_cascade.py:67,68`, `test_endpoint_observation_gate.py:43,45`, `test_experiment_reports.py:278,279`, `test_phase3_acceptance.py:38`, `test_protocol_catalog.py:784,786`, `test_protocol_provider_diagnostics.py:29`, `test_repeat_until_declaration_properties.py:52,54`, `test_runtime_intent_routing.py:26,27`, `test_safety_pack.py:38,39,40`, `test_score_extraction_tool.py:20`, `test_semantic_intent_fallback.py:55,57`, `test_stability_and_semantic_hardening.py:30`, `test_transcript_admission.py:17` | R |
 | 〃 | `tests/test_extraction_accuracy.py:28`, `test_timer_manifest.py:29`, `test_ui_data_provenance.py:21,22,89,105,128,209` | C |
-| 〃 (서버 실행 시) | `server.py:1007-1011` 이 `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE` / `_PROVENANCE` / `_SOURCE_PDF` 를 읽는다. 값은 `run_candidate_a.sh:59-61` 이 넣는다 | E |
+| 〃 (서버 실행 시) | `server.py:1007-1011` 이 `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE` / `_PROVENANCE` / `_SOURCE_PDF` 를 읽는다. 값은 `run_candidate_a.sh:59-61` 이 넣는다 | E |
 | 사이드카 3개 | `curated_protocol.py:992-996` 이 fixture 파일 옆에서 `with_name(...)` 으로 찾는다. **5개 파일은 한 디렉터리에 같이 있어야 한다** | fixture 경로 기준 |
 | `data/evaluation/candidate_a_real_voice_hardening.json` | `scripts/evaluate_candidate_a_hardening.py:47` | R |
 | `data/approved_safety_manual.demo.json` | `src/voice_workflow_agent/safety_pack.py:494` (`parents[2] / "data" / ...`). 파일이 없으면 **조용히** 빈 데모 팩이 된다. `tests/test_safety_pack.py::test_17c_candidate_a_demo_safety_pack` 가 `total_document_count > 0` 으로 지키고, 이 트리에서는 실행된다 (CI 조건 B 에서는 건너뛴다) | R |
@@ -172,11 +172,11 @@ PDF 가 필요한 테스트는 임시 디렉터리에 합성 PDF 를 만들어 �
 
 | 대상 | 참조 | 종류 |
 |---|---|---|
-| `data/runtime/candidate-a-source/in-gel-digestion.pdf` | `tests/conftest.py:19` 외 테스트 35개 모듈, `scripts/` 6개 (`run_candidate_a.sh:8` 은 `CANDIDATE_A_SOURCE_PDF` 로 덮어쓸 수 있음) | R / C (`test_extraction_cross_check.py:33`, `test_repeat_range_integrity.py:44,425,511`, `test_timer_manifest.py:34`, `test_extraction_accuracy.py:27`, `test_pdf_to_session_walkthrough.py:49`, `test_numbered_label_trigger.py:25`, `test_claim_contract_audit.py:184`) / E |
+| `data/runtime/candidate-a-source/in-gel-digestion.pdf` | `tests/conftest.py:19` 외 테스트 35개 모듈, `scripts/` 6개 (`run_candidate_a.sh:8` 은 `VOINEY_LAB_CANDIDATE_A_SOURCE_PDF` 로 덮어쓸 수 있음) | R / C (`test_extraction_cross_check.py:33`, `test_repeat_range_integrity.py:44,425,511`, `test_timer_manifest.py:34`, `test_extraction_accuracy.py:27`, `test_pdf_to_session_walkthrough.py:49`, `test_numbered_label_trigger.py:25`, `test_claim_contract_audit.py:184`) / E |
 | ANKOM 객체 경로 | `tests/test_extraction_cross_check.py:30`, `test_repeat_range_integrity.py:515`, `test_timer_manifest.py:37`, `test_numbered_label_trigger.py:19`, `test_claim_contract_audit.py:188`, `scripts/diagnose_hazard_claim_chunk.py:46`, `diagnose_protocol_claim_latency.py:63`, `prototype_claim_chunks.py:56`, `diagnose_full_document_run.py:50` | C / R |
 | 루트의 PDF 2개 | `tests/test_extraction_cross_check.py:632,636`, `test_numbered_label_trigger.py:22,23`, `test_step20_label_loss_regression.py:41`, `test_repeat_range_integrity.py:473,512,513`, `test_claim_contract_audit.py:185,186`, `test_timer_manifest.py:40,41`, `test_endpoint_observation_gate.py:48,49`, `scripts/diagnose_figure_label_chunk.py:55`, `.gitignore:20,21` | C / R |
 | `data/runtime` 전체 | `tests/test_stored_payloads_still_load.py:27` (C, 동적 수집), `server.py:1075,1089` (R, STT 진단 디렉터리 기본값이며 반드시 `data/runtime` 아래여야 함), `run_candidate_a.sh:9`, `run_ci_server.sh:15`, `test_protocol_catalog.py:977` (run_candidate_a.sh 의 한 줄을 그대로 고정), `.gitignore:11` | R / C |
-| `data/development_cache/*` | `chunk_analysis_cache.py:61` (C, `VOICE_WORKFLOW_AGENT_CHUNK_CACHE_DIR` 가 없을 때 기본값), `scripts/score_extraction.py:298` (C), `scripts/diagnose_provider_chunk.py:239` (C), `scripts/collect_chunks.sh:14,57`, `tests/test_chunk_analysis_cache.py:436` (이름 `development_cache` 를 고정), `tests/test_score_extraction_tool.py:87`, `.gitignore:22` | C / E |
+| `data/development_cache/*` | `chunk_analysis_cache.py:61` (C, `VOINEY_LAB_CHUNK_CACHE_DIR` 가 없을 때 기본값), `scripts/score_extraction.py:298` (C), `scripts/diagnose_provider_chunk.py:239` (C), `scripts/collect_chunks.sh:14,57`, `tests/test_chunk_analysis_cache.py:436` (이름 `development_cache` 를 고정), `tests/test_score_extraction_tool.py:87`, `.gitignore:22` | C / E |
 | `data/moss_demo/approved_documents.ko.json` | `scripts/setup_moss_demo.py:26`, `tests/test_moss_retrieval.py:250` | R |
 | `data/procedure_demo/*.json` | `scripts/setup_procedure_demo.py:27`, `tests/test_procedure_demo.py:23`, `test_server_procedure_integration.py:28`, `test_curated_protocol_cascade.py:4377` | R |
 | `tests/fixtures/fictional_ingestion_manifest.json` | `tests/test_server_procedure_integration.py:497` | R |
@@ -185,13 +185,13 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 
 ### A-3. 등록된 프로토콜이 실행 중 저장되는 곳
 
-- 켜는 법: `VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED=true`.
-- 위치: `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` (`experiment_protocol_config.py:12`). 켜져 있으면 반드시
+- 켜는 법: `VOINEY_LAB_PROTOCOL_ENABLED=true`.
+- 위치: `VOINEY_LAB_PROTOCOL_DATA_DIR` (`experiment_protocol_config.py:12`). 켜져 있으면 반드시
   절대 경로여야 하고 기본값은 없다 (`experiment_protocol_config.py:48-59`).
 - 안의 구조: `protocol_workspace.sqlite` (`experiment_protocol_store.py:35`) 와 PDF 원본을 내용 주소로
   저장한 `objects/sha256/<앞 2자리>/<sha256>.pdf` (`experiment_protocol_files.py:113,126`).
-- 함께 쓰는 설정: `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR` (`workspace_store.py:132`, 절대 경로 필수),
-  `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` (`experiment_reports.py:48`, 옛 이름
+- 함께 쓰는 설정: `VOINEY_LAB_WORKSPACE_DATA_DIR` (`workspace_store.py:132`, 절대 경로 필수),
+  `VOINEY_LAB_EXPERIMENT_REPORT_DB` (`experiment_reports.py:48`, 옛 이름
   `…_EXPERIMENT_REPORTS_DATABASE` 도 받음).
 - 실행 스크립트별 값:
   - `run_candidate_a.sh:9,71-77` → `data/runtime/candidate-a-live-acceptance/` (보고서 DB 와 workspace 도 그 안)
@@ -270,7 +270,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 | 3 | `moss_retrieval.py:256,431` | `"voice_workflow_agent_key"` | 외부 Moss 색인에 저장되는 메타데이터 필드 이름이다. 바꾸면 이미 올린 색인 항목과 맞지 않는다 |
 | 4 | `scripts/sync_moss_index.py:82` | 〃 | 동기화가 기존 색인 항목의 이 필드를 비교한다 |
 | 5 | `tests/test_moss_retrieval.py:223,404` | 〃 | 위 필드를 확인하는 테스트다 |
-| 6 | `.env.example:70` (`docs/MOSS_RETRIEVAL.md:65,179` 도 같은 값) | `MOSS_INDEX_NAME=voice_workflow_agent-approved-safety` | 외부 서비스에 이미 있는 색인 이름이다 |
+| 6 | `.env.example:70` (`docs/MOSS_RETRIEVAL.md:65,179` 도 같은 값) | `VOINEY_LAB_MOSS_INDEX_NAME=voice_workflow_agent-approved-safety` | 외부 서비스에 이미 있는 색인 이름이다 |
 | 7 | `worker.py:171`, `.env.example:21` | `voice_workflow_agent@example.invalid` | 알림 메일 발신 주소의 기본값이다. 밖으로 나가는 값이라 바꾸면 동작이 바뀐다 |
 
 **저장소 안에 저장된 데이터를 확인한 결과 (바꿔도 기존 기록을 읽을 수 있다는 근거):**
@@ -286,7 +286,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 
 **범위 밖이라 바꾸지 않는 비슷한 이름 (소문자 `voice_workflow_agent` 가 아님, 기록용):**
 
-- `VOICE_WORKFLOW_AGENT_*` 환경변수 전부 (지시 규칙).
+- `VOINEY_LAB_*` 환경변수 전부 (지시 규칙).
 - `external_references.py:549` 의 `"prompt_cache_key": "voice-workflow-agent-grok46-v1"`: xAI 쪽 프롬프트 캐시
   키라 바꾸면 캐시가 무효가 된다.
 - `brain.py` 의 페르소나 이름 "Voice Workflow Agent": 모델에게 보내는 문구이고 `test_brain.py:20` 이 확인한다.
@@ -471,7 +471,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 | 대상 | 이유 |
 |---|---|
 | B-2 의 10건 (§2) | 저장되거나 밖으로 나가는 식별자 |
-| `VOICE_WORKFLOW_AGENT_*` 환경변수 | 지시 규칙. 서버 `.env` 와 테스트 명령이 이 이름에 기대고 있다 |
+| `VOINEY_LAB_*` 환경변수 | 지시 규칙. 서버 `.env` 와 테스트 명령이 이 이름에 기대고 있다 |
 | in-gel PDF 의 파일 이름 `in-gel-digestion.pdf` | provenance 가 파일 이름을 고정한다 (A-5) |
 | `data/runtime/**` | 지시 규칙 |
 | `data/moss_demo/`, `data/procedure_demo/`, `tests/fixtures/fictional_ingestion_manifest.json` | 자기 경로가 내용에 들어 있다. MOSS 데모의 경로는 `data/runtime/moss_demo_catalog.sqlite` 에도 저장돼 있다 |
@@ -529,7 +529,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 ### 판단 불가 (2~4단계에서 건드리지 않는다)
 
 - `data/development_cache/` → `data/cache/`. git 밖이라 `git mv` 를 쓸 수 없다. `.env` 의
-  `VOICE_WORKFLOW_AGENT_CHUNK_CACHE_DIR` 를 확인할 수 없다. 캐시 안 4개 파일이 자기 경로를 기록하고,
+  `VOINEY_LAB_CHUNK_CACHE_DIR` 를 확인할 수 없다. 캐시 안 4개 파일이 자기 경로를 기록하고,
   `test_chunk_analysis_cache.py:436` 이 이름을 고정한다. 캐시를 못 찾으면 provider 비용이 다시 든다.
 - 루트의 라이선스 PDF 2개를 `data/runtime/` 아래로 옮기는 일. 파일이 없어서 테스트가 어느 쪽이든
   건너뛰므로, 이 트리에서는 맞게 고쳤는지 확인할 수 없다.
@@ -558,7 +558,7 @@ C 로 표기한 곳은 저장소 루트에서 실행해야만 맞는 경로다. 
 7. `tests/test_safety_pack.py:40` 이 만든 적 없는 파일
    (`data/development_protocols/candidate_a_source_in_gel_digestion.pdf`)을 먼저 찾고 `:42` 에서
    `data/runtime` 으로 넘어간다. 3단계에서 경로 문자열만 새 위치로 바꾼다.
-8. `playwright.ci.config.ts` 는 포트 8000 을 고정했다 (`PLAYWRIGHT_APP_PORT` 를 읽지 않는다). 기존
+8. `playwright.ci.config.ts` 는 포트 8000 을 고정했다 (`VOINEY_LAB_PLAYWRIGHT_APP_PORT` 를 읽지 않는다). 기존
    Playwright 설정 두 개는 모두 `data/runtime/` 에 쓴다 (Q4).
 9. README 의 조건 A 수치는 라이선스 PDF 4개를 전제로 한다. 이 트리에는 2개뿐이라 재현되지 않는다 (0-2).
    버그가 아니라 환경 차이다.

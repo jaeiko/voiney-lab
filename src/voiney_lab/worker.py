@@ -141,8 +141,8 @@ def draft_handoff(report: dict[str, Any], client: Any | None = None) -> str:
             api_key=api_key,
         )
     response = client.chat.completions.create(
-        model=os.environ.get("WORKER_MODEL")
-        or os.environ.get("CHAT_MODEL", "grok-4"),
+        model=os.environ.get("VOINEY_LAB_WORKER_MODEL")
+        or os.environ.get("VOINEY_LAB_CHAT_MODEL", "grok-4"),
         messages=[
             {"role": "system", "content": HANDOFF_PROMPT},
             {
@@ -167,9 +167,9 @@ def write_handoff_email(
     urgent = report.get("urgency") in ("emergency", "urgent")
     prefix = "[긴급] " if urgent else ""
     message = EmailMessage()
-    message["To"] = os.environ.get("LAB_MANAGER_EMAIL", "lab-manager@example.invalid")
+    message["To"] = os.environ.get("VOINEY_LAB_LAB_MANAGER_EMAIL", "lab-manager@example.invalid")
     message["From"] = os.environ.get(
-        "VOICE_WORKFLOW_AGENT_FROM_EMAIL", "voice_workflow_agent@example.invalid"
+        "VOINEY_LAB_FROM_EMAIL", "voice_workflow_agent@example.invalid"
     )
     message["Subject"] = (
         f"{prefix}Voice Workflow Agent 보고 {report['id']} — {report['location']}"

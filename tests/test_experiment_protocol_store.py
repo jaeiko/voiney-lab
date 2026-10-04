@@ -267,13 +267,13 @@ class ProtocolStoreTests(unittest.TestCase):
     def test_configuration_requires_boolean_and_absolute_enabled_path(self):
         with self.assertRaises(ProtocolConfigurationError):
             ProtocolPersistenceSettings.from_environment(
-                {"VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED": "maybe"}
+                {"VOINEY_LAB_PROTOCOL_ENABLED": "maybe"}
             )
         with self.assertRaises(ProtocolConfigurationError):
             ProtocolPersistenceSettings.from_environment(
                 {
-                    "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED": "true",
-                    "VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR": "relative/path",
+                    "VOINEY_LAB_PROTOCOL_ENABLED": "true",
+                    "VOINEY_LAB_PROTOCOL_DATA_DIR": "relative/path",
                 }
             )
 

@@ -138,7 +138,7 @@ When falling through to Grok:
 - Enhance `classify_curated_control_intent` in `curated_protocol.py` to route learning/version/continuation requests before falling back to step elaboration.
 
 ### 4. Persona & Tone Upgrade
-- Configure default `TTS_VOICE` to `leo`.
+- Configure default `VOINEY_LAB_TTS_VOICE` to `leo`.
 - Implement distinct voice response formatting:
   - **Instruction Mode**: *"다음 단계는 [단계명]입니다. [지시사항]을 진행해 주세요."*
   - **Learning Mode**: *"이 단계의 목적은 [목적]입니다. [원리/이유] 때문이며, [주의할 점]에 유의해야 합니다."*

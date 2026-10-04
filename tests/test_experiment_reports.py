@@ -335,10 +335,10 @@ class ExperimentReportStoreTests(unittest.TestCase):
         )
 
         with unittest.mock.patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(self.store.path),
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_DATABASE": str(self.store.path),
-            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_ENABLED": "false",
+            "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "true",
+            "VOINEY_LAB_EXPERIMENT_REPORT_DB": str(self.store.path),
+            "VOINEY_LAB_EXPERIMENT_REPORTS_DATABASE": str(self.store.path),
+            "VOINEY_LAB_REPORT_WRITER_ENABLED": "false",
         }), unittest.mock.patch(
             "fastapi.routing.run_in_threadpool", side_effect=run_inline,
         ):

@@ -78,8 +78,8 @@ between `procedures.py`/`procedure_store.py` (legacy) and
 
 - Only `server.py` imports the legacy stack in production code.
 - It only activates when an operator sets **both**
-  `VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG` and
-  `VOICE_WORKFLOW_AGENT_PROCEDURE_STORE` - neither is set by
+  `VOINEY_LAB_PROCEDURE_CATALOG` and
+  `VOINEY_LAB_PROCEDURE_STORE` - neither is set by
   `scripts/run_candidate_a.sh` or any documented deployment default.
 - `server.py`'s protocol-selection logic gates the legacy lookup on
   `selected_curated_fixture is None`, so a session can never be bound to both
@@ -109,7 +109,7 @@ Checked configuration presence only (booleans), never printed credential
 values.
 
 **Before this pass**, only `XAI_API_KEY`/`XAI_BASE_URL` and
-`MOSS_PROJECT_ID`/`MOSS_PROJECT_KEY`/etc. were configured in this
+`VOINEY_LAB_MOSS_PROJECT_ID`/`VOINEY_LAB_MOSS_PROJECT_KEY`/etc. were configured in this
 environment; no Drive/GitHub/protocols.io/OIDC/eLabFTW/OCR/Seqera
 credentials exist here.
 

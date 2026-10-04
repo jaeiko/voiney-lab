@@ -650,8 +650,8 @@ class SemanticIntentSettingsTests(unittest.TestCase):
 
     def test_enabling_uses_bounded_defaults(self) -> None:
         settings = SemanticIntentSettings.from_environment({
-            "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED": "true",
-            "CHAT_MODEL": "grok-4.6",
+            "VOINEY_LAB_SEMANTIC_INTENT_ENABLED": "true",
+            "VOINEY_LAB_CHAT_MODEL": "grok-4.6",
         })
         self.assertTrue(settings.enabled)
         self.assertEqual(settings.model, "grok-4.20-0309-non-reasoning")
@@ -660,9 +660,9 @@ class SemanticIntentSettingsTests(unittest.TestCase):
 
     def test_out_of_range_configuration_is_refused(self) -> None:
         cases = (
-            {"VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_TIMEOUT_SECONDS": "60"},
-            {"VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MIN_CONFIDENCE": "2"},
-            {"VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_TIMEOUT_SECONDS": "fast"},
+            {"VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS": "60"},
+            {"VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE": "2"},
+            {"VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS": "fast"},
         )
         for environment in cases:
             with self.subTest(environment=environment):
@@ -672,8 +672,8 @@ class SemanticIntentSettingsTests(unittest.TestCase):
     def test_a_mutation_floor_may_not_be_weaker_than_the_read_only_floor(self) -> None:
         with self.assertRaises(ValueError):
             SemanticIntentSettings.from_environment({
-                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MIN_CONFIDENCE": "0.9",
-                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE": "0.5",
+                "VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE": "0.9",
+                "VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE": "0.5",
             })
 
     def test_the_public_capability_declares_no_mutation_authority(self) -> None:

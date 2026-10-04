@@ -49,8 +49,8 @@ committed file) for secrets, matching the "no fake external validation" and
 ## Durable state and backup
 
 Durable pilot metadata is stored in SQLite, rooted under the directories named by
-`VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR`, `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR`,
-and `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB`. There is no object-store
+`VOINEY_LAB_PROTOCOL_DATA_DIR`, `VOINEY_LAB_WORKSPACE_DATA_DIR`,
+and `VOINEY_LAB_EXPERIMENT_REPORT_DB`. There is no object-store
 backend in this build — evidence/asset bytes referenced from these databases
 also live under the same data directories (`objects/sha256/` and `evidence/`),
 so a backup must capture the allowlisted files as well as the `.sqlite` files.
@@ -99,9 +99,9 @@ promotion:
   /opt/voice-workflow-agent/scripts/pilot_state_backup.py verify \
   /var/backups/voice-workflow-agent/pilot-pre-session-001.tar.gz
 
-export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/protocol
-export VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/workspace
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB=/var/lib/voice-workflow-agent-restore-001/reports/experiment_reports.sqlite
+export VOINEY_LAB_PROTOCOL_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/protocol
+export VOINEY_LAB_WORKSPACE_DATA_DIR=/var/lib/voice-workflow-agent-restore-001/workspace
+export VOINEY_LAB_EXPERIMENT_REPORT_DB=/var/lib/voice-workflow-agent-restore-001/reports/experiment_reports.sqlite
 ```
 
 The automated test suite exercises create, verify, restore, collision refusal,
@@ -115,7 +115,7 @@ deployment-specific restore drill before the first participant session.
 already raise at startup or first use for invalid combinations (e.g.
 workspace enabled without an absolute data directory, curated-protocol paths
 partially set). Development identity is only reachable outside `operational`
-scope — `VOICE_WORKFLOW_AGENT_USAGE_SCOPE=operational` requires a complete
+scope — `VOINEY_LAB_USAGE_SCOPE=operational` requires a complete
 OIDC configuration; there is no silent fallback from operational to
 development identity.
 

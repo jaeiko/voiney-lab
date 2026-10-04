@@ -57,7 +57,7 @@ from .protocol_claim_analysis import (
 )
 
 CACHE_FORMAT_VERSION = 1
-CACHE_DIRECTORY_ENV = "VOICE_WORKFLOW_AGENT_CHUNK_CACHE_DIR"
+CACHE_DIRECTORY_ENV = "VOINEY_LAB_CHUNK_CACHE_DIR"
 #: Anchored at the repository root rather than the working directory, so a run
 #: started from scripts/ or tests/ reads the entries a run from the root wrote.
 DEFAULT_CACHE_DIRECTORY = (

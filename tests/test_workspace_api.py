@@ -64,16 +64,16 @@ def _principal(profile_id: str) -> Principal:
 
 
 def _configure(monkeypatch, tmp_path, *, scope="demo"):
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED", "true")
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", scope)
+    monkeypatch.setenv("VOINEY_LAB_WORKSPACE_ENABLED", "true")
+    monkeypatch.setenv("VOINEY_LAB_WORKSPACE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", scope)
     monkeypatch.setenv(
-        "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES", json.dumps(_profiles())
+        "VOINEY_LAB_DEV_AUTH_PROFILES", json.dumps(_profiles())
     )
     for name in (
-        "VOICE_WORKFLOW_AGENT_OIDC_ISSUER",
-        "VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE",
-        "VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL",
+        "VOINEY_LAB_OIDC_ISSUER",
+        "VOINEY_LAB_OIDC_AUDIENCE",
+        "VOINEY_LAB_OIDC_JWKS_URL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -929,7 +929,7 @@ def test_admin_connector_setup_requires_scoped_credential_check_before_enable(
     monkeypatch.setenv("TEST_DRIVE_TOKEN", "drive-token")
     monkeypatch.setenv("TEST_OTHER_TENANT_TOKEN", "other-token")
     monkeypatch.setenv(
-        "VOICE_WORKFLOW_AGENT_SECRET_REFERENCES",
+        "VOINEY_LAB_SECRET_REFERENCES",
         json.dumps(
             {
                 "secret://tenant-a/google-drive": "TEST_DRIVE_TOKEN",
@@ -1048,7 +1048,7 @@ def test_connector_configuration_failure_is_visible_and_keeps_connector_disabled
 ):
     _configure(monkeypatch, tmp_path)
     monkeypatch.setenv(
-        "VOICE_WORKFLOW_AGENT_SECRET_REFERENCES",
+        "VOINEY_LAB_SECRET_REFERENCES",
         json.dumps({"secret://tenant-a/github": "MISSING_GITHUB_TOKEN"}),
     )
     credentials = asyncio.run(
@@ -1312,7 +1312,7 @@ def test_in_development_revision_fails_closed_and_operational_requires_oidc(monk
     assert blocked.status_code == 409
     assert blocked.json() == {"detail": "workspace_conflict"}
 
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "operational")
+    monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", "operational")
     unauthenticated = asyncio.run(_request("GET", "/api/workspace/session"))
     assert unauthenticated.status_code == 503
     assert unauthenticated.json() == {"detail": "identity_configuration_invalid"}
@@ -1463,8 +1463,8 @@ def test_admin_membership_retention_and_cross_tenant_report_idor(monkeypatch, tm
     store.bootstrap_principal(admin)
     store.bind_resource(admin, "experiment_report", report["report_id"])
     store.close()
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED", "true")
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB", str(report_path))
+    monkeypatch.setenv("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "true")
+    monkeypatch.setenv("VOINEY_LAB_EXPERIMENT_REPORT_DB", str(report_path))
     outsider = asyncio.run(
         _request(
             "GET",
@@ -1488,7 +1488,7 @@ def test_github_ping_webhook_hmac_and_delivery_replay_boundary(monkeypatch, tmp_
     monkeypatch.setenv("TEST_GITHUB_INSTALLATION_TOKEN", "installation-token")
     monkeypatch.setenv("TEST_GITHUB_WEBHOOK_SECRET", "webhook-secret")
     monkeypatch.setenv(
-        "VOICE_WORKFLOW_AGENT_SECRET_REFERENCES",
+        "VOINEY_LAB_SECRET_REFERENCES",
         json.dumps(
             {
                 "secret://tenant-a/github": "TEST_GITHUB_INSTALLATION_TOKEN",
@@ -1603,11 +1603,11 @@ def test_elabftw_http_boundary_requires_confirmation_and_uses_server_report(monk
         status="completed",
         event_key="legacy-report-complete",
     )
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED", "true")
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB", str(report_path))
+    monkeypatch.setenv("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "true")
+    monkeypatch.setenv("VOINEY_LAB_EXPERIMENT_REPORT_DB", str(report_path))
     monkeypatch.setenv("TEST_ELABFTW_KEY", "elab-api-key")
     monkeypatch.setenv(
-        "VOICE_WORKFLOW_AGENT_SECRET_REFERENCES",
+        "VOINEY_LAB_SECRET_REFERENCES",
         json.dumps({"secret://tenant-a/elabftw": "TEST_ELABFTW_KEY"}),
     )
 

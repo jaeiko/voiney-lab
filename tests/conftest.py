@@ -16,7 +16,7 @@ require it, with an explicit, honest reason, whenever it is not present.
 import os
 from pathlib import Path
 
-CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
+VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
     "test_candidate_a_acceptance_phase2.py",
@@ -37,14 +37,14 @@ MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
 
 
 def pytest_collection_modifyitems(config, items):
-    if CANDIDATE_A_SOURCE_PDF.is_file():
+    if VOINEY_LAB_CANDIDATE_A_SOURCE_PDF.is_file():
         return
     import pytest
 
     skip = pytest.mark.skip(
         reason=(
             f"requires the externally licensed Candidate A source PDF at "
-            f"{CANDIDATE_A_SOURCE_PDF}, which is not committed to this "
+            f"{VOINEY_LAB_CANDIDATE_A_SOURCE_PDF}, which is not committed to this "
             f"repository (see scripts/run_dev.sh)"
         )
     )

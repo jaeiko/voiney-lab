@@ -65,8 +65,8 @@ answer as approval evidence.
 ## 4. Runtime configuration and health check
 
 The normal server configuration requires an absolute
-`VOICE_WORKFLOW_AGENT_SAFETY_CATALOG`, an exact
-`VOICE_WORKFLOW_AGENT_USAGE_SCOPE`, and (when policy requires it) a facility ID.
+`VOINEY_LAB_SAFETY_CATALOG`, an exact
+`VOINEY_LAB_USAGE_SCOPE`, and (when policy requires it) a facility ID.
 Configuration belongs in the existing operator environment; this guide does not
 modify `.env`.
 
@@ -174,21 +174,22 @@ or 20, and must retain their canonical URL and retrieval time.
 
 The live xAI Responses adapter additionally requires:
 
-- `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED=true` (or the documented
-  `EXTERNAL_REFERENCES_ENABLED` alias);
+- `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true`;
 - a reviewed domain profile such as
-  `EXTERNAL_REFERENCE_DOMAIN_PROFILE=candidate_a`, or one
+  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=candidate_a`, or one
   to five comma-separated authority domains in
-  `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS`;
-- a non-empty `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL` (default
+  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` (or its alias
+  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`; set one, or both to the
+  same value);
+- a non-empty `VOINEY_LAB_EXTERNAL_REFERENCE_MODEL` (default
   `grok-4.6`);
-- a bounded `VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
+- a bounded `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
   1 and 30 seconds (the Candidate A launcher uses a 20-second total deadline);
 - optional 3-second connect and 15-second read deadlines through
-  `EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
-  `EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
+  `VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS` and
+  `VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS`;
 - an optional validated-result TTL through
-  `EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
+  `VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS` (900 seconds in the Candidate A
   launcher). Only cited, allowlisted success is cached.
 
 Each Turn is limited to one web-search request with SDK retries disabled. The
@@ -209,9 +210,9 @@ enabled authoritative web tier do not answer it. It is never indexed into the
 approved catalog and never gains document or URL citations.
 
 ```bash
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
 ```
 
 The Candidate A development launcher enables this option so the live demo can
@@ -228,7 +229,7 @@ server nor browser accepts another result for that identity. A newer accepted
 Turn and session stop terminally close any older in-flight research operation.
 
 The provider total deadline and visible enrichment budget are intentionally
-different. Configure `EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS` below the
+different. Configure `VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS` below the
 total timeout (the Candidate A launcher uses 4 and 20 seconds). Crossing the
 shorter budget removes the primary spinner and reports bounded background work;
 it creates neither a second request nor a second terminal result.
@@ -242,11 +243,11 @@ or mutate state, and cannot make evidence-admission decisions. Keep them disable
 in an evidence-only run:
 
 ```bash
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED=false
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL='grok-4.6'
-export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
-export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS=8
-export VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS=6
+export VOINEY_LAB_MULTI_BRAIN_ENABLED=false
+export VOINEY_LAB_MULTI_BRAIN_MODEL='grok-4.6'
+export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
+export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8
+export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6
 ```
 
 The short primary budget is not a provider timeout. It lets admitted local text

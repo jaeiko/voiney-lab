@@ -159,9 +159,9 @@ class OidcSettings:
     ) -> OidcSettings | None:
         env = os.environ if environment is None else environment
         values = {
-            "issuer": env.get("VOICE_WORKFLOW_AGENT_OIDC_ISSUER", "").strip(),
-            "audience": env.get("VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE", "").strip(),
-            "jwks_url": env.get("VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL", "").strip(),
+            "issuer": env.get("VOINEY_LAB_OIDC_ISSUER", "").strip(),
+            "audience": env.get("VOINEY_LAB_OIDC_AUDIENCE", "").strip(),
+            "jwks_url": env.get("VOINEY_LAB_OIDC_JWKS_URL", "").strip(),
         }
         if not any(values.values()):
             return None
@@ -176,15 +176,15 @@ class OidcSettings:
         return cls(
             **values,
             tenant_claim=env.get(
-                "VOICE_WORKFLOW_AGENT_OIDC_TENANT_CLAIM", "organization_id"
+                "VOINEY_LAB_OIDC_TENANT_CLAIM", "organization_id"
             ).strip()
             or "organization_id",
             roles_claim=env.get(
-                "VOICE_WORKFLOW_AGENT_OIDC_ROLES_CLAIM", "roles"
+                "VOINEY_LAB_OIDC_ROLES_CLAIM", "roles"
             ).strip()
             or "roles",
             display_name_claim=env.get(
-                "VOICE_WORKFLOW_AGENT_OIDC_NAME_CLAIM", "name"
+                "VOINEY_LAB_OIDC_NAME_CLAIM", "name"
             ).strip()
             or "name",
         )
@@ -298,7 +298,7 @@ class DevIdentityProvider:
         cls, environment: Mapping[str, str] | None = None
     ) -> DevIdentityProvider:
         env = os.environ if environment is None else environment
-        raw = env.get("VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES", "").strip()
+        raw = env.get("VOINEY_LAB_DEV_AUTH_PROFILES", "").strip()
         if not raw:
             profile = DevIdentityProfile(
                 profile_id="local-admin",

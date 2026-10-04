@@ -36,9 +36,9 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 아래 명령이 통과해야 한다. 플래그 세 개를 빼면 `.env` 영향으로 무관한 실패 28건이 나온다.
 
 ```bash
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 ```
 

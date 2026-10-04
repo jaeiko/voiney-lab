@@ -36,21 +36,21 @@ class ExperimentReportSettings:
     @classmethod
     def from_environment(cls) -> "ExperimentReportSettings":
         raw = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED", ""
+            "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", ""
         ).strip().casefold()
         if raw in _FALSE:
             return cls(False)
         if raw not in _TRUE:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED must be a boolean"
+                "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED must be a boolean"
             )
         path = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB",
-            os.environ.get("VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_DATABASE", ""),
+            "VOINEY_LAB_EXPERIMENT_REPORT_DB",
+            os.environ.get("VOINEY_LAB_EXPERIMENT_REPORTS_DATABASE", ""),
         ).strip()
         if not path:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB is required"
+                "VOINEY_LAB_EXPERIMENT_REPORT_DB is required"
             )
         return cls(True, Path(path))
 
@@ -1093,16 +1093,16 @@ class ReportWriterSettings:
     @classmethod
     def from_environment(cls) -> "ReportWriterSettings":
         enabled_val = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_ENABLED", "true"
+            "VOINEY_LAB_REPORT_WRITER_ENABLED", "true"
         ).strip().casefold()
         enabled = enabled_val in _TRUE
         model = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_REPORT_WRITER_MODEL",
-            os.environ.get("EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
+            "VOINEY_LAB_REPORT_WRITER_MODEL",
+            os.environ.get("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
         ).strip() or "grok-4.6"
         try:
             timeout = float(os.environ.get(
-                "VOICE_WORKFLOW_AGENT_REPORT_WRITER_TIMEOUT_SECONDS", "25"
+                "VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS", "25"
             ).strip())
         except ValueError:
             timeout = 25.0

@@ -85,20 +85,20 @@ class MossSettings:
 
     @classmethod
     def from_environment(cls) -> "MossSettings":
-        enabled = _boolean_env("VOICE_WORKFLOW_AGENT_MOSS_ENABLED")
+        enabled = _boolean_env("VOINEY_LAB_MOSS_ENABLED")
         if not enabled:
             return cls(enabled=False)
 
-        project_id = os.environ.get("MOSS_PROJECT_ID", "").strip()
-        project_key = os.environ.get("MOSS_PROJECT_KEY", "").strip()
-        index_name = os.environ.get("MOSS_INDEX_NAME", "").strip()
+        project_id = os.environ.get("VOINEY_LAB_MOSS_PROJECT_ID", "").strip()
+        project_key = os.environ.get("VOINEY_LAB_MOSS_PROJECT_KEY", "").strip()
+        index_name = os.environ.get("VOINEY_LAB_MOSS_INDEX_NAME", "").strip()
         if not all((project_id, project_key, index_name)):
             raise ValueError(
-                "MOSS_PROJECT_ID, MOSS_PROJECT_KEY, and MOSS_INDEX_NAME are required"
+                "VOINEY_LAB_MOSS_PROJECT_ID, VOINEY_LAB_MOSS_PROJECT_KEY, and VOINEY_LAB_MOSS_INDEX_NAME are required"
             )
 
         raw_scopes = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES",
+            "VOINEY_LAB_MOSS_ALLOWED_SCOPES",
             ",".join(sorted(DEFAULT_ALLOWED_SCOPES)),
         )
         allowed_scopes = frozenset(
@@ -107,7 +107,7 @@ class MossSettings:
             if value.strip()
         )
         if not allowed_scopes or not allowed_scopes.issubset(MOSS_CAPABLE_SCOPES):
-            raise ValueError("VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES is invalid")
+            raise ValueError("VOINEY_LAB_MOSS_ALLOWED_SCOPES is invalid")
 
         return cls(
             enabled=True,
@@ -115,20 +115,20 @@ class MossSettings:
             project_key=project_key,
             index_name=index_name,
             allowed_scopes=allowed_scopes,
-            alpha=_bounded_float("VOICE_WORKFLOW_AGENT_MOSS_ALPHA", 0.65, 0.0, 1.0),
+            alpha=_bounded_float("VOINEY_LAB_MOSS_ALPHA", 0.65, 0.0, 1.0),
             candidate_limit=_bounded_int(
-                "VOICE_WORKFLOW_AGENT_MOSS_CANDIDATE_LIMIT", 64, 3, 100
+                "VOINEY_LAB_MOSS_CANDIDATE_LIMIT", 64, 3, 100
             ),
             query_timeout_seconds=_bounded_float(
-                "VOICE_WORKFLOW_AGENT_MOSS_QUERY_TIMEOUT_MS", 250.0, 10.0, 5000.0
+                "VOINEY_LAB_MOSS_QUERY_TIMEOUT_MS", 250.0, 10.0, 5000.0
             )
             / 1000,
             load_timeout_seconds=_bounded_float(
-                "VOICE_WORKFLOW_AGENT_MOSS_LOAD_TIMEOUT_SECONDS", 60.0, 1.0, 300.0
+                "VOINEY_LAB_MOSS_LOAD_TIMEOUT_SECONDS", 60.0, 1.0, 300.0
             ),
-            auto_refresh=_boolean_env("VOICE_WORKFLOW_AGENT_MOSS_AUTO_REFRESH"),
+            auto_refresh=_boolean_env("VOINEY_LAB_MOSS_AUTO_REFRESH"),
             refresh_seconds=_bounded_int(
-                "VOICE_WORKFLOW_AGENT_MOSS_REFRESH_SECONDS", 600, 60, 86400
+                "VOINEY_LAB_MOSS_REFRESH_SECONDS", 600, 60, 86400
             ),
         )
 

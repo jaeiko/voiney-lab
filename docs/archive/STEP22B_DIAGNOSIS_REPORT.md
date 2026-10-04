@@ -395,7 +395,7 @@ p.6 `repeat steps 8-9 until fully dehydrated`) + `source_ambiguity` 1개
 
 **세 개의 관문:**
 
-1. `_development_activation_allowed()` (server.py:3387) — `VOICE_WORKFLOW_AGENT_USAGE_SCOPE`
+1. `_development_activation_allowed()` (server.py:3387) — `VOINEY_LAB_USAGE_SCOPE`
    (또는 `_SAFETY_USAGE_SCOPE`)가 `{demo, reference_only, test_only}` 중 하나여야 한다.
    미설정 포함 그 외 전부 403 `development_activation_not_allowed`. fail closed.
    *(이 환경에서는 `True` 로 측정되었다. 값 자체는 출력하지 않았다.)*
@@ -437,7 +437,7 @@ fixture 에 대해 `"available_for_execution": True` 를 **readiness 와 무관�
 넣는다. 그리고 `get_protocol_catalog_entry()` 는 fixture id 에 대해 store 를 아예 보지
 않고 이 dict 를 돌려준다.
 
-- 이 문이 열리는 조건은 런처가 `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE` 를
+- 이 문이 열리는 조건은 런처가 `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE` 를
   설정하는 것뿐이다. usage scope 검사를 받지 않는다.
 - 다만 fixture 는 `load_curated_protocol_fixture` 를 통과해야 하고, 그것은 특정 PDF sha
   와 provenance 에 해시로 묶여 있다. 즉 **임의의 문서로 이 문을 열 수는 없다.**

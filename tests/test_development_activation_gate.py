@@ -248,7 +248,7 @@ class ConfiguredFixtureExecutionStateTests(unittest.TestCase):
             return catalog, store
 
         with patch.dict(
-            os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": scope}, clear=False
+            os.environ, {"VOINEY_LAB_USAGE_SCOPE": scope}, clear=False
         ), patch.object(
             server_module, "_protocol_store_settings", return_value=self.settings
         ), patch.object(
@@ -279,7 +279,7 @@ class ConfiguredFixtureExecutionStateTests(unittest.TestCase):
         disabled = ProtocolPersistenceSettings(False, None)
         with patch.dict(
             os.environ,
-            {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"},
+            {"VOINEY_LAB_USAGE_SCOPE": "demo"},
             clear=False,
         ), patch.object(
             server_module, "_protocol_store_settings", return_value=disabled

@@ -323,7 +323,7 @@ class EndpointWithAProblemVoiceTests(VoiceSessionHarness, unittest.TestCase):
             scenario,
             patch.dict(
                 "os.environ",
-                {"VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false"},
+                {"VOINEY_LAB_WORKSPACE_ENABLED": "false"},
                 clear=False,
             ),
             patch(

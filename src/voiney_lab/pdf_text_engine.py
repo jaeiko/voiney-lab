@@ -154,7 +154,7 @@ def _worker_timeout_seconds() -> float:
     than raised for everyone.  Nonsense is ignored rather than obeyed.
     """
 
-    raw = os.environ.get("VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS", "")
+    raw = os.environ.get("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", "")
     try:
         value = float(raw)
     except (TypeError, ValueError):

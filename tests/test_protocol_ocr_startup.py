@@ -39,10 +39,10 @@ class ServerStartupTests(unittest.TestCase):
 
     def test_configured_engines_are_installed_and_served(self) -> None:
         env = {
-            "VOICE_WORKFLOW_AGENT_OCR_PROVIDERS": "clova,google",
-            "VOICE_WORKFLOW_AGENT_CLOVA_OCR_INVOKE_URL": CLOVA_URL,
-            "VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET": CLOVA_SECRET,
-            "VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
+            "VOINEY_LAB_OCR_PROVIDERS": "clova,google",
+            "VOINEY_LAB_CLOVA_OCR_INVOKE_URL": CLOVA_URL,
+            "VOINEY_LAB_CLOVA_OCR_SECRET": CLOVA_SECRET,
+            "VOINEY_LAB_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
         }
         with self.assertLogs("voiney_lab", level=logging.INFO) as logs:
             server_module._install_protocol_ocr_provider(env)
@@ -62,15 +62,15 @@ class ServerStartupTests(unittest.TestCase):
         injected = DualEngineOcrProvider((_FakeEngine(GOOGLE, ENGLISH),))
         server_module.app.state.protocol_ocr_provider = injected
         server_module._install_protocol_ocr_provider(
-            {"VOICE_WORKFLOW_AGENT_OCR_PROVIDERS": "google",
-             "VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY": GOOGLE_KEY}
+            {"VOINEY_LAB_OCR_PROVIDERS": "google",
+             "VOINEY_LAB_GOOGLE_VISION_API_KEY": GOOGLE_KEY}
         )
         self.assertIs(server_module._protocol_ocr_provider(), injected)
 
     def test_the_lifespan_installs_it(self) -> None:
         env = {
-            "VOICE_WORKFLOW_AGENT_OCR_PROVIDERS": "google",
-            "VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
+            "VOINEY_LAB_OCR_PROVIDERS": "google",
+            "VOINEY_LAB_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
         }
 
         async def run() -> None:

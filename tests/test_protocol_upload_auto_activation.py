@@ -42,17 +42,17 @@ class ProtocolUploadAutoActivationTests(unittest.TestCase):
 
     def test_auto_activate_policy_default_and_env(self):
         # Default without explicit toggle is False
-        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo", "VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS": ""}, clear=False):
+        with patch.dict(os.environ, {"VOINEY_LAB_USAGE_SCOPE": "demo", "VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS": ""}, clear=False):
             self.assertFalse(_auto_activate_ready_uploads_enabled())
 
         # In operational mode, auto-activation is always disabled even if toggle is true
-        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "operational", "VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS": "true"}, clear=False):
+        with patch.dict(os.environ, {"VOINEY_LAB_USAGE_SCOPE": "operational", "VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS": "true"}, clear=False):
             self.assertFalse(_auto_activate_ready_uploads_enabled())
 
         # Explicit toggle enables auto-activation in non-operational mode
-        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS": "true", "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}, clear=False):
+        with patch.dict(os.environ, {"VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS": "true", "VOINEY_LAB_USAGE_SCOPE": "demo"}, clear=False):
             self.assertTrue(_auto_activate_ready_uploads_enabled())
-        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS": "1", "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}, clear=False):
+        with patch.dict(os.environ, {"VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS": "1", "VOINEY_LAB_USAGE_SCOPE": "demo"}, clear=False):
             self.assertTrue(_auto_activate_ready_uploads_enabled())
 
     def test_activate_development_success_when_guidance_ready(self):

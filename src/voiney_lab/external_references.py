@@ -56,7 +56,11 @@ def _aliased_value(
     *,
     default: str | None = None,
 ) -> str | None:
-    """Resolve one canonical setting without silently accepting conflicts."""
+    """Resolve one canonical setting without silently accepting conflicts.
+
+    Since the VOINEY_LAB_ rename (2026-10-04) three callers pass the same name
+    twice; only the allowed-domains pair still names two different settings.
+    """
 
     canonical_value = os.environ.get(canonical)
     legacy_value = os.environ.get(legacy)
@@ -106,19 +110,19 @@ class ExternalReferenceSettings:
     @classmethod
     def from_environment(cls) -> "ExternalReferenceSettings":
         enabled, _ = _aliased_enabled(
-            "EXTERNAL_REFERENCES_ENABLED",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
         )
         if not enabled:
             return cls(False)
         profile = os.environ.get(
-            "EXTERNAL_REFERENCE_DOMAIN_PROFILE", ""
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE", ""
         ).strip().casefold() or None
         if profile is not None and profile not in DOMAIN_PROFILES:
-            raise ValueError("EXTERNAL_REFERENCE_DOMAIN_PROFILE is invalid")
+            raise ValueError("VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE is invalid")
         configured_domains = _aliased_value(
-            "EXTERNAL_REFERENCE_ALLOWED_DOMAINS",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS",
             default="",
         ) or ""
         domains = tuple(dict.fromkeys(
@@ -128,51 +132,51 @@ class ExternalReferenceSettings:
         ))
         if not domains and profile is not None:
             domains = DOMAIN_PROFILES.get(profile, ())
-        if profile == "open" or os.environ.get("EXTERNAL_SEARCH_DISPLAY_MODE") == "open":
+        if profile == "open" or os.environ.get("VOINEY_LAB_EXTERNAL_SEARCH_DISPLAY_MODE") == "open":
             domains = ()
         elif domains and (not 1 <= len(domains) <= 5 or any(
             _DOMAIN.fullmatch(domain) is None for domain in domains
         )):
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS is invalid"
             )
         model = (_aliased_value(
-            "EXTERNAL_REFERENCE_MODEL",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",
             default="grok-4.6",
         ) or "").strip()
         if not model:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_MODEL is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL is invalid"
             )
         default_timeout = "20" if profile == "candidate_a" else "90"
         timeout_raw = (_aliased_value(
-            "EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS",
             default=default_timeout,
         ) or "").strip()
         try:
             timeout_seconds = float(timeout_raw)
         except ValueError as exc:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS is invalid"
             ) from exc
         max_timeout = 30.0 if profile == "candidate_a" else 120.0
         if not 1 <= timeout_seconds <= max_timeout:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_TIMEOUT_SECONDS is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS is invalid"
             )
         max_citations_raw = os.environ.get(
-            "EXTERNAL_REFERENCE_MAX_CITATIONS", "5"
+            "VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS", "5"
         ).strip()
         try:
             max_citations = int(max_citations_raw)
         except ValueError as exc:
             raise ValueError(
-                "EXTERNAL_REFERENCE_MAX_CITATIONS is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS is invalid"
             ) from exc
         if not 1 <= max_citations <= 5:
-            raise ValueError("EXTERNAL_REFERENCE_MAX_CITATIONS is invalid")
+            raise ValueError("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS is invalid")
         def bounded_float(name: str, default: str, maximum: float) -> float:
             try:
                 value = float(os.environ.get(name, default).strip())
@@ -182,37 +186,37 @@ class ExternalReferenceSettings:
                 raise ValueError(f"{name} is invalid")
             return value
         connect_timeout = bounded_float(
-            "EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS", "5", 30)
+            "VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS", "5", 30)
         read_timeout = bounded_float(
-            "EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS", "90", 120)
+            "VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS", "90", 120)
         enrichment_budget = bounded_float(
-            "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS", "4", 30)
+            "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS", "4", 30)
         if enrichment_budget >= timeout_seconds:
             raise ValueError(
-                "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS must be below the total timeout"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS must be below the total timeout"
             )
         try:
             cache_ttl = int(os.environ.get(
-                "EXTERNAL_REFERENCE_CACHE_TTL_SECONDS", "900"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS", "900"
             ).strip())
         except ValueError as exc:
             raise ValueError(
-                "EXTERNAL_REFERENCE_CACHE_TTL_SECONDS is invalid"
+                "VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS is invalid"
             ) from exc
         if not 0 <= cache_ttl <= 86400:
-            raise ValueError("EXTERNAL_REFERENCE_CACHE_TTL_SECONDS is invalid")
+            raise ValueError("VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS is invalid")
         service_tier = os.environ.get(
-            "EXTERNAL_REFERENCE_SERVICE_TIER", "default"
+            "VOINEY_LAB_EXTERNAL_REFERENCE_SERVICE_TIER", "default"
         ).strip().casefold()
         if service_tier not in {"default", "priority"}:
-            raise ValueError("EXTERNAL_REFERENCE_SERVICE_TIER is invalid")
+            raise ValueError("VOINEY_LAB_EXTERNAL_REFERENCE_SERVICE_TIER is invalid")
         reasoning_effort = os.environ.get(
-            "EXTERNAL_REFERENCE_REASONING_EFFORT", "low"
+            "VOINEY_LAB_EXTERNAL_REFERENCE_REASONING_EFFORT", "low"
         ).strip().casefold()
         if reasoning_effort not in {"low", "medium", "high"}:
             reasoning_effort = "low"
         try:
-            max_turns = int(os.environ.get("EXTERNAL_REFERENCE_MAX_TURNS", "1").strip())
+            max_turns = int(os.environ.get("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_TURNS", "1").strip())
         except ValueError:
             max_turns = 1
         if not 1 <= max_turns <= 5:
@@ -264,25 +268,25 @@ class SupplementalKnowledgeSettings:
 
     @classmethod
     def from_environment(cls) -> "SupplementalKnowledgeSettings":
-        if not _enabled("SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"):
+        if not _enabled("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"):
             return cls(False)
         model = os.environ.get(
-            "SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL",
-            os.environ.get("EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL",
+            os.environ.get("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
         ).strip()
         if not model:
-            raise ValueError("SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL is invalid")
+            raise ValueError("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL is invalid")
         try:
             timeout = float(os.environ.get(
-                "SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS", "8"
+                "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS", "8"
             ).strip())
         except ValueError as exc:
             raise ValueError(
-                "SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS is invalid"
+                "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS is invalid"
             ) from exc
         if not 1 <= timeout <= 15:
             raise ValueError(
-                "SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS is invalid"
+                "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS is invalid"
             )
         return cls(True, model, timeout)
 

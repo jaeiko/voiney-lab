@@ -93,7 +93,7 @@ the fallback only for a separate instructional-visual request.
 
 ## Experiment reports
 
-When `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=true`, Candidate A opens
+When `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true`, Candidate A opens
 one SQLite-backed draft per accepted procedure session. Start, presented step,
 committed completion/navigation, explicit anomaly, block, consulted source,
 system anomaly, stop, and finalization events use stable idempotency keys.
@@ -285,20 +285,20 @@ exports for the normal Candidate A run.
 Equivalent canonical controls for a separate development launcher are:
 
 ```bash
-export EXTERNAL_REFERENCES_ENABLED=true
-export EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
-export EXTERNAL_REFERENCE_MODEL='grok-4.6'
-export EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
-export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=3
-export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=15
-export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900
-export EXTERNAL_REFERENCE_MAX_CITATIONS=5
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
-export WEB_VISUAL_SEARCH_ENABLED=true
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
-export CASCADE_BARGE_IN_PREFIX_MS=800
+export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true
+export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE='candidate_a'
+export VOINEY_LAB_EXTERNAL_REFERENCE_MODEL='grok-4.6'
+export VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=20
+export VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=3
+export VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=15
+export VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900
+export VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS=5
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
+export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=true
+export VOINEY_LAB_GENERATED_VISUALS_ENABLED=true
+export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800
 ```
 
 The domain list above is an operator-visible example, not a blanket authority
@@ -312,9 +312,9 @@ the dedicated launcher makes them available. No visual lookup or generation runs
 on routine step transitions. For another launcher the model/timeout controls are:
 
 ```bash
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED=true
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL='grok-imagine-image-quality'
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS=60
+export VOINEY_LAB_GENERATED_VISUALS_ENABLED=true
+export VOINEY_LAB_GENERATED_VISUAL_MODEL='grok-imagine-image-quality'
+export VOINEY_LAB_GENERATED_VISUAL_TIMEOUT_SECONDS=60
 ```
 
 Do not enable either feature merely to run offline tests. Automated tests use
@@ -364,8 +364,8 @@ The Candidate A launcher enables the experiment-report service at an ignored
 runtime path. For another launcher, use only an ignored absolute path:
 
 ```bash
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=true
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB=/absolute/ignored/runtime/experiment_reports.sqlite
+export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true
+export VOINEY_LAB_EXPERIMENT_REPORT_DB=/absolute/ignored/runtime/experiment_reports.sqlite
 ```
 
 ## Real-failure regression matrix

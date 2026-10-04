@@ -138,16 +138,16 @@ class WorkspaceSettings:
     ) -> WorkspaceSettings:
         env = os.environ if environment is None else environment
         enabled = env.get(
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED", "false"
+            "VOINEY_LAB_WORKSPACE_ENABLED", "false"
         ).strip().casefold() in {"1", "true", "yes", "on"}
-        raw_dir = env.get("VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR", "").strip()
+        raw_dir = env.get("VOINEY_LAB_WORKSPACE_DATA_DIR", "").strip()
         data_dir = Path(raw_dir) if raw_dir else None
         if enabled and (data_dir is None or not data_dir.is_absolute()):
             raise WorkspaceError(
                 "Workspace data directory must be an absolute path when enabled."
             )
         retention = int(
-            env.get("VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS", "90")
+            env.get("VOINEY_LAB_ANALYTICS_RETENTION_DAYS", "90")
         )
         if retention < 1 or retention > 3650:
             raise WorkspaceError("Analytics retention is outside allowed bounds.")

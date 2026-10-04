@@ -42,11 +42,11 @@ class WebVisualSettings:
         cls,
         references: ExternalReferenceSettings | None = None,
     ) -> "WebVisualSettings":
-        raw = os.environ.get("WEB_VISUAL_SEARCH_ENABLED", "").strip().casefold()
+        raw = os.environ.get("VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED", "").strip().casefold()
         if raw in _FALSE:
             return cls(False)
         if raw not in _TRUE:
-            raise ValueError("WEB_VISUAL_SEARCH_ENABLED must be a boolean")
+            raise ValueError("VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED must be a boolean")
         references = references or ExternalReferenceSettings.from_environment()
         if not references.enabled:
             raise ValueError("authoritative external references must be enabled")

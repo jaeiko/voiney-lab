@@ -14,7 +14,7 @@ class ConfigurationError(ValueError):
     """A named environment setting is malformed or outside its safe range."""
 
 
-CASCADE_FILLER_DELAY_ENV = "CASCADE_FILLER_DELAY_MS"
+CASCADE_FILLER_DELAY_ENV = "VOINEY_LAB_CASCADE_FILLER_DELAY_MS"
 DEFAULT_CASCADE_FILLER_DELAY_MS = 700
 
 
@@ -100,58 +100,58 @@ class CascadeVadSettings:
     )->"CascadeVadSettings":
         env=os.environ if environment is None else environment
         settings=cls(
-            mode=_integer(env,"CASCADE_VAD_MODE",3,0,3),
+            mode=_integer(env,"VOINEY_LAB_CASCADE_VAD_MODE",3,0,3),
             onset_voiced_frames=_integer(
-                env,"CASCADE_VAD_ONSET_VOICED_FRAMES",4,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES",4,1,100),
             onset_window_frames=_integer(
-                env,"CASCADE_VAD_ONSET_WINDOW_FRAMES",6,1,100),
-            prefix_ms=_integer(env,"CASCADE_VAD_PREFIX_MS",300,20,5000),
+                env,"VOINEY_LAB_CASCADE_VAD_ONSET_WINDOW_FRAMES",6,1,100),
+            prefix_ms=_integer(env,"VOINEY_LAB_CASCADE_VAD_PREFIX_MS",300,20,5000),
             barge_in_prefix_ms=_integer(
-                env,"CASCADE_BARGE_IN_PREFIX_MS",800,300,5000),
+                env,"VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS",800,300,5000),
             endpoint_silence_ms=_integer(
-                env,"CASCADE_VAD_ENDPOINT_SILENCE_MS",1000,20,10000),
+                env,"VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS",1000,20,10000),
             minimum_speech_ms=_integer(
-                env,"CASCADE_VAD_MIN_SPEECH_MS",240,20,10000),
+                env,"VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS",240,20,10000),
             maximum_utterance_ms=_integer(
-                env,"CASCADE_VAD_MAX_UTTERANCE_MS",15000,20,300000),
+                env,"VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS",15000,20,300000),
             cooldown_ms=_integer(
-                env,"CASCADE_VAD_COOLDOWN_MS",300,0,10000),
+                env,"VOINEY_LAB_CASCADE_VAD_COOLDOWN_MS",300,0,10000),
             playback_onset_voiced_frames=_integer(
-                env,"CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES",12,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES",12,1,100),
             playback_onset_window_frames=_integer(
-                env,"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES",15,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES",15,1,100),
             listening_onset_voiced_frames=_integer(
-                env,"CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES",8,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES",8,1,100),
             listening_onset_window_frames=_integer(
-                env,"CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES",12,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES",12,1,100),
             listening_resume_voiced_frames=_integer(
-                env,"CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES",6,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES",6,1,100),
             listening_resume_window_frames=_integer(
-                env,"CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES",10,1,100),
+                env,"VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES",10,1,100),
         )
         if settings.onset_voiced_frames>settings.onset_window_frames:
             raise ConfigurationError(
-                "CASCADE_VAD_ONSET_VOICED_FRAMES cannot exceed "
-                "CASCADE_VAD_ONSET_WINDOW_FRAMES")
+                "VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES cannot exceed "
+                "VOINEY_LAB_CASCADE_VAD_ONSET_WINDOW_FRAMES")
         if settings.minimum_speech_ms>settings.maximum_utterance_ms:
             raise ConfigurationError(
-                "CASCADE_VAD_MIN_SPEECH_MS cannot exceed "
-                "CASCADE_VAD_MAX_UTTERANCE_MS")
+                "VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS cannot exceed "
+                "VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS")
         if (settings.playback_onset_voiced_frames>
                 settings.playback_onset_window_frames):
             raise ConfigurationError(
-                "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES cannot exceed "
-                "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES")
+                "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES cannot exceed "
+                "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES")
         if (settings.listening_onset_voiced_frames>
                 settings.listening_onset_window_frames):
             raise ConfigurationError(
-                "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES cannot exceed "
-                "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES")
+                "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES cannot exceed "
+                "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES")
         if (settings.listening_resume_voiced_frames>
                 settings.listening_resume_window_frames):
             raise ConfigurationError(
-                "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES cannot exceed "
-                "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES")
+                "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES cannot exceed "
+                "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES")
         return settings
 
 
@@ -169,10 +169,10 @@ class CascadeSttSettings:
         env = os.environ if environment is None else environment
         return cls(
             vad_threshold=_floating(
-                env, "XAI_STT_VAD_THRESHOLD", 0.5, 0.0, 1.0
+                env, "VOINEY_LAB_XAI_STT_VAD_THRESHOLD", 0.5, 0.0, 1.0
             ),
             filler_words=_integer(
-                env, "XAI_STT_FILLER_WORDS", 0, 0, 1
+                env, "VOINEY_LAB_XAI_STT_FILLER_WORDS", 0, 0, 1
             ) == 1,
         )
 

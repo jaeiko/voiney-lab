@@ -683,8 +683,8 @@ class ActivationTests(unittest.TestCase):
 
     def test_without_the_workspace_or_the_model_role_nothing_runs(self) -> None:
         with patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false",
-            "VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_ENABLED": "false",
+            "VOINEY_LAB_MULTI_BRAIN_ENABLED": "true",
             "XAI_API_KEY": "offline",
         }), patch.object(server_module, "_start_revision_translation") as start:
             server_module._translate_authorized_revision(self.catalog, self.protocol_id)
@@ -695,8 +695,8 @@ class ActivationTests(unittest.TestCase):
         fixture = rich_fixture()
         translator = FakeTranslator()
         with patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace),
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace),
         }):
             report = asyncio.run(server_module.store_revision_translations(
                 fixture, translator, model="grok-test"))

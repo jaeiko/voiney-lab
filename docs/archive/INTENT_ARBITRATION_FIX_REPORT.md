@@ -83,7 +83,7 @@ Researcher Audio Input
 
 - **Professor Persona**: Defined in `SYSTEM_PROMPT` in [`src/voice_workflow_agent/brain.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/brain.py):
   > *"You embody the Professor persona: a calm, professional, and supportive laboratory mentor. Your explanations are educational, precise, and encouraging, focusing on safety, scientific principles, and experimental reproducibility without excessive verbosity."*
-- **Voice Profile**: **Leo (`TTS_VOICE=leo`)** across all synthesis pipelines.
+- **Voice Profile**: **Leo (`VOINEY_LAB_TTS_VOICE=leo`)** across all synthesis pipelines.
 
 ---
 

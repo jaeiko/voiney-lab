@@ -2870,8 +2870,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
 
         fake_client=SimpleNamespace(images=SimpleNamespace())
         with patch.dict(os.environ,{
-            "VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED":"true",
-            "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL":"offline-test-model",
+            "VOINEY_LAB_GENERATED_VISUALS_ENABLED":"true",
+            "VOINEY_LAB_GENERATED_VISUAL_MODEL":"offline-test-model",
         },clear=False),patch(
             "voiney_lab.server.transcribe",
             return_value=Transcription(

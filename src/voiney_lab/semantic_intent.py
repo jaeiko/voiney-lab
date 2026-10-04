@@ -204,27 +204,27 @@ class SemanticIntentSettings:
     ) -> "SemanticIntentSettings":
         env = os.environ if environment is None else environment
         enabled = _flag(
-            env, "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED", False
+            env, "VOINEY_LAB_SEMANTIC_INTENT_ENABLED", False
         )
         model = env.get(
-            "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MODEL",
+            "VOINEY_LAB_SEMANTIC_INTENT_MODEL",
             "grok-4.20-0309-non-reasoning",
         ).strip() or "grok-4.20-0309-non-reasoning"
         timeout = _bounded_float(
-            env, "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_TIMEOUT_SECONDS",
+            env, "VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS",
             2.5, 0.2, 8.0,
         )
         minimum = _bounded_float(
-            env, "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MIN_CONFIDENCE",
+            env, "VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE",
             0.6, 0.0, 1.0,
         )
         mutation_minimum = _bounded_float(
-            env, "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE",
+            env, "VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE",
             0.85, 0.0, 1.0,
         )
         if mutation_minimum < minimum:
             raise ValueError(
-                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE "
+                "VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE "
                 "may not be weaker than the read-only confidence floor"
             )
         return cls(enabled, model, timeout, minimum, mutation_minimum)

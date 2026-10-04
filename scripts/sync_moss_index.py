@@ -50,10 +50,10 @@ async def _sync(args: argparse.Namespace, documents: list[Any]) -> None:
             "Moss SDK is not installed; run: python -m pip install -e '.[moss]'"
         ) from exc
 
-    project_id = os.environ.get("MOSS_PROJECT_ID", "").strip()
-    project_key = os.environ.get("MOSS_PROJECT_KEY", "").strip()
+    project_id = os.environ.get("VOINEY_LAB_MOSS_PROJECT_ID", "").strip()
+    project_key = os.environ.get("VOINEY_LAB_MOSS_PROJECT_KEY", "").strip()
     if not project_id or not project_key:
-        raise RuntimeError("MOSS_PROJECT_ID and MOSS_PROJECT_KEY are required")
+        raise RuntimeError("VOINEY_LAB_MOSS_PROJECT_ID and VOINEY_LAB_MOSS_PROJECT_KEY are required")
 
     sdk_documents = [
         DocumentInfo(id=item.id, text=item.text, metadata=item.metadata)
@@ -122,11 +122,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--index-name",
-        default=os.environ.get("MOSS_INDEX_NAME", "").strip(),
+        default=os.environ.get("VOINEY_LAB_MOSS_INDEX_NAME", "").strip(),
     )
     parser.add_argument(
         "--model-id",
-        default=os.environ.get("MOSS_MODEL_ID", "moss-minilm").strip(),
+        default=os.environ.get("VOINEY_LAB_MOSS_MODEL_ID", "moss-minilm").strip(),
         choices=("moss-minilm", "moss-mediumlm"),
     )
     parser.add_argument("--wait-timeout", type=float, default=300.0)
@@ -146,7 +146,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not args.index_name:
-        parser.error("--index-name or MOSS_INDEX_NAME is required")
+        parser.error("--index-name or VOINEY_LAB_MOSS_INDEX_NAME is required")
     if args.wait_timeout <= 0 or args.wait_timeout > 3600:
         parser.error("--wait-timeout must be between 0 and 3600 seconds")
     if args.usage_scope == "operational" and not args.allow_sensitive_scope:

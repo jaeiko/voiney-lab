@@ -174,12 +174,12 @@ class CascadeFillerTests(unittest.IsolatedAsyncioTestCase):
     def test_delay_configuration_is_bounded(self):
         self.assertEqual(cascade_filler_delay_ms({}), 700)
         self.assertEqual(
-            cascade_filler_delay_ms({"CASCADE_FILLER_DELAY_MS": "900"}),
+            cascade_filler_delay_ms({"VOINEY_LAB_CASCADE_FILLER_DELAY_MS": "900"}),
             900,
         )
         for value in ("99", "5001", "not-a-number"):
             with self.assertRaises(ValueError):
-                cascade_filler_delay_ms({"CASCADE_FILLER_DELAY_MS": value})
+                cascade_filler_delay_ms({"VOINEY_LAB_CASCADE_FILLER_DELAY_MS": value})
 
 
 if __name__ == "__main__":

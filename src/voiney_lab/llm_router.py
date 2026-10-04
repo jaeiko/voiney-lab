@@ -38,7 +38,7 @@ do not ask for a hand-off ("~에게 전달해줘", answered "보고서는 화면
 기록할까요?". An answer is also checked for a question only the server asks,
 and an outside-PDF explanation may be about any word of the protocol's text.
 
-server.py routes a turn here only when VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED
+server.py routes a turn here only when VOINEY_LAB_LLM_ROUTER_ENABLED
 is true; it is false by default, and off, every turn takes the rules' path
 exactly as before.
 """
@@ -659,9 +659,9 @@ def _missing_action_word(action: str | None, evidence: str) -> str | None:
 
 # --- Settings ----------------------------------------------------------------------
 
-LLM_ROUTER_ENABLED_ENV = "VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED"
-LLM_ROUTER_MODEL_ENV = "VOICE_WORKFLOW_AGENT_LLM_ROUTER_MODEL"
-LLM_ROUTER_TIMEOUT_ENV = "VOICE_WORKFLOW_AGENT_LLM_ROUTER_TIMEOUT_SECONDS"
+LLM_ROUTER_ENABLED_ENV = "VOINEY_LAB_LLM_ROUTER_ENABLED"
+LLM_ROUTER_MODEL_ENV = "VOINEY_LAB_LLM_ROUTER_MODEL"
+LLM_ROUTER_TIMEOUT_ENV = "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS"
 DEFAULT_LLM_ROUTER_MODEL = "grok-4.20-0309-non-reasoning"
 DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS = 2.5
 _TRUE = frozenset({"1", "true", "yes", "on"})

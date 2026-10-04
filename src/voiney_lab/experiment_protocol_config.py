@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-PROTOCOL_ENABLED_ENV = "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED"
-PROTOCOL_DATA_DIR_ENV = "VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR"
+PROTOCOL_ENABLED_ENV = "VOINEY_LAB_PROTOCOL_ENABLED"
+PROTOCOL_DATA_DIR_ENV = "VOINEY_LAB_PROTOCOL_DATA_DIR"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off", ""})
 

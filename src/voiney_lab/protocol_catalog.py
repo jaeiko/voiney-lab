@@ -161,7 +161,7 @@ _OCR_FAILED_EVENT = "protocol_ocr_failed"
 _OCR_REVIEWED_EVENT = "protocol_ocr_reviewed"
 _CHUNK_RUN_LOCKS = tuple(threading.Lock() for _ in range(64))
 CLAIM_CHUNK_ANALYSIS_ENABLED_ENV = (
-    "VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED"
+    "VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED"
 )
 _TRUE_FEATURE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_FEATURE_VALUES = frozenset({"0", "false", "no", "off", ""})
@@ -1579,7 +1579,7 @@ class ProtocolCatalog:
                     "retryable": latest_failure
                     not in {"ocr_required", "protocol_pdf_too_large"},
                     "action": (
-                        "Configure XAI_API_KEY and PROTOCOL_ANALYSIS_MODEL, then retry."
+                        "Configure XAI_API_KEY and VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL, then retry."
                         if latest_failure == "provider_configuration_missing"
                         else "Review the failure code and explicitly retry analysis."
                     ),

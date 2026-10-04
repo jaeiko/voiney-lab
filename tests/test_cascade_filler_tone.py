@@ -1,8 +1,8 @@
 """The waiting cue is a short browser tone by default, not a spoken sentence.
 
-``CASCADE_FILLER_MODE=tone`` (the default) sends ``filler.tone`` and the browser
+``VOINEY_LAB_CASCADE_FILLER_MODE=tone`` (the default) sends ``filler.tone`` and the browser
 makes the sound; nothing is synthesized, so the cue never waits on a TTS call.
-``CASCADE_FILLER_MODE=phrase`` brings back the old sentence unchanged.
+``VOINEY_LAB_CASCADE_FILLER_MODE=phrase`` brings back the old sentence unchanged.
 The scheduler is driven directly and through ``run_turn_safely``, and the page
 script is driven in Node with a fake Web Audio context.
 """
@@ -81,14 +81,14 @@ async def settle():
 class FillerModeSettingTests(unittest.TestCase):
     def test_tone_is_the_default_and_phrase_brings_the_sentence_back(self):
         self.assertEqual(cascade_filler_mode({}), "tone")
-        self.assertEqual(cascade_filler_mode({"CASCADE_FILLER_MODE": ""}), "tone")
+        self.assertEqual(cascade_filler_mode({"VOINEY_LAB_CASCADE_FILLER_MODE": ""}), "tone")
         self.assertEqual(
-            cascade_filler_mode({"CASCADE_FILLER_MODE": " Phrase "}), "phrase")
-        self.assertEqual(cascade_filler_mode({"CASCADE_FILLER_MODE": "tone"}), "tone")
+            cascade_filler_mode({"VOINEY_LAB_CASCADE_FILLER_MODE": " Phrase "}), "phrase")
+        self.assertEqual(cascade_filler_mode({"VOINEY_LAB_CASCADE_FILLER_MODE": "tone"}), "tone")
 
     def test_an_unknown_mode_is_refused_not_guessed(self):
         with self.assertRaises(ConfigurationError):
-            cascade_filler_mode({"CASCADE_FILLER_MODE": "beep"})
+            cascade_filler_mode({"VOINEY_LAB_CASCADE_FILLER_MODE": "beep"})
 
     def test_a_tone_filler_cannot_be_built_without_a_way_to_send_it(self):
         with self.assertRaises(ValueError):
@@ -170,11 +170,11 @@ class ToneThroughTheTurnTests(unittest.TestCase):
         socket = Socket()
 
         def slow_empty_transcript(*_args, **_kwargs):
-            time.sleep(0.4)  # past CASCADE_FILLER_DELAY_MS=100
+            time.sleep(0.4)  # past VOINEY_LAB_CASCADE_FILLER_DELAY_MS=100
             return Transcription("", "ko")
 
         with patch.dict("os.environ", {
-            "CASCADE_FILLER_DELAY_MS": "100", **environment,
+            "VOINEY_LAB_CASCADE_FILLER_DELAY_MS": "100", **environment,
         }), patch(
             "voiney_lab.server.transcribe", side_effect=slow_empty_transcript,
         ), patch(
@@ -184,7 +184,7 @@ class ToneThroughTheTurnTests(unittest.TestCase):
         return socket, tts
 
     def test_default_turn_sends_a_tone_and_synthesizes_nothing(self):
-        socket, tts = self.run_slow_turn({"CASCADE_FILLER_MODE": ""})
+        socket, tts = self.run_slow_turn({"VOINEY_LAB_CASCADE_FILLER_MODE": ""})
         kinds = [item["type"] for item in socket.text]
         self.assertIn("filler.tone", kinds)
         self.assertNotIn("filler.audio.start", kinds)
@@ -197,7 +197,7 @@ class ToneThroughTheTurnTests(unittest.TestCase):
         self.assertEqual([item["cue"] for item in played], ["tone"])
 
     def test_phrase_setting_brings_back_the_spoken_sentence(self):
-        socket, tts = self.run_slow_turn({"CASCADE_FILLER_MODE": "phrase"})
+        socket, tts = self.run_slow_turn({"VOINEY_LAB_CASCADE_FILLER_MODE": "phrase"})
         kinds = [item["type"] for item in socket.text]
         self.assertIn("filler.audio.start", kinds)
         self.assertNotIn("filler.tone", kinds)
