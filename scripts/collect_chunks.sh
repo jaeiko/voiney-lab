@@ -40,6 +40,10 @@ export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false
 
 if [ -f .venv/bin/activate ]; then . .venv/bin/activate; fi
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 spent=0
 for chunk in "${CHUNKS[@]}"; do
   echo "=== chunk ${chunk} ===" >&2

@@ -20,10 +20,12 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.tools import INBOX_PATH, OUTBOX_DIR, PROCESSED_PATH, STATUS_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
+refuse_old_setting_names()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("voiney_lab.worker")

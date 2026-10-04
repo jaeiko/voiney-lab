@@ -22,6 +22,10 @@ if [[ -z "${VIRTUAL_ENV:-}" && -f "$ROOT/.venv/bin/activate" ]]; then
   source "$ROOT/.venv/bin/activate"
 fi
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 rm -rf "$PROTOCOL_DATA_DIR"
 
 export VOINEY_LAB_PROTOCOL_ENABLED="true"

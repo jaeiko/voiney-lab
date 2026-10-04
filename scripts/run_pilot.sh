@@ -43,6 +43,10 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 # --- Durable pilot state -----------------------------------------------------
 export VOINEY_LAB_PROTOCOL_ENABLED="true"
 export VOINEY_LAB_PROTOCOL_DATA_DIR="$PILOT_DATA_DIR"

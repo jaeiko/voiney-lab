@@ -191,6 +191,7 @@ from voiney_lab.semantic_intent import (
     SemanticIntentSettings,
     propose_semantic_intent,
 )
+from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from voiney_lab.identity import (
     AuthenticationRequiredError,
@@ -253,6 +254,9 @@ def _load_project_environment(path:Path|None=None)->bool:
 
 
 _load_project_environment()
+# Refuse to start while an old setting name is set, in the process environment
+# or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
+refuse_old_setting_names()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
 

@@ -36,6 +36,27 @@ MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
 }
 
 
+def pytest_sessionstart(session):
+    """Refuse to run while an old setting name is set (decision of 2026-10-04).
+
+    The server loads the repository .env when it is imported, so the names in
+    that file count as well as the process environment. Names only are shown.
+    """
+    import pytest
+
+    from voiney_lab.setting_names import (
+        OldSettingNamesError,
+        refuse_old_setting_names,
+    )
+
+    try:
+        refuse_old_setting_names(
+            dotenv_path=Path(__file__).resolve().parents[1] / ".env"
+        )
+    except OldSettingNamesError as exc:
+        pytest.exit(str(exc), returncode=pytest.ExitCode.USAGE_ERROR)
+
+
 def pytest_collection_modifyitems(config, items):
     if VOINEY_LAB_CANDIDATE_A_SOURCE_PDF.is_file():
         return

@@ -44,6 +44,10 @@ fi
 
 source .venv/bin/activate
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 echo "=== Candidate A configuration check ==="
 
 for file in \
