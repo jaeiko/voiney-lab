@@ -356,17 +356,17 @@ class PilotAnswerServerTests(unittest.TestCase):
         CuratedProtocolServerCascadeTests.setUpClass()
         cases = (
             # (test mode as run_dev.sh --test-mode sets it, development-only)
-            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "true"}, True),
+            ({"VOINEY_LAB_USAGE_SCOPE": "demo",
+              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "true"}, True),
             # run_pilot.sh: reference_only, test mode forced off -- even a
             # development-activated protocol gets no note.
-            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "reference_only",
-              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "false"}, True),
-            ({"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "reference_only",
-              "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES": "false"}, False),
+            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only",
+              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "false"}, True),
+            ({"VOINEY_LAB_USAGE_SCOPE": "reference_only",
+              "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES": "false"}, False),
         )
         for environment, development_only in cases:
-            test_mode = environment["VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES"] == "true"
+            test_mode = environment["VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"] == "true"
             with self.subTest(test_mode=test_mode, development_only=development_only), \
                     patch.dict("os.environ", environment):
                 harness = CuratedProtocolServerCascadeTests()

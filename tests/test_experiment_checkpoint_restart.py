@@ -344,14 +344,14 @@ async def _post(path: str, body: dict[str, object]):
 
 
 def test_the_http_route_starts_the_new_session(monkeypatch, tmp_path):
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED", "true")
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "demo")
-    monkeypatch.setenv("VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES", json.dumps(_profiles()))
+    monkeypatch.setenv("VOINEY_LAB_WORKSPACE_ENABLED", "true")
+    monkeypatch.setenv("VOINEY_LAB_WORKSPACE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", "demo")
+    monkeypatch.setenv("VOINEY_LAB_DEV_AUTH_PROFILES", json.dumps(_profiles()))
     for name in (
-        "VOICE_WORKFLOW_AGENT_OIDC_ISSUER",
-        "VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE",
-        "VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL",
+        "VOINEY_LAB_OIDC_ISSUER",
+        "VOINEY_LAB_OIDC_AUDIENCE",
+        "VOINEY_LAB_OIDC_JWKS_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     principal = _api_principal()
@@ -458,10 +458,10 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
             environment = {
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-                "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+                "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+                "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace),
+                "VOINEY_LAB_USAGE_SCOPE": "demo",
+                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             store = _store(workspace)
             try:

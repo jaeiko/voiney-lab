@@ -187,9 +187,9 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(ExternalReferenceSettings.from_environment().enabled)
         with patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
-            "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "osha.gov,cdc.gov",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS": "2.5",
         }, clear=True):
             settings = ExternalReferenceSettings.from_environment()
         self.assertEqual(settings.allowed_domains, ("osha.gov", "cdc.gov"))
@@ -200,32 +200,35 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_external_setting_alias_conflict_and_invalid_profile_fail_loudly(self):
+        # The enabled pair became one name in the VOINEY_LAB_ rename, so the
+        # conflict is checked on the alias pair that still names two settings.
         with patch.dict(os.environ, {
-            "EXTERNAL_REFERENCES_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_EXTERNAL_REFERENCES_ENABLED": "false",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS": "osha.gov",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS": "cdc.gov",
         }, clear=True), self.assertRaisesRegex(ValueError, "conflicts"):
             ExternalReferenceSettings.from_environment()
         with patch.dict(os.environ, {
-            "EXTERNAL_REFERENCES_ENABLED": "true",
-            "EXTERNAL_REFERENCE_DOMAIN_PROFILE": "unknown-profile",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "true",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE": "unknown-profile",
         }, clear=True), self.assertRaisesRegex(ValueError, "DOMAIN_PROFILE"):
             ExternalReferenceSettings.from_environment()
         for name,value in (
-            ("EXTERNAL_REFERENCE_MODEL",""),
-            ("EXTERNAL_REFERENCE_TIMEOUT_SECONDS","31"),
-            ("EXTERNAL_REFERENCE_MAX_CITATIONS","6"),
+            ("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",""),
+            ("VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS","31"),
+            ("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS","6"),
         ):
             with self.subTest(name=name),patch.dict(os.environ, {
-                "EXTERNAL_REFERENCES_ENABLED":"true",
-                "EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
+                "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
+                "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
                 name:value,
             },clear=True),self.assertRaises(ValueError):
                 ExternalReferenceSettings.from_environment()
         with patch.dict(os.environ, {
-            "EXTERNAL_REFERENCES_ENABLED":"true",
-            "EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
-            "EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
-            "EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED":"true",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE":"candidate_a",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS":"5",
+            "VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS":"5",
         },clear=True),self.assertRaises(ValueError):
             ExternalReferenceSettings.from_environment()
 
@@ -235,9 +238,9 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
                 SupplementalKnowledgeSettings.from_environment().enabled
             )
         with patch.dict(os.environ, {
-            "SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED": "true",
-            "SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL": "grok-test",
-            "SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS": "7",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED": "true",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL": "grok-test",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS": "7",
         }, clear=True):
             settings = SupplementalKnowledgeSettings.from_environment()
         self.assertTrue(settings.enabled)
@@ -529,11 +532,11 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         script = Path(__file__).resolve().parent.parent / "scripts" / "run_dev.sh"
         self.assertTrue(script.is_file())
         text = script.read_text(encoding="utf-8")
-        self.assertIn('EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', text)
-        self.assertIn('EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"', text)
-        self.assertIn('EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"', text)
-        self.assertIn('EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"', text)
-        self.assertIn('EXTERNAL_REFERENCE_MODEL="grok-4.6"', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_MODEL="grok-4.6"', text)
         self.assertIn('external_search_model', text)
         self.assertIn('external_search_open_mode', text)
 

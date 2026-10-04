@@ -846,7 +846,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         # at usage_scope_not_development. Only a maintainer's .env used to
         # set the scope, so the test sets it.
         with patch.dict(
-            os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}
+            os.environ, {"VOINEY_LAB_USAGE_SCOPE": "demo"}
         ), patch.object(
             server_module, "server_config", return_value=SimpleNamespace()
         ), patch.object(
@@ -984,17 +984,17 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             launcher,
         )
         self.assertIn(
-            'export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"', launcher
+            'export VOINEY_LAB_PROTOCOL_ENABLED="true"', launcher
         )
         self.assertIn(
-            'export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"', launcher
+            'export VOINEY_LAB_MOSS_ENABLED="false"', launcher
         )
-        self.assertIn('export EXTERNAL_REFERENCES_ENABLED="true"', launcher)
+        self.assertIn('export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true"', launcher)
         self.assertIn(
-            'export EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', launcher
+            'export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', launcher
         )
-        self.assertIn('export WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
-        self.assertIn('export CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
+        self.assertIn('export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
+        self.assertIn('export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
         self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
         # The development launcher binds loopback unless a person overrides
@@ -1015,16 +1015,16 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         gated = launcher[launcher.index('if [[ "$TEST_MODE" == "true" ]]; then'):]
         gated = gated[: gated.index("\nfi\n")]
         self.assertIn(
-            'export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="demo"', gated
+            'export VOINEY_LAB_USAGE_SCOPE="demo"', gated
         )
         self.assertIn(
-            'export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="true"',
+            'export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"',
             gated,
         )
         # Nowhere else in the launcher does either variable get set.
         outside = launcher.replace(gated, "")
-        self.assertNotIn("VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES", outside)
-        self.assertNotIn("export VOICE_WORKFLOW_AGENT_USAGE_SCOPE", outside)
+        self.assertNotIn("VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES", outside)
+        self.assertNotIn("export VOINEY_LAB_USAGE_SCOPE", outside)
 
     def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
         """The pilot launcher owns its data root and opts out, not in.
@@ -1041,11 +1041,11 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
         self.assertIn('PORT="${PORT:-8080}"', launcher)
         for name in (
-            "EXTERNAL_REFERENCES_ENABLED",
-            "SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
-            "WEB_VISUAL_SEARCH_ENABLED",
-            "VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED",
-            "VOICE_WORKFLOW_AGENT_MOSS_ENABLED",
+            "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
+            "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED",
+            "VOINEY_LAB_GENERATED_VISUALS_ENABLED",
+            "VOINEY_LAB_MOSS_ENABLED",
         ):
             self.assertIn(
                 f'export {name}="${{{name}:-false}}"',
@@ -1053,11 +1053,11 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
                 f"{name} must default to false and stay operator-overridable",
             )
         self.assertIn(
-            'export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="false"',
+            'export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="false"',
             launcher,
         )
         self.assertNotIn(
-            'VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="true"', launcher
+            'VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"', launcher
         )
         self.assertIn("--check-only", launcher)
         self.assertIn('--host "$HOST"', launcher)
@@ -1342,8 +1342,8 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         provider = TrustedOcrProvider()
         transport = httpx.ASGITransport(app=server_module.app)
         environment = {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false",
-            "VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN": "review-token",
+            "VOINEY_LAB_WORKSPACE_ENABLED": "false",
+            "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN": "review-token",
         }
         with (
             patch.dict(os.environ, environment),
@@ -1435,7 +1435,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
-        with patch.dict(os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo"}):
+        with patch.dict(os.environ, {"VOINEY_LAB_USAGE_SCOPE": "demo"}):
             review = await self._request(
                 "GET",
                 f"/api/protocols/{protocol_id}/review",
@@ -1454,7 +1454,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(activated.json()["development_only"])
 
         with patch.dict(
-            os.environ, {"VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "operational"}
+            os.environ, {"VOINEY_LAB_USAGE_SCOPE": "operational"}
         ):
             blocked = await self._request(
                 "POST",

@@ -4,8 +4,8 @@ Architecture status (Phase 15 reconciliation, docs/COMMERCIALIZATION_PASS3_REPOR
 this is a separate, explicitly config-gated workflow authority from the
 production ExperimentSession/CuratedProtocolSession stack in
 workspace_store.py/curated_protocol.py. It only activates when an operator
-sets both VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG and
-VOICE_WORKFLOW_AGENT_PROCEDURE_STORE - neither is set by the commercial demo
+sets both VOINEY_LAB_PROCEDURE_CATALOG and
+VOINEY_LAB_PROCEDURE_STORE - neither is set by the commercial demo
 launcher (scripts/run_dev.sh) or documented as a normal deployment
 default. server.py's protocol-selection logic only attempts a legacy
 ProcedureController lookup when no curated fixture was selected

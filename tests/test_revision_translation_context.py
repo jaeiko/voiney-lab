@@ -334,8 +334,8 @@ class SessionStartTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": self.temp.name,
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": self.temp.name,
         })
         self.env.start()
         self.started: list[str] = []
@@ -376,8 +376,8 @@ class SessionStartTests(unittest.TestCase):
     def test_without_the_model_role_nothing_starts(self) -> None:
         server_module.app.state.revision_translation_runner = None
         with patch.dict(os.environ, {
-            "VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED": "false",
-            "VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_ENABLED": "false",
+            "VOINEY_LAB_MULTI_BRAIN_ENABLED": "false",
+            "VOINEY_LAB_ANSWER_BRAIN_ENABLED": "false",
         }), patch.object(server_module, "_start_revision_translation") as start:
             server_module._with_revision_translations(rich_fixture())
         start.assert_not_called()

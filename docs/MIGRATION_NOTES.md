@@ -193,3 +193,59 @@ WAL/SHM files, start one instance), then confirm
 `schema_metadata.schema_version = 7`. A revision made executable before this
 version has no translations until a session opens on it (or it is activated or
 approved again), which starts its generation once.
+
+## Environment setting names → `VOINEY_LAB_` (2026-10-04)
+
+This changes configuration, not a store: no database, ledger, table or file
+under `data/` is rewritten.
+
+- Every setting the code reads now carries the `VOINEY_LAB_` prefix (decision
+  of 2026-10-04). An old prefixed name keeps the rest of its name under the new
+  prefix; an old unprefixed application setting (the voice-activity, filler,
+  model, external-reference, Moss, SMTP and contact-email settings, among
+  others) gains the prefix in front. Nothing else in a name changed.
+- The full old → new map is `RENAMED` in `src/voiney_lab/setting_renames.py`,
+  the one file in the repository that still spells an old name. The current
+  names, with their `.env` area, default and meaning, are the table in
+  `src/voiney_lab/setting_names.py`; `tests/test_setting_names.py` keeps the
+  table equal to the names the code reads and checks that no old name is left
+  anywhere else.
+- Kept as they were: `XAI_API_KEY` and `XAI_BASE_URL` (provider SDK names), the
+  launchers' `HOST` and `PORT`, and `VIRTUAL_ENV` and `RUNNER_TEMP`, which a
+  venv and GitHub Actions set. Names that only other software reads (the
+  `openai` SDK's `OPENAI_*`, proxy and certificate variables, and so on) are
+  listed in `EXTERNAL_NAMES` and are never renamed.
+- Three old pairs became one name each: `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
+  `VOINEY_LAB_EXTERNAL_REFERENCE_MODEL` and
+  `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
+  two names of one setting now applies only to
+  `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias
+  `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`.
+- There is no transition period. Instead the server (after it loads the
+  repository `.env`), the handoff worker, `scripts/run_dev.sh`,
+  `scripts/run_pilot.sh`, `scripts/run_ci_server.sh`,
+  `scripts/collect_chunks.sh` and pytest refuse to start while an old name is
+  set, with "옛 설정 이름 N개: (names). scripts/migrate_env.py 를 실행하세요." The
+  names are shown, never a value.
+
+### Migrating a `.env`
+
+```bash
+python scripts/migrate_env.py --check [path]   # names only; writes nothing
+python scripts/migrate_env.py --write [path]   # backs up, renames, regroups
+```
+
+The path defaults to the repository `.env`. `--write` copies the file to
+`<name>.bak-YYYYMMDD-HHMMSS` beside it (mode 600), renames the old names, and
+writes the settings back grouped by area (공급자 키, OCR, 모델, 기능 켜기·끄기,
+경로·저장소, 그 밖), sorted, each under a short comment, with the file at mode
+600. The text after every `=` is copied character for character. Names the
+code does not read are kept, at the bottom under "코드가 읽지 않는 설정". It
+stops before writing anything when a name appears twice -- including an old
+and a new name for one setting, or both old names of a collapsed pair -- when a
+line is not `.env` syntax, or when `VOINEY_LAB_SECRET_REFERENCES` points at a
+name the rename would move (its value is never changed, so fix it by hand).
+
+Old names set anywhere else -- a shell profile, a deploy or helper script, a
+service unit, a CI secret -- have to be renamed by hand; the refusal names
+each one.

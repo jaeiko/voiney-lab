@@ -304,13 +304,13 @@ available = bool(approved and execution_ready)
 | | 카탈로그 | 워크스페이스 |
 |---|---|---|
 | DB 파일 | `protocol_workspace.sqlite` — `experiment_protocol_store.py:35` | `commercial_workspace.sqlite` — `workspace_store.py:29` |
-| 경로 환경변수 | `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` — `experiment_protocol_config.py:12` | `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR` — `workspace_store.py:132` |
+| 경로 환경변수 | `VOINEY_LAB_PROTOCOL_DATA_DIR` — `experiment_protocol_config.py:12` | `VOINEY_LAB_WORKSPACE_DATA_DIR` — `workspace_store.py:132` |
 | 리비전 테이블 | `protocol_revisions` — `experiment_protocol_store.py:106` | `protocol_lineage_revisions` — `workspace_store.py:305` |
 | 부모 컬럼 | **없음** (experiment_id, revision_number, pdf_checksum, original_filename, created_at 뿐) | `parent_revision_id` — `workspace_store.py:310` |
 | 계보 | 없음 | `family_id`, `protocol_adaptation_revisions` — `workspace_store.py:665` |
 
 결정적: **워크스페이스는 통째로 꺼질 수 있다**
-(`VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED`). 꺼져 있으면 계보 정보가 **존재하지
+(`VOINEY_LAB_WORKSPACE_ENABLED`). 꺼져 있으면 계보 정보가 **존재하지
 않는다.** 어떤 방안이든 그 경우 fail closed 여야 한다.
 
 ### 7-2. 최소 변경안 3가지

@@ -337,9 +337,9 @@ class PilotLauncherTests(unittest.TestCase):
         env = {
             key: value for key, value in os.environ.items()
             if key not in (
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE",
-                "VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE",
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+                "VOINEY_LAB_USAGE_SCOPE",
+                "VOINEY_LAB_SAFETY_USAGE_SCOPE",
+                "VOINEY_LAB_SAFETY_CATALOG",
             )
         }
         env.update({"PYTHONDONTWRITEBYTECODE": "1", "HOST": "127.0.0.1", "PORT": "0"})
@@ -402,16 +402,16 @@ class PilotLauncherTests(unittest.TestCase):
             _moss_demo_documents(), self.root / "moss" / "moss_demo_catalog.sqlite"
         )
         result = self._run("--check-only", environment={
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG": str(elsewhere),
+            "VOINEY_LAB_USAGE_SCOPE": "demo",
+            "VOINEY_LAB_SAFETY_CATALOG": str(elsewhere),
         })
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
-            "[WARN] VOICE_WORKFLOW_AGENT_USAGE_SCOPE was set in the environment.",
+            "[WARN] VOINEY_LAB_USAGE_SCOPE was set in the environment.",
             result.stdout,
         )
         self.assertIn(
-            "[WARN] VOICE_WORKFLOW_AGENT_SAFETY_CATALOG was set in the environment.",
+            "[WARN] VOINEY_LAB_SAFETY_CATALOG was set in the environment.",
             result.stdout,
         )
         self.assertIn(f"SAFETY_CATALOG = {self.catalog}\n", result.stdout)

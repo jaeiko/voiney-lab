@@ -38,21 +38,21 @@ class VadConfigurationTests(unittest.TestCase):
 
     def test_every_cascade_setting_can_be_overridden(self):
         environment={
-            "CASCADE_VAD_MODE":"2",
-            "CASCADE_VAD_ONSET_VOICED_FRAMES":"5",
-            "CASCADE_VAD_ONSET_WINDOW_FRAMES":"8",
-            "CASCADE_VAD_PREFIX_MS":"321",
-            "CASCADE_BARGE_IN_PREFIX_MS":"860",
-            "CASCADE_VAD_ENDPOINT_SILENCE_MS":"777",
-            "CASCADE_VAD_MIN_SPEECH_MS":"281",
-            "CASCADE_VAD_MAX_UTTERANCE_MS":"16001",
-            "CASCADE_VAD_COOLDOWN_MS":"450",
-            "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"11",
-            "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"14",
-            "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"9",
-            "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"13",
-            "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"7",
-            "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"11",
+            "VOINEY_LAB_CASCADE_VAD_MODE":"2",
+            "VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES":"5",
+            "VOINEY_LAB_CASCADE_VAD_ONSET_WINDOW_FRAMES":"8",
+            "VOINEY_LAB_CASCADE_VAD_PREFIX_MS":"321",
+            "VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS":"860",
+            "VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS":"777",
+            "VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS":"281",
+            "VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS":"16001",
+            "VOINEY_LAB_CASCADE_VAD_COOLDOWN_MS":"450",
+            "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"11",
+            "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"14",
+            "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"9",
+            "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"13",
+            "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"7",
+            "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"11",
         }
         settings=VoiceVadSettings.from_environment(environment)
         self.assertEqual(
@@ -85,9 +85,9 @@ class VadConfigurationTests(unittest.TestCase):
 
     def test_invalid_numeric_values_name_the_setting(self):
         cases=(
-            ("CASCADE_VAD_MODE","not-an-integer","must be an integer"),
-            ("CASCADE_VAD_PREFIX_MS","20.5","must be an integer"),
-            ("CASCADE_BARGE_IN_PREFIX_MS","x","must be an integer"),
+            ("VOINEY_LAB_CASCADE_VAD_MODE","not-an-integer","must be an integer"),
+            ("VOINEY_LAB_CASCADE_VAD_PREFIX_MS","20.5","must be an integer"),
+            ("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS","x","must be an integer"),
         )
         for name,value,message in cases:
             with self.subTest(name=name),self.assertRaisesRegex(
@@ -97,53 +97,53 @@ class VadConfigurationTests(unittest.TestCase):
 
     def test_ranges_and_onset_relationship_are_validated(self):
         cases=(
-            ({"CASCADE_VAD_MODE":"4"},"CASCADE_VAD_MODE"),
+            ({"VOINEY_LAB_CASCADE_VAD_MODE":"4"},"VOINEY_LAB_CASCADE_VAD_MODE"),
             (
                 {
-                    "CASCADE_VAD_ONSET_VOICED_FRAMES":"7",
-                    "CASCADE_VAD_ONSET_WINDOW_FRAMES":"6",
+                    "VOINEY_LAB_CASCADE_VAD_ONSET_VOICED_FRAMES":"7",
+                    "VOINEY_LAB_CASCADE_VAD_ONSET_WINDOW_FRAMES":"6",
                 },
                 "cannot exceed",
             ),
             (
                 {
-                    "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"13",
-                    "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"12",
+                    "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"13",
+                    "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"12",
                 },
                 "PLAYBACK_ONSET_VOICED_FRAMES cannot exceed",
             ),
-            ({"CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"0"},
-              "CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES"),
-            ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"-1"},
-              "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
-            ({"CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"101"},
-              "CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES":"0"},
+              "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_VOICED_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"-1"},
+              "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES":"101"},
+              "VOINEY_LAB_CASCADE_VAD_PLAYBACK_ONSET_WINDOW_FRAMES"),
             (
                 {
-                    "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"13",
-                    "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"12",
+                    "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"13",
+                    "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"12",
                 },
                 "LISTENING_ONSET_VOICED_FRAMES cannot exceed",
             ),
             (
                 {
-                    "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"11",
-                    "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"10",
+                    "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"11",
+                    "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"10",
                 },
                 "LISTENING_RESUME_VOICED_FRAMES cannot exceed",
             ),
-            ({"CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"0"},
-              "CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES"),
-            ({"CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"101"},
-              "CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES"),
-            ({"CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"-1"},
-              "CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES"),
-            ({"CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"101"},
-              "CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES":"0"},
+              "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_VOICED_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES":"101"},
+              "VOINEY_LAB_CASCADE_VAD_LISTENING_ONSET_WINDOW_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES":"-1"},
+              "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_VOICED_FRAMES"),
+            ({"VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES":"101"},
+              "VOINEY_LAB_CASCADE_VAD_LISTENING_RESUME_WINDOW_FRAMES"),
             (
                 {
-                    "CASCADE_VAD_MIN_SPEECH_MS":"2000",
-                    "CASCADE_VAD_MAX_UTTERANCE_MS":"1000",
+                    "VOINEY_LAB_CASCADE_VAD_MIN_SPEECH_MS":"2000",
+                    "VOINEY_LAB_CASCADE_VAD_MAX_UTTERANCE_MS":"1000",
                 },
                 "cannot exceed",
             ),
@@ -207,12 +207,12 @@ class DeploymentConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             environment_file=Path(temporary)/".env"
             environment_file.write_text(
-                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true\n",
+                "VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true\n",
                 encoding="utf-8",
             )
             with patch.dict(
                 os.environ,
-                {"VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED":"false"},
+                {"VOINEY_LAB_SEMANTIC_INTENT_ENABLED":"false"},
                 clear=True,
             ):
                 server._load_project_environment(environment_file)
@@ -224,7 +224,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             environment_file=Path(temporary)/".env"
             environment_file.write_text(
-                "VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true\n",
+                "VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true\n",
                 encoding="utf-8",
             )
             with patch.dict(os.environ,{},clear=True):
@@ -238,7 +238,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
-                "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+                "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
             },
             clear=True,
         ),patch.object(server,"OpenAI") as client:
@@ -253,8 +253,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
-                "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
-                "PROTOCOL_ANALYSIS_REASONING_EFFORT":"medium",
+                "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+                "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT":"medium",
             },
             clear=True,
         ),patch.object(server,"OpenAI"):
@@ -266,8 +266,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
                 os.environ,
                 {
                     "XAI_API_KEY":"fake-key",
-                    "PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
-                    "PROTOCOL_ANALYSIS_REASONING_EFFORT":invalid_effort,
+                    "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+                    "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT":invalid_effort,
                 },
                 clear=True,
             ),patch.object(server,"OpenAI") as client:

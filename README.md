@@ -194,10 +194,10 @@ injects it as `app.state.protocol_ocr_provider`; an adapter a deployment has
 already injected is kept. Two engines are supported, both over REST with
 `requests`:
 
-| `VOICE_WORKFLOW_AGENT_OCR_PROVIDERS` entry | Engine | Credentials |
+| `VOINEY_LAB_OCR_PROVIDERS` entry | Engine | Credentials |
 | --- | --- | --- |
-| `clova` | NAVER CLOVA OCR (General, V2), Korean print and handwriting | `VOICE_WORKFLOW_AGENT_CLOVA_OCR_INVOKE_URL` (https), `VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET` (sent as `X-OCR-SECRET`) |
-| `google` | Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, English | `VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY` (sent as `X-Goog-Api-Key`, never in the URL) |
+| `clova` | NAVER CLOVA OCR (General, V2), Korean print and handwriting | `VOINEY_LAB_CLOVA_OCR_INVOKE_URL` (https), `VOINEY_LAB_CLOVA_OCR_SECRET` (sent as `X-OCR-SECRET`) |
+| `google` | Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, English | `VOINEY_LAB_GOOGLE_VISION_API_KEY` (sent as `X-Goog-Api-Key`, never in the URL) |
 
 Only the pages the extraction marked `ocr_required` are rendered (PyMuPDF,
 300 dpi PNG, in memory) and sent; the other pages keep their text layer and are
@@ -336,11 +336,11 @@ interaction never depends on the model being available.
 Enable it per deployment (see `.env.example`):
 
 ```bash
-VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_ENABLED=true
-VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MODEL=grok-4.20-0309-non-reasoning
-VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_TIMEOUT_SECONDS=2.5
-VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MIN_CONFIDENCE=0.6
-VOICE_WORKFLOW_AGENT_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE=0.85
+VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true
+VOINEY_LAB_SEMANTIC_INTENT_MODEL=grok-4.20-0309-non-reasoning
+VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS=2.5
+VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE=0.6
+VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE=0.85
 ```
 
 The dedicated non-reasoning model keeps this small typed classification off the
@@ -358,10 +358,10 @@ utterance text or model prose.
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
 intent judgment moves to one LLM router; a state change stays a tool proposal
 that the server validates and carries out. **It is off unless
-`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED=true`** (no launcher sets it; turning
+`VOINEY_LAB_LLM_ROUTER_ENABLED=true`** (no launcher sets it; turning
 it on in development or the pilot is decided by the people running it, from
 the lane R evaluation). Off, the voice path is exactly the one described
-above. `VOICE_WORKFLOW_AGENT_LLM_ROUTER_MODEL` (default
+above. `VOINEY_LAB_LLM_ROUTER_MODEL` (default
 `grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default 2.5) choose
 the model and how long a turn waits for it; it needs `XAI_API_KEY`.
 
@@ -619,17 +619,17 @@ same key in a repo-root `.env`.
 `scripts/run_dev.sh` is the full development launcher: it verifies the
 Candidate A fixture and its externally licensed source PDF by SHA-256, loads
 the curated fixture, and enables the xAI-dependent optional features. Its
-`--test-mode` flag sets `VOICE_WORKFLOW_AGENT_USAGE_SCOPE=demo` and
-`VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
+`--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
+`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
 without the flag neither variable is set. `scripts/run_candidate_a.sh` is the
 former name and now forwards to it.
 
 `scripts/run_pilot.sh` loads no fixture, keeps its state under
 `data/runtime/pilot/`, and turns every feature that reaches outside the
-approved source documents off — `EXTERNAL_REFERENCES_ENABLED`,
-`SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `WEB_VISUAL_SEARCH_ENABLED`,
-`VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED` — along with
-`VOICE_WORKFLOW_AGENT_MOSS_ENABLED`. Each keeps a value the operator exported
+approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
+`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED`,
+`VOINEY_LAB_GENERATED_VISUALS_ENABLED` — along with
+`VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator exported
 themselves, so enabling one is a deliberate act taken before startup. Test
 mode is forced off whatever the environment said. Dry-lab workflows and the
 eLabFTW ELN write-back have no flag of their own: both sit behind the
@@ -638,9 +638,9 @@ need, and both stay inert until an admin configures and verifies a connector,
 so the launcher reports them rather than disabling them.
 
 The pilot's approved safety documents are fixed by the launcher, never by a
-`.env`. It exports `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` as the absolute path
+`.env`. It exports `VOINEY_LAB_SAFETY_CATALOG` as the absolute path
 of `data/runtime/pilot/approved_safety_catalog.sqlite` and
-`VOICE_WORKFLOW_AGENT_USAGE_SCOPE=reference_only`; a different value already
+`VOINEY_LAB_USAGE_SCOPE=reference_only`; a different value already
 exported in the shell is reported with `[WARN]` and ignored. `reference_only`
 is the one scope a pilot without an identity provider can run: `operational`
 needs OIDC, without which every `/api` and `/ws` request fails identity
@@ -668,28 +668,44 @@ back to the fictional records in
 warning. The pilot never reaches that fallback, because it does not start
 without its catalog.
 
+### Setting names
+
+Every setting the code reads carries the `VOINEY_LAB_` prefix (decision of
+2026-10-04). `src/voiney_lab/setting_names.py` lists each one with its `.env`
+area, default and meaning, and a test keeps that table equal to the names the
+code reads. Names other software defines keep their own (`XAI_API_KEY`,
+`XAI_BASE_URL`), as do the launchers' `HOST` and `PORT`.
+
+Nothing reads an old name. The server, the handoff worker, the launchers and
+pytest refuse to start while one is set in the environment or the repository
+`.env`, and say how many and which -- names only, never a value. Rename them in
+a `.env` with `python scripts/migrate_env.py --check` (names only, writes
+nothing) and then `--write`, which backs the file up as
+`.env.bak-YYYYMMDD-HHMMSS` (mode 600) and rewrites it grouped by area with every
+value unchanged. `docs/MIGRATION_NOTES.md` records the change.
+
 ### Core configuration
 
 | Variable | Purpose |
 |---|---|
 | `XAI_API_KEY` | Server-only xAI credential |
-| `CHAT_MODEL`, `WORKER_MODEL` | Agent and handoff-worker models |
-| `PROTOCOL_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
-| `PROTOCOL_ANALYSIS_REASONING_EFFORT` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
-| `TTS_VOICE` | Cascade voice; defaults to `leo` |
-| `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
-| `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` | Absolute approved safety-catalog path |
-| `VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
-| `VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR` | Absolute ignored protocol-store directory |
-| `VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` | Default-off gate for controlled evidence-first claim-chunk evaluation |
-| `VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED` | Enables tenant/RBAC/source workspace |
-| `VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR` | Absolute ignored workspace directory |
-| `VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
-| `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
-| `VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
-| `VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
+| `VOINEY_LAB_CHAT_MODEL`, `VOINEY_LAB_WORKER_MODEL` | Agent and handoff-worker models |
+| `VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
+| `VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
+| `VOINEY_LAB_TTS_VOICE` | Cascade voice; defaults to `leo` |
+| `VOINEY_LAB_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
+| `VOINEY_LAB_SAFETY_CATALOG` | Absolute approved safety-catalog path |
+| `VOINEY_LAB_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
+| `VOINEY_LAB_PROTOCOL_DATA_DIR` | Absolute ignored protocol-store directory |
+| `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` | Default-off gate for controlled evidence-first claim-chunk evaluation |
+| `VOINEY_LAB_WORKSPACE_ENABLED` | Enables tenant/RBAC/source workspace |
+| `VOINEY_LAB_WORKSPACE_DATA_DIR` | Absolute ignored workspace directory |
+| `VOINEY_LAB_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
+| `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
+| `VOINEY_LAB_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
+| `VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
 
-`VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
+`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
 Protocol be development-activated and run while readiness gates are still
 outstanding. It is honoured only in the `demo`, `reference_only` and
 `test_only` scopes; under `operational` it is ignored and the startup log says
@@ -704,7 +720,7 @@ turns it on, together with the `demo` scope; `scripts/run_pilot.sh` always turns
 it off, with a `[WARN]` when the environment had it on. A server started any
 other way reads it from the environment or `.env`.
 
-`PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
+`VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
 current deployment example. Protocol analysis explicitly defaults to high
 reasoning effort. Lower effort levels remain deployment-configurable but must
@@ -733,16 +749,16 @@ claim-reasoning configuration instead of changing the monolithic defaults.
 For operational workspace mode, configure all of:
 
 ```dotenv
-VOICE_WORKFLOW_AGENT_OIDC_ISSUER=https://id.example.test/
-VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE=voice-workflow-agent
-VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL=https://id.example.test/.well-known/jwks.json
-VOICE_WORKFLOW_AGENT_OIDC_TENANT_CLAIM=organization_id
-VOICE_WORKFLOW_AGENT_OIDC_ROLES_CLAIM=roles
-VOICE_WORKFLOW_AGENT_OIDC_NAME_CLAIM=name
+VOINEY_LAB_OIDC_ISSUER=https://id.example.test/
+VOINEY_LAB_OIDC_AUDIENCE=voice-workflow-agent
+VOINEY_LAB_OIDC_JWKS_URL=https://id.example.test/.well-known/jwks.json
+VOINEY_LAB_OIDC_TENANT_CLAIM=organization_id
+VOINEY_LAB_OIDC_ROLES_CLAIM=roles
+VOINEY_LAB_OIDC_NAME_CLAIM=name
 ```
 
 For a non-operational local demo, omit OIDC values and optionally set a JSON
-allowlist in `VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES`. If omitted, one local
+allowlist in `VOINEY_LAB_DEV_AUTH_PROFILES`. If omitted, one local
 lab-admin profile is created. Do not enable development identities in operational
 scope.
 
@@ -752,7 +768,7 @@ Connector records contain opaque `secret://` references, never credential values
 The application resolves them through a server-owned environment mapping:
 
 ```dotenv
-VOICE_WORKFLOW_AGENT_SECRET_REFERENCES={"secret://tenant-a/protocols-io":"PROTOCOLS_IO_TOKEN","secret://tenant-a/drive":"DRIVE_ACCESS_TOKEN","secret://tenant-a/github":"GITHUB_INSTALLATION_TOKEN","secret://tenant-a/github-webhook":"GITHUB_WEBHOOK_SECRET","secret://tenant-a/elabftw":"ELABFTW_API_KEY"}
+VOINEY_LAB_SECRET_REFERENCES={"secret://tenant-a/protocols-io":"PROTOCOLS_IO_TOKEN","secret://tenant-a/drive":"DRIVE_ACCESS_TOKEN","secret://tenant-a/github":"GITHUB_INSTALLATION_TOKEN","secret://tenant-a/github-webhook":"GITHUB_WEBHOOK_SECRET","secret://tenant-a/elabftw":"ELABFTW_API_KEY"}
 ```
 
 Set the referenced environment variables only in the process secret manager.
@@ -825,9 +841,9 @@ adds `pytest` and `httpx`):
 
 ```bash
 python -m pip install -e '.[test]'
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python -m pytest -q
 python -m compileall -q src tests scripts
 git diff --check
@@ -873,7 +889,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main`,
   refuses to answer without an approved safety catalog, so the job builds one
   from the repository's fictional demo manifest
   (`data/moss_demo/approved_documents.ko.json`) and passes it to the server
-  with `VOICE_WORKFLOW_AGENT_USAGE_SCOPE=demo`. A failed run uploads
+  with `VOINEY_LAB_USAGE_SCOPE=demo`. A failed run uploads
   `test-results/` (traces and screenshots).
 
 Local development still uses `scripts/run_dev.sh` (the default

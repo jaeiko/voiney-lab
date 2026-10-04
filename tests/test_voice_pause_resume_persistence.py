@@ -152,12 +152,12 @@ class VoiceSessionHarness:
         store.bind_resource(self.principal, "protocol_catalog", PROTOCOL_ID)
         store.close()
         self.environment = {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(self.workspace_dir),
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(self.report_db),
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-            "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([PROFILE]),
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": str(self.workspace_dir),
+            "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "true",
+            "VOINEY_LAB_EXPERIMENT_REPORT_DB": str(self.report_db),
+            "VOINEY_LAB_USAGE_SCOPE": "demo",
+            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([PROFILE]),
         }
 
     def _session(self, scenario, *extra_patches):

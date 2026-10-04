@@ -1,4 +1,4 @@
-"""The lane R router, wired behind VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED.
+"""The lane R router, wired behind VOINEY_LAB_LLM_ROUTER_ENABLED.
 
 A turn the front rules hand on goes to one model call with the two tools.
 The server rules on a proposal and carries it out through the session's own
@@ -89,9 +89,9 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(LlmRouterSettings.from_environment({}).enabled)
         self.assertFalse(LlmRouterSettings().enabled)
         on = LlmRouterSettings.from_environment({
-            "VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_LLM_ROUTER_MODEL": "grok-4.6",
-            "VOICE_WORKFLOW_AGENT_LLM_ROUTER_TIMEOUT_SECONDS": "3",
+            "VOINEY_LAB_LLM_ROUTER_ENABLED": "true",
+            "VOINEY_LAB_LLM_ROUTER_MODEL": "grok-4.6",
+            "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "3",
         })
         self.assertEqual((on.enabled, on.model, on.timeout_seconds), (True, "grok-4.6", 3.0))
         self.assertEqual(
@@ -100,9 +100,9 @@ class SettingsTests(unittest.TestCase):
 
     def test_bad_values_fail_closed(self) -> None:
         for env in (
-            {"VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED": "maybe"},
-            {"VOICE_WORKFLOW_AGENT_LLM_ROUTER_TIMEOUT_SECONDS": "soon"},
-            {"VOICE_WORKFLOW_AGENT_LLM_ROUTER_TIMEOUT_SECONDS": "90"},
+            {"VOINEY_LAB_LLM_ROUTER_ENABLED": "maybe"},
+            {"VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "soon"},
+            {"VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "90"},
         ):
             with self.subTest(env=env), self.assertRaises(ValueError):
                 LlmRouterSettings.from_environment(env)
@@ -320,7 +320,7 @@ class RouterVoiceTests(VoiceSessionHarness, unittest.TestCase):
 
     def _run(self, *said, enabled: bool, script=()):
         if enabled:
-            self.environment["VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED"] = "true"
+            self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
             self.environment["XAI_API_KEY"] = "test-only-not-a-key"
         _FakeAsyncOpenAI.client = FakeRouterClient(*script)
         _FakeAsyncOpenAI.built = 0

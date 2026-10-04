@@ -17,7 +17,7 @@ During hands-free laboratory voice testing of the **Voice Workflow Agent**, a cr
 
 In this phase, we completed a full overhaul of the conversational intelligence and routing layer:
 1. **Resolved Voice Routing Failures**: Expanded Korean and English conversational intent recognition in [`completion_intent.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/completion_intent.py) and added fast deterministic sub-millisecond dispatch in [`brain.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/brain.py) and [`curated_protocol.py`](file:///home/student/voice-ai-course/voice-workflow-agent/src/voice_workflow_agent/curated_protocol.py).
-2. **Upgraded Assistant Voice & Persona**: Transitioned default assistant persona to **Professor** with the **Leo** voice profile (`TTS_VOICE=leo`), delivering a calm, authoritative, and helpful laboratory mentor tone.
+2. **Upgraded Assistant Voice & Persona**: Transitioned default assistant persona to **Professor** with the **Leo** voice profile (`VOINEY_LAB_TTS_VOICE=leo`), delivering a calm, authoritative, and helpful laboratory mentor tone.
 3. **Structured Response Modes**: Established four distinct spoken response modes (**Instruction Mode**, **Learning Mode**, **Audit Mode**, **Resume Mode**) ensuring concise, speech-friendly guidance without redundant instruction reading.
 4. **Authored Lab Admin / PI Strategy**: Formulated [`docs/LAB_ADMIN_PRODUCT_PLAN.md`](file:///home/student/voice-ai-course/voice-workflow-agent/docs/LAB_ADMIN_PRODUCT_PLAN.md) detailing enterprise features for Principal Investigators and Lab Managers.
 5. **Built Scenario Evaluation Suite**: Implemented [`tests/test_voice_product_scenarios.py`](file:///home/student/voice-ai-course/voice-workflow-agent/tests/test_voice_product_scenarios.py) validating end-to-end routing with 100% test pass rate.
@@ -75,11 +75,11 @@ In this phase, we completed a full overhaul of the conversational intelligence a
 ## 3. Persona & Voice Configuration
 
 - **Persona**: **Professor (Academic Research Mentor)**
-- **Voice Profile**: **Leo (`TTS_VOICE=leo`)**
+- **Voice Profile**: **Leo (`VOINEY_LAB_TTS_VOICE=leo`)**
 - **Acoustic Characteristics**: Calm, steady, professional, encouraging, clear Korean and English phonetics.
 - **Configuration Points**:
   - `src/voice_workflow_agent/server.py`: Default voice set to `"leo"` in `_tts_voice()`.
-  - `README.md`: Documented Professor persona with `TTS_VOICE=leo`.
+  - `README.md`: Documented Professor persona with `VOINEY_LAB_TTS_VOICE=leo`.
 
 ---
 

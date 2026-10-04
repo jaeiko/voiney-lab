@@ -1,6 +1,6 @@
 """Development test mode: run an analysed protocol with its readiness gates open.
 
-``VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES`` exists so the voice
+``VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES`` exists so the voice
 guide can be exercised on protocols whose gates cannot be settled yet. These
 tests pin what it may and may not do:
 
@@ -66,8 +66,8 @@ GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
 def _environment(*, test_mode: bool, scope: str = "demo") -> dict[str, str]:
     return {
         READINESS_GATE_TEST_MODE_ENV: "true" if test_mode else "false",
-        "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": scope,
-        "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "false",
+        "VOINEY_LAB_USAGE_SCOPE": scope,
+        "VOINEY_LAB_WORKSPACE_ENABLED": "false",
     }
 
 
@@ -280,7 +280,7 @@ class HttpTestModeTests(_TestModeFixture):
             {"documents": [operational_document(usage_scope="demo")]}, catalog
         )
         catalog_patch = patch.dict(
-            os.environ, {"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG": str(catalog)}
+            os.environ, {"VOINEY_LAB_SAFETY_CATALOG": str(catalog)}
         )
         catalog_patch.start()
         self.addCleanup(catalog_patch.stop)

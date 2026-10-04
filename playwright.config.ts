@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = process.env.PLAYWRIGHT_APP_PORT || '8000';
+const PORT = process.env.VOINEY_LAB_PLAYWRIGHT_APP_PORT || '8000';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({

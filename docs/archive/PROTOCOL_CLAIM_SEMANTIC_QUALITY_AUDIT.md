@@ -185,8 +185,8 @@ git diff --check                                            ok
 python scripts/audit_claim_semantics.py                     ok (no provider call)
 ```
 
-Baseline flags `VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false` and
-`VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false` were forced off per the
+Baseline flags `VOINEY_LAB_WORKSPACE_ENABLED=false` and
+`VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false` were forced off per the
 documented pytest baseline; `.env` was not modified.
 
 Audit findings quote laboratory source documents, so the runner is content-free

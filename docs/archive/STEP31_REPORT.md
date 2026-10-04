@@ -210,9 +210,9 @@ provider 호출은 사용자의 예산을 쓰고 외부로 나가는 행위이�
 **사용자가 실행할 명령** (한 번에 한 청크, 4-2/4-3 을 지키기 위해):
 
 ```bash
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python scripts/diagnose_provider_chunk.py \
   data/runtime/candidate-a-source/in-gel-digestion.pdf \
   --chunk 0 --budget 1 --execute

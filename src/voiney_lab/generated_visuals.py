@@ -37,17 +37,17 @@ class GeneratedVisualSettings:
 
     @classmethod
     def from_environment(cls) -> "GeneratedVisualSettings":
-        enabled = _enabled("VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED")
+        enabled = _enabled("VOINEY_LAB_GENERATED_VISUALS_ENABLED")
         if not enabled:
             return cls(False)
         model = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_MODEL",
+            "VOINEY_LAB_GENERATED_VISUAL_MODEL",
             "grok-imagine-image-2.0",
         ).strip()
         if not model or len(model) > 128:
             raise ValueError("generated visual model is invalid")
         timeout_raw = os.environ.get(
-            "VOICE_WORKFLOW_AGENT_GENERATED_VISUAL_TIMEOUT_SECONDS", "60"
+            "VOINEY_LAB_GENERATED_VISUAL_TIMEOUT_SECONDS", "60"
         ).strip()
         try:
             timeout_seconds = float(timeout_raw)

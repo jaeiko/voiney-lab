@@ -37,7 +37,7 @@ text and identity enter canonical `SourceEvidence`.
 ## Resource and latency policy
 
 - Claim-chunk production routing is protected by the default-off
-  `VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` deployment gate.
+  `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` deployment gate.
 - The page planner retains established windows of at most eight core pages and
   the unchanged 192 KiB text ceiling, then subdivides each window at a
   deterministic 4 KiB core-source target to bound expected output cardinality.

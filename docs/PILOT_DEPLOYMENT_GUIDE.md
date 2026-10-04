@@ -56,7 +56,7 @@ scope and the approved safety catalog itself and ignores `.env` for both:
 
 - The usage scope is `reference_only` and the approved safety catalog is
   `data/runtime/pilot/approved_safety_catalog.sqlite`. A different value of
-  `VOICE_WORKFLOW_AGENT_USAGE_SCOPE` or `VOICE_WORKFLOW_AGENT_SAFETY_CATALOG`
+  `VOINEY_LAB_USAGE_SCOPE` or `VOINEY_LAB_SAFETY_CATALOG`
   exported in the shell is reported with `[WARN]` and ignored.
 - The pilot does not run `operational` yet. That scope requires all OIDC
   values and refuses development identity; without an identity provider every
@@ -75,22 +75,22 @@ scope and the approved safety catalog itself and ignores `.env` for both:
 The launcher does not set the following, so `.env` still decides them. Check
 each one before the session:
 
-- `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE`,
-  `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE` and
-  `VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF` are empty; otherwise the
+- `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE`,
+  `VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE` and
+  `VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF` are empty; otherwise the
   Candidate A development fixture loads.
-- `VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG` and
-  `VOICE_WORKFLOW_AGENT_PROCEDURE_STORE` are empty (the older procedure stack
+- `VOINEY_LAB_PROCEDURE_CATALOG` and
+  `VOINEY_LAB_PROCEDURE_STORE` are empty (the older procedure stack
   described in `CLAUDE.md`).
-- `VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS` is false or unset. Under
+- `VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS` is false or unset. Under
   `reference_only` it would development-activate an analysed upload with no
   person involved.
-- `VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
+- `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
   transcripts and audio are written to disk.
-- `VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES` lists the participants' profiles.
+- `VOINEY_LAB_DEV_AUTH_PROFILES` lists the participants' profiles.
   Under `reference_only` everyone is a development identity, and with no
   profiles everyone is the `local-admin` lab administrator.
-- The safety card filters facility SOPs by `VOICE_WORKFLOW_AGENT_FACILITY_ID`
+- The safety card filters facility SOPs by `VOINEY_LAB_FACILITY_ID`
   only when the SOP itself is in the `operational` scope, so a
   `reference_only` catalog filters none: put only this laboratory's documents
   in the pilot catalog.

@@ -22,20 +22,24 @@ if [[ -z "${VIRTUAL_ENV:-}" && -f "$ROOT/.venv/bin/activate" ]]; then
   source "$ROOT/.venv/bin/activate"
 fi
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 rm -rf "$PROTOCOL_DATA_DIR"
 
-export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
-export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
-export EXTERNAL_REFERENCES_ENABLED="false"
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="false"
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
-export WEB_VISUAL_SEARCH_ENABLED="false"
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="false"
+export VOINEY_LAB_PROTOCOL_ENABLED="true"
+export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
+export VOINEY_LAB_MOSS_ENABLED="false"
+export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED="true"
+export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
+export VOINEY_LAB_WORKSPACE_ENABLED="true"
+export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
+export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="false"
+export VOINEY_LAB_MULTI_BRAIN_ENABLED="false"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
+export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="false"
+export VOINEY_LAB_GENERATED_VISUALS_ENABLED="false"
 
 echo "=== Starting Voiney Lab (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \

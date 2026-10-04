@@ -306,9 +306,9 @@ id 모양이 저장소를 가른다:
 
 **CLI 로 확인하는 명령** (병합 성공 후):
 ```bash
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python scripts/score_extraction.py \
   data/runtime/candidate-a-source/in-gel-digestion.pdf \
   --reference  data/development_protocols/candidate_a_curated_analysis.json \

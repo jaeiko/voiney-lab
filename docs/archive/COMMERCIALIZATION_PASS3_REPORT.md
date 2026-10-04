@@ -69,7 +69,7 @@ Status terms in this report follow Pass 2's convention:
   is new; `docs/demo_script.md` itself was never edited.
 - **Real defect found via live browser testing, not assumed**: the standard
   demo launcher (`scripts/run_candidate_a.sh`) never set
-  `VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED`, so every real run of the
+  `VOINEY_LAB_WORKSPACE_ENABLED`, so every real run of the
   documented demo flow silently disabled the entire commercial workspace
   (reviewer, admin, experiment sessions, timeline) built in Phases 1-9. Fixed
   by enabling the existing flag in the launcher; confirmed via a live server

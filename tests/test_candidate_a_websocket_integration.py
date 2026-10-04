@@ -290,10 +290,10 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             store.bind_resource(principal, "protocol_catalog", protocol_id)
             store.close()
             environment = {
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace_dir),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-                "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+                "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+                "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
+                "VOINEY_LAB_USAGE_SCOPE": "demo",
+                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             initial = {
                 "type": "session.start",
@@ -412,10 +412,10 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             # bootstrap never binds it either, so this must still work.
             store.close()
             environment = {
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace_dir),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-                "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+                "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+                "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
+                "VOINEY_LAB_USAGE_SCOPE": "demo",
+                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             patches = (
                 patch(
@@ -674,10 +674,10 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         store.bootstrap_principal(principal)
         store.close()
         environment = {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(workspace_dir),
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "demo",
-            "VOICE_WORKFLOW_AGENT_DEV_AUTH_PROFILES": json.dumps([profile]),
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
+            "VOINEY_LAB_USAGE_SCOPE": "demo",
+            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
         }
         return environment, principal
 

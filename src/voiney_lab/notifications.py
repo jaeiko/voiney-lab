@@ -57,11 +57,11 @@ class SMTPEmailProvider:
         use_tls: bool = True,
         timeout_seconds: float = 10.0,
     ) -> None:
-        self.host = host or os.environ.get("SMTP_HOST", "")
-        self.port = port or int(os.environ.get("SMTP_PORT", "587"))
-        self.username = username or os.environ.get("SMTP_USER", "")
-        self.password = password or os.environ.get("SMTP_PASSWORD", "")
-        self.from_email = from_email or os.environ.get("SMTP_FROM_EMAIL", "noreply@lab-workflow.local")
+        self.host = host or os.environ.get("VOINEY_LAB_SMTP_HOST", "")
+        self.port = port or int(os.environ.get("VOINEY_LAB_SMTP_PORT", "587"))
+        self.username = username or os.environ.get("VOINEY_LAB_SMTP_USER", "")
+        self.password = password or os.environ.get("VOINEY_LAB_SMTP_PASSWORD", "")
+        self.from_email = from_email or os.environ.get("VOINEY_LAB_SMTP_FROM_EMAIL", "noreply@lab-workflow.local")
         self.use_tls = use_tls
         self.timeout_seconds = timeout_seconds
 
@@ -199,14 +199,14 @@ def get_default_contacts() -> dict[str, HandoffContact]:
             id="advisor",
             role="advisor",
             display_name="지도교수님",
-            email=os.environ.get("LAB_ADVISOR_EMAIL", "advisor@university.edu"),
+            email=os.environ.get("VOINEY_LAB_LAB_ADVISOR_EMAIL", "advisor@university.edu"),
             preferred_channel="email",
         ),
         "safety_officer": HandoffContact(
             id="safety_officer",
             role="safety_officer",
             display_name="연구실 안전관리자",
-            email=os.environ.get("LAB_SAFETY_OFFICER_EMAIL", "safety@university.edu"),
+            email=os.environ.get("VOINEY_LAB_LAB_SAFETY_OFFICER_EMAIL", "safety@university.edu"),
             preferred_channel="email",
         ),
     }

@@ -326,10 +326,10 @@ class SelectionRuleTests(unittest.TestCase):
 class EnvironmentTests(unittest.TestCase):
     def _env(self, providers: str, **overrides: str) -> dict[str, str]:
         env = {
-            "VOICE_WORKFLOW_AGENT_OCR_PROVIDERS": providers,
-            "VOICE_WORKFLOW_AGENT_CLOVA_OCR_INVOKE_URL": CLOVA_URL,
-            "VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET": CLOVA_SECRET,
-            "VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
+            "VOINEY_LAB_OCR_PROVIDERS": providers,
+            "VOINEY_LAB_CLOVA_OCR_INVOKE_URL": CLOVA_URL,
+            "VOINEY_LAB_CLOVA_OCR_SECRET": CLOVA_SECRET,
+            "VOINEY_LAB_GOOGLE_VISION_API_KEY": GOOGLE_KEY,
         }
         env.update(overrides)
         return env
@@ -345,7 +345,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_an_engine_without_credentials_is_left_out_and_not_logged(self) -> None:
         with self.assertLogs("voiney_lab.protocol_ocr", level=logging.WARNING) as logs:
             provider = ocr_provider_from_environment(
-                self._env("clova,google", VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET="")
+                self._env("clova,google", VOINEY_LAB_CLOVA_OCR_SECRET="")
             )
         self.assertEqual(provider.engine_names, (GOOGLE,))
         joined = "\n".join(logs.output)
@@ -353,7 +353,7 @@ class EnvironmentTests(unittest.TestCase):
         self.assertNotIn("clova.invalid", joined)
         self.assertIsNone(
             ocr_provider_from_environment(
-                self._env("google", VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY="")
+                self._env("google", VOINEY_LAB_GOOGLE_VISION_API_KEY="")
             )
         )
 

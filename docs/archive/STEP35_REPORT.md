@@ -209,9 +209,9 @@ STEP 22-B 가 지난번 이 바이트가 움직였을 때 기록한 것과 동�
 ### 6-2. 병합 후 채점 명령
 
 ```bash
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=false \
-VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED=false \
-VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED=false \
+VOINEY_LAB_MOSS_ENABLED=false \
+VOINEY_LAB_WORKSPACE_ENABLED=false \
+VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=false \
 python scripts/score_extraction.py \
   data/runtime/candidate-a-source/in-gel-digestion.pdf \
   --reference  data/development_protocols/candidate_a_curated_analysis.json \

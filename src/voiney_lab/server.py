@@ -191,6 +191,7 @@ from voiney_lab.semantic_intent import (
     SemanticIntentSettings,
     propose_semantic_intent,
 )
+from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
 from voiney_lab.identity import (
     AuthenticationRequiredError,
@@ -253,6 +254,9 @@ def _load_project_environment(path:Path|None=None)->bool:
 
 
 _load_project_environment()
+# Refuse to start while an old setting name is set, in the process environment
+# or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
+refuse_old_setting_names()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
 
@@ -435,7 +439,7 @@ _REQUEST_PRINCIPAL:contextvars.ContextVar[Principal|None]=contextvars.ContextVar
 
 
 def _runtime_usage_scope()->str:
-    return os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE","demo").strip() or "demo"
+    return os.environ.get("VOINEY_LAB_USAGE_SCOPE","demo").strip() or "demo"
 
 
 def _identity_resolver()->IdentityResolver:
@@ -596,7 +600,7 @@ def _visible_catalog_resource_ids()->frozenset[str]|None:
 def _resolve_server_secret(reference:str)->str:
     """Resolve an opaque credential reference through a server-owned env mapping."""
 
-    raw=os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","").strip()
+    raw=os.environ.get("VOINEY_LAB_SECRET_REFERENCES","").strip()
     try:
         mapping=json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
@@ -613,7 +617,7 @@ def _resolve_server_secret(reference:str)->str:
 def _server_credential_options(principal:Principal)->tuple[dict[str,object], ...]:
     """Expose tenant-scoped credential handles, never references or values."""
 
-    raw=os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","").strip()
+    raw=os.environ.get("VOINEY_LAB_SECRET_REFERENCES","").strip()
     try:
         mapping=json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
@@ -646,7 +650,7 @@ def _server_credential_options(principal:Principal)->tuple[dict[str,object], ...
 def _credential_reference_from_handle(principal:Principal,handle:str)->str:
     for option in _server_credential_options(principal):
         if hmac.compare_digest(str(option["credential_handle"]),handle):
-            raw=json.loads(os.environ.get("VOICE_WORKFLOW_AGENT_SECRET_REFERENCES","{}"))
+            raw=json.loads(os.environ.get("VOINEY_LAB_SECRET_REFERENCES","{}"))
             prefix=f"secret://{principal.organization_id}/"
             for reference in raw:
                 candidate=("credential-"+hashlib.sha256(
@@ -993,7 +997,7 @@ def _protocol_store_settings()->ProtocolPersistenceSettings:
 def _install_protocol_ocr_provider(environ=None)->None:
     """Build the OCR engines the deployment configured and inject them once.
 
-    Reads VOICE_WORKFLOW_AGENT_OCR_PROVIDERS and the engines' credentials; an
+    Reads VOINEY_LAB_OCR_PROVIDERS and the engines' credentials; an
     adapter already injected (a deployment hook or a test) is kept. Only
     engine names are logged, never a key, secret or URL.
     """
@@ -1295,9 +1299,9 @@ def validate_approved_catalog(catalog_path:Path,usage_scope:str)->None:
     rendered=repr(str(catalog_path))
     if not catalog_path.is_file():
         raise ServerConfigurationError(
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must point to an existing "
+            "VOINEY_LAB_SAFETY_CATALOG must point to an existing "
             f"regular file: {rendered}",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+            "VOINEY_LAB_SAFETY_CATALOG",
         )
     try:
         connection=sqlite3.connect(
@@ -1319,63 +1323,63 @@ def validate_approved_catalog(catalog_path:Path,usage_scope:str)->None:
             connection.close()
     except sqlite3.Error as exc:
         raise ServerConfigurationError(
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG is not a usable approved "
+            "VOINEY_LAB_SAFETY_CATALOG is not a usable approved "
             f"catalog: {rendered}",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+            "VOINEY_LAB_SAFETY_CATALOG",
         ) from exc
     if approved<1:
         raise ServerConfigurationError(
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE has no approved active documents "
-            "in VOICE_WORKFLOW_AGENT_SAFETY_CATALOG: "
+            "VOINEY_LAB_USAGE_SCOPE has no approved active documents "
+            "in VOINEY_LAB_SAFETY_CATALOG: "
             f"{rendered}",
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+            "VOINEY_LAB_USAGE_SCOPE",
+            "VOINEY_LAB_SAFETY_CATALOG",
         )
 
 def server_config()->ServerConfig:
     """Load server-wide policy without exposing configuration values."""
-    catalog=os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG","").strip()
-    scope=os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE","").strip()
+    catalog=os.environ.get("VOINEY_LAB_SAFETY_CATALOG","").strip()
+    scope=os.environ.get("VOINEY_LAB_USAGE_SCOPE","").strip()
     catalog_path=Path(catalog)
     if not catalog:
         raise ServerConfigurationError(
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must not be empty",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+            "VOINEY_LAB_SAFETY_CATALOG must not be empty",
+            "VOINEY_LAB_SAFETY_CATALOG",
         )
     if not catalog_path.is_absolute():
         raise ServerConfigurationError(
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must be an absolute path: "
+            "VOINEY_LAB_SAFETY_CATALOG must be an absolute path: "
             f"{catalog!r}",
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+            "VOINEY_LAB_SAFETY_CATALOG",
         )
     invalid_policy_fields=[]
     if scope not in ("operational","demo","reference_only","test_only"):
-        invalid_policy_fields.append("VOICE_WORKFLOW_AGENT_USAGE_SCOPE")
+        invalid_policy_fields.append("VOINEY_LAB_USAGE_SCOPE")
     if invalid_policy_fields:
         raise ServerConfigurationError(
             "safety catalog configuration is incomplete",
             *invalid_policy_fields,
         )
     validate_approved_catalog(catalog_path,scope)
-    facility=os.environ.get("VOICE_WORKFLOW_AGENT_FACILITY_ID","").strip() or None
-    raw_allowed=os.environ.get("VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES","ko,en,vi")
+    facility=os.environ.get("VOINEY_LAB_FACILITY_ID","").strip() or None
+    raw_allowed=os.environ.get("VOINEY_LAB_ALLOWED_LANGUAGES","ko,en,vi")
     try:
         allowed=frozenset(normalize_session_language(value) for value in raw_allowed.split(",") if value.strip())
-        default=normalize_session_language(os.environ.get("VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE","ko"))
+        default=normalize_session_language(os.environ.get("VOINEY_LAB_SESSION_LANGUAGE","ko"))
     except ValueError as exc:
         raise ServerConfigurationError(
             "session language configuration is invalid",
-            "VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES",
-            "VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE",
+            "VOINEY_LAB_ALLOWED_LANGUAGES",
+            "VOINEY_LAB_SESSION_LANGUAGE",
         ) from exc
     if not allowed or default not in allowed:
         raise ServerConfigurationError(
             "session language configuration is invalid",
-            "VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES",
-            "VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE",
+            "VOINEY_LAB_ALLOWED_LANGUAGES",
+            "VOINEY_LAB_SESSION_LANGUAGE",
         )
-    procedure_catalog=os.environ.get("VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG","").strip()
-    procedure_store=os.environ.get("VOICE_WORKFLOW_AGENT_PROCEDURE_STORE","").strip()
+    procedure_catalog=os.environ.get("VOINEY_LAB_PROCEDURE_CATALOG","").strip()
+    procedure_store=os.environ.get("VOINEY_LAB_PROCEDURE_STORE","").strip()
     procedure_catalog_path=Path(procedure_catalog) if procedure_catalog else None
     procedure_store_path=Path(procedure_store) if procedure_store else None
     if ((procedure_catalog_path is None)!=(procedure_store_path is None) or
@@ -1383,15 +1387,15 @@ def server_config()->ServerConfig:
         (not procedure_catalog_path.is_absolute() or not procedure_store_path.is_absolute())):
         raise ServerConfigurationError(
             "procedure configuration is invalid",
-            "VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG",
-            "VOICE_WORKFLOW_AGENT_PROCEDURE_STORE",
+            "VOINEY_LAB_PROCEDURE_CATALOG",
+            "VOINEY_LAB_PROCEDURE_STORE",
         )
     curated_fixture=os.environ.get(
-        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE","").strip()
+        "VOINEY_LAB_CURATED_PROTOCOL_FIXTURE","").strip()
     curated_provenance=os.environ.get(
-        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE","").strip()
+        "VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE","").strip()
     curated_source_pdf=os.environ.get(
-        "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF","").strip()
+        "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF","").strip()
     curated_values=(curated_fixture,curated_provenance,curated_source_pdf)
     curated_paths=tuple(Path(value) if value else None for value in curated_values)
     if any(curated_paths) and (
@@ -1400,9 +1404,9 @@ def server_config()->ServerConfig:
     ):
         raise ServerConfigurationError(
             "curated development protocol configuration is invalid",
-            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE",
-            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE",
-            "VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF",
+            "VOINEY_LAB_CURATED_PROTOCOL_FIXTURE",
+            "VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE",
+            "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF",
         )
     return ServerConfig(catalog_path,facility,scope,allowed,default,
                         procedure_catalog_path,procedure_store_path,
@@ -1461,19 +1465,19 @@ class SttDiagnosticSettings:
     @classmethod
     def from_environment(cls)->"SttDiagnosticSettings":
         raw=os.environ.get(
-            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED","false"
+            "VOINEY_LAB_STT_DIAGNOSTICS_ENABLED","false"
         ).strip().casefold()
         if raw not in {"0","1","false","true","no","yes","off","on"}:
             raise ValueError("STT diagnostic mode must be a boolean")
         enabled=raw in {"1","true","yes","on"}
         configured=os.environ.get(
-            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTIC_DIR","").strip()
+            "VOINEY_LAB_STT_DIAGNOSTIC_DIR","").strip()
         directory=(Path(configured) if configured else cls.directory).resolve()
         runtime_root=(PROJECT_ROOT / "data/runtime").resolve()
         if directory != runtime_root and runtime_root not in directory.parents:
             raise ValueError("STT diagnostic directory must be under data/runtime")
         maximum=int(os.environ.get(
-            "VOICE_WORKFLOW_AGENT_STT_DIAGNOSTIC_MAX_FILES","20"))
+            "VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES","20"))
         if not 2<=maximum<=100:
             raise ValueError("STT diagnostic file limit is outside bounds")
         return cls(enabled,directory,maximum)
@@ -1653,7 +1657,7 @@ def validate_tts_pcm(response:requests.Response)->bytes:
 def _tts_voice() -> str:
     """Resolve the one active Cascade TTS voice configuration path."""
 
-    return os.environ.get("TTS_VOICE", "leo").strip() or "leo"
+    return os.environ.get("VOINEY_LAB_TTS_VOICE", "leo").strip() or "leo"
 
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
@@ -3909,28 +3913,28 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
     reasoning_effort=os.environ.get(
-        "PROTOCOL_ANALYSIS_REASONING_EFFORT","high"
+        "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT","high"
     ).strip().casefold()
     if reasoning_effort not in {"low","medium","high","xhigh"}:
         raise ServerConfigurationError(
-            "PROTOCOL_ANALYSIS_REASONING_EFFORT is invalid.",
-            "PROTOCOL_ANALYSIS_REASONING_EFFORT",
+            "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT is invalid.",
+            "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT",
         )
     client=OpenAI(
         base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
         max_retries=0,timeout=120.0)
     return OpenAICompatibleProtocolAnalysisModel(
-        client,require_env("PROTOCOL_ANALYSIS_MODEL"),reasoning_effort)
+        client,require_env("VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL"),reasoning_effort)
 
 
 def _auto_activate_ready_uploads_enabled() -> bool:
     scope = (
-        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
-        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
+        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     if scope == "operational":
         return False  # NEVER silently bypass human/facility approval in operational mode
-    raw = os.environ.get("VOICE_WORKFLOW_AGENT_AUTO_ACTIVATE_READY_UPLOADS", "false").strip().casefold()
+    raw = os.environ.get("VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS", "false").strip().casefold()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -3938,13 +3942,13 @@ def _development_activation_allowed() -> bool:
     """Fail closed outside an explicitly non-operational runtime scope."""
 
     scope = (
-        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
-        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
+        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     return scope in {"demo", "reference_only", "test_only"}
 
 
-READINESS_GATE_TEST_MODE_ENV = "VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES"
+READINESS_GATE_TEST_MODE_ENV = "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
 READINESS_GATE_TEST_MODE_LABEL = "테스트 모드: 실행 준비 게이트를 건너뜀"
 
 
@@ -3986,8 +3990,8 @@ def log_readiness_gate_test_mode() -> None:
         log.warning(banner)
         return
     scope = (
-        os.environ.get("VOICE_WORKFLOW_AGENT_USAGE_SCOPE", "")
-        or os.environ.get("VOICE_WORKFLOW_AGENT_SAFETY_USAGE_SCOPE", "")
+        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
+        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     log.warning(
         "readiness_gate_test_mode.ignored %s=true reason=%s usage_scope=%s",
@@ -4119,7 +4123,7 @@ async def review_protocol_ocr(
             else:
                 policy=SharedSecretApprovalPolicy(
                     os.environ.get(
-                        "VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"
+                        "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"
                     )
                 )
                 presented=x_protocol_approval_token
@@ -4380,7 +4384,7 @@ def approve_protocol_revision(
                 presented="tenant-rbac-authorized"
             else:
                 policy=SharedSecretApprovalPolicy(
-                    os.environ.get("VOICE_WORKFLOW_AGENT_PROTOCOL_APPROVAL_TOKEN"))
+                    os.environ.get("VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"))
                 presented=x_protocol_approval_token
             entry=catalog.approve(
                 protocol_id,
@@ -4847,7 +4851,7 @@ def get_web_visual_asset(asset_id:str):
 def _require_admin_access(presented_token:str|None)->None:
     """Fail closed without retaining or logging the presented credential."""
 
-    configured=os.environ.get("VOICE_WORKFLOW_AGENT_ADMIN_TOKEN","").strip()
+    configured=os.environ.get("VOINEY_LAB_ADMIN_TOKEN","").strip()
     if not configured:
         raise HTTPException(status_code=503,detail="admin_access_not_configured")
     if not presented_token:
@@ -5973,7 +5977,7 @@ async def _queue_curated_web_visual(
                         return cand
                 return None
 
-            web_visual_timeout = float(os.environ.get("VOICE_WORKFLOW_AGENT_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
+            web_visual_timeout = float(os.environ.get("VOINEY_LAB_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
 
             async def _grok_image_search() -> dict[str, Any]:
                 try:
@@ -6564,7 +6568,7 @@ async def _queue_curated_research(
                     client=AsyncOpenAI(
                         base_url=api_url(""),
                         api_key=require_env("XAI_API_KEY"),max_retries=0)
-                    client.model=require_env("CHAT_MODEL")
+                    client.model=require_env("VOINEY_LAB_CHAT_MODEL")
                     answer=await asyncio.wait_for(
                         answer_approved_reference_question(
                             client,ctx["query"],language=turn_language,
@@ -9325,7 +9329,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             fallback_reason=None,
         )
         await progress("composing",route="brain")
-        client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("CHAT_MODEL")
+        client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("VOINEY_LAB_CHAT_MODEL")
         result=await stream_brain_turn(
             client,session.history,transcript,sentence,mark_token,tool_event,
             tool_context=turn_context,arbitration=request_arbitration)

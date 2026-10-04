@@ -31,7 +31,7 @@ source-linked protocol evidence.
    classifier or prompt that decides state apart from this line. The rules'
    own path (the shared `RequestArbitration` boundary and the curated rules)
    is the classification path when the router is off
-   (`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED`, false by default), and with it
+   (`VOINEY_LAB_LLM_ROUTER_ENABLED`, false by default), and with it
    on it is the same turn's fallback when the model is late, fails, is
    refused, or its answer fails a check -- never a second decision beside the
    model's. (Decision D1, 2026-10-02; decision of 2026-10-03.)

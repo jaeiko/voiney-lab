@@ -88,27 +88,27 @@ class MossSettingsTests(unittest.TestCase):
 
     def test_enabled_settings_are_validated_and_operational_is_opt_in(self):
         environment = {
-            "VOICE_WORKFLOW_AGENT_MOSS_ENABLED": "true",
-            "MOSS_PROJECT_ID": "project",
-            "MOSS_PROJECT_KEY": "key",
-            "MOSS_INDEX_NAME": "safe-index",
+            "VOINEY_LAB_MOSS_ENABLED": "true",
+            "VOINEY_LAB_MOSS_PROJECT_ID": "project",
+            "VOINEY_LAB_MOSS_PROJECT_KEY": "key",
+            "VOINEY_LAB_MOSS_INDEX_NAME": "safe-index",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = MossSettings.from_environment()
         self.assertEqual(settings.allowed_scopes, frozenset({"demo", "reference_only"}))
         self.assertNotIn("operational", settings.allowed_scopes)
 
-        environment["VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES"] = "operational"
+        environment["VOINEY_LAB_MOSS_ALLOWED_SCOPES"] = "operational"
         with patch.dict(os.environ, environment, clear=True):
             settings = MossSettings.from_environment()
         self.assertEqual(settings.allowed_scopes, frozenset({"operational"}))
 
     def test_allowed_scopes_normalize_case_whitespace_and_duplicates(self):
         base={
-            "VOICE_WORKFLOW_AGENT_MOSS_ENABLED":"true",
-            "MOSS_PROJECT_ID":"project",
-            "MOSS_PROJECT_KEY":"key",
-            "MOSS_INDEX_NAME":"safe-index",
+            "VOINEY_LAB_MOSS_ENABLED":"true",
+            "VOINEY_LAB_MOSS_PROJECT_ID":"project",
+            "VOINEY_LAB_MOSS_PROJECT_KEY":"key",
+            "VOINEY_LAB_MOSS_INDEX_NAME":"safe-index",
         }
         cases=(
             ("demo",frozenset({"demo"})),
@@ -119,7 +119,7 @@ class MossSettingsTests(unittest.TestCase):
         for raw,expected in cases:
             with self.subTest(raw=raw),patch.dict(
                 os.environ,
-                {**base,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES":raw},
+                {**base,"VOINEY_LAB_MOSS_ALLOWED_SCOPES":raw},
                 clear=True,
             ):
                 self.assertEqual(
@@ -129,17 +129,17 @@ class MossSettingsTests(unittest.TestCase):
         for raw in (""," , ","demo,unknown"):
             with self.subTest(raw=raw),patch.dict(
                 os.environ,
-                {**base,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES":raw},
+                {**base,"VOINEY_LAB_MOSS_ALLOWED_SCOPES":raw},
                 clear=True,
             ),self.assertRaisesRegex(
-                ValueError,"VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES",
+                ValueError,"VOINEY_LAB_MOSS_ALLOWED_SCOPES",
             ):
                 MossSettings.from_environment()
 
     def test_partial_or_invalid_enabled_configuration_is_rejected(self):
         with patch.dict(
             os.environ,
-            {"VOICE_WORKFLOW_AGENT_MOSS_ENABLED": "true", "MOSS_PROJECT_ID": "project"},
+            {"VOINEY_LAB_MOSS_ENABLED": "true", "VOINEY_LAB_MOSS_PROJECT_ID": "project"},
             clear=True,
         ):
             with self.assertRaises(ValueError):

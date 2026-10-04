@@ -489,15 +489,15 @@ def test_workspace_settings_require_explicit_absolute_storage(tmp_path):
     with pytest.raises(WorkspaceError, match="absolute"):
         WorkspaceSettings.from_environment(
             {
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-                "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": "relative/path",
+                "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+                "VOINEY_LAB_WORKSPACE_DATA_DIR": "relative/path",
             }
         )
     configured = WorkspaceSettings.from_environment(
         {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": str(tmp_path),
-            "VOICE_WORKFLOW_AGENT_ANALYTICS_RETENTION_DAYS": "30",
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": str(tmp_path),
+            "VOINEY_LAB_ANALYTICS_RETENTION_DAYS": "30",
         }
     )
     assert configured.analytics_retention_days == 30

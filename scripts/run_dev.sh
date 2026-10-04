@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIXTURE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.json"
 PROVENANCE="$ROOT/data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
-SOURCE_PDF="${CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
+SOURCE_PDF="${VOINEY_LAB_CANDIDATE_A_SOURCE_PDF:-$ROOT/data/runtime/candidate-a-source/in-gel-digestion.pdf}"
 PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"
 
 EXPECTED_PDF_SHA256="63d81102fb644fca21e1c2296b566987756f2964ece06758fe52c73ba9c00bd9"
@@ -44,6 +44,10 @@ fi
 
 source .venv/bin/activate
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 echo "=== Candidate A configuration check ==="
 
 for file in \
@@ -71,9 +75,9 @@ fi
 
 echo "[OK] Candidate A PDF SHA-256 verified"
 
-export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
-export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
-export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
+export VOINEY_LAB_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
+export VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
+export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
 # Registering a PDF in the browser POSTs /api/protocols/{id}/analysis straight
 # away, which spends a provider call with no confirmation. This launcher walks
 # the pre-analysed curated fixture and needs no analysis of its own, so the
@@ -81,56 +85,56 @@ export VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
 # route answers provider_configuration_missing, and an accidental upload during
 # a walkthrough cannot reach the budget. Registration and the source record are
 # unaffected. To analyse a new document, run the server without this launcher
-# (or export PROTOCOL_ANALYSIS_MODEL after it) so the call is a deliberate act.
-export PROTOCOL_ANALYSIS_MODEL=""
-export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
-export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="false"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
-export EXTERNAL_REFERENCES_ENABLED="true"
-export EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"
-export EXTERNAL_REFERENCE_MODEL="grok-4.6"
-export EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"
-export EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"
-export EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"
-export EXTERNAL_REFERENCE_CACHE_TTL_SECONDS="900"
-export EXTERNAL_REFERENCE_MAX_CITATIONS="5"
-export EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
+# (or export VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL after it) so the call is a deliberate act.
+export VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL=""
+export VOINEY_LAB_PROTOCOL_ENABLED="true"
+export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
+export VOINEY_LAB_MOSS_ENABLED="false"
+export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED="true"
+export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
+export VOINEY_LAB_WORKSPACE_ENABLED="true"
+export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
+export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true"
+export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"
+export VOINEY_LAB_EXTERNAL_REFERENCE_MODEL="grok-4.6"
+export VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"
+export VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"
+export VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"
+export VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS="900"
+export VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS="5"
+export VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
 # PROJECT-ENGINEERING: three bounded read-only planning/answering roles are
 # available conditionally; course-explicit state/tool guardrails remain server
 # enforced. Report Brain is a separate async derivation path and is not part of
 # the latency-critical Answer/Source/Visual start() fan-out.
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_MULTI_BRAIN_MODEL="grok-4.6"
-export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
-export VOICE_WORKFLOW_AGENT_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
-export VOICE_WORKFLOW_AGENT_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
+export VOINEY_LAB_MULTI_BRAIN_ENABLED="true"
+export VOINEY_LAB_MULTI_BRAIN_MODEL="grok-4.6"
+export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
+export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
+export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
 # CLASS-EXPLICIT: model prose cannot gain workflow or evidence authority.
 # PROJECT-ENGINEERING: this development launcher enables one bounded Grok-only
 # background tier; production/operator launchers may keep the feature disabled.
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="true"
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL="grok-4.6"
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
-export WEB_VISUAL_SEARCH_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="true"
-export CASCADE_BARGE_IN_PREFIX_MS="800"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="true"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL="grok-4.6"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
+export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="true"
+export VOINEY_LAB_GENERATED_VISUALS_ENABLED="true"
+export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS="800"
 # Raw microphone evidence remains off unless the operator explicitly opts in
-# before startup with VOICE_WORKFLOW_AGENT_STT_DIAGNOSTICS_ENABLED=true. Any
+# before startup with VOINEY_LAB_STT_DIAGNOSTICS_ENABLED=true. Any
 # configured diagnostic directory must remain below data/runtime and is ignored.
 
 if [[ "$TEST_MODE" == "true" ]]; then
   # Development test mode. The server only honours it outside an operational
   # usage scope, so the scope is set here too; it never changes a readiness
   # verdict, it only lets an analysed protocol be run with gates outstanding.
-  export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="demo"
-  export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="true"
+  export VOINEY_LAB_USAGE_SCOPE="demo"
+  export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="true"
   echo
   echo "!!! TEST MODE ON (--test-mode) !!!"
-  echo "  VOICE_WORKFLOW_AGENT_USAGE_SCOPE=demo"
-  echo "  VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES=true"
+  echo "  VOINEY_LAB_USAGE_SCOPE=demo"
+  echo "  VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true"
   echo "  Analysed protocols can be activated and run with readiness gates"
   echo "  outstanding. Development only; not for real experiments."
 fi
@@ -176,17 +180,17 @@ print("allowed_domain_count:", len(references.allowed_domains))
 print("web_image_search:", "enabled" if web_images.enabled else "disabled")
 print("generated_visuals:", "enabled" if generated.enabled else "disabled")
 print("experiment_reports: enabled")
-print("barge_in_prefix_ms:", os.environ["CASCADE_BARGE_IN_PREFIX_MS"])
+print("barge_in_prefix_ms:", os.environ["VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS"])
 PY
 
 echo
 echo "=== Effective Candidate A paths ==="
-echo "FIXTURE    = $VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE"
-echo "PROVENANCE = $VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE"
-echo "SOURCE_PDF = $VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF"
-echo "CATALOG    = $VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR/protocol_workspace.sqlite"
-echo "ASSET_ROOT = $VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR/objects/sha256"
-echo "REPORT_DB  = $VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB"
+echo "FIXTURE    = $VOINEY_LAB_CURATED_PROTOCOL_FIXTURE"
+echo "PROVENANCE = $VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE"
+echo "SOURCE_PDF = $VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF"
+echo "CATALOG    = $VOINEY_LAB_PROTOCOL_DATA_DIR/protocol_workspace.sqlite"
+echo "ASSET_ROOT = $VOINEY_LAB_PROTOCOL_DATA_DIR/objects/sha256"
+echo "REPORT_DB  = $VOINEY_LAB_EXPERIMENT_REPORT_DB"
 
 echo
 echo "=== Loading curated fixture ==="
@@ -201,9 +205,9 @@ from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import ProtocolCatalog
 
 fixture = load_curated_protocol_fixture(
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_FIXTURE"]),
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_PROVENANCE"]),
-    Path(os.environ["VOICE_WORKFLOW_AGENT_CURATED_PROTOCOL_SOURCE_PDF"]),
+    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_FIXTURE"]),
+    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE"]),
+    Path(os.environ["VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF"]),
 )
 
 settings = ProtocolPersistenceSettings.from_environment()

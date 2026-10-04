@@ -1,6 +1,6 @@
 """Generation-scoped latency filler scheduling for Cascade turns.
 
-The cue is chosen by ``CASCADE_FILLER_MODE``:
+The cue is chosen by ``VOINEY_LAB_CASCADE_FILLER_MODE``:
 
 * ``tone`` (the default) -- the browser plays one short, quiet tone. Nothing is
   synthesized and nothing is said, so the cue costs no TTS call and cannot
@@ -12,7 +12,7 @@ Either cue carries no protocol content, starts only once ``delay_ms`` has passed
 with the primary turn still pending, and is cleared the moment the primary
 audio is admitted.
 
-In tone mode a turn that is still pending at ``CASCADE_FILLER_STATUS_DELAY_MS``
+In tone mode a turn that is still pending at ``VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS``
 (1.5 s by default) also hears, once, what the server is doing at that moment
 (``FILLER_STATUS_PHRASES``) -- read from the turn's own progress state, the same
 state its Turn card shows, and only for states that name real work. A session
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from voiney_lab.configuration import ConfigurationError
 
 
-FILLER_MODE_ENV = "CASCADE_FILLER_MODE"
+FILLER_MODE_ENV = "VOINEY_LAB_CASCADE_FILLER_MODE"
 FILLER_MODE_TONE = "tone"
 FILLER_MODE_PHRASE = "phrase"
 FILLER_MODES = frozenset({FILLER_MODE_TONE, FILLER_MODE_PHRASE})
@@ -49,7 +49,7 @@ def cascade_filler_mode(environment: Mapping[str, str] | None = None) -> str:
     return raw
 
 
-FILLER_STATUS_DELAY_ENV = "CASCADE_FILLER_STATUS_DELAY_MS"
+FILLER_STATUS_DELAY_ENV = "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS"
 DEFAULT_FILLER_STATUS_DELAY_MS = 1500
 
 

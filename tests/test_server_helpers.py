@@ -59,7 +59,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(_tts_voice(), "leo")
         with patch.dict(
             "os.environ",
-            {"TTS_VOICE": "custom-professor", "XAI_TTS_VOICE": "stale-alias"},
+            {"VOINEY_LAB_TTS_VOICE": "custom-professor", "XAI_TTS_VOICE": "stale-alias"},
             clear=True,
         ):
             self.assertEqual(_tts_voice(), "custom-professor")
@@ -312,7 +312,7 @@ class ServerTests(unittest.TestCase):
                      patch("voiney_lab.server.AsyncOpenAI"), \
                      patch.dict("os.environ",{
                          "XAI_API_KEY":"test",
-                         "CHAT_MODEL":"test",
+                         "VOINEY_LAB_CHAT_MODEL":"test",
                      },clear=False):
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
                 resolver.assert_not_called()
@@ -363,7 +363,7 @@ class ServerTests(unittest.TestCase):
              patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
-                 "CHAT_MODEL":"test",
+                 "VOINEY_LAB_CHAT_MODEL":"test",
              },clear=False):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         resolver.assert_not_called()
@@ -410,7 +410,7 @@ class ServerTests(unittest.TestCase):
              patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
-                 "CHAT_MODEL":"test",
+                 "VOINEY_LAB_CHAT_MODEL":"test",
              },clear=False):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         brain.assert_called_once()
@@ -503,9 +503,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(normalize_session_language("vi_VN"), "vi")
         with tempfile.TemporaryDirectory() as temporary:
             catalog=self.approved_catalog(temporary)
-            values={"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
-                    "VOICE_WORKFLOW_AGENT_FACILITY_ID":"FACILITY-A","VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE":"vi-VN",
-                    "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"operational"}
+            values={"VOINEY_LAB_SAFETY_CATALOG":str(catalog),
+                    "VOINEY_LAB_FACILITY_ID":"FACILITY-A","VOINEY_LAB_SESSION_LANGUAGE":"vi-VN",
+                    "VOINEY_LAB_USAGE_SCOPE":"operational"}
             with patch.dict("os.environ", values, clear=True):
                 context=server_tool_context()
         self.assertEqual((str(context.catalog_path),context.facility_id,context.language,context.usage_scope),
@@ -517,27 +517,27 @@ class ServerTests(unittest.TestCase):
             root=Path(temporary)
             catalog=self.approved_catalog(root)
             base={
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"operational",
+                "VOINEY_LAB_SAFETY_CATALOG":str(catalog),
+                "VOINEY_LAB_USAGE_SCOPE":"operational",
             }
             with patch.dict("os.environ",base,clear=True):
                 self.assertEqual(server_config().catalog_path,catalog)
 
             missing=root/"missing.sqlite"
             with patch.dict("os.environ",{
-                **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(missing),
+                **base,"VOINEY_LAB_SAFETY_CATALOG":str(missing),
             },clear=True),self.assertRaisesRegex(
                 ServerConfigurationError,
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG.*existing regular file",
+                "VOINEY_LAB_SAFETY_CATALOG.*existing regular file",
             ) as captured:
                 server_config()
             self.assertIn(str(missing),str(captured.exception))
 
             with patch.dict("os.environ",{
-                **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":"",
+                **base,"VOINEY_LAB_SAFETY_CATALOG":"",
             },clear=True),self.assertRaisesRegex(
                 ServerConfigurationError,
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG must not be empty",
+                "VOINEY_LAB_SAFETY_CATALOG must not be empty",
             ):
                 server_config()
 
@@ -545,18 +545,18 @@ class ServerTests(unittest.TestCase):
             invalid_file.write_text("not sqlite",encoding="utf-8")
             for target in (root,invalid_file):
                 with self.subTest(target=target),patch.dict("os.environ",{
-                    **base,"VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(target),
+                    **base,"VOINEY_LAB_SAFETY_CATALOG":str(target),
                 },clear=True),self.assertRaisesRegex(
                     ServerConfigurationError,
-                    "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",
+                    "VOINEY_LAB_SAFETY_CATALOG",
                 ):
                     server_config()
 
             with patch.dict("os.environ",{
-                **base,"VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+                **base,"VOINEY_LAB_USAGE_SCOPE":"demo",
             },clear=True),self.assertRaisesRegex(
                 ServerConfigurationError,
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE.*no approved active documents",
+                "VOINEY_LAB_USAGE_SCOPE.*no approved active documents",
             ):
                 server_config()
 
@@ -580,14 +580,14 @@ class ServerTests(unittest.TestCase):
             missing=Path(temporary)/"missing.sqlite"
             socket=Socket()
             with patch.dict("os.environ",{
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(missing),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
+                "VOINEY_LAB_SAFETY_CATALOG":str(missing),
+                "VOINEY_LAB_USAGE_SCOPE":"demo",
             },clear=True),patch(
                 "voiney_lab.server.log.warning",
             ) as warning:
                 asyncio.run(voice_socket(socket))
             rendered=warning.call_args.args[0] % warning.call_args.args[1:]
-        self.assertIn("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",rendered)
+        self.assertIn("VOINEY_LAB_SAFETY_CATALOG",rendered)
         self.assertIn(str(missing),rendered)
         self.assertTrue(any(
             item.get("message")=="invalid session configuration"
@@ -616,11 +616,11 @@ class ServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             catalog=self.approved_catalog(temporary,"demo")
             environment={
-                "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":str(catalog),
-                "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"demo",
-                "VOICE_WORKFLOW_AGENT_FACILITY_ID":"",
-                "VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG":"",
-                "VOICE_WORKFLOW_AGENT_PROCEDURE_STORE":"",
+                "VOINEY_LAB_SAFETY_CATALOG":str(catalog),
+                "VOINEY_LAB_USAGE_SCOPE":"demo",
+                "VOINEY_LAB_FACILITY_ID":"",
+                "VOINEY_LAB_PROCEDURE_CATALOG":"",
+                "VOINEY_LAB_PROCEDURE_STORE":"",
             }
             socket=Socket()
             with patch.dict("os.environ",environment,clear=True):
@@ -864,20 +864,20 @@ class ServerTests(unittest.TestCase):
         self.assertIn("pipeline=cascade",rendered)
         self.assertIn("stage=server_policy",rendered)
         self.assertIn("exception=ServerConfigurationError",rendered)
-        self.assertIn("VOICE_WORKFLOW_AGENT_SAFETY_CATALOG",rendered)
+        self.assertIn("VOINEY_LAB_SAFETY_CATALOG",rendered)
         self.assertNotIn("must-not-appear-in-logs",rendered)
 
     def test_invalid_canonical_policy_names_the_safe_fields(self):
         environment={
-            "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG":"/trusted/catalog.sqlite",
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE":"unsupported",
+            "VOINEY_LAB_SAFETY_CATALOG":"/trusted/catalog.sqlite",
+            "VOINEY_LAB_USAGE_SCOPE":"unsupported",
         }
         with patch.dict("os.environ",environment,clear=True), \
              self.assertRaises(ServerConfigurationError) as captured:
             server_config()
         self.assertEqual(
             captured.exception.field_names,
-            ("VOICE_WORKFLOW_AGENT_USAGE_SCOPE",),
+            ("VOINEY_LAB_USAGE_SCOPE",),
         )
 
     def test_rest_stt_preserves_optional_provider_quality_without_inventing_it(self):
@@ -1776,10 +1776,10 @@ class ServerTests(unittest.TestCase):
                 user_wording="private operator wording",
             )
             environment = {
-                "VOICE_WORKFLOW_AGENT_ADMIN_TOKEN": "test-admin-token",
-                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "true",
-                "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB": str(path),
-                "TTS_VOICE": "leo",
+                "VOINEY_LAB_ADMIN_TOKEN": "test-admin-token",
+                "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "true",
+                "VOINEY_LAB_EXPERIMENT_REPORT_DB": str(path),
+                "VOINEY_LAB_TTS_VOICE": "leo",
             }
             with patch.dict("os.environ", environment, clear=True), patch(
                 "voiney_lab.server._public_protocol_catalog_entries",
@@ -1863,10 +1863,10 @@ class ServerTests(unittest.TestCase):
             ) as client:
                 return await client.get("/readyz")
         with patch.dict("os.environ", {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
-            "VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED": "false",
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "false",
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": tempfile.mkdtemp(),
+            "VOINEY_LAB_PROTOCOL_ENABLED": "false",
+            "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "false",
         }):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 200)
@@ -1890,8 +1890,8 @@ class ServerTests(unittest.TestCase):
             ) as client:
                 return await client.get("/readyz")
         with patch.dict("os.environ", {
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED": "true",
-            "VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR": "not-an-absolute-path",
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": "not-an-absolute-path",
         }):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 503)
@@ -1904,11 +1904,11 @@ class ServerTests(unittest.TestCase):
             ) as client:
                 return await client.get("/readyz")
         with patch.dict("os.environ", {
-            "VOICE_WORKFLOW_AGENT_USAGE_SCOPE": "operational",
-            "VOICE_WORKFLOW_AGENT_OIDC_ISSUER": "",
-            "VOICE_WORKFLOW_AGENT_OIDC_AUDIENCE": "",
-            "VOICE_WORKFLOW_AGENT_OIDC_JWKS_URL": "",
-            "VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED": "false",
+            "VOINEY_LAB_USAGE_SCOPE": "operational",
+            "VOINEY_LAB_OIDC_ISSUER": "",
+            "VOINEY_LAB_OIDC_AUDIENCE": "",
+            "VOINEY_LAB_OIDC_JWKS_URL": "",
+            "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "false",
         }):
             response = asyncio.run(call())
         self.assertEqual(response.status_code, 503)

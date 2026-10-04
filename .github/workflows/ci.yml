@@ -126,8 +126,8 @@ jobs:
           CI: "true"
           # Read by the server the launcher starts (Playwright's webServer
           # inherits this environment).
-          VOICE_WORKFLOW_AGENT_SAFETY_CATALOG: ${{ runner.temp }}/ci-safety-catalog.sqlite
-          VOICE_WORKFLOW_AGENT_USAGE_SCOPE: demo
+          VOINEY_LAB_SAFETY_CATALOG: ${{ runner.temp }}/ci-safety-catalog.sqlite
+          VOINEY_LAB_USAGE_SCOPE: demo
 
       - uses: actions/upload-artifact@v4
         if: failure()

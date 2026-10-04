@@ -43,25 +43,29 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+# Refuse to start while an old setting name is set in the environment or
+# the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
+python -B -m voiney_lab.setting_names || exit 1
+
 # --- Durable pilot state -----------------------------------------------------
-export VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR="$PILOT_DATA_DIR"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB="$PILOT_DATA_DIR/experiment_reports.sqlite"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED="true"
-export VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
+export VOINEY_LAB_PROTOCOL_ENABLED="true"
+export VOINEY_LAB_PROTOCOL_DATA_DIR="$PILOT_DATA_DIR"
+export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED="true"
+export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PILOT_DATA_DIR/experiment_reports.sqlite"
+export VOINEY_LAB_WORKSPACE_ENABLED="true"
+export VOINEY_LAB_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
 
 # --- Off unless a person asks for it before startup --------------------------
 # These four reach outside the approved source documents. Each keeps a value
 # the operator exported themselves, so turning one on is a deliberate act.
-export EXTERNAL_REFERENCES_ENABLED="${EXTERNAL_REFERENCES_ENABLED:-false}"
-export SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="${SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED:-false}"
-export WEB_VISUAL_SEARCH_ENABLED="${WEB_VISUAL_SEARCH_ENABLED:-false}"
-export VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED="${VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED:-false}"
+export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="${VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED:-false}"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="${VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED:-false}"
+export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="${VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED:-false}"
+export VOINEY_LAB_GENERATED_VISUALS_ENABLED="${VOINEY_LAB_GENERATED_VISUALS_ENABLED:-false}"
 
 # --- Outside the pilot's scope -----------------------------------------------
 # MOSS (the org-governed approved-safety-document corpus) has its own flag.
-export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="${VOICE_WORKFLOW_AGENT_MOSS_ENABLED:-false}"
+export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"
 # Dry-lab workflows and the eLabFTW ELN write-back have no launcher flag of
 # their own: both sit behind the commercial workspace, which the reviewer
 # inbox, protocol library and experiment timeline also need, so disabling it
@@ -69,11 +73,11 @@ export VOICE_WORKFLOW_AGENT_MOSS_ENABLED="${VOICE_WORKFLOW_AGENT_MOSS_ENABLED:-f
 # until an admin creates and verifies a connector for them.
 
 # --- Test mode is never on in a pilot ----------------------------------------
-if [[ "${VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES:-}" =~ ^([1]|[Tt]rue|[Yy]es|[Oo]n)$ ]]; then
-  echo "[WARN] VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES was set in the"
+if [[ "${VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES:-}" =~ ^([1]|[Tt]rue|[Yy]es|[Oo]n)$ ]]; then
+  echo "[WARN] VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES was set in the"
   echo "[WARN] environment. A pilot never skips readiness gates; forcing it off."
 fi
-export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="false"
+export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="false"
 
 # --- Approved safety documents: decided here, never by a .env ---------------
 # operational needs OIDC, which the pilot does not have yet: without it the
@@ -85,26 +89,26 @@ export VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES="false"
 PILOT_USAGE_SCOPE="reference_only"
 PILOT_SAFETY_CATALOG="$PILOT_DATA_DIR/approved_safety_catalog.sqlite"
 for fixed in \
-  "VOICE_WORKFLOW_AGENT_USAGE_SCOPE=$PILOT_USAGE_SCOPE" \
-  "VOICE_WORKFLOW_AGENT_SAFETY_CATALOG=$PILOT_SAFETY_CATALOG"; do
+  "VOINEY_LAB_USAGE_SCOPE=$PILOT_USAGE_SCOPE" \
+  "VOINEY_LAB_SAFETY_CATALOG=$PILOT_SAFETY_CATALOG"; do
   name="${fixed%%=*}"
   if [[ -n "${!name:-}" && "${!name}" != "${fixed#*=}" ]]; then
     echo "[WARN] $name was set in the environment. The pilot ignores it and"
     echo "[WARN] uses ${fixed#*=}."
   fi
 done
-export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="$PILOT_USAGE_SCOPE"
-export VOICE_WORKFLOW_AGENT_SAFETY_CATALOG="$PILOT_SAFETY_CATALOG"
+export VOINEY_LAB_USAGE_SCOPE="$PILOT_USAGE_SCOPE"
+export VOINEY_LAB_SAFETY_CATALOG="$PILOT_SAFETY_CATALOG"
 
 # Counted read-only by the rule the safety pack uses, so a demo document can
 # never reach the safety panel of a pilot run.
 SAFETY_DEMO_DOCUMENTS="-"
 SAFETY_SCOPE_DOCUMENTS="-"
 SAFETY_REFUSAL=""
-if [[ ! -f "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" ]]; then
-  SAFETY_REFUSAL="no approved safety catalog at $VOICE_WORKFLOW_AGENT_SAFETY_CATALOG"
-elif ! safety_counts="$(python -B - "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" \
-    "$VOICE_WORKFLOW_AGENT_USAGE_SCOPE" <<'PY'
+if [[ ! -f "$VOINEY_LAB_SAFETY_CATALOG" ]]; then
+  SAFETY_REFUSAL="no approved safety catalog at $VOINEY_LAB_SAFETY_CATALOG"
+elif ! safety_counts="$(python -B - "$VOINEY_LAB_SAFETY_CATALOG" \
+    "$VOINEY_LAB_USAGE_SCOPE" <<'PY'
 import sqlite3
 import sys
 
@@ -123,7 +127,7 @@ else
   if [[ "$SAFETY_DEMO_DOCUMENTS" != "0" ]]; then
     SAFETY_REFUSAL="the safety catalog holds $SAFETY_DEMO_DOCUMENTS demo document(s) (scope demo/test_only or a fictional title)"
   elif [[ "$SAFETY_SCOPE_DOCUMENTS" == "0" ]]; then
-    SAFETY_REFUSAL="the safety catalog has no approved active $VOICE_WORKFLOW_AGENT_USAGE_SCOPE document; the server would reject every request"
+    SAFETY_REFUSAL="the safety catalog has no approved active $VOINEY_LAB_USAGE_SCOPE document; the server would reject every request"
   fi
 fi
 
@@ -142,28 +146,28 @@ echo "PORT = $PORT   (override: PORT=...)"
 echo
 echo "--- Data paths ---"
 echo "DATA_ROOT  = $PILOT_DATA_DIR"
-echo "CATALOG    = $VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR/protocol_workspace.sqlite"
-echo "ASSET_ROOT = $VOICE_WORKFLOW_AGENT_PROTOCOL_DATA_DIR/objects/sha256"
-echo "REPORT_DB  = $VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORT_DB"
-echo "WORKSPACE  = $VOICE_WORKFLOW_AGENT_WORKSPACE_DATA_DIR"
+echo "CATALOG    = $VOINEY_LAB_PROTOCOL_DATA_DIR/protocol_workspace.sqlite"
+echo "ASSET_ROOT = $VOINEY_LAB_PROTOCOL_DATA_DIR/objects/sha256"
+echo "REPORT_DB  = $VOINEY_LAB_EXPERIMENT_REPORT_DB"
+echo "WORKSPACE  = $VOINEY_LAB_WORKSPACE_DATA_DIR"
 echo
 echo "--- Approved safety documents (fixed by this launcher) ---"
-echo "SAFETY_CATALOG = $VOICE_WORKFLOW_AGENT_SAFETY_CATALOG"
-echo "USAGE_SCOPE    = $VOICE_WORKFLOW_AGENT_USAGE_SCOPE"
+echo "SAFETY_CATALOG = $VOINEY_LAB_SAFETY_CATALOG"
+echo "USAGE_SCOPE    = $VOINEY_LAB_USAGE_SCOPE"
 echo "demo documents = $SAFETY_DEMO_DOCUMENTS"
-echo "approved active $VOICE_WORKFLOW_AGENT_USAGE_SCOPE documents = $SAFETY_SCOPE_DOCUMENTS"
+echo "approved active $VOINEY_LAB_USAGE_SCOPE documents = $SAFETY_SCOPE_DOCUMENTS"
 echo
 echo "--- Features ---"
 report_feature() { printf '%-30s %s\n' "$1" "$(feature_state "${2:-}")"; }
-report_feature "protocol_catalog:" "$VOICE_WORKFLOW_AGENT_PROTOCOL_ENABLED"
-report_feature "experiment_reports:" "$VOICE_WORKFLOW_AGENT_EXPERIMENT_REPORTS_ENABLED"
-report_feature "workspace:" "$VOICE_WORKFLOW_AGENT_WORKSPACE_ENABLED"
-report_feature "external_references:" "$EXTERNAL_REFERENCES_ENABLED"
-report_feature "supplemental_model_knowledge:" "$SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
-report_feature "web_visual_search:" "$WEB_VISUAL_SEARCH_ENABLED"
-report_feature "generated_visuals:" "$VOICE_WORKFLOW_AGENT_GENERATED_VISUALS_ENABLED"
-report_feature "moss_safety_documents:" "$VOICE_WORKFLOW_AGENT_MOSS_ENABLED"
-report_feature "readiness_gate_test_mode:" "$VOICE_WORKFLOW_AGENT_TEST_MODE_SKIP_READINESS_GATES"
+report_feature "protocol_catalog:" "$VOINEY_LAB_PROTOCOL_ENABLED"
+report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
+report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
+report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
+report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
+report_feature "web_visual_search:" "$VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED"
+report_feature "generated_visuals:" "$VOINEY_LAB_GENERATED_VISUALS_ENABLED"
+report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
+report_feature "readiness_gate_test_mode:" "$VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
 echo
 echo "--- No launcher flag of their own (reported, not disabled) ---"
 printf '%-30s %s\n' "dry_lab_workflows:" \

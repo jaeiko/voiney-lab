@@ -61,10 +61,10 @@ from voiney_lab.protocol_ocr import (
 
 log = logging.getLogger("voiney_lab.protocol_ocr")
 
-OCR_PROVIDERS_ENV = "VOICE_WORKFLOW_AGENT_OCR_PROVIDERS"
-CLOVA_INVOKE_URL_ENV = "VOICE_WORKFLOW_AGENT_CLOVA_OCR_INVOKE_URL"
-CLOVA_SECRET_ENV = "VOICE_WORKFLOW_AGENT_CLOVA_OCR_SECRET"
-GOOGLE_API_KEY_ENV = "VOICE_WORKFLOW_AGENT_GOOGLE_VISION_API_KEY"
+OCR_PROVIDERS_ENV = "VOINEY_LAB_OCR_PROVIDERS"
+CLOVA_INVOKE_URL_ENV = "VOINEY_LAB_CLOVA_OCR_INVOKE_URL"
+CLOVA_SECRET_ENV = "VOINEY_LAB_CLOVA_OCR_SECRET"
+GOOGLE_API_KEY_ENV = "VOINEY_LAB_GOOGLE_VISION_API_KEY"
 
 CLOVA = "clova"
 GOOGLE = "google"
@@ -502,7 +502,7 @@ def ocr_provider_from_environment(
 ) -> DualEngineOcrProvider | None:
     """Build the provider the deployment configured, or None.
 
-    ``VOICE_WORKFLOW_AGENT_OCR_PROVIDERS`` lists the engines (``clova``,
+    ``VOINEY_LAB_OCR_PROVIDERS`` lists the engines (``clova``,
     ``google``, or both, comma-separated). An engine listed without its
     credentials is left out and logged by name only. None means OCR is not
     configured, and the catalog reports ``protocol_ocr_not_configured``.

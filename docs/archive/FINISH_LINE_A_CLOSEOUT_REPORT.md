@@ -228,7 +228,7 @@ git diff --check               → clean
 
 **provider 호출: 0회.** `--execute` 플래그가 든 명령을 실행하지 않았다.
 `data/development_cache/chunk_analysis` 최신 엔트리 mtime 은 2026-09-06 13:09 로
-이번 작업 중 새로 쓰인 항목이 없다. 이 셸의 `PROTOCOL_ANALYSIS_MODEL` 은 미설정.
+이번 작업 중 새로 쓰인 항목이 없다. 이 셸의 `VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` 은 미설정.
 
 `CLAIM_SCHEMA_VERSION`, `EVIDENCE_SEGMENT_VERSION`, 시스템 프롬프트,
 `capability_policy` 의 `profile_id` 모두 불변.

@@ -16,7 +16,7 @@ require it, with an explicit, honest reason, whenever it is not present.
 import os
 from pathlib import Path
 
-CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
+VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 
 MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
     "test_candidate_a_acceptance_phase2.py",
@@ -36,15 +36,36 @@ MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF = {
 }
 
 
+def pytest_sessionstart(session):
+    """Refuse to run while an old setting name is set (decision of 2026-10-04).
+
+    The server loads the repository .env when it is imported, so the names in
+    that file count as well as the process environment. Names only are shown.
+    """
+    import pytest
+
+    from voiney_lab.setting_names import (
+        OldSettingNamesError,
+        refuse_old_setting_names,
+    )
+
+    try:
+        refuse_old_setting_names(
+            dotenv_path=Path(__file__).resolve().parents[1] / ".env"
+        )
+    except OldSettingNamesError as exc:
+        pytest.exit(str(exc), returncode=pytest.ExitCode.USAGE_ERROR)
+
+
 def pytest_collection_modifyitems(config, items):
-    if CANDIDATE_A_SOURCE_PDF.is_file():
+    if VOINEY_LAB_CANDIDATE_A_SOURCE_PDF.is_file():
         return
     import pytest
 
     skip = pytest.mark.skip(
         reason=(
             f"requires the externally licensed Candidate A source PDF at "
-            f"{CANDIDATE_A_SOURCE_PDF}, which is not committed to this "
+            f"{VOINEY_LAB_CANDIDATE_A_SOURCE_PDF}, which is not committed to this "
             f"repository (see scripts/run_dev.sh)"
         )
     )

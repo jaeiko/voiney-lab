@@ -224,7 +224,7 @@ class WorkerContractTests(unittest.TestCase):
 
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(
-                "VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS", None
+                "VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", None
             )
             self.assertEqual(engine_module._worker_timeout_seconds(), 30.0)
         # A host may say its machine needs longer; nonsense is ignored rather
@@ -235,7 +235,7 @@ class WorkerContractTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 with patch.dict(
                     os.environ,
-                    {"VOICE_WORKFLOW_AGENT_PDF_WORKER_TIMEOUT_SECONDS": raw},
+                    {"VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS": raw},
                 ):
                     self.assertEqual(
                         engine_module._worker_timeout_seconds(), expected

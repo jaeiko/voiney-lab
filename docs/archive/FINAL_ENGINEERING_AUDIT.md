@@ -49,7 +49,7 @@ This audit catalogues all findings, classifies them by severity and category, an
 
 | Issue ID | Severity | Category | Component | Description & Root Cause | Impact & Remediation |
 |---|---|---|---|---|---|
-| **VOICE-01**| **High** | Latency | `server.py` / `vad.py` | **VAD Endpoint Silence Delay**: `CASCADE_VAD_ENDPOINT_SILENCE_MS` defaults to `1000ms`. While safe for hesitations, it adds a 1-second delay before STT starts processing. | Implement dynamic silence reduction: after short commands (e.g. "완료했어"), reduce endpoint silence threshold to 500ms; keep 1000ms only for multi-clause sentence drafting. |
+| **VOICE-01**| **High** | Latency | `server.py` / `vad.py` | **VAD Endpoint Silence Delay**: `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS` defaults to `1000ms`. While safe for hesitations, it adds a 1-second delay before STT starts processing. | Implement dynamic silence reduction: after short commands (e.g. "완료했어"), reduce endpoint silence threshold to 500ms; keep 1000ms only for multi-clause sentence drafting. |
 | **VOICE-02**| **Medium** | Voice UX | `brain.py` | **Sentence Chunker Abbreviation Boundaries**: `SentenceChunker` handles `Dr.`, `Mr.`, `Ms.`, but laboratory abbreviations like `vs.`, `Fig.`, `approx.`, `e.g.`, `i.e.`, `pH 7.4` can cause premature sentence splits. | Expand regex protection in `SentenceChunker` for scientific notation and standard lab abbreviations. |
 | **VOICE-03**| **Medium** | Voice Quality| `static/index.html` | **AudioWorklet Resampling Artifacts**: Browser-side downsampling to 16kHz in `mic-capture-worklet.js` uses basic linear decimation, which can introduce high-frequency aliasing on low-end microphones. | Implement standard polyphase low-pass FIR filter in AudioWorklet before decimation. |
 

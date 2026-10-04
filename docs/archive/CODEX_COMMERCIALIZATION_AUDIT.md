@@ -124,7 +124,7 @@ Official documentation checked on 2026-08-22:
   voice.
 
 The application currently uses STT/agent/TTS Cascade, not native speech-to-speech.
-`TTS_VOICE=leo` is now the one canonical path. The provider persona and voice are
+`VOINEY_LAB_TTS_VOICE=leo` is now the one canonical path. The provider persona and voice are
 visible as non-secret runtime capability metadata. Professor-style language is
 enforced in the agent system prompt, while deterministic curated replies remain
 short and source-bounded.

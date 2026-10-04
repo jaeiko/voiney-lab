@@ -23,7 +23,7 @@ Browser
 ```
 
 Only the Cascade path exists. The server advertises `pipelines:["cascade"]` and a
-non-secret voice profile. `TTS_VOICE` defaults to `leo`; there is no active
+non-secret voice profile. `VOINEY_LAB_TTS_VOICE` defaults to `leo`; there is no active
 Realtime/Native configuration or transport.
 
 Where the 16 kHz above comes from: one module constant, `SAMPLE_RATE` in
@@ -87,7 +87,7 @@ the router the line every turn goes along -- front rules, router, server
 validation -- and allows it to choose the model or tool per situation; what
 is forbidden is two paths separately deciding the same turn's state change.
 
-`VOICE_WORKFLOW_AGENT_LLM_ROUTER_ENABLED` (default `false`), `..._MODEL`
+`VOINEY_LAB_LLM_ROUTER_ENABLED` (default `false`), `..._MODEL`
 (default `grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default
 2.5). Off, `run_turn` calls `route_curated_runtime_turn_with_semantics` as
 before and nothing below runs. On:
@@ -191,10 +191,10 @@ conditional/parallel/repeat constructs and missing or conflicting execution valu
 remain explicit and block execution.
 
 Structured protocol analysis requires the deployment-supplied
-`PROTOCOL_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
+`VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
 separate from the bounded low-latency semantic-intent model and timeout policy.
 When the default-off deployment gate
-`VOICE_WORKFLOW_AGENT_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
+`VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native
 documents over eight pages enter the evidence-claim path even when their
 extracted byte count is small. Its provider DTO is not ExperimentProtocol:
 it contains page coverage, source structure markers, and independently evidenced

@@ -1,6 +1,6 @@
 """A slow turn says what the server is really doing, once, after the tone.
 
-In tone mode a turn still pending at ``CASCADE_FILLER_STATUS_DELAY_MS`` (1.5 s)
+In tone mode a turn still pending at ``VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS`` (1.5 s)
 hears one sentence naming its own progress state -- the state its Turn card
 shows -- and nothing for states that name no work. A session never hears the
 same sentence twice in a row, and each sentence is synthesized once per session.
@@ -250,11 +250,11 @@ class StatusSentenceVocabularyTests(unittest.TestCase):
         self.assertEqual(cascade_filler_status_delay_ms({}), 1500)
         self.assertEqual(
             cascade_filler_status_delay_ms(
-                {"CASCADE_FILLER_STATUS_DELAY_MS": "2000"}), 2000)
+                {"VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS": "2000"}), 2000)
         for value in ("199", "10001", "soon"):
             with self.assertRaises(ConfigurationError):
                 cascade_filler_status_delay_ms(
-                    {"CASCADE_FILLER_STATUS_DELAY_MS": value})
+                    {"VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS": value})
 
     def test_sentences_name_only_real_server_states_in_every_language(self):
         states = set(FILLER_STATUS_PHRASES["ko"])
@@ -292,9 +292,9 @@ class StatusThroughTheTurnTests(unittest.TestCase):
             return Transcription("", "ko")
 
         with patch.dict("os.environ", {
-            "CASCADE_FILLER_MODE": "tone",
-            "CASCADE_FILLER_DELAY_MS": "100",
-            "CASCADE_FILLER_STATUS_DELAY_MS": "250",
+            "VOINEY_LAB_CASCADE_FILLER_MODE": "tone",
+            "VOINEY_LAB_CASCADE_FILLER_DELAY_MS": "100",
+            "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS": "250",
         }), patch(
             "voiney_lab.server.transcribe", side_effect=slow_empty_transcript,
         ), patch(

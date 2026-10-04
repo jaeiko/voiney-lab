@@ -60,10 +60,10 @@ Create a project in the Moss portal and place its values only in
 the repository root `.env`:
 
 ```dotenv
-MOSS_PROJECT_ID=replace-with-moss-project-id
-MOSS_PROJECT_KEY=replace-with-moss-project-key
-MOSS_INDEX_NAME=voice_workflow_agent-approved-safety
-MOSS_MODEL_ID=moss-minilm
+VOINEY_LAB_MOSS_PROJECT_ID=replace-with-moss-project-id
+VOINEY_LAB_MOSS_PROJECT_KEY=replace-with-moss-project-key
+VOINEY_LAB_MOSS_INDEX_NAME=voice_workflow_agent-approved-safety
+VOINEY_LAB_MOSS_MODEL_ID=moss-minilm
 ```
 
 `.env` is ignored by Git. Do not put a key in a manifest, shell history, commit,
@@ -79,17 +79,17 @@ The repository includes a separate `demo`-scope catalog containing only
 demo_dir=$(mktemp -d)
 python scripts/setup_moss_demo.py --output-dir "$demo_dir"
 
-export VOICE_WORKFLOW_AGENT_SAFETY_CATALOG="$demo_dir/moss_demo_catalog.sqlite"
-export VOICE_WORKFLOW_AGENT_FACILITY_ID="MOSS-DEMO-FACILITY"
-export VOICE_WORKFLOW_AGENT_USAGE_SCOPE="demo"
-export VOICE_WORKFLOW_AGENT_SESSION_LANGUAGE="ko"
-export VOICE_WORKFLOW_AGENT_ALLOWED_LANGUAGES="ko"
-unset VOICE_WORKFLOW_AGENT_PROCEDURE_CATALOG VOICE_WORKFLOW_AGENT_PROCEDURE_STORE
+export VOINEY_LAB_SAFETY_CATALOG="$demo_dir/moss_demo_catalog.sqlite"
+export VOINEY_LAB_FACILITY_ID="MOSS-DEMO-FACILITY"
+export VOINEY_LAB_USAGE_SCOPE="demo"
+export VOINEY_LAB_SESSION_LANGUAGE="ko"
+export VOINEY_LAB_ALLOWED_LANGUAGES="ko"
+unset VOINEY_LAB_PROCEDURE_CATALOG VOINEY_LAB_PROCEDURE_STORE
 ```
 
 These exports are for a development run (`scripts/run_dev.sh` or Uvicorn
 started by hand). `scripts/run_pilot.sh` ignores an exported
-`VOICE_WORKFLOW_AGENT_SAFETY_CATALOG` or `VOICE_WORKFLOW_AGENT_USAGE_SCOPE`
+`VOINEY_LAB_SAFETY_CATALOG` or `VOINEY_LAB_USAGE_SCOPE`
 with a `[WARN]` line and uses its own fixed catalog in the `reference_only`
 scope, and it refuses to start when that catalog holds a demo document, so
 this demo catalog never reaches a pilot run.
@@ -98,15 +98,15 @@ Preview and then create the non-sensitive demo index:
 
 ```bash
 python scripts/sync_moss_index.py \
-  --db "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" \
+  --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$MOSS_INDEX_NAME" \
+  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
   --dry-run
 
 python scripts/sync_moss_index.py \
-  --db "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" \
+  --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$MOSS_INDEX_NAME"
+  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME"
 ```
 
 Enable Moss, restart Uvicorn, and ask:
@@ -124,9 +124,9 @@ For non-sensitive demo data:
 
 ```bash
 python scripts/sync_moss_index.py \
-  --db "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" \
+  --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope demo \
-  --index-name "$MOSS_INDEX_NAME" \
+  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
   --dry-run
 ```
 
@@ -138,9 +138,9 @@ explicitly adds `--allow-sensitive-scope`:
 
 ```bash
 python scripts/sync_moss_index.py \
-  --db "$VOICE_WORKFLOW_AGENT_SAFETY_CATALOG" \
+  --db "$VOINEY_LAB_SAFETY_CATALOG" \
   --usage-scope operational \
-  --index-name "$MOSS_INDEX_NAME" \
+  --index-name "$VOINEY_LAB_MOSS_INDEX_NAME" \
   --allow-sensitive-scope \
   --dry-run
 ```
@@ -157,23 +157,23 @@ requested scope.
 For demo or reference-only data, add:
 
 ```dotenv
-VOICE_WORKFLOW_AGENT_MOSS_ENABLED=true
-VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES=demo,reference_only
-VOICE_WORKFLOW_AGENT_MOSS_ALPHA=0.65
-VOICE_WORKFLOW_AGENT_MOSS_CANDIDATE_LIMIT=64
-VOICE_WORKFLOW_AGENT_MOSS_QUERY_TIMEOUT_MS=250
-VOICE_WORKFLOW_AGENT_MOSS_LOAD_TIMEOUT_SECONDS=60
-VOICE_WORKFLOW_AGENT_MOSS_AUTO_REFRESH=false
-VOICE_WORKFLOW_AGENT_MOSS_REFRESH_SECONDS=600
+VOINEY_LAB_MOSS_ENABLED=true
+VOINEY_LAB_MOSS_ALLOWED_SCOPES=demo,reference_only
+VOINEY_LAB_MOSS_ALPHA=0.65
+VOINEY_LAB_MOSS_CANDIDATE_LIMIT=64
+VOINEY_LAB_MOSS_QUERY_TIMEOUT_MS=250
+VOINEY_LAB_MOSS_LOAD_TIMEOUT_SECONDS=60
+VOINEY_LAB_MOSS_AUTO_REFRESH=false
+VOINEY_LAB_MOSS_REFRESH_SECONDS=600
 ```
 
-`VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES`는 쉼표로 구분하며 공백과 대소문자를
+`VOINEY_LAB_MOSS_ALLOWED_SCOPES`는 쉼표로 구분하며 공백과 대소문자를
 정규화하고 중복을 제거한다. 허용값은 `operational`, `demo`,
 `reference_only`뿐이며 빈 집합이나 알 수 없는 값은 거부하고 SQLite
 fallback을 유지한다.
 
 In the controlled pilot Moss stays off unless the operator exports
-`VOICE_WORKFLOW_AGENT_MOSS_ENABLED=true` before `scripts/run_pilot.sh`. The
+`VOINEY_LAB_MOSS_ENABLED=true` before `scripts/run_pilot.sh`. The
 pilot's catalog is `data/runtime/pilot/approved_safety_catalog.sqlite` in the
 `reference_only` scope, so its index is built from that path with
 `--usage-scope reference_only`. That catalog holds the laboratory's own SDS and
@@ -186,7 +186,7 @@ To use a deliberately approved operational index, the operator must separately
 change:
 
 ```dotenv
-VOICE_WORKFLOW_AGENT_MOSS_ALLOWED_SCOPES=operational
+VOINEY_LAB_MOSS_ALLOWED_SCOPES=operational
 ```
 
 Restart Uvicorn after changing the index or runtime configuration. On successful
@@ -203,7 +203,7 @@ safe and completed through the original deterministic ordering.
 ## Tuning
 
 - `moss-minilm` is the speed-first model used for the voice demo.
-- `VOICE_WORKFLOW_AGENT_MOSS_ALPHA=0.65` keeps both semantic and keyword signal.
+- `VOINEY_LAB_MOSS_ALPHA=0.65` keeps both semantic and keyword signal.
 - Candidate count is bounded to 64 and result count remains three.
 - Query timeout is 250 ms so a stalled optional backend cannot hold the voice turn.
 - Automatic index refresh is off by default for a stable demo. Enable it only when
