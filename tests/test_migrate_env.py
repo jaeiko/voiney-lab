@@ -290,5 +290,15 @@ class SecretReferenceTests(MigrateEnvCase):
         self.assertEqual(self.run_tool("--check")[0], 1)
 
 
+class ExampleFileTests(unittest.TestCase):
+    def test_env_example_is_in_the_tools_layout(self):
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
+        parsed = migrate_env.parse(text)
+        self.assertEqual(migrate_env.render(parsed), text)
+        self.assertEqual(migrate_env.duplicates(parsed.entries), {})
+        self.assertEqual([e.name for e in parsed.entries if renamed(e.name)], [])
+        self.assertEqual(parsed.loose_comments, [])
+
+
 if __name__ == "__main__":
     unittest.main()

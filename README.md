@@ -668,6 +668,22 @@ back to the fictional records in
 warning. The pilot never reaches that fallback, because it does not start
 without its catalog.
 
+### Setting names
+
+Every setting the code reads carries the `VOINEY_LAB_` prefix (decision of
+2026-10-04). `src/voiney_lab/setting_names.py` lists each one with its `.env`
+area, default and meaning, and a test keeps that table equal to the names the
+code reads. Names other software defines keep their own (`XAI_API_KEY`,
+`XAI_BASE_URL`), as do the launchers' `HOST` and `PORT`.
+
+Nothing reads an old name. The server, the handoff worker, the launchers and
+pytest refuse to start while one is set in the environment or the repository
+`.env`, and say how many and which -- names only, never a value. Rename them in
+a `.env` with `python scripts/migrate_env.py --check` (names only, writes
+nothing) and then `--write`, which backs the file up as
+`.env.bak-YYYYMMDD-HHMMSS` (mode 600) and rewrites it grouped by area with every
+value unchanged. `docs/MIGRATION_NOTES.md` records the change.
+
 ### Core configuration
 
 | Variable | Purpose |
