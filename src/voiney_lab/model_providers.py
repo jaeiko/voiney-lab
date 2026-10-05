@@ -118,6 +118,16 @@ DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
 THINKING_ALLOWANCE_TOKENS = 4096
 #: What a reply may be given when the caller sets no limit.
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
+#: Gemini's thinking room by thinking level. Its max_output_tokens includes
+#: the thought tokens (ai.google.dev, thinking guide), and at "high" one
+#: translation batch thought ~11,800 tokens and was cut at 8,192 + 4,096
+#: (finish reason MAX_TOKENS, lane G, live); the guide gives no number per
+#: level, so these are rooms, not measurements of need. Gemini 3.x cannot stop
+#: thinking ("none" thinks at low), and an unset level is the model's default
+#: (not documented for 3.8 Flash), given the high room.
+GEMINI_THINKING_ALLOWANCE_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
+#: gemini-3.8-flash's output limit (model page, lane P3).
+GEMINI_MAX_OUTPUT_TOKENS = 65536
 
 
 class ModelProviderError(RuntimeError):
@@ -1244,16 +1254,20 @@ class _GeminiBackend:
                     "role": "model" if role == "assistant" else "user",
                     "parts": [{"text": _text(message.get("content"))}],
                 })
-        thinks = request.reasoning is None or request.reasoning != "none"
-        config: dict[str, Any] = {"max_output_tokens": request.output_limit(thinks)}
+        # Gemini 3.x thinks at low, medium or high and cannot turn it off
+        # (ai.google.dev, thinking guide): "none" asks for the least.
+        level = None if request.reasoning is None else (
+            "low" if request.reasoning == "none" else
+            "high" if request.reasoning in {"xhigh", "max"} else request.reasoning
+        )
+        config: dict[str, Any] = {"max_output_tokens": min(
+            (request.max_tokens or DEFAULT_MAX_OUTPUT_TOKENS)
+            + GEMINI_THINKING_ALLOWANCE_TOKENS[level or "high"],
+            GEMINI_MAX_OUTPUT_TOKENS,
+        )}
         if request.temperature is not None:
             config["temperature"] = request.temperature
-        if request.reasoning is not None:
-            # Gemini 3.x thinks at low, medium or high and cannot turn it
-            # off (ai.google.dev, thinking guide): "none" asks for the least.
-            level = "low" if request.reasoning == "none" else (
-                "high" if request.reasoning in {"xhigh", "max"} else request.reasoning
-            )
+        if level is not None:
             config["thinking_config"] = {"thinking_level": level}
         if request.tools:
             config["tools"] = [{"function_declarations": [

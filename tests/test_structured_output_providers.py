@@ -238,7 +238,11 @@ class AnalysisOutputLimitTests(unittest.TestCase):
                     sdk_client=fake).chat.completions.create(**{**request, "model": "gemini-3.8-flash"})
         sent["google"] = fake.requests[0]["config"]["max_output_tokens"]
         thinking = ANALYSIS_MAX_OUTPUT_TOKENS + mp.THINKING_ALLOWANCE_TOKENS
-        self.assertEqual(sent, {"openai": thinking, "anthropic": thinking, "google": thinking})
+        # Gemini's room follows its thinking level (lane G): high, capped at
+        # the model's output limit.
+        gemini = min(ANALYSIS_MAX_OUTPUT_TOKENS + mp.GEMINI_THINKING_ALLOWANCE_TOKENS["high"],
+                     mp.GEMINI_MAX_OUTPUT_TOKENS)
+        self.assertEqual(sent, {"openai": thinking, "anthropic": thinking, "google": gemini})
         self.assertLessEqual(sent["google"], 65_536)  # Gemini 3.8 Flash's output limit
 
 
@@ -386,4 +390,40 @@ class UnsupportedKeywordTests(unittest.TestCase):
                 output = asyncio.run(brain._answer(snapshot))
                 self.assertEqual(output.evidence_ids, ("e1",))
                 self.assertNotIn("uniqueItems", keywords(fake.requests[0][where]))
+
+
+class GeminiThinkingRoomTests(unittest.TestCase):
+    """Lane G (2026-10-05): Gemini counts thought tokens in max_output_tokens.
+
+    Live, a gemini-3.8-flash translation batch at "high" thought ~11,800
+    tokens and stopped with finish reason MAX_TOKENS at 8,192 + 4,096, so its
+    JSON was cut. The room now follows the thinking level. Contract-tested.
+    """
+
+    def sent(self, reasoning, **extra) -> dict:
+        fake = SyncFake("google")
+        chat_client(RoleModel("translation", "google", "gemini-3.8-flash", reasoning), asynchronous=False,
+                    sdk_client=fake).chat.completions.create(
+            model="gemini-3.8-flash", messages=[{"role": "user", "content": "x"}], **extra)
+        return fake.requests[0]["config"]
+
+    def test_the_room_follows_the_thinking_level(self) -> None:
+        base = mp.DEFAULT_MAX_OUTPUT_TOKENS
+        for reasoning, level, room in (("none", "low", 4096), ("low", "low", 4096),
+                                       ("medium", "medium", 16384), ("high", "high", 32768),
+                                       ("xhigh", "high", 32768)):
+            with self.subTest(reasoning=reasoning):
+                config = self.sent(reasoning)
+                self.assertEqual(config["thinking_config"], {"thinking_level": level})
+                self.assertEqual(config["max_output_tokens"], base + room)
+
+    def test_an_unset_level_sends_no_thinking_config_and_gets_the_high_room(self) -> None:
+        config = self.sent(None)
+        self.assertNotIn("thinking_config", config)
+        self.assertEqual(config["max_output_tokens"], mp.DEFAULT_MAX_OUTPUT_TOKENS + 32768)
+
+    def test_a_caller_limit_is_kept_and_the_total_capped(self) -> None:
+        self.assertEqual(self.sent("low", max_tokens=400)["max_output_tokens"], 400 + 4096)
+        self.assertEqual(self.sent("high", max_completion_tokens=60_000)["max_output_tokens"],
+                         mp.GEMINI_MAX_OUTPUT_TOKENS)
 
