@@ -2557,13 +2557,14 @@ OUTSIDE_PDF_SPOKEN_LEAD = {
     "ko": "PDF에는 따로 설명이 없어요.",
     "en": "The PDF does not explain this.",
 }
-#: Said when a model answer was dropped by a check and the rules had none.
-#: A hand-off asked of the voice (decision 1 of 2026-10-03, D8): reports are
-#: sent from the screen, never by voice, and nothing is recorded.
+#: A hand-off asked of the voice (decision 1 of 2026-10-03, D8; decision 5b
+#: of lane M1): there is no sending at all, and nothing is recorded. The
+#: screen downloads the report as Word (.docx) or Markdown.
 HANDOFF_ON_SCREEN_REPLY = {
-    "ko": "보고서는 화면에서 보내 주세요.",
-    "en": "Please send the report from the screen.",
+    "ko": "보고서 전송은 지원하지 않아요. 보고서는 화면에서 Word나 마크다운 파일로 받을 수 있어요.",
+    "en": "Sending reports is not supported. You can download the report from the screen as a Word or Markdown file.",
 }
+#: Said when a model answer was dropped by a check and the rules had none.
 ANSWER_NOT_CONFIRMED = {
     "ko": "PDF에서 확인할 수 없어요.",
     "en": "I could not confirm that in the PDF.",
@@ -2640,6 +2641,10 @@ FRONT_RULES: dict[str, str] = {
     "step_lookup": "a lookup that points at a step -- a numbered, the last or "
                    "the next step, or the current step read out -- read from "
                    "the source as it is (lane R3, decision 4)",
+    "quantity_target": "a quantity or concentration asked with no target: two "
+                       "or more substances with a value in the current step's "
+                       "source are asked back, one is said as the source words "
+                       "it (lane M1, decision 5a)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -3302,6 +3307,149 @@ def _derived_source_text(value: str) -> str:
     """Normalize only an in-memory derived view; raw evidence stays untouched."""
 
     return value.translate(_DERIVED_SOURCE_GLYPHS).replace("mm3", "mm³")
+
+
+# --- A quantity or concentration asked with no target (lane M1, decision 5a) ---
+# "얼마나 넣어?" and "농도가 어떻게 돼?" name no substance. The answer is read
+# from the current step's own source text: the substances it gives a value
+# to, and the values as it words them.
+
+_QUANTITY_LEAD = (
+    r"(?:(?:그럼|그러면|근데|그래서|자|이제|여기서|여기에|여기|이\s*단계에서|지금)\s*)*"
+)
+#: (kind, the whole question). "amount" reads every value; "concentration"
+#: only concentrations.
+_UNTARGETED_QUANTITY_QUESTIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("amount", re.compile(
+        _QUANTITY_LEAD
+        + r"(?:얼마나|얼마|몇\s*(?:µl|μl|ul|ml|마이크로리터|밀리리터|미리)?)\s*"
+        r"(?:넣어|넣어요|넣지|넣나|넣노|넣을까|넣으면\s*(?:돼|되나|돼요|될까)|"
+        r"넣어야\s*(?:돼|해|되나|하나|되노|돼요|할까)|써|써요|쓰면\s*돼|부어|부으면\s*돼)"
+    )),
+    ("amount", re.compile(
+        _QUANTITY_LEAD + r"(?:양|용량|볼륨)(?:은|이|는)?\s*(?:얼마(?:야|예요|에요|나\s*돼)?|몇이야)?"
+    )),
+    ("amount", re.compile(
+        r"how\s+much(?:\s+(?:do|should)\s+i)?\s+(?:add|use|put\s+in)"
+    )),
+    ("concentration", re.compile(
+        _QUANTITY_LEAD + r"농도(?:가|는|를)?\s*"
+        r"(?:어떻게\s*(?:돼|되나|돼요|되지)|얼마(?:야|예요|에요|나\s*돼|지)?|몇이야|뭐야)?"
+    )),
+    ("concentration", re.compile(
+        r"what(?:'s|\s+is)\s+the\s+concentration"
+    )),
+)
+_CONCENTRATION_UNIT = (
+    r"mg/mL|mg/ml|µg/µL|µg/uL|ug/uL|µg/mL|ug/mL|ng/µL|ng/uL|ng/μL|"
+    r"mM|µM|μM|nM|M|millimolar(?:\s*\(mM\))?|%\s*\(?v/v\)?|%"
+)
+_STEP_VALUE = re.compile(
+    r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?\s*"
+    r"(?P<unit>" + _CONCENTRATION_UNIT + r"|µL|μL|uL|ul|mL|ml|parts?)"
+    r"(?![A-Za-z0-9/])"
+)
+_CONCENTRATION_VALUE = re.compile(r"(?:" + _CONCENTRATION_UNIT + r")$")
+#: A value that is a vessel's size, not an amount ("a 1.5ml tube").
+_VESSEL_AFTER = re.compile(r"\s*tubes?\b", re.I)
+#: Between a value and the substance it gives: "of", "the above", more values.
+_VALUE_TO_SUBSTANCE = re.compile(
+    r"\s*(?:of\s+)?(?:the\s+)?(?:above\s+)?", re.I,
+)
+
+
+def untargeted_quantity_question(transcript: str) -> str | None:
+    """"amount" or "concentration" when the words ask one of no target, else None."""
+
+    key = _utterance_key(transcript)
+    for kind, pattern in _UNTARGETED_QUANTITY_QUESTIONS:
+        if pattern.fullmatch(key):
+            return kind
+    return None
+
+
+def step_value_candidates(
+    text: str, substances: Sequence[str], *, kind: str = "amount",
+) -> tuple[tuple[str, str], ...]:
+    """The substances one step's source gives a value to, with that value.
+
+    Returns (the substance as the source spells it, the source words that
+    give it its value), in source order. ``substances`` are the protocol's
+    own names (materials, labelled reagents, defined abbreviations); a value
+    binds to the substance written right after it ("500 µL of solution A",
+    "200 µL 25mM AMBIC", "25uL of the above trypsin solution"), to the one
+    written right before it ("DTT 10 millimolar (mM)", "trypsin solution of
+    6ng/uL", "formic acid (FA, 10% v/v)"), or, after "X:", to X ("solution B:
+    25mM ..."). A value bound to nothing is not offered. Nothing is inferred
+    from outside the step's text.
+    """
+
+    flat = " ".join(text.split())
+    mentions: list[tuple[int, int]] = []
+    for surface in sorted(set(substances), key=len, reverse=True):
+        for match in _term_pattern(surface).finditer(flat):
+            span = match.span()
+            if not any(start < span[1] and span[0] < end for start, end in mentions):
+                mentions.append(span)
+    mentions.sort()
+    bound: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for value in _STEP_VALUE.finditer(flat):
+        if _VESSEL_AFTER.match(flat, value.end()):
+            continue
+        if kind == "concentration" and not _CONCENTRATION_VALUE.fullmatch(value.group("unit")):
+            continue
+        # "value (of (the) (above)) [more values] X"
+        position = value.end()
+        while True:
+            position = _VALUE_TO_SUBSTANCE.match(flat, position).end()
+            more = _STEP_VALUE.match(flat, position)
+            if more is None:
+                break
+            position = more.end()
+        forward = next((span for span in mentions if span[0] == position), None)
+        target: tuple[int, int] | None = None
+        for start, end in mentions:
+            # "X: value ..." -- the value defines X.
+            if end <= value.start() and re.fullmatch(r"\s*:\s*", flat[end:value.start()]):
+                target = (start, end)
+        if target is None:
+            target = forward
+        if target is None:
+            # "X (solution) (of) value" or "X (ABBR, value"
+            for start, end in mentions:
+                if end <= value.start() and re.fullmatch(
+                    r"\s*(?:solution\s+)?(?:of\s+)?|\s*\((?:[A-Za-z][A-Za-z0-9-]*,\s*)?",
+                    flat[end:value.start()], re.I,
+                ):
+                    target = (start, end)
+        if target is not None:
+            # A definition's phrase runs on to the substance it names
+            # ("solution B: 25mM ammonium bicarbonate").
+            reach = forward[1] if forward is not None and forward != target else value.end()
+            bound.setdefault(target, []).append((value.start(), reach))
+    by_name: dict[str, list[tuple[int, int]]] = {}
+    spelled: dict[str, str] = {}
+    for (start, end), values in sorted(bound.items()):
+        name = flat[start:end]
+        key = name.casefold()
+        spelled.setdefault(key, name)
+        # "the above trypsin solution": the phrase keeps the word "solution".
+        tail = re.match(r"\s+solutions?\b", flat[end:], re.I)
+        phrase_end = end + (tail.end() if tail is not None else 0)
+        by_name.setdefault(key, []).extend(
+            (min(start, value_start), max(phrase_end, value_end))
+            for value_start, value_end in values
+        )
+    result: list[tuple[str, str]] = []
+    for key, spans in by_name.items():
+        merged: list[list[int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        result.append((spelled[key], " / ".join(flat[start:end] for start, end in merged)))
+    return tuple(result)
 
 
 def _parameter_role(unit: str, text: str) -> str:
@@ -5725,7 +5873,6 @@ class CuratedProtocolSession:
         #: model proposed in words the rules do not read as a problem. Only
         #: apply_tool_proposal opens it; a yes on the next turn records them.
         self._pending_anomaly_confirmation: dict[str, Any] | None = None
-        self._pending_handoff_confirmation: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
@@ -6076,6 +6223,87 @@ class CuratedProtocolSession:
             cached = (self.fixture, ProtocolVocabulary.from_fixture(self.fixture))
             self._vocabulary_cache = cached
         return cached[1]
+
+    def _quantity_candidates(self, kind: str) -> tuple[tuple[str, str], ...]:
+        """The current step's substances with a value (decision 5a), or ().
+
+        Only while a step is running and not paused, and only from the
+        step's own source text; the substance names are the protocol's
+        materials, labelled reagents ("Solution A") and defined
+        abbreviations ("AMBIC").
+        """
+
+        if not self.active or self._pause_state == "paused":
+            return ()
+        vocabulary = self._protocol_vocabulary()
+        materials = {name.casefold() for name in vocabulary.materials}
+        substances = [
+            term.text for term in vocabulary.terms
+            if (term.resource and term.text.casefold() in materials)
+            or _LABELLED_REAGENT.fullmatch(term.text)
+            or re.fullmatch(r"[A-Z][A-Z0-9]+", term.text)
+        ]
+        step = self.fixture.steps[self.current_index]
+        return step_value_candidates(
+            step.instruction_source_text, substances, kind=kind,
+        )
+
+    def _quantity_target_plan(
+        self, intent: CuratedControlIntent, *, language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Ask which substance, or say the one value as the source words it."""
+
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        candidates = self._quantity_candidates(intent.question_kind or "amount")
+        names = tuple(name for name, _phrase in candidates)
+        common = {
+            "facts": (),
+            "step_label": step.source_label,
+            "final_step": self.current_index == len(steps) - 1,
+            "state_changed": False,
+            "intent_kind": intent.intent_kind,
+            "requested_entities": names,
+            "question_kind": intent.question_kind,
+            "normalized_transcript": intent.normalized_transcript,
+            "target_step": step.source_label,
+        }
+        if len(candidates) == 1:
+            phrase = candidates[0][1]
+            response = (
+                f"{step.source_label}단계 원문: {phrase}" if language == "ko"
+                else f"Step {step.source_label} source: {phrase}"
+            )
+            fact = next(
+                (item for item in self.fixture.facts_for_step(self.current_index)
+                 if item.fact_id == "current_step"),
+                None,
+            )
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.QUESTION,
+                display_text=response, speech_text=response, primary_text=response,
+                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
+                source_texts=(fact.text,) if fact is not None else (),
+                source_pages=(fact.source_page,) if fact is not None else (),
+                evidence_ids=("current_step",) if fact is not None else (),
+                **{**common, "facts": (fact,) if fact is not None else ()},
+            )
+        if language == "ko":
+            listed = (
+                f"{', '.join(names[:-1])}와 {names[-1]}" if len(names) > 1 else names[0]
+            )
+            response = f"이 단계에는 {listed}가 있어요. 어느 쪽을 말씀하세요?"
+        else:
+            listed = (
+                f"{', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else names[0]
+            )
+            response = f"This step has {listed}. Which one do you mean?"
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            display_text=response, speech_text=response, primary_text=response,
+            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+            **common,
+        )
 
     def research_scope(self) -> dict[str, Any]:
         """What ``plan_research_query`` needs to judge this protocol's substances.
@@ -7507,7 +7735,6 @@ class CuratedProtocolSession:
         self._frozen_question = None
         self._pending_timer_confirmation = None
         self._pending_anomaly_confirmation = None
-        self._pending_handoff_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -7598,7 +7825,6 @@ class CuratedProtocolSession:
         self._frozen_question = None
         self._pending_timer_confirmation = None
         self._pending_anomaly_confirmation = None
-        self._pending_handoff_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -9986,6 +10212,22 @@ class CuratedProtocolSession:
                 requested_transition=None,
                 requested_followup=None,
             )
+        if (
+            front_rule is None
+            and intent.action is CuratedProtocolAction.OFF_TOPIC
+            and intent.intent_kind == "off_topic"
+        ):
+            quantity_kind = untargeted_quantity_question(transcript)
+            if quantity_kind is not None and self._quantity_candidates(quantity_kind):
+                # Decision 5a (lane M1): a quantity asked with no target.
+                front_rule = "quantity_target"
+                intent = replace(
+                    intent,
+                    intent_kind="untargeted_quantity_question",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                    question_kind=quantity_kind,
+                    allows_state_mutation=False,
+                )
         if front_rule is None:
             front_rule = self._front_rule_for(intent, classified)
         self._last_front_rule = front_rule
@@ -10112,7 +10354,9 @@ class CuratedProtocolSession:
                 speech_policy="speak" if spoken else "silent",
             )
 
-        if command is CuratedProtocolAction.STOP and intent.intent_kind != "stop_confirmed" and (
+        if intent.intent_kind == "untargeted_quantity_question":
+            plan = self._quantity_target_plan(intent, language=language)
+        elif command is CuratedProtocolAction.STOP and intent.intent_kind != "stop_confirmed" and (
             self.active
             or (
                 self._experiment_started_at is not None
@@ -10461,17 +10705,11 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
             )
         elif command is CuratedProtocolAction.REPORT_HANDOFF:
-            recip_label = "지도교수님" if any(t in transcript for t in ("교수", "교수님", "advisor", "professor")) else "연구실 안전관리자"
-            recip_email = "advisor@university.edu" if "교수" in recip_label else "safety@university.edu"
-            response = (
-                f"등록된 {recip_label}({recip_email})로 현재 실험 보고서를 전송할까요? 전송을 진행하시려면 '응, 보내줘'라고 말씀해 주세요."
-                if language == "ko" else
-                f"Shall I send the current laboratory report to {recip_label} ({recip_email})? Please say 'yes, send it' to confirm."
-            )
-            self._pending_handoff_confirmation = {
-                "recipient_name": recip_label,
-                "recipient_email": recip_email,
-            }
+            # Decision 5b (lane M1): there is no sending. The rules used to
+            # ask to send the report to a placeholder address by voice; now
+            # they say sending is not supported and where the report is
+            # downloaded. Nothing is opened or recorded.
+            response = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.REPORT_HANDOFF,
                 display_text=response,
@@ -13003,30 +13241,6 @@ class CuratedProtocolSession:
             plan, display_text=text, speech_text=text, primary_text=text,
             source_texts=(), source_pages=(), evidence_ids=(), display_document=None,
             intent_kind="router_answer_not_confirmed",
-        )
-        self._replay[turn_id] = replaced
-        return replaced
-
-    def handoff_on_screen(
-        self, *, turn_id: int, language: str,
-    ) -> CuratedProtocolTurnPlan | None:
-        """"보고서는 화면에서 보내 주세요." in place of the rules' voice hand-off.
-
-        Router only (decision 1 of 2026-10-03, lane R3, with D8): when the
-        router falls back to the rules on a hand-off request, the rules'
-        reply asks to send the report to a placeholder address by voice.
-        The router says to send it from the screen instead, and leaves no
-        hand-off question open. Any other rules' reply stands.
-        """
-
-        plan = self._replay.get(turn_id)
-        if plan is None or plan.action is not CuratedProtocolAction.REPORT_HANDOFF or plan.state_changed:
-            return None
-        self._pending_handoff_confirmation = None
-        text = HANDOFF_ON_SCREEN_REPLY.get(language, HANDOFF_ON_SCREEN_REPLY["ko"])
-        replaced = replace(
-            plan, display_text=text, speech_text=text, primary_text=text,
-            intent_kind="handoff_on_screen",
         )
         self._replay[turn_id] = replaced
         return replaced

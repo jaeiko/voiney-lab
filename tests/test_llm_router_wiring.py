@@ -90,7 +90,7 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(LlmRouterSettings().enabled)
         on = LlmRouterSettings.from_environment({
             "VOINEY_LAB_LLM_ROUTER_ENABLED": "true",
-            "VOINEY_LAB_LLM_ROUTER_MODEL": "grok-4.6",
+            "VOINEY_LAB_ROUTER_MODEL": "grok-4.6",
             "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS": "3",
         })
         self.assertEqual((on.enabled, on.model, on.timeout_seconds), (True, "grok-4.6", 3.0))

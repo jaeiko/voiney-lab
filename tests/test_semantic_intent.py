@@ -651,7 +651,7 @@ class SemanticIntentSettingsTests(unittest.TestCase):
     def test_enabling_uses_bounded_defaults(self) -> None:
         settings = SemanticIntentSettings.from_environment({
             "VOINEY_LAB_SEMANTIC_INTENT_ENABLED": "true",
-            "VOINEY_LAB_CHAT_MODEL": "grok-4.6",
+            "VOINEY_LAB_ANSWER_MODEL": "grok-4.6",
         })
         self.assertTrue(settings.enabled)
         self.assertEqual(settings.model, "grok-4.20-0309-non-reasoning")

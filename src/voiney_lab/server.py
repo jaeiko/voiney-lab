@@ -100,14 +100,6 @@ from voiney_lab.web_visuals import (
     WikimediaVisualAdapter,
     XaiAuthoritativeImageSearch,
 )
-from voiney_lab.notifications import (
-    HandoffContact,
-    NotificationProvider,
-    NotificationResult,
-    SMTPEmailProvider,
-    FakeNotificationProvider,
-    resolve_handoff_recipient,
-)
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
@@ -179,8 +171,10 @@ from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse
 from voiney_lab.llm_router import (
     LlmRouterSettings,
     RouterTurnOutcome,
+    refuse_two_turn_deciders,
     route_turn_with_llm_router,
 )
+from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
     route_curated_runtime_turn_with_semantics,
@@ -250,8 +244,16 @@ PROJECT_ROOT=Path(__file__).resolve().parents[2]
 
 
 def _load_project_environment(path:Path|None=None)->bool:
-    """Load development values without overriding the process environment."""
+    """Load development values without overriding the process environment.
 
+    Under pytest (PYTEST_VERSION is set) the repository .env is not read
+    (lane M1, decision 6): real provider or OCR keys kept there must never
+    reach a test. Only the old-setting-name check still looks at the file
+    (tests/conftest.py). An explicit ``path`` is always read.
+    """
+
+    if path is None and os.environ.get("PYTEST_VERSION"):
+        return False
     return load_dotenv(path or PROJECT_ROOT/".env",override=False)
 
 
@@ -259,6 +261,9 @@ _load_project_environment()
 # Refuse to start while an old setting name is set, in the process environment
 # or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
 refuse_old_setting_names()
+# One turn, one deciding path (lane M1, decision 4): the LLM router and the
+# semantic-intent fallback are never both on.
+refuse_two_turn_deciders()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
 
@@ -1074,7 +1079,7 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
     settings=MultiBrainSettings.from_environment()
     if (not _workspace_settings().enabled
             or not settings.answer_brain_enabled
-            or not os.environ.get("XAI_API_KEY","").strip()):
+            or not RoleModel.from_environment("translation").has_key()):
         return None
     return _start_revision_translation
 
@@ -1225,13 +1230,11 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
         if fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING:
             return
         _REVISION_TRANSLATIONS_RUNNING.add(fixture.revision_id)
-    settings=MultiBrainSettings.from_environment()
-    model=settings.answer_brain_model or settings.model
+    role=RoleModel.from_environment("translation")
+    model=role.model
 
     def client()->Any:
-        return AsyncOpenAI(
-            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-            max_retries=0)
+        return _role_client(role)
 
     translate=openai_batch_translator(client,model)
     make_glossary=openai_glossary_maker(client,model)
@@ -1431,6 +1434,35 @@ def require_env(name:str)->str:
     return value
 def api_url(path:str)->str:
     return os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/") + "/" + path.lstrip("/")
+
+
+_KEEP_SDK_RETRIES=object()
+
+
+def _role_client(
+    role:RoleModel,*,asynchronous:bool=True,timeout:Any=None,
+    max_retries:Any=0,
+)->Any:
+    """The client one model role calls (lane M1, decision 1).
+
+    For xAI it is the OpenAI SDK client this module always built, with the
+    same arguments (``max_retries=_KEEP_SDK_RETRIES`` leaves the SDK's own
+    retries, as the brain's call did); the other providers go through
+    model_providers' adapters, which hand back the same reply shape.
+    """
+
+    if role.provider=="xai":
+        options:dict[str,Any]={"base_url":api_url(""),"api_key":require_env("XAI_API_KEY")}
+        if max_retries is not _KEEP_SDK_RETRIES:
+            options["max_retries"]=max_retries
+        if timeout is not None:
+            options["timeout"]=timeout
+        client=(AsyncOpenAI if asynchronous else OpenAI)(**options)
+        return chat_client(role,asynchronous=asynchronous,sdk_client=client)
+    return chat_client(
+        role,asynchronous=asynchronous,timeout=timeout,
+        max_retries=0 if max_retries is _KEEP_SDK_RETRIES else max_retries,
+    )
 
 
 def semantic_intent_resolver(
@@ -3943,12 +3975,12 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
     reasoning_effort=os.environ.get(
-        "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT","high"
+        "VOINEY_LAB_ANALYSIS_REASONING","high"
     ).strip().casefold()
     if reasoning_effort not in {"low","medium","high","xhigh"}:
         raise ServerConfigurationError(
-            "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT is invalid.",
-            "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT",
+            "VOINEY_LAB_ANALYSIS_REASONING is invalid.",
+            "VOINEY_LAB_ANALYSIS_REASONING",
         )
     # The call runs in the background analysis task, never on a request
     # path, and measured calls took 236-394 s (lane P1), so the limit is a
@@ -3965,11 +3997,10 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
             "VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS must be 30-3600 seconds.",
             "VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS",
         )
-    client=OpenAI(
-        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-        max_retries=0,timeout=timeout_seconds)
+    role=RoleModel.from_environment("analysis")
+    client=_role_client(role,asynchronous=False,timeout=timeout_seconds)
     return OpenAICompatibleProtocolAnalysisModel(
-        client,require_env("VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL"),reasoning_effort)
+        client,require_env("VOINEY_LAB_ANALYSIS_MODEL"),reasoning_effort)
 
 
 def _auto_activate_ready_uploads_enabled() -> bool:
@@ -5014,13 +5045,11 @@ def export_experiment_report(report_id:str,format_name:str):
             try:
                 writer_settings = ReportWriterSettings.from_environment()
                 if writer_settings.enabled:
-                    api_key = os.environ.get("XAI_API_KEY", "").strip()
-                    if api_key:
+                    report_role = RoleModel.from_environment("report")
+                    if report_role.has_key():
                         try:
-                            async_client = AsyncOpenAI(
-                                base_url=api_url(""),
-                                api_key=api_key,
-                                max_retries=0,
+                            async_client = _role_client(
+                                report_role,
                                 timeout=writer_settings.timeout_seconds,
                             )
                             brain = ReportWriterBrain(
@@ -6421,11 +6450,11 @@ async def _request_reader_translation(
     """One bounded model call for a Korean reading of one source statement."""
 
     settings=session.multi_brain_settings
-    client=AsyncOpenAI(
-        base_url=api_url(""),api_key=require_env("XAI_API_KEY"),max_retries=0)
+    role=RoleModel.from_environment("translation")
+    client=_role_client(role)
     response=await asyncio.wait_for(
         client.chat.completions.create(
-            model=settings.answer_brain_model or settings.model,
+            model=role.model,
             messages=[
                 {"role":"system","content":READER_TRANSLATION_PROMPT},
                 {"role":"user","content":json.dumps(
@@ -6610,10 +6639,8 @@ async def _queue_curated_research(
                 match_count=len(matches))
             if reference_result.get("answerable") and matches:
                 try:
-                    client=AsyncOpenAI(
-                        base_url=api_url(""),
-                        api_key=require_env("XAI_API_KEY"),max_retries=0)
-                    client.model=require_env("VOINEY_LAB_CHAT_MODEL")
+                    client=_role_client(RoleModel.from_environment("answer"))
+                    client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
                     answer=await asyncio.wait_for(
                         answer_approved_reference_question(
                             client,ctx["query"],language=turn_language,
@@ -6792,9 +6819,8 @@ async def _queue_curated_research(
             )
             supplemental_started=clock()
             try:
-                supplemental_client=AsyncOpenAI(
-                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                    max_retries=0)
+                supplemental_client=_role_client(
+                    RoleModel.from_environment("supplemental"))
                 supplemental_result=await asyncio.wait_for(
                     XaiSupplementalKnowledge(
                         supplemental_client,
@@ -7547,10 +7573,8 @@ async def _route_with_llm_router(
 
     settings=session.llm_router_settings
 
-    def client()->AsyncOpenAI:
-        return AsyncOpenAI(
-            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-            max_retries=0)
+    def client()->Any:
+        return _role_client(settings.role_model)
 
     async def said(state:str)->None:
         await progress(
@@ -8138,9 +8162,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 and curated.active
             ):
                 step=curated.fixture.steps[curated.current_index]
-                brain_client=AsyncOpenAI(
-                    base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                    max_retries=0)
+                brain_client=_role_client(RoleModel.from_environment("answer"))
                 snapshot=BrainSnapshot(
                     configuration_id=session.accepted_configuration_id,
                     session_id=session.session_id,
@@ -9374,7 +9396,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             fallback_reason=None,
         )
         await progress("composing",route="brain")
-        client=AsyncOpenAI(base_url=api_url(""),api_key=require_env("XAI_API_KEY")); client.model=require_env("VOINEY_LAB_CHAT_MODEL")
+        client=_role_client(RoleModel.from_environment("answer"),max_retries=_KEEP_SDK_RETRIES); client.model=require_env("VOINEY_LAB_ANSWER_MODEL")
         result=await stream_brain_turn(
             client,session.history,transcript,sentence,mark_token,tool_event,
             tool_context=turn_context,arbitration=request_arbitration)

@@ -181,7 +181,7 @@ The live xAI Responses adapter additionally requires:
   `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` (or its alias
   `VOINEY_LAB_EXTERNAL_REFERENCE_ALLOWED_DOMAINS`; set one, or both to the
   same value);
-- a non-empty `VOINEY_LAB_EXTERNAL_REFERENCE_MODEL` (default
+- a non-empty `VOINEY_LAB_SUPPLEMENTAL_MODEL` (default
   `grok-4.6`);
 - a bounded `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS` between
   1 and 30 seconds (the Candidate A launcher uses a 20-second total deadline);
@@ -211,7 +211,7 @@ approved catalog and never gains document or URL citations.
 
 ```bash
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false
-export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL='grok-4.6'
+export VOINEY_LAB_SUPPLEMENTAL_MODEL='grok-4.6'
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
 ```
 
@@ -244,7 +244,7 @@ in an evidence-only run:
 
 ```bash
 export VOINEY_LAB_MULTI_BRAIN_ENABLED=false
-export VOINEY_LAB_MULTI_BRAIN_MODEL='grok-4.6'
+export VOINEY_LAB_ANSWER_MODEL='grok-4.6'
 export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25
 export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8
 export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6

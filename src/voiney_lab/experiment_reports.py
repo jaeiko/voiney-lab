@@ -1097,8 +1097,8 @@ class ReportWriterSettings:
         ).strip().casefold()
         enabled = enabled_val in _TRUE
         model = os.environ.get(
-            "VOINEY_LAB_REPORT_WRITER_MODEL",
-            os.environ.get("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
+            "VOINEY_LAB_REPORT_MODEL",
+            os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6"),
         ).strip() or "grok-4.6"
         try:
             timeout = float(os.environ.get(

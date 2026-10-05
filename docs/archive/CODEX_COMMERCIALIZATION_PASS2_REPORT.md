@@ -84,7 +84,7 @@ bound. Size, corruption, encryption, OCR, and chunking were therefore not the
 cause of the observed stalled state.
 
 **Exact root cause:** the local environment had neither `XAI_API_KEY` nor
-`VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL`. Structured analysis could not start. The earlier
+`VOINEY_LAB_ANALYSIS_MODEL`. Structured analysis could not start. The earlier
 frontend reduced that provider/configuration failure to a non-actionable
 `analysis_required` state; analysis also ran in the request lifecycle rather than
 as a visible background job. The source bytes were stored correctly, but failure,

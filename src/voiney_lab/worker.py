@@ -20,11 +20,14 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.tools import INBOX_PATH, OUTBOX_DIR, PROCESSED_PATH, STATUS_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
+if not os.environ.get("PYTEST_VERSION"):
+    # Under pytest the repository .env is not read (lane M1, decision 6).
+    load_dotenv(PROJECT_ROOT / ".env")
 refuse_old_setting_names()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -133,18 +136,24 @@ def pending_reports(
 
 
 def draft_handoff(report: dict[str, Any], client: Any | None = None) -> str:
-    """Use a worker-specific prompt and model; no voice-path history is shared."""
+    """Use a worker-specific prompt and model; no voice-path history is shared.
+
+    The model is the answer role's (lane M1, decision 1), grok-4 when unset
+    as before, on the answer role's provider.
+    """
+    role = RoleModel.from_environment("answer")
     if client is None:
-        api_key = os.environ.get("XAI_API_KEY", "").strip()
-        if not api_key:
-            raise RuntimeError("XAI_API_KEY is not set")
-        client = OpenAI(
-            base_url=os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1"),
-            api_key=api_key,
-        )
+        if not role.has_key():
+            raise RuntimeError(f"{role.api_key_setting} is not set")
+        if role.provider == "xai":
+            client = chat_client(role, asynchronous=False, sdk_client=OpenAI(
+                base_url=os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1"),
+                api_key=os.environ.get("XAI_API_KEY", "").strip(),
+            ))
+        else:
+            client = chat_client(role, asynchronous=False, max_retries=2)
     response = client.chat.completions.create(
-        model=os.environ.get("VOINEY_LAB_WORKER_MODEL")
-        or os.environ.get("VOINEY_LAB_CHAT_MODEL", "grok-4"),
+        model=role.model or "grok-4",
         messages=[
             {"role": "system", "content": HANDOFF_PROMPT},
             {

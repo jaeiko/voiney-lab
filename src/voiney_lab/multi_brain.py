@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from voiney_lab.answer_checks import claims_mutation, numbers_in
+from voiney_lab.model_providers import RoleModel
 
 
 ALLOWED_SOURCE_SCOPES = (
@@ -80,13 +81,15 @@ class MultiBrainSettings:
     @classmethod
     def from_environment(cls) -> "MultiBrainSettings":
         enabled = os.environ.get("VOINEY_LAB_MULTI_BRAIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
-        model = os.environ.get("VOINEY_LAB_MULTI_BRAIN_MODEL", "grok-4.6").strip()
+        # One answer-role model for every read-only role (lane M1, decision
+        # 1); unset, they keep grok-4.6 as before.
+        model = RoleModel.from_environment("answer").model or "grok-4.6"
         answer_enabled = os.environ.get("VOINEY_LAB_ANSWER_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        answer_model = os.environ.get("VOINEY_LAB_ANSWER_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        answer_model = model
         source_enabled = os.environ.get("VOINEY_LAB_SOURCE_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        source_model = os.environ.get("VOINEY_LAB_SOURCE_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        source_model = model
         visual_enabled = os.environ.get("VOINEY_LAB_VISUAL_BRAIN_ENABLED", "true" if enabled else "false").strip().casefold() in {"1", "true", "yes", "on"}
-        visual_model = os.environ.get("VOINEY_LAB_VISUAL_BRAIN_MODEL", model).strip() or model or "grok-4.6"
+        visual_model = model
 
         overall_enabled = enabled or answer_enabled or source_enabled or visual_enabled
         answer = float(os.environ.get("VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS", "8"))

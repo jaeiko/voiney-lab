@@ -312,7 +312,7 @@ class ServerTests(unittest.TestCase):
                      patch("voiney_lab.server.AsyncOpenAI"), \
                      patch.dict("os.environ",{
                          "XAI_API_KEY":"test",
-                         "VOINEY_LAB_CHAT_MODEL":"test",
+                         "VOINEY_LAB_ANSWER_MODEL":"test",
                      },clear=False):
                     asyncio.run(run_turn(socket,session,b"\0\0",1,1))
                 resolver.assert_not_called()
@@ -363,7 +363,7 @@ class ServerTests(unittest.TestCase):
              patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
-                 "VOINEY_LAB_CHAT_MODEL":"test",
+                 "VOINEY_LAB_ANSWER_MODEL":"test",
              },clear=False):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         resolver.assert_not_called()
@@ -410,7 +410,7 @@ class ServerTests(unittest.TestCase):
              patch("voiney_lab.server.AsyncOpenAI"), \
              patch.dict("os.environ",{
                  "XAI_API_KEY":"test",
-                 "VOINEY_LAB_CHAT_MODEL":"test",
+                 "VOINEY_LAB_ANSWER_MODEL":"test",
              },clear=False):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         brain.assert_called_once()

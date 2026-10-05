@@ -238,7 +238,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
-                "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
+                "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
             },
             clear=True,
         ),patch.object(server,"OpenAI") as client:
@@ -253,8 +253,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
             os.environ,
             {
                 "XAI_API_KEY":"fake-key",
-                "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
-                "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT":"medium",
+                "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
+                "VOINEY_LAB_ANALYSIS_REASONING":"medium",
             },
             clear=True,
         ),patch.object(server,"OpenAI"):
@@ -266,8 +266,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
                 os.environ,
                 {
                     "XAI_API_KEY":"fake-key",
-                    "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL":"grok-4.6",
-                    "VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT":invalid_effort,
+                    "VOINEY_LAB_ANALYSIS_MODEL":"grok-4.6",
+                    "VOINEY_LAB_ANALYSIS_REASONING":invalid_effort,
                 },
                 clear=True,
             ),patch.object(server,"OpenAI") as client:

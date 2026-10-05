@@ -10,7 +10,8 @@ meet any of this):
    보여줘", "기록 열어줘") is not a request. An anomaly in the problem words
    is not recorded when the turn asks for it to be handed to someone ("~에게
    전달해줘 / 보내줘 / 알려줘"): hand-off is not done by voice (D8), and the
-   reply is "보고서는 화면에서 보내 주세요."
+   reply is the rules' own: sending is not supported, the report is
+   downloaded from the screen (lane M1, decision 5b).
 3. The server-value check also catches a protocol number said as something
    else ("프로토콜 번호는 25단계").
 5. An answer may not imitate a question only the server asks ("…완료하셨나요?",
@@ -47,7 +48,7 @@ from voiney_lab.llm_router import (
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 
 ON = LlmRouterSettings(enabled=True, model="fake-router-model", timeout_seconds=1.0)
-HANDOFF_REPLY = "보고서는 화면에서 보내 주세요."
+HANDOFF_REPLY = "보고서 전송은 지원하지 않아요. 보고서는 화면에서 Word나 마크다운 파일로 받을 수 있어요."
 
 #: (said, the value the model would record)
 RECORD_REQUESTS = (
@@ -202,7 +203,6 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(outcome.plan.state_changed)
         self.assertFalse(outcome.plan.reported_anomaly)
         # No e-mail question is left open, and nothing waits for a yes.
-        self.assertIsNone(session._pending_handoff_confirmation)
         self.assertFalse(session.awaiting_server_confirmation)
         self.assertNotIn("@", outcome.plan.speech_text)
 
@@ -216,7 +216,7 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(outcome.handled_by, "fallback_rules")
         self.assertIs(outcome.rule_route.plan.action, CuratedProtocolAction.REPORT_HANDOFF)
         self.assertEqual(outcome.plan.speech_text, HANDOFF_REPLY)
-        self.assertIsNone(session._pending_handoff_confirmation)
+        self.assertFalse(session.awaiting_server_confirmation)
 
     def test_an_answer_promising_a_handoff_is_dropped(self) -> None:
         context = _session().router_context(turn_id=2, language="ko")
@@ -225,17 +225,19 @@ class HandoffTests(unittest.TestCase):
                 self.assertIn("claims_state_change", answer_check_failures(
                     _answer(spoken), context, utterance="교수님께 보고서 보내줘"))
         self.assertEqual(answer_check_failures(
-            _answer("보고서는 화면에서 보내 주세요."), context, utterance="교수님께 보고서 보내줘"), ())
+            _answer(HANDOFF_REPLY), context, utterance="교수님께 보고서 보내줘"), ())
 
-    def test_the_rules_alone_keep_their_handoff_reply(self) -> None:
-        # Router off: the rules' path is not changed by lane R3.
+    def test_the_rules_alone_give_the_same_reply(self) -> None:
+        # Router off: the rules say the same (lane M1, decision 5b); they no
+        # longer ask to send the report to a placeholder address.
         session = _session()
         plan = route_curated_runtime_turn(
             session, "안전관리자에게 이상사항 전달해줘", turn_id=2, language="ko",
             configuration_id=1, generation=1,
         ).plan
         self.assertIs(plan.action, CuratedProtocolAction.REPORT_HANDOFF)
-        self.assertNotEqual(plan.speech_text, HANDOFF_REPLY)
+        self.assertEqual(plan.speech_text, HANDOFF_REPLY)
+        self.assertFalse(session.awaiting_server_confirmation)
 
 
 class ServerValueCheckTests(unittest.TestCase):

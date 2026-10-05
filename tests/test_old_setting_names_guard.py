@@ -26,7 +26,10 @@ from voiney_lab.setting_renames import OLD_PREFIX, RENAMED
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD_PREFIXED = OLD_PREFIX + "MOSS_ENABLED"
-OLD_UNPREFIXED = next(old for old, new in RENAMED.items() if new == "VOINEY_LAB_CHAT_MODEL")
+OLD_UNPREFIXED = next(
+    old for old, new in RENAMED.items()
+    if new == "VOINEY_LAB_ANSWER_MODEL" and not old.startswith(OLD_PREFIX)
+)
 SECRET = "VALUE-MUST-NOT-BE-PRINTED-7f3a"
 GUIDANCE = "scripts/migrate_env.py 를 실행하세요."
 
@@ -59,7 +62,7 @@ class GuardMessageTests(unittest.TestCase):
     def test_new_and_kept_names_pass(self):
         refuse_old_setting_names({
             "VOINEY_LAB_MOSS_ENABLED": "false",
-            "VOINEY_LAB_CHAT_MODEL": "grok-4",
+            "VOINEY_LAB_ANSWER_MODEL": "grok-4",
             "XAI_API_KEY": SECRET,
             "HOST": "127.0.0.1",
             "PORT": "8000",

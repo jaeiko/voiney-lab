@@ -214,7 +214,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         }, clear=True), self.assertRaisesRegex(ValueError, "DOMAIN_PROFILE"):
             ExternalReferenceSettings.from_environment()
         for name,value in (
-            ("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",""),
+            ("VOINEY_LAB_SUPPLEMENTAL_MODEL",""),
             ("VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS","31"),
             ("VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS","6"),
         ):
@@ -239,7 +239,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
             )
         with patch.dict(os.environ, {
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED": "true",
-            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL": "grok-test",
+            "VOINEY_LAB_SUPPLEMENTAL_MODEL": "grok-test",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS": "7",
         }, clear=True):
             settings = SupplementalKnowledgeSettings.from_environment()
@@ -536,7 +536,7 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"', text)
         self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"', text)
         self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_MODEL="grok-4.6"', text)
+        self.assertIn('VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"', text)
         self.assertIn('external_search_model', text)
         self.assertIn('external_search_open_mode', text)
 

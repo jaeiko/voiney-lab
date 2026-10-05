@@ -154,7 +154,7 @@ def parse(payload: dict):
 class AnalysisTimeLimitTests(unittest.TestCase):
     ENV = {
         "XAI_API_KEY": "fake-key",
-        "VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL": "grok-4.6",
+        "VOINEY_LAB_ANALYSIS_MODEL": "grok-4.6",
     }
 
     def client_timeout(self, extra: dict[str, str]) -> float:

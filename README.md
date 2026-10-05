@@ -414,9 +414,16 @@ that the server validates and carries out. **It is off unless
 `VOINEY_LAB_LLM_ROUTER_ENABLED=true`** (no launcher sets it; turning
 it on in development or the pilot is decided by the people running it, from
 the lane R evaluation). Off, the voice path is exactly the one described
-above. `VOINEY_LAB_LLM_ROUTER_MODEL` (default
-`grok-4.20-0309-non-reasoning`) and `..._TIMEOUT_SECONDS` (default 2.5) choose
-the model and how long a turn waits for it; it needs `XAI_API_KEY`.
+above. The router role's `VOINEY_LAB_ROUTER_PROVIDER` (default `xai`),
+`VOINEY_LAB_ROUTER_MODEL` (default `grok-4.20-0309-non-reasoning`) and
+`VOINEY_LAB_ROUTER_REASONING` choose the model (see [Model providers by
+role](#model-providers-by-role)), and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`
+(default 2.5) how long a turn waits for it; it needs that provider's key.
+
+The router and the semantic-intent fallback are never both on: with
+`VOINEY_LAB_LLM_ROUTER_ENABLED=true` and
+`VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true` the server refuses to start and says
+why (lane M1, decision 4) -- one turn is decided along one line.
 
 On, a turn goes:
 
@@ -751,14 +758,59 @@ nothing) and then `--write`, which backs the file up as
 `.env.bak-YYYYMMDD-HHMMSS` (mode 600) and rewrites it grouped by area with every
 value unchanged. `docs/MIGRATION_NOTES.md` records the change.
 
+### Model providers by role
+
+Decision of 2026-10-04 (lane M1): each role names its provider, model and
+reasoning, and the people running the pilot choose them from our evaluation
+sets -- performance first, cost second. Every default is the provider and
+model the code called before, so an environment that sets none of these
+behaves as before.
+
+| Role | Used by | Default provider · model |
+|---|---|---|
+| `ROUTER` | the LLM router's one call per voice turn (tools) | `xai` · `grok-4.20-0309-non-reasoning` |
+| `ANSWER` | the brain's answers, the approved-document answer, the multi-brain roles, the hand-off worker | `xai` · none: the brain requires it, the worker uses `grok-4`, the multi-brain roles `grok-4.6` |
+| `TRANSLATION` | a revision's Korean and the reader translation of a step | `xai` · `grok-4.6` |
+| `ANALYSIS` | the structured PDF protocol analysis | `xai` · none (required), reasoning `high` |
+| `REPORT` | the experiment report's prose | `xai` · `VOINEY_LAB_SUPPLEMENTAL_MODEL`, then `grok-4.6` |
+| `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `xai` · `grok-4.6`, reasoning `low` |
+
+Each role reads `VOINEY_LAB_<ROLE>_PROVIDER` (`xai`, `anthropic`, `openai` or
+`google`), `VOINEY_LAB_<ROLE>_MODEL` and `VOINEY_LAB_<ROLE>_REASONING`
+(`none`, `low`, `medium`, `high`, `xhigh`, `max`; unset leaves the provider's
+default). `src/voiney_lab/model_providers.py` moves each provider's request and
+reply to and from the chat-completions shape the code reads: xAI through the
+OpenAI SDK as before, OpenAI through its Responses API, Anthropic through the
+Messages API (with `cache_control` on the stable system blocks) and Google
+through `google-genai`: the Gemini API with `GEMINI_API_KEY` by default, or
+Vertex AI (now "Gemini Enterprise Agent Platform") when the SDK's own
+`GOOGLE_GENAI_USE_ENTERPRISE=true` (legacy `GOOGLE_GENAI_USE_VERTEXAI`) is set
+-- with `GOOGLE_API_KEY` (express mode), or with `GOOGLE_CLOUD_PROJECT` and
+`GOOGLE_CLOUD_LOCATION` (default `global`) through Application Default
+Credentials. The server's validation of a proposal,
+its answer checks and the translation checks are the same for every provider.
+The web reference search is xAI's `web_search` tool, so
+`VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` with any other
+`VOINEY_LAB_SUPPLEMENTAL_PROVIDER` is refused at start-up. The adapters are
+contract-tested against fake SDK clients (`tests/test_model_providers.py`), not
+live-tested by the suite.
+
+The settings that named models before (the chat, worker, multi-brain,
+protocol-analysis, report-writer, external-reference and supplemental model
+settings, and their reasoning settings) are old names now:
+`scripts/migrate_env.py` renames them, and the server refuses to start while
+one is set. Two of them in one `.env` that became the same role setting stop
+the tool; keep the one you want.
+
 ### Core configuration
 
 | Variable | Purpose |
 |---|---|
-| `XAI_API_KEY` | Server-only xAI credential |
-| `VOINEY_LAB_CHAT_MODEL`, `VOINEY_LAB_WORKER_MODEL` | Agent and handoff-worker models |
-| `VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
-| `VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
+| `XAI_API_KEY` | Server-only xAI credential (the default provider of every role) |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Credentials of the other providers, read only when a role names them |
+| `VOINEY_LAB_<ROLE>_PROVIDER`, `_MODEL`, `_REASONING` | The model behind each role; see [Model providers by role](#model-providers-by-role) |
+| `VOINEY_LAB_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
+| `VOINEY_LAB_ANALYSIS_REASONING` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
 | `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS` | Time limit of one protocol-analysis provider call, 30–3600 s; default `600`. The call runs in the background analysis task |
 | `VOINEY_LAB_STT_PROVIDER`, `VOINEY_LAB_TTS_PROVIDER` | Speech providers, default `xai`; see [Speech providers](#speech-providers) |
 | `VOINEY_LAB_TTS_VOICE` | Cascade voice of the selected TTS provider; xAI default `leo` |
@@ -789,7 +841,7 @@ turns it on, together with the `demo` scope; `scripts/run_pilot.sh` always turns
 it off, with a `[WARN]` when the environment had it on. A server started any
 other way reads it from the environment or `.env`.
 
-`VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` is read from deployment environment configuration;
+`VOINEY_LAB_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
 current deployment example. Protocol analysis explicitly defaults to high
 reasoning effort. Lower effort levels remain deployment-configurable but must
@@ -933,12 +985,18 @@ python -m compileall -q src tests scripts
 git diff --check
 ```
 
-Pass those three flags in **both** baselines below. `server.py` calls
-`load_dotenv`, so a repo-root `.env` that enables the workspace or experiment
-reports silently changes the result; forcing the flags off per command
-reproduces the documented numbers without editing `.env`. In a tree with no
-`.env` in scope (CI, a fresh worktree) they are a no-op, so passing them is
-always safe and never wrong.
+Pass those three flags in **both** baselines below. Under pytest the server
+and the worker no longer read the repository `.env` (lane M1, decision 6 --
+only the old-setting-name check still looks at it), but the same names
+exported in the shell would still change the result; forcing the flags off per
+command reproduces the documented numbers. In a clean shell (CI, a fresh
+worktree) they are a no-op, so passing them is always safe and never wrong.
+
+No test reaches a model or OCR provider, whatever keys exist: `tests/conftest.py`
+removes `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`GOOGLE_API_KEY` and the OCR and Moss secrets from the test process before any
+test module is imported, and refuses any connection to an address outside this
+machine (`tests/test_no_outside_calls.py`). Provider calls stay fake-backed.
 
 The suite needs no system PDF tools: PyMuPDF is a Python wheel, and the
 `pdftotext` comparator the suite used to expect is gone (see

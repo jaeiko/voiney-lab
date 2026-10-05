@@ -216,7 +216,7 @@ under `data/` is rewritten.
   `openai` SDK's `OPENAI_*`, proxy and certificate variables, and so on) are
   listed in `EXTERNAL_NAMES` and are never renamed.
 - Three old pairs became one name each: `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
-  `VOINEY_LAB_EXTERNAL_REFERENCE_MODEL` and
+  `VOINEY_LAB_SUPPLEMENTAL_MODEL` and
   `VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS`. The conflict check between
   two names of one setting now applies only to
   `VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS` and its alias

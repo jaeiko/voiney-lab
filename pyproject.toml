@@ -21,7 +21,13 @@ dependencies = [
   # the suite gives the same result as the known-good freeze.
   "fastapi>=0.141.1,<0.142",
   "uvicorn[standard]",
-  "openai",
+  # Model provider SDKs (lane M1, 2026-10-05), pinned to the versions the
+  # adapters in model_providers.py were written and contract-tested against.
+  # openai: xAI (its OpenAI-compatible API) and OpenAI (the Responses API).
+  "openai==3.3.1",
+  "anthropic==1.11.0",
+  # google-genai: the Gemini API (generativelanguage), not Vertex AI.
+  "google-genai==2.28.0",
   "PyJWT[crypto]>=2.10,<3",
   # pypdf: used by curated_protocol.py (development fixture page check) and by
   # the tests' PDF fixture writers.  Protocol PDF reading no longer uses it.

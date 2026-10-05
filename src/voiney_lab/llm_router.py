@@ -33,9 +33,9 @@ so many words ("기록해 줘", "적어", "메모해", "남겨", "note this", "r
 this"; the noun "기록" is not a request) -- a reply to the open observation
 question is the front rules' (F5) and never reaches a proposal -- and an
 anomaly only when the words read as a problem by the rules' own tables and
-do not ask for a hand-off ("~에게 전달해줘", answered "보고서는 화면에서
-보내 주세요."); any other anomaly is asked about once, "이상 사항으로
-기록할까요?". An answer is also checked for a question only the server asks,
+do not ask for a hand-off ("~에게 전달해줘", answered as the rules answer
+one: "보고서 전송은 지원하지 않아요. ..." -- lane M1, decision 5b); any other
+anomaly is asked about once, "이상 사항으로 기록할까요?". An answer is also checked for a question only the server asks,
 and an outside-PDF explanation may be about any word of the protocol's text.
 
 server.py routes a turn here only when VOINEY_LAB_LLM_ROUTER_ENABLED
@@ -64,7 +64,9 @@ from voiney_lab.answer_checks import (
     outside_pdf_violations,
     server_value_violations,
 )
+from voiney_lab.model_providers import DEFAULT_MODELS, RoleModel
 from voiney_lab.semantic_intent import (
+    SemanticIntentSettings,
     evidence_fence_rejection,
     has_completion_evidence,
     normalize_semantic_utterance,
@@ -660,9 +662,11 @@ def _missing_action_word(action: str | None, evidence: str) -> str | None:
 # --- Settings ----------------------------------------------------------------------
 
 LLM_ROUTER_ENABLED_ENV = "VOINEY_LAB_LLM_ROUTER_ENABLED"
-LLM_ROUTER_MODEL_ENV = "VOINEY_LAB_LLM_ROUTER_MODEL"
 LLM_ROUTER_TIMEOUT_ENV = "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS"
-DEFAULT_LLM_ROUTER_MODEL = "grok-4.20-0309-non-reasoning"
+#: The router role's provider, model and reasoning are model_providers'
+#: router settings: VOINEY_LAB_ROUTER_PROVIDER, VOINEY_LAB_ROUTER_MODEL and
+#: VOINEY_LAB_ROUTER_REASONING (lane M1, decision 1).
+DEFAULT_LLM_ROUTER_MODEL = DEFAULT_MODELS["router"]
 DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS = 2.5
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _BOOLEAN = _TRUE | {"0", "false", "no", "off"}
@@ -680,6 +684,12 @@ class LlmRouterSettings:
     model: str = DEFAULT_LLM_ROUTER_MODEL
     timeout_seconds: float = DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS
     max_output_tokens: int = 400
+    provider: str = "xai"
+    reasoning: str | None = None
+
+    @property
+    def role_model(self) -> RoleModel:
+        return RoleModel("router", self.provider, self.model, self.reasoning)
 
     @classmethod
     def from_environment(
@@ -689,7 +699,7 @@ class LlmRouterSettings:
         raw = env.get(LLM_ROUTER_ENABLED_ENV, "false").strip().casefold()
         if raw not in _BOOLEAN:
             raise ValueError(f"{LLM_ROUTER_ENABLED_ENV} must be a boolean")
-        model = env.get(LLM_ROUTER_MODEL_ENV, "").strip() or DEFAULT_LLM_ROUTER_MODEL
+        role = RoleModel.from_environment("router", env)
         timeout_raw = env.get(
             LLM_ROUTER_TIMEOUT_ENV, str(DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS),
         ).strip()
@@ -699,13 +709,43 @@ class LlmRouterSettings:
             raise ValueError(f"{LLM_ROUTER_TIMEOUT_ENV} must be a number") from exc
         if not 0.2 <= timeout <= 30.0:
             raise ValueError(f"{LLM_ROUTER_TIMEOUT_ENV} must be between 0.2 and 30")
-        return cls(enabled=raw in _TRUE, model=model, timeout_seconds=timeout)
+        return cls(
+            enabled=raw in _TRUE, model=role.model or DEFAULT_LLM_ROUTER_MODEL,
+            timeout_seconds=timeout, provider=role.provider, reasoning=role.reasoning,
+        )
 
     def public_capability(self) -> dict[str, object]:
         return {
             "status": "enabled" if self.enabled else "disabled",
             "model": self.model if self.enabled else None,
         }
+
+
+class TwoTurnDecidersError(RuntimeError):
+    """Two paths would each decide a turn; the server refuses to start."""
+
+
+def refuse_two_turn_deciders(environment: Mapping[str, str] | None = None) -> None:
+    """Refuse the LLM router and the semantic-intent fallback both on.
+
+    Decision 4 of lane M1 (2026-10-04), from the one-line routing rule: one
+    turn is decided by one path. With the router on, the router decides
+    behind the front rules; with it off, the rules do, and the semantic
+    fallback may propose for a catch-all. Both on would let two models each
+    read the same turn, so the server does not start and says why.
+    """
+
+    env = os.environ if environment is None else environment
+    if (
+        LlmRouterSettings.from_environment(env).enabled
+        and SemanticIntentSettings.from_environment(env).enabled
+    ):
+        raise TwoTurnDecidersError(
+            "VOINEY_LAB_LLM_ROUTER_ENABLED 와 VOINEY_LAB_SEMANTIC_INTENT_ENABLED 가 "
+            "둘 다 켜져 있습니다. 한 턴은 한 경로만 판단합니다: LLM 라우터를 쓰면 "
+            "의미 의도 보조를 끄고(VOINEY_LAB_SEMANTIC_INTENT_ENABLED=false), "
+            "의미 의도 보조를 쓰면 라우터를 끄세요."
+        )
 
 
 # --- What the model is shown ------------------------------------------------------
@@ -726,7 +766,7 @@ Most turns are questions or remarks: answer them. A question -- anything asking 
 Reply with exactly one function call: answer, change_state or record_log.
 
 1. Call change_state when, in THIS turn, the researcher asks to start the experiment, says the current step is done or asks to go to the next step, asks to end the experiment (only with 종료), to pause, to resume, or to start the step timer. evidence = the exact words from this turn that ask for it. The server asks the researcher to confirm "next" and "stop"; never call next when they say the step is not done.
-2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: reports are sent from the screen.
+2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: sending is not supported, and reports are downloaded from the screen.
 3. Otherwise call answer: spoken, display, source_kind ("pdf" | "outside_pdf" | "server_state" | "none"), evidence_ids, and outside_pdf_term only for an outside_pdf answer.
 
 Never call a tool for a question, a hypothetical, a plan or wish, a step other than the current one, or to skip steps. At most one tool call.
@@ -836,6 +876,12 @@ def _usage(value: object) -> dict[str, int] | None:
     cached = getattr(details, "cached_tokens", None) if details is not None else None
     if isinstance(cached, int):
         usage["cached_prompt_tokens"] = cached
+    # What model_providers' adapters add for cost accounting (lane M1): cache
+    # writes are billed apart, and thinking is billed as output.
+    for key in ("cache_write_tokens", "reasoning_tokens"):
+        number = value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
+        if isinstance(number, int):
+            usage[key] = number
     return usage or None
 
 
@@ -1110,9 +1156,6 @@ async def route_turn_with_llm_router(
         await progress("checking_protocol")
         route = await rule_route()
         plan = route.plan
-        # A hand-off is not done by voice (decision 1, D8): the rules' e-mail
-        # question gives way to "보고서는 화면에서 보내 주세요.".
-        plan = session.handoff_on_screen(turn_id=turn_id, language=language) or plan
         if unconfirmed:
             # The model's answer was dropped and the rules have none either:
             # "PDF에서 확인할 수 없어요." instead of a scope reminder.
