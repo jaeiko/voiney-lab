@@ -68,7 +68,7 @@ FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analys
 PROVENANCE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.provenance.json"
 SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")
 EXPECTED_FIXTURE_SHA256 = "69517f0fe629d0e4dc356c78ff3d407ed0f510de24d325e1575b0adff998ee3c"
-EXPECTED_SCHEMA_SHA256 = "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
+EXPECTED_SCHEMA_SHA256 = "9f34928becbfcd4a63b1339f5200187abd1755801e326637f0f9d8d02ac17b02"
 
 
 class RecordingCompletions:
@@ -242,7 +242,15 @@ class CuratedProtocolFixtureTests(unittest.TestCase):
         ).encode("utf-8")
         self.assertEqual(hashlib.sha256(raw).hexdigest(), EXPECTED_FIXTURE_SHA256)
         self.assertEqual(hashlib.sha256(schema_bytes).hexdigest(), EXPECTED_SCHEMA_SHA256)
-        assert_schema_shape(self, self.payload, ANALYSIS_RESPONSE_SCHEMA, ANALYSIS_RESPONSE_SCHEMA)
+        # The fixture predates the response-required list fields (lane P2,
+        # human decision 2026-10-05) and has no description key; the decoder
+        # still reads it with the default, so only that key is excused.
+        fixture_schema = copy.deepcopy(ANALYSIS_RESPONSE_SCHEMA)
+        protocol_schema = fixture_schema["$defs"]["ExperimentProtocol"]
+        protocol_schema["required"] = [
+            name for name in protocol_schema["required"] if name != "description"
+        ]
+        assert_schema_shape(self, self.payload, fixture_schema, fixture_schema)
         self.assertEqual(self.fixture.status, DEVELOPMENT_FIXTURE_STATUS)
         self.assertEqual(
             self.provenance["status"],

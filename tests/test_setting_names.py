@@ -136,8 +136,11 @@ class SettingTableTests(unittest.TestCase):
                 self.assertTrue(new.startswith(NEW_PREFIX))
                 rest = old[len(OLD_PREFIX):] if old.startswith(OLD_PREFIX) else old
                 self.assertEqual(new, NEW_PREFIX + rest)
+        # A setting added after the rename has no old name, so the renamed
+        # names are a subset of the table rather than all of it (human
+        # decision 2026-10-05, lane P2).
         prefixed = {name for name in BY_NAME if name.startswith(NEW_PREFIX)}
-        self.assertEqual(prefixed, set(RENAMED.values()))
+        self.assertLessEqual(set(RENAMED.values()), prefixed)
 
     def test_code_spells_exactly_the_table_names(self):
         spelled: dict[str, str] = {}

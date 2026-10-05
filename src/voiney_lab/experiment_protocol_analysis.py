@@ -68,7 +68,19 @@ Unicode units. If an optional list item cannot carry a verbatim excerpt, omit
 that entire item. Never synthesize an excerpt from the item's claim, and never
 use a summary as evidence. The evidence validator compares the returned quote
 to the selected immutable page and rejects the complete response when the quote
-is absent. Never guess missing values. Return exactly one JSON object with no
+is absent.
+For every source step, make its evidence source_excerpt start with the step's
+own source number exactly as printed on the page (for example "3 Wash..." or
+"3. Wash..."), and set source_label to that number without a trailing period.
+metadata.evidence is always required: quote the protocol title from the page
+where it is printed. When a metadata field is printed on a different page than
+metadata.evidence,
+give that field its own evidence in the matching <field>_evidence (for example
+created_date_evidence), quoted from the page where the field is printed. When a
+quantity, duration, time, or temperature value is printed on a different page
+than the evidence of the item that holds it (for example in a note the step
+refers to), give that value its own evidence quoted from the page where the
+value is printed. Otherwise omit that field or value. Never guess missing values. Return exactly one JSON object with no
 prose, Markdown, or code fences. The response is an unapproved draft; do not
 describe it as confirmed, executable, scientifically validated, or approved.
 """
@@ -86,6 +98,31 @@ _CONSTRUCT_TYPES = {
 }
 
 ANALYSIS_RESPONSE_SCHEMA_NAME = "protocol_analysis_response_v1"
+
+#: Fields the response must spell out although the domain gives them a
+#: default. With them optional a provider returned metadata and a description
+#: and no sections at all -- zero steps, accepted for review -- on two of three
+#: real PDFs (lane P1). Required here they must at least be present; an empty
+#: list stays possible for a source that genuinely has none (human decision
+#: 2026-10-05). The decoder still fills a missing one with its default, so a
+#: stored or hand-built response is read as before.
+_RESPONSE_REQUIRED_FIELDS: dict[type[Any], frozenset[str]] = {
+    domain.ExperimentProtocol: frozenset(
+        {
+            "before_start",
+            "materials",
+            "equipment",
+            "sections",
+            "constructs",
+            "description",
+        }
+    ),
+    domain.ProtocolSection: frozenset({"steps"}),
+    # The validator refuses a draft whose metadata has no shared evidence.
+    # With per-field evidence on offer a provider cited only title_evidence
+    # and left this out (lane P2, OCR reagent-kit run), so it is spelled out.
+    domain.ProtocolMetadata: frozenset({"evidence"}),
+}
 _CONSTRUCT_NAMES = {
     record_type: construct_name
     for construct_name, record_type in _CONSTRUCT_TYPES.items()
@@ -188,9 +225,12 @@ class _DomainResponseSchemaBuilder:
                     "const": construct_name,
                 }
                 required.append("type")
+            response_required = _RESPONSE_REQUIRED_FIELDS.get(
+                record_type, frozenset()
+            )
             for field in record_fields:
                 properties[field.name] = self.schema_for(hints[field.name])
-                if (
+                if field.name in response_required or (
                     field.default is MISSING
                     and field.default_factory is MISSING
                 ):
@@ -1118,19 +1158,65 @@ def _claim_occurs_in_text(claim: str, source_text: str) -> bool:
     return False
 
 
+#: A step number that may stand bare before its text: "3", or a protocols.io
+#: sub-step "6.1". Any other label needs its period ("A.").
+_BARE_STEP_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+
+
+def _source_label_markers(source_label: str) -> tuple[str, ...]:
+    if _BARE_STEP_NUMBER.fullmatch(source_label):
+        return (f"{source_label}.", source_label)
+    return (f"{source_label}.",)
+
+
 def _source_label_is_at_excerpt_start(
     source_label: str,
     source_excerpt: str,
 ) -> bool:
     normalized_excerpt, _, _ = _normalized_text_with_bounds(source_excerpt)
     label_marker = f"{source_label}."
-    if normalized_excerpt == label_marker or normalized_excerpt.startswith(
-        f"{label_marker} "
-    ):
+    if normalized_excerpt == label_marker:
         return True
-    return bool(re.fullmatch(r"[0-9]+", source_label)) and (
-        normalized_excerpt.startswith(f"{source_label} ")
+    return any(
+        normalized_excerpt.startswith(f"{marker} ")
+        for marker in _source_label_markers(source_label)
     )
+
+
+def _source_label_precedes_excerpt(
+    source_label: str,
+    evidence: domain.SourceEvidence,
+    extraction: ProtocolPdfExtraction,
+) -> bool:
+    """Whether the page prints the step number right before the excerpt.
+
+    Models quote a step from its first word and leave the number out ("Wash
+    the band..." under "3 Wash the band..."); every step of three real PDFs
+    was refused for it in lane P1. The number is still required, only read
+    from the page: it must open its line, be whole ("13" is not "3", "6.1" is
+    not "1"), and be separated from the excerpt by whitespace alone ("1.5 mL"
+    does not put "5 mL" under step 1). An excerpt found more than once on its
+    page must have the number before every occurrence, so an ambiguous quote
+    stays refused (human decision 2026-10-05).
+    """
+
+    page_text = extraction.pages[evidence.source_page_number - 1].text
+    spans = _canonical_match_spans(page_text, evidence.source_excerpt)
+    markers = _source_label_markers(source_label)
+
+    def numbered(start: int) -> bool:
+        before = page_text[:start]
+        head = before.rstrip()
+        if len(head) == len(before):
+            return False
+        for marker in markers:
+            if head.endswith(marker):
+                line = head[: -len(marker)].rstrip(" \t\u00a0")
+                if not line or line[-1] in "\n\r":
+                    return True
+        return False
+
+    return bool(spans) and all(numbered(start) for start, _ in spans)
 
 
 @dataclass
@@ -1172,9 +1258,16 @@ def _verify_claim_tree(
         and value.source_label
         and (
             local_evidence is None
-            or not _source_label_is_at_excerpt_start(
-                value.source_label,
-                local_evidence.source_excerpt,
+            or not (
+                _source_label_is_at_excerpt_start(
+                    value.source_label,
+                    local_evidence.source_excerpt,
+                )
+                or _source_label_precedes_excerpt(
+                    value.source_label,
+                    local_evidence,
+                    extraction,
+                )
             )
         )
     ):
@@ -1198,6 +1291,12 @@ def _verify_claim_tree(
     for field_name in _CLAIM_FIELDS.get(type(value), ()):
         field_value = getattr(value, field_name)
         claims = field_value if isinstance(field_value, tuple) else (field_value,)
+        claim_evidence = local_evidence
+        if isinstance(value, domain.ProtocolMetadata):
+            claim_evidence = (
+                getattr(value, domain.METADATA_FIELD_EVIDENCE[field_name])
+                or local_evidence
+            )
         for claim in claims:
             if claim is None:
                 continue
@@ -1205,10 +1304,10 @@ def _verify_claim_tree(
             state.next_index += 1
             if (
                 not isinstance(claim, str)
-                or local_evidence is None
+                or claim_evidence is None
                 or not _claim_occurs_on_evidence_page(
                     claim,
-                    local_evidence,
+                    claim_evidence,
                     extraction,
                 )
             ):
@@ -1223,8 +1322,8 @@ def _verify_claim_tree(
                         evidence_type=type(value).__name__,
                         field_path=f"{_path}.{field_name}",
                         page_number=(
-                            local_evidence.source_page_number
-                            if local_evidence is not None
+                            claim_evidence.source_page_number
+                            if claim_evidence is not None
                             else None
                         ),
                         matching_source_pages=(

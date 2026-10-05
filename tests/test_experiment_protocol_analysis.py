@@ -467,6 +467,11 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                     if field.default is MISSING
                     and field.default_factory is MISSING
                 }
+                # The response must spell out these defaulted fields too, so
+                # a provider cannot drop every step by omission (lane P2).
+                expected_required |= analysis_module._RESPONSE_REQUIRED_FIELDS.get(
+                    record_type, frozenset()
+                )
                 if record_type in analysis_module._CONSTRUCT_NAMES:
                     expected_names.add("type")
                     expected_required.add("type")

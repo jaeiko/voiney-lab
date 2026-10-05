@@ -7,6 +7,7 @@ values retain the byte-identity-only meaning defined by Slice 1.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -278,6 +279,20 @@ class ProtocolMetadata:
     license: str | None = None
     source_status: str | None = None
     evidence: SourceEvidence | None = None
+    #: Evidence for one field, where that field is printed on another page
+    #: than ``evidence`` -- a protocols.io title on page 1 and its dates on
+    #: page 2 cannot share one quote. A field without its own evidence is
+    #: checked against ``evidence`` as before (human decision 2026-10-05).
+    title_evidence: SourceEvidence | None = None
+    authors_evidence: SourceEvidence | None = None
+    created_date_evidence: SourceEvidence | None = None
+    modified_date_evidence: SourceEvidence | None = None
+    publication_date_evidence: SourceEvidence | None = None
+    version_evidence: SourceEvidence | None = None
+    doi_evidence: SourceEvidence | None = None
+    source_uri_evidence: SourceEvidence | None = None
+    license_evidence: SourceEvidence | None = None
+    source_status_evidence: SourceEvidence | None = None
 
     @property
     def original_filename(self) -> str:
@@ -305,6 +320,10 @@ class ScientificValue:
     source_text: str
     parsed_value: str | None = None
     normalized_unit: str | None = None
+    #: Where the value itself is printed, when that is not on its owner's
+    #: page -- a step on page 1 whose amount is given in a note on page 4.
+    #: Without it the value is checked on its owner's evidence page.
+    evidence: SourceEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -318,6 +337,8 @@ class SourceStatement:
 class EstimatedDuration:
     source_text: str
     parsed_seconds: int | None = None
+    #: Same as ``ScientificValue.evidence``: the page the time is printed on.
+    evidence: SourceEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -1135,6 +1156,49 @@ def _check_dependency_cycles(
         visit(node)
 
 
+#: Each metadata claim field and the field that may hold its own evidence.
+METADATA_FIELD_EVIDENCE: dict[str, str] = {
+    name: f"{name}_evidence"
+    for name in (
+        "title",
+        "authors",
+        "created_date",
+        "modified_date",
+        "publication_date",
+        "version",
+        "doi",
+        "source_uri",
+        "license",
+        "source_status",
+    )
+}
+
+
+def _validate_value_evidence(
+    value: object,
+    pdf: ProtocolPdfExtraction,
+    location: str,
+) -> None:
+    """Check the optional own evidence of every value and duration."""
+
+    if isinstance(value, (ScientificValue, EstimatedDuration)):
+        if value.evidence is not None:
+            _validate_evidence(value.evidence, pdf, f"{location}.evidence")
+        return
+    if isinstance(value, tuple):
+        for index, item in enumerate(value):
+            _validate_value_evidence(item, pdf, f"{location}[{index}]")
+        return
+    if (
+        dataclasses.is_dataclass(value)
+        and not isinstance(value, (type, ProtocolPdfExtraction, SourceEvidence))
+    ):
+        for field in dataclasses.fields(value):
+            _validate_value_evidence(
+                getattr(value, field.name), pdf, f"{location}.{field.name}"
+            )
+
+
 def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
     """Validate all evidence, identifiers, references, and dependency graphs."""
 
@@ -1164,6 +1228,15 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
             protocol.metadata.pdf,
             "metadata.evidence",
         )
+    for evidence_field in METADATA_FIELD_EVIDENCE.values():
+        field_evidence = getattr(protocol.metadata, evidence_field)
+        if field_evidence is not None:
+            _validate_evidence(
+                field_evidence,
+                protocol.metadata.pdf,
+                f"metadata.{evidence_field}",
+            )
+    _validate_value_evidence(protocol, protocol.metadata.pdf, "protocol")
     if protocol.description is not None:
         _validate_statement(
             protocol.description,
