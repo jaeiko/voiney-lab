@@ -600,6 +600,20 @@ loop:
 python -m voiney_lab.worker
 ```
 
+### Development on macOS
+
+macOS is supported for development only; the server, pilot labs and CI run
+on Linux. One difference matters:
+
+- **On macOS the PDF child process has no memory cap.** On Linux the PDF
+  engine's child process caps its address space (`RLIMIT_AS`, 1 GiB to read,
+  2 GiB to render) and a refused cap fails the request. macOS refuses that
+  cap (`ValueError: current limit exceeds maximum limit`), so there alone the
+  child reads without one. The time limit and the output size limit still
+  apply. Any other error, or a refusal on any other platform, still fails the
+  request. See `_cap_address_space` in `src/voiney_lab/pdf_text_engine.py`
+  (decision of 2026-10-04).
+
 ### Launchers
 
 Two wrappers around that same `uvicorn` process exist so the two runtime
