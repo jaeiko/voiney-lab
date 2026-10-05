@@ -67,7 +67,7 @@ FAKE_ENV = (
     "VOINEY_LAB_USAGE_SCOPE=demo\n"
     f"{OLD_PROFILES}='[{{\"id\": \"{SECRET}-5\"}},\n {{\"id\": \"b\"}}]'\n"
     f"{OLD_OCR}=clova\n"
-    f"ELEVENLABS_API_KEY=sk-el-{SECRET}-6\n"
+    f"COHERE_API_KEY=sk-co-{SECRET}-6\n"
     f"{OLD_UNREAD}=x={SECRET}-7\n"
     f"EMPTY_ONE=\n"
 )
@@ -108,7 +108,7 @@ class CheckTests(MigrateEnvCase):
         self.assertIn("  XAI_API_KEY\n", stays)
         self.assertIn("  VOINEY_LAB_USAGE_SCOPE\n", stays)
         unread = output.split("코드가 읽지 않는 이름")[1].split("중복")[0]
-        for name in ("UNRELATED_TOOL_TOKEN", "ELEVENLABS_API_KEY", "EMPTY_ONE"):
+        for name in ("UNRELATED_TOOL_TOKEN", "COHERE_API_KEY", "EMPTY_ONE"):
             self.assertIn(f"  {name}\n", unread)
         self.assertIn(f"  {renamed(OLD_UNREAD)} (옛 이름 {OLD_UNREAD})\n", unread)
         self.assertIn("중복 (0개)", output)
@@ -200,10 +200,10 @@ class WriteTests(MigrateEnvCase):
         text = self.path.read_text(encoding="utf-8")
         bottom = text.split("## ── 코드가 읽지 않는 설정 ──\n")[1]
         self.assertIn(f"UNRELATED_TOOL_TOKEN=keep {SECRET}-3\n", bottom)
-        self.assertIn(f"ELEVENLABS_API_KEY=sk-el-{SECRET}-6\n", bottom)
+        self.assertIn(f"COHERE_API_KEY=sk-co-{SECRET}-6\n", bottom)
         self.assertIn("EMPTY_ONE=\n", bottom)
         self.assertIn(f"{renamed(OLD_UNREAD)}=x={SECRET}-7\n", bottom)
-        for name in ("UNRELATED_TOOL_TOKEN", "ELEVENLABS_API_KEY", "EMPTY_ONE"):
+        for name in ("UNRELATED_TOOL_TOKEN", "COHERE_API_KEY", "EMPTY_ONE"):
             self.assertNotIn(f"{name}=", text.split("## ── 코드가 읽지 않는 설정 ──\n")[0])
 
     def test_running_it_again_changes_nothing(self):

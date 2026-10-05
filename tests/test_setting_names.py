@@ -137,12 +137,18 @@ class SettingTableTests(unittest.TestCase):
                 self.assertIn(new, BY_NAME)
                 self.assertTrue(new.startswith(NEW_PREFIX))
                 rest = old[len(OLD_PREFIX):] if old.startswith(OLD_PREFIX) else old
-                prefixed_name = NEW_PREFIX + rest if not old.startswith(NEW_PREFIX) else old
-                if prefixed_name in ROLE_RENAMED:
+                # Lane SV (human decision 2026-10-05): the xAI-only STT names
+                # moved to provider-neutral ones, so for them the new name is
+                # the old one with XAI_STT_ made STT_, not just re-prefixed.
+                rest = rest.removeprefix(NEW_PREFIX)
+                if rest.startswith("XAI_STT_"):
+                    rest = rest[len("XAI_"):]
+                prefixed_name = NEW_PREFIX + rest
+                if old in ROLE_RENAMED or prefixed_name in ROLE_RENAMED:
                     # Lane M1 moved a model setting to a role setting: the
                     # old name (and the one before it) maps straight there.
                     self.assertIn(new, role_settings)
-                    self.assertEqual(new, RENAMED[prefixed_name])
+                    self.assertEqual(new, RENAMED[old if old in ROLE_RENAMED else prefixed_name])
                 else:
                     self.assertEqual(new, NEW_PREFIX + rest)
         # A setting added after the rename has no old name, so the renamed
