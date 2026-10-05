@@ -22,8 +22,10 @@ Selection, per page that needs OCR:
 The result records which engine produced each page and its version. OCR text
 is review evidence: the catalog still requires a person to accept it.
 
-Contract-tested against fake transports only. Neither engine has been called
-from this repository with real credentials (2026-10-02: keys not yet issued).
+Contract-tested against fake transports in the test suite. Live-tested on
+2026-10-05 (lane P2): both engines answered real requests for the scanned
+reagent-kit guide (4 pages) and three ANKOM pages, and the catalog's
+OCR -> accept -> re-analysis flow ran end to end once in a measurement store.
 """
 
 from __future__ import annotations
@@ -71,9 +73,10 @@ GOOGLE = "google"
 TEXT_LAYER = "pdf-text-layer"
 
 #: Starting value, set by the people who chose the two engines on
-#: 2026-10-02. Not yet measured on OCR output: the keys were not issued when
-#: this was written. See the lane report for what the text layers of the
-#: local samples show.
+#: 2026-10-02. First real output (lane P2): CLOVA's Hangul share reached it
+#: on the Korean reagent-kit pages 1-3 (CLOVA chosen), stayed below it on that
+#: guide's English table page 4, and was 0.0 on ANKOM (Google chosen). Not
+#: tuned further.
 HANGUL_SELECTION_THRESHOLD = 0.30
 
 #: (connect, read) seconds for one page request.

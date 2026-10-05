@@ -3952,8 +3952,23 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
             "VOINEY_LAB_ANALYSIS_REASONING is invalid.",
             "VOINEY_LAB_ANALYSIS_REASONING",
         )
+    # The call runs in the background analysis task, never on a request
+    # path, and measured calls took 236-394 s (lane P1), so the limit is a
+    # setting with room above that (human decision 2026-10-05).
+    raw_timeout=os.environ.get(
+        "VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS","600"
+    ).strip()
+    try:
+        timeout_seconds=float(raw_timeout)
+    except ValueError:
+        timeout_seconds=math.nan
+    if not 30.0<=timeout_seconds<=3600.0:
+        raise ServerConfigurationError(
+            "VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS must be 30-3600 seconds.",
+            "VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS",
+        )
     role=RoleModel.from_environment("analysis")
-    client=_role_client(role,asynchronous=False,timeout=120.0)
+    client=_role_client(role,asynchronous=False,timeout=timeout_seconds)
     return OpenAICompatibleProtocolAnalysisModel(
         client,require_env("VOINEY_LAB_ANALYSIS_MODEL"),reasoning_effort)
 

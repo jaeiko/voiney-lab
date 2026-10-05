@@ -210,8 +210,10 @@ nothing. With one engine configured, that engine is used alone. With none,
 the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
 PDF. Every page records the engine and version that produced it. Keys,
 secrets and the invoke URL are never logged or returned. These adapters are
-contract-tested against fake transports; neither has been called from this
-repository with real credentials yet. The contract they implement is in
+contract-tested against fake transports in the test suite, and live-tested on
+2026-10-05: both engines answered real requests for the scanned reagent-kit
+guide (4 pages) and three ANKOM pages, and the OCR -> accept -> re-analysis
+flow ran once end to end in a measurement store. The contract they implement is in
 `src/voiney_lab/protocol_ocr.py`. Credentials and provider choice stay outside
 HTTP input and the voice execution path.
 
@@ -607,6 +609,20 @@ loop:
 python -m voiney_lab.worker
 ```
 
+### Development on macOS
+
+macOS is supported for development only; the server, pilot labs and CI run
+on Linux. One difference matters:
+
+- **On macOS the PDF child process has no memory cap.** On Linux the PDF
+  engine's child process caps its address space (`RLIMIT_AS`, 1 GiB to read,
+  2 GiB to render) and a refused cap fails the request. macOS refuses that
+  cap (`ValueError: current limit exceeds maximum limit`), so there alone the
+  child reads without one. The time limit and the output size limit still
+  apply. Any other error, or a refusal on any other platform, still fails the
+  request. See `_cap_address_space` in `src/voiney_lab/pdf_text_engine.py`
+  (decision of 2026-10-04).
+
 ### Launchers
 
 Two wrappers around that same `uvicorn` process exist so the two runtime
@@ -744,6 +760,7 @@ the tool; keep the one you want.
 | `VOINEY_LAB_<ROLE>_PROVIDER`, `_MODEL`, `_REASONING` | The model behind each role; see [Model providers by role](#model-providers-by-role) |
 | `VOINEY_LAB_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
 | `VOINEY_LAB_ANALYSIS_REASONING` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
+| `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS` | Time limit of one protocol-analysis provider call, 30–3600 s; default `600`. The call runs in the background analysis task |
 | `VOINEY_LAB_TTS_VOICE` | Cascade voice; defaults to `leo` |
 | `VOINEY_LAB_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
 | `VOINEY_LAB_SAFETY_CATALOG` | Absolute approved safety-catalog path |
@@ -779,6 +796,21 @@ reasoning effort. Lower effort levels remain deployment-configurable but must
 pass protocol-specific completeness and evidence validation before use. The
 separate low-latency semantic-intent path keeps its dedicated non-reasoning
 model and timeout settings.
+
+The browser's analysis request returns at once (`analysis_pending`) and the
+provider call runs in a background task; the screen polls the status and shows
+`analyzing`, then `review_required` or `analysis_failed` with its failure code.
+A call that runs past `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS` (default
+600 s; measured `grok-4.6` calls took 236–501 s) fails as
+`protocol_analysis_model_failed`. The response schema requires the protocol's
+`before_start`, `materials`, `equipment`, `sections`, `constructs` and
+`description` and each section's `steps`, so a provider cannot drop every step
+by leaving the list out. A step label is supported when the cited excerpt starts
+with the step number, or when the page prints that number at the start of the
+line right before the excerpt; a missing or different number is refused. A
+metadata field (`created_date_evidence`, …) and a value or duration may carry
+its own evidence on the page where it is printed; without it the claim is
+checked on its owner's evidence page as before.
 
 The default-off claim-chunk path supplies deterministic, bounded action-block
 evidence and accepts only adjacent compact request-scoped handles from the

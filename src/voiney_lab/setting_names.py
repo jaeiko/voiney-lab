@@ -115,6 +115,8 @@ SETTINGS: tuple[Setting, ...] = (
             "PDF 밖 설명·외부 근거 검색 모델"),
     Setting("VOINEY_LAB_SUPPLEMENTAL_REASONING", MODELS, "low",
             "외부 근거 검색 추론 (low/medium/high)"),
+    Setting("VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS", MODELS, "600",
+            "프로토콜 분석 호출 제한 시간 (초, 30–3600, 백그라운드 작업)"),
     Setting("VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS", MODELS, "2.5",
             "LLM 라우터 제한 시간 (초, 0.2–30)"),
     Setting("VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS", MODELS, "1.25",
