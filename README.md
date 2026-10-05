@@ -155,7 +155,12 @@ lane U). It only changes what is shown; every state it shows is the server's.
   one protocol started the same day are numbered "· 2번째"); the approval reads
   "개발용 초안(승인 전)" or "승인본 · {approval date} · {approver role}". The
   names are built in the browser from `experiment.report.state` (`started_at`,
-  `protocol_id`) and the catalog entry (`title`, `approval`).
+  `protocol_id`) and the catalog entry (`title`, `approval`). The server also
+  sends (lane R6, decision 5; the screen does not read them yet):
+  `protocol_title`, `day_sequence` and `day_sequence_date` (the Nth record
+  started that UTC day) on `experiment.report.state` and on each
+  `/api/workspace/experiments` item, and `actor_display_name` on a catalog
+  approval where the approver had one.
 - **Evidence candidates** in a reviewer finding are one row each — checkbox,
   page, a one-line excerpt (full excerpt on hover) — in a list of fixed height
   that scrolls inside itself. Pressing the finding button with nothing ticked
@@ -164,12 +169,23 @@ lane U). It only changes what is shown; every state it shows is the server's.
 - **A refused finding** says why and what to do on one line beside the button.
   `protocol_approval_denied` is the catalog's refusal of the finding's content
   (for example a citation that does not resolve), not a permission check, and
-  is shown that way; `authorization_denied` names the reviewer role.
+  is shown that way; `authorization_denied` names the reviewer role. Since
+  lane R6 (decision 5) the server answers a finding refused for its content
+  with its own code and 400/422 instead: `finding_evidence_missing`,
+  `finding_evidence_span_mismatch`, `ambiguity_not_found`,
+  `analysis_revision_missing`, `finding_target_not_found`,
+  `finding_value_mismatch`, `finding_not_recorded` (422) and
+  `finding_unsupported`, `finding_value_invalid` (400). Only a real
+  permission refusal is 403.
 - **A turn card shows one status.** The end of a turn ("완료", "중단됨",
   "차단됨", "오류") is shown once; the red line under it is kept for the text of
   a real failure. When a later utterance is committed, an earlier card that
   never received its end state stops showing a progress label such as
   "재생 중…"; its developer details say the end state was not received.
+  Since lane R6 the server sends that end state itself: a playback.ended held
+  back by an open barge-in candidate ends the turn "complete" once the
+  candidate is rejected, and a committed next turn sends the old turn's
+  "cancelled" `turn.state` with `cascade.playback.clear`.
 - **Pause.** While `protocol.fixture.state` says `workflow_status:"paused"`, the
   step card shows a large "다시 시작" button and the rail button reads
   "▶ 다시 시작". `experiment.ended` and `workflow.control.refused` disable both
@@ -397,6 +413,35 @@ adapters are contract-tested against fake transports in
 `tests/test_voice_providers.py`; lane SV's measurement report records which
 real calls were made.
 
+## Step-named questions and the "2단계"/"이 단계" homophone (lane R6)
+
+Decisions of 2026-10-06, from two voice tests:
+
+- **A quantity asked of a named step** is answered from that step's source
+  values by the `quantity_target` front rule, in the same sentence as an
+  untargeted one ("3단계에서는 solution A를 500 µL 넣어요."). A step with several
+  substances is asked back; a step with no value is read as written.
+- **Another step's substances are said with the source's values**: "다음
+  2단계는 Solution A(25mM AMBIC 2 : acetonitrile 1)와 Solution B(25mM AMBIC)를
+  만들어요." Every number is the source's (a "parts" mixture is said as a
+  ratio of the same numbers; a long form defined in the source may be said by
+  its abbreviation). Past 70 characters the names alone are said, "자세한 값은
+  화면에 있어요.", and the screen keeps the values.
+- **A question back is not a refusal**: the "어느 쪽인지 말씀해 주세요" turn is
+  planned with `speech_mode: control`, so it ends "complete", not "차단됨".
+- **"2단계" and "이 단계" sound alike.** Away from step 2, a read-only question
+  (왜·뭐·얼마나·설명) naming either is answered for the current step,
+  "지금 N단계 기준으로 답할게요. … 2단계를 물으신 거면 '두 번째 단계'라고 해
+  주세요." "두 번째 단계" and "다음 단계" are taken as said. A word that moves
+  the protocol (완료, 이동, 시작, …) is not read this way; "2단계 완료했어" at
+  step 1 still gets the step-mismatch question "현재 진행 중인 단계는
+  1단계입니다. 1단계를 완료하셨다는 뜻인가요?".
+- **A term answer reads as a sentence**: "탈색(destained)은 원문 7단계에
+  나와요." (the Korean word the researcher used, then the source's spelling).
+- **Web references off** (`VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false`): no
+  research step is announced unless it has something to show, so nothing ends
+  in "웹 참고 자료 확인 제한".
+
 ## Semantic intent fallback
 
 Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
@@ -497,8 +542,11 @@ On, a turn goes:
   "그거", repeat, cancel, transcript quality, a completion naming the current
   step, "끝났어", "다 끝났어" or "끝" said alone (asked about, "N단계
   완료하셨나요?"), a quantity asked with no target (the current and the next
-  step's source values, said as a sentence or asked back), and a start of an
-  experiment never started or already ended. These never wait on a model.
+  step's source values, said as a sentence or asked back), a quantity asked of
+  a named step ("N단계 얼마나 넣어?", "다음 단계는 얼마나 넣어?", "두 번째
+  단계 …"), a read-only question naming "2단계" or "이 단계" away from step 2
+  (`step_homophone`, below), and a start of an experiment never started or
+  already ended. These never wait on a model.
   While paused, a word one letter from "재개" or "다시 시작" ("제개") is asked
   about, "다시 시작할까요?"; a word with a digit ("3개") is not.
 - **One model call** — otherwise `llm_router.route_turn_with_llm_router` sends
@@ -520,6 +568,19 @@ On, a turn goes:
   term of the protocol in at most 120 characters with no numbers, method,
   safety or completion content. The server marks such an answer "PDF 밖
   설명이니 유의" on the screen and says "PDF에는 따로 설명이 없어요." first.
+- **Outside-PDF explanation after the answer (lane R6, decision 6)** — where
+  a question asks what a word means or why a step is done and the source does
+  not say (a term the PDF does not define, a step's purpose, or a router
+  answer saying the PDF does not explain it), the supplemental role
+  (`VOINEY_LAB_SUPPLEMENTAL_PROVIDER` and `VOINEY_LAB_SUPPLEMENTAL_MODEL`, on with
+  `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true`) is asked for one
+  short general sentence. It must pass the same D4 checks (120 characters, no
+  number, method, safety or completion). The rules' answer is said at once;
+  the explanation is said after it, "PDF에는 따로 설명이 없어요. 일반적으로는
+  …", only if it is ready while that answer plays, and `research.result`
+  carries `source_label: "AI 일반 지식"` and `outside_pdf: true`. Late, failed
+  or refused, the rules' answer stands alone. A quantity question the source
+  answers never gets one.
 - **Fallback** — when the model is late, fails, says nothing usable, is
   refused, or its answer fails a check, the turn takes the rules' own path,
   exactly as with the router off ("PDF에서 확인할 수 없어요." where the rules

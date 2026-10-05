@@ -277,6 +277,17 @@ def _in_protocol_text(term: str, protocol_text: str) -> bool:
     return key in text
 
 
+def outside_pdf_question_allowed(question: str) -> bool:
+    """Whether D4 lets a question be given an outside-PDF explanation at all:
+    it asks what a word means or why something is done, and asks no
+    quantity, method, safety or completion (lane R6, decision 6)."""
+
+    return bool(
+        (_MEANING_QUESTION.search(question) or _PURPOSE_QUESTION.search(question))
+        and not any(pattern.search(question) for _name, pattern in _FORBIDDEN_QUESTION_DIMENSIONS)
+    )
+
+
 def outside_pdf_violations(
     answer: str,
     *,

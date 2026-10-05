@@ -78,6 +78,15 @@ _ACTOR_PRINCIPAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}")
 _ACTOR_ROLES = frozenset({"reviewer", "lab_admin", "organization_admin"})
 
 
+def _display_name(value: object) -> str | None:
+    """A readable name as recorded: text of 1-200 characters, else None."""
+
+    if not isinstance(value, str):
+        return None
+    name = " ".join(value.split())
+    return name[:200] if name else None
+
+
 def _checked_actor(
     actor_principal_id: str,
     actor_role: str | None,
@@ -998,6 +1007,7 @@ class ProtocolCatalog:
                 "final_approval": False,
                 "actor_principal_id": None,
                 "actor_role": None,
+                "actor_display_name": None,
                 "recorded_at": None,
                 "authority": None,
             }
@@ -1026,6 +1036,7 @@ class ProtocolCatalog:
         payload = event.payload if event is not None else {}
         actor_principal_id = payload.get("actor_principal_id")
         actor_role = payload.get("actor_role")
+        actor_display_name = payload.get("actor_display_name")
         authority = payload.get("authority")
         return {
             "status": "approved" if final_approval else "development_only",
@@ -1038,6 +1049,9 @@ class ProtocolCatalog:
             "actor_role": (
                 actor_role if isinstance(actor_role, str) and actor_role else None
             ),
+            # Lane R6, decision 5: the approver's readable name, where the
+            # approval recorded one; None otherwise, never guessed.
+            "actor_display_name": _display_name(actor_display_name),
             "recorded_at": event.recorded_at if event is not None else None,
             "authority": (
                 authority if isinstance(authority, str) and authority else None
@@ -3483,6 +3497,7 @@ class ProtocolCatalog:
         actor_principal_id: str | None = None,
         actor_role: str | None = None,
         comment: str | None = None,
+        actor_display_name: str | None = None,
     ) -> ProtocolCatalogEntry:
         if not policy.permits(presented_secret):
             raise ProtocolApprovalError("Protocol approval authorization failed.")
@@ -3516,6 +3531,11 @@ class ProtocolCatalog:
                 "actor_role":actor_role,
                 "comment":(comment or "Tenant RBAC approval.")[:4000],
             })
+            name = _display_name(actor_display_name)
+            if name is not None:
+                # What a person reads the approver as (lane R6, decision 5);
+                # the principal id stays the identity.
+                payload["actor_display_name"] = name
         self.store.append_event(
             (
                 f"approved-{protocol_id[-16:]}-{protocol_revision_number}-"
