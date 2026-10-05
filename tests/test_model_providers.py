@@ -467,7 +467,9 @@ class AnthropicContractTests(_ProviderContract, unittest.TestCase):
         self.assertEqual(request["tool_choice"], {"type": "any"})
         self.assertEqual([tool["name"] for tool in request["tools"]],
                          [tool["function"]["name"] for tool in ROUTER_CALL_TOOLS])
-        self.assertEqual(request["temperature"], 0)
+        # anthropic 1.x has no temperature keyword: it goes in the body.
+        self.assertNotIn("temperature", request)
+        self.assertEqual(request["extra_body"], {"temperature": 0})
         self.assertEqual(request["max_tokens"], 400)
         self.assertNotIn("thinking", request)
 
@@ -480,6 +482,7 @@ class AnthropicContractTests(_ProviderContract, unittest.TestCase):
         self.assertEqual(request["thinking"], {"type": "between_tools"})
         self.assertEqual(request["output_config"], {"effort": "low"})
         self.assertNotIn("temperature", request)
+        self.assertNotIn("extra_body", request)
         self.assertEqual(request["max_tokens"], 400)
 
     def test_a_tool_loop_turns_into_tool_use_and_tool_result_blocks(self) -> None:
@@ -610,6 +613,26 @@ class GeminiContractTests(_ProviderContract, unittest.TestCase):
         with self.assertRaises(ModelProviderError) as caught:
             _router_call(self.client(self.fake_error(_StatusError(402))), self.model)
         self.assertEqual(caught.exception.kind, "payment_required")
+
+
+class AnthropicSdkSignatureTests(unittest.TestCase):
+    def test_every_keyword_the_adapter_sends_is_one_the_sdk_takes(self) -> None:
+        # The pinned SDK's own signature, so a request never fails with an
+        # unexpected keyword (the 1.x SDK dropped temperature).
+        import inspect
+
+        from anthropic.resources.messages import AsyncMessages
+
+        accepted = set(inspect.signature(AsyncMessages.create).parameters)
+        fake = FakeAnthropic(events=anthropic_tool_events("record_log", TOOL_ARGUMENTS))
+        for model, reasoning in (
+            ("claude-haiku-4-5-20251001", None), ("claude-sonnet-5-5", "none"),
+            ("claude-opus-5-5", "high"),
+        ):
+            client = chat_client(_role("anthropic", model, reasoning), sdk_client=fake)
+            _router_call(client, model)
+            with self.subTest(model=model):
+                self.assertLessEqual(set(fake.requests[-1]) - {"stream"}, accepted)
 
 
 class SupplementalShapeTests(unittest.TestCase):

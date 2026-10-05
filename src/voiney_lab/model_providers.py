@@ -668,7 +668,8 @@ def _openai_error(exc: Exception) -> ModelProviderError:
 #: request asks with "auto" and the router's prompt asks for one call
 #: (platform.claude.com, build-with-claude/thinking).
 _ANTHROPIC_NO_FORCED_TOOL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-mythos-5-1")
-#: Models that take no thinking or effort settings and do accept temperature.
+#: Models that take no thinking or effort settings and do accept temperature
+#: (Sonnet 5.5 and Opus 5.5 refuse a non-default one with a 400).
 _ANTHROPIC_PLAIN = ("claude-haiku-",)
 
 
@@ -737,7 +738,9 @@ class _AnthropicBackend:
         elif not plain:
             thinks = True  # these models think by default
         if plain and request.temperature is not None:
-            params["temperature"] = request.temperature
+            # The Anthropic SDK 1.x has no sampling keywords; the API still
+            # takes temperature on these models, so it rides in the body.
+            params["extra_body"] = {"temperature": request.temperature}
         params["max_tokens"] = request.output_limit(thinks)
         if request.tools:
             params["tools"] = [
