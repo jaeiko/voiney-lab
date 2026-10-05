@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -118,6 +119,16 @@ DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
 THINKING_ALLOWANCE_TOKENS = 4096
 #: What a reply may be given when the caller sets no limit.
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
+#: Gemini's thinking room by thinking level. Its max_output_tokens includes
+#: the thought tokens (ai.google.dev, thinking guide), and at "high" one
+#: translation batch thought ~11,800 tokens and was cut at 8,192 + 4,096
+#: (finish reason MAX_TOKENS, lane G, live); the guide gives no number per
+#: level, so these are rooms, not measurements of need. Gemini 3.x cannot stop
+#: thinking ("none" thinks at low), and an unset level is the model's default
+#: (not documented for 3.8 Flash), given the high room.
+GEMINI_THINKING_ALLOWANCE_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
+#: gemini-3.8-flash's output limit (model page, lane P3).
+GEMINI_MAX_OUTPUT_TOKENS = 65536
 
 
 class ModelProviderError(RuntimeError):
@@ -451,6 +462,12 @@ ANTHROPIC_MAX_UNION_PROPERTIES = 16
 #: schemas the other roles send stay well under this.
 GEMINI_MAX_SCHEMA_PROPERTIES = 100
 
+#: Anthropic has no JSON mode: a json_object request says so in the system
+#: prompt instead (OpenAI and Gemini send their own JSON modes).
+_JSON_OBJECT_INSTRUCTION = (
+    "Return exactly one JSON object, with no prose, Markdown or code fences."
+)
+
 _SCHEMA_INSTRUCTION = (
     "Return exactly one JSON object, with no prose, Markdown or code fences, "
     "that conforms to the JSON Schema named {name} below. Omit an optional "
@@ -517,6 +534,41 @@ def _any_of(node: Any) -> Any:
     if not isinstance(node, Mapping):
         return node
     return {("anyOf" if key == "oneOf" else key): _any_of(value) for key, value in node.items()}
+
+
+#: Keywords a grammar refuses outright, so a schema that carries one is sent
+#: without it (the server still checks the reply against the original).
+#: OpenAI strict: "'uniqueItems' is not permitted" (HTTP 400, lane G, live,
+#: the answer brain's schema). Anthropic: the structured-outputs page's list
+#: of unsupported constraints (numeric, string length, array constraints
+#: beyond minItems 0 or 1); "For 'array' type, property 'uniqueItems' is not
+#: supported" was the live 400 (lane G).
+OPENAI_STRICT_UNSUPPORTED_KEYWORDS = frozenset({"uniqueItems"})
+ANTHROPIC_UNSUPPORTED_KEYWORDS = frozenset({
+    "uniqueItems", "maxItems", "minLength", "maxLength", "minimum", "maximum",
+    "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+})
+
+
+def _without_keywords(node: Any, keywords: frozenset[str]) -> Any:
+    """A copy without ``keywords`` (and, for Anthropic, without a minItems
+    above 1, which its grammar does not take)."""
+
+    if isinstance(node, list):
+        return [_without_keywords(item, keywords) for item in node]
+    if not isinstance(node, Mapping):
+        return node
+    out = {}
+    for key, value in node.items():
+        if key in keywords and not isinstance(value, Mapping):
+            continue
+        if (
+            key == "minItems" and keywords is ANTHROPIC_UNSUPPORTED_KEYWORDS
+            and isinstance(value, int) and value > 1
+        ):
+            continue
+        out[key] = _without_keywords(value, keywords)
+    return out
 
 
 def _allows_null(root: Mapping[str, Any], node: Any) -> bool:
@@ -617,14 +669,38 @@ def _drop_unasked_nulls(root: Mapping[str, Any], node: Any, value: Any) -> Any:
     return out
 
 
+#: One Markdown code fence around a whole reply ("```json ... ```").
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json|JSON)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.S)
+
+
+def _unfenced(content: str) -> str:
+    """A JSON reply a model wrapped in one code fence, without the fence --
+    only when what is inside parses (lane G: claude-sonnet-5-5 fenced its
+    json_object report, live, and the writer's json.loads failed)."""
+
+    match = _FENCED_REPLY.match(content)
+    if match is None:
+        return content
+    try:
+        json.loads(match.group(1))
+    except ValueError:
+        return content
+    return match.group(1)
+
+
 def _restore_structured_reply(content: str, request: "_Request") -> str:
     schema = request.json_schema()
-    if schema is None or not content:
+    if (schema is None and not request.wants_json_object) or not content:
         return content
     try:
         parsed = json.loads(content)
     except ValueError:
-        return content  # the server's own parser reports it
+        unfenced = _unfenced(content)
+        if unfenced is content:
+            return content  # the server's own parser reports it
+        content, parsed = unfenced, json.loads(unfenced)
+    if schema is None:
+        return content
     restored = _drop_unasked_nulls(schema[1], schema[1], parsed)
     if restored == parsed:
         return content
@@ -812,7 +888,11 @@ class _OpenAIResponsesBackend:
             name, body, strict = schema
             params["text"] = {"format": {
                 "type": "json_schema", "name": name,
-                "schema": _openai_strict(body) if strict else body, "strict": strict,
+                "schema": (
+                    _openai_strict(_without_keywords(body, OPENAI_STRICT_UNSUPPORTED_KEYWORDS))
+                    if strict else body
+                ),
+                "strict": strict,
             }}
         elif request.wants_json_object:
             params["text"] = {"format": {"type": "json_object"}}
@@ -1044,7 +1124,7 @@ class _AnthropicBackend:
                 params["tool_choice"]["disable_parallel_tool_use"] = True
         schema = request.json_schema()
         if schema is not None:
-            body = _any_of(schema[1])
+            body = _without_keywords(_any_of(schema[1]), ANTHROPIC_UNSUPPORTED_KEYWORDS)
             _, optional, unions = _schema_counts(body)
             if (
                 optional <= ANTHROPIC_MAX_OPTIONAL_PROPERTIES
@@ -1057,6 +1137,8 @@ class _AnthropicBackend:
                 params.setdefault("system", []).append(
                     {"type": "text", "text": _schema_instruction(schema[0], schema[1])}
                 )
+        elif request.wants_json_object:
+            params.setdefault("system", []).append({"type": "text", "text": _JSON_OBJECT_INSTRUCTION})
         if output_config:
             params["output_config"] = output_config
         if request.timeout is not None:
@@ -1205,16 +1287,20 @@ class _GeminiBackend:
                     "role": "model" if role == "assistant" else "user",
                     "parts": [{"text": _text(message.get("content"))}],
                 })
-        thinks = request.reasoning is None or request.reasoning != "none"
-        config: dict[str, Any] = {"max_output_tokens": request.output_limit(thinks)}
+        # Gemini 3.x thinks at low, medium or high and cannot turn it off
+        # (ai.google.dev, thinking guide): "none" asks for the least.
+        level = None if request.reasoning is None else (
+            "low" if request.reasoning == "none" else
+            "high" if request.reasoning in {"xhigh", "max"} else request.reasoning
+        )
+        config: dict[str, Any] = {"max_output_tokens": min(
+            (request.max_tokens or DEFAULT_MAX_OUTPUT_TOKENS)
+            + GEMINI_THINKING_ALLOWANCE_TOKENS[level or "high"],
+            GEMINI_MAX_OUTPUT_TOKENS,
+        )}
         if request.temperature is not None:
             config["temperature"] = request.temperature
-        if request.reasoning is not None:
-            # Gemini 3.x thinks at low, medium or high and cannot turn it
-            # off (ai.google.dev, thinking guide): "none" asks for the least.
-            level = "low" if request.reasoning == "none" else (
-                "high" if request.reasoning in {"xhigh", "max"} else request.reasoning
-            )
+        if level is not None:
             config["thinking_config"] = {"thinking_level": level}
         if request.tools:
             config["tools"] = [{"function_declarations": [

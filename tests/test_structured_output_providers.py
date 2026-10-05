@@ -238,7 +238,11 @@ class AnalysisOutputLimitTests(unittest.TestCase):
                     sdk_client=fake).chat.completions.create(**{**request, "model": "gemini-3.8-flash"})
         sent["google"] = fake.requests[0]["config"]["max_output_tokens"]
         thinking = ANALYSIS_MAX_OUTPUT_TOKENS + mp.THINKING_ALLOWANCE_TOKENS
-        self.assertEqual(sent, {"openai": thinking, "anthropic": thinking, "google": thinking})
+        # Gemini's room follows its thinking level (lane G): high, capped at
+        # the model's output limit.
+        gemini = min(ANALYSIS_MAX_OUTPUT_TOKENS + mp.GEMINI_THINKING_ALLOWANCE_TOKENS["high"],
+                     mp.GEMINI_MAX_OUTPUT_TOKENS)
+        self.assertEqual(sent, {"openai": thinking, "anthropic": thinking, "google": gemini})
         self.assertLessEqual(sent["google"], 65_536)  # Gemini 3.8 Flash's output limit
 
 
@@ -296,3 +300,177 @@ class AnalysisThroughEveryAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ANSWER_LIKE = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "spoken_answer": {"type": "string", "minLength": 1, "maxLength": 400},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "enum": ["e1", "e2"]},
+                         "uniqueItems": True, "minItems": 1},
+        "pair": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 999},
+                 "minItems": 2, "maxItems": 2},
+        # A property that happens to be named like a keyword is kept.
+        "minimum": {"type": "string"},
+    },
+    "required": ["spoken_answer", "evidence_ids", "pair", "minimum"],
+}
+
+
+class UnsupportedKeywordTests(unittest.TestCase):
+    """Lane G (2026-10-05): the answer brain's schema carries ``uniqueItems``.
+
+    On the real APIs OpenAI strict answered HTTP 400 "'uniqueItems' is not
+    permitted" and Anthropic HTTP 400 "For 'array' type, property
+    'uniqueItems' is not supported"; Gemini took it. Each adapter now drops
+    what its grammar refuses (Anthropic: the structured-outputs page's list).
+    Contract-tested against fake SDK clients.
+    """
+
+    def test_openai_strict_drops_unique_items_only(self) -> None:
+        fake, _ = call("openai", "gpt-6-luna", ANSWER_LIKE)
+        schema = fake.requests[0]["text"]["format"]["schema"]
+        self.assertNotIn("uniqueItems", keywords(schema))
+        evidence = schema["properties"]["evidence_ids"]
+        self.assertEqual(evidence["items"]["enum"], ["e1", "e2"])
+        self.assertEqual(evidence["minItems"], 1)
+        self.assertEqual(schema["properties"]["pair"]["maxItems"], 2)
+        self.assertEqual(schema["properties"]["spoken_answer"]["maxLength"], 400)
+        self.assertIn("uniqueItems", keywords(ANSWER_LIKE))  # the original is untouched
+
+    def test_anthropic_drops_the_documented_unsupported_constraints(self) -> None:
+        fake, _ = call("anthropic", "claude-sonnet-5-5", ANSWER_LIKE)
+        schema = fake.requests[0]["output_config"]["format"]["schema"]
+        for keyword in ("uniqueItems", "maxItems", "minLength", "maxLength", "maximum"):
+            self.assertNotIn(keyword, keywords(schema))
+        self.assertEqual(schema["properties"]["evidence_ids"]["minItems"], 1)
+        self.assertNotIn("minItems", schema["properties"]["pair"])
+        self.assertEqual(schema["properties"]["minimum"], {"type": "string"})
+        self.assertEqual(schema["required"], ANSWER_LIKE["required"])
+
+    def test_gemini_sends_the_schema_as_before(self) -> None:
+        fake, _ = call("google", "gemini-3.8-flash", ANSWER_LIKE)
+        self.assertEqual(fake.requests[0]["config"]["response_json_schema"], mp._any_of(ANSWER_LIKE))
+
+    def test_the_answer_brain_reply_still_passes_the_brains_own_gate(self) -> None:
+        import asyncio
+
+        from voiney_lab.multi_brain import (
+            BrainFact, BrainSnapshot, HybridMultiBrain, MultiBrainSettings,
+        )
+
+        snapshot = BrainSnapshot(
+            configuration_id=1, session_id="s", turn_id=1, generation_id=1, workflow_revision=1,
+            protocol_id="p", document_sha256="", step_id="step-3", step_index=2, language="ko",
+            transcript="용액 A 얼마나 넣어?", intent_kind="related_question", question_kind=None,
+            requested_entities=(), question_dimensions=(),
+            facts=(BrainFact("e1", "step", "Wash the band with 500 µL of solution A.", 1),),
+        )
+        reply = json.dumps({"spoken_answer": "용액 A 500 µL를 넣어요.", "display_answer": "500 µL",
+                            "evidence_ids": ["e1"], "limitations": []}, ensure_ascii=False)
+        for provider, model, where in (("openai", "gpt-6-luna", "text"),
+                                       ("anthropic", "claude-sonnet-5-5", "output_config")):
+            with self.subTest(provider=provider):
+                fake = SyncFake(provider, reply)
+
+                class AsyncFake:
+                    pass
+
+                async_fake = AsyncFake()
+                if provider == "openai":
+                    async def create(**params):
+                        return fake._openai(**params)
+                    async_fake.responses = SimpleNamespace(create=create)
+                else:
+                    async def create(**params):
+                        return fake._anthropic(**params)
+                    async_fake.messages = SimpleNamespace(create=create)
+                client = chat_client(RoleModel("answer", provider, model, "none"), sdk_client=async_fake)
+                brain = HybridMultiBrain(client, MultiBrainSettings(True, model))
+                output = asyncio.run(brain._answer(snapshot))
+                self.assertEqual(output.evidence_ids, ("e1",))
+                self.assertNotIn("uniqueItems", keywords(fake.requests[0][where]))
+
+
+class GeminiThinkingRoomTests(unittest.TestCase):
+    """Lane G (2026-10-05): Gemini counts thought tokens in max_output_tokens.
+
+    Live, a gemini-3.8-flash translation batch at "high" thought ~11,800
+    tokens and stopped with finish reason MAX_TOKENS at 8,192 + 4,096, so its
+    JSON was cut. The room now follows the thinking level. Contract-tested.
+    """
+
+    def sent(self, reasoning, **extra) -> dict:
+        fake = SyncFake("google")
+        chat_client(RoleModel("translation", "google", "gemini-3.8-flash", reasoning), asynchronous=False,
+                    sdk_client=fake).chat.completions.create(
+            model="gemini-3.8-flash", messages=[{"role": "user", "content": "x"}], **extra)
+        return fake.requests[0]["config"]
+
+    def test_the_room_follows_the_thinking_level(self) -> None:
+        base = mp.DEFAULT_MAX_OUTPUT_TOKENS
+        for reasoning, level, room in (("none", "low", 4096), ("low", "low", 4096),
+                                       ("medium", "medium", 16384), ("high", "high", 32768),
+                                       ("xhigh", "high", 32768)):
+            with self.subTest(reasoning=reasoning):
+                config = self.sent(reasoning)
+                self.assertEqual(config["thinking_config"], {"thinking_level": level})
+                self.assertEqual(config["max_output_tokens"], base + room)
+
+    def test_an_unset_level_sends_no_thinking_config_and_gets_the_high_room(self) -> None:
+        config = self.sent(None)
+        self.assertNotIn("thinking_config", config)
+        self.assertEqual(config["max_output_tokens"], mp.DEFAULT_MAX_OUTPUT_TOKENS + 32768)
+
+    def test_a_caller_limit_is_kept_and_the_total_capped(self) -> None:
+        self.assertEqual(self.sent("low", max_tokens=400)["max_output_tokens"], 400 + 4096)
+        self.assertEqual(self.sent("high", max_completion_tokens=60_000)["max_output_tokens"],
+                         mp.GEMINI_MAX_OUTPUT_TOKENS)
+
+
+class JsonObjectTests(unittest.TestCase):
+    """Lane G (2026-10-05): a json_object request (the report writer's) to Anthropic.
+
+    The Anthropic adapter sent no JSON mode and no instruction, and live
+    claude-sonnet-5-5 wrapped its report in a ```json fence, so the writer's
+    json.loads failed and the report fell back to the deterministic prose.
+    Contract-tested against fake SDK clients.
+    """
+
+    FENCED = '```json\n{"title": "보고서", "objective": "목적"}\n```'
+
+    def ask(self, provider: str, model: str, text: str, response_format: dict | None) -> tuple[SyncFake, str]:
+        fake = SyncFake(provider, text)
+        client = chat_client(RoleModel("report", provider, model, None), asynchronous=False, sdk_client=fake)
+        extra = {"response_format": response_format} if response_format else {}
+        response = client.chat.completions.create(
+            model=model, messages=[{"role": "system", "content": "RULES"}, {"role": "user", "content": "CTX"}],
+            max_tokens=1800, **extra)
+        return fake, response.choices[0].message.content
+
+    def test_anthropic_says_json_object_in_the_system_prompt(self) -> None:
+        fake, _ = self.ask("anthropic", "claude-sonnet-5-5", "{}", {"type": "json_object"})
+        request = fake.requests[0]
+        self.assertEqual([block["text"] for block in request["system"]], ["RULES", mp._JSON_OBJECT_INSTRUCTION])
+        self.assertNotIn("format", request.get("output_config", {}))
+
+    def test_a_fenced_json_reply_is_unwrapped(self) -> None:
+        for provider, model in (("anthropic", "claude-sonnet-5-5"), ("openai", "gpt-6-luna"),
+                                ("google", "gemini-3.8-flash")):
+            with self.subTest(provider=provider):
+                _, content = self.ask(provider, model, self.FENCED, {"type": "json_object"})
+                self.assertEqual(json.loads(content), {"title": "보고서", "objective": "목적"})
+
+    def test_a_fence_around_something_that_is_not_json_is_left_for_the_server(self) -> None:
+        text = "```json\n{\"title\": \"cut\n```"
+        _, content = self.ask("anthropic", "claude-sonnet-5-5", text, {"type": "json_object"})
+        self.assertEqual(content, text)
+
+    def test_a_reply_to_a_plain_request_is_not_touched(self) -> None:
+        fake, content = self.ask("anthropic", "claude-sonnet-5-5", self.FENCED, None)
+        self.assertEqual(content, self.FENCED)
+        self.assertEqual([block["text"] for block in fake.requests[0]["system"]], ["RULES"])
+
+    def test_a_fenced_reply_to_a_schema_is_unwrapped_and_its_nulls_dropped(self) -> None:
+        _, content = call("anthropic", "claude-opus-5-5", SMALL, '```json\n{"korean": "a", "tags": null}\n```')
+        self.assertEqual(json.loads(content), {"korean": "a"})
