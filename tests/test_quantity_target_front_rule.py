@@ -117,7 +117,9 @@ class QuantityTargetFrontRuleTests(unittest.TestCase):
         self.assertIs(plan.action, CuratedProtocolAction.CLARIFY_PARAMETER)
         self.assertEqual(
             plan.speech_text,
-            "지금 1단계라면 Buffer 1 500 µL, 다음 2단계에는 DTT와 iodoacetamide가 있어요. "
+            # Lane R6, decision 2: the next step's values are said with them.
+            "지금 1단계라면 Buffer 1 500 µL, 다음 2단계에는 DTT(1.5mg/mL)와 "
+            "iodoacetamide(10mg/mL)가 있어요. "
             "어느 쪽인지 말씀해 주세요.",
         )
         self.assertEqual(plan.source_pages, (1, 1))
@@ -141,7 +143,8 @@ class QuantityTargetFrontRuleTests(unittest.TestCase):
         # Step 1 gives a volume and no concentration; step 2 gives two.
         plan = _front(_session(0), "농도가 어떻게 돼?")
         self.assertEqual(
-            plan.speech_text, "다음 2단계에는 DTT와 iodoacetamide가 있어요. 어느 쪽을 말씀하세요?",
+            plan.speech_text,
+            "다음 2단계에는 DTT(1.5mg/mL)와 iodoacetamide(10mg/mL)가 있어요. 어느 쪽을 말씀하세요?",
         )
         # Step 4 gives a volume, step 5 nothing: handed on.
         self.assertIsNone(_front(_session(3), "농도가 어떻게 돼?"))
@@ -224,8 +227,10 @@ class InGelQuantityTargetTests(unittest.TestCase):
         plan = _front(_session(0, in_gel_fixture()), "얼마나 넣어?")
         self.assertEqual(
             plan.speech_text,
-            "지금 1단계라면 25mM AMBIC 약 200 µL, 다음 2단계에는 Solution A, ammonium "
-            "bicarbonate, acetonitrile과 Solution B가 있어요. 어느 쪽인지 말씀해 주세요.",
+            # Lane R6, decision 2: the solutions step 2 makes, with the
+            # source's own numbers.
+            "지금 1단계라면 25mM AMBIC 약 200 µL, 다음 2단계는 Solution A(25mM AMBIC 2 : "
+            "acetonitrile 1)와 Solution B(25mM AMBIC)를 만들어요. 어느 쪽인지 말씀해 주세요.",
         )
 
     def test_a_ratio_is_read_as_the_source_words_it(self) -> None:

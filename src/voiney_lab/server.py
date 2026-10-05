@@ -5360,6 +5360,9 @@ class ListenerSession:
         self.turn_progress:dict[tuple[int,int],TurnProgress]={}
         self.visual_tasks:set[asyncio.Task]=set()
         self.research_operations:set[tuple[int,int]]=set()
+        # A turn whose audio.complete waits for an outside-PDF explanation
+        # to be said after it (lane R6, decision 6): (turn, generation).
+        self.held_audio_complete:set[tuple[int,int]]=set()
         self._interrupted_generations:set[tuple[int,int]]=set()
         self._cascade_vad_config=self.detector.config
         self._vad_classifier=self.detector.classifier
@@ -5443,6 +5446,7 @@ class ListenerSession:
             task.cancel()
         self.visual_tasks.clear()
         self.research_operations.clear()
+        self.held_audio_complete.clear()
         self.turn_generations.clear()
         self.turn_progress.clear()
         self._interrupted_generations.clear()
@@ -6737,13 +6741,27 @@ async def _queue_curated_research(
         def research_remaining(cap:float)->float:
             return max(0.05,min(cap,research_deadline-clock()))
 
-        # 1. Approved references (internal SQLite)
-        if session.tool_context is not None and not ctx["force_external"]:
+        # Lane R6, decision 8: with web references off, a step is announced
+        # only once it has something to show, so nothing on the screen waits
+        # for an answer that can only end in "웹 참고 자료 확인 제한".
+        web_enabled=session.external_reference_settings.enabled
+        # The turn itself announced "pending" when web references are on.
+        announced=web_enabled and not ctx.get("explain_only")
+        async def announce(phase:str)->None:
+            nonlocal announced
+            announced=True
             await sender.text(
-                "research.state",turn_id=turn_id,status="running",
-                phase="approved_references",
+                "research.state",turn_id=turn_id,status="running",phase=phase,
                 correlation_id=f"research-{generation}-{turn_id}",
             )
+
+        # 1. Approved references (internal SQLite)
+        if (
+            session.tool_context is not None and not ctx["force_external"]
+            and not ctx.get("explain_only")
+        ):
+            if web_enabled:
+                await announce("approved_references")
             await sender.text(
                 "tool.call",turn_id=turn_id,
                 tool=APPROVED_LAB_REFERENCE_TOOL_NAME,round=0)
@@ -6807,7 +6825,10 @@ async def _queue_curated_research(
 
         # 2. External Web Search (Grok 4.6)
         result=None
-        if research_plan is None and session.external_reference_settings.enabled:
+        if (
+            research_plan is None and session.external_reference_settings.enabled
+            and not ctx.get("explain_only")
+        ):
             await sender.text(
                 "research.state",turn_id=turn_id,status="running",
                 phase="authoritative_web",
@@ -6944,19 +6965,86 @@ async def _queue_curated_research(
                         visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
                         candidate=img_match)
 
-        # 3. Supplemental model knowledge (Grok 4.6 explanation)
+        # 3a. A short outside-PDF explanation, said after the rules' answer
+        # (lane R6, decision 6, restoring D4).
         supplemental_result=None
+        spoken_explanation=False
+        if research_plan is None and ctx.get("outside_pdf") is not None:
+            try:
+                supplemental_role=RoleModel.from_environment("supplemental")
+                supplemental_result=await asyncio.wait_for(
+                    XaiSupplementalKnowledge(
+                        _role_client(supplemental_role),
+                        replace(
+                            session.supplemental_knowledge_settings,
+                            model=supplemental_role.model
+                            or session.supplemental_knowledge_settings.model,
+                        ),
+                    ).explain_outside_pdf(
+                        ctx["question"],subject=ctx["outside_pdf"]["subject"],
+                        kind=ctx["outside_pdf"]["kind"],language=turn_language),
+                    timeout=research_remaining(
+                        session.supplemental_knowledge_settings.timeout_seconds),
+                )
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                supplemental_result={"status":"timeout_total"}
+            except Exception as exc:
+                log.info(
+                    "outside-PDF explanation failed turn_id=%s category=%s",
+                    turn_id,type(exc).__name__)
+                supplemental_result={"status":"provider_error"}
+            if not session.owns_research_result(turn_id,generation,configuration_id):
+                return
+            explanation=(
+                supplemental_result.get("answer","")
+                if supplemental_result.get("status")=="success" else ""
+            )
+            violations=(
+                curated.outside_pdf_explanation_violations(
+                    explanation,question=ctx["question"],gap=ctx["outside_pdf"])
+                if explanation else ("no_explanation",)
+            )
+            if violations:
+                log.info(
+                    "outside-PDF explanation dropped turn_id=%s status=%s checks=%s",
+                    turn_id,supplemental_result.get("status"),"+".join(violations))
+            elif (
+                (turn_id,generation) in session.held_audio_complete
+                and clock()<ctx.get("speak_by",0.0)
+            ):
+                explained=curated.apply_outside_pdf_explanation(
+                    turn_id=turn_id,language=turn_language,explanation=explanation,
+                    retrieval_backend=supplemental_result["backend"],
+                )
+                pcm=await asyncio.to_thread(
+                    synthesize,said(explained.speech_text),turn_language)
+                frames=frame_complete_audio(pcm)
+                if (
+                    frames and session.is_current(turn_id,generation)
+                    and (turn_id,generation) in session.held_audio_complete
+                ):
+                    await sender.segment(turn_id,1,frames,generation)
+                    await _release_held_audio(sender,session,turn_id,generation,2)
+                    research_plan=explained
+                    spoken_explanation=True
+            else:
+                log.info(
+                    "outside-PDF explanation late turn_id=%s elapsed_ms=%s",
+                    turn_id,supplemental_result.get("elapsed_ms"))
+
+        # 3. Supplemental model knowledge (Grok 4.6 explanation)
         if (
             research_plan is None
+            and ctx.get("outside_pdf") is None
+            and not ctx.get("source_answers_quantity")
             and session.supplemental_knowledge_settings.enabled
             and supplemental_knowledge_allowed(
                 ctx["query"],plan.question_dimensions)
         ):
-            await sender.text(
-                "research.state",turn_id=turn_id,status="running",
-                phase="supplemental_model",
-                correlation_id=f"research-{generation}-{turn_id}",
-            )
+            if web_enabled:
+                await announce("supplemental_model")
             supplemental_started=clock()
             try:
                 supplemental_client=_role_client(
@@ -6989,6 +7077,18 @@ async def _queue_curated_research(
                 )
 
         if research_plan is not None and session.owns_research_result(turn_id,generation,configuration_id):
+            if not announced:
+                await announce(
+                    "supplemental_model"
+                    if research_plan.answer_origin=="supplemental_model_knowledge"
+                    else "approved_references")
+            outside_pdf_fields=(
+                # Lane R6, decision 6: where the words come from, for the
+                # screen -- AI general knowledge, outside the PDF.
+                {"source_label":"AI 일반 지식","outside_pdf":True,
+                 "spoken":spoken_explanation}
+                if "outside_pdf_explanation" in research_plan.limitations else {}
+            )
             await _finish_research_operation(
                 sender,session,turn_id,generation,"success",
                 primary_text=research_plan.primary_text,
@@ -6996,6 +7096,7 @@ async def _queue_curated_research(
                 citations=list(research_plan.citations),
                 retrieval_backend=research_plan.retrieval_backend,
                 limitations=list(research_plan.limitations),
+                **outside_pdf_fields,
             )
             if session.experiment_report_store is not None:
                 report=await asyncio.to_thread(
@@ -7015,6 +7116,9 @@ async def _queue_curated_research(
             if (
                 session.experiment_report_store is not None
                 and status not in {"disabled","not_found","no_allowed_citation"}
+                # An outside-PDF explanation left unsaid is not a research
+                # failure: the rules' answer was the answer (decision 6).
+                and not (ctx.get("outside_pdf") is not None and result is None)
             ):
                 report=_open_experiment_report(session,curated)
                 store=session.experiment_report_store
@@ -7031,6 +7135,11 @@ async def _queue_curated_research(
                     payload={"status":status,"state_mutation":False},
                 )
                 await sender.text("experiment.report.state",report=_public_experiment_report_state(report))
+            if not announced:
+                # Nothing was shown as pending, so nothing is shown as
+                # unfinished: the rules' answer stands alone (decision 8).
+                session.finish_research(turn_id,generation)
+                return
             await _finish_research_operation(
                 sender,session,turn_id,generation,status,
                 limitation=(
@@ -7040,7 +7149,13 @@ async def _queue_curated_research(
                 ),
             )
 
-    task=asyncio.create_task(worker())
+    async def worker_releasing_held_audio()->None:
+        try:
+            await worker()
+        finally:
+            await _release_held_audio(sender,session,turn_id,generation,1)
+
+    task=asyncio.create_task(worker_releasing_held_audio())
     session.track_visual_task(task)
     try:
         await asyncio.shield(task)
@@ -7444,6 +7559,53 @@ async def _finish_research_operation(
         correlation_id=f"research-{generation}-{turn_id}",
         **fields,
     )
+    return True
+
+
+def _outside_pdf_gap(
+    session:ListenerSession,curated:CuratedProtocolSession,plan:Any,
+    transcript:str,language:str,
+)->dict[str,str]|None:
+    """What a spoken outside-PDF explanation would explain, when one may follow.
+
+    Only with the supplemental role on, for a spoken Korean or English
+    answer, where curated.outside_pdf_gap finds the source silent on the
+    meaning or purpose asked (lane R6, decision 6).
+    """
+
+    if (
+        not session.supplemental_knowledge_settings.enabled
+        or language not in {"ko","en"}
+        or getattr(plan,"speech_policy","speak")!="speak"
+    ):
+        return None
+    return curated.outside_pdf_gap(plan,transcript)
+
+
+async def _release_held_audio(
+    sender:LockedSender,
+    session:ListenerSession,
+    turn_id:int,
+    generation:int,
+    segment_count:int,
+)->bool:
+    """Send the audio.complete an outside-PDF explanation held, once.
+
+    Lane R6, decision 6: the rules' answer is played at once and the
+    explanation is said after it only if it is ready while that answer
+    plays. Whichever comes first -- the explanation, its failure, or the end
+    of the answer's audio -- sends it; the others find it gone.
+    """
+
+    identity=(turn_id,generation)
+    if identity not in session.held_audio_complete:return False
+    session.held_audio_complete.discard(identity)
+    if not session.is_current(turn_id,generation):return False
+    fields:dict[str,Any]={"generation":generation}
+    if session.accepted_configuration_id is not None:
+        fields["configuration_id"]=session.accepted_configuration_id
+    await sender.text(
+        "audio.complete",turn_id=turn_id,segment_count=segment_count,**fields)
     return True
 
 
@@ -8500,8 +8662,35 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "query":resolved_query,"reference_query":reference_query,
                     "step":step,"facts":tuple(facts),
                     "force_external":plan.requested_followup=="search_external_reference",
+                    "question":transcript,
+                    # Lane R6, decision 3: a quantity the source answers is
+                    # never given model knowledge.
+                    "source_answers_quantity":curated.quantity_answered_by_source(transcript),
+                    "outside_pdf":_outside_pdf_gap(session,curated,plan,transcript,turn_language),
                 }
                 session.begin_research(turn_id,generation)
+            elif (
+                curated.active
+                and _outside_pdf_gap(session,curated,plan,transcript,turn_language) is not None
+            ):
+                # "이 단계 왜 하는 거야?": the rules' answer, then a short
+                # outside-PDF explanation and nothing else (lane R6, decision 6).
+                step=curated.fixture.steps[curated.current_index]
+                research_context={
+                    "query":transcript,"reference_query":transcript,
+                    "step":step,"facts":tuple(plan.facts),"force_external":False,
+                    "question":transcript,"source_answers_quantity":False,
+                    "outside_pdf":_outside_pdf_gap(session,curated,plan,transcript,turn_language),
+                    "explain_only":True,
+                }
+                session.begin_research(turn_id,generation)
+            if (
+                research_context is not None
+                and not research_context.get("explain_only")
+                # Lane R6, decision 8: with web references off, nothing is
+                # announced that can only end in "웹 참고 자료 확인 제한".
+                and session.external_reference_settings.enabled
+            ):
                 await current_text(
                     "research.state",turn_id=turn_id,status="pending",
                     phase="approved_references",
@@ -9109,8 +9298,24 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await sender.segment(turn_id,0,frames,generation)
         await current_text(
             "reply.complete",turn_id=turn_id,text=display_text)
-        await current_text(
-            "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
+        if (
+            speech_policy=="speak" and research_context is not None
+            and research_context.get("outside_pdf") is not None
+        ):
+            # Lane R6, decision 6: the answer plays now; an outside-PDF
+            # explanation ready before it ends is said right after it.
+            # Otherwise audio.complete goes when the answer's audio ends.
+            session.held_audio_complete.add((turn_id,generation))
+            research_context["speak_by"]=(
+                clock()+sum(len(frame) for frame in frames)/32000+0.3)
+            async def release_when_answer_ends(deadline:float)->None:
+                await asyncio.sleep(max(0.0,deadline-clock()))
+                await _release_held_audio(sender,session,turn_id,generation,1)
+            session.track_visual_task(asyncio.create_task(
+                release_when_answer_ends(research_context["speak_by"])))
+        else:
+            await current_text(
+                "audio.complete",turn_id=turn_id,segment_count=1 if speech_policy=="speak" else 0)
         if (
             router_outcome is not None and router_before is not None
             and session.is_current(turn_id,generation)
