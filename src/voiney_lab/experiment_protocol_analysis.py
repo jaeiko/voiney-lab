@@ -99,6 +99,14 @@ _CONSTRUCT_TYPES = {
 
 ANALYSIS_RESPONSE_SCHEMA_NAME = "protocol_analysis_response_v1"
 
+#: Output tokens the analysis call may use. The request used to name none, and
+#: xAI then set no cap; the other providers' adapters fall back to a chat-sized
+#: default (8,192 + 4,096 for thinking), while real responses ran to 21-68 KB
+#: of JSON (lane P2). 60,000 leaves the adapters' thinking allowance inside
+#: Gemini 3.8 Flash's 65,536 output tokens and is under the 128K of Claude
+#: Opus/Sonnet 5.5 and GPT-6.1 Sol (official model pages, 2026-10-05).
+ANALYSIS_MAX_OUTPUT_TOKENS = 60_000
+
 #: Fields the response must spell out although the domain gives them a
 #: default. With them optional a provider returned metadata and a description
 #: and no sections at all -- zero steps, accepted for review -- on two of three
@@ -563,6 +571,7 @@ def build_protocol_analysis_chat_request(
             },
         },
         "temperature": 0,
+        "max_completion_tokens": ANALYSIS_MAX_OUTPUT_TOKENS,
     }
     if reasoning_effort is not None:
         request["reasoning_effort"] = reasoning_effort
