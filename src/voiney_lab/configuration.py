@@ -157,7 +157,12 @@ class CascadeVadSettings:
 
 @dataclass(frozen=True)
 class CascadeSttSettings:
-    """Documented xAI REST STT fields that stay off the voice-path critical loop."""
+    """Documented xAI REST STT fields that stay off the voice-path critical loop.
+
+    Only the ``xai`` STT provider sends them. Lane SV moved the setting names
+    from xAI-only to provider-neutral ones (``VOINEY_LAB_STT_VAD_THRESHOLD``,
+    ``VOINEY_LAB_STT_FILLER_WORDS``).
+    """
 
     vad_threshold: float = 0.5
     filler_words: bool = False
@@ -169,10 +174,10 @@ class CascadeSttSettings:
         env = os.environ if environment is None else environment
         return cls(
             vad_threshold=_floating(
-                env, "VOINEY_LAB_XAI_STT_VAD_THRESHOLD", 0.5, 0.0, 1.0
+                env, "VOINEY_LAB_STT_VAD_THRESHOLD", 0.5, 0.0, 1.0
             ),
             filler_words=_integer(
-                env, "VOINEY_LAB_XAI_STT_FILLER_WORDS", 0, 0, 1
+                env, "VOINEY_LAB_STT_FILLER_WORDS", 0, 0, 1
             ) == 1,
         )
 

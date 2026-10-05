@@ -193,6 +193,8 @@ from voiney_lab.semantic_intent import (
 )
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
+from voiney_lab import voice_providers
+from voiney_lab.voice_providers import SttProviderSettings, TtsProviderSettings
 from voiney_lab.identity import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
@@ -1613,13 +1615,23 @@ def transcribe(
     vad_threshold:float=0.5,
     filler_words:bool=False,
 )->Transcription:
-    """Call documented batch STT fields while retaining optional extensions."""
+    """Send one utterance to the configured STT provider (xAI by default).
 
+    The xAI request below is the original one; the other providers live in
+    ``voice_providers`` and keep the same contract (raise on failure or
+    timeout, empty text on an empty result).
+    """
+
+    settings=SttProviderSettings.from_environment()
+    language=voice_providers.stt_language(settings,language)
+    if settings.provider!=voice_providers.XAI:
+        return voice_providers.transcribe(
+            pcm,settings,language=language,keyterms=keyterms)
     multipart,_,_= _stt_multipart(
         pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
         filler_words=filler_words)
     response=requests.post(api_url("stt"),headers={"Authorization":f"Bearer {require_env("XAI_API_KEY")}"},
-        files=multipart,timeout=120)
+        files=multipart,timeout=settings.timeout_seconds)
     response.raise_for_status()
     payload=response.json()
     text=payload.get("text","")
@@ -1657,13 +1669,31 @@ def validate_tts_pcm(response:requests.Response)->bytes:
 def _tts_voice() -> str:
     """Resolve the one active Cascade TTS voice configuration path."""
 
-    return os.environ.get("VOINEY_LAB_TTS_VOICE", "leo").strip() or "leo"
+    return TtsProviderSettings.from_environment().voice
+
+
+def _tts_provider() -> str:
+    return TtsProviderSettings.from_environment().provider
+
+
+def stt_endpoint_label() -> str:
+    """The STT request the diagnostics name: the xAI path keeps "/v1/stt"."""
+
+    provider=SttProviderSettings.from_environment().provider
+    return {
+        voice_providers.XAI:"/v1/stt",
+        voice_providers.GOOGLE_CLOUD:"google_cloud:/v1/speech:recognize",
+        voice_providers.ELEVENLABS:"elevenlabs:/v1/speech-to-text",
+    }[provider]
 
 def synthesize(text:str,language:str|None=None)->bytes:
     clean_text = clean_speech_text(text)
     if not clean_text:
         return b""
-    voice = _tts_voice()
+    settings=TtsProviderSettings.from_environment()
+    if settings.provider!=voice_providers.XAI:
+        return voice_providers.synthesize(clean_text,language or "ko",settings)
+    voice = settings.voice
     response=requests.post(
         api_url("tts"),
         headers={"Authorization":f"Bearer {require_env('XAI_API_KEY')}"},
@@ -1673,7 +1703,7 @@ def synthesize(text:str,language:str|None=None)->bytes:
             "language":language or "ko",
             "output_format":{"codec":"pcm","sample_rate":16000},
         },
-        timeout=120,
+        timeout=settings.timeout_seconds,
     )
     return validate_tts_pcm(response)
 
@@ -4937,7 +4967,7 @@ def get_admin_metrics(
         "schema_version":1,
         "voice":{
             "pipeline":"cascade",
-            "provider":"xai",
+            "provider":_tts_provider(),
             "voice_id":_tts_voice(),
             "persona":"professor",
         },
@@ -7722,7 +7752,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         "configured_prefix_ms":session.detector.config.prefix_frames*20,
         "retained_prefix_frames":max(0,retained_prefix_frames),
         "retained_prefix_ms":max(0,retained_prefix_frames)*20,
-        "stt_endpoint":"/v1/stt",
+        "stt_endpoint":stt_endpoint_label(),
         "request_field_order":transcription_context.request_policy()[
             "request_field_order"],
         "language":stt_language,"keyterms":list(stt_keyterms),
@@ -7752,7 +7782,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         response_duration_seconds=transcription.duration_seconds,
         word_count=len(transcription.words),
         words=list(transcription.words),
-        stt_endpoint="/v1/stt",
+        stt_endpoint=stt_diagnostic_metadata["stt_endpoint"],
         wav_sha256=stt_diagnostic_metadata["wav_sha256"],
         wav_byte_count=stt_diagnostic_metadata["wav_byte_count"],
         language_bias=stt_language,
@@ -9673,7 +9703,7 @@ async def voice_socket(websocket:WebSocket):
                                     barge_in_prefix_ms=config.barge_in_prefix_frames*20,
                                     voice_profile={
                                         "pipeline":"cascade",
-                                        "provider":"xai",
+                                        "provider":_tts_provider(),
                                         "voice_id":_tts_voice(),
                                         "persona":"professor",
                                     },

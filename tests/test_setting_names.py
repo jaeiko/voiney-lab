@@ -135,6 +135,12 @@ class SettingTableTests(unittest.TestCase):
                 self.assertIn(new, BY_NAME)
                 self.assertTrue(new.startswith(NEW_PREFIX))
                 rest = old[len(OLD_PREFIX):] if old.startswith(OLD_PREFIX) else old
+                # Lane SV (human decision 2026-10-05): the xAI-only STT names
+                # moved to provider-neutral ones, so for them the new name is
+                # the old one with XAI_STT_ made STT_, not just re-prefixed.
+                rest = rest.removeprefix(NEW_PREFIX)
+                if rest.startswith("XAI_STT_"):
+                    rest = rest[len("XAI_"):]
                 self.assertEqual(new, NEW_PREFIX + rest)
         # A setting added after the rename has no old name, so the renamed
         # names are a subset of the table rather than all of it (human
