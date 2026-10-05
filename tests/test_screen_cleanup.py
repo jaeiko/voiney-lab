@@ -188,18 +188,18 @@ assert(gate.route.includes("blocked")&&gate.route.includes("endpoint_observation
 // The reason was already set before this turn, so this turn cannot be told
 // apart from a failed save that restored it: it stays "차단됨".
 const again=await turn(3,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked"});
-assert(again.status.textContent==="차단됨"&&again.error==="차단됨",`unconfirmable hold was relabelled: ${again.status.textContent}`);
+assert(again.status.textContent==="차단됨"&&again.error==="",`unconfirmable hold was relabelled: ${again.status.textContent}`);
 await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:4}});
 const failed=await turn(4,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked",extra:[{type:"experiment.session.error",code:"workspace_error"}]});
-assert(failed.status.textContent==="차단됨"&&failed.error==="차단됨",`a failed save read as an observation hold: ${failed.status.textContent}`);
+assert(failed.status.textContent==="차단됨"&&failed.error!=="차단됨",`a failed save read as an observation hold: ${failed.status.textContent}`);
 await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:5}});
 const interval=await turn(5,{blockReason:"repeat_interval_open",done:{result_kind:"next",speech_mode:"blocked"},terminal:"blocked"});
-assert(interval.status.textContent==="차단됨"&&interval.error==="차단됨",`another hold reason was relabelled: ${interval.status.textContent}`);
+assert(interval.status.textContent==="차단됨"&&interval.error==="",`another hold reason was relabelled: ${interval.status.textContent}`);
 await send({type:"protocol.fixture.state",action:"next",state:{...base,block_reason:null,revision:6}});
 const clarify=await turn(6,{blockReason:"endpoint_observation_not_reported",done:{result_kind:"clarify_reference",speech_mode:"blocked"},terminal:"blocked"});
 assert(clarify.status.textContent==="차단됨",`a non-NEXT turn read as an observation hold: ${clarify.status.textContent}`);
 const cancelled=await turn(7,{done:{result_kind:"current",speech_mode:"control"},terminal:"cancelled"});
-assert(cancelled.status.textContent==="중단됨"&&cancelled.error==="중단됨",`cancelled turn changed: ${cancelled.status.textContent}`);
+assert(cancelled.status.textContent==="중단됨"&&cancelled.error==="",`cancelled turn changed: ${cancelled.status.textContent}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -346,7 +346,10 @@ renderProtocolReview({protocol_id:"p-1",title:"In-gel",revision_id:"pdf-1-analys
  outstanding_blockers:[{code:"unresolved_ambiguity",kind:"reviewer_can_clear",reviewer_action:"resolve_ambiguity",already_acknowledged:false,decision_options:["single_statement_is_authoritative"],clearing_decision:"single_statement_is_authoritative",citable_segments:[]}],
  reviewer_findings:[{kind:"ambiguity_resolved",actor_principal_id:"reviewer-a",actor_role:"reviewer"},{kind:"gate_acknowledged",reason_code:"no_declared_safety_warnings",actor_principal_id:"reviewer-a",actor_role:"reviewer"}],sections:[]});
 const text=["protocol-review-content","protocol-blockers","protocol-findings"].map(id=>visibleText(node(id))).join(" ");
-for(const phrase of ["원문과 분석 버전","버전 pdf-1-analysis-2","분석 결과 데이터 SHA-256","처리 단계 · 검토 필요","실행 전 확인 조건","어느 진술이 기준인지","근거 없는 해결은 서버가 거부합니다","선택할 근거 원문 구간이 없습니다","이 모호성을 해결","모호성 해결","확인 처리"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+for(const phrase of ["원문 파일","9쪽","처리 단계 · 검토 필요","실행 전 확인 조건","어느 진술이 기준인지","근거 없는 해결은 서버가 거부합니다","고를 수 있는 원문 근거가 없어","이 모호성을 해결","모호성 해결","확인 처리"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+// Lane U decision 2: the revision id and the hashes sit in the developer details, not the body.
+for(const hidden of ["pdf-1-analysis-2","SHA-256","a".repeat(64),"b".repeat(64)])assert(!text.includes(hidden),`identifier in the body: ${hidden}`);
+const dev=["protocol-review-content"].map(id=>devText(node(id))).join(" ");assert(dev.includes("pdf-1-analysis-2")&&dev.includes("b".repeat(64)),"identifier missing from the developer details");
 for(const term of ["리비전","해소","게이트","정본","세그먼트","페이로드","수명주기"])assert(!text.includes(term),`hard term still rendered: ${term}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
