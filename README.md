@@ -22,8 +22,10 @@ authority.
 
 ## Product contract
 
-- The active voice path is Cascade: browser PCM → WebRTC VAD → xAI STT → shared
-  intent arbitration → deterministic workflow/tool boundary → xAI TTS.
+- The active voice path is Cascade: browser PCM → WebRTC VAD → STT → shared
+  intent arbitration → deterministic workflow/tool boundary → TTS. STT and TTS
+  each have a provider setting (`xai` by default; `google_cloud`,
+  `elevenlabs`) — see [Speech providers](#speech-providers).
 - Protocol learning, audit, history, combined “why + next,” visual requests,
   completion, pause/resume, and interruption stay on the production WebSocket
   path covered by integration tests.
@@ -51,14 +53,14 @@ Local PDF / protocols.io / Drive / GitHub
 
 Browser AudioWorklet (16 kHz PCM)
   → FastAPI WebSocket + FrameBuffer + WebRTC VAD
-  → xAI POST /v1/stt
+  → one batch STT request per utterance (xAI POST /v1/stt by default)
   → language-consistency and transcript-admission gates
   → shared RequestArbitration
       ├─ emergency and deterministic state gates
       ├─ curated/executable protocol router
       ├─ approved reference retrieval
       └─ bounded general agent tool loop
-  → sentence-segmented xAI TTS
+  → sentence-segmented TTS (xAI by default)
   → canonical events and browser playback
 
 Canonical workflow events
@@ -281,6 +283,55 @@ preference, transcript admission emits the fixed clarification:
 No workflow mutation is executed from that mismatched transcript. Sanitized
 analytics retain only the mismatch classification and timing—not transcript
 text. See the [official xAI STT documentation](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text).
+
+### Speech providers
+
+The server cuts each utterance with its WebRTC VAD and sends the finished
+utterance (16 kHz mono PCM16) to one batch STT request; replies are spoken one
+sentence segment at a time, each segment one TTS request for 16 kHz PCM16.
+`src/voiney_lab/voice_providers.py` lets each of those two calls use a
+different provider. The defaults keep the original xAI path unchanged.
+
+| Setting | Values | Default |
+|---|---|---|
+| `VOINEY_LAB_STT_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | `xai` |
+| `VOINEY_LAB_STT_MODEL` | provider model id | xai: not sent; google_cloud: `latest_long`; elevenlabs: `scribe_v2` |
+| `VOINEY_LAB_STT_LANGUAGE` | `ko`, `en`, `vi` — used when the session input language is `auto` | empty (provider detects; google_cloud then uses `ko`) |
+| `VOINEY_LAB_STT_TIMEOUT_SECONDS` | 1–300 | `120` |
+| `VOINEY_LAB_STT_VAD_THRESHOLD`, `VOINEY_LAB_STT_FILLER_WORDS` | xAI-only request fields (lane SV moved them from xAI-only names; `setting_renames.py` maps the old ones) | `0.5`, `0` |
+| `VOINEY_LAB_TTS_PROVIDER` | `xai`, `google_cloud`, `elevenlabs` | `xai` |
+| `VOINEY_LAB_TTS_MODEL` | provider model id | xai, google_cloud: not sent; elevenlabs: `eleven_v4_turbo` |
+| `VOINEY_LAB_TTS_VOICE` | a voice of the selected provider | xai: `leo`; google_cloud: `ko-KR-Chirp3-HD-Charon`; elevenlabs: `JBFqnCBsd6RMkjVDRZzb` |
+| `VOINEY_LAB_TTS_TIMEOUT_SECONDS` | 1–300 | `120` |
+| `VOINEY_LAB_GOOGLE_SPEECH_API_KEY` | Google Cloud API key with Speech-to-Text and Text-to-Speech enabled | — |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key (needs speech-to-text and text-to-speech permission) | — |
+
+A voice name belongs to one provider: change `VOINEY_LAB_TTS_VOICE` (or leave
+it empty) together with `VOINEY_LAB_TTS_PROVIDER`. A Chirp 3 HD voice follows
+the turn's language (`ko-KR-Chirp3-HD-Charon` speaks an English turn as
+`en-US-Chirp3-HD-Charon`).
+
+- `google_cloud` STT uses Cloud Speech-to-Text **v1** `speech:recognize`
+  (`latest_long`, `latest_short`, `command_and_search`, `default`). The newest
+  model, `chirp_3`, exists only in the v2 API, and v2 refuses API keys; using it
+  needs a service-account credential, which is not set up. Key terms go out as
+  `speechContexts` phrases.
+- `google_cloud` TTS uses Cloud Text-to-Speech v1 `text:synthesize` with a
+  Chirp 3 HD voice. Gemini-TTS (`gemini-2.5-flash-tts`) answered 403 with an
+  API key (it needs Vertex AI permission).
+- `elevenlabs` STT is `POST /v1/speech-to-text` (`scribe_v2`, key terms as
+  `keyterms`); TTS is `POST /v1/text-to-speech/{voice_id}` with
+  `output_format=pcm_16000`.
+
+Switching provider does not move the safety boundary: the emergency gate, the
+deterministic front rules (pause/stop/end confirmation) and server validation
+read the transcript the same way whichever provider wrote it. A provider error
+or timeout raises exactly as the xAI path does, so an ordinary turn ends with
+the turn error and no state change, and an interrupted answer asks the user to
+say it again; an empty result is rejected as an empty transcript. The
+adapters are contract-tested against fake transports in
+`tests/test_voice_providers.py`; lane SV's measurement report records which
+real calls were made.
 
 ## Semantic intent fallback
 
@@ -709,7 +760,8 @@ value unchanged. `docs/MIGRATION_NOTES.md` records the change.
 | `VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
 | `VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT` | Protocol-analysis reasoning effort; defaults to compatibility-preserving `high` |
 | `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS` | Time limit of one protocol-analysis provider call, 30–3600 s; default `600`. The call runs in the background analysis task |
-| `VOINEY_LAB_TTS_VOICE` | Cascade voice; defaults to `leo` |
+| `VOINEY_LAB_STT_PROVIDER`, `VOINEY_LAB_TTS_PROVIDER` | Speech providers, default `xai`; see [Speech providers](#speech-providers) |
+| `VOINEY_LAB_TTS_VOICE` | Cascade voice of the selected TTS provider; xAI default `leo` |
 | `VOINEY_LAB_USAGE_SCOPE` | `operational`, `demo`, `reference_only`, or `test_only` |
 | `VOINEY_LAB_SAFETY_CATALOG` | Absolute approved safety-catalog path |
 | `VOINEY_LAB_PROTOCOL_ENABLED` | Enables immutable PDF catalog |
