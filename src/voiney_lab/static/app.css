@@ -398,6 +398,14 @@
     .protocol-review-group{padding:.6rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
     .protocol-review-group h4{margin:0 0 .35rem;color:var(--blurple);font-size:.78rem}
     .protocol-review-group p{margin:.2rem 0;color:var(--subtext);font-size:.75rem;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+    .citation-list{display:flex;flex-direction:column;max-height:12.5rem;overflow-y:auto;overscroll-behavior:contain;margin:.3rem 0 .5rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:rgba(0,0,0,.12);scrollbar-width:thin;scrollbar-color:var(--blurple) rgba(255,255,255,.06)}
+    .citation-list:focus-visible{outline:2px solid var(--border-focus);outline-offset:2px}
+    .citation-row{display:flex;align-items:center;gap:.5rem;min-height:2.3rem;padding:.3rem .55rem;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--ink);cursor:pointer}
+    .citation-row:last-child{border-bottom:0}
+    .citation-row:hover{background:rgba(88,101,242,.1)}
+    .citation-row input{flex:0 0 auto;width:1.05rem;height:1.05rem;margin:0}
+    .citation-page{flex:0 0 auto;min-width:2.6rem;color:var(--blurple);font-weight:800}
+    .citation-excerpt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--subtext)}
     .protocol-review-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.65rem}
     .protocol-review-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.45rem .7rem;font-weight:750;cursor:pointer}
     .protocol-review-actions button:disabled{cursor:not-allowed;opacity:.45}
@@ -1006,6 +1014,11 @@
 
     .turn .turn-status{grid-column:2;color:var(--blurple);font-size:.8rem;font-weight:800}
     .turn .turn-status.needs-observation{color:var(--amber)}
+    .turn .turn-status.is-complete{color:var(--muted)}
+    .turn .turn-status.is-stopped{color:var(--muted)}
+    .turn .turn-status.is-blocked,.turn .turn-status.is-error{color:var(--red)}
+    .turn .turn-status.is-settled{display:none}
+    .turn .error:empty{display:none}
     .turn .tools{color:var(--cyan);font-size:.8rem;font-weight:700;white-space:pre-wrap}
     .turn .server-operation{color:var(--muted);font-size:.76rem}
     .turn .stats{color:var(--muted);font-size:.74rem}
@@ -1104,3 +1117,18 @@
       .voice-panel{padding:1.25rem}
       h1{font-size:1.45rem}
     }
+
+    /* Lane U: pause banner, resume button, readable labels with folded ids */
+    .workflow-paused-banner{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin:.6rem 0;padding:.75rem .9rem;border:2px solid var(--amber);border-radius:var(--radius-sm);background:rgba(240,178,50,.12)}
+    .workflow-paused-banner[hidden]{display:none}
+    .workflow-paused-banner strong{display:block;color:var(--amber);font-size:.95rem}
+    .workflow-paused-banner span{color:var(--ink);font-size:.82rem}
+    .workflow-paused-banner button{min-height:2.75rem;padding:.55rem 1.1rem;border:0;border-radius:var(--radius-pill);background:var(--green-cta);color:#03210f;font-weight:850;font-size:.95rem;cursor:pointer}
+    .workflow-paused-banner button:hover{background:var(--green-cta-hover)}
+    #rail-pause-session.is-resume{background:var(--green-cta);color:#03210f;border-color:var(--green-cta);font-weight:850}
+    .experiment-context-grid strong .dev-code-details,#procedure-meta .dev-code-details,#procedure-handoff .dev-code-details{font-weight:400}
+    .experiment-workflow-panel{margin-top:.75rem}
+    .finding-status:empty{display:none}
+    .finding-status{color:var(--amber);font-weight:700}
+    .audio-echo-notice{margin:.35rem 0 0;color:var(--amber);font-size:.8rem;font-weight:700}
+    .audio-echo-notice[hidden]{display:none}
