@@ -20,3 +20,5 @@ node_modules/
 /intracellularmetaboliteextraction.pdf
 /usingdynamicheadspacecollections.pdf
 data/development_cache/
+.env.*
+!.env.example
