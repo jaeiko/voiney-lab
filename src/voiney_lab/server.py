@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, contextvars, copy, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time
+import asyncio, collections, contextvars, copy, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -38,8 +38,10 @@ from voiney_lab.cascade_filler import (
     FillerSessionMemory,
     cascade_filler_mode,
     cascade_filler_status_delay_ms,
+    cascade_filler_status_speech_enabled,
 )
 from voiney_lab.curated_protocol import (
+    control_words,
     ClaimAdmissionStatus,
     CuratedProtocolAction,
     CuratedProtocolFixture,
@@ -378,9 +380,11 @@ def log_effective_vad_configuration(settings:VoiceVadSettings)->None:
 def log_cascade_filler_configuration()->None:
     """Check the waiting-cue settings once at startup and say which cue is on."""
     log.info(
-        "cascade_filler.configuration mode=%s delay_ms=%d status_delay_ms=%d",
+        "cascade_filler.configuration mode=%s delay_ms=%d status_delay_ms=%d "
+        "status_speech=%s",
         cascade_filler_mode(),cascade_filler_delay_ms(),
         cascade_filler_status_delay_ms(),
+        "on" if cascade_filler_status_speech_enabled() else "off",
     )
 
 
@@ -1742,6 +1746,85 @@ def synthesize(text:str,language:str|None=None)->bytes:
         timeout=settings.timeout_seconds,
     )
     return validate_tts_pcm(response)
+
+# --- The server hears itself (lane XO, decision 6b of 2026-10-05) ------------
+# A laptop speaker's sound reaches its microphone. The xAI STT request carries
+# vad_threshold (0.5), and an empty transcript sends a barge-in candidate
+# back to the playback it interrupted; Google's and ElevenLabs' batch STT take
+# no such threshold, so the agent's own voice came back as a user turn. The
+# server knows what it has just said, so a transcript heard while it speaks,
+# or just after, that is mostly one of those sentences is dropped as an echo:
+# nothing changes and the drop is logged. A pause or end word the agent did
+# not say keeps the transcript -- a researcher speaking over the agent.
+
+#: Sentences kept, and for how long, to compare a transcript with.
+ECHO_MEMORY_SENTENCES=12
+ECHO_MEMORY_SECONDS=60.0
+#: After playback ends, the room and the browser's audio path still carry it.
+ECHO_TAIL_SECONDS=3.0
+#: Shorter transcripts ("다음 단계", "네", "잠깐만") are never taken for an
+#: echo: a researcher's short command often repeats the agent's own words.
+ECHO_MIN_CHARACTERS=12
+#: An echo is the share of the transcript's characters inside a run of at
+#: least ECHO_RUN_CHARACTERS that one spoken sentence also has.
+ECHO_RUN_CHARACTERS=3
+#: Set from ~/reports/lane_xo_echo_calibration.md (lane XO report §3): with
+#: every recent sentence counted as just played, no researcher utterance of
+#: the evaluation set reaches 0.8, and most simulated echoes do.
+ECHO_OVERLAP_THRESHOLD=0.8
+
+_ECHO_DROPPED=re.compile(r"[^0-9a-z가-힣µμ%]+")
+_SPEAKING_SESSION:contextvars.ContextVar["ListenerSession|None"]=contextvars.ContextVar(
+    "voiney_lab_speaking_session",default=None)
+
+
+def echo_key(text:str)->str:
+    """``text`` with case, spacing and punctuation removed, for comparison."""
+
+    return _ECHO_DROPPED.sub("",unicodedata.normalize("NFKC",text or "").casefold())
+
+
+def echo_overlap(transcript:str,spoken:str)->float:
+    """The share of the transcript ``spoken`` also has, in runs of 3 or more.
+
+    Each character of the normalized transcript counts once it sits in a
+    run of ECHO_RUN_CHARACTERS that the spoken sentence contains. Containment
+    rather than similarity: an echo is usually a stretch of a longer sentence,
+    heard from wherever the microphone caught it.
+    """
+
+    heard=echo_key(transcript); said=echo_key(spoken)
+    run=ECHO_RUN_CHARACTERS
+    if len(heard)<run:
+        return 0.0
+    known={said[i:i+run] for i in range(len(said)-run+1)}
+    covered=[False]*len(heard)
+    for i in range(len(heard)-run+1):
+        if heard[i:i+run] in known:
+            covered[i:i+run]=[True]*run
+    return sum(covered)/len(heard)
+
+
+@dataclass(frozen=True)
+class OwnSpeechEcho:
+    """A transcript taken for the agent's own voice, and why."""
+
+    spoken:str
+    overlap:float
+
+
+def said(text:str)->str:
+    """Remember ``text`` as said in the current session, and hand it back.
+
+    Wrapped round the text at every TTS call, ``asyncio.to_thread(synthesize,
+    said(text), language)``, so the sentence is known before its audio exists.
+    """
+
+    session=_SPEAKING_SESSION.get()
+    if session is not None:
+        session.remember_spoken(text)
+    return text
+
 
 def frame_complete_audio(pcm:bytes)->list[bytes]:
     buffer=FrameBuffer(); frames=buffer.push(pcm); tail=buffer.finish(pad=True)
@@ -5251,6 +5334,11 @@ class ListenerSession:
         self.auto_translation_announced=False
         # Waiting-status sentences already said and made in this session.
         self.filler_memory=FillerSessionMemory()
+        # What the agent has said lately, for the echo check (lane XO, 6b):
+        # (when it was synthesized, the sentence).
+        self.spoken_recently:collections.deque[tuple[float,str]]=collections.deque(
+            maxlen=ECHO_MEMORY_SENTENCES)
+        self.last_playback_ended_at:float|None=None
         self.semantic_intent_settings=(
             semantic_intent_settings or SemanticIntentSettings())
         #: The lane R router (off by default): a turn the front rules hand on
@@ -5288,6 +5376,41 @@ class ListenerSession:
         self.stt_settings=CascadeSttSettings.from_environment()
     @property
     def state(self): return self.detector.state
+    def remember_spoken(self,text:str)->None:
+        """Keep a sentence the agent is about to say, for the echo check."""
+
+        if text and text.strip():
+            self.spoken_recently.append((self.clock(),text.strip()))
+    def own_speech_echo(
+        self,transcript:str,*,heard_from:float|None=None,
+    )->OwnSpeechEcho|None:
+        """The agent's own sentence ``transcript`` repeats, or None.
+
+        ``heard_from`` is when an ordinary turn's speech began; it is an echo
+        only if that was while playback could still be heard. A barge-in
+        candidate (``heard_from`` None) is heard during playback by
+        definition. Short transcripts, and ones with a pause or end word the
+        sentence lacks, are never an echo.
+        """
+
+        if heard_from is not None and (
+            self.last_playback_ended_at is None
+            or heard_from>self.last_playback_ended_at+ECHO_TAIL_SECONDS
+        ):
+            return None
+        if len(echo_key(transcript))<ECHO_MIN_CHARACTERS:
+            return None
+        now=self.clock()
+        best:OwnSpeechEcho|None=None
+        for said_at,spoken in self.spoken_recently:
+            if now-said_at>ECHO_MEMORY_SECONDS:
+                continue
+            if control_words(transcript)-control_words(spoken):
+                continue
+            overlap=echo_overlap(transcript,spoken)
+            if overlap>=ECHO_OVERLAP_THRESHOLD and (best is None or overlap>best.overlap):
+                best=OwnSpeechEcho(spoken,overlap)
+        return best
     def _new_interrupt_detector(self,*,playback:bool=False)->EndpointDetector:
         config=self._cascade_vad_config
         if playback:
@@ -5682,6 +5805,7 @@ class ListenerSession:
         if (turn_id,turn_gen) in self._interrupted_generations or self._interrupt_candidate_identity is not None:
             return False
         received_at=self.clock()
+        self.last_playback_ended_at=received_at
         committed_at=self.turn_committed_at.get(turn_id)
         self._restore_primary_detector(TurnState.COOLDOWN)
         self.cooldown_until=self.clock()+self.detector.config.cooldown_ms/1000
@@ -7361,7 +7485,7 @@ async def _send_session_greeting(
     )
     try:
         log.info("session.greeting.tts_started greeting_id=%s",greeting_id)
-        pcm=await asyncio.to_thread(synthesize,greeting,language)
+        pcm=await asyncio.to_thread(synthesize,said(greeting),language)
         frames=frame_complete_audio(pcm)
         log.info(
             "session.greeting.tts_completed greeting_id=%s frame_count=%d",
@@ -7647,7 +7771,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         try:
             await progress("synthesizing",route=route)
             pcm=await asyncio.to_thread(
-                synthesize,text,session.accepted_language or "ko"
+                synthesize,said(text),session.accepted_language or "ko"
             )
             frames=frame_complete_audio(pcm)
             if filler is not None:
@@ -7730,6 +7854,33 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             )
             await sender.text("speech.rejected",turn_id=turn_id,reason="empty_transcript",voiced_frames=voiced_frames,total_frames=input_frames,duration_ms=input_frames*20)
             await sender.text("state.changed",state=session.state.value,turn_id=turn_id,cooldown_ms=session.detector.config.cooldown_ms)
+        return
+    committed_at=session.turn_committed_at.get(turn_id)
+    echo=(
+        session.own_speech_echo(
+            transcript,heard_from=committed_at-input_frames*0.02)
+        if accepted_transcription is None and committed_at is not None
+        else None
+    )
+    if echo is not None:
+        # Just after playback, the agent's own sentence came back (6b).
+        log.info(
+            "speech.rejected reason=self_echo (메아리로 버림) overlap=%.2f "
+            "turn_id=%s",echo.overlap,turn_id)
+        if session.reject_empty_transcript(turn_id):
+            _record_workspace_metric(
+                category="voice",metric_name="command_failure",
+                dimensions={"status":"rejected","reason_code":"self_echo"},
+            )
+            await sender.text(
+                "speech.rejected",turn_id=turn_id,generation=generation,
+                reason="self_echo",voiced_frames=voiced_frames,
+                total_frames=input_frames,duration_ms=input_frames*20,
+            )
+            await sender.text(
+                "state.changed",state=session.state.value,turn_id=turn_id,
+                cooldown_ms=session.detector.config.cooldown_ms,
+            )
         return
     input_decision=classify_input_event(
         transcription,
@@ -7870,7 +8021,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
         try:
             await progress("synthesizing",route="deterministic_emergency")
-            pcm=await asyncio.to_thread(synthesize,text,emergency.language)
+            pcm=await asyncio.to_thread(synthesize,said(text),emergency.language)
             frames=frame_complete_audio(pcm)
             if filler is not None:await filler.primary_ready()
         except Exception:
@@ -7942,7 +8093,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             session.set_turn_terminal_outcome(turn_id,generation,"blocked")
             try:
                 await progress("synthesizing",route="language_clarification")
-                pcm=await asyncio.to_thread(synthesize,text,fallback)
+                pcm=await asyncio.to_thread(synthesize,said(text),fallback)
                 frames=frame_complete_audio(pcm)
                 if filler is not None:await filler.primary_ready()
             except Exception:
@@ -8791,7 +8942,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     raise RuntimeError("curated protocol produced no speech text")
                 timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
                 await progress("synthesizing",route="curated_protocol")
-                pcm=await asyncio.to_thread(synthesize,speech_text,turn_language)
+                pcm=await asyncio.to_thread(synthesize,said(speech_text),turn_language)
                 frames=frame_complete_audio(pcm)
                 if filler is not None:await filler.primary_ready()
                 if not frames or not session.start_playback(turn_id):
@@ -9267,7 +9418,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         try:
             timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
             await progress("synthesizing",route="deterministic_procedure")
-            pcm=await asyncio.to_thread(synthesize,text,turn_language)
+            pcm=await asyncio.to_thread(synthesize,said(text),turn_language)
             frames=frame_complete_audio(pcm)
             if filler is not None:await filler.primary_ready()
         except Exception:
@@ -9370,7 +9521,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if "first_tts_request_ms" not in timings:
                 timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
                 await progress("synthesizing",route="brain")
-            pcm=await asyncio.to_thread(synthesize,segment.text,turn_language); frames=frame_complete_audio(pcm)
+            pcm=await asyncio.to_thread(synthesize,said(segment.text),turn_language); frames=frame_complete_audio(pcm)
             if not session.is_current(turn_id,generation):return
             if not first_audio:
                 if filler is not None:await filler.primary_ready()
@@ -9438,6 +9589,7 @@ async def run_turn_safely(
     accepted_stt_context:CascadeTranscriptionContext|None=None,
 ):
     generation=session.turn_generations.get(turn_id,session.generation)
+    _SPEAKING_SESSION.set(session)
     sender=LockedSender(websocket)
     language=(session.accepted_language or session.manual_language or
               (session.tool_context.language if session.tool_context else "ko"))
@@ -9467,12 +9619,15 @@ async def run_turn_safely(
         turn_id=turn_id,generation=generation,language=language,
         delay_ms=cascade_filler_delay_ms(),
         synthesize=lambda text,selected:asyncio.to_thread(
-            synthesize,text,selected),
+            synthesize,said(text),selected),
         send_audio=filler_audio,send_event=filler_event,
         send_clear=filler_clear,is_current=session.is_current,
         clock=session.clock,
         mode=cascade_filler_mode(),send_tone=filler_tone,
-        status_delay_ms=cascade_filler_status_delay_ms(),
+        # Off by default (lane XO, decision 7): the tone and the screen only.
+        status_delay_ms=(
+            cascade_filler_status_delay_ms()
+            if cascade_filler_status_speech_enabled() else None),
         activity=filler_activity,memory=session.filler_memory)
     filler.start()
     try: await run_turn(
@@ -9570,7 +9725,7 @@ async def run_barge_in_stt_failure_turn(
         )
         if progress is not None:
             await sender.text("turn.state",**progress)
-        pcm=await asyncio.to_thread(synthesize,text,language)
+        pcm=await asyncio.to_thread(synthesize,said(text),language)
         frames=frame_complete_audio(pcm)
     except Exception:
         frames=[]
@@ -9719,6 +9874,9 @@ async def voice_socket(websocket:WebSocket):
         semantic_intent_settings=semantic_intent_settings,
         llm_router_settings=llm_router_settings,
     ); task=None; trusted_config=None; procedure_store=None
+    # Every sentence this connection synthesizes is remembered for the echo
+    # check; tasks started from here inherit the binding.
+    _SPEAKING_SESSION.set(session)
     curated_fixture=None
     sender=LockedSender(websocket); pipeline="cascade"
     await websocket.send_text(event("ready",sample_rate=16000,
@@ -9770,6 +9928,19 @@ async def voice_socket(websocket:WebSocket):
                     if not transcription.text.strip():
                         rejected=session.reject_interrupt_candidate(
                             item,"transcription_failed")
+                        if rejected is not None:
+                            listener_events.append(rejected)
+                        continue
+                    echo=session.own_speech_echo(transcription.text)
+                    if echo is not None:
+                        # The agent's own voice: playback goes on (6b).
+                        log.info(
+                            "barge_in.rejected reason=self_echo (메아리로 버림) "
+                            "overlap=%.2f voiced_frames=%d total_frames=%d",
+                            echo.overlap,item.result.voiced_frames,
+                            item.result.total_frames)
+                        rejected=session.reject_interrupt_candidate(
+                            item,"self_echo")
                         if rejected is not None:
                             listener_events.append(rejected)
                         continue

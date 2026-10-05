@@ -2581,6 +2581,27 @@ EXPERIMENT_ENDED_START_REPLY = {
 }
 
 
+#: The stems of the front rules' pause and end words (_FRONT_PAUSE_COMMAND,
+#: _PAUSE_PATTERNS, _END_REQUEST_WITHOUT_END_WORD, _END_COMMAND), found
+#: anywhere in an utterance. The server's echo check (lane XO, decision 6b)
+#: keeps a transcript that carries one the agent did not say: a researcher
+#: talking over the agent's own voice.
+_CONTROL_WORD = re.compile(
+    r"잠깐|잠시|멈춰|멈처|멈추|일시\s*정지|일시\s*중지|정지|중지|중단|스톱|"
+    r"그만|기다려|종료|끝내|끝낼|여기까지|stop|pause|hold\s+on|end\s+session|포즈",
+    re.I,
+)
+
+
+def control_words(text: str) -> frozenset[str]:
+    """The pause and end words in ``text``, spaces removed, case folded."""
+
+    return frozenset(
+        re.sub(r"\s+", "", match.group(0)).casefold()
+        for match in _CONTROL_WORD.finditer(text or "")
+    )
+
+
 def _completion_question(step_label: str) -> str:
     """The completion question, naming the step it asks about."""
 
@@ -8424,10 +8445,21 @@ class CuratedProtocolSession:
                 f"현재 {step.source_label}단계에서 프로토콜이 명시한 내용은 "
                 f"다음과 같습니다: {localized or step.instruction_source_text}"
             )
-            speech = (
-                f"활성 프로토콜이 확인하는 내용을 먼저 정리했습니다. "
-                "추가 설명은 검증 가능한 읽기 전용 근거가 있을 때만 분리해 안내합니다."
+            # The step as the screen shows it, read out -- not a sentence
+            # about the answer (lane XO, a person's decision of 2026-10-05:
+            # "활성 프로토콜이 확인하는 내용을 먼저 정리했습니다 ..." sounded
+            # like a script being read). Long steps are cut at a sentence end.
+            reading = " ".join((localized or step.instruction_source_text).split())
+            reading = re.sub(
+                rf"^(?:{re.escape(step.source_label)}\s*단계\s*:|{re.escape(step.source_label)}\s)\s*",
+                "", reading,
             )
+            first = re.split(r"(?<=[.!?。])\s+", reading, maxsplit=1)[0]
+            if len(first) > 160:
+                first = first[:160].rsplit(" ", 1)[0] + " …"
+            speech = f"{step.source_label}단계 내용입니다. {first}"
+            if first != reading:
+                speech += " 나머지는 화면에 있습니다."
         # Only what the PDF's statements answer is local: where an entity
         # appears is not its definition or its role, so those dimensions stay
         # for the references, as they always did on every other document.

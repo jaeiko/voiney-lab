@@ -333,6 +333,8 @@ SETTINGS: tuple[Setting, ...] = (
             "기다림 신호까지의 시간 (ms, 100–5000)"),
     Setting("VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS", OTHER, "1500",
             "진행 상황을 말하기까지의 시간 (ms, 200–10000)"),
+    Setting("VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED", SWITCHES, "false",
+            "기다리는 동안 진행 상황을 말로 함 (끄면 톤과 화면만, 줄 XO 결정 7)"),
     Setting("VOINEY_LAB_STT_DIAGNOSTIC_MAX_FILES", OTHER, "20",
             "STT 진단 녹음 최대 개수 (2–100)"),
     Setting("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", OTHER, "30",
