@@ -71,7 +71,7 @@ DEVELOPMENT_FIXTURE_MODE = "offline_curated_development_fixture"
 #: was reviewed against, so every block of it is gated on this identity.
 CANDIDATE_A_PROTOCOL_ID = "candidate-a-curated-development-v1"
 _CANONICAL_SCHEMA_SHA256 = (
-    "33ca2886cdc6cbad272363ebfaafd3f69853304610c7e47dfce3d485d18ee528"
+    "9f34928becbfcd4a63b1339f5200187abd1755801e326637f0f9d8d02ac17b02"
 )
 _PROVENANCE_FIELDS = {
     "candidate_filename",
