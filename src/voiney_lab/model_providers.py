@@ -519,6 +519,41 @@ def _any_of(node: Any) -> Any:
     return {("anyOf" if key == "oneOf" else key): _any_of(value) for key, value in node.items()}
 
 
+#: Keywords a grammar refuses outright, so a schema that carries one is sent
+#: without it (the server still checks the reply against the original).
+#: OpenAI strict: "'uniqueItems' is not permitted" (HTTP 400, lane G, live,
+#: the answer brain's schema). Anthropic: the structured-outputs page's list
+#: of unsupported constraints (numeric, string length, array constraints
+#: beyond minItems 0 or 1); "For 'array' type, property 'uniqueItems' is not
+#: supported" was the live 400 (lane G).
+OPENAI_STRICT_UNSUPPORTED_KEYWORDS = frozenset({"uniqueItems"})
+ANTHROPIC_UNSUPPORTED_KEYWORDS = frozenset({
+    "uniqueItems", "maxItems", "minLength", "maxLength", "minimum", "maximum",
+    "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+})
+
+
+def _without_keywords(node: Any, keywords: frozenset[str]) -> Any:
+    """A copy without ``keywords`` (and, for Anthropic, without a minItems
+    above 1, which its grammar does not take)."""
+
+    if isinstance(node, list):
+        return [_without_keywords(item, keywords) for item in node]
+    if not isinstance(node, Mapping):
+        return node
+    out = {}
+    for key, value in node.items():
+        if key in keywords and not isinstance(value, Mapping):
+            continue
+        if (
+            key == "minItems" and keywords is ANTHROPIC_UNSUPPORTED_KEYWORDS
+            and isinstance(value, int) and value > 1
+        ):
+            continue
+        out[key] = _without_keywords(value, keywords)
+    return out
+
+
 def _allows_null(root: Mapping[str, Any], node: Any) -> bool:
     node = _definition(root, node)
     if not isinstance(node, Mapping):
@@ -812,7 +847,11 @@ class _OpenAIResponsesBackend:
             name, body, strict = schema
             params["text"] = {"format": {
                 "type": "json_schema", "name": name,
-                "schema": _openai_strict(body) if strict else body, "strict": strict,
+                "schema": (
+                    _openai_strict(_without_keywords(body, OPENAI_STRICT_UNSUPPORTED_KEYWORDS))
+                    if strict else body
+                ),
+                "strict": strict,
             }}
         elif request.wants_json_object:
             params["text"] = {"format": {"type": "json_object"}}
@@ -1044,7 +1083,7 @@ class _AnthropicBackend:
                 params["tool_choice"]["disable_parallel_tool_use"] = True
         schema = request.json_schema()
         if schema is not None:
-            body = _any_of(schema[1])
+            body = _without_keywords(_any_of(schema[1]), ANTHROPIC_UNSUPPORTED_KEYWORDS)
             _, optional, unions = _schema_counts(body)
             if (
                 optional <= ANTHROPIC_MAX_OPTIONAL_PROPERTIES

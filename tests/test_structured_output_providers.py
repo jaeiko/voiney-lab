@@ -296,3 +296,94 @@ class AnalysisThroughEveryAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ANSWER_LIKE = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "spoken_answer": {"type": "string", "minLength": 1, "maxLength": 400},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "enum": ["e1", "e2"]},
+                         "uniqueItems": True, "minItems": 1},
+        "pair": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 999},
+                 "minItems": 2, "maxItems": 2},
+        # A property that happens to be named like a keyword is kept.
+        "minimum": {"type": "string"},
+    },
+    "required": ["spoken_answer", "evidence_ids", "pair", "minimum"],
+}
+
+
+class UnsupportedKeywordTests(unittest.TestCase):
+    """Lane G (2026-10-05): the answer brain's schema carries ``uniqueItems``.
+
+    On the real APIs OpenAI strict answered HTTP 400 "'uniqueItems' is not
+    permitted" and Anthropic HTTP 400 "For 'array' type, property
+    'uniqueItems' is not supported"; Gemini took it. Each adapter now drops
+    what its grammar refuses (Anthropic: the structured-outputs page's list).
+    Contract-tested against fake SDK clients.
+    """
+
+    def test_openai_strict_drops_unique_items_only(self) -> None:
+        fake, _ = call("openai", "gpt-6-luna", ANSWER_LIKE)
+        schema = fake.requests[0]["text"]["format"]["schema"]
+        self.assertNotIn("uniqueItems", keywords(schema))
+        evidence = schema["properties"]["evidence_ids"]
+        self.assertEqual(evidence["items"]["enum"], ["e1", "e2"])
+        self.assertEqual(evidence["minItems"], 1)
+        self.assertEqual(schema["properties"]["pair"]["maxItems"], 2)
+        self.assertEqual(schema["properties"]["spoken_answer"]["maxLength"], 400)
+        self.assertIn("uniqueItems", keywords(ANSWER_LIKE))  # the original is untouched
+
+    def test_anthropic_drops_the_documented_unsupported_constraints(self) -> None:
+        fake, _ = call("anthropic", "claude-sonnet-5-5", ANSWER_LIKE)
+        schema = fake.requests[0]["output_config"]["format"]["schema"]
+        for keyword in ("uniqueItems", "maxItems", "minLength", "maxLength", "maximum"):
+            self.assertNotIn(keyword, keywords(schema))
+        self.assertEqual(schema["properties"]["evidence_ids"]["minItems"], 1)
+        self.assertNotIn("minItems", schema["properties"]["pair"])
+        self.assertEqual(schema["properties"]["minimum"], {"type": "string"})
+        self.assertEqual(schema["required"], ANSWER_LIKE["required"])
+
+    def test_gemini_sends_the_schema_as_before(self) -> None:
+        fake, _ = call("google", "gemini-3.8-flash", ANSWER_LIKE)
+        self.assertEqual(fake.requests[0]["config"]["response_json_schema"], mp._any_of(ANSWER_LIKE))
+
+    def test_the_answer_brain_reply_still_passes_the_brains_own_gate(self) -> None:
+        import asyncio
+
+        from voiney_lab.multi_brain import (
+            BrainFact, BrainSnapshot, HybridMultiBrain, MultiBrainSettings,
+        )
+
+        snapshot = BrainSnapshot(
+            configuration_id=1, session_id="s", turn_id=1, generation_id=1, workflow_revision=1,
+            protocol_id="p", document_sha256="", step_id="step-3", step_index=2, language="ko",
+            transcript="용액 A 얼마나 넣어?", intent_kind="related_question", question_kind=None,
+            requested_entities=(), question_dimensions=(),
+            facts=(BrainFact("e1", "step", "Wash the band with 500 µL of solution A.", 1),),
+        )
+        reply = json.dumps({"spoken_answer": "용액 A 500 µL를 넣어요.", "display_answer": "500 µL",
+                            "evidence_ids": ["e1"], "limitations": []}, ensure_ascii=False)
+        for provider, model, where in (("openai", "gpt-6-luna", "text"),
+                                       ("anthropic", "claude-sonnet-5-5", "output_config")):
+            with self.subTest(provider=provider):
+                fake = SyncFake(provider, reply)
+
+                class AsyncFake:
+                    pass
+
+                async_fake = AsyncFake()
+                if provider == "openai":
+                    async def create(**params):
+                        return fake._openai(**params)
+                    async_fake.responses = SimpleNamespace(create=create)
+                else:
+                    async def create(**params):
+                        return fake._anthropic(**params)
+                    async_fake.messages = SimpleNamespace(create=create)
+                client = chat_client(RoleModel("answer", provider, model, "none"), sdk_client=async_fake)
+                brain = HybridMultiBrain(client, MultiBrainSettings(True, model))
+                output = asyncio.run(brain._answer(snapshot))
+                self.assertEqual(output.evidence_ids, ("e1",))
+                self.assertNotIn("uniqueItems", keywords(fake.requests[0][where]))
+
