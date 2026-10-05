@@ -305,7 +305,7 @@ class OutsidePdfGapTests(unittest.TestCase):
         })
         gap = session.outside_pdf_gap(plan, "acetonitrile이 뭐야?")
         self.assertIsNotNone(gap)
-        self.assertEqual(gap["kind"], "term")
+        self.assertEqual((gap["kind"], gap["term"]), ("term", "acetonitrile"))
 
     def test_a_step_purpose_question_has_a_gap(self) -> None:
         session = _session(2)
@@ -313,6 +313,31 @@ class OutsidePdfGapTests(unittest.TestCase):
                             configuration_id=1, generation=1)
         if plan.action is CuratedProtocolAction.QUESTION:
             self.assertEqual(session.outside_pdf_gap(plan, "현재 단계 왜 하는 거야?")["kind"], "step")
+
+    def test_a_router_answer_saying_the_pdf_is_silent_has_a_gap(self) -> None:
+        # Live gpt-6-luna (lane R6 check): "DTT의 역할은 PDF에 설명되어 있지 않아요."
+        from voiney_lab.curated_protocol import CuratedProtocolTurnPlan
+
+        session = _session(5)
+
+        def router_answer(text: str, origin: str = "current_protocol"):
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.QUESTION, display_text=text, speech_text=text,
+                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT, facts=(),
+                step_label="6", final_step=True, state_changed=False,
+                intent_kind="llm_router_answer", answer_origin=origin,
+            )
+
+        gap = session.outside_pdf_gap(
+            router_answer("DTT의 역할은 PDF에 설명되어 있지 않아요."), "DTT는 왜 넣는 거야?")
+        self.assertEqual((gap["kind"], gap["term"]), ("term", "DTT"))
+        # An answer the PDF gives, or an outside-PDF answer already, has none.
+        self.assertIsNone(session.outside_pdf_gap(
+            router_answer("DTT는 10단계에서 준비해요."), "DTT는 왜 넣는 거야?"))
+        self.assertIsNone(session.outside_pdf_gap(
+            router_answer("PDF에는 따로 설명이 없어요. 환원제예요.",
+                          "supplemental_model_knowledge"),
+            "DTT는 왜 넣는 거야?"))
 
     def test_a_method_or_quantity_question_has_none(self) -> None:
         session = _session(2)

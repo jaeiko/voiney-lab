@@ -2428,6 +2428,24 @@ _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:show|find|make|generate).*(?:image|photo|illustration|visual|structure|chemical\s+structure)"),
     re.compile(r"(?:structure|chemical\s+structure).*(?:show|find|view|display)"),
 )
+#: A source answer saying the source does not explain what was asked.
+_SOURCE_SILENT = re.compile(
+    r"(?:설명되어\s*있지\s*않|설명이\s*없|나와\s*있지\s*않|적혀\s*있지\s*않|"
+    r"명시되어\s*있지\s*않)"
+)
+
+
+def _entity_said(said: str) -> str | None:
+    """The first protocol entity named in ``said``, by the term table."""
+
+    found = [
+        (match.start(), key)
+        for pattern, key in _TERM_QUESTION_PATTERNS
+        for match in [pattern.search(said)] if match is not None
+    ]
+    return min(found)[1] if found else None
+
+
 def _korean_name_said(entity: str, said: str) -> str | None:
     """The Korean word the researcher used for ``entity`` ("탈색"), if any."""
 
@@ -14918,7 +14936,20 @@ class CuratedProtocolSession:
                 answer = self.entity_source_answer(entity, language="ko")
                 if not answer.found:
                     return None
-                return {"subject": answer.label, "term": answer.label, "kind": "term"}
+                return self._term_gap(answer)
+        elif plan.intent_kind == "llm_router_answer":
+            # The router's own answer from the PDF, saying the PDF does not
+            # explain it ("그 이유는 PDF에 설명되어 있지 않아요").
+            if (
+                plan.answer_origin != "current_protocol"
+                or not _SOURCE_SILENT.search(plan.speech_text or "")
+            ):
+                return None
+            entity = _entity_said(transcript)
+            if entity is not None:
+                answer = self.entity_source_answer(entity, language="ko")
+                if answer.found:
+                    return self._term_gap(answer)
         elif not (
             plan.action is CuratedProtocolAction.QUESTION
             and plan.intent_kind == "current_step_learning"
@@ -14926,6 +14957,17 @@ class CuratedProtocolSession:
             return None
         source = " ".join(step.instruction_source_text.split())
         return {"subject": source[:300], "term": source, "kind": "step"}
+
+    def _term_gap(self, answer: EntitySourceAnswer) -> dict[str, str]:
+        """A term to explain, with the protocol it is in: "trypsin" here is
+        the in-gel digestion's protease, not a cell-culture reagent."""
+
+        context = " ".join(answer.text.split())[:400]
+        return {
+            "subject": f"{answer.label} (protocol: {self.fixture.title}; {context})",
+            "term": answer.label,
+            "kind": "term",
+        }
 
     def outside_pdf_explanation_violations(
         self, explanation: str, *, question: str, gap: dict[str, str],

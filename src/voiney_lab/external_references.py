@@ -1108,10 +1108,12 @@ class XaiSupplementalKnowledge:
                     input=[{
                         "role": "system",
                         "content": (
-                            f"In one short sentence, say {about}. "
+                            f"In one short sentence, say {about}, as it is used in the "
+                            "protocol given. "
                             + (
-                                "Reply in Korean, at most 80 characters, as the rest of "
-                                "a sentence that begins '일반적으로는' (do not repeat it). "
+                                "Reply in polite Korean (해요체 or 합니다체), at most 80 "
+                                "characters, as the rest of a sentence that begins "
+                                "'일반적으로는' (do not repeat it). "
                                 if language == "ko" else
                                 "Reply in English, at most 110 characters, as the rest "
                                 "of a sentence that begins 'Generally,' (do not repeat it). "
