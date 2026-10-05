@@ -325,6 +325,7 @@ class _ProviderContract:
         self.assertGreater(reply.usage["prompt_tokens"], 0)
         self.assertGreater(reply.usage["completion_tokens"], 0)
         self.assertGreaterEqual(reply.usage.get("cached_prompt_tokens", 0), 0)
+        self.assertIn("cache_write_tokens", reply.usage)
 
     def test_the_answer_function_is_a_tool_call_too(self) -> None:
         answer = {"spoken": "PDF에서 확인할 수 없어요.", "source_kind": "none", "evidence_ids": []}
@@ -554,6 +555,8 @@ class OpenAIContractTests(_ProviderContract, unittest.TestCase):
     def test_the_cached_and_written_tokens_are_reported(self) -> None:
         reply = _router_call(self.client(self.fake_tool_call("record_log", TOOL_ARGUMENTS)), self.model)
         self.assertEqual(reply.usage["cached_prompt_tokens"], 2900)
+        self.assertEqual(reply.usage["cache_write_tokens"], 0)
+        self.assertEqual(reply.usage["reasoning_tokens"], 0)
 
 
 class GeminiContractTests(_ProviderContract, unittest.TestCase):

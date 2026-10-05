@@ -876,6 +876,12 @@ def _usage(value: object) -> dict[str, int] | None:
     cached = getattr(details, "cached_tokens", None) if details is not None else None
     if isinstance(cached, int):
         usage["cached_prompt_tokens"] = cached
+    # What model_providers' adapters add for cost accounting (lane M1): cache
+    # writes are billed apart, and thinking is billed as output.
+    for key in ("cache_write_tokens", "reasoning_tokens"):
+        number = value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
+        if isinstance(number, int):
+            usage[key] = number
     return usage or None
 
 
