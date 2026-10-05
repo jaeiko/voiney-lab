@@ -983,18 +983,18 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             'PROTOCOL_DATA_DIR="$ROOT/data/runtime/candidate-a-live-acceptance"',
             launcher,
         )
-        self.assertIn(
-            'export VOINEY_LAB_PROTOCOL_ENABLED="true"', launcher
-        )
+        # Launcher defaults a .env may override; the xAI-only features are
+        # off by default (lane XO, decision 1).
+        self.assertIn('  VOINEY_LAB_PROTOCOL_ENABLED=true \\', launcher)
         self.assertIn(
             'export VOINEY_LAB_MOSS_ENABLED="false"', launcher
         )
-        self.assertIn('export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true"', launcher)
+        self.assertIn('  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \\', launcher)
         self.assertIn(
-            'export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', launcher
+            '  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', launcher
         )
-        self.assertIn('export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="true"', launcher)
-        self.assertIn('export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS="800"', launcher)
+        self.assertIn('  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \\', launcher)
+        self.assertIn('  VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800)"', launcher)
         self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
         # The development launcher binds loopback unless a person overrides
@@ -1040,18 +1040,23 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertNotIn("candidate-a-live-acceptance", launcher)
         self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
         self.assertIn('PORT="${PORT:-8080}"', launcher)
+        # The four keep a value set in the shell or the .env (lane XO,
+        # decision 1); MOSS keeps the shell's.
         for name in (
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
             "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED",
             "VOINEY_LAB_GENERATED_VISUALS_ENABLED",
-            "VOINEY_LAB_MOSS_ENABLED",
         ):
-            self.assertIn(
-                f'export {name}="${{{name}:-false}}"',
+            self.assertRegex(
                 launcher,
+                rf"\n  {name}=false(?: \\|\)\")",
                 f"{name} must default to false and stay operator-overridable",
             )
+        self.assertIn(
+            'export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"',
+            launcher,
+        )
         self.assertIn(
             'export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="false"',
             launcher,

@@ -8,7 +8,9 @@
 #
 # server.py calls load_dotenv(..., override=False), so a value exported by this
 # script wins over the same key in a repo-root .env. Every flag the startup
-# banner prints is exported below, which is what makes the banner accurate.
+# banner prints is exported below, which is what makes the banner accurate:
+# the optional features export the shell's or the .env's own value when a
+# person set one (lane XO), and the safety settings are fixed here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,13 +57,18 @@ export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PILOT_DATA_DIR/experiment_reports.sqlit
 export VOINEY_LAB_WORKSPACE_ENABLED="true"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
 
-# --- Off unless a person asks for it before startup --------------------------
+# --- Off unless a person asks for it -----------------------------------------
 # These four reach outside the approved source documents. Each keeps a value
-# the operator exported themselves, so turning one on is a deliberate act.
-export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="${VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED:-false}"
-export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="${VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED:-false}"
-export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="${VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED:-false}"
-export VOINEY_LAB_GENERATED_VISUALS_ENABLED="${VOINEY_LAB_GENERATED_VISUALS_ENABLED:-false}"
+# the operator set in the shell or wrote in the repository .env (decision 1 of
+# lane XO, 2026-10-05), so turning one on is a deliberate act. Three of them,
+# and semantic intent, are features only xAI provides: one switched on without
+# XAI_API_KEY is refused below, by name.
+eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
+  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
+  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false \
+  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \
+  VOINEY_LAB_GENERATED_VISUALS_ENABLED=false \
+  VOINEY_LAB_SEMANTIC_INTENT_ENABLED=false)"
 
 # --- Outside the pilot's scope -----------------------------------------------
 # MOSS (the org-governed approved-safety-document corpus) has its own flag.
@@ -166,6 +173,7 @@ report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
 report_feature "web_visual_search:" "$VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED"
 report_feature "generated_visuals:" "$VOINEY_LAB_GENERATED_VISUALS_ENABLED"
+report_feature "semantic_intent:" "$VOINEY_LAB_SEMANTIC_INTENT_ENABLED"
 report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
 report_feature "readiness_gate_test_mode:" "$VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
 echo
@@ -174,6 +182,18 @@ printf '%-30s %s\n' "dry_lab_workflows:" \
   "behind the workspace; inert without a verified connector"
 printf '%-30s %s\n' "eln_writeback (eLabFTW):" \
   "behind the workspace; inert without a verified connector"
+
+XAI_REFUSAL=""
+if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then
+  XAI_REFUSAL="an xAI-only feature is on without XAI_API_KEY (see the line above)"
+fi
+
+if [[ -n "$XAI_REFUSAL" ]]; then
+  echo
+  echo "[ERROR] $XAI_REFUSAL"
+  echo "[ERROR] Refusing to start the pilot."
+  exit 1
+fi
 
 if [[ -n "$SAFETY_REFUSAL" ]]; then
   echo

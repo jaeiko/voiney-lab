@@ -31,6 +31,7 @@ from voiney_lab.configuration import (
     ConfigurationError,
     VoiceVadSettings,
     cascade_filler_delay_ms,
+    refuse_xai_only_features_without_key,
 )
 from voiney_lab.cascade_filler import (
     CascadeFiller,
@@ -264,6 +265,9 @@ refuse_old_setting_names()
 # One turn, one deciding path (lane M1, decision 4): the LLM router and the
 # semantic-intent fallback are never both on.
 refuse_two_turn_deciders()
+# xAI is no longer a default (lane XO, decision 2): a feature only xAI provides
+# is refused at start-up, by name, when it is on without XAI_API_KEY.
+refuse_xai_only_features_without_key()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
 

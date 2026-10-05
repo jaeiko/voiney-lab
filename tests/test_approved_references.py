@@ -532,11 +532,13 @@ class ApprovedReferenceTests(unittest.IsolatedAsyncioTestCase):
         script = Path(__file__).resolve().parent.parent / "scripts" / "run_dev.sh"
         self.assertTrue(script.is_file())
         text = script.read_text(encoding="utf-8")
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"', text)
-        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"', text)
-        self.assertIn('VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"', text)
+        # Launcher defaults a .env may override (lane XO, decision 1); the
+        # launcher names no model.
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=90 \\', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=90 \\', text)
+        self.assertIn('VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=5 \\', text)
+        self.assertNotIn('VOINEY_LAB_SUPPLEMENTAL_MODEL=', text)
         self.assertIn('external_search_model', text)
         self.assertIn('external_search_open_mode', text)
 
