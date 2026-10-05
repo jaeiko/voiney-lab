@@ -10,6 +10,7 @@ import hashlib
 import csv
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from voiney_lab.report_projection import project_protocol_for_report, project_step_for_report
+
+log = logging.getLogger(__name__)
 
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -302,6 +305,7 @@ class ExperimentReportStore:
             ).fetchall()
         result = dict(report)
         result["development_only"] = bool(result["development_only"])
+        result.update(self._day_sequence(result))
         result["events"] = [
             {
                 **{key: row[key] for key in (
@@ -327,7 +331,7 @@ class ExperimentReportStore:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT report_id,session_id,protocol_id,status,started_at,ended_at,
+                SELECT report_id,session_id,protocol_id,protocol_title,status,started_at,ended_at,
                        anomaly_count,blocker_count,finalization_version,
                        development_only
                   FROM experiment_reports {where}
@@ -336,9 +340,31 @@ class ExperimentReportStore:
                 parameters,
             ).fetchall()
         return [
-            {**dict(row), "development_only": bool(row["development_only"])}
+            {
+                **dict(row), "development_only": bool(row["development_only"]),
+                **self._day_sequence(dict(row)),
+            }
             for row in rows
         ]
+
+    def _day_sequence(self, report: dict[str, Any]) -> dict[str, Any]:
+        """The record's place among those started the same day (lane R6, decision 5).
+
+        Records keep their start in UTC (``timezone``), so the day is the UTC
+        date of ``started_at``; 1 is the first record started that day.
+        """
+
+        day = str(report["started_at"])[:10]
+        with self._connect() as connection:
+            sequence = connection.execute(
+                """
+                SELECT COUNT(*) FROM experiment_reports
+                 WHERE substr(started_at,1,10)=?
+                   AND (started_at<? OR (started_at=? AND report_id<=?))
+                """,
+                (day, report["started_at"], report["started_at"], report["report_id"]),
+            ).fetchone()[0]
+        return {"day_sequence": sequence, "day_sequence_date": day}
 
     def aggregate_metrics(self) -> dict[str, Any]:
         """Return privacy-minimized operational aggregates for administrators.

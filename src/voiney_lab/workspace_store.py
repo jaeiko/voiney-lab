@@ -1426,9 +1426,40 @@ class WorkspaceStore:
                     "SELECT COUNT(*) FROM experiment_completed_steps WHERE session_id=?",
                     (row["session_id"],),
                 ).fetchone()[0],
+                **self._experiment_display_values(row),
             }
             for row in rows
         )
+
+    def _experiment_display_values(self, row: sqlite3.Row) -> dict[str, object]:
+        """What the screen names an experiment by (lane R6, decision 5).
+
+        ``protocol_title`` is the protocol family's title where the revision
+        is one of this workspace's (None otherwise; the server fills it from
+        the protocol catalog). ``day_sequence`` is the experiment's place
+        among the organization's experiments started the same UTC day
+        (``day_sequence_date``), counted in start order: 1 for the first.
+        """
+
+        family = self._connection.execute(
+            """SELECT f.title FROM protocol_lineage_revisions r
+            JOIN protocol_families f ON f.family_id=r.family_id
+            WHERE r.revision_id=? AND r.organization_id=?""",
+            (row["protocol_revision_id"], row["organization_id"]),
+        ).fetchone()
+        day = str(row["started_at"])[:10]
+        sequence = self._connection.execute(
+            """SELECT COUNT(*) FROM experiment_sessions
+            WHERE organization_id=? AND substr(started_at,1,10)=?
+              AND (started_at<? OR (started_at=? AND session_id<=?))""",
+            (row["organization_id"], day, row["started_at"], row["started_at"],
+             row["session_id"]),
+        ).fetchone()[0]
+        return {
+            "protocol_title": family["title"] if family is not None else None,
+            "day_sequence": sequence,
+            "day_sequence_date": day,
+        }
 
     def resume_experiment(
         self,

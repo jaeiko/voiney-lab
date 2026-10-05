@@ -41,7 +41,11 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
 )
-from voiney_lab.answer_checks import ServerValues
+from voiney_lab.answer_checks import (
+    ServerValues,
+    outside_pdf_question_allowed,
+    outside_pdf_violations,
+)
 from voiney_lab.llm_router import (
     RECORD_LOG,
     ProposalBasis,
@@ -2424,6 +2428,36 @@ _VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:show|find|make|generate).*(?:image|photo|illustration|visual|structure|chemical\s+structure)"),
     re.compile(r"(?:structure|chemical\s+structure).*(?:show|find|view|display)"),
 )
+#: A source answer saying the source does not explain what was asked.
+_SOURCE_SILENT = re.compile(
+    r"(?:설명되어\s*있지\s*않|설명이\s*없|나와\s*있지\s*않|적혀\s*있지\s*않|"
+    r"명시되어\s*있지\s*않)"
+)
+
+
+def _entity_said(said: str) -> str | None:
+    """The first protocol entity named in ``said``, by the term table."""
+
+    found = [
+        (match.start(), key)
+        for pattern, key in _TERM_QUESTION_PATTERNS
+        for match in [pattern.search(said)] if match is not None
+    ]
+    return min(found)[1] if found else None
+
+
+def _korean_name_said(entity: str, said: str) -> str | None:
+    """The Korean word the researcher used for ``entity`` ("탈색"), if any."""
+
+    for pattern, key in _TERM_QUESTION_PATTERNS:
+        if key != entity:
+            continue
+        for match in pattern.finditer(said):
+            if re.search(r"[가-힣]", match.group(0)):
+                return match.group(0)
+    return None
+
+
 _WEB_VISUAL_REQUEST_PATTERNS = (
     re.compile(r"(?:원본|실제|인터넷|웹).*(?:사진|이미지).*(?:보여|찾아)"),
     re.compile(r"(?:find|show).*(?:real|web|source).*(?:photo|image)"),
@@ -2685,7 +2719,12 @@ FRONT_RULES: dict[str, str] = {
     "quantity_target": "a quantity or concentration asked with no target: two "
                        "or more substances with a value in the current step's "
                        "source are asked back, one is said as the source words "
-                       "it (lane M1, decision 5a)",
+                       "it (lane M1, decision 5a); a quantity asked of a named "
+                       "step ('N단계 얼마나 넣어?', '다음 단계는 얼마나 넣어?') is "
+                       "answered from that step's source (lane R6, decision 1)",
+    "step_homophone": "away from step 2, a read-only question naming '2단계' or "
+                      "'이 단계' (said alike) is answered for the current step, "
+                      "with how to name step 2 (lane R6, decision 7)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -3466,6 +3505,88 @@ def untargeted_quantity_question(transcript: str) -> str | None:
     return None
 
 
+# --- A step named at the front of a question (lane R6, decisions 1 and 7) ----
+_ORDINAL_STEP_NUMBERS = {
+    "첫": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8,
+    "아홉": 9, "열": 10,
+}
+_STEP_REFERENCE = re.compile(
+    r"(?:(?:그럼|그러면|근데|그리고|자|이제)\s*)*"
+    r"(?P<ref>(?P<digits>[1-9][0-9]?)\s*단계"
+    r"|(?P<ordinal>" + "|".join(sorted(_ORDINAL_STEP_NUMBERS, key=len, reverse=True))
+    + r")\s*번째\s*단계"
+    r"|(?P<next>다음\s*단계)|(?P<this>이\s*단계)|(?P<current>(?:현재|지금)\s*단계))"
+    r"(?P<particle>에\s*대해서도|에\s*대해서는|에\s*대해선|에\s*대해서|에\s*대해|에서도|에서는"
+    r"|에서|에는|에도|에|는|은|도|의)?"
+    r"\s*(?P<rest>.+)"
+)
+#: The rest of "N단계 얼마나 넣어야 될지 알려줘": the question, then a request
+#: to be told. Only a step-targeted question takes these endings.
+_QUANTITY_ASK_TAIL = re.compile(
+    r"\s*(?:알려\s*(?:줘|주세요|줄래|줄래요)|말해\s*(?:줘|주세요)|궁금해|궁금해요)$"
+)
+_TARGETED_AMOUNT = re.compile(
+    r"(?:얼마나|얼마|몇\s*(?:µl|μl|ul|ml|마이크로리터|밀리리터|미리)?)\s*"
+    r"(?:넣어야\s*(?:될지|되는지|하는지|할지)|넣을지|넣는지|넣으면\s*될지|쓰는지|쓸지|써야\s*(?:될지|하는지))"
+)
+#: A question that only reads ("왜", "뭐", "얼마나", "설명"), not one that moves.
+_READ_ONLY_QUESTION = re.compile(
+    r"(?:왜|뭐|무엇|무슨|얼마|몇|설명|뜻|의미|목적|이유|하는\s*거|역할)"
+)
+_MOVING_WORDS = re.compile(
+    r"(?:완료|끝|마쳤|마침|넘어|넘겨|이동|시작|건너|진행|돌아가|가자|갈래|가\s*줘|"
+    r"했어|했어요|했습니다|됐어|기록|타이머|일시\s*정지|멈춰|재개|미리|예습)"
+)
+
+
+@dataclass(frozen=True)
+class StepReference:
+    """The step a question names first, and the question that follows it.
+
+    ``kind`` is "number" ("2단계"), "ordinal" ("두 번째 단계"), "next",
+    "this" ("이 단계", which STT cannot tell from "2단계") or "current".
+    """
+
+    kind: str
+    number: int | None
+    particle: str
+    rest: str
+
+
+def leading_step_reference(transcript: str) -> StepReference | None:
+    key = _utterance_key(transcript)
+    match = _STEP_REFERENCE.fullmatch(key)
+    if match is None:
+        return None
+    if match.group("digits"):
+        kind, number = "number", int(match.group("digits"))
+    elif match.group("ordinal"):
+        kind, number = "ordinal", _ORDINAL_STEP_NUMBERS[match.group("ordinal")]
+    elif match.group("next"):
+        kind, number = "next", None
+    elif match.group("this"):
+        kind, number = "this", None
+    else:
+        kind, number = "current", None
+    return StepReference(kind, number, match.group("particle") or "", match.group("rest").strip())
+
+
+def targeted_quantity_kind(rest: str) -> str | None:
+    """"amount"/"concentration" when what follows a named step asks a quantity."""
+
+    asked = _QUANTITY_ASK_TAIL.sub("", rest).strip()
+    kind = untargeted_quantity_question(asked)
+    if kind is not None:
+        return kind
+    return "amount" if _TARGETED_AMOUNT.fullmatch(asked) else None
+
+
+def is_read_only_step_question(rest: str) -> bool:
+    """What follows "2단계"/"이 단계" asks only (왜·뭐·얼마나·설명), never moves."""
+
+    return bool(_READ_ONLY_QUESTION.search(rest)) and not _MOVING_WORDS.search(rest)
+
+
 def step_value_candidates(
     text: str, substances: Sequence[str], *, kind: str = "amount",
 ) -> tuple[tuple[str, str], ...]:
@@ -3705,6 +3826,117 @@ def _quantity_sentence_en(kind: str, label: str, phrase: str, name: str, source:
     if kind == "amount":
         return f"At step {label}, add {_qualified(value, phrase, source, False)} of {what}."
     return f"At step {label}, {what} is {value}."
+
+
+# --- Another step's values, said with their names (lane R6, decision 2) -------
+#: "Solution A: 2 parts of ..." -- a labelled reagent the step defines. Not
+#: one an amount is taken of ("500 µL of solution B: 25mM ..."): that step
+#: adds solution B, it does not make it.
+_REAGENT_DEFINITION = re.compile(
+    r"(?<![A-Za-z0-9])(?P<label>(?i:solution|buffer|reagent)\s+[A-Z0-9])\s*:\s*"
+)
+_VALUE_BEFORE_LABEL = re.compile(
+    r"(?:" + _AMOUNT + r"|" + _CONCENTRATION + r")\s+(?:of\s+)?(?:the\s+)?$"
+)
+_PARTS_OF = re.compile(r"(?P<count>\d+(?:\.\d+)?)\s*parts?\s+(?:of\s+)?(?P<what>.+)")
+#: Past this many characters the values are left to the screen.
+_SPOKEN_VALUES_LIMIT = 70
+
+
+def _with_abbreviation(phrase: str, name: str, text: str) -> str:
+    """``phrase`` with ``name`` said as the abbreviation the source defines
+    for it right after it ("ammonium bicarbonate (AMBIC)" -> "AMBIC")."""
+
+    defined = re.search(re.escape(name) + r"\s*\(([A-Z][A-Z0-9]+)\)", text)
+    return phrase.replace(name, defined.group(1)) if defined else phrase
+
+
+def _defined_reagent_items(
+    text: str, substances: Sequence[str], kind: str,
+) -> tuple[tuple[str, str], ...] | None:
+    """(label, said with its values) for each reagent the step defines, or None.
+
+    "Solution A: 2 parts of 25mM ammonium bicarbonate (AMBIC) ... mixed with
+    1 part acetonitrile" gives ("Solution A", "Solution A(25mM AMBIC 2 :
+    acetonitrile 1)"): the source's own numbers, its parts said as a ratio. A
+    definition with no value is said by its label. None when the step defines
+    no reagent, or gives a value outside its definitions.
+    """
+
+    flat = " ".join(text.split())
+    definitions = [
+        match for match in _REAGENT_DEFINITION.finditer(flat)
+        if not _VALUE_BEFORE_LABEL.search(flat[:match.start()])
+    ]
+    if not definitions or _STEP_VALUE.search(flat[:definitions[0].start()]):
+        return None
+    items: list[tuple[str, str]] = []
+    for position, match in enumerate(definitions):
+        end = definitions[position + 1].start() if position + 1 < len(definitions) else len(flat)
+        body = flat[match.end():end]
+        pairs = step_value_candidates(body, substances, kind=kind)
+        phrases = [_with_abbreviation(phrase, name, body) for name, phrase in pairs]
+        parts = [_PARTS_OF.fullmatch(phrase) for phrase in phrases]
+        if phrases and all(parts):
+            values = " : ".join(f"{part.group('what')} {part.group('count')}" for part in parts)
+        else:
+            values = ", ".join(
+                _quantity_short(kind, phrase, name, body)
+                for (name, _raw), phrase in zip(pairs, phrases)
+            )
+        label = match.group("label")
+        items.append((label, f"{label}({values})" if values else label))
+    return tuple(items)
+
+
+def _named_items(
+    kind: str, candidates: Sequence[tuple[str, str]], source: str,
+) -> tuple[tuple[str, str], ...]:
+    """(name, said with the source's values) for each substance a step gives one:
+    the name, then its values as the source writes them ("DTT(1.5mg/mL, 10
+    millimolar (mM))", "AMBIC(25mM)")."""
+
+    items: list[tuple[str, str]] = []
+    for name, phrase in candidates:
+        values = ", ".join(
+            # "(FA, 10% v/v)": the value, not the parenthesis it closes.
+            value[:-1] if value.endswith(")") and value.count(")") > value.count("(") else value
+            for value in (match.group(0) for match in _STEP_VALUE.finditer(phrase))
+        )
+        items.append((name, f"{name}({values})" if values else name))
+    return tuple(items)
+
+
+def _other_step_contents(
+    head: str, items: Sequence[tuple[str, str]], *, makes: bool,
+) -> tuple[str, str]:
+    """(spoken, shown) Korean for what another step holds, with its values.
+
+    "다음 2단계는 Solution A(25mM AMBIC 2 : acetonitrile 1)와 Solution
+    B(25mM AMBIC)를 만들어요." ``head`` is "다음 2단계" or "2단계". The
+    particles go by the name, not by its parenthesis. Past
+    _SPOKEN_VALUES_LIMIT the names alone are said and the screen keeps the
+    values, so every number said is the source's own.
+    """
+
+    names = [name for name, _item in items]
+
+    def joined(words: Sequence[str]) -> str:
+        if len(words) == 1:
+            return words[0]
+        return f"{', '.join(words[:-1])}{_josa(names[-2], '과', '와')} {words[-1]}"
+
+    def sentence(words: Sequence[str]) -> str:
+        if makes:
+            return f"{head}는 {joined(words)}{_josa(names[-1], '을', '를')} 만들어요."
+        return f"{head}에는 {joined(words)}{_josa(names[-1], '이', '가')} 있어요."
+
+    said = [item for _name, item in items]
+    shown = sentence(said)
+    if len(joined(said)) <= _SPOKEN_VALUES_LIMIT or said == names:
+        return shown, shown
+    detail = "비율" if " : " in shown else "값"
+    return f"{sentence(names)} 자세한 {detail}{_josa(detail, '은', '는')} 화면에 있어요.", shown
 
 
 def _parameter_role(unit: str, text: str) -> str:
@@ -6496,18 +6728,33 @@ class CuratedProtocolSession:
             or not 0 <= index < len(self.fixture.steps)
         ):
             return ()
+        step = self.fixture.steps[index]
+        return step_value_candidates(
+            step.instruction_source_text, self._quantity_substances(), kind=kind,
+        )
+
+    def _quantity_substances(self) -> list[str]:
         vocabulary = self._protocol_vocabulary()
         materials = {name.casefold() for name in vocabulary.materials}
-        substances = [
+        return [
             term.text for term in vocabulary.terms
             if (term.resource and term.text.casefold() in materials)
             or _LABELLED_REAGENT.fullmatch(term.text)
             or re.fullmatch(r"[A-Z][A-Z0-9]+", term.text)
         ]
-        step = self.fixture.steps[index]
-        return step_value_candidates(
-            step.instruction_source_text, substances, kind=kind,
-        )
+
+    def _other_step_items(
+        self, kind: str, index: int,
+    ) -> tuple[tuple[tuple[str, str], ...], bool]:
+        """Another step's substances said with its values, and whether the
+        step makes them (lane R6, decision 2): the reagents it defines
+        ("Solution A: ..."), else each substance it gives a value to."""
+
+        source = " ".join(self.fixture.steps[index].instruction_source_text.split())
+        defined = _defined_reagent_items(source, self._quantity_substances(), kind)
+        if defined is not None:
+            return defined, True
+        return _named_items(kind, self._quantity_candidates(kind, index), source), False
 
     def _quantity_target_plan(
         self, intent: CuratedControlIntent, *, language: str,
@@ -6549,22 +6796,34 @@ class CuratedProtocolSession:
             )
 
         if len(here) > 1 or (not here and len(following) > 1):
-            # Several substances in one step: asked back, as before.
+            # Several substances in one step: asked back, as before. The next
+            # step's are said with their values (lane R6, decision 2).
             index = self.current_index if here else following_index
             names = tuple(name for name, _phrase in (here or following))
             label = steps[index].source_label
-            lead = "이 단계에는" if here else f"다음 {label}단계에는"
-            response = (
-                f"{lead} {_korean_list(names)}{_josa(names[-1], '이', '가')} 있어요. "
-                "어느 쪽을 말씀하세요?"
-                if language == "ko" else
-                ("This step has " if here else f"The next step, {label}, has ")
-                + f"{_english_list(names)}. Which one do you mean?"
-            )
+            shown = None
+            if language == "ko" and here:
+                response = (
+                    f"이 단계에는 {_korean_list(names)}{_josa(names[-1], '이', '가')} 있어요. "
+                    "어느 쪽을 말씀하세요?"
+                )
+            elif language == "ko":
+                items, makes = self._other_step_items(kind, index)
+                names = tuple(name for name, _item in items)
+                spoken, shown = _other_step_contents(f"다음 {label}단계", items, makes=makes)
+                response = f"{spoken} 어느 쪽을 말씀하세요?"
+                shown = f"{shown} 어느 쪽을 말씀하세요?"
+            else:
+                response = (
+                    ("This step has " if here else f"The next step, {label}, has ")
+                    + f"{_english_list(names)}. Which one do you mean?"
+                )
             return CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.CLARIFY_PARAMETER,
-                display_text=response, speech_text=response, primary_text=response,
-                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                display_text=shown or response, speech_text=response, primary_text=shown or response,
+                # A question back, not a refusal: the turn ends "complete"
+                # (lane R6, decision 4).
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
                 requested_entities=names,
                 **common,
             )
@@ -6581,6 +6840,7 @@ class CuratedProtocolSession:
             index: " ".join(steps[index].instruction_source_text.split())
             for index, _values in said
         }
+        shown_text: str | None = None
         if len(said) == 1:
             index, ((name, phrase),) = said[0]
             label = steps[index].source_label
@@ -6607,11 +6867,19 @@ class CuratedProtocolSession:
                         "어느 쪽인지 말씀해 주세요."
                     )
                 else:
-                    listed = tuple(name for name, _phrase in next_values)
+                    # Lane R6, decision 2: the next step's substances are
+                    # said with the source's values, not by name alone.
+                    items, makes = self._other_step_items(kind, next_index)
+                    names = (here_name, *(name for name, _item in items))
+                    spoken, shown = _other_step_contents(
+                        f"다음 {next_label}단계", items, makes=makes)
                     response = (
-                        f"지금 {here_label}단계라면 {here_short}, "
-                        f"다음 {next_label}단계에는 {_korean_list(listed)}"
-                        f"{_josa(listed[-1], '이', '가')} 있어요. 어느 쪽인지 말씀해 주세요."
+                        f"지금 {here_label}단계라면 {here_short}, {spoken} "
+                        "어느 쪽인지 말씀해 주세요."
+                    )
+                    shown_text = (
+                        f"지금 {here_label}단계라면 {here_short}, {shown} "
+                        "어느 쪽인지 말씀해 주세요."
                     )
             else:
                 here_short = _quantity_short(
@@ -6632,10 +6900,13 @@ class CuratedProtocolSession:
                 CuratedProtocolAction.QUESTION if len(said) == 1
                 else CuratedProtocolAction.CLARIFY_PARAMETER
             ),
-            display_text=response, speech_text=response, primary_text=response,
+            display_text=shown_text or response, speech_text=response,
+            primary_text=shown_text or response,
+            # Two steps said and asked which: a question back, not a refusal,
+            # so the turn ends "complete", not "차단됨" (lane R6, decision 4).
             speech_mode=(
                 CuratedProtocolSpeechMode.VERIFIED_FACT if len(said) == 1
-                else CuratedProtocolSpeechMode.BLOCKED
+                else CuratedProtocolSpeechMode.CONTROL
             ),
             source_texts=tuple(fact.text for fact in facts),
             source_pages=tuple(fact.source_page for fact in facts),
@@ -6645,6 +6916,146 @@ class CuratedProtocolSession:
             ),
             requested_entities=names,
             **{**common, "facts": facts},
+        )
+
+    def _targeted_quantity_step(self, transcript: str) -> tuple[str, int] | None:
+        """(kind, step index) when the words ask a quantity of a named step.
+
+        "N단계 얼마나 넣어?", "N단계에 대해서도 얼마나 넣어야 될지 알려줘",
+        "두 번째 단계 얼마나 넣어?", "다음 단계는 얼마나 넣어?" (lane R6,
+        decision 1). A step the protocol does not have is not taken.
+        """
+
+        reference = leading_step_reference(transcript)
+        if reference is None:
+            return None
+        kind = targeted_quantity_kind(reference.rest)
+        if kind is None:
+            return None
+        steps = self.fixture.steps
+        if reference.kind in {"number", "ordinal"}:
+            index = next(
+                (position for position, step in enumerate(steps)
+                 if step.source_label == str(reference.number)),
+                None,
+            )
+        elif reference.kind == "next":
+            index = self.current_index + 1 if self.current_index + 1 < len(steps) else None
+        else:
+            index = self.current_index
+        return None if index is None else (kind, index)
+
+    def quantity_answered_by_source(self, transcript: str) -> bool:
+        """Whether the front rules answer these words from a step's own values.
+
+        A quantity question with no target, or of a named step (lane R6,
+        decisions 1 and 3): the source is the answer, so no model knowledge
+        is added to it.
+        """
+
+        if not self.active:
+            return False
+        kind = untargeted_quantity_question(transcript)
+        if kind is not None:
+            return bool(
+                self._quantity_candidates(kind)
+                or self._quantity_candidates(kind, self.current_index + 1)
+            )
+        return self._targeted_quantity_step(transcript) is not None
+
+    def _targeted_quantity_plan(
+        self, intent: CuratedControlIntent, *, language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Say a named step's value as its source words it (lane R6, decision 1).
+
+        The sentence is lane XO's ("2단계에서는 …", "다음 4단계에서는 …"). A step
+        with several substances is asked back as before, another step's with
+        their values (decision 2); a step with no value is read as written.
+        """
+
+        steps = self.fixture.steps
+        kind = intent.question_kind or "amount"
+        index = next(
+            position for position, step in enumerate(steps)
+            if step.source_label == intent.target_step
+        )
+        step = steps[index]
+        label = step.source_label
+        where = (
+            "지금" if index == self.current_index
+            else "다음" if index == self.current_index + 1 else ""
+        )
+        head = f"{where} {label}단계".strip()
+        source = " ".join(step.instruction_source_text.split())
+        candidates = self._quantity_candidates(kind, index)
+        fact = next(
+            (item for item in self.fixture.facts_for_step(index)
+             if item.fact_id == "current_step"),
+            None,
+        )
+        shown: str | None = None
+        names = tuple(name for name, _phrase in candidates)
+        action = CuratedProtocolAction.QUESTION
+        speech_mode = CuratedProtocolSpeechMode.VERIFIED_FACT
+        if len(candidates) == 1:
+            ((name, phrase),) = candidates
+            response = (
+                _quantity_sentence(kind, where, label, phrase, name, source).strip()
+                if language == "ko" else
+                _quantity_sentence_en(kind, label, phrase, name, source)
+            )
+        elif candidates:
+            action = CuratedProtocolAction.CLARIFY_PARAMETER
+            speech_mode = CuratedProtocolSpeechMode.CONTROL
+            if language != "ko":
+                response = f"Step {label} has {_english_list(names)}. Which one do you mean?"
+            elif index == self.current_index:
+                response = (
+                    f"이 단계에는 {_korean_list(names)}{_josa(names[-1], '이', '가')} 있어요. "
+                    "어느 쪽을 말씀하세요?"
+                )
+            else:
+                items, makes = self._other_step_items(kind, index)
+                names = tuple(name for name, _item in items)
+                spoken, shown_contents = _other_step_contents(head, items, makes=makes)
+                response = f"{spoken} 어느 쪽을 말씀하세요?"
+                shown = f"{shown_contents} 어느 쪽을 말씀하세요?"
+        else:
+            # No value in the step: its source, read as it is written.
+            written = re.sub(r"^\d+\s*", "", source)
+            if language != "ko":
+                response = f"Step {label}'s source says: {written}"
+            else:
+                first = re.match(r".+?[.!?](?=\s|$)", written)
+                said = first.group(0) if first is not None and len(written) > 160 else written
+                response = (
+                    f"{head} 원문에는 '{said}'{_josa(said, '이라고', '라고')} 되어 있어요."
+                    + (" 나머지는 화면에 있어요." if said != written else "")
+                )
+                if said != written:
+                    shown = (
+                        f"{head} 원문에는 '{written}'{_josa(written, '이라고', '라고')} "
+                        "되어 있어요."
+                    )
+        return CuratedProtocolTurnPlan(
+            action=action,
+            display_text=shown or response, speech_text=response,
+            primary_text=shown or response,
+            speech_mode=speech_mode,
+            facts=(fact,) if fact is not None else (),
+            step_label=steps[self.current_index].source_label,
+            final_step=self.current_index == len(steps) - 1,
+            state_changed=False,
+            source_texts=(fact.text,) if fact is not None else (),
+            source_pages=(fact.source_page,) if fact is not None else (),
+            evidence_ids=(
+                ("current_step",) if fact is not None and index == self.current_index else ()
+            ),
+            requested_entities=names,
+            intent_kind=intent.intent_kind,
+            question_kind=intent.question_kind,
+            normalized_transcript=intent.normalized_transcript,
+            target_step=label,
         )
 
     def research_scope(self) -> dict[str, Any]:
@@ -7258,8 +7669,13 @@ class CuratedProtocolSession:
         *,
         language: str,
         facts: tuple[CuratedProtocolFact, ...] = (),
+        said: str = "",
     ) -> EntitySourceAnswer:
         """What the active PDF itself says about one requested entity.
+
+        ``said`` is the researcher's words: the Korean name they used goes
+        before the source's spelling ("탈색(destained)은 원문 7단계에 나와요.",
+        lane R6, decision 6).
 
         Every sentence is the protocol's own: which steps name the entity,
         and the first statement naming it, where the source introduces it --
@@ -7320,6 +7736,9 @@ class CuratedProtocolSession:
                 "Please consult approved reference materials."
             )
             return EntitySourceAnswer(entity, label, text, text, (), False)
+        spoken_name = _korean_name_said(entity, said)
+        named = f"{spoken_name}({label})" if spoken_name else label
+        topic = f"{named}{_josa(spoken_name or label, '은', '는')}"
         defined_as = _source_abbreviation(label, texts)
         definition = (
             (
@@ -7344,7 +7763,7 @@ class CuratedProtocolSession:
             more = (" 등" if language == "ko" else ", ...") if len(labels) > 6 else ""
             evidence.append(nearest.fact_id)
             if language == "ko":
-                lead = f"{label}: 이 프로토콜 원문에서 {listed}{more}에 나옵니다."
+                lead = f"{topic} 원문 {listed}{more}에 나와요."
                 body = (
                     f"{nearest_label}단계 내용: {localized}"
                     if localized is not None else
@@ -7364,7 +7783,7 @@ class CuratedProtocolSession:
             evidence.append(material.fact_id)
             where = overview_kinds.get(material.fact_id, ("개요", "overview"))
             if language == "ko":
-                lead = f"{label}: 이 프로토콜 원문의 {where[0]}에 나옵니다."
+                lead = f"{topic} 원문의 {where[0]}에 나와요."
                 body = f"원문(p.{material.source_page}): “{material.text.strip()}”"
             else:
                 lead = f"{label} appears in the active protocol's {where[1]}."
@@ -7549,7 +7968,9 @@ class CuratedProtocolSession:
             # answers, not about what the entity is.
             if intent.question_kind == "safety":
                 continue
-            found = self.entity_source_answer(entity, language=language, facts=facts)
+            found = self.entity_source_answer(
+                entity, language=language, facts=facts, said=transcript,
+            )
             if not found.found:
                 continue
             composition = entity in _SOLUTION_SURFACES
@@ -8651,6 +9072,7 @@ class CuratedProtocolSession:
                         if claim.target_type is ClaimTargetType.ENTITY:
                             summaries.append(self.entity_source_answer(
                                 claim.target_id, language=language, facts=facts,
+                                said=plan.normalized_transcript or "",
                             ).spoken(alone=len(entity_claims) == 1 and len(visible) == 1))
                             continue
                         if claim.local_answer:
@@ -8718,7 +9140,10 @@ class CuratedProtocolSession:
         # about it -- for every protocol alike. A definition the PDF does not
         # give stays unresolved, for the approved and external references.
         answers = tuple(
-            self.entity_source_answer(entity, language=language, facts=facts)
+            self.entity_source_answer(
+                entity, language=language, facts=facts,
+                said=plan.normalized_transcript or "",
+            )
             for entity in entities
         )
         for answer in answers:
@@ -9685,6 +10110,92 @@ class CuratedProtocolSession:
             return "targeted_completion"
         return None
 
+    def _step_homophone(
+        self,
+        transcript: str,
+        *,
+        transcript_quality: str | None,
+        turn_id: int,
+        configuration_id: int | None,
+        generation: int | None,
+    ) -> StepReference | None:
+        """"2단계" said where it may be "이 단계" (lane R6, decision 7).
+
+        STT writes "이 단계" as "2단계", and the two sound the same. Away from
+        step 2, a read-only question (왜·뭐·얼마나·설명) naming "2단계" or "이
+        단계" is answered for the current step. "두 번째 단계" and "다음 단계"
+        are never read this way, nor is anything that moves the protocol.
+        """
+
+        if (
+            not self.active or self._pause_state == "paused"
+            or transcript_quality is not None
+            or self._pending_anomaly
+            or self.fixture.steps[self.current_index].source_label == "2"
+        ):
+            return None
+        reference = leading_step_reference(transcript)
+        if (
+            reference is None
+            or not (
+                (reference.kind == "number" and reference.number == 2)
+                or reference.kind == "this"
+            )
+            or not is_read_only_step_question(reference.rest)
+            # "이 단계 왜 하는지 알려주고 다음 단계도 알려줘" names a second
+            # step; that turn is left as it was.
+            or re.search(r"단계|다음", reference.rest)
+        ):
+            return None
+        open_questions = self._open_questions(
+            turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+        )
+        return None if open_questions.first_open is not None else reference
+
+    def _plan_step_homophone(
+        self,
+        reference: StepReference,
+        *,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        arbitration: RequestArbitration | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Answer for the current step, and say how to name step 2."""
+
+        label = self.fixture.steps[self.current_index].source_label
+        planned = self._plan(
+            # Read as the current step named by its number, which every
+            # step-naming rule already understands.
+            f"{label}단계{reference.particle} {reference.rest}",
+            turn_id=turn_id, language=language,
+            configuration_id=configuration_id, generation=generation,
+            actor_principal_id=actor_principal_id, actor_role=actor_role,
+            front_only=False,
+        )
+        assert planned is not None
+        lead = f"지금 {label}단계 기준으로 답할게요."
+        hint = "2단계를 물으신 거면 '두 번째 단계'라고 해 주세요."
+        decorated = replace(
+            planned,
+            display_text=f"{lead} {planned.display_text} {hint}",
+            speech_text=(
+                f"{lead} {planned.speech_text} {hint}" if planned.speech_text
+                else planned.speech_text
+            ),
+            primary_text=(
+                f"{lead} {planned.primary_text} {hint}" if planned.primary_text
+                else planned.primary_text
+            ),
+            intent_kind=planned.intent_kind,
+        )
+        self._last_front_rule = "step_homophone"
+        self._replay[turn_id] = decorated
+        return decorated
+
     def plan(
         self,
         transcript: str,
@@ -9788,6 +10299,23 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        homophone = language == "ko" and self._step_homophone(
+            transcript, transcript_quality=transcript_quality,
+            turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+        )
+        if homophone:
+            return self._plan_step_homophone(
+                homophone, turn_id=turn_id, language=language,
+                configuration_id=configuration_id, generation=generation,
+                arbitration=arbitration,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+            )
+        ordinal = leading_step_reference(transcript) if language == "ko" else None
+        if ordinal is not None and ordinal.kind == "ordinal":
+            # "두 번째 단계" is step 2 itself, the way to say it unmistakably
+            # (decision 7): read as "2단계" by every step-naming rule.
+            transcript = f"{ordinal.number}단계{ordinal.particle} {ordinal.rest}"
+            arbitration = None
         # What reading the turn may clear before the rules know who owns it.
         # A front-only reading that hands the turn on puts these back.
         untouched = (
@@ -10653,6 +11181,28 @@ class CuratedProtocolSession:
                 )
         if (
             front_rule is None
+            and self.active
+            and self._pause_state != "paused"
+            and not intent.allows_state_mutation
+        ):
+            targeted = self._targeted_quantity_step(transcript)
+            if targeted is not None:
+                # Lane R6, decision 1: a quantity asked of a named step is
+                # answered from that step's source, by rule.
+                quantity_kind, target_index = targeted
+                front_rule = "quantity_target"
+                intent = replace(
+                    intent,
+                    intent_kind="targeted_quantity_question",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                    question_kind=quantity_kind,
+                    target_step=self.fixture.steps[target_index].source_label,
+                    allows_state_mutation=False,
+                    requested_transition=None,
+                    requested_followup=None,
+                )
+        if (
+            front_rule is None
             and short_completion
             and intent.action is CuratedProtocolAction.CLARIFY_COMPLETION
         ):
@@ -10785,6 +11335,8 @@ class CuratedProtocolSession:
 
         if intent.intent_kind == "untargeted_quantity_question":
             plan = self._quantity_target_plan(intent, language=language)
+        elif intent.intent_kind == "targeted_quantity_question":
+            plan = self._targeted_quantity_plan(intent, language=language)
         elif command is CuratedProtocolAction.STOP and intent.intent_kind != "stop_confirmed" and (
             self.active
             or (
@@ -13018,7 +13570,7 @@ class CuratedProtocolSession:
             speech_text = None
             if re.search(r"(?:튜브|tube|용기|vial|container)", transcript.casefold()):
                 # What this protocol's own statements say about its tubes.
-                tube = self.entity_source_answer("tube", language=language)
+                tube = self.entity_source_answer("tube", language=language, said=transcript)
                 keep = (
                     f"현재 프로토콜 상태는 {current_step.source_label}단계를 그대로 유지합니다."
                     if language == "ko" else
@@ -14351,6 +14903,135 @@ class CuratedProtocolSession:
         )
         self._replay[turn_id] = plan
         return plan
+
+    def outside_pdf_gap(
+        self, plan: CuratedProtocolTurnPlan, transcript: str,
+    ) -> dict[str, str] | None:
+        """What a short outside-PDF explanation would explain, or None.
+
+        Lane R6, decision 6 (restoring D4): a question of what a word means
+        or why a step is done, answered by the rules from the source, where
+        the source gives no meaning or purpose -- an entity the PDF does not
+        define, a step whose purpose it does not state. The rules' answer is
+        said first; this only names what the explanation is about. A
+        quantity question, which the source answers, never has one
+        (decision 3).
+        """
+
+        if (
+            not self.active or plan.state_changed
+            or not outside_pdf_question_allowed(transcript)
+            or self.quantity_answered_by_source(transcript)
+        ):
+            return None
+        step = self.fixture.steps[self.current_index]
+        unresolved = set(plan.unresolved_dimensions)
+        if plan.action is CuratedProtocolAction.RELATED_QUESTION:
+            if not unresolved & {"definition", "role", "rationale", "mechanism", "related_knowledge"}:
+                return None
+            entity = plan.requested_entity or (
+                plan.requested_entities[0] if plan.requested_entities else None
+            )
+            if entity:
+                answer = self.entity_source_answer(entity, language="ko")
+                if not answer.found:
+                    return None
+                return self._term_gap(answer)
+        elif plan.intent_kind == "llm_router_answer":
+            # The router's own answer from the PDF, saying the PDF does not
+            # explain it ("그 이유는 PDF에 설명되어 있지 않아요").
+            if (
+                plan.answer_origin != "current_protocol"
+                or not _SOURCE_SILENT.search(plan.speech_text or "")
+            ):
+                return None
+            entity = _entity_said(transcript)
+            if entity is not None:
+                answer = self.entity_source_answer(entity, language="ko")
+                if answer.found:
+                    return self._term_gap(answer)
+        elif not (
+            plan.action is CuratedProtocolAction.QUESTION
+            and plan.intent_kind == "current_step_learning"
+        ):
+            return None
+        source = " ".join(step.instruction_source_text.split())
+        return {"subject": source[:300], "term": source, "kind": "step"}
+
+    def _term_gap(self, answer: EntitySourceAnswer) -> dict[str, str]:
+        """A term to explain, with the protocol it is in: "trypsin" here is
+        the in-gel digestion's protease, not a cell-culture reagent."""
+
+        context = " ".join(answer.text.split())[:400]
+        return {
+            "subject": f"{answer.label} (protocol: {self.fixture.title}; {context})",
+            "term": answer.label,
+            "kind": "term",
+        }
+
+    def outside_pdf_explanation_violations(
+        self, explanation: str, *, question: str, gap: dict[str, str],
+    ) -> tuple[str, ...]:
+        """D4's checks on an explanation (answer_checks): 120 characters, no
+        number, no method, safety or completion, about a word of this
+        protocol. An explanation that states no number cannot contradict a
+        value the source gives."""
+
+        vocabulary = self._protocol_vocabulary()
+        return outside_pdf_violations(
+            explanation, question=question, term=gap["term"],
+            protocol_terms=tuple(term.text for term in vocabulary.terms),
+            protocol_text=vocabulary.corpus,
+        )
+
+    def apply_outside_pdf_explanation(
+        self,
+        *,
+        turn_id: int,
+        language: str,
+        explanation: str,
+        retrieval_backend: str,
+    ) -> CuratedProtocolTurnPlan:
+        """The explanation said after the rules' answer, marked as outside the PDF.
+
+        "PDF에는 따로 설명이 없어요. 일반적으로는 …": said, and shown with its
+        source named "AI 일반 지식" (lane R6, decision 6). It is never
+        evidence and changes nothing.
+        """
+
+        opening = self._replay.get(turn_id)
+        if opening is None or opening.state_changed or not explanation.strip():
+            raise CuratedProtocolFixtureError(
+                "An outside-PDF explanation does not own this turn."
+            )
+        lead = OUTSIDE_PDF_SPOKEN_LEAD.get(language, OUTSIDE_PDF_SPOKEN_LEAD["ko"])
+        body = explanation.strip()
+        if language == "ko" and not body.startswith("일반적으로"):
+            body = f"일반적으로는 {body}"
+        said = f"{lead} {body}"
+        step = self.fixture.steps[self.current_index]
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.QUESTION,
+            display_text=said,
+            speech_text=said,
+            speech_mode=CuratedProtocolSpeechMode.REFERENCE,
+            facts=(),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=said,
+            translation_status="supplemental_model_knowledge",
+            intent_kind=opening.intent_kind,
+            answer_origin="supplemental_model_knowledge",
+            retrieval_backend=retrieval_backend,
+            limitations=("outside_pdf_explanation",),
+            requested_entity=opening.requested_entity,
+            requested_entities=opening.requested_entities,
+            question_kind=opening.question_kind,
+            normalized_transcript=opening.normalized_transcript,
+            question_dimensions=opening.question_dimensions,
+            source_plan_scopes=("SUPPLEMENTAL_MODEL_KNOWLEDGE",),
+        )
 
     def apply_supplemental_answer(
         self,

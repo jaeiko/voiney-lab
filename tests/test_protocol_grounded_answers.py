@@ -134,7 +134,8 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
                 session, (plan,) = _run(self.fixture, ("튜브가 뭐야?",), index=index)
                 self.assertEqual(plan.action, CuratedProtocolAction.LAB_DOMAIN_QA)
                 self.assertFalse(plan.state_changed)
-                self.assertIn("tube: 이 프로토콜 원문에서 2단계에 나옵니다.", plan.display_text)
+                # Lane R6, decision 6: said as a sentence, with the Korean name used.
+                self.assertIn("튜브(tube)는 원문 2단계에 나와요.", plan.display_text)
                 self.assertIn(self.fixture.steps[1].instruction_source_text, plan.display_text)
                 self.assertEqual(session.current_index, index)
 
@@ -147,10 +148,10 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
         ))
 
     def test_its_own_materials_are_answered_from_its_steps(self) -> None:
-        for utterance, label, step in (
-            ("lysozyme이 뭐야?", "lysozyme", "2"),
-            ("Tris-HCl buffer는 왜 넣어?", "Tris-HCl buffer", "1"),
-            ("microcentrifuge가 뭐야?", "microcentrifuge", "3"),
+        for utterance, label, step, particle in (
+            ("lysozyme이 뭐야?", "lysozyme", "2", "은"),
+            ("Tris-HCl buffer는 왜 넣어?", "Tris-HCl buffer", "1", "는"),
+            ("microcentrifuge가 뭐야?", "microcentrifuge", "3", "는"),
         ):
             with self.subTest(utterance=utterance):
                 _, (plan,) = _run(self.fixture, (utterance,), index=0)
@@ -158,7 +159,7 @@ class AnotherProtocolHearsOnlyItsOwnPdfTests(unittest.TestCase):
                 self.assertEqual(plan.requested_entities, (label,))
                 # Only the steps whose own statements name it, not the
                 # material rows bound to other steps.
-                self.assertIn(f"{label}: 이 프로토콜 원문에서 {step}단계에 나옵니다.", plan.display_text)
+                self.assertIn(f"{label}{particle} 원문 {step}단계에 나와요.", plan.display_text)
                 index = int(step) - 1
                 self.assertIn(
                     self.fixture.steps[index].instruction_source_text, plan.display_text
@@ -218,13 +219,13 @@ class ReviewedEdgeTests(unittest.TestCase):
         ):
             with self.subTest(utterance=utterance):
                 _, (plan,) = _run(fixture, (utterance,), index=0)
-                self.assertIn(f"이 프로토콜 원문에서 {step}단계에 나옵니다.", plan.display_text)
+                self.assertIn(f"원문 {step}단계에 나와요.", plan.display_text)
                 self.assertNotIn(absent, plan.display_text)
 
     def test_a_safety_question_about_a_material_gets_the_safety_answer(self) -> None:
         _, (plan,) = _run(miniprep_fixture(), ("ethanol 안전해?",), index=2)
         self.assertIn("안전", plan.display_text)
-        self.assertNotIn("ethanol: 이 프로토콜 원문에서", plan.display_text)
+        self.assertNotIn("ethanol은 원문", plan.display_text)
         self.assertIn("safety", plan.unresolved_dimensions)
 
     def test_a_completion_report_naming_a_material_is_not_a_term_question(self) -> None:
@@ -375,7 +376,7 @@ class ServerBoundaryTests(unittest.TestCase):
         fixture = miniprep_fixture()
         spoken, events = self._turn(fixture, "튜브가 뭐야?", index=0)
         self.assertEqual(len(spoken), 1)
-        self.assertTrue(spoken[0].startswith("tube: 이 프로토콜 원문에서 2단계에 나옵니다."))
+        self.assertTrue(spoken[0].startswith("튜브(tube)는 원문 2단계에 나와요."))
         reply = next(item for item in events if item["type"] == "reply.delta")
         self.assertIn(fixture.steps[1].instruction_source_text, reply["text"])
         self.assertFalse(any(item["type"] == "error" for item in events))

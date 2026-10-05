@@ -1497,6 +1497,12 @@ class ServerTests(unittest.TestCase):
                 "route":"curated_protocol",
                 "superseding_turn_id":5,"superseding_generation":9,
                 "reason":"confirmed_speech",
+            },{
+                # Lane R6, decision 5: the interrupted turn's end state too.
+                "type":"turn.state",
+                "configuration_id":19,"turn_id":4,"generation":8,
+                "revision":2,"state":"cancelled",
+                "route":"curated_protocol",
             }])
         asyncio.run(scenario())
 
