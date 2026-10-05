@@ -107,7 +107,6 @@ from voiney_lab.web_visuals import (
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
-    ProtocolFindingRejectedError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -2029,6 +2028,35 @@ def log_protocol_catalog_runtime_configuration()->None:
         )
 
 
+#: A reviewer finding the catalog refuses for what it says, not for who sent
+#: it: the catalog's own refusal sentence -> (reason code, HTTP status).
+#: They all reached the screen as 403 "protocol_approval_denied", which read
+#: as a permission problem (lane R6, decision 5). 400 is a request the
+#: endpoint does not support, 422 one whose content does not hold. Every
+#: sentence here is one protocol_catalog.py raises (tested).
+FINDING_REJECTIONS:dict[str,tuple[str,int]]={
+    "A reviewer finding must cite the segments it rests on.":("finding_evidence_missing",422),
+    "An ambiguity decision must cite the segments it rests on.":("finding_evidence_missing",422),
+    "The cited evidence segments do not resolve on that page.":("finding_evidence_span_mismatch",422),
+    "This analysis revision has no such ambiguity.":("ambiguity_not_found",422),
+    "Ambiguity decision is unsupported.":("finding_unsupported",400),
+    "This readiness reason cannot be cleared by acknowledgement.":("finding_unsupported",400),
+    "A validated analysis revision is required for acknowledgement.":("analysis_revision_missing",422),
+    "A validated analysis revision is required to resolve an ambiguity.":("analysis_revision_missing",422),
+    "A validated analysis revision is required to record a finding.":("analysis_revision_missing",422),
+    "A validated analysis revision is required to revoke a finding.":("analysis_revision_missing",422),
+    "This analysis revision does not carry that readiness gate.":("finding_target_not_found",422),
+    "This analysis revision has no such fixed repetition.":("finding_target_not_found",422),
+    "That page is not in this source.":("finding_target_not_found",422),
+    "That label is not a numbered line on that page.":("finding_target_not_found",422),
+    "A confirmed count must be a number.":("finding_value_invalid",400),
+    "A confirmed count must be positive.":("finding_value_invalid",400),
+    "The confirmed count does not match the analysed count.":("finding_value_mismatch",422),
+    "This analysis revision carries no confirmation to revoke.":("finding_not_recorded",422),
+    "This analysis revision carries no finding to revoke.":("finding_not_recorded",422),
+}
+
+
 def _catalog_http_error(exc:Exception)->HTTPException:
     if isinstance(exc,(AuthenticationRequiredError,AuthorizationDeniedError,WorkspaceError)):
         return _workspace_http_error(exc)
@@ -2065,10 +2093,11 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
-    if isinstance(exc,ProtocolFindingRejectedError):
+    if isinstance(exc,ProtocolApprovalError) and str(exc) in FINDING_REJECTIONS:
         # A finding refused for its content: its reason, and not 403, which
         # is kept for a real permission refusal (lane R6, decision 5).
-        return HTTPException(status_code=exc.status_code,detail=exc.code)
+        code,status=FINDING_REJECTIONS[str(exc)]
+        return HTTPException(status_code=status,detail=code)
     if isinstance(exc,ProtocolApprovalError):
         return HTTPException(status_code=403,detail=exc.code)
     if isinstance(exc,ProtocolRegistrationError):

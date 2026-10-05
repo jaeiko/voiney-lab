@@ -201,41 +201,6 @@ class ProtocolApprovalError(ProtocolCatalogError):
     code = "protocol_approval_denied"
 
 
-class ProtocolFindingRejectedError(ProtocolApprovalError):
-    """A reviewer finding refused for what it says, not for who sent it.
-
-    Lane R6, decision 5: these were all "protocol_approval_denied" (HTTP
-    403), which the screen read as a permission problem. Each now carries
-    its reason as ``code`` and an HTTP status that is not 403: 400 for a
-    request the endpoint does not support, 422 for one whose content does
-    not hold. Only a real permission refusal stays 403.
-    """
-
-    code = "finding_rejected"
-    status_code = 422
-
-
-#: Reason code -> HTTP status, one per way a finding's content is refused.
-_FINDING_REJECTION_STATUS = {
-    "finding_evidence_missing": 422,
-    "finding_evidence_span_mismatch": 422,
-    "ambiguity_not_found": 422,
-    "finding_unsupported": 400,
-    "analysis_revision_missing": 422,
-    "finding_target_not_found": 422,
-    "finding_value_invalid": 400,
-    "finding_value_mismatch": 422,
-    "finding_not_recorded": 422,
-}
-_FindingRejected = {
-    code: type(
-        "ProtocolFindingRejectedError", (ProtocolFindingRejectedError,),
-        {"code": code, "status_code": status},
-    )
-    for code, status in _FINDING_REJECTION_STATUS.items()
-}
-
-
 class ProtocolOcrRequiredError(ProtocolCatalogError):
     code = "ocr_required"
 
@@ -2747,11 +2712,11 @@ class ProtocolCatalog:
             revision_id
         )
         if analysis_revision_number is None:
-            raise _FindingRejected["analysis_revision_missing"](
+            raise ProtocolApprovalError(
                 "A validated analysis revision is required for acknowledgement."
             )
         if reason_code not in _ACKNOWLEDGEABLE_GATES:
-            raise _FindingRejected["finding_unsupported"](
+            raise ProtocolApprovalError(
                 "This readiness reason cannot be cleared by acknowledgement."
             )
         _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
@@ -2764,7 +2729,7 @@ class ProtocolCatalog:
             protocol_id, protocol_revision_number, analysis_revision_number
         )
         if reason_code not in analysis.readiness.reason_codes:
-            raise _FindingRejected["finding_target_not_found"](
+            raise ProtocolApprovalError(
                 "This analysis revision does not carry that readiness gate."
             )
         self.store.append_event(
@@ -2822,12 +2787,12 @@ class ProtocolCatalog:
         """
 
         if decision not in _AMBIGUITY_DECISIONS:
-            raise _FindingRejected["finding_unsupported"]("Ambiguity decision is unsupported.")
+            raise ProtocolApprovalError("Ambiguity decision is unsupported.")
         protocol_revision_number, analysis_revision_number = _parse_revision_id(
             revision_id
         )
         if analysis_revision_number is None:
-            raise _FindingRejected["analysis_revision_missing"](
+            raise ProtocolApprovalError(
                 "A validated analysis revision is required to resolve an "
                 "ambiguity."
             )
@@ -2850,11 +2815,11 @@ class ProtocolCatalog:
             None,
         )
         if ambiguity is None:
-            raise _FindingRejected["ambiguity_not_found"](
+            raise ProtocolApprovalError(
                 "This analysis revision has no such ambiguity."
             )
         if not evidence_segment_ids:
-            raise _FindingRejected["finding_evidence_missing"](
+            raise ProtocolApprovalError(
                 "An ambiguity decision must cite the segments it rests on."
             )
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
@@ -2877,7 +2842,7 @@ class ProtocolCatalog:
                 source_revision="pdf-1",
             )
         except Exception as exc:  # noqa: BLE001 - a citation that will not open
-            raise _FindingRejected["finding_evidence_span_mismatch"](
+            raise ProtocolApprovalError(
                 "The cited evidence segments do not resolve on that page."
             ) from exc
         ordinal = self._finding_ordinal(
@@ -2924,7 +2889,7 @@ class ProtocolCatalog:
             revision_id
         )
         if analysis_revision_number is None:
-            raise _FindingRejected["analysis_revision_missing"](
+            raise ProtocolApprovalError(
                 "A validated analysis revision is required to record a "
                 "finding."
             )
@@ -2953,7 +2918,7 @@ class ProtocolCatalog:
         """A finding must cite segments that actually open on that page."""
 
         if not evidence_segment_ids:
-            raise _FindingRejected["finding_evidence_missing"](
+            raise ProtocolApprovalError(
                 "A reviewer finding must cite the segments it rests on."
             )
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
@@ -2976,7 +2941,7 @@ class ProtocolCatalog:
                 source_revision="pdf-1",
             )
         except Exception as exc:  # noqa: BLE001 - a citation that will not open
-            raise _FindingRejected["finding_evidence_span_mismatch"](
+            raise ProtocolApprovalError(
                 "The cited evidence segments do not resolve on that page."
             ) from exc
 
@@ -3058,11 +3023,11 @@ class ProtocolCatalog:
             )
         )
         if not 1 <= source_page_number <= extraction.page_count:
-            raise _FindingRejected["finding_target_not_found"]("That page is not in this source.")
+            raise ProtocolApprovalError("That page is not in this source.")
         if source_label not in _numbered_step_labels(
             extraction.pages[source_page_number - 1].text
         ):
-            raise _FindingRejected["finding_target_not_found"](
+            raise ProtocolApprovalError(
                 "That label is not a numbered line on that page."
             )
         self._check_cited_segments(
@@ -3132,7 +3097,7 @@ class ProtocolCatalog:
         if key not in self._disposition_findings(
             protocol_id, protocol_revision_number, analysis_revision_number
         ):
-            raise _FindingRejected["finding_not_recorded"](
+            raise ProtocolApprovalError(
                 "This analysis revision carries no confirmation to revoke."
             )
         ordinal = self._finding_ordinal(
@@ -3235,9 +3200,9 @@ class ProtocolCatalog:
         """
 
         if not isinstance(repeat_count, int) or isinstance(repeat_count, bool):
-            raise _FindingRejected["finding_value_invalid"]("A confirmed count must be a number.")
+            raise ProtocolApprovalError("A confirmed count must be a number.")
         if repeat_count < 1:
-            raise _FindingRejected["finding_value_invalid"]("A confirmed count must be positive.")
+            raise ProtocolApprovalError("A confirmed count must be positive.")
         (
             protocol_revision_number,
             analysis_revision_number,
@@ -3254,11 +3219,11 @@ class ProtocolCatalog:
             None,
         )
         if repetition is None:
-            raise _FindingRejected["finding_target_not_found"](
+            raise ProtocolApprovalError(
                 "This analysis revision has no such fixed repetition."
             )
         if repetition.repeat_count != repeat_count:
-            raise _FindingRejected["finding_value_mismatch"](
+            raise ProtocolApprovalError(
                 "The confirmed count does not match the analysed count."
             )
         self._check_cited_segments(
@@ -3319,7 +3284,7 @@ class ProtocolCatalog:
         if repetition_id not in self._repetition_findings(
             protocol_id, protocol_revision_number, analysis_revision_number
         ):
-            raise _FindingRejected["finding_not_recorded"](
+            raise ProtocolApprovalError(
                 "This analysis revision carries no confirmation to revoke."
             )
         ordinal = self._finding_ordinal(
@@ -3442,7 +3407,7 @@ class ProtocolCatalog:
             revision_id
         )
         if analysis_revision_number is None:
-            raise _FindingRejected["analysis_revision_missing"](
+            raise ProtocolApprovalError(
                 "A validated analysis revision is required to revoke a "
                 "finding."
             )
@@ -3450,7 +3415,7 @@ class ProtocolCatalog:
         if ambiguity_id not in self._ambiguity_findings(
             protocol_id, protocol_revision_number, analysis_revision_number
         ):
-            raise _FindingRejected["finding_not_recorded"](
+            raise ProtocolApprovalError(
                 "This analysis revision carries no finding to revoke."
             )
         ordinal = self._finding_ordinal(

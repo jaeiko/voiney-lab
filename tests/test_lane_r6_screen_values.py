@@ -16,6 +16,7 @@ lane U2:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import tempfile
@@ -24,15 +25,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from tests import test_ambiguity_resolution as _ambiguity
+from voiney_lab import protocol_catalog
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.identity import Principal, Role
 from voiney_lab.protocol_catalog import (
     AMBIGUITY_SINGLE_AUTHORITATIVE,
     ProtocolApprovalError,
-    ProtocolFindingRejectedError,
     SharedSecretApprovalPolicy,
 )
 from voiney_lab.server import (
+    FINDING_REJECTIONS,
     ListenerSession,
     _catalog_http_error,
     _public_experiment_report_state,
@@ -117,12 +119,10 @@ class FindingRejectionTests(unittest.TestCase):
     _protocol = _ambiguity.AmbiguityResolutionTests._protocol
     _resolve = _ambiguity.AmbiguityResolutionTests._resolve
 
-    def _refused(self, **call) -> ProtocolFindingRejectedError:
-        with self.assertRaises(ProtocolFindingRejectedError) as raised:
+    def _refused(self, **call):
+        with self.assertRaises(ProtocolApprovalError) as raised:
             self._resolve(**call)
-        # Still an approval error to every caller that catches one.
-        self.assertIsInstance(raised.exception, ProtocolApprovalError)
-        return raised.exception
+        return _catalog_http_error(raised.exception)
 
     def test_each_content_refusal_has_its_own_code_and_no_403(self) -> None:
         for call, code, status in (
@@ -136,16 +136,30 @@ class FindingRejectionTests(unittest.TestCase):
             ({"decision": "looks_the_same_to_me"}, "finding_unsupported", 400),
         ):
             with self.subTest(code=code):
-                error = self._refused(**call)
-                self.assertEqual(error.code, code)
-                http = _catalog_http_error(error)
+                http = self._refused(**call)
                 self.assertEqual((http.status_code, http.detail), (status, code))
 
     def test_a_missing_analysis_revision_is_its_own_code(self) -> None:
         self.revision_id = "pdf-1"
-        error = self._refused(decision=AMBIGUITY_SINGLE_AUTHORITATIVE)
-        self.assertEqual(error.code, "analysis_revision_missing")
-        self.assertEqual(_catalog_http_error(error).status_code, 422)
+        http = self._refused(decision=AMBIGUITY_SINGLE_AUTHORITATIVE)
+        self.assertEqual((http.status_code, http.detail), (422, "analysis_revision_missing"))
+
+    def test_every_mapped_refusal_is_one_the_catalog_raises(self) -> None:
+        # The table is keyed by the catalog's own sentences; one that drifts
+        # would fall back to 403 silently.
+        source = ast.parse(Path(protocol_catalog.__file__).read_text(encoding="utf-8"))
+        raised = {
+            node.exc.args[0].value
+            for node in ast.walk(source)
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
+            and getattr(node.exc.func, "id", None) == "ProtocolApprovalError"
+            and node.exc.args and isinstance(node.exc.args[0], ast.Constant)
+        }
+        self.assertEqual(sorted(set(FINDING_REJECTIONS) - raised), [])
+        for message in raised - set(FINDING_REJECTIONS):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    _catalog_http_error(ProtocolApprovalError(message)).status_code, 403)
 
     def test_an_authorization_failure_is_still_403(self) -> None:
         http = _catalog_http_error(ProtocolApprovalError("Protocol approval authorization failed."))
