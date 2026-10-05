@@ -396,6 +396,8 @@ class ProtocolCatalogTests(unittest.TestCase):
                 "final_approval": False,
                 "actor_principal_id": None,
                 "actor_role": None,
+                # Lane R6, decision 5: the approver's readable name, if recorded.
+                "actor_display_name": None,
                 "recorded_at": None,
                 "authority": None,
             },
@@ -897,6 +899,8 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
                 "final_approval": False,
                 "actor_principal_id": None,
                 "actor_role": None,
+                # Lane R6, decision 5: the approver's readable name, if recorded.
+                "actor_display_name": None,
                 "recorded_at": None,
                 "authority": None,
             },

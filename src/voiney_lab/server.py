@@ -107,6 +107,7 @@ from voiney_lab.web_visuals import (
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
+    ProtocolFindingRejectedError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -2064,6 +2065,10 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
+    if isinstance(exc,ProtocolFindingRejectedError):
+        # A finding refused for its content: its reason, and not 403, which
+        # is kept for a real permission refusal (lane R6, decision 5).
+        return HTTPException(status_code=exc.status_code,detail=exc.code)
     if isinstance(exc,ProtocolApprovalError):
         return HTTPException(status_code=403,detail=exc.code)
     if isinstance(exc,ProtocolRegistrationError):
@@ -2111,20 +2116,51 @@ async def get_workspace_session()->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
+def _catalog_protocol_titles()->dict[str,str]:
+    """protocol_id -> title from the configured fixture and the protocol
+    catalog, for naming experiments on the screen. Empty on any failure: a
+    title is a convenience, never a reason to refuse a list."""
+
+    titles:dict[str,str]={}
+    try:
+        candidate=_configured_candidate_fixture(server_config())
+        if candidate is not None:
+            titles[candidate.protocol_id]=candidate.title
+        if _protocol_store_settings().enabled:
+            catalog,catalog_store=_open_protocol_catalog()
+            try:
+                for item in catalog.list_entries():
+                    public=item.public_dict()
+                    if isinstance(public.get("title"),str):
+                        titles.setdefault(item.protocol_id,public["title"])
+            finally:
+                catalog_store.close()
+    except Exception:
+        log.info("experiment titles unavailable from the protocol catalog")
+    return titles
+
+
 @app.get("/api/workspace/experiments")
 def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
     try:
         principal,store=_commercial_workspace()
         try:
-            return {
-                "experiments":list(
-                    store.list_experiments(principal,active_only=active_only)
-                )
-            }
+            experiments=list(
+                store.list_experiments(principal,active_only=active_only))
         finally:
             store.close()
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
+    # Lane R6, decision 5: each item names its protocol and its place that
+    # day; a title the workspace does not hold is the catalog's.
+    if any(item.get("protocol_title") is None for item in experiments):
+        titles=_catalog_protocol_titles()
+        experiments=[
+            item if item.get("protocol_title") is not None
+            else {**item,"protocol_title":titles.get(str(item.get("protocol_id")))}
+            for item in experiments
+        ]
+    return {"experiments":experiments}
 
 
 @app.get("/api/workspace/experiments/{session_id}")
@@ -2975,6 +3011,7 @@ async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,o
                         actor_principal_id=principal.principal_id,
                         actor_role=role,
                         comment=comment,
+                        actor_display_name=principal.display_name,
                     )
                 finally:
                     catalog_store.close()
@@ -4557,6 +4594,7 @@ def approve_protocol_revision(
                 presented_secret=presented,
                 actor_principal_id=actor.principal_id if actor else None,
                 actor_role=role,
+                actor_display_name=actor.display_name if actor else None,
             )
             return _catalog_entry_projection(catalog,entry)
         finally:
@@ -5363,6 +5401,9 @@ class ListenerSession:
         # A turn whose audio.complete waits for an outside-PDF explanation
         # to be said after it (lane R6, decision 6): (turn, generation).
         self.held_audio_complete:set[tuple[int,int]]=set()
+        # A playback.ended refused while a barge-in candidate was open: the
+        # turn it ends, to be completed if the candidate is rejected.
+        self._deferred_playback_end:tuple[int,int]|None=None
         self._interrupted_generations:set[tuple[int,int]]=set()
         self._cascade_vad_config=self.detector.config
         self._vad_classifier=self.detector.classifier
@@ -5447,6 +5488,7 @@ class ListenerSession:
         self.visual_tasks.clear()
         self.research_operations.clear()
         self.held_audio_complete.clear()
+        self._deferred_playback_end=None
         self.turn_generations.clear()
         self.turn_progress.clear()
         self._interrupted_generations.clear()
@@ -5807,8 +5849,14 @@ class ListenerSession:
     def playback_ended(self,turn_id:int)->bool:
         if self.state!=TurnState.AGENT_SPEAKING or turn_id!=self.active_turn_id:return False
         turn_gen=self.turn_generations.get(turn_id,self.generation)
-        if (turn_id,turn_gen) in self._interrupted_generations or self._interrupt_candidate_identity is not None:
+        if (turn_id,turn_gen) in self._interrupted_generations:
             return False
+        if self._interrupt_candidate_identity is not None:
+            # Lane R6, decision 5: kept, so a rejected candidate still ends
+            # this turn "complete" instead of leaving it playing forever.
+            self._deferred_playback_end=(turn_id,turn_gen)
+            return False
+        self._deferred_playback_end=None
         received_at=self.clock()
         self.last_playback_ended_at=received_at
         committed_at=self.turn_committed_at.get(turn_id)
@@ -5820,6 +5868,12 @@ class ListenerSession:
             self.playback_completion_metrics[turn_id]=max(
                 0,round((received_at-committed_at)*1000))
         return True
+    def resume_deferred_playback_end(self,turn_id:int,generation:int)->bool:
+        """Accept the playback.ended a rejected candidate held back, once."""
+
+        if self._deferred_playback_end!=(turn_id,generation):return False
+        self._deferred_playback_end=None
+        return self.playback_ended(turn_id)
     def playback_completion_ms(self,turn_id:int)->int|None:
         return self.playback_completion_metrics.get(turn_id)
     def cascade_failed(self,turn_id:int):
@@ -7525,6 +7579,8 @@ def _public_experiment_report_state(report:dict)->dict:
             "report_id","status","started_at","ended_at","anomaly_count",
             "blocker_count","finalization_version","development_only",
             "session_id","protocol_id",
+            # Lane R6, decision 5: what the screen names the record by.
+            "protocol_title","day_sequence","day_sequence_date","timezone",
         )
     } | {"event_count":len(events),"events":events}
 
@@ -9975,6 +10031,47 @@ async def run_barge_in_stt_failure_turn(
         timings_ms={"stt":max(0,stt_ms)},
     )
 
+async def _send_playback_terminal(
+    websocket:WebSocket,session:ListenerSession,turn_id:int,*,cooldown_ms:int,
+)->None:
+    """End a turn whose playback ended: its turn.state, then the cooldown.
+
+    For the browser's playback.ended, and (lane R6, decision 5) for one a
+    barge-in candidate held back until it was rejected.
+    """
+
+    generation=session.turn_generations.get(turn_id,session.generation)
+    playback_completion_ms=session.playback_completion_ms(turn_id)
+    progress=session.advance_turn_progress(
+        turn_id,generation,
+        session.turn_terminal_outcome(turn_id,generation),
+        timings_ms=(
+            {"playback_completion":playback_completion_ms}
+            if playback_completion_ms is not None else None),
+    )
+    if progress is not None:
+        await websocket.send_text(event("turn.state",**progress))
+    if playback_completion_ms is not None:
+        log.info(
+            "playback.completed pipeline=cascade turn_id=%s "
+            "playback_completion_ms=%s",
+            turn_id,playback_completion_ms)
+        await websocket.send_text(event(
+            "playback.completed",pipeline="cascade",
+            turn_id=turn_id,
+            generation=generation,
+            playback_completion_ms=playback_completion_ms))
+        RUNTIME_METRICS.observe("playback.completed",{
+            "turn_id":turn_id,
+            "generation":generation,
+            "playback_completion_ms":playback_completion_ms,
+        })
+    await websocket.send_text(event(
+        "state.changed",state=session.state.value,
+        turn_id=turn_id,generation=generation,
+        cooldown_ms=cooldown_ms))
+
+
 async def cancel_cascade_generation(
     websocket:WebSocket,session:ListenerSession,task:asyncio.Task|None,
     interruption:ListenerEvent,
@@ -10008,6 +10105,10 @@ async def cancel_cascade_generation(
             dimensions={"status":"confirmed","event_kind":"barge_in"},
         )
     await websocket.send_text(event("cascade.playback.clear",**fields))
+    if progress is not None:
+        # Lane R6, decision 5: the interrupted turn's end state, as every
+        # other turn's, so no card is left "재생 중".
+        await websocket.send_text(event("turn.state",**progress))
 
 @app.websocket("/ws")
 async def voice_socket(websocket:WebSocket):
@@ -10215,6 +10316,16 @@ async def voice_socket(websocket:WebSocket):
                     if item.diagnostics:
                         fields.update(item.diagnostics)
                     await websocket.send_text(event(item.kind,**fields))
+                    if (
+                        item.kind=="barge_in_rejected"
+                        and session.resume_deferred_playback_end(
+                            item.turn_id,item.generation)
+                    ):
+                        # The playback.ended held back for this candidate:
+                        # the turn now ends as it would have (decision 5).
+                        await _send_playback_terminal(
+                            websocket,session,item.turn_id,
+                            cooldown_ms=config.cooldown_ms)
                     if item.kind in {
                         "barge_in_candidate","barge_in_committed",
                         "barge_in_rejected",
@@ -10875,37 +10986,9 @@ async def voice_socket(websocket:WebSocket):
                         attempts=1,
                     ))
             elif control["type"]=="playback.ended" and session.playback_ended(control["turn_id"]):
-                generation=session.turn_generations.get(
-                    control["turn_id"],session.generation)
-                playback_completion_ms=session.playback_completion_ms(control["turn_id"])
-                progress=session.advance_turn_progress(
-                    control["turn_id"],generation,
-                    session.turn_terminal_outcome(control["turn_id"],generation),
-                    timings_ms=(
-                        {"playback_completion":playback_completion_ms}
-                        if playback_completion_ms is not None else None),
-                )
-                if progress is not None:
-                    await websocket.send_text(event("turn.state",**progress))
-                if playback_completion_ms is not None:
-                    log.info(
-                        "playback.completed pipeline=cascade turn_id=%s "
-                        "playback_completion_ms=%s",
-                        control["turn_id"],playback_completion_ms)
-                    await websocket.send_text(event(
-                        "playback.completed",pipeline="cascade",
-                        turn_id=control["turn_id"],
-                        generation=generation,
-                        playback_completion_ms=playback_completion_ms))
-                    RUNTIME_METRICS.observe("playback.completed",{
-                        "turn_id":control["turn_id"],
-                        "generation":generation,
-                        "playback_completion_ms":playback_completion_ms,
-                    })
-                await websocket.send_text(event(
-                    "state.changed",state=session.state.value,
-                    turn_id=control["turn_id"],generation=generation,
-                    cooldown_ms=config.cooldown_ms))
+                await _send_playback_terminal(
+                    websocket,session,control["turn_id"],
+                    cooldown_ms=config.cooldown_ms)
     except WebSocketDisconnect:
         pass
     except Exception as exc:
