@@ -20,13 +20,13 @@
         <strong id="rail-state">준비</strong>
       </div>
       <div class="rail-divider"></div>
-      <span id="rail-pdf-title" class="rail-title" title="선택된 실험 PDF">실험 PDF 선택 대기</span>
+      <span id="rail-pdf-title" class="rail-title" title="선택된 실험 PDF">프로토콜을 고르세요</span>
       <span id="rail-step-badge" class="rail-badge" title="현재 단계">—</span>
       <span id="rail-timer-badge" class="rail-timer" title="타이머">⏱ 00:00</span>
       <span id="rail-safety-badge" class="rail-safety" title="바인딩된 안전 지침">🛡️ 안전 자료 확인 중</span>
     </div>
     <div class="rail-right">
-      <button id="rail-new-session" type="button" class="btn-rail-secondary">새 세션</button>
+      <button id="rail-new-session" type="button" class="btn-rail-secondary">새 실험</button>
       <button id="rail-pause-session" type="button" class="btn-rail-secondary" disabled>일시정지</button>
       <button id="rail-stop-session" type="button" class="btn-rail-danger" disabled>종료</button>
       <button id="toggle-setup-btn" type="button" class="btn-rail-ghost" aria-expanded="true" aria-controls="hero-setup">⚙️ 설정 접기</button>
@@ -54,9 +54,9 @@
     <div id="hero-setup" class="hero">
       <section class="panel voice-panel" aria-labelledby="page-title">
         <div class="voice-copy">
-          <p class="eyebrow">Approved protocol · Hands-free execution</p>
+          <p class="eyebrow">승인된 프로토콜 · 음성으로 진행</p>
           <h1 id="page-title">프로토콜을 확인하고, 손을 쓰지 않고 진행하세요.</h1>
-          <p class="lede">정확한 버전과 승인 상태를 먼저 확인한 뒤 현재 단계, 관찰 기록, 안전 근거를 음성으로 이용할 수 있습니다.</p>
+          <p class="lede">프로토콜과 승인 상태를 확인한 뒤, 단계 안내·관찰 기록·안전 확인을 말로 하세요.</p>
         </div>
         <div class="voice-actions">
           <div class="voice-console" aria-live="polite">
@@ -64,6 +64,7 @@
             <div>
               <div id="state">준비</div>
               <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
+              <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
             </div>
             <div class="controls">
               <button id="start" type="button" disabled>새 실험 시작</button>
@@ -80,10 +81,10 @@
             </div>
             <div class="experiment-context-grid">
               <div><span>실험</span><strong id="experiment-context-name">프로토콜을 선택해 주세요.</strong></div>
-              <div><span>승인 버전</span><strong id="experiment-context-version">—</strong></div>
-              <div><span>승인 책임</span><strong id="experiment-context-approval">승인 기록 확인 전</strong></div>
+              <div><span>승인 상태</span><strong id="experiment-context-version">—</strong></div>
+              <div><span>승인한 사람</span><strong id="experiment-context-approval">확인 전</strong></div>
               <div><span>현재 단계</span><strong id="experiment-context-step">시작 전</strong></div>
-              <div class="experiment-context-actions"><span>사용 가능한 작업</span><strong id="experiment-context-actions">승인된 프로토콜 선택</strong></div>
+              <div class="experiment-context-actions"><span>지금 할 수 있는 일</span><strong id="experiment-context-actions">승인된 프로토콜 선택</strong></div>
             </div>
             <p id="experiment-resume-disclosure" class="experiment-resume-disclosure" role="status" hidden></p>
           </section>
@@ -111,7 +112,7 @@
               </select></label>
             </div>
             <details id="protocol-review-panel" class="protocol-review" hidden open>
-              <summary>업로드 분석 검토 · 원문 근거와 실행 준비 상태</summary>
+              <summary>올린 PDF 검토 · 원문 근거와 실행 준비</summary>
               <p id="protocol-review-status" class="protocol-review-status" role="status">분석 결과를 불러오는 중…</p>
               <div id="protocol-review-content" class="protocol-review-content"></div>
               <div id="protocol-blockers" class="protocol-review-content"></div>
@@ -144,11 +145,11 @@
               </div>
             </details>
             <details class="dev-diagnostics" style="grid-column:1/-1">
-              <summary>빠른 프로토콜 라이브러리 · 소스 허브</summary>
+              <summary>프로토콜 찾기 · 저장된 원본</summary>
               <div class="dev-chips">
-                <span class="context-chip"><b>소스</b>Local PDF · Google Drive · protocols.io · GitHub</span>
-                <span class="context-chip"><b>권한</b>변경 소스는 항상 검토 초안</span>
-                <span class="context-chip"><b>빠른 실행</b>승인된 정확한 버전만 선택 가능</span>
+                <span class="context-chip"><b>원본</b>내 PDF · Google Drive · protocols.io · GitHub</span>
+                <span class="context-chip"><b>검토</b>바뀐 원본은 검토를 마쳐야 쓸 수 있음</span>
+                <span class="context-chip"><b>바로 시작</b>승인된 버전만 고를 수 있음</span>
               </div>
               <label class="workspace-field"><span>검색 · 이름 / 팀 태그</span><input id="quick-library-search" type="search" placeholder="프로토콜 검색"></label>
               <div id="quick-library-results" class="workspace-list" aria-live="polite"></div>
@@ -163,11 +164,15 @@
         <div class="procedure-head">
           <div>
             <div class="label" style="color:var(--magenta);font-weight:800;font-size:.74rem;letter-spacing:.08em;">지금 할 일 📄</div>
-            <strong id="procedure-title">연결된 절차 없음</strong>
-            <div id="procedure-meta">서버가 승인 절차 상태를 전송하면 표시됩니다.</div>
+            <strong id="procedure-title">선택된 프로토콜 없음</strong>
+            <div id="procedure-meta">실험을 시작하면 현재 단계가 여기에 나옵니다.</div>
             <div id="procedure-translation-note" class="translation-note" hidden></div>
           </div>
           <div id="procedure-status">대기</div>
+        </div>
+        <div id="workflow-paused-banner" class="workflow-paused-banner" role="status" aria-live="polite" hidden>
+          <div><strong>일시정지 중</strong><span id="workflow-paused-text">준비되면 ‘다시 시작’을 누르거나 “재개”라고 말하세요.</span></div>
+          <button id="workflow-resume-button" type="button">▶ 다시 시작</button>
         </div>
         <div id="procedure-progress"></div>
         <p id="procedure-step-title"></p>
@@ -181,18 +186,19 @@
               <b>짧은 음성 안내</b>
               <span id="procedure-spoken-summary">현재 단계가 시작되면 표시됩니다.</span>
             </div>
-            <p id="voice-command-hint" class="voice-command-hint">말씀하시면 음성 안내를 반복하거나 다음 단계로 안전하게 전환합니다.</p>
+            <p id="voice-command-hint" class="voice-command-hint">“다시 말해 줘”, “다음 단계”처럼 말하면 됩니다.</p>
             <div class="workflow-details-rows">
               <div class="workflow-detail-row"><b>출처</b><span id="procedure-source">—</span></div>
               <div class="workflow-detail-row"><b>타이머</b><span id="procedure-timer">—</span></div>
               <div class="workflow-detail-row" id="observation-container"><b>관찰</b><span id="procedure-observation">—</span></div>
-              <div class="workflow-detail-row" id="handoff-container" hidden><b>인계</b><span id="procedure-handoff">—</span></div>
-              <div class="workflow-detail-row" id="audit-container" hidden><b>감사</b><span id="procedure-audit">—</span></div>
+              <div class="workflow-detail-row" id="handoff-container" hidden><b>관리자 인계</b><span id="procedure-handoff">—</span></div>
+              <div class="workflow-detail-row" id="audit-container" hidden><b>확인 기록</b><span id="procedure-audit">—</span></div>
             </div>
             <aside class="report-card procedure-report" aria-live="polite" aria-labelledby="experiment-report-title">
-              <div class="label" id="experiment-report-title">실험 기록 · 세션 초안</div>
-              <strong id="last-report-id">아직 열린 실험 기록 없음</strong>
-              <div id="last-report-state">세션이 시작되면 서버가 실험 기록 초안을 관리합니다.</div>
+              <div class="label" id="experiment-report-title">실험 기록</div>
+              <strong id="last-report-id">아직 실험 기록 없음</strong>
+              <span id="last-report-dev"></span>
+              <div id="last-report-state">실험을 시작하면 기록이 자동으로 쌓입니다.</div>
               <details id="procedure-report-details">
                 <summary>기록 보기 · 이상 사항 · 내보내기</summary>
                 <div id="experiment-report-list" aria-label="이 세션의 실험 기록"></div>
@@ -201,15 +207,15 @@
                   <a id="export-report-markdown" aria-disabled="true">Markdown 내보내기</a>
                   <a id="export-report-json" aria-disabled="true">JSON 내보내기</a>
                   <a id="export-report-csv" aria-disabled="true">CSV 내보내기</a>
-                  <a id="export-report-docx" aria-disabled="true">작성된 보고서 다운로드</a>
+                  <a id="export-report-docx" aria-disabled="true">보고서(Word) 받기</a>
                 </div>
                 <fieldset class="workspace-field" style="margin-top:.75rem">
                   <legend>확인 후 eLabFTW에 기록</legend>
                   <label><span>eLabFTW 연결</span><select id="elabftw-connector"><option value="">구성된 연결 없음</option></select></label>
-                  <label><span>정확한 승인 프로토콜 버전</span><select id="elab-protocol-revision"><option value="">선택 필요</option></select></label>
+                  <label><span>승인된 프로토콜</span><select id="elab-protocol-revision"><option value="">선택 필요</option></select></label>
                   <label><input id="elab-confirm" type="checkbox"> 이 완료 기록을 eLabFTW로 전송하는 데 동의합니다.</label>
                   <button id="elab-writeback" type="button" disabled>확인하고 기록</button>
-                  <span id="elab-writeback-status" role="status">원음·전체 대화문·모델 추론은 전송하지 않습니다.</span>
+                  <span id="elab-writeback-status" role="status">녹음·대화 전체·AI 판단 과정은 보내지 않습니다.</span>
                 </fieldset>
                 <div id="pending-report" hidden></div>
               </details>
@@ -218,9 +224,9 @@
 
           <div class="task-body-right">
             <section class="panel source-card" aria-labelledby="source-visual-title">
-              <h2 id="source-visual-title">실험 PDF 원문 시각 자료</h2>
+              <h2 id="source-visual-title">원문 PDF 그림</h2>
               <div class="source-meta" aria-live="polite">
-                <span><b>상태</b> <span id="source-visual-state">단계 선택 대기</span></span>
+                <span><b>상태</b> <span id="source-visual-state">단계를 시작하면 표시</span></span>
                 <span><b>파일</b> <span id="source-filename">—</span></span>
                 <span><b>페이지</b> <span id="source-page-number">—</span></span>
                 <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
@@ -245,8 +251,8 @@
       <section id="experiment-session-ledger" class="panel experiment-ledger" aria-labelledby="experiment-ledger-title">
         <div class="experiment-ledger-head">
           <div>
-            <h2 id="experiment-ledger-title">실험 세션 · 관찰 타임라인</h2>
-            <p>음성·수동 관찰과 첨부 근거를 단계별로 남깁니다. 관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.</p>
+            <h2 id="experiment-ledger-title">실험 진행 · 관찰 기록</h2>
+            <p>말이나 글로 남긴 관찰과 사진·파일을 단계별로 모읍니다. 관찰은 승인된 프로토콜 지침을 바꾸지 않습니다.</p>
           </div>
           <div class="experiment-ledger-controls">
             <label class="visually-hidden" for="experiment-session-select">실험 세션</label>
@@ -255,28 +261,32 @@
             <label class="visually-hidden" for="experiment-checkpoint-select">체크포인트</label>
             <select id="experiment-checkpoint-select" aria-label="체크포인트" hidden></select>
             <button id="experiment-checkpoint-restart" class="btn-rail-secondary" type="button" hidden>체크포인트에서 새 실험</button>
-            <button id="experiment-timeline-refresh" class="btn-rail-secondary" type="button">타임라인 새로고침</button>
+            <button id="experiment-timeline-refresh" class="btn-rail-secondary" type="button">기록 새로고침</button>
           </div>
         </div>
         <div class="experiment-ledger-grid">
           <div class="experiment-ledger-capture">
             <label class="workspace-field"><span>관찰 유형</span><select id="manual-observation-category"><option value="note">메모</option><option value="appearance">외관</option><option value="measurement">측정</option><option value="deviation">편차</option><option value="other">기타</option></select></label>
-            <label class="workspace-field"><span>수동 관찰</span><textarea id="manual-observation-content" maxlength="4000" placeholder="예: 시료가 시작 시점보다 약간 탁해 보임"></textarea></label>
+            <label class="workspace-field"><span>관찰 내용</span><textarea id="manual-observation-content" maxlength="4000" placeholder="예: 시료가 시작 시점보다 약간 탁해 보임"></textarea></label>
             <div class="workspace-actions"><button id="manual-observation-save" type="button">현재 단계에 기록</button></div>
-            <label class="workspace-field"><span>이미지·문서 근거 · 자동 해석 안 함</span><input id="experiment-evidence-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.docx"></label>
+            <label class="workspace-field"><span>사진·문서 첨부 · 자동 해석 안 함</span><input id="experiment-evidence-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.docx"></label>
             <div class="workspace-actions"><button id="experiment-evidence-upload" type="button">현재 단계에 첨부</button></div>
-            <div id="experiment-capture-status" class="workspace-status" role="status">시작된 실험을 선택하면 기록할 수 있습니다.</div>
-            <h3>계산 워크플로 메타데이터 연결</h3>
-            <p>현재 실험과 검토된 Snakemake/Nextflow 버전을 연결합니다. 코드는 실행하지 않습니다.</p>
-            <label class="workspace-field"><span>습식 프로토콜 리니지</span><select id="experiment-protocol-lineage"><option value="">정확한 버전 선택</option></select></label>
-            <label class="workspace-field"><span>승인된 계산 워크플로</span><select id="experiment-workflow-revision"><option value="">승인된 메타데이터 선택</option></select></label>
-            <div class="workspace-actions"><button id="experiment-workflow-link" type="button">실험에 연결</button></div>
-            <div id="experiment-workflow-status" class="workspace-status" role="status">메타데이터 연결만 지원하며 실행은 시작하지 않습니다.</div>
-            <div id="experiment-workflow-links" class="workspace-list" aria-live="polite"></div>
+            <div id="experiment-capture-status" class="workspace-status" role="status">실험을 시작하거나 고르면 기록할 수 있습니다.</div>
+            <!-- Decision 3 (lane U, 2026-10-05): wet-lab pilots do not use the
+                 Snakemake/Nextflow link, so it stays here, folded and closed. -->
+            <details id="experiment-workflow-panel" class="dev-diagnostics experiment-workflow-panel">
+              <summary>개발 상세 정보 · 분석 코드(Snakemake/Nextflow) 연결</summary>
+              <p>이 실험에 검토된 분석 코드 버전을 기록으로 연결합니다. 코드는 실행하지 않습니다.</p>
+              <label class="workspace-field"><span>프로토콜 버전</span><select id="experiment-protocol-lineage"><option value="">버전 선택</option></select></label>
+              <label class="workspace-field"><span>승인된 분석 코드</span><select id="experiment-workflow-revision"><option value="">분석 코드 선택</option></select></label>
+              <div class="workspace-actions"><button id="experiment-workflow-link" type="button">실험에 연결</button></div>
+              <div id="experiment-workflow-status" class="workspace-status" role="status">기록만 연결하고 코드는 실행하지 않습니다.</div>
+              <div id="experiment-workflow-links" class="workspace-list" aria-live="polite"></div>
+            </details>
           </div>
           <div class="experiment-ledger-timeline">
             <div id="experiment-event-timeline" class="experiment-event-list bounded-record-list" tabindex="0" aria-live="polite" aria-label="실험 이벤트 타임라인 · 항목이 많으면 내부 스크롤">
-              <div class="workspace-row">실험 세션을 선택하면 단계별 이벤트가 표시됩니다.</div>
+              <div class="workspace-row">실험을 고르면 단계별 기록이 여기에 나옵니다.</div>
             </div>
             <p class="bounded-list-hint">기록이 많으면 이 영역 안에서 스크롤할 수 있습니다.</p>
           </div>
@@ -587,7 +597,7 @@ const SERVER_CODE_LABELS=Object.freeze({
  blocker_kind:Object.freeze({reviewer_can_clear:"검토자가 해제 가능",capability_required:"새 능력 필요 · 사람이 해제 불가"}),
  ambiguity_decision:Object.freeze({single_statement_is_authoritative:"한 진술이 기준임",statements_are_distinct:"두 진술은 서로 다른 내용임"}),
  finding_kind:Object.freeze({gate_acknowledged:"확인 처리",repetition_confirmed:"고정 반복 확인",repetition_confirmation_revoked:"고정 반복 확인 철회",ambiguity_resolved:"모호성 해결"}),
- finding_error:Object.freeze({reason_code_required:"확인할 사유가 지정되지 않았습니다",repetition_id_required:"반복 항목이 지정되지 않았습니다",repeat_count_required:"반복 횟수가 지정되지 않았습니다",ambiguity_id_required:"모호한 항목이 지정되지 않았습니다",decision_required:"판단을 선택하지 않았습니다",protocol_catalog_not_found:"프로토콜을 찾을 수 없습니다",protocol_catalog_unavailable:"프로토콜 저장소를 사용할 수 없습니다",protocol_approval_denied:"이 기록을 남길 권한이 없습니다",protocol_catalog_error:"서버가 이 기록을 받아들이지 않았습니다",unexpected_server_error:"서버 오류가 발생했습니다"}),
+ finding_error:Object.freeze({reason_code_required:"확인할 사유가 지정되지 않았습니다",repetition_id_required:"반복 항목이 지정되지 않았습니다",repeat_count_required:"반복 횟수가 지정되지 않았습니다",ambiguity_id_required:"모호한 항목이 지정되지 않았습니다",decision_required:"판단을 선택하지 않았습니다",protocol_catalog_not_found:"프로토콜을 찾을 수 없습니다",protocol_catalog_unavailable:"프로토콜 저장소를 사용할 수 없습니다",protocol_approval_denied:"서버가 이 판단을 받지 않았습니다(권한 문제는 아닙니다). 고른 원문 근거가 이 항목과 맞는지 확인하거나 ‘검토 새로고침’ 뒤 다시 눌러 주세요",authorization_denied:"검토자 역할이 있는 계정만 기록할 수 있습니다. 검토자 계정으로 로그인한 뒤 다시 눌러 주세요",authentication_required:"로그인해야 기록할 수 있습니다. 로그인한 뒤 다시 눌러 주세요",protocol_catalog_error:"서버가 이 기록을 받지 않았습니다. ‘검토 새로고침’ 뒤 다시 눌러 주세요",unexpected_server_error:"서버 오류가 발생했습니다"}),
  block_reason:Object.freeze({unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계",endpoint_observation_not_reported:"관찰 결과 보고 필요",repeat_interval_open:"반복 구간 진행 중",next_step_not_startable:"다음 단계 시작 불가 · 사람 확인 필요",already_at_final_step:"이미 마지막 단계",run_not_active:"실행 중이 아님"}),
  procedure_status:Object.freeze({active:"진행 중",blocked_for_handoff:"관리자 인계로 진행 차단",completed:"완료"}),
  experiment_report_status:Object.freeze({in_progress:"진행 중",completed:"완료",blocked:"진행 차단",stopped:"종료됨",incomplete:"미완료"}),
@@ -612,11 +622,28 @@ function appendDevCodeDetails(parent,pairs){const details=devCodeDetails(pairs);
 function workspaceRequestError(detail,fallback){const error=new Error(serverCodeLabel("workspace_error",detail)||fallback);if(typeof detail==="string"&&detail)error.code=detail;return error;}
 function showWorkspaceStatus(node,text,code){if(!node)return;node.textContent=text;appendDevCodeDetails(node,[["detail",code]]);}
 
-let workflowPaused=false;
+let workflowPaused=false,experimentEndedOnScreen=false;
+// Lane U decision 7. The pause state is the server's: it comes from
+// protocol.fixture.state (workflow_status "paused"), experiment.ended and
+// workflow.control.refused. The screen only shows it, and while paused the
+// resume action is a large button in the step card as well as in the rail.
 function updatePauseState(isPaused){
- workflowPaused=Boolean(isPaused);
+ workflowPaused=Boolean(isPaused)&&!experimentEndedOnScreen;
  const btn=$("rail-pause-session");
- if(btn){btn.textContent=workflowPaused?"재개":"일시정지";btn.disabled=!sessionActive;}
+ if(btn){btn.textContent=workflowPaused?"▶ 다시 시작":"일시정지";btn.classList?.toggle("is-resume",workflowPaused);setDisabled(btn,!sessionActive||experimentEndedOnScreen);btn.title=experimentEndedOnScreen?"실험이 끝나 일시정지·다시 시작을 쓸 수 없습니다":"";}
+ const banner=$("workflow-paused-banner");if(banner)banner.hidden=!(workflowPaused&&sessionActive);
+ const resume=$("workflow-resume-button");if(resume)setDisabled(resume,!(workflowPaused&&sessionActive));
+}
+function showExperimentEnded(message){
+ experimentEndedOnScreen=true;updatePauseState(false);
+ const status=message?.status==="completed"?"모든 단계를 마쳐 실험이 끝났습니다":"실험이 종료되었습니다";
+ const report=message?.report==="saved"?" · 실험 기록 저장됨":message?.report==="failed"?" · 실험 기록을 저장하지 못했습니다":"";
+ setText("procedure-status",`${status}${report}`);
+}
+function showWorkflowControlRefused(message){
+ const text=message?.reason==="experiment_ended"?"실험이 이미 끝나 일시정지·다시 시작을 할 수 없습니다. 새 실험을 시작하세요.":"지금은 일시정지·다시 시작을 할 수 없습니다. 현재 단계를 확인해 주세요.";
+ setText("status",text);appendDevCodeDetails($("status"),[["refused_action",typeof message?.action==="string"?message.action:null],["reason",typeof message?.reason==="string"?message.reason:null]]);
+ if(message?.reason==="experiment_ended")showExperimentEnded({status:message.status});
 }
 function togglePauseSession(){
  if(!sessionActive||!socket||socket.readyState!==WebSocket.OPEN)return;
@@ -625,32 +652,60 @@ function togglePauseSession(){
 }
 
 function setDisabled(node,value){if(!node)return;node.disabled=value;node.setAttribute?.("aria-disabled",String(value));}
+// Lane U decision 2: the body names things the way a researcher reads them.
+// Revision ids, hashes and principal ids stay in "개발 상세 정보".
+function localDateParts(iso){
+ if(typeof iso!=="string"||!iso)return null;const date=new Date(iso);if(Number.isNaN(date.getTime()))return null;
+ const pad=value=>String(value).padStart(2,"0");
+ return{day:`${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`,time:`${pad(date.getHours())}:${pad(date.getMinutes())}`};
+}
+function localDateTimeText(iso){const parts=localDateParts(iso);return parts?`${parts.day} ${parts.time}`:"";}
+function approverText(approval){return ROLE_LABELS[approval?.actor_role]||(approval?.actor_role?"승인 권한자":"");}
 function approvalContextLabel(entry){
  const approval=entry?.approval;
- if(entry?.development_only===true||approval?.status==="development_only")return "개발용 초안 · 최종 승인 없음";
- if(approval?.final_approval===true&&approval.status==="approved"){
-  const role=ROLE_LABELS[approval.actor_role]||"승인 권한자",actor=typeof approval.actor_principal_id==="string"&&approval.actor_principal_id?approval.actor_principal_id:null,when=typeof approval.recorded_at==="string"&&approval.recorded_at?approval.recorded_at.slice(0,16).replace("T"," "):null;
-  return [role,actor,when].filter(Boolean).join(" · ")||"최종 승인 기록 · 담당자 정보 미기록";
- }
- if(entry?.available_for_execution===true&&entry?.approval_status==="approved")return "최종 승인 기록 · 담당자 정보 미기록";
- return "검토·승인 대기";
+ if(entry?.development_only===true||approval?.status==="development_only")return "아직 승인 전";
+ if(approval?.final_approval===true&&approval.status==="approved")return approverText(approval)||"승인자 기록 없음";
+ if(entry?.available_for_execution===true&&entry?.approval_status==="approved")return "승인자 기록 없음";
+ return "승인 전";
 }
+function versionStatusLabel(entry){
+ const approval=entry?.approval;
+ if(!entry)return "—";
+ if(entry.development_only===true||approval?.status==="development_only")return "개발용 초안(승인 전)";
+ if(approval?.final_approval===true&&approval.status==="approved")return ["승인본",localDateParts(approval.recorded_at)?.day,approverText(approval)].filter(Boolean).join(" · ");
+ if(entry.available_for_execution===true&&entry.approval_status==="approved")return "승인본";
+ return "승인 전";
+}
+const experimentReportsSeen=new Map();
+function experimentReportLabel(report){
+ // "실험 기록 · {프로토콜 제목} · {시작 날짜·시각}". Two records of the same
+ // protocol started on the same day get a number, in start order.
+ const id=report.report_id,title=protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
+ experimentReportsSeen.set(id,{title,day:parts?.day||"",started:report.started_at||""});
+ const same=[...experimentReportsSeen.entries()].filter(([,item])=>item.title===title&&item.day===(parts?.day||"")).sort(([a,x],[b,y])=>x.started<y.started?-1:x.started>y.started?1:a<b?-1:1);
+ const number=same.length>1?` · ${same.findIndex(([key])=>key===id)+1}번째`:"";
+ return ["실험 기록",title,parts?`${parts.day} ${parts.time}`:""].filter(Boolean).join(" · ")+number;
+}
+function setReportTitle(text,pairs=[]){setText("last-report-id",text);const dev=$("last-report-dev");if(dev){dev.replaceChildren();appendDevCodeDetails(dev,pairs);}}
 function renderResumeDisclosure(recovery=currentExperimentRecovery){
  const node=$("experiment-resume-disclosure");if(!node)return false;
  if(!currentExperimentSessionId||!recovery||typeof recovery!=="object"){node.hidden=true;node.textContent="";return false;}
  const restored=recovery.restored&&typeof recovery.restored==="object"?recovery.restored:{},revision=typeof restored.protocol_revision_id==="string"?restored.protocol_revision_id:currentExperimentProtocolRevision,step=typeof restored.current_step_label==="string"?restored.current_step_label:currentExperimentStepLabel,count=Number.isInteger(restored.completed_step_count)&&restored.completed_step_count>=0?restored.completed_step_count:currentExperimentCompletedStepCount,wasRecovered=["session_recovered","session_resumed"].includes(recovery.last_event_type),eligible=recovery.eligible===true;
  const checkpoints=!eligible&&Array.isArray(recovery.checkpoints)?recovery.checkpoints.length:0;
  const lead=checkpoints?"이 실험은 종료되었습니다. 체크포인트를 골라 새 실험 세션으로 이어갈 수 있습니다.":!eligible?"이 실험은 종료되어 새 실험으로만 시작할 수 있습니다.":wasRecovered?"서버 복구 확인 완료.":"저장된 실험을 선택했습니다.";
- const durable=`서버가 유지한 상태: 정확한 버전 ${revision||"—"}, 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
- const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`복구하지 않는 항목: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
+ const durable=`저장된 상태: 현재 ${step||"—"}단계, 완료 ${count}개 단계.`;
+ const omittedKeys=Array.isArray(recovery.not_restored)?recovery.not_restored.filter(key=>Object.prototype.hasOwnProperty.call(RECOVERY_NOT_RESTORED_LABELS,key)):Object.keys(RECOVERY_NOT_RESTORED_LABELS),omitted=`다시 불러오지 않는 것: ${omittedKeys.map(key=>RECOVERY_NOT_RESTORED_LABELS[key]).join(", ")}.`;
  const next=sessionActive?"다음 작업: 음성으로 현재 단계를 확인하세요.":eligible?"다음 작업: ‘실험 이어하기’를 눌러 서버 검증을 완료하세요.":checkpoints?"다음 작업: 체크포인트를 고르고 ‘체크포인트에서 새 실험’을 누르세요.":"다음 작업: 승인된 프로토콜로 새 실험을 시작하세요.";
- node.textContent=`${lead} ${durable} ${omitted} ${next}`;node.hidden=false;return true;
+ node.textContent=`${lead} ${durable} ${omitted} ${next}`;appendDevCodeDetails(node,[["protocol_revision_id",revision||null]]);node.hidden=false;return true;
 }
 function renderExperimentContext(){
  const selected=$("protocol-id")?.value||"",entry=protocolCatalog.get(selected),sessionRevision=currentExperimentProtocolRevision,exactEntry=!sessionRevision||entry?.revision_id===sessionRevision?entry:null,stateInfo=sessionStateBadgeInfo(currentExperimentSessionStatus),step=curatedProtocolState?.attached===true&&curatedProtocolState.current_step_label?curatedProtocolState.current_step_label:currentExperimentStepLabel;
  setText("experiment-context-name",entry?.title||"프로토콜을 선택해 주세요.");
- setText("experiment-context-version",sessionRevision||entry?.revision_id||"—");
- setText("experiment-context-approval",sessionRevision&&entry&&entry.revision_id!==sessionRevision?"복구된 과거 버전 · 승인 기록 재확인 필요":approvalContextLabel(exactEntry));
+ const oldRevision=Boolean(sessionRevision&&entry&&entry.revision_id!==sessionRevision);
+ setText("experiment-context-version",oldRevision?"이전 버전 · 승인 다시 확인 필요":sessionRevision&&!entry?"저장된 실험의 버전 · 승인 확인 필요":versionStatusLabel(entry));
+ appendDevCodeDetails($("experiment-context-version"),[["revision_id",sessionRevision||entry?.revision_id||null],["approval_status",entry?.approval?.status||entry?.approval_status||null],["approved_at",entry?.approval?.recorded_at||null]]);
+ setText("experiment-context-approval",oldRevision?"이전 버전 · 승인 다시 확인 필요":approvalContextLabel(exactEntry));
+ appendDevCodeDetails($("experiment-context-approval"),[["actor_principal_id",exactEntry?.approval?.actor_principal_id||null],["actor_role",exactEntry?.approval?.actor_role||null]]);
  setText("experiment-context-step",step?`${step}단계 · ${stateInfo?.label||"상태 확인"}`:"시작 전");
  let actions="승인된 프로토콜 선택";
  if(sessionActive)actions="현재 단계 듣기 · 관찰 기록 · 일시정지 · 종료";
@@ -665,7 +720,7 @@ function renderState(state,detail=""){
  if($("rail-state"))$("rail-state").textContent=visibleLabel;
  const selectedEntry=protocolCatalog.get($("protocol-id")?.value),protocolUnavailable=!experimentIsResumable()&&selectedEntry?.available_for_execution!==true;setDisabled($("start"),view[1]||protocolUnavailable);setDisabled($("stop"),view[2]);
  setDisabled($("rail-stop-session"),view[2]);
- setDisabled($("rail-pause-session"),!sessionActive);
+ updatePauseState(workflowPaused);
  const configurationLocked=!["IDLE","ERROR"].includes(visibleState);
  for(const id of ["protocol-id","protocol-pdf","register-protocol","input-language"]){setDisabled($(id),configurationLocked);}
  $("protocol-id")?.setAttribute?.("aria-busy",String(visibleState==="CONNECTING"));
@@ -738,7 +793,7 @@ function startWorkflowTimer(){
  }
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
-function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${report.report_id} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status]]);container.appendChild(row);}return true;}
+function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
 function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`Step ${event.step_label}`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 function selectedDevProfile(){return $("dev-identity-profile")?.value||"";}
 function workspaceFetch(url,options={}){const profile=selectedDevProfile(),headers={...(options.headers||{})};if(profile)headers["X-Voice-Dev-Profile"]=profile;return fetch(url,{...options,headers});}
@@ -782,13 +837,13 @@ function renderExperimentTimeline(payload){
   const row=document.createElement("div"),title=document.createElement("b"),detail=document.createElement("small"),content=document.createElement("small");
   row.className="experiment-event";row.dataset.eventKind=experimentEventKind(event.event_type);
   title.textContent=`${event.step_label?`${event.step_label}단계 · `:""}${experimentEventLabel(event.event_type)}`;
-  const detailBits=[event.created_at,event.actor_principal_id].filter(value=>typeof value==="string"&&value.trim());detail.textContent=detailBits.join(" · ");
+  detail.textContent=localDateTimeText(event.created_at)||(typeof event.created_at==="string"?event.created_at:"");
   if(event.observation&&typeof event.observation.content==="string")content.textContent=`${serverCodeText("observation_category",event.observation.category||"note")} · ${event.observation.content} · 관찰 전용`;
   else if(event.evidence)content.textContent=`${event.evidence.original_filename||"첨부"} · ${event.evidence.media_type||"파일"} · 자동 해석 안 함`;
   else if(event.payload?.comment)content.textContent=String(event.payload.comment);
-  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`;link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
+  row.append(title,detail);if(content.textContent)row.appendChild(content);appendDevCodeDetails(row,[["event_type",experimentEventLabel(event.event_type)==="이벤트"?event.event_type:null],["category",typeof event.observation?.category==="string"?event.observation.category:null],["actor",typeof event.actor_principal_id==="string"?event.actor_principal_id:null],["created_at",typeof event.created_at==="string"?event.created_at:null]]);if(event.evidence&&typeof event.evidence.evidence_id==="string"&&typeof payload?.session?.session_id==="string"){const link=document.createElement("a");link.className="experiment-evidence-download";link.href=`/api/workspace/experiments/${encodeURIComponent(payload.session.session_id)}/evidence/${encodeURIComponent(event.evidence.evidence_id)}`;link.textContent="원본 증거 다운로드";link.download="";row.appendChild(link);}target.appendChild(row);
  }
- if(!items.length)target.appendChild(workspaceRow("기록된 이벤트 없음","실험을 시작하거나 관찰을 추가하면 여기에 표시됩니다."));
+ if(!items.length)target.appendChild(workspaceRow("아직 기록 없음","실험을 시작하거나 관찰을 남기면 여기에 나옵니다."));
  const session=payload?.session;
  if(session&&typeof session.session_id==="string"){
   currentExperimentSessionId=session.session_id;
@@ -857,10 +912,10 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
   const response=await workspaceFetch("/api/workspace/experiments",{cache:"no-store"}),data=await response.json();
   if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"실험 세션을 불러오지 못했습니다. 네트워크 상태를 확인하고 새로고침해 주세요."));
   const experiments=Array.isArray(data.experiments)?data.experiments:[];select.replaceChildren();
-  const empty=document.createElement("option");empty.value="";empty.textContent=experiments.length?"실험 세션 선택":"진행 중인 실험 없음";select.appendChild(empty);
+  const empty=document.createElement("option");empty.value="";empty.textContent=experiments.length?"실험 고르기":"진행 중인 실험 없음";select.appendChild(empty);
   for(const item of experiments){
    if(!item||typeof item.session_id!=="string")continue;
-   const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=`${item.protocol_id} · ${item.current_step_label||"—"}단계 · ${stateInfo?.label||"상태 확인"}`;select.appendChild(option);
+   const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=[protocolCatalog.get(item.protocol_id)?.title||"실험",localDateTimeText(item.started_at),`${item.current_step_label||"—"}단계`,stateInfo?.label||"상태 확인"].filter(Boolean).join(" · ");option.title=`${item.protocol_id} · ${item.session_id}`;select.appendChild(option);
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";return selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
  }catch(error){
@@ -872,9 +927,9 @@ async function saveManualObservation(){const status=$("experiment-capture-status
 function evidenceMediaType(file){if(file?.type)return file.type;const name=(file?.name||"").toLowerCase();if(name.endsWith(".docx"))return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";if(name.endsWith(".pdf"))return "application/pdf";return "application/octet-stream";}
 async function uploadExperimentEvidence(){const status=$("experiment-capture-status"),input=$("experiment-evidence-file"),file=input?.files?.[0];if(!currentExperimentSessionId||!file){if(status)status.textContent="실험 세션과 첨부 파일이 필요합니다.";return false;}if(file.size<1||file.size>32*1024*1024){if(status)status.textContent="첨부 파일은 1 byte–32 MiB여야 합니다.";return false;}try{const query=new URLSearchParams({filename:file.name,idempotency_key:newExperimentIdempotency("evidence")}),response=await workspaceFetch(`/api/workspace/experiments/${encodeURIComponent(currentExperimentSessionId)}/evidence?${query}`,{method:"POST",headers:{"Content-Type":evidenceMediaType(file)},body:file}),data=await response.json();if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"근거를 첨부하지 못했습니다. 실험 상태를 새로고침한 뒤 다시 시도해 주세요."));if(input)input.value="";if(status)status.textContent="파일 메타데이터를 첨부했습니다. 내용은 자동 해석하지 않습니다.";await loadExperimentTimeline();return true;}catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,"근거를 첨부하지 못했습니다. 실험 상태를 새로고침한 뒤 다시 시도해 주세요.");return false;}}
 async function loadWorkspaceConnectors(){try{const response=await workspaceFetch("/api/workspace/connectors",{cache:"no-store"});if(!response.ok)return false;const data=await response.json(),targets={protocols_io:$("protocols-io-connector"),google_drive:$("drive-connector"),github:$("github-connector"),elabftw:$("elabftw-connector")};for(const [kind,select] of Object.entries(targets)){if(!select)continue;select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="구성된 연결 없음";select.appendChild(empty);for(const item of data.connectors||[]){if(item.connector_kind!==kind||!item.enabled)continue;const option=document.createElement("option");option.value=item.connector_id;option.textContent=item.display_name;select.appendChild(option);}}await loadWorkspaceProtocolRevisions();return true;}catch{return false;}}
-async function loadWorkspaceProtocolRevisions(){const selects=[$("elab-protocol-revision"),$("experiment-protocol-lineage")].filter(Boolean);if(!selects.length)return false;try{const response=await workspaceFetch("/api/workspace/protocol-library",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();for(const select of selects){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="정확한 버전 선택";select.appendChild(empty);for(const item of data.protocols||[]){const option=document.createElement("option");option.value=item.revision_id;option.textContent=`${item.title} · v${item.revision_number} · ${serverCodeText("approval_state",item.approval_state||"review_required","확인되지 않은 상태")}`;select.appendChild(option);}}return true;}catch{return false;}}
+async function loadWorkspaceProtocolRevisions(){const selects=[$("elab-protocol-revision"),$("experiment-protocol-lineage")].filter(Boolean);if(!selects.length)return false;try{const response=await workspaceFetch("/api/workspace/protocol-library",{cache:"no-store"});if(!response.ok)return false;const data=await response.json();for(const select of selects){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="버전 고르기";select.appendChild(empty);for(const item of data.protocols||[]){const option=document.createElement("option");option.value=item.revision_id;option.textContent=`${item.title} · v${item.revision_number} · ${serverCodeText("approval_state",item.approval_state||"review_required","확인되지 않은 상태")}`;select.appendChild(option);}}return true;}catch{return false;}}
 async function saveProtocolPreference(item,favorite){try{const response=await workspaceFetch(`/api/workspace/protocol-library/${encodeURIComponent(item.family_id)}/preference`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({favorite,tags:Array.isArray(item.tags)?item.tags:[]})});if(!response.ok)return false;await loadQuickProtocolLibrary();return true;}catch{return false;}}
-async function loadQuickProtocolLibrary(){const target=$("quick-library-results");if(!target)return false;const search=$("quick-library-search")?.value?.trim()||"";try{const response=await workspaceFetch(`/api/workspace/protocol-library?search=${encodeURIComponent(search)}`,{cache:"no-store"});if(!response.ok)throw new Error("빠른 라이브러리를 불러오지 못했습니다.");const data=await response.json();target.replaceChildren();for(const item of data.protocols||[]){const tags=Array.isArray(item.tags)&&item.tags.length?` · #${item.tags.join(" #")}`:"",row=workspaceRow(`${item.favorite?"★":"☆"} ${item.title} · v${item.revision_number}`,`${reviewerSourceLabel(item.connector_kind)} · ${item.owner||"owner unknown"} · ${item.department||"team 없음"} · ${serverCodeText("approval_state",item.approval_state||"review_required")} · ${serverCodeText(["risk_state","lifecycle_state"],item.risk_state)}${tags}`),actions=document.createElement("div"),favorite=document.createElement("button");actions.className="workspace-actions";favorite.type="button";favorite.textContent=item.favorite?"즐겨찾기 해제":"즐겨찾기";favorite.addEventListener("click",()=>saveProtocolPreference(item,!item.favorite));actions.appendChild(favorite);if(item.executable&&typeof item.catalog_protocol_id==="string"&&protocolCatalog.has(item.catalog_protocol_id)){const open=document.createElement("button");open.type="button";open.textContent="정확한 버전 선택";open.addEventListener("click",async()=>{$("protocol-id").value=item.catalog_protocol_id;renderSelectedProtocolContext();await saveProtocolPreference(item,item.favorite);});actions.appendChild(open);}row.appendChild(actions);appendDevCodeDetails(row,[["connector_kind",item.connector_kind],["approval_state",item.approval_state],["risk_state",item.risk_state]]);target.appendChild(row);}if(!(data.protocols||[]).length)target.textContent="검색 결과가 없습니다.";return true;}catch(error){target.textContent=error?.message||"빠른 라이브러리 오류";return false;}}
+async function loadQuickProtocolLibrary(){const target=$("quick-library-results");if(!target)return false;const search=$("quick-library-search")?.value?.trim()||"";try{const response=await workspaceFetch(`/api/workspace/protocol-library?search=${encodeURIComponent(search)}`,{cache:"no-store"});if(!response.ok)throw new Error("빠른 라이브러리를 불러오지 못했습니다.");const data=await response.json();target.replaceChildren();for(const item of data.protocols||[]){const tags=Array.isArray(item.tags)&&item.tags.length?` · #${item.tags.join(" #")}`:"",row=workspaceRow(`${item.favorite?"★":"☆"} ${item.title} · v${item.revision_number}`,`${reviewerSourceLabel(item.connector_kind)} · ${item.owner||"owner unknown"} · ${item.department||"team 없음"} · ${serverCodeText("approval_state",item.approval_state||"review_required")} · ${serverCodeText(["risk_state","lifecycle_state"],item.risk_state)}${tags}`),actions=document.createElement("div"),favorite=document.createElement("button");actions.className="workspace-actions";favorite.type="button";favorite.textContent=item.favorite?"즐겨찾기 해제":"즐겨찾기";favorite.addEventListener("click",()=>saveProtocolPreference(item,!item.favorite));actions.appendChild(favorite);if(item.executable&&typeof item.catalog_protocol_id==="string"&&protocolCatalog.has(item.catalog_protocol_id)){const open=document.createElement("button");open.type="button";open.textContent="이 버전 고르기";open.addEventListener("click",async()=>{$("protocol-id").value=item.catalog_protocol_id;renderSelectedProtocolContext();await saveProtocolPreference(item,item.favorite);});actions.appendChild(open);}row.appendChild(actions);appendDevCodeDetails(row,[["connector_kind",item.connector_kind],["approval_state",item.approval_state],["risk_state",item.risk_state]]);target.appendChild(row);}if(!(data.protocols||[]).length)target.textContent="검색 결과가 없습니다.";return true;}catch(error){target.textContent=error?.message||"빠른 라이브러리 오류";return false;}}
 const REVIEW_ACTIONS=Object.freeze({approved:{label:"승인",consequence:"연구자가 이 정확한 버전을 새 실험에서 사용할 수 있게 됩니다. 원본과 결정 기록은 그대로 남습니다."},rejected:{label:"수정 요청",consequence:"연구자는 이 버전으로 새 실험을 시작할 수 없습니다. 요청 내용은 기록에 남으며 수정한 새 버전을 다시 검토해야 합니다."},revoked:{label:"사용 중지",consequence:"이 버전으로는 새 실험을 시작할 수 없습니다. 이미 진행한 실험과 이전 결정 기록은 삭제되지 않습니다."}});
 const REVIEW_FIELD_LABELS=Object.freeze({steps:"절차 단계",warnings:"경고",document:"원본 문서",lab_adaptation:"랩 적용 변경"});
 const ADAPTATION_KIND_LABELS=Object.freeze({equipment_difference:"장비 차이",reagent_substitution:"시약 대체",lab_note:"랩 메모",troubleshooting_tip:"문제 해결 메모"});
@@ -892,8 +947,8 @@ async function importProtocolsIo(){const status=$("protocols-io-status"),connect
 async function syncGoogleDrive(){const status=$("drive-status"),connector_id=$("drive-connector")?.value||"",folder_id=$("drive-folder")?.value?.trim()||"";if(!connector_id||!folder_id){if(status)status.textContent="연결과 허용 폴더 ID가 필요합니다.";return false;}if(status)status.textContent="Drive 변경 로그를 확인하는 중…";try{const response=await workspaceFetch("/api/workspace/sources/google-drive/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({connector_id,folder_id})}),data=await response.json();if(!response.ok)throw workspaceRequestError(data.detail,"Drive 동기화 실패");if(status){status.textContent=`${serverCodeText("sync_mode",data.sync_mode)} · 새 초안 ${(data.imports||[]).length}개 · 변경 토큰 저장됨`;appendDevCodeDetails(status,[["sync_mode",data.sync_mode]]);}await loadReviewerWorkspace();return true;}catch(error){showWorkspaceStatus(status,error?.message||"Drive 동기화 오류",error?.code);return false;}}
 async function importGitHubSource(){const status=$("github-status"),connector_id=$("github-connector")?.value||"",repository=$("github-repository")?.value?.trim()||"",ref=$("github-ref")?.value?.trim()||"",path=$("github-path")?.value?.trim()||"",kind=$("github-import-kind")?.value||"protocol";if(!connector_id||!repository||!ref||!path){if(status)status.textContent="연결, 저장소, ref, 경로가 필요합니다.";return false;}const dry=kind!=="protocol",url=dry?"/api/workspace/sources/github/dry-lab/import":"/api/workspace/sources/github/import",body={connector_id,repository,ref,path,...(dry?{engine:kind}:{})};if(status)status.textContent="정확한 GitHub 커밋을 확인하는 중…";try{const response=await workspaceFetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw workspaceRequestError(data.detail,"GitHub 가져오기 실패");if(status)status.textContent=`${data.revision_id||data.workflow_revision_id} · 검토 필요 · 코드 실행 안 함`;await loadReviewerWorkspace();await loadDryLabWorkflows();return true;}catch(error){showWorkspaceStatus(status,error?.message||"GitHub 가져오기 오류",error?.code);return false;}}
 async function loadDryLabWorkflows(){const target=$("drylab-workflows"),select=$("experiment-workflow-revision");if(!target&&!select)return false;try{const response=await workspaceFetch("/api/workspace/dry-lab/workflows",{cache:"no-store"});if(!response.ok)throw new Error("계산 워크플로를 불러오지 못했습니다.");const data=await response.json(),workflows=Array.isArray(data.workflows)?data.workflows:[];if(target){target.replaceChildren();for(const item of workflows){const row=workspaceRow(`${item.engine} · ${item.repository}`,`${item.commit_sha} · ${item.source_path} · ${serverCodeText("approval_state",item.approval_state)} · 실행 안 함`),actions=document.createElement("div");appendDevCodeDetails(row,[["approval_state",item.approval_state]]);actions.className="workspace-actions";const action=item.approval_state==="review_required"?"approved":item.approval_state==="approved"?"revoked":null;if(action){const button=document.createElement("button");button.type="button";button.textContent=action==="approved"?"메타데이터 승인":"승인 취소";button.addEventListener("click",()=>reviewDryLab(item.workflow_revision_id,action));actions.appendChild(button);row.appendChild(actions);}target.appendChild(row);}if(!workflows.length)target.textContent="등록된 계산 워크플로가 없습니다.";}if(select){select.replaceChildren();const empty=document.createElement("option");empty.value="";empty.textContent="승인된 메타데이터 선택";select.appendChild(empty);for(const item of workflows.filter(value=>value.approval_state==="approved")){const option=document.createElement("option");option.value=item.workflow_revision_id;option.textContent=`${item.engine} · ${item.repository}@${String(item.commit_sha||"").slice(0,12)} · ${item.source_path}`;select.appendChild(option);}}return true;}catch(error){if(target)target.textContent=error?.message||"계산 워크플로 오류";return false;}}
-async function loadDryLabLinks(sessionId=currentExperimentSessionId){const target=$("experiment-workflow-links");if(!target||!sessionId)return false;try{const response=await workspaceFetch(`/api/workspace/dry-lab/links?experiment_session_id=${encodeURIComponent(sessionId)}`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"계산 워크플로 연결을 불러오지 못했습니다. 실험 상태를 새로고침해 주세요."));target.replaceChildren();for(const item of data.links||[])target.appendChild(workspaceRow(`${item.engine} · ${item.repository}`,`${item.commit_sha} · ${item.source_path} · ${item.protocol_revision_id} · 메타데이터만 · 실행 안 함`));if(!(data.links||[]).length)target.textContent="이 실험에 연결된 계산 워크플로가 없습니다.";return true;}catch(error){target.textContent=researcherErrorMessage(error?.message,"계산 워크플로 연결을 불러오지 못했습니다. 실험 상태를 새로고침해 주세요.");return false;}}
-async function linkDryLabWorkflow(){const status=$("experiment-workflow-status"),protocol_revision_id=$("experiment-protocol-lineage")?.value||"",workflow_revision_id=$("experiment-workflow-revision")?.value||"";if(!currentExperimentSessionId||!protocol_revision_id||!workflow_revision_id){if(status)status.textContent="실험 세션, 습식 리니지, 승인된 계산 워크플로를 선택해 주세요.";return false;}try{const response=await workspaceFetch("/api/workspace/dry-lab/links",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({experiment_session_id:currentExperimentSessionId,protocol_revision_id,workflow_revision_id})}),data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"실험과 프로토콜 리니지가 일치하지 않거나 이미 연결되었습니다.":researcherErrorMessage(data.detail,"계산 워크플로를 연결하지 못했습니다. 실험 상태를 새로고침해 주세요."));if(status)status.textContent=`${data.link_id} · 메타데이터 연결 완료 · 실행 시작 안 함`;await loadDryLabLinks();return true;}catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,"계산 워크플로를 연결하지 못했습니다. 실험 상태를 새로고침해 주세요.");return false;}}
+async function loadDryLabLinks(sessionId=currentExperimentSessionId){const target=$("experiment-workflow-links");if(!target||!sessionId)return false;try{const response=await workspaceFetch(`/api/workspace/dry-lab/links?experiment_session_id=${encodeURIComponent(sessionId)}`,{cache:"no-store"}),data=await response.json();if(!response.ok)throw new Error(researcherErrorMessage(data.detail,"계산 워크플로 연결을 불러오지 못했습니다. 실험 상태를 새로고침해 주세요."));target.replaceChildren();for(const item of data.links||[]){const row=workspaceRow(`${item.engine} · ${item.repository}`,"기록만 연결됨 · 실행 안 함");appendDevCodeDetails(row,[["commit",item.commit_sha],["path",item.source_path],["protocol_revision_id",item.protocol_revision_id]]);target.appendChild(row);}if(!(data.links||[]).length)target.textContent="연결된 분석 코드가 없습니다.";return true;}catch(error){target.textContent=researcherErrorMessage(error?.message,"계산 워크플로 연결을 불러오지 못했습니다. 실험 상태를 새로고침해 주세요.");return false;}}
+async function linkDryLabWorkflow(){const status=$("experiment-workflow-status"),protocol_revision_id=$("experiment-protocol-lineage")?.value||"",workflow_revision_id=$("experiment-workflow-revision")?.value||"";if(!currentExperimentSessionId||!protocol_revision_id||!workflow_revision_id){if(status)status.textContent="실험, 프로토콜 버전, 분석 코드를 모두 고른 뒤 다시 눌러 주세요.";return false;}try{const response=await workspaceFetch("/api/workspace/dry-lab/links",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({experiment_session_id:currentExperimentSessionId,protocol_revision_id,workflow_revision_id})}),data=await response.json();if(!response.ok)throw new Error(data.detail==="workspace_conflict"?"이미 연결됐거나 이 실험의 프로토콜 버전과 맞지 않습니다.":researcherErrorMessage(data.detail,"계산 워크플로를 연결하지 못했습니다. 실험 상태를 새로고침해 주세요."));if(status){status.textContent="연결했습니다 · 코드는 실행하지 않았습니다.";appendDevCodeDetails(status,[["link_id",typeof data.link_id==="string"?data.link_id:null]]);}await loadDryLabLinks();return true;}catch(error){if(status)status.textContent=researcherErrorMessage(error?.message,"계산 워크플로를 연결하지 못했습니다. 실험 상태를 새로고침해 주세요.");return false;}}
 async function reviewDryLab(revisionId,action){const comment=$("reviewer-comment")?.value?.trim()||"Reviewed metadata provenance and non-execution boundary.";try{const response=await workspaceFetch(`/api/workspace/reviewer/dry-lab/${encodeURIComponent(revisionId)}/decision`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,comment})});if(!response.ok)throw new Error("계산 워크플로 결정을 저장하지 못했습니다.");await loadDryLabWorkflows();return true;}catch(error){setText("github-status",error?.message||"계산 워크플로 검토 오류");return false;}}
 const ADMIN_ROLE_LABELS=Object.freeze({researcher:"연구자",reviewer:"검토자",lab_admin:"랩 관리자",organization_admin:"조직 관리자"});
 const ADMIN_PERMISSION_LABELS=Object.freeze({"protocol.read":"프로토콜 보기","protocol.import":"프로토콜 가져오기","protocol.execute":"실험 실행","protocol.review":"변경 검토","protocol.approve":"프로토콜 승인","protocol.revoke":"향후 사용 중지","report.read":"실험 기록 보기","report.write":"실험 기록 작성","connector.read":"연결 사용","connector.manage":"연결 관리","eln.writeback":"ELN 기록 전송","knowledge.write":"랩 지식 기록","knowledge.promote":"랩 지식 승인","asset.read":"자산 보기","asset.manage":"자산 관리","analytics.read":"운영 지표 보기","membership.manage":"사용자 권한 관리","retention.manage":"보존 정책 관리"});
@@ -1069,6 +1124,7 @@ function resetVoiceProcessing(){}
 function updateVoiceProcessing(_stage){}
 function voiceCommandHint(text){$("voice-command-hint").textContent=`마이크에 “${text}”라고 말씀해 주세요.`;}
 function resetSessionUI(){
+ experimentEndedOnScreen=false;workflowPaused=false;
  clearPlayback();lastReplayableAudio=null;pendingVoiceReplay=false;audioRecoveryTurns.clear();
  stopWorkflowTimer();stopReportPolling();lastReportId=null;lastReportStatus=null;turns.clear();provisionalTurns.clear();pendingFillers.clear();
  toolEvents.clear();visualEvents.clear();researchEvents.clear();brainEvents.clear();greetingEvents.clear();
@@ -1079,7 +1135,7 @@ function resetSessionUI(){
  $("log").replaceChildren();renderExperimentReportList([]);
  if($("new-chat-update"))$("new-chat-update").hidden=true;
  const draft=$("pending-report");draft.hidden=true;draft.textContent="";
- $("last-report-id").textContent="아직 열린 실험 기록 없음";
+ setReportTitle("아직 실험 기록 없음");
  $("last-report-state").textContent="세션이 시작되면 서버가 실험 기록 초안을 관리합니다.";
  for(const id of ["export-report-markdown","export-report-json","export-report-csv","export-report-docx"]){
   const link=$(id);if(link){link.removeAttribute?.("href");link.setAttribute?.("aria-disabled","true");}
@@ -1188,7 +1244,8 @@ function renderCuratedProtocolState(message){
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
- $("procedure-meta").textContent=value.development_only?`개발용 · 최종 승인 아님 · ${value.protocol_id} · ${value.revision_id}`:`승인 버전 · ${value.protocol_id} · ${value.revision_id}`;
+ $("procedure-meta").textContent=value.development_only?"개발용 초안(승인 전)":"승인본";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id]]);
+ updatePauseState(value.workflow_status==="paused");
  const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
  $("procedure-progress").textContent=(value.active||previewValid)?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
@@ -1204,7 +1261,7 @@ function renderCuratedProtocolState(message){
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
- $("procedure-handoff").textContent=blocked?`진행 제한 · ${serverCodeText(["block_reason","readiness_reason"],value.block_reason)}`:"연결된 인계 없음";
+ $("procedure-handoff").textContent=blocked?`진행 제한 · ${serverCodeText(["block_reason","readiness_reason"],value.block_reason)}`:"넘긴 보고 없음";
  $("procedure-audit").textContent=`준비 상태 ${serverCodeText("readiness_status",value.readiness_status)} · ${value.development_only?"개발용":"승인 버전"}`;
  $("source-filename").textContent=nonempty(value.source_filename)?value.source_filename:"파일명 정보 없음";
  $("source-page-number").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?value.source_page_refs.map(page=>`p.${page}`).join(", "):"—";
@@ -1263,7 +1320,7 @@ function renderProcedureState(value){
  $("procedure-warning").hidden=!value.warning_text;
  $("procedure-spoken-summary").textContent=value.spoken_instruction||"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=`승인 지침 v${value.version}`;
- $("procedure-handoff").textContent=blocked&&value.handoff?`인계 번호: ${value.handoff.report_id}`:"연결된 인계 없음";
+ $("procedure-handoff").textContent=blocked&&value.handoff?"관리자에게 넘긴 안전 보고가 있습니다":"넘긴 보고 없음";if(blocked&&value.handoff)appendDevCodeDetails($("procedure-handoff"),[["handoff_report_id",typeof value.handoff.report_id==="string"?value.handoff.report_id:null]]);
  $("procedure-audit").textContent=`감사 상태: ${serverCodeText("procedure_status",value.status)}`;
  startWorkflowTimer();
 }
@@ -1690,12 +1747,32 @@ function applyTurnState(message,browserGeneration=sessionGeneration){
  if(FILLER_BRIEF_END_STATES.has(state))endBriefFillerStatus(message.turn_id,message.generation,browserGeneration);
  if(state==="listening"&&!turns.has(browserKey))return true;
  renderTurnState(turnNode(message.turn_id,browserGeneration),state,route||previous?.route||null,key);
+ // A newer utterance was committed, so every earlier card has finished on
+ // the screen even if its own end never arrived (the server does not send
+ // "complete" for a playback.ended it refused, e.g. during a barge-in check).
+ if(state!=="listening")settleEarlierTurnCards(browserGeneration,message.turn_id);
  return true;
 }
+const TURN_PROGRESS_STATUS_LABELS=new Set([...Object.entries(TURN_STATE_LABELS).filter(([name])=>!TURN_TERMINAL_STATES.has(name)).map(([,label])=>label),"세션 준비 안내 · 음성으로 중단 가능"]);
+function settleEarlierTurnCards(browserGeneration,beforeTurnId=Infinity){
+ // Display only: the server's turn state is not changed, and the last state
+ // it sent stays in the card's developer details.
+ for(const [key,node] of turns){
+  const split=key.indexOf(":"),generation=Number(key.slice(0,split)),id=Number(key.slice(split+1));
+  if(generation>browserGeneration||(generation===browserGeneration&&id>=beforeTurnId))continue;
+  const status=node.querySelector(".turn-status");if(!status||!TURN_PROGRESS_STATUS_LABELS.has(status.textContent))continue;
+  status.textContent="";status.className="turn-status is-settled";
+  const details=node.querySelector?.(".turn-diagnostics-body");if(details){let line=details.querySelector?.(".turn-settled");if(!line){line=document.createElement("div");line.className="turn-settled";details.appendChild(line);}line.textContent="화면 정리 · 다음 요청이 시작되어 진행 표시를 지움 · 서버의 종료 상태는 받지 못함";}
+ }
+}
+// Lane U decision 5: a turn card shows one status. The end of a turn is said
+// once, in .turn-status, coloured by its kind; .error is kept for the text of
+// a real failure (fail(), experiment.session.error), never a second label.
+const TURN_END_STATUS_CLASSES=Object.freeze({complete:"is-complete",cancelled:"is-stopped",blocked:"is-blocked",error:"is-error"});
 function renderTurnState(node,state,route,serverKey){
  const heldForObservation=state==="blocked"&&turnHeldForObservation(serverKey),status=node.querySelector(".turn-status");
- status.textContent=heldForObservation?"관찰 필요":TURN_STATE_LABELS[state];status.className=heldForObservation?"turn-status needs-observation":"turn-status";
- if(state==="cancelled")node.querySelector(".error").textContent="중단됨";else if(state==="blocked"&&!heldForObservation)node.querySelector(".error").textContent="차단됨";else if(state==="error")node.querySelector(".error").textContent="오류";
+ status.textContent=heldForObservation?"관찰 필요":TURN_STATE_LABELS[state];status.className=heldForObservation?"turn-status needs-observation":`turn-status${TURN_END_STATUS_CLASSES[state]?` ${TURN_END_STATUS_CLASSES[state]}`:""}`;
+ const error=node.querySelector(".error");if(error&&TURN_TERMINAL_STATES.has(state)&&Object.values(TURN_STATE_LABELS).includes(error.textContent))error.textContent="";
  const details=node.querySelector?.(".turn-diagnostics-body");if(!details)return;
  let line=details.querySelector?.(".turn-route");if(!line){line=document.createElement("div");line.className="turn-route";details.appendChild(line);}
  line.textContent=`처리 경로 · ${route?`${TURN_ROUTE_LABELS[route]} (${route})`:"확인 전"} · 턴 상태 ${state}${heldForObservation?` · block_reason ${OBSERVATION_HOLD_REASON}`:""}`;
@@ -1724,6 +1801,10 @@ async function ensureAudio(generation){
    const names=["echoCancellation","noiseSuppression","autoGainControl"],track=micStream.getAudioTracks?.()[0]||micStream.getTracks?.()[0]||null,settings=track?.getSettings?.()||{},actual=Object.fromEntries(names.map(name=>[name,typeof settings[name]==="boolean"?settings[name]:null]));
    sendControl("client.audio_constraints",{requested:Object.fromEntries(names.map(name=>[name,audioConstraints[name]===true])),actual});
    setText("audio-processing-capability",actual.echoCancellation===true?"에코 제거 확인":actual.echoCancellation===false?"에코 제거 꺼짐 · 헤드폰 권장":"에코 제거 확인 불가 · 헤드폰 권장");
+   // Lane U decision 7: when the browser did not turn echo cancellation on,
+   // the speaker can be heard again as the researcher's words. Say so in the
+   // body, with what to do, instead of only in the developer chip.
+   const echoNotice=$("audio-echo-notice");if(echoNotice){echoNotice.hidden=actual.echoCancellation===true;echoNotice.textContent=actual.echoCancellation===true?"":"이 마이크는 에코 제거가 켜지지 않아 스피커 소리가 내 말로 들어갈 수 있습니다. 헤드폰을 쓰거나 스피커 소리를 줄이세요.";}
    micContext=new AudioContext();
    if(!micContext.audioWorklet?.addModule)throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");
    await micContext.audioWorklet.addModule("/mic-capture-worklet.js");
@@ -1863,17 +1944,22 @@ function appendProtocolReviewGroup(title,lines,codes=[]){
  appendDevCodeDetails(group,codes);
  content.appendChild(group);
 }
-async function postReviewerFinding(path,body){
- const protocolId=currentProtocolReviewId,revisionId=currentProtocolReviewRevisionId,status=$("protocol-review-status");
+// Lane U decision 6: a refused finding says, on one line beside the button
+// that was pressed, why it was refused and what to do next. The server still
+// decides; a citation it would refuse as empty is caught before sending.
+function findingStatusNode(group){const note=document.createElement("p");note.className="protocol-review-status finding-status";note.setAttribute("role","status");group.appendChild(note);return note;}
+function citationMissing(boxes,note){if(boxes.some(box=>box.checked))return false;if(note)note.textContent="원문 근거를 하나 이상 고른 뒤 다시 눌러 주세요.";return true;}
+async function postReviewerFinding(path,body,statusNode=null){
+ const protocolId=currentProtocolReviewId,revisionId=currentProtocolReviewRevisionId,status=statusNode||$("protocol-review-status");
  if(!protocolId||!revisionId||typeof fetch!=="function")return null;
  try{
   const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/revisions/${encodeURIComponent(revisionId)}/findings/${path}`,
    {method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(body),redirect:"error"});
   const payload=await safeProtocolUploadPayload(response);
-  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status){status.textContent=`기록하지 못했습니다 · ${serverCodeText(["finding_error","workspace_error"],code,"서버가 이 기록을 받아들이지 않았습니다")}`;appendDevCodeDetails(status,[["detail",code]]);}return null;}
+  if(!response.ok){const code=typeof payload?.detail==="string"?payload.detail:"unexpected_server_error";if(status){status.textContent=`기록하지 못했습니다. ${serverCodeText(["finding_error","workspace_error"],code,"서버가 이 기록을 받지 않았습니다. ‘검토 새로고침’ 뒤 다시 눌러 주세요")}.`;appendDevCodeDetails(status,[["detail",code],["http_status",String(response.status)]]);}return null;}
   await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);
   return payload;
- }catch(_){if(status)status.textContent="네트워크 오류 · 기록되지 않았습니다.";return null;}
+ }catch(_){if(status)status.textContent="기록하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 눌러 주세요.";return null;}
 }
 function appendCitationChoices(group,candidates,key){
  // A finding that must cite evidence needs candidates to choose from. The
@@ -1882,18 +1968,35 @@ function appendCitationChoices(group,candidates,key){
  const boxes=[];
  if(!Array.isArray(candidates)||!candidates.length){
   const none=document.createElement("p");none.className="protocol-review-status";
-  none.textContent="선택할 근거 원문 구간이 없습니다 · 이 항목은 UI 에서 해결할 수 없습니다.";
+  none.textContent="고를 수 있는 원문 근거가 없어 이 화면에서는 해결할 수 없습니다.";
   group.appendChild(none);return boxes;
  }
+ // One candidate per row: checkbox, page, a short excerpt. A long list
+ // scrolls inside its own fixed height. The segment handle stays in the
+ // developer details; the full excerpt is the row's tooltip.
+ const list=citationList(group,`근거 후보 원문 ${candidates.length}개 · 많으면 목록 안에서 스크롤`);
+ const handles=[];
  for(const candidate of candidates){
-  const wrapper=document.createElement("label"),box=document.createElement("input");
-  box.type="checkbox";box.value=candidate.segment_id;
-  wrapper.appendChild(box);
-  wrapper.append(` p.${candidate.source_page_number} #${candidate.segment_index} · ${String(candidate.excerpt||"").slice(0,90)}`);
-  wrapper.setAttribute("data-citation",key);
-  group.appendChild(wrapper);boxes.push(box);
+  const excerpt=String(candidate.excerpt||"").replace(/\s+/g," ").trim();
+  const box=citationRow(list,key,candidate.segment_id,`p.${candidate.source_page_number}`,excerpt);
+  boxes.push(box);handles.push(["segment",`p.${candidate.source_page_number} #${candidate.segment_index} ${candidate.segment_id}`]);
  }
+ appendDevCodeDetails(group,handles);
  return boxes;
+}
+function citationList(group,label){
+ const hint=document.createElement("p");hint.className="protocol-review-status citation-hint";
+ hint.textContent="판단의 근거가 된 원문을 하나 이상 고르세요.";
+ const list=document.createElement("div");list.className="citation-list";list.setAttribute("role","group");list.setAttribute("aria-label",label);list.tabIndex=0;
+ group.append(hint,list);return list;
+}
+function citationRow(list,key,value,page,excerpt,checked=false){
+ const row=document.createElement("label"),box=document.createElement("input"),where=document.createElement("span"),text=document.createElement("span");
+ row.className="citation-row";row.setAttribute("data-citation",key);
+ box.type="checkbox";box.value=value;box.checked=checked;
+ where.className="citation-page";where.textContent=page;
+ text.className="citation-excerpt";text.textContent=excerpt;if(excerpt)row.title=excerpt;
+ row.append(box,where,text);list.appendChild(row);return box;
 }
 function ambiguityIdFor(item){
  if(typeof item.ambiguity_id==="string"&&item.ambiguity_id)return item.ambiguity_id;
@@ -1926,8 +2029,8 @@ function renderProtocolBlockers(review){
   if(item.reviewer_action==="acknowledge_gate"&&!item.already_acknowledged){
    const button=document.createElement("button");button.type="button";
    button.textContent="안전 경고 확인 처리";
-   button.addEventListener("click",()=>{void postReviewerFinding("acknowledge-gate",{reason_code:item.code,comment:"원문과 대조해 확인했습니다."});});
-   group.appendChild(button);
+   group.appendChild(button);const note=findingStatusNode(group);
+   button.addEventListener("click",()=>{void postReviewerFinding("acknowledge-gate",{reason_code:item.code,comment:"원문과 대조해 확인했습니다."},note);});
   }
   if(item.reviewer_action==="resolve_ambiguity"&&!item.already_acknowledged){
    const label=document.createElement("p");label.className="protocol-review-status";
@@ -1949,11 +2052,11 @@ function renderProtocolBlockers(review){
    const boxes=appendCitationChoices(group,item.citable_segments,item.code);
    const resolve=document.createElement("button");resolve.type="button";
    resolve.textContent="이 모호성을 해결";
-   resolve.addEventListener("click",()=>{void postReviewerFinding("resolve-ambiguity",{
+   group.appendChild(resolve);const note=findingStatusNode(group);
+   resolve.addEventListener("click",()=>{if(boxes.length&&citationMissing(boxes,note))return;void postReviewerFinding("resolve-ambiguity",{
     ambiguity_id:ambiguityIdFor(item),decision:decision.value,
     evidence_segment_ids:boxes.filter(box=>box.checked).map(box=>box.value),
-    comment:"원문을 대조해 판단했습니다."});});
-   group.appendChild(resolve);
+    comment:"원문을 대조해 판단했습니다."},note);});
   }
  }
  appendDevCodeDetails(group,codes);
@@ -1978,11 +2081,10 @@ function renderProtocolRepetitions(review,host){
   // cites nothing. The checkboxes are that affordance, not decoration.
   const handles=Array.isArray(item.evidence_segment_ids)?item.evidence_segment_ids:[];
   const boxes=[];
-  for(const handle of handles){
-   const wrapper=document.createElement("label"),box=document.createElement("input");
-   box.type="checkbox";box.value=handle;box.checked=true;
-   wrapper.appendChild(box);wrapper.append(` 근거 원문 구간 ${handle.slice(0,14)}…`);
-   group.appendChild(wrapper);boxes.push(box);
+  if(handles.length){
+   const list=citationList(group,`분석이 고른 근거 원문 ${handles.length}개`);
+   handles.forEach((handle,index)=>boxes.push(citationRow(list,item.repetition_id,handle,`근거 ${index+1}`,"분석이 고른 원문 구간",true)));
+   appendDevCodeDetails(group,handles.map(handle=>["segment",handle]));
   }
   if(!boxes.length){
    const blocker=(Array.isArray(review?.outstanding_blockers)?review.outstanding_blockers:[])
@@ -1995,16 +2097,16 @@ function renderProtocolRepetitions(review,host){
   group.appendChild(count);
   const confirm=document.createElement("button");confirm.type="button";
   confirm.textContent="이 반복 횟수를 확인";
-  confirm.addEventListener("click",()=>{void postReviewerFinding("confirm-repetition",{
-   repetition_id:item.repetition_id,repeat_count:Number(count.value),
-   evidence_segment_ids:boxes.filter(box=>box.checked).map(box=>box.value),
-   comment:"원문에서 횟수를 세었습니다."});});
   group.appendChild(confirm);
   const revoke=document.createElement("button");revoke.type="button";
   revoke.textContent="확인 철회";
+  group.appendChild(revoke);const note=findingStatusNode(group);
+  confirm.addEventListener("click",()=>{if(boxes.length&&citationMissing(boxes,note))return;void postReviewerFinding("confirm-repetition",{
+   repetition_id:item.repetition_id,repeat_count:Number(count.value),
+   evidence_segment_ids:boxes.filter(box=>box.checked).map(box=>box.value),
+   comment:"원문에서 횟수를 세었습니다."},note);});
   revoke.addEventListener("click",()=>{void postReviewerFinding("revoke-repetition",{
-   repetition_id:item.repetition_id,comment:"다시 세어야 합니다."});});
-  group.appendChild(revoke);
+   repetition_id:item.repetition_id,comment:"다시 세어야 합니다."},note);});
  }
  host.appendChild(group);
 }
@@ -2039,12 +2141,10 @@ function renderProtocolReview(review,options={}){
  lastProtocolReview=review;renderProtocolBlockers(review);renderProtocolFindings(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
  status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
- appendProtocolReviewGroup("원문과 분석 버전",[
+ appendProtocolReviewGroup("원문 파일",[
   `파일 · ${source.filename||review?.source_filename||"—"}`,
-  `원문 SHA-256 · ${source.sha256||review?.source_sha256||"—"}`,
-  `페이지 · ${Number.isInteger(source.page_count)?source.page_count:"—"} · 버전 ${review?.revision_id||"—"}`,
-  `분석 결과 데이터 SHA-256 · ${review?.analysis_payload_sha256||"분석 전"}`,
- ]);
+  `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256?"분석 끝남":"분석 전"}`,
+ ],[["revision_id",review?.revision_id||null],["source_sha256",source.sha256||review?.source_sha256||null],["analysis_payload_sha256",review?.analysis_payload_sha256||null]]);
  const lifecycleCode=review?.lifecycle_state||"uploaded",readinessCode=readiness.status||review?.readiness_status||"analysis_required";
  appendProtocolReviewGroup("실행 준비 판정",[
   `처리 단계 · ${serverCodeText("lifecycle_state",lifecycleCode)}`,
@@ -2242,11 +2342,11 @@ function updateToolView(m){
  const round=Number.isInteger(m.round)?m.round:0,key=`${m.generation}:${m.turn_id}:${round}:${m.tool}`,record=toolEvents.get(key);if(m.type==="tool.call"){if(record)return false;toolEvents.set(key,{status:"calling",tool:m.tool});}else if(m.type==="tool.result"){if(!record||record.status!=="calling")return false;record.status=m.status||"complete";record.code=m.code;record.elapsed_ms=m.elapsed_ms;record.retrieval_backend=m.retrieval_backend;record.match_count=m.match_count;}else return false;
  const node=turnNode(m.turn_id),snapshot=beginChatPatch(node),target=node.querySelector(".tools"),records=[...toolEvents.entries()].filter(([eventKey])=>eventKey.startsWith(`${m.generation}:${m.turn_id}:`)).map(([,value])=>value),rendered=records.map(item=>{const label=TOOL_LABELS[item.tool]||item.tool;if(item.status==="calling")return `Tool · ${label} · 실행 중`;const outcome=item.status==="error"||item.status==="invalid_arguments"?`거부됨 · ${TOOL_ERROR_LABELS[item.code]||item.code||item.status}`:item.status,backend=item.retrieval_backend?` · 백엔드 ${item.retrieval_backend}`:"",matches=Number.isInteger(item.match_count)?` · 근거 ${item.match_count}건`:"";return `Tool · ${label} · ${outcome}${backend}${matches}${item.elapsed_ms!==undefined?` · ${item.elapsed_ms} ms`:""}`;});target.textContent=rendered.join("\n");target.hidden=rendered.length===0;finishChatPatch(snapshot);
  const state=$("last-report-state"),draft=$("pending-report");
- if(m.report){const r=m.report;draft.hidden=false;draft.textContent=`위치: ${r.location} · 상황: ${r.summary} · 긴급도: ${serverCodeText("safety_report_urgency",r.urgency)} · 노출: ${serverCodeText("safety_report_exposure",r.exposure_status)} · 물질/장비: ${r.material_or_equipment||"알 수 없음"}`;appendDevCodeDetails(draft,[["urgency",r.urgency],["exposure_status",r.exposure_status]]);$("last-report-id").textContent="보고 초안";}
+ if(m.report){const r=m.report;draft.hidden=false;draft.textContent=`위치: ${r.location} · 상황: ${r.summary} · 긴급도: ${serverCodeText("safety_report_urgency",r.urgency)} · 노출: ${serverCodeText("safety_report_exposure",r.exposure_status)} · 물질/장비: ${r.material_or_equipment||"알 수 없음"}`;appendDevCodeDetails(draft,[["urgency",r.urgency],["exposure_status",r.exposure_status]]);setReportTitle("안전 보고 초안 · 제출 전");}
  if(m.status==="cancelled"||m.status==="confirmed"){draft.hidden=true;draft.textContent="";}
- if(m.status==="cancelled")$("last-report-id").textContent="아직 접수된 보고 없음";
+ if(m.status==="cancelled")setReportTitle("아직 접수된 보고 없음");
  if(state&&REPORT_LABELS[m.status])state.textContent=REPORT_LABELS[m.status];
- if(m.report_id){$("last-report-id").textContent=m.report_id;if(state){state.textContent=m.report_status?serverCodeText("report_status",m.report_status):"보고 접수됨";appendDevCodeDetails(state,[["report_status",m.report_status]]);}if(m.status==="confirmed")startReportPolling(m.report_id);}
+ if(m.report_id){setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);if(state){state.textContent=m.report_status?serverCodeText("report_status",m.report_status):"보고 접수됨";appendDevCodeDetails(state,[["report_status",m.report_status]]);}if(m.status==="confirmed")startReportPolling(m.report_id);}
  return true;
 }
 
@@ -2268,7 +2368,7 @@ async function onMessage(e,generation,current){
   if(acceptedSessionConfiguration.experiment_session_id&&acceptedSessionConfiguration.experiment_session_version!==null){currentExperimentSessionId=acceptedSessionConfiguration.experiment_session_id;currentExperimentSessionVersion=acceptedSessionConfiguration.experiment_session_version;void loadExperimentSessions(currentExperimentSessionId);}
   renderResearchCapabilities(m.research_capabilities);renderLanguageState(serverInputLanguage==="auto"?"auto":"manual",serverInputLanguage);$("protocol-id").value=m.protocol_id||"";renderSelectedProtocolContext();$("protocol-revision").textContent=m.revision_id||"—";$("session-configuration-status").textContent=m.protocol_id?`서버 확인 완료 · ${m.protocol_id} · ${m.revision_id}`:"서버 확인 완료 · 프로토콜 미선택";
   try{await ensureAudio(generation);}catch(error){sendControl("session.stop");fail(error);return;}
-  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
+  if(generation!==sessionGeneration||socket!==current||acceptedSessionConfiguration?.configuration_id!==m.configuration_id)return;sessionActive=true;experimentEndedOnScreen=false;workflowPaused=false;renderState("LISTENING");renderExperimentContext();renderResumeDisclosure();
  }
  if(m.type==="session.greeting"){
   const accepted=acceptedSessionConfiguration,key=m.greeting_id;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.turn_id)||m.turn_id<=0||!Number.isInteger(m.generation)||typeof key!=="string"||greetingEvents.has(key))return;greetingEvents.add(key);activeTurn=m.turn_id;activeCascadeGeneration=m.generation;turnServerGenerations.set(turnBrowserKey(m.turn_id,generation),m.generation);const node=turnNode(m.turn_id,generation);node.dataset.greetingOwner=key;if(node.children?.[0])node.children[0].textContent="Session greeting";node.querySelector(".transcript").textContent="새 세션 안내";node.querySelector(".reply").textContent=normalizePresentationText(m.text);node.querySelector(".turn-status").textContent="세션 준비 안내 · 음성으로 중단 가능";renderState("THINKING");
@@ -2283,7 +2383,7 @@ async function onMessage(e,generation,current){
   if(!pendingSessionConfiguration||m.configuration_id!==pendingSessionConfiguration.configuration_id)return;
   pendingSessionConfiguration=null;acceptedSessionConfiguration=null;sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();const reasons={protocol_selection_required:"정확한 프로토콜을 선택해 주세요.",protocol_selection_unavailable:"선택한 개발용 프로토콜을 서버에서 사용할 수 없습니다.",protocol_selection_unknown:"서버가 선택한 프로토콜 ID를 확인하지 못했습니다.",protocol_selection_not_supported_for_mode:"이 모드에서는 선택한 프로토콜을 사용할 수 없습니다."};$("session-configuration-status").textContent=reasons[m.reason]||"세션 설정을 다시 선택해 주세요.";renderState("IDLE",$("session-configuration-status").textContent);
  }
- if(m.type==="session.stopped"){sessionActive=false;removeProvisionalTurns(generation);invalidateCuratedProtocolState();renderState("IDLE");}
+ if(m.type==="session.stopped"){sessionActive=false;removeProvisionalTurns(generation);settleEarlierTurnCards(generation);invalidateCuratedProtocolState();renderState("IDLE");}
  if(m.type==="session.language_state"){renderLanguageState(m.mode,m.language);}
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
  if(m.type==="session.language_confirmation_required"){$("language-status").textContent="Language confirmation required";}
@@ -2291,6 +2391,8 @@ async function onMessage(e,generation,current){
  if(m.type==="session.reset"){resetSessionUI();}
  if(m.type==="procedure.state")renderProcedureState(m.state);
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
+ if(m.type==="experiment.ended"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showExperimentEnded(m);
+ if(m.type==="workflow.control.refused"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showWorkflowControlRefused(m);
  if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
  if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
  if(m.type==="protocol.visual.state"&&applyGeneratedVisualState(m,generation))promoteTurnVisualToPanel(m,generation);
@@ -2301,10 +2403,10 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;$("last-report-id").textContent=report.report_id;$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);updateElnWritebackAvailability(report);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;setReportTitle(experimentReportLabel(report),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);updateElnWritebackAvailability(report);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
- if(m.type==="report.status"){if(m.report_id)$("last-report-id").textContent=m.report_id;const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
+ if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
  if(m.type==="barge_in_candidate"){provisionalCascadeInterruption(m);}
  if(m.type==="barge_in_rejected"){rejectCascadeInterruption(m);}
  if(m.type==="cascade.playback.clear"){
@@ -2339,6 +2441,7 @@ async function onMessage(e,generation,current){
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
+$("workflow-resume-button")?.addEventListener("click",()=>{if(workflowPaused)togglePauseSession();});
 $("rail-stop-session")?.addEventListener("click",stopSession);
 $("modal-confirm-btn")?.addEventListener("click",async()=>{const m=$("new-session-modal");if(m)m.hidden=true;await stopSession();clearExperimentResumeSelection();resetSessionUI();renderState("IDLE");announceMilestone("새 세션이 준비되었습니다.");});
 $("modal-cancel-btn")?.addEventListener("click",()=>{const m=$("new-session-modal");if(m)m.hidden=true;});
