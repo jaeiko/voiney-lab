@@ -367,6 +367,11 @@ above. The router role's `VOINEY_LAB_ROUTER_PROVIDER` (default `xai`),
 role](#model-providers-by-role)), and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`
 (default 2.5) how long a turn waits for it; it needs that provider's key.
 
+The router and the semantic-intent fallback are never both on: with
+`VOINEY_LAB_LLM_ROUTER_ENABLED=true` and
+`VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true` the server refuses to start and says
+why (lane M1, decision 4) -- one turn is decided along one line.
+
 On, a turn goes:
 
 - **Front rules** — `CuratedProtocolSession.front_plan()` plans pause and

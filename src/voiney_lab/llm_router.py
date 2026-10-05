@@ -66,6 +66,7 @@ from voiney_lab.answer_checks import (
 )
 from voiney_lab.model_providers import DEFAULT_MODELS, RoleModel
 from voiney_lab.semantic_intent import (
+    SemanticIntentSettings,
     evidence_fence_rejection,
     has_completion_evidence,
     normalize_semantic_utterance,
@@ -718,6 +719,33 @@ class LlmRouterSettings:
             "status": "enabled" if self.enabled else "disabled",
             "model": self.model if self.enabled else None,
         }
+
+
+class TwoTurnDecidersError(RuntimeError):
+    """Two paths would each decide a turn; the server refuses to start."""
+
+
+def refuse_two_turn_deciders(environment: Mapping[str, str] | None = None) -> None:
+    """Refuse the LLM router and the semantic-intent fallback both on.
+
+    Decision 4 of lane M1 (2026-10-04), from the one-line routing rule: one
+    turn is decided by one path. With the router on, the router decides
+    behind the front rules; with it off, the rules do, and the semantic
+    fallback may propose for a catch-all. Both on would let two models each
+    read the same turn, so the server does not start and says why.
+    """
+
+    env = os.environ if environment is None else environment
+    if (
+        LlmRouterSettings.from_environment(env).enabled
+        and SemanticIntentSettings.from_environment(env).enabled
+    ):
+        raise TwoTurnDecidersError(
+            "VOINEY_LAB_LLM_ROUTER_ENABLED 와 VOINEY_LAB_SEMANTIC_INTENT_ENABLED 가 "
+            "둘 다 켜져 있습니다. 한 턴은 한 경로만 판단합니다: LLM 라우터를 쓰면 "
+            "의미 의도 보조를 끄고(VOINEY_LAB_SEMANTIC_INTENT_ENABLED=false), "
+            "의미 의도 보조를 쓰면 라우터를 끄세요."
+        )
 
 
 # --- What the model is shown ------------------------------------------------------

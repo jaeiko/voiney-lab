@@ -171,6 +171,7 @@ from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse
 from voiney_lab.llm_router import (
     LlmRouterSettings,
     RouterTurnOutcome,
+    refuse_two_turn_deciders,
     route_turn_with_llm_router,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
@@ -250,6 +251,9 @@ _load_project_environment()
 # Refuse to start while an old setting name is set, in the process environment
 # or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
 refuse_old_setting_names()
+# One turn, one deciding path (lane M1, decision 4): the LLM router and the
+# semantic-intent fallback are never both on.
+refuse_two_turn_deciders()
 logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("voiney_lab")
 
