@@ -20,13 +20,6 @@ from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
 )
-from voiney_lab.notifications import (
-    FakeNotificationProvider,
-    HandoffContact,
-    NotificationResult,
-    SMTPEmailProvider,
-    resolve_handoff_recipient,
-)
 from voiney_lab.web_visuals import (
     PubChemChemistryAdapter,
     _KNOWN_PUBCHEM_COMPOUNDS,
@@ -177,30 +170,6 @@ class CandidateAResearchHardeningTests(unittest.TestCase):
         self.assertEqual(pause_status_after["current_pause_seconds"], 0)
         self.assertEqual(len(pause_status_after["intervals"]), 1)
         self.assertEqual(pause_status_after["intervals"][0]["duration_seconds"], 50.0)
-
-    def test_handoff_recipient_resolution_and_provider(self) -> None:
-        """Verify handoff contact resolution and FakeNotificationProvider delivery."""
-        advisor = resolve_handoff_recipient("교수님께 보고서 전달해줘")
-        self.assertEqual(advisor.id, "advisor")
-        self.assertEqual(advisor.role, "advisor")
-
-        safety = resolve_handoff_recipient("안전관리자에게 이상사항 인계해줘")
-        self.assertEqual(safety.id, "safety_officer")
-        self.assertEqual(safety.role, "safety_officer")
-
-        fake_provider = FakeNotificationProvider()
-        result = asyncio.run(
-            fake_provider.send_email(
-                to_email=advisor.email or "advisor@university.edu",
-                subject=f"[Laboratory Report] In-gel digestion (ER-001)",
-                body_text="Step 1 and Step 2 completed cleanly with 0 anomalies.",
-                attachment_bytes=b"PK\x03\x04fake-docx",
-                attachment_filename="report.docx",
-            )
-        )
-        self.assertEqual(result.status, "success")
-        self.assertEqual(result.recipient, advisor.email)
-        self.assertEqual(len(fake_provider.sent_emails), 1)
 
     def test_enriched_experiment_report_generation(self) -> None:
         """Verify experiment report generation contains protocol metadata and completed steps."""

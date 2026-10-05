@@ -33,9 +33,9 @@ so many words ("기록해 줘", "적어", "메모해", "남겨", "note this", "r
 this"; the noun "기록" is not a request) -- a reply to the open observation
 question is the front rules' (F5) and never reaches a proposal -- and an
 anomaly only when the words read as a problem by the rules' own tables and
-do not ask for a hand-off ("~에게 전달해줘", answered "보고서는 화면에서
-보내 주세요."); any other anomaly is asked about once, "이상 사항으로
-기록할까요?". An answer is also checked for a question only the server asks,
+do not ask for a hand-off ("~에게 전달해줘", answered as the rules answer
+one: "보고서 전송은 지원하지 않아요. ..." -- lane M1, decision 5b); any other
+anomaly is asked about once, "이상 사항으로 기록할까요?". An answer is also checked for a question only the server asks,
 and an outside-PDF explanation may be about any word of the protocol's text.
 
 server.py routes a turn here only when VOINEY_LAB_LLM_ROUTER_ENABLED
@@ -726,7 +726,7 @@ Most turns are questions or remarks: answer them. A question -- anything asking 
 Reply with exactly one function call: answer, change_state or record_log.
 
 1. Call change_state when, in THIS turn, the researcher asks to start the experiment, says the current step is done or asks to go to the next step, asks to end the experiment (only with 종료), to pause, to resume, or to start the step timer. evidence = the exact words from this turn that ask for it. The server asks the researcher to confirm "next" and "stop"; never call next when they say the step is not done.
-2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: reports are sent from the screen.
+2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: sending is not supported, and reports are downloaded from the screen.
 3. Otherwise call answer: spoken, display, source_kind ("pdf" | "outside_pdf" | "server_state" | "none"), evidence_ids, and outside_pdf_term only for an outside_pdf answer.
 
 Never call a tool for a question, a hypothetical, a plan or wish, a step other than the current one, or to skip steps. At most one tool call.
@@ -1110,9 +1110,6 @@ async def route_turn_with_llm_router(
         await progress("checking_protocol")
         route = await rule_route()
         plan = route.plan
-        # A hand-off is not done by voice (decision 1, D8): the rules' e-mail
-        # question gives way to "보고서는 화면에서 보내 주세요.".
-        plan = session.handoff_on_screen(turn_id=turn_id, language=language) or plan
         if unconfirmed:
             # The model's answer was dropped and the rules have none either:
             # "PDF에서 확인할 수 없어요." instead of a scope reminder.

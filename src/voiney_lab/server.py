@@ -100,14 +100,6 @@ from voiney_lab.web_visuals import (
     WikimediaVisualAdapter,
     XaiAuthoritativeImageSearch,
 )
-from voiney_lab.notifications import (
-    HandoffContact,
-    NotificationProvider,
-    NotificationResult,
-    SMTPEmailProvider,
-    FakeNotificationProvider,
-    resolve_handoff_recipient,
-)
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
     ProtocolApprovalError,
