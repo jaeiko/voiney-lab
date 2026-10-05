@@ -304,6 +304,9 @@ SETTINGS: tuple[Setting, ...] = (
             kept_because="Python venv 가 정하는 이름"),
     Setting("RUNNER_TEMP", OTHER, _NONE, "CI: 임시 폴더 (안전 카탈로그를 둠)",
             kept_because="GitHub Actions 가 정하는 이름"),
+    Setting("PYTEST_VERSION", OTHER, _NONE,
+            "pytest 실행 중이면 있음: 서버·워커가 저장소 .env 를 읽지 않음 (줄 M1, 결정 6)",
+            kept_because="pytest 가 정하는 이름 (pytest 8.2 이상)"),
 )
 
 #: Names that other software reads by a fixed name, or that decision 2 keeps,

@@ -896,12 +896,18 @@ python -m compileall -q src tests scripts
 git diff --check
 ```
 
-Pass those three flags in **both** baselines below. `server.py` calls
-`load_dotenv`, so a repo-root `.env` that enables the workspace or experiment
-reports silently changes the result; forcing the flags off per command
-reproduces the documented numbers without editing `.env`. In a tree with no
-`.env` in scope (CI, a fresh worktree) they are a no-op, so passing them is
-always safe and never wrong.
+Pass those three flags in **both** baselines below. Under pytest the server
+and the worker no longer read the repository `.env` (lane M1, decision 6 --
+only the old-setting-name check still looks at it), but the same names
+exported in the shell would still change the result; forcing the flags off per
+command reproduces the documented numbers. In a clean shell (CI, a fresh
+worktree) they are a no-op, so passing them is always safe and never wrong.
+
+No test reaches a model or OCR provider, whatever keys exist: `tests/conftest.py`
+removes `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`GOOGLE_API_KEY` and the OCR and Moss secrets from the test process before any
+test module is imported, and refuses any connection to an address outside this
+machine (`tests/test_no_outside_calls.py`). Provider calls stay fake-backed.
 
 The suite needs no system PDF tools: PyMuPDF is a Python wheel, and the
 `pdftotext` comparator the suite used to expect is gone (see

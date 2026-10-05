@@ -242,8 +242,16 @@ PROJECT_ROOT=Path(__file__).resolve().parents[2]
 
 
 def _load_project_environment(path:Path|None=None)->bool:
-    """Load development values without overriding the process environment."""
+    """Load development values without overriding the process environment.
 
+    Under pytest (PYTEST_VERSION is set) the repository .env is not read
+    (lane M1, decision 6): real provider or OCR keys kept there must never
+    reach a test. Only the old-setting-name check still looks at the file
+    (tests/conftest.py). An explicit ``path`` is always read.
+    """
+
+    if path is None and os.environ.get("PYTEST_VERSION"):
+        return False
     return load_dotenv(path or PROJECT_ROOT/".env",override=False)
 
 
