@@ -69,9 +69,12 @@ that entire item. Never synthesize an excerpt from the item's claim, and never
 use a summary as evidence. The evidence validator compares the returned quote
 to the selected immutable page and rejects the complete response when the quote
 is absent.
-For every source step, make its evidence source_excerpt start with the step's
-own source number exactly as printed on the page (for example "3 Wash..." or
-"3. Wash..."), and set source_label to that number without a trailing period.
+When the source numbers its steps, make every step's evidence source_excerpt
+start with the step's own source number exactly as printed on the page (for
+example "3 Wash..." or "3. Wash..."), and set source_label to that number
+without a trailing period. When the source prints no step numbers, leave
+source_label empty ("") for every step; never use a heading, a bullet, a
+section title, or a number the page does not print as a step label.
 metadata.evidence is always required: quote the protocol title from the page
 where it is printed. When a metadata field is printed on a different page than
 metadata.evidence,
@@ -98,6 +101,14 @@ _CONSTRUCT_TYPES = {
 }
 
 ANALYSIS_RESPONSE_SCHEMA_NAME = "protocol_analysis_response_v1"
+
+#: Output tokens the analysis call may use. The request used to name none, and
+#: xAI then set no cap; the other providers' adapters fall back to a chat-sized
+#: default (8,192 + 4,096 for thinking), while real responses ran to 21-68 KB
+#: of JSON (lane P2). 60,000 leaves the adapters' thinking allowance inside
+#: Gemini 3.8 Flash's 65,536 output tokens and is under the 128K of Claude
+#: Opus/Sonnet 5.5 and GPT-6.1 Sol (official model pages, 2026-10-05).
+ANALYSIS_MAX_OUTPUT_TOKENS = 60_000
 
 #: Fields the response must spell out although the domain gives them a
 #: default. With them optional a provider returned metadata and a description
@@ -286,6 +297,31 @@ class ProtocolAnalysisInputTooLargeError(ProtocolAnalysisInputError):
 
 class ProtocolAnalysisModelError(ProtocolAnalysisError):
     code = "protocol_analysis_model_failed"
+
+
+class ProtocolAnalysisTimeoutError(ProtocolAnalysisModelError):
+    """The provider call ran past its time limit (human decision 2026-10-05,
+    lane P3): told apart from a refused key or a bad request on the screen."""
+
+    code = "protocol_analysis_timeout"
+
+
+def _is_timeout(error: BaseException | None) -> bool:
+    """An SDK timeout (openai/anthropic ``APITimeoutError``, a ``TimeoutError``)
+    or an adapter's ``ModelProviderError`` of kind "timeout", anywhere in the
+    chain of causes."""
+
+    seen = 0
+    while error is not None and seen < 8:
+        if (
+            isinstance(error, TimeoutError)
+            or "Timeout" in type(error).__name__
+            or getattr(error, "kind", None) == "timeout"
+        ):
+            return True
+        error = error.__cause__ or error.__context__
+        seen += 1
+    return False
 
 
 class ProtocolAnalysisResponseError(ProtocolAnalysisError):
@@ -563,6 +599,7 @@ def build_protocol_analysis_chat_request(
             },
         },
         "temperature": 0,
+        "max_completion_tokens": ANALYSIS_MAX_OUTPUT_TOKENS,
     }
     if reasoning_effort is not None:
         request["reasoning_effort"] = reasoning_effort
@@ -612,6 +649,10 @@ class OpenAICompatibleProtocolAnalysisModel:
             )
             content = response.choices[0].message.content
         except Exception as exc:
+            if _is_timeout(exc):
+                raise ProtocolAnalysisTimeoutError(
+                    "Protocol analysis model request ran past its time limit."
+                ) from exc
             raise ProtocolAnalysisModelError(
                 "Protocol analysis model request failed."
             ) from exc
@@ -811,10 +852,22 @@ class _DomainDecoder:
 _LINE_END_HYPHENS = frozenset("-‐‑")
 
 
+def _is_hangul(character: str) -> bool:
+    code = ord(character)
+    return (
+        0xAC00 <= code <= 0xD7A3
+        or 0x1100 <= code <= 0x11FF
+        or 0x3130 <= code <= 0x318F
+        or 0xA960 <= code <= 0xA97F
+        or 0xD7B0 <= code <= 0xD7FF
+    )
+
+
 def _normalized_text_with_bounds(
     value: str,
     *,
     join_line_end_hyphens: bool = False,
+    join_hangul_line_breaks: bool = False,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -828,6 +881,12 @@ def _normalized_text_with_bounds(
     ending "5-" before "10" compares as "5-10" (human decision 2026-10-03).
     It is a comparison form only: page text, its hash and evidence identities
     are untouched, and the hyphen itself is never removed.
+
+    With ``join_hangul_line_breaks`` a whitespace run that holds a line break
+    between two Hangul letters is dropped, so an OCR line "개봉한 날" before
+    "짜를" compares as "개봉한 날짜를" (human decision 2026-10-05, lane P3).
+    Only for a page whose text came from OCR, and in comparison only, like
+    the hyphen rule. A break between digits or other letters is kept.
     """
 
     normalized: list[str] = []
@@ -844,6 +903,16 @@ def _normalized_text_with_bounds(
                 join_line_end_hyphens
                 and units
                 and units[-1][0] in _LINE_END_HYPHENS
+                and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                join_hangul_line_breaks
+                and units
+                and index < len(value)
+                and len(units[-1][0]) == 1
+                and _is_hangul(units[-1][0])
+                and _is_hangul(value[index])
                 and any(character in "\n\r" for character in value[start:index])
             ):
                 continue
@@ -875,21 +944,34 @@ def _normalized_text_with_bounds(
     return "".join(normalized), starts, ends
 
 
+def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
+    """The comparison forms a page is read in, plain form first.
+
+    Every form is tried, so an excerpt accepted in an earlier form is still
+    accepted ("5- 10" for a source "5-" / "10", "날 짜" for "날" / "짜"), and a
+    span found by several forms is the same source span, counted once.
+    """
+
+    hangul = (False, True) if ocr_derived else (False,)
+    return tuple(
+        {"join_line_end_hyphens": join, "join_hangul_line_breaks": joined}
+        for joined in hangul
+        for join in (False, True)
+    )
+
+
 def _canonical_match_spans(
     source_text: str,
     excerpt: str,
+    *,
+    ocr_derived: bool = False,
 ) -> tuple[tuple[int, int], ...]:
-    # Both forms are tried, so every excerpt accepted before the line-end
-    # hyphen rule is still accepted ("5- 10" for a source "5-" / "10"), and a
-    # span found by both is the same source span, counted once.
     spans: list[tuple[int, int]] = []
-    for join in (False, True):
+    for form in _comparison_forms(ocr_derived):
         canonical_source, starts, ends = _normalized_text_with_bounds(
-            source_text, join_line_end_hyphens=join
+            source_text, **form
         )
-        canonical_excerpt, _, _ = _normalized_text_with_bounds(
-            excerpt, join_line_end_hyphens=join
-        )
+        canonical_excerpt, _, _ = _normalized_text_with_bounds(excerpt, **form)
         if not canonical_excerpt:
             return ()
         offset = 0
@@ -914,7 +996,8 @@ def _matching_source_pages(
     return tuple(
         page.source_page_number
         for page in extraction.pages
-        if excerpt in page.text or _canonical_match_spans(page.text, excerpt)
+        if excerpt in page.text
+        or _canonical_match_spans(page.text, excerpt, ocr_derived=page.ocr_derived)
     )
 
 
@@ -998,10 +1081,13 @@ def _verified_evidence(
                 mismatch_class="unsafe_location_identity",
             ),
         )
-    page_text = extraction.pages[evidence.source_page_number - 1].text
+    page = extraction.pages[evidence.source_page_number - 1]
+    page_text = page.text
     if evidence.source_excerpt in page_text:
         return evidence
-    spans = _canonical_match_spans(page_text, evidence.source_excerpt)
+    spans = _canonical_match_spans(
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+    )
     if not spans:
         matching_pages = _matching_source_pages(
             evidence.source_excerpt,
@@ -1139,20 +1225,18 @@ def _claim_occurs_on_evidence_page(
     evidence: domain.SourceEvidence,
     extraction: ProtocolPdfExtraction,
 ) -> bool:
-    page_text = extraction.pages[evidence.source_page_number - 1].text
-    return _claim_occurs_in_text(claim, page_text)
+    page = extraction.pages[evidence.source_page_number - 1]
+    return _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived)
 
 
-def _claim_occurs_in_text(claim: str, source_text: str) -> bool:
+def _claim_occurs_in_text(
+    claim: str, source_text: str, *, ocr_derived: bool = False
+) -> bool:
     if claim in source_text:
         return True
-    for join in (False, True):
-        normalized_page, _, _ = _normalized_text_with_bounds(
-            source_text, join_line_end_hyphens=join
-        )
-        normalized_claim, _, _ = _normalized_text_with_bounds(
-            claim, join_line_end_hyphens=join
-        )
+    for form in _comparison_forms(ocr_derived):
+        normalized_page, _, _ = _normalized_text_with_bounds(source_text, **form)
+        normalized_claim, _, _ = _normalized_text_with_bounds(claim, **form)
         if normalized_claim and normalized_claim in normalized_page:
             return True
     return False
@@ -1161,6 +1245,10 @@ def _claim_occurs_in_text(claim: str, source_text: str) -> bool:
 #: A step number that may stand bare before its text: "3", or a protocols.io
 #: sub-step "6.1". Any other label needs its period ("A.").
 _BARE_STEP_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+#: A printed step number at the start of an excerpt ("3 Wash", "3. Wash").
+_LEADING_STEP_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)*\.?\s")
+#: A printed step number alone between a line start and the excerpt.
+_LINE_HEAD_STEP_NUMBER = re.compile(r"(?:^|[\n\r])[ \t\u00a0]*[0-9]+(?:\.[0-9]+)*\.?$")
 
 
 def _source_label_markers(source_label: str) -> tuple[str, ...]:
@@ -1200,8 +1288,11 @@ def _source_label_precedes_excerpt(
     stays refused (human decision 2026-10-05).
     """
 
-    page_text = extraction.pages[evidence.source_page_number - 1].text
-    spans = _canonical_match_spans(page_text, evidence.source_excerpt)
+    page = extraction.pages[evidence.source_page_number - 1]
+    page_text = page.text
+    spans = _canonical_match_spans(
+        page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+    )
     markers = _source_label_markers(source_label)
 
     def numbered(start: int) -> bool:
@@ -1217,6 +1308,32 @@ def _source_label_precedes_excerpt(
         return False
 
     return bool(spans) and all(numbered(start) for start, _ in spans)
+
+
+def _printed_number_is_dropped(
+    evidence: domain.SourceEvidence,
+    extraction: ProtocolPdfExtraction,
+) -> bool:
+    """Whether a step left unlabelled cites text the page numbers.
+
+    An empty label says the source prints no step number (human decision
+    2026-10-05, lane P3). That is checked against the page: an excerpt that
+    starts with a number, or that the page prints right after a line-head
+    number, is a numbered step whose label was dropped.
+    """
+
+    normalized, _, _ = _normalized_text_with_bounds(evidence.source_excerpt)
+    if _LEADING_STEP_NUMBER.match(normalized + " "):
+        return True
+    page = extraction.pages[evidence.source_page_number - 1]
+    spans = _canonical_match_spans(
+        page.text, evidence.source_excerpt, ocr_derived=page.ocr_derived
+    )
+    return any(
+        _LINE_HEAD_STEP_NUMBER.search(page.text[:start].rstrip()) is not None
+        and page.text[:start].rstrip() != page.text[:start]
+        for start, _ in spans
+    )
 
 
 @dataclass
@@ -1285,6 +1402,28 @@ def _verify_claim_tree(
                     if local_evidence is not None
                     else None
                 ),
+                source_hash=extraction.sha256,
+            ),
+        )
+    if (
+        isinstance(value, domain.ProtocolSourceStep)
+        and isinstance(value.source_label, str)
+        and not value.source_label.strip()
+        and local_evidence is not None
+        and _printed_number_is_dropped(local_evidence, extraction)
+    ):
+        raise ProtocolAnalysisEvidenceError(
+            "A Protocol source step that the source numbers has no label.",
+            diagnostic=ProtocolEvidenceDiagnostic(
+                validation_stage="structured_claim_verification",
+                # The existing label refusal: the label the page prints is
+                # not the one returned (empty).
+                reason_code="source_label_not_found",
+                mismatch_class="claim_evidence_mismatch",
+                evidence_index=state.next_index,
+                evidence_type=type(value).__name__,
+                field_path=f"{_path}.source_label",
+                page_number=local_evidence.source_page_number,
                 source_hash=extraction.sha256,
             ),
         )

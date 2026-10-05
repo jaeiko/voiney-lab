@@ -244,7 +244,16 @@ both: CLOVA's text is used when Hangul is at least 30% of the letters it read,
 otherwise Google's; if one engine fails or times out the other's text is used;
 if the two read different numbers or units the page carries
 `numeric_review_required` and a warning in the result data, which blocks
-nothing. With one engine configured, that engine is used alone. With none,
+nothing. The number comparison leaves out, where the engines give word boxes,
+the page's running-footer band (a word whose top is in the bottom 8% of the
+rendered page, the band the text layer uses for its footer) and, on a page
+that has a text layer, words whose centre is on none of the PDF's own text
+blocks -- letters drawn inside a picture. A scan has no text blocks, so there
+only the footer band is left out. The chosen text is the engine's whole text
+either way. On real readings (2026-10-05, lane P3) this cleared the mark on
+ANKOM pages 2, 3 and 9, where it came only from a footer date and words in a
+photo, and kept it on the scanned reagent-kit pages 2–4, where the engines
+read body values differently; a changed body number still sets it. With one engine configured, that engine is used alone. With none,
 the endpoint returns `protocol_ocr_not_configured` and preserves the immutable
 PDF. Every page records the engine and version that produced it. Keys,
 secrets and the invoke URL are never logged or returned. These adapters are
@@ -860,11 +869,24 @@ Vertex AI (now "Gemini Enterprise Agent Platform") when the SDK's own
 `GOOGLE_CLOUD_LOCATION` (default `global`) through Application Default
 Credentials. The server's validation of a proposal,
 its answer checks and the translation checks are the same for every provider.
+A `json_schema` response format is sent in the form each provider takes:
+OpenAI's strict form (every property required, an optional one nullable, the
+nulls it forces dropped from the reply), Anthropic's and Gemini's grammar with
+`oneOf` as `anyOf` -- and, for a schema over Anthropic's documented limits (24
+optional, 16 union-typed properties) or over 100 properties on Gemini (the
+PDF analysis schema on both), the schema as a system instruction instead,
+with the reply validated by the server as always.
 The web reference search is xAI's `web_search` tool, so
 `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` with any other
 `VOINEY_LAB_SUPPLEMENTAL_PROVIDER` is refused at start-up. The adapters are
-contract-tested against fake SDK clients (`tests/test_model_providers.py`), not
-live-tested by the suite.
+contract-tested against fake SDK clients (`tests/test_model_providers.py`,
+`tests/test_structured_output_providers.py`), not live-tested by the suite. The
+analysis role was live-tested on 2026-10-05 (lane P3) through these adapters
+with `claude-opus-5-5`, `claude-sonnet-5-5` and `gpt-6.1-sol`: real requests
+succeeded and were validated by the server as usual. `gemini-3.8-flash` on
+Vertex AI answered a short probe, then every call was refused with HTTP 403
+"Spend cap breached" for the project, so Gemini is not live-tested for any
+role.
 
 The settings that named models before (the chat, worker, multi-brain,
 protocol-analysis, report-writer, external-reference and supplemental model
@@ -925,12 +947,24 @@ provider call runs in a background task; the screen polls the status and shows
 `analyzing`, then `review_required` or `analysis_failed` with its failure code.
 A call that runs past `VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS` (default
 600 s; measured `grok-4.6` calls took 236–501 s) fails as
-`protocol_analysis_model_failed`. The response schema requires the protocol's
+`protocol_analysis_timeout` (on screen "분석 시간 초과"), apart from other
+provider failures (`protocol_analysis_model_failed`); it can be retried. The
+analysis request names `max_completion_tokens` 60,000, so the reply is not cut
+at the adapters' chat-sized default. The response schema requires the protocol's
 `before_start`, `materials`, `equipment`, `sections`, `constructs` and
 `description` and each section's `steps`, so a provider cannot drop every step
 by leaving the list out. A step label is supported when the cited excerpt starts
 with the step number, or when the page prints that number at the start of the
-line right before the excerpt; a missing or different number is refused. A
+line right before the excerpt; a missing or different number is refused. When
+the source prints no step numbers, every step's `source_label` is empty; an
+empty label on a step the page numbers is refused, and a protocol mixing
+labelled and empty steps fails validation. The stored analysis keeps the empty
+label, and the review screen and the run number such steps 1, 2, 3 … in order
+(the review payload marks them `source_label_printed: false`). On a page whose
+text is accepted OCR output, evidence comparison also joins a line break
+between two Hangul letters ("날⏎짜" compares as "날짜"), like the line-end
+hyphen rule: comparison only, the page text, its hash and evidence identities
+are unchanged, and a break between digits is not joined. A
 metadata field (`created_date_evidence`, …) and a value or duration may carry
 its own evidence on the page where it is printed; without it the claim is
 checked on its owner's evidence page as before.

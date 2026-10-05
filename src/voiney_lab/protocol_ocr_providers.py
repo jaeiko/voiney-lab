@@ -49,8 +49,11 @@ from voiney_lab.experiment_protocol_pdf import (
     extract_protocol_pdf,
 )
 from voiney_lab.pdf_text_engine import (
+    BOTTOM_BAND_FRACTION,
     ENGINE_NAME as PDF_ENGINE_NAME,
+    MAX_RENDER_PIXELS,
     OCR_RENDER_DPI,
+    PdfTextBlock,
     engine_version as pdf_engine_version,
     render_page_png,
 )
@@ -94,9 +97,43 @@ class ProtocolOcrProviderError(ProtocolOcrError):
 
 
 @dataclass(frozen=True)
+class OcrWord:
+    """One word an engine read, with its box in the rendered page's pixels."""
+
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    #: What the engine puts after this word: " ", "\n" (a line ends) or ""
+    #: (Google runs some words together, e.g. "65" and "°C").
+    after: str = " "
+
+
+@dataclass(frozen=True)
 class RecognizedPage:
     text: str
     confidence: float | None = None
+    #: The words with their boxes, where the engine gives them. Used only to
+    #: leave the footer band and picture text out of the number comparison.
+    words: tuple[OcrWord, ...] = ()
+
+
+def _box(vertices: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(vertices, list) or not vertices:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for vertex in vertices:
+        if not isinstance(vertex, dict):
+            return None
+        # The engines leave a 0 coordinate out of a vertex.
+        x, y = vertex.get("x", 0), vertex.get("y", 0)
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x, y)):
+            return None
+        xs.append(float(x))
+        ys.append(float(y))
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 class PageRecognizer(Protocol):
@@ -212,16 +249,22 @@ class ClovaOcrRecognizer:
             raise ProtocolOcrProviderError("CLOVA OCR returned an invalid envelope.")
         parts: list[str] = []
         confidences: list[float] = []
+        words: list[OcrWord] = []
         for field in fields:
             if not isinstance(field, dict) or not isinstance(field.get("inferText"), str):
                 raise ProtocolOcrProviderError("CLOVA OCR returned an invalid field.")
             parts.append(field["inferText"])
-            parts.append("\n" if field.get("lineBreak") is True else " ")
+            after = "\n" if field.get("lineBreak") is True else " "
+            parts.append(after)
             confidence = field.get("inferConfidence")
             if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
                 confidences.append(float(confidence))
+            poly = field.get("boundingPoly")
+            box = _box(poly.get("vertices")) if isinstance(poly, dict) else None
+            if box is not None:
+                words.append(OcrWord(field["inferText"], *box, after))
         text = "".join(parts).rstrip()
-        return RecognizedPage(text=text, confidence=_mean(confidences))
+        return RecognizedPage(text=text, confidence=_mean(confidences), words=tuple(words))
 
 
 class GoogleVisionRecognizer:
@@ -295,7 +338,34 @@ class GoogleVisionRecognizer:
             and isinstance(page.get("confidence"), (int, float))
             and not isinstance(page.get("confidence"), bool)
         ]
-        return RecognizedPage(text=text.rstrip(), confidence=_mean(confidences))
+        return RecognizedPage(
+            text=text.rstrip(), confidence=_mean(confidences), words=_google_words(annotation),
+        )
+
+
+#: Google's detectedBreak types, as the text they stand for.
+_GOOGLE_BREAKS = {"SPACE": " ", "SURE_SPACE": " ", "EOL_SURE_SPACE": "\n", "LINE_BREAK": "\n", "HYPHEN": "-\n"}
+
+
+def _google_words(annotation: dict) -> tuple[OcrWord, ...]:
+    """Words of a fullTextAnnotation: pages > blocks > paragraphs > words > symbols."""
+
+    words: list[OcrWord] = []
+    for page in annotation.get("pages") or []:
+        for block in (page.get("blocks") or []) if isinstance(page, dict) else []:
+            for paragraph in (block.get("paragraphs") or []) if isinstance(block, dict) else []:
+                for word in (paragraph.get("words") or []) if isinstance(paragraph, dict) else []:
+                    if not isinstance(word, dict):
+                        continue
+                    symbols = [s for s in word.get("symbols") or [] if isinstance(s, dict)]
+                    text = "".join(str(s.get("text") or "") for s in symbols)
+                    bounding = word.get("boundingBox")
+                    box = _box(bounding.get("vertices")) if isinstance(bounding, dict) else None
+                    if not text or box is None:
+                        continue
+                    detected = ((symbols[-1].get("property") or {}).get("detectedBreak") or {}) if symbols else {}
+                    words.append(OcrWord(text, *box, _GOOGLE_BREAKS.get(detected.get("type"), "")))
+    return tuple(words)
 
 
 _HANGUL_RANGES = (
@@ -346,6 +416,77 @@ def numeric_tokens(text: str) -> Counter[str]:
     )
 
 
+#: Box margin, in points, within which a word still counts as on a text block.
+_TEXT_BLOCK_MARGIN_PT = 2.0
+
+
+@dataclass(frozen=True)
+class NumericRegion:
+    """Which words of a rendered page the number comparison leaves out.
+
+    Human decision 2026-10-05 (lane P3): the running-footer band and letters
+    drawn inside pictures. On the real pages of lane P2 the mark came from
+    exactly these, not from the body: a footer date read "December 14,2019"
+    by one engine and "December 14, 2019" by the other, and words printed on
+    an instrument in a photo ("ANKOM 2000", "28816").
+
+    * Footer band: a word whose top lies in the bottom
+      ``BOTTOM_BAND_FRACTION`` (8%) of the page. The same geometric band the
+      text layer uses for its running footer (measured in STEP 22: every
+      local source's footer sits there and nothing else does).
+    * Picture text: on a page that has a text layer, a word whose centre is
+      on none of the PDF's own text blocks. The text layer records where the
+      page prints text; letters elsewhere are part of an image. A page with
+      no text layer (a scan) has no blocks, and there nothing is taken for a
+      picture -- the scan is one image and the body is in it.
+    """
+
+    width: int
+    height: int
+    #: Rendered pixels per PDF point, or None when it cannot be known (a page
+    #: rendered below its dpi to fit the pixel cap); the picture rule is off.
+    pixels_per_point: float | None
+    blocks: tuple[PdfTextBlock, ...]
+
+    @classmethod
+    def from_page(
+        cls, png: bytes, *, dpi: int, blocks: tuple[PdfTextBlock, ...]
+    ) -> "NumericRegion | None":
+        if len(png) < 24 or not png.startswith(b"\x89PNG\r\n\x1a\n") or png[12:16] != b"IHDR":
+            return None
+        width = int.from_bytes(png[16:20], "big")
+        height = int.from_bytes(png[20:24], "big")
+        if width <= 0 or height <= 0:
+            return None
+        capped = width * height >= MAX_RENDER_PIXELS * 0.99
+        return cls(width, height, None if capped else dpi / 72.0, tuple(blocks))
+
+    def excluded(self, word: OcrWord) -> str | None:
+        if word.y0 >= self.height * (1.0 - BOTTOM_BAND_FRACTION):
+            return "footer_band"
+        if self.blocks and self.pixels_per_point:
+            x = (word.x0 + word.x1) / 2 / self.pixels_per_point
+            y = (word.y0 + word.y1) / 2 / self.pixels_per_point
+            margin = _TEXT_BLOCK_MARGIN_PT
+            if not any(
+                block.x0 - margin <= x <= block.x1 + margin
+                and block.y0 - margin <= y <= block.y1 + margin
+                for block in self.blocks
+            ):
+                return "outside_text_layer"
+        return None
+
+
+def _comparison_text(page: RecognizedPage, region: NumericRegion | None) -> str | None:
+    if region is None or not page.words:
+        return None
+    return "".join(
+        word.text + word.after
+        for word in page.words
+        if region.excluded(word) is None
+    )
+
+
 @dataclass(frozen=True)
 class _EngineOutcome:
     engine: PageRecognizer
@@ -377,8 +518,15 @@ def select_page_text(
     outcomes: tuple[_EngineOutcome, ...],
     *,
     threshold: float = HANGUL_SELECTION_THRESHOLD,
+    region: NumericRegion | None = None,
 ) -> PageSelection:
-    """Pick one engine's text for one page, following the module's rules."""
+    """Pick one engine's text for one page, following the module's rules.
+
+    With ``region`` and both engines' word boxes, the numbers are compared
+    without the footer band and picture text (``NumericRegion``); otherwise
+    the two whole texts are compared, as before. The chosen text is the
+    engine's whole text either way.
+    """
 
     succeeded = [outcome for outcome in outcomes if outcome.page is not None]
     warnings = [
@@ -396,7 +544,10 @@ def select_page_text(
     if CLOVA in by_name and GOOGLE in by_name:
         clova, google = by_name[CLOVA], by_name[GOOGLE]
         chosen = clova if hangul_ratio(clova.page.text) >= threshold else google
-        if numeric_tokens(clova.page.text) != numeric_tokens(google.page.text):
+        compared = (_comparison_text(clova.page, region), _comparison_text(google.page, region))
+        if None in compared:
+            compared = (clova.page.text, google.page.text)
+        if numeric_tokens(compared[0]) != numeric_tokens(compared[1]):
             numeric_review = True
             warnings.append(
                 f"Page {page_number}: CLOVA and Google Vision read different "
@@ -476,7 +627,10 @@ class DualEngineOcrProvider:
                 outcomes = tuple(
                     pool.map(lambda engine: _call(engine, png, number), self._engines)
                 )
-                selection = select_page_text(number, outcomes, threshold=self._threshold)
+                region = NumericRegion.from_page(png, dpi=self._dpi, blocks=page.blocks)
+                selection = select_page_text(
+                    number, outcomes, threshold=self._threshold, region=region,
+                )
                 pages.append(selection.page)
                 warnings.extend(selection.warnings)
                 engine = next(e for e in self._engines if e.name == selection.page.provider)

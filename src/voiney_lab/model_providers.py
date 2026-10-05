@@ -427,6 +427,223 @@ class _Request:
         return bool(self.response_format) and self.response_format.get("type") == "json_object"
 
 
+# --- Structured output across providers ---------------------------------------
+#
+# A json_schema response format is written once, for xAI's OpenAI-compatible
+# strict mode. The other three grammars each take a different subset, and on
+# the PDF analysis schema (196 properties, 28 definitions, oneOf, 86 optional
+# properties) all three refused the request outright (lane P3, 2026-10-05):
+# Anthropic "Schema type 'oneOf' is not supported", OpenAI "'required' ... must
+# include every key in properties", Gemini a bare 400 INVALID_ARGUMENT. So
+# each adapter sends the same schema in the form its provider takes, and where
+# no grammar can hold it, sends it as an instruction instead. That is a
+# request-shape translation only: the server still validates every reply
+# against the original contract, exactly as before.
+
+#: Anthropic's documented grammar limits (platform.claude.com, structured
+#: outputs, "Numeric complexity limits"): optional parameters and parameters
+#: with union types, counted across one request.
+ANTHROPIC_MAX_OPTIONAL_PROPERTIES = 24
+ANTHROPIC_MAX_UNION_PROPERTIES = 16
+#: Gemini publishes no number ("the API may reject very large or deeply nested
+#: schemas"). Measured on Vertex AI, lane P3: a 26-property, 2-definition
+#: schema accepted, the 196-property analysis schema refused; the small
+#: schemas the other roles send stay well under this.
+GEMINI_MAX_SCHEMA_PROPERTIES = 100
+
+_SCHEMA_INSTRUCTION = (
+    "Return exactly one JSON object, with no prose, Markdown or code fences, "
+    "that conforms to the JSON Schema named {name} below. Omit an optional "
+    "property instead of inventing a value.\n"
+)
+
+
+def _definition(root: Mapping[str, Any], node: Any) -> Any:
+    seen = 0
+    while isinstance(node, Mapping) and "$ref" in node and seen < 64:
+        name = str(node["$ref"]).rsplit("/", 1)[-1]
+        node = (root.get("$defs") or {}).get(name, {})
+        seen += 1
+    return node
+
+
+def _schema_counts(root: Mapping[str, Any]) -> tuple[int, int, int]:
+    """(properties, optional properties, union-typed properties), each
+    definition counted once however often it is referenced."""
+
+    counts = [0, 0, 0]
+    seen: set[str] = set()
+
+    def is_union(node: Any) -> bool:
+        node = _definition(root, node)
+        return isinstance(node, Mapping) and (
+            "anyOf" in node or "oneOf" in node or isinstance(node.get("type"), list)
+        )
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, Mapping):
+            return
+        if "$ref" in node:
+            name = str(node["$ref"]).rsplit("/", 1)[-1]
+            if name not in seen:
+                seen.add(name)
+                walk((root.get("$defs") or {}).get(name, {}))
+            return
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required") or ())
+            counts[0] += len(properties)
+            counts[1] += sum(1 for key in properties if key not in required)
+            counts[2] += sum(1 for value in properties.values() if is_union(value))
+        for key, value in node.items():
+            if key != "$defs":
+                walk(value)
+
+    walk(root)
+    return counts[0], counts[1], counts[2]
+
+
+def _any_of(node: Any) -> Any:
+    """A copy with every oneOf as anyOf: the grammars take anyOf only. The
+    analysis schema's oneOf branches each carry a distinct const kind, so the
+    two accept the same documents."""
+
+    if isinstance(node, list):
+        return [_any_of(item) for item in node]
+    if not isinstance(node, Mapping):
+        return node
+    return {("anyOf" if key == "oneOf" else key): _any_of(value) for key, value in node.items()}
+
+
+def _allows_null(root: Mapping[str, Any], node: Any) -> bool:
+    node = _definition(root, node)
+    if not isinstance(node, Mapping):
+        return False
+    kind = node.get("type")
+    if kind == "null" or (isinstance(kind, list) and "null" in kind):
+        return True
+    return any(_allows_null(root, branch) for branch in node.get("anyOf") or node.get("oneOf") or ())
+
+
+def _openai_strict(root: Mapping[str, Any]) -> dict[str, Any]:
+    """OpenAI strict form: every property required, an optional one nullable."""
+
+    def convert(node: Any) -> Any:
+        if isinstance(node, list):
+            return [convert(item) for item in node]
+        if not isinstance(node, Mapping):
+            return node
+        out = {key: convert(value) for key, value in node.items()}
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required") or ())
+            out["properties"] = {
+                key: (
+                    out["properties"][key]
+                    if key in required or _allows_null(root, value)
+                    else {"anyOf": [out["properties"][key], {"type": "null"}]}
+                )
+                for key, value in properties.items()
+            }
+            out["required"] = list(properties)
+        return out
+
+    return convert(_any_of(root))
+
+
+def _object_branch(root: Mapping[str, Any], node: Any, value: Mapping[str, Any]) -> Any:
+    node = _definition(root, node)
+    if not isinstance(node, Mapping):
+        return None
+    if isinstance(node.get("properties"), Mapping):
+        return node
+    for branch in node.get("anyOf") or node.get("oneOf") or ():
+        branch = _definition(root, branch)
+        properties = branch.get("properties") if isinstance(branch, Mapping) else None
+        if not isinstance(properties, Mapping) or not set(value) <= set(properties):
+            continue
+        if all(
+            "const" not in spec or value.get(key) == spec["const"]
+            for key, spec in properties.items()
+            if isinstance(spec, Mapping)
+        ):
+            return branch
+    return None
+
+
+def _array_items(root: Mapping[str, Any], node: Any) -> Any:
+    node = _definition(root, node)
+    if not isinstance(node, Mapping):
+        return None
+    if "items" in node:
+        return node["items"]
+    for branch in node.get("anyOf") or node.get("oneOf") or ():
+        branch = _definition(root, branch)
+        if isinstance(branch, Mapping) and "items" in branch:
+            return branch["items"]
+    return None
+
+
+def _drop_unasked_nulls(root: Mapping[str, Any], node: Any, value: Any) -> Any:
+    """Remove ``null`` where the original schema asked for no null: an optional
+    property a strict grammar forced the model to spell out (OpenAI), or one
+    an instruction-only reply wrote as null. Absent is what it means."""
+
+    if isinstance(value, list):
+        items = _array_items(root, node)
+        return value if items is None else [
+            _drop_unasked_nulls(root, items, item) for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    branch = _object_branch(root, node, value)
+    if branch is None:
+        return value
+    properties = branch["properties"]
+    required = set(branch.get("required") or ())
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        spec = properties.get(key)
+        if spec is None:
+            out[key] = item
+        elif item is None and key not in required and not _allows_null(root, spec):
+            continue
+        else:
+            out[key] = _drop_unasked_nulls(root, spec, item)
+    return out
+
+
+def _restore_structured_reply(content: str, request: "_Request") -> str:
+    schema = request.json_schema()
+    if schema is None or not content:
+        return content
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return content  # the server's own parser reports it
+    restored = _drop_unasked_nulls(schema[1], schema[1], parsed)
+    if restored == parsed:
+        return content
+    return json.dumps(restored, ensure_ascii=False)
+
+
+def _schema_instruction(name: str, schema: Mapping[str, Any]) -> str:
+    return _SCHEMA_INSTRUCTION.format(name=name) + json.dumps(
+        schema, ensure_ascii=False, separators=(",", ":"),
+    )
+
+
+def _with_content(completion: SimpleNamespace, content: str) -> SimpleNamespace:
+    completion.choices[0].message.content = content
+    completion.output_text = content
+    completion.output[0].content[0].text = content
+    return completion
+
+
 def _text(content: Any) -> str:
     """A message's content as text (a string, or text parts)."""
 
@@ -594,7 +811,8 @@ class _OpenAIResponsesBackend:
         if schema is not None:
             name, body, strict = schema
             params["text"] = {"format": {
-                "type": "json_schema", "name": name, "schema": body, "strict": strict,
+                "type": "json_schema", "name": name,
+                "schema": _openai_strict(body) if strict else body, "strict": strict,
             }}
         elif request.wants_json_object:
             params["text"] = {"format": {"type": "json_object"}}
@@ -648,7 +866,12 @@ class _OpenAIResponsesBackend:
             response = self.client.responses.create(**self._params(request))
         except Exception as exc:  # noqa: BLE001 -- typed below
             raise _openai_error(exc) from exc
-        return self._reply(response, request.model)
+        return self._restored(self._reply(response, request.model), request)
+
+    @staticmethod
+    def _restored(completion: SimpleNamespace, request: _Request) -> SimpleNamespace:
+        content = completion.choices[0].message.content
+        return _with_content(completion, _restore_structured_reply(content, request))
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
@@ -658,7 +881,7 @@ class _OpenAIResponsesBackend:
                 response = await self.client.responses.create(**params)
             except Exception as exc:  # noqa: BLE001
                 raise _openai_error(exc) from exc
-            return self._reply(response, request.model)
+            return self._restored(self._reply(response, request.model), request)
         try:
             stream = await self.client.responses.create(**params, stream=True)
         except Exception as exc:  # noqa: BLE001
@@ -821,7 +1044,19 @@ class _AnthropicBackend:
                 params["tool_choice"]["disable_parallel_tool_use"] = True
         schema = request.json_schema()
         if schema is not None:
-            output_config["format"] = {"type": "json_schema", "schema": schema[1]}
+            body = _any_of(schema[1])
+            _, optional, unions = _schema_counts(body)
+            if (
+                optional <= ANTHROPIC_MAX_OPTIONAL_PROPERTIES
+                and unions <= ANTHROPIC_MAX_UNION_PROPERTIES
+            ):
+                output_config["format"] = {"type": "json_schema", "schema": body}
+            else:
+                # No grammar can hold it: the schema goes as an instruction,
+                # in its own system block after the standing prompt.
+                params.setdefault("system", []).append(
+                    {"type": "text", "text": _schema_instruction(schema[0], schema[1])}
+                )
         if output_config:
             params["output_config"] = output_config
         if request.timeout is not None:
@@ -867,14 +1102,16 @@ class _AnthropicBackend:
             response = self.client.messages.create(**self._params(request))
         except Exception as exc:  # noqa: BLE001
             raise _anthropic_error(exc) from exc
-        return self._reply(response, request.model)
+        return _OpenAIResponsesBackend._restored(self._reply(response, request.model), request)
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
         params = self._params(request)
         try:
             if not request.stream:
-                return self._reply(await self.client.messages.create(**params), request.model)
+                return _OpenAIResponsesBackend._restored(
+                    self._reply(await self.client.messages.create(**params), request.model), request,
+                )
             stream = await self.client.messages.create(**params, stream=True)
         except Exception as exc:  # noqa: BLE001
             raise _anthropic_error(exc) from exc
@@ -970,8 +1207,6 @@ class _GeminiBackend:
                 })
         thinks = request.reasoning is None or request.reasoning != "none"
         config: dict[str, Any] = {"max_output_tokens": request.output_limit(thinks)}
-        if system:
-            config["system_instruction"] = "\n\n".join(system)
         if request.temperature is not None:
             config["temperature"] = request.temperature
         if request.reasoning is not None:
@@ -995,9 +1230,16 @@ class _GeminiBackend:
         schema = request.json_schema()
         if schema is not None:
             config["response_mime_type"] = "application/json"
-            config["response_json_schema"] = schema[1]
+            body = _any_of(schema[1])
+            if _schema_counts(body)[0] <= GEMINI_MAX_SCHEMA_PROPERTIES:
+                config["response_json_schema"] = body
+            else:
+                # JSON mode, and the schema as an instruction (see above).
+                system.append(_schema_instruction(schema[0], schema[1]))
         elif request.wants_json_object:
             config["response_mime_type"] = "application/json"
+        if system:
+            config["system_instruction"] = "\n\n".join(system)
         return {"model": request.model, "contents": contents, "config": config}
 
     @staticmethod
@@ -1051,16 +1293,16 @@ class _GeminiBackend:
             response = self.client.models.generate_content(**self._params(request))
         except Exception as exc:  # noqa: BLE001
             raise _gemini_error(exc) from exc
-        return self._reply(response, request.model)
+        return _OpenAIResponsesBackend._restored(self._reply(response, request.model), request)
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
         params = self._params(request)
         try:
             if not request.stream:
-                return self._reply(
+                return _OpenAIResponsesBackend._restored(self._reply(
                     await self.client.aio.models.generate_content(**params), request.model,
-                )
+                ), request)
             stream = await self.client.aio.models.generate_content_stream(**params)
         except Exception as exc:  # noqa: BLE001
             raise _gemini_error(exc) from exc

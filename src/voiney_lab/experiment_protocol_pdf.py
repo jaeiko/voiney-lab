@@ -223,6 +223,11 @@ class ProtocolPdfPage:
     #: The engine's text blocks, with coordinates, font size and weight.
     #: Carried for the next structure measurement; nothing decides on them.
     blocks: tuple[PdfTextBlock, ...] = ()
+    #: True when this page's text is accepted OCR output rather than the
+    #: PDF's text layer (set by the catalog for analysis). Evidence
+    #: comparison then joins a line break between two Hangul letters, as OCR
+    #: breaks Korean words mid-line (human decision 2026-10-05, lane P3).
+    ocr_derived: bool = False
 
 
 @dataclass(frozen=True)
