@@ -70,6 +70,8 @@ SETTINGS: tuple[Setting, ...] = (
             "PDF 프로토콜 분석 모델 (분석에 필수)"),
     Setting("VOINEY_LAB_PROTOCOL_ANALYSIS_REASONING_EFFORT", MODELS, "high",
             "프로토콜 분석 추론 강도 (low/medium/high/xhigh)"),
+    Setting("VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS", MODELS, "600",
+            "프로토콜 분석 호출 제한 시간 (초, 30–3600, 백그라운드 작업)"),
     Setting("VOINEY_LAB_LLM_ROUTER_MODEL", MODELS,
             "grok-4.20-0309-non-reasoning", "LLM 라우터 모델"),
     Setting("VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS", MODELS, "2.5",
