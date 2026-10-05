@@ -394,7 +394,7 @@ class VoicePauseResumeTests(VoiceSessionHarness, unittest.TestCase):
         self.assertEqual(done[0]["output_frames"], 0)
         reply = socket.reply(4)
         self.assertIn("일시정지 상태입니다", reply)
-        self.assertIn("'재개'라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
+        self.assertIn("'다시 시작'이라고 말씀하시거나 재개 버튼을 눌러주세요", reply)
         self.assertEqual(socket.for_turn(4, "reply.delta")[-1]["speech_text"], "")
         self.assertEqual(socket.for_turn(4, "audio.complete")[-1]["segment_count"], 0)
         self.assertEqual(socket.for_turn(4, "audio.replay.available"), [])

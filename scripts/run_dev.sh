@@ -17,6 +17,7 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 
 BOOTSTRAP_ONLY=false
+CHECK_ONLY=false
 TEST_MODE=false
 while [[ "$#" -ne 0 ]]; do
   case "$1" in
@@ -24,12 +25,18 @@ while [[ "$#" -ne 0 ]]; do
       BOOTSTRAP_ONLY=true
       shift
       ;;
+    --check-only)
+      # Print the effective settings and run the start-up checks, then stop
+      # before anything is read from or written to data/runtime.
+      CHECK_ONLY=true
+      shift
+      ;;
     --test-mode)
       TEST_MODE=true
       shift
       ;;
     *)
-      echo "usage: $0 [--bootstrap-only] [--test-mode]"
+      echo "usage: $0 [--bootstrap-only] [--check-only] [--test-mode]"
       exit 2
       ;;
   esac
@@ -48,33 +55,10 @@ source .venv/bin/activate
 # the repository .env (decision of 2026-10-04; scripts/migrate_env.py).
 python -B -m voiney_lab.setting_names || exit 1
 
-echo "=== Candidate A configuration check ==="
 
-for file in \
-  "$FIXTURE" \
-  "$PROVENANCE" \
-  "$SOURCE_PDF"
-do
-  if [[ ! -f "$file" ]]; then
-    echo "[ERROR] required file not found:"
-    echo "  $file"
-    exit 1
-  fi
-
-  echo "[OK] $file"
-done
-
-ACTUAL_PDF_SHA256="$(sha256sum "$SOURCE_PDF" | awk '{print $1}')"
-
-if [[ "$ACTUAL_PDF_SHA256" != "$EXPECTED_PDF_SHA256" ]]; then
-  echo "[ERROR] Candidate A source PDF SHA-256 mismatch"
-  echo "expected: $EXPECTED_PDF_SHA256"
-  echo "actual:   $ACTUAL_PDF_SHA256"
-  exit 1
-fi
-
-echo "[OK] Candidate A PDF SHA-256 verified"
-
+# --- Fixed by this launcher ----------------------------------------------------
+# The fixture it verifies below, the data root it keeps apart from every other
+# run, and the safety settings. These are not taken from a .env.
 export VOINEY_LAB_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
 export VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
 export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
@@ -87,40 +71,45 @@ export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
 # unaffected. To analyse a new document, run the server without this launcher
 # (or export VOINEY_LAB_ANALYSIS_MODEL after it) so the call is a deliberate act.
 export VOINEY_LAB_ANALYSIS_MODEL=""
-export VOINEY_LAB_PROTOCOL_ENABLED="true"
 export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
-export VOINEY_LAB_MOSS_ENABLED="false"
-export VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED="true"
 export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
-export VOINEY_LAB_WORKSPACE_ENABLED="true"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
-export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true"
-export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"
-export VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"
-export VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"
-export VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"
-export VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"
-export VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS="900"
-export VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS="5"
-export VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
+export VOINEY_LAB_MOSS_ENABLED="false"
+
+# --- Defaults: a value set in the shell or the .env wins ------------------------
+# Decision 1 of lane XO (2026-10-05). Each name below is exported only when a
+# person has not set it already, in the shell or in the repository .env. The
+# launcher names no model: every role keeps model_providers' default unless
+# the .env chooses one. The four features only xAI provides (external
+# reference web search, web image search, generated images, and semantic
+# intent, which is off unless set) default to off, so the server starts
+# without XAI_API_KEY; turning one on in the .env needs the key.
 # PROJECT-ENGINEERING: three bounded read-only planning/answering roles are
 # available conditionally; course-explicit state/tool guardrails remain server
 # enforced. Report Brain is a separate async derivation path and is not part of
 # the latency-critical Answer/Source/Visual start() fan-out.
-export VOINEY_LAB_MULTI_BRAIN_ENABLED="true"
-export VOINEY_LAB_ANSWER_MODEL="grok-4.6"
-export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
-export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
-export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
 # CLASS-EXPLICIT: model prose cannot gain workflow or evidence authority.
-# PROJECT-ENGINEERING: this development launcher enables one bounded Grok-only
-# background tier; production/operator launchers may keep the feature disabled.
-export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="true"
-export VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"
-export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
-export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="true"
-export VOINEY_LAB_GENERATED_VISUALS_ENABLED="true"
-export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS="800"
+eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
+  VOINEY_LAB_PROTOCOL_ENABLED=true \
+  VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true \
+  VOINEY_LAB_WORKSPACE_ENABLED=true \
+  VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
+  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \
+  VOINEY_LAB_GENERATED_VISUALS_ENABLED=false \
+  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \
+  VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=90 \
+  VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=5 \
+  VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS=90 \
+  VOINEY_LAB_EXTERNAL_REFERENCE_CACHE_TTL_SECONDS=900 \
+  VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS=5 \
+  VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS=4 \
+  VOINEY_LAB_MULTI_BRAIN_ENABLED=true \
+  VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25 \
+  VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8 \
+  VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6 \
+  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true \
+  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8 \
+  VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800)"
 # Raw microphone evidence remains off unless the operator explicitly opts in
 # before startup with VOINEY_LAB_STT_DIAGNOSTICS_ENABLED=true. Any
 # configured diagnostic directory must remain below data/runtime and is ignored.
@@ -152,7 +141,9 @@ from voiney_lab.external_references import (
     SupplementalKnowledgeSettings,
 )
 from voiney_lab.generated_visuals import GeneratedVisualSettings
+from voiney_lab.model_providers import ROLES, RoleModel
 from voiney_lab.multi_brain import MultiBrainSettings
+from voiney_lab.semantic_intent import SemanticIntentSettings
 from voiney_lab.web_visuals import WebVisualSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
@@ -161,8 +152,6 @@ web_images = WebVisualSettings.from_environment(references)
 generated = GeneratedVisualSettings.from_environment()
 supplemental = SupplementalKnowledgeSettings.from_environment()
 multi_brain = MultiBrainSettings.from_environment()
-if references.enabled and not bool(os.environ.get("XAI_API_KEY")):
-    raise SystemExit("[ERROR] XAI_API_KEY is not configured for enabled Candidate A research")
 print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
 print("external_search_model:", references.model if references.enabled else "disabled")
 print("external_search_profile:", references.domain_profile or "custom")
@@ -179,9 +168,50 @@ print("authority_profile:", references.domain_profile or "custom")
 print("allowed_domain_count:", len(references.allowed_domains))
 print("web_image_search:", "enabled" if web_images.enabled else "disabled")
 print("generated_visuals:", "enabled" if generated.enabled else "disabled")
-print("experiment_reports: enabled")
-print("barge_in_prefix_ms:", os.environ["VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS"])
+print("experiment_reports:", os.environ.get("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "false"))
+print("semantic_intent:", "enabled" if SemanticIntentSettings.from_environment().enabled else "disabled")
+print("barge_in_prefix_ms:", os.environ.get("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS", "800"))
+for role in ROLES:
+    chosen = RoleModel.from_environment(role)
+    print(f"{role}_role:", chosen.provider, chosen.model or "(the caller's default)")
 PY
+# An xAI-only feature switched on without XAI_API_KEY is refused here, by
+# name, and again by the server at start-up (decision 2 of lane XO).
+python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env" || exit 1
+
+if [[ "$CHECK_ONLY" == "true" ]]; then
+  echo
+  echo "[OK] --check-only: settings printed; nothing read from or written to data/runtime"
+  exit 0
+fi
+
+echo
+echo "=== Candidate A configuration check ==="
+
+for file in \
+  "$FIXTURE" \
+  "$PROVENANCE" \
+  "$SOURCE_PDF"
+do
+  if [[ ! -f "$file" ]]; then
+    echo "[ERROR] required file not found:"
+    echo "  $file"
+    exit 1
+  fi
+
+  echo "[OK] $file"
+done
+
+ACTUAL_PDF_SHA256="$(sha256sum "$SOURCE_PDF" | awk '{print $1}')"
+
+if [[ "$ACTUAL_PDF_SHA256" != "$EXPECTED_PDF_SHA256" ]]; then
+  echo "[ERROR] Candidate A source PDF SHA-256 mismatch"
+  echo "expected: $EXPECTED_PDF_SHA256"
+  echo "actual:   $ACTUAL_PDF_SHA256"
+  exit 1
+fi
+
+echo "[OK] Candidate A PDF SHA-256 verified"
 
 echo
 echo "=== Effective Candidate A paths ==="

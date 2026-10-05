@@ -3640,7 +3640,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertEqual(session.curated_protocol_session.current_index, 2)
         self.assertEqual(len(client.chat.completions.calls), 0)
         llm.assert_not_called()
-        self.assertIn("활성 프로토콜", tts.call_args.args[0])
+        # The step read out (lane XO), not a sentence about the answer.
+        self.assertTrue(tts.call_args.args[0].startswith("3단계 내용입니다."))
         reply = next(item for item in socket.text if item["type"] == "reply.delta")
         self.assertEqual(reply["answer_origin"], "current_protocol")
         self.assertIn(4, reply["source_pages"])

@@ -55,11 +55,11 @@ RECORDED_REASK = {
 }
 #: The record write failing is answered as before.
 RECORD_FAILED = "실험 기록을 저장하지 못해 이상 사항이 기록되었다고 확인할 수 없습니다."
-PAUSED_REPLY = "일시정지했어요. '재개'라고 하시면 이어서 할게요."
+PAUSED_REPLY = "일시정지했어요. '다시 시작'이라고 하시면 이어서 할게요."
 TIMER_RUNS_ON = "타이머는 실제로는 계속 흐르고 있어요."
-PAUSED_SPOKEN = "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+PAUSED_SPOKEN = "지금 일시정지 중이에요. '다시 시작'이라고 말씀해 주세요."
 PAUSED_NOTICE = (
-    "현재 실험 안내가 일시정지 상태입니다. '재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+    "현재 실험 안내가 일시정지 상태입니다. '다시 시작'이라고 말씀하시거나 재개 버튼을 눌러주세요."
 )
 
 

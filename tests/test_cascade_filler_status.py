@@ -295,6 +295,8 @@ class StatusThroughTheTurnTests(unittest.TestCase):
             "VOINEY_LAB_CASCADE_FILLER_MODE": "tone",
             "VOINEY_LAB_CASCADE_FILLER_DELAY_MS": "100",
             "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS": "250",
+            # Off by default since lane XO (decision 7); this is the opt-in.
+            "VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED": "true",
         }), patch(
             "voiney_lab.server.transcribe", side_effect=slow_empty_transcript,
         ), patch(

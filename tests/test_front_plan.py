@@ -185,7 +185,7 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
 
     def test_everything_else_is_handed_on_untouched(self) -> None:
         for said in (
-            "다 했어", "완료했어", "끝났어", "다음 단계", "다음 단계로 넘어가자", "넘어가",
+            "다 했어", "완료했어", "다음 단계", "다음 단계로 넘어가자", "넘어가",
             "5단계 완료", "자 이제 다음 거 하자", "이 단계 왜 해?",
             "자세히 알려줘", "타이머 시작해줘", "버퍼 1은 뭐야?", "어디까지 했지?",
             "오늘 점심 뭐 먹지", "메모해줘 튜브 라벨 A-17",
@@ -194,6 +194,14 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
                 self.assert_handed_on((said,), step_index=3)
         # Decision 3 (lane R3): the current step is a server value.
         self.assert_front(("지금 몇 단계야",), "server_value_query", step_index=3)
+        # Decision 5 (lane XO): a short completion said alone is asked about
+        # by the front rules, whichever model the router runs.
+        for said in ("끝났어", "다 끝났어", "끝"):
+            with self.subTest(said=said):
+                front, session = self.assert_front((said,), "short_completion", step_index=3)
+                self.assertEqual(front.speech_text, "4단계 완료하셨나요?")
+                self.assertFalse(front.state_changed)
+                self.assertEqual(session.current_index, 3)
 
     def test_before_the_start_only_front_words_are_taken(self) -> None:
         # Decision 2 (2026-10-03): an explicit start of an experiment that
@@ -239,6 +247,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "start_command", "server_value_query", "step_lookup",
             # lane M1, decision 5a
             "quantity_target",
+            # lane XO, decision 5
+            "short_completion",
         })
 
 

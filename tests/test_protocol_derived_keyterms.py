@@ -40,6 +40,8 @@ from tests.protocol_vocabulary_support import (
 CONTROL_TERMS = (
     "아니", "네", "현재 단계", "이번 단계", "완료", "완료했어",
     "시작", "다음 단계", "다시 알려줘",
+    # The pause and resume words (lane XO, decision 4).
+    "잠깐", "멈춰", "정지", "일시정지", "스톱", "재개", "다시 시작",
 )
 
 

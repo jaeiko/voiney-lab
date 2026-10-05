@@ -12,11 +12,15 @@ Either cue carries no protocol content, starts only once ``delay_ms`` has passed
 with the primary turn still pending, and is cleared the moment the primary
 audio is admitted.
 
-In tone mode a turn that is still pending at ``VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS``
-(1.5 s by default) also hears, once, what the server is doing at that moment
-(``FILLER_STATUS_PHRASES``) -- read from the turn's own progress state, the same
-state its Turn card shows, and only for states that name real work. A session
-never hears the same status sentence twice in a row.
+Nothing is said while a turn waits unless a deployment asks for it (lane XO,
+decision 7 of 2026-10-05): a fixed sentence read out while waiting sounds like
+a script being read. With ``VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED``
+true, a tone-mode turn that is still pending at
+``VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS`` (1.5 s by default) also hears,
+once, what the server is doing at that moment (``FILLER_STATUS_PHRASES``) --
+read from the turn's own progress state, the same state its Turn card shows,
+and only for states that name real work. A session never hears the same
+status sentence twice in a row. The screen shows the state either way.
 """
 
 from __future__ import annotations
@@ -47,6 +51,23 @@ def cascade_filler_mode(environment: Mapping[str, str] | None = None) -> str:
             + ", ".join(sorted(FILLER_MODES))
         )
     return raw
+
+
+FILLER_STATUS_SPEECH_ENV = "VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED"
+
+
+def cascade_filler_status_speech_enabled(
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a waiting turn says its status aloud: off unless asked for."""
+
+    env = os.environ if environment is None else environment
+    raw = env.get(FILLER_STATUS_SPEECH_ENV, "").strip().casefold()
+    if raw in {"", "0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    raise ConfigurationError(f"{FILLER_STATUS_SPEECH_ENV} must be a boolean")
 
 
 FILLER_STATUS_DELAY_ENV = "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS"
