@@ -715,7 +715,12 @@ default). `src/voiney_lab/model_providers.py` moves each provider's request and
 reply to and from the chat-completions shape the code reads: xAI through the
 OpenAI SDK as before, OpenAI through its Responses API, Anthropic through the
 Messages API (with `cache_control` on the stable system blocks) and Google
-through the Gemini API (`google-genai`). The server's validation of a proposal,
+through `google-genai`: the Gemini API with `GEMINI_API_KEY` by default, or
+Vertex AI (now "Gemini Enterprise Agent Platform") when the SDK's own
+`GOOGLE_GENAI_USE_ENTERPRISE=true` (legacy `GOOGLE_GENAI_USE_VERTEXAI`) is set
+-- with `GOOGLE_API_KEY` (express mode), or with `GOOGLE_CLOUD_PROJECT` and
+`GOOGLE_CLOUD_LOCATION` (default `global`) through Application Default
+Credentials. The server's validation of a proposal,
 its answer checks and the translation checks are the same for every provider.
 The web reference search is xAI's `web_search` tool, so
 `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=true` with any other

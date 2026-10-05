@@ -45,8 +45,30 @@ _NONE = "(없음)"
 
 SETTINGS: tuple[Setting, ...] = (
     # --- 공급자 키 --------------------------------------------------------------
-    Setting("XAI_API_KEY", KEYS, _NONE, "xAI API 키 (모든 모델 호출)",
+    Setting("XAI_API_KEY", KEYS, _NONE,
+            "xAI API 키 (공급자가 xai 인 역할, STT·TTS·그림·웹 검색)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
+    Setting("ANTHROPIC_API_KEY", KEYS, _NONE, "Anthropic API 키 (공급자가 anthropic 인 역할)",
+            kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
+    Setting("OPENAI_API_KEY", KEYS, _NONE, "OpenAI API 키 (공급자가 openai 인 역할)",
+            kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
+    Setting("GEMINI_API_KEY", KEYS, _NONE,
+            "Gemini API 키 (공급자가 google 이고 Vertex AI 를 쓰지 않을 때)",
+            kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
+    Setting("GOOGLE_GENAI_USE_ENTERPRISE", KEYS, "false",
+            "true 면 google 역할이 Vertex AI(Gemini Enterprise Agent Platform)로 감",
+            kept_because="google-genai SDK 표준 이름 (줄 M1 추가 지시)"),
+    Setting("GOOGLE_GENAI_USE_VERTEXAI", KEYS, "false",
+            "GOOGLE_GENAI_USE_ENTERPRISE 의 옛 이름 (둘 다 있으면 앞의 것)",
+            kept_because="google-genai SDK 표준 이름 (줄 M1 추가 지시)"),
+    Setting("GOOGLE_CLOUD_PROJECT", KEYS, _NONE,
+            "Vertex AI 구글 클라우드 프로젝트 (키 없이 ADC 로 쓸 때 필수)",
+            kept_because="google-genai SDK 표준 이름 (줄 M1 추가 지시)"),
+    Setting("GOOGLE_CLOUD_LOCATION", KEYS, "global", "Vertex AI 지역",
+            kept_because="google-genai SDK 표준 이름 (줄 M1 추가 지시)"),
+    Setting("GOOGLE_API_KEY", KEYS, _NONE,
+            "Vertex AI API 키 (express 모드; 없으면 ADC)",
+            kept_because="google-genai SDK 표준 이름 (줄 M1 추가 지시)"),
     Setting("XAI_BASE_URL", KEYS, "https://api.x.ai/v1", "xAI API 주소",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
     Setting("VOINEY_LAB_MOSS_PROJECT_ID", KEYS, _NONE, "Moss 프로젝트 ID"),
@@ -314,8 +336,6 @@ SETTINGS: tuple[Setting, ...] = (
 #: never renames them; the ones a dependency reads are grouped with the
 #: settings, and the rest are listed under "코드가 읽지 않는 설정".
 EXTERNAL_NAMES: dict[str, tuple[str | None, str]] = {
-    "OPENAI_API_KEY": (KEYS, "openai SDK 가 api_key 를 받지 못하면 읽음 "
-                             "(openai/_client.py). 코드는 늘 api_key 를 준다"),
     "OPENAI_BASE_URL": (KEYS, "openai SDK 가 base_url 을 받지 못하면 읽음. 코드는 늘 준다"),
     "OPENAI_ORG_ID": (KEYS, "openai SDK 가 늘 읽어 요청 머리에 넣음"),
     "OPENAI_PROJECT_ID": (KEYS, "openai SDK 가 늘 읽어 요청 머리에 넣음"),
@@ -326,8 +346,6 @@ EXTERNAL_NAMES: dict[str, tuple[str | None, str]] = {
     "SSL_CERT_FILE": (OTHER, "httpx 가 읽는 인증서 파일"),
     "SSL_CERT_DIR": (OTHER, "httpx 가 읽는 인증서 폴더"),
     "TESSDATA_PREFIX": (OTHER, "pymupdf 가 읽는 Tesseract 데이터 폴더"),
-    "ANTHROPIC_API_KEY": (None, "공급자 SDK 표준 이름 (사람 결정 2). 이 저장소는 읽지 않음"),
-    "GEMINI_API_KEY": (None, "공급자 SDK 표준 이름 (사람 결정 2). 이 저장소는 읽지 않음"),
     "ELEVENLABS_API_KEY": (None, "공급자 SDK 표준 이름 (사람 결정 2). 이 저장소는 읽지 않음"),
 }
 

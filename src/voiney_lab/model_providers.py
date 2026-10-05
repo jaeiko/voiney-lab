@@ -97,6 +97,19 @@ API_KEY_SETTINGS: Mapping[str, str] = {
     "openai": "OPENAI_API_KEY",
     "google": "GEMINI_API_KEY",
 }
+#: Google: the Gemini API (GEMINI_API_KEY) by default, or Vertex AI -- now
+#: "Gemini Enterprise Agent Platform" -- when the google-genai SDK's own
+#: switch is on. These are the SDK's standard names (googleapis.github.io/
+#: python-genai): GOOGLE_GENAI_USE_ENTERPRISE (GOOGLE_GENAI_USE_VERTEXAI is
+#: its legacy name; the newer one wins), GOOGLE_CLOUD_PROJECT and
+#: GOOGLE_CLOUD_LOCATION (default "global", where gemini-3.8-flash is served),
+#: and GOOGLE_API_KEY for an express-mode Vertex key. Without a key, Vertex
+#: authenticates with Application Default Credentials.
+GOOGLE_VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI")
+GOOGLE_PROJECT_SETTING = "GOOGLE_CLOUD_PROJECT"
+GOOGLE_LOCATION_SETTING = "GOOGLE_CLOUD_LOCATION"
+GOOGLE_VERTEX_KEY_SETTING = "GOOGLE_API_KEY"
+DEFAULT_GOOGLE_LOCATION = "global"
 XAI_BASE_URL_SETTING = "XAI_BASE_URL"
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
 #: Output room for thinking, where a provider counts it in the output limit
@@ -158,8 +171,54 @@ class RoleModel:
         return API_KEY_SETTINGS[self.provider]
 
     def has_key(self, environment: Mapping[str, str] | None = None) -> bool:
+        """Whether the role can authenticate (Vertex: a key, or a project for ADC)."""
+
         env = os.environ if environment is None else environment
+        if self.provider == "google" and google_uses_vertex(env):
+            return bool(
+                env.get(GOOGLE_VERTEX_KEY_SETTING, "").strip()
+                or env.get(GOOGLE_PROJECT_SETTING, "").strip()
+            )
         return bool(env.get(self.api_key_setting, "").strip())
+
+
+def google_uses_vertex(environment: Mapping[str, str] | None = None) -> bool:
+    """Whether Google roles go to Vertex AI: the SDK's switch, newer name first."""
+
+    env = os.environ if environment is None else environment
+    for name in GOOGLE_VERTEX_SWITCHES:
+        raw = env.get(name, "").strip().casefold()
+        if raw:
+            return raw in {"1", "true", "yes", "on"}
+    return False
+
+
+def google_client_options(environment: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The google-genai Client arguments: the Gemini API, or Vertex AI.
+
+    Vertex with GOOGLE_API_KEY is express mode (no project or location);
+    otherwise GOOGLE_CLOUD_PROJECT (required) and GOOGLE_CLOUD_LOCATION, with
+    Application Default Credentials.
+    """
+
+    env = os.environ if environment is None else environment
+    if not google_uses_vertex(env):
+        key = env.get(API_KEY_SETTINGS["google"], "").strip()
+        if not key:
+            raise RuntimeError(f"{API_KEY_SETTINGS['google']} is required")
+        return {"enterprise": False, "api_key": key}
+    key = env.get(GOOGLE_VERTEX_KEY_SETTING, "").strip()
+    if key:
+        return {"enterprise": True, "api_key": key}
+    project = env.get(GOOGLE_PROJECT_SETTING, "").strip()
+    if not project:
+        raise RuntimeError(
+            f"Vertex AI needs {GOOGLE_VERTEX_KEY_SETTING} or {GOOGLE_PROJECT_SETTING}"
+        )
+    return {
+        "enterprise": True, "project": project,
+        "location": env.get(GOOGLE_LOCATION_SETTING, "").strip() or DEFAULT_GOOGLE_LOCATION,
+    }
 
 
 def _api_key(role_model: RoleModel, environment: Mapping[str, str] | None) -> str:
@@ -238,7 +297,7 @@ def chat_client(
             options = {}
             if timeout is not None and isinstance(timeout, (int, float)):
                 options["http_options"] = genai_types.HttpOptions(timeout=int(timeout * 1000))
-            client = genai.Client(api_key=_api_key(role_model, environment), **options)
+            client = genai.Client(**google_client_options(environment), **options)
         return _Facade(_GeminiBackend(client, role_model), asynchronous)
     raise ValueError(f"unknown provider: {provider}")
 

@@ -33,6 +33,7 @@ from voiney_lab.model_providers import (
     ModelProviderError,
     RoleModel,
     chat_client,
+    google_client_options,
 )
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 
@@ -268,6 +269,49 @@ class RoleSettingsTests(unittest.TestCase):
         self.assertTrue(role.has_key({"OPENAI_API_KEY": "test-only"}))
         with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY"):
             chat_client(role, environment={})
+
+
+class GoogleEndpointTests(unittest.TestCase):
+    """The Gemini API, or Vertex AI by the google-genai SDK's own setting names."""
+
+    def test_the_gemini_api_is_the_default(self) -> None:
+        self.assertEqual(google_client_options({"GEMINI_API_KEY": "test-only"}),
+                         {"enterprise": False, "api_key": "test-only"})
+        with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
+            google_client_options({})
+
+    def test_vertex_with_a_project_uses_adc_in_the_global_location(self) -> None:
+        for switch in ("GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI"):
+            with self.subTest(switch=switch):
+                self.assertEqual(
+                    google_client_options({switch: "true", "GOOGLE_CLOUD_PROJECT": "lab-project"}),
+                    {"enterprise": True, "project": "lab-project", "location": "global"},
+                )
+        self.assertEqual(google_client_options({
+            "GOOGLE_GENAI_USE_ENTERPRISE": "true", "GOOGLE_CLOUD_PROJECT": "p",
+            "GOOGLE_CLOUD_LOCATION": "us",
+        })["location"], "us")
+
+    def test_vertex_with_a_key_is_express_mode(self) -> None:
+        self.assertEqual(
+            google_client_options({"GOOGLE_GENAI_USE_ENTERPRISE": "true", "GOOGLE_API_KEY": "test-only",
+                                   "GOOGLE_CLOUD_PROJECT": "ignored"}),
+            {"enterprise": True, "api_key": "test-only"},
+        )
+
+    def test_the_newer_switch_wins_and_vertex_needs_a_key_or_project(self) -> None:
+        self.assertFalse(google_client_options({
+            "GOOGLE_GENAI_USE_ENTERPRISE": "false", "GOOGLE_GENAI_USE_VERTEXAI": "true",
+            "GEMINI_API_KEY": "k",
+        })["enterprise"])
+        with self.assertRaisesRegex(RuntimeError, "GOOGLE_API_KEY or GOOGLE_CLOUD_PROJECT"):
+            google_client_options({"GOOGLE_GENAI_USE_ENTERPRISE": "true", "GEMINI_API_KEY": "k"})
+
+    def test_a_google_role_has_a_key_by_its_endpoint(self) -> None:
+        role = RoleModel("router", "google", "gemini-3.8-flash", None)
+        self.assertTrue(role.has_key({"GEMINI_API_KEY": "k"}))
+        self.assertFalse(role.has_key({"GOOGLE_GENAI_USE_ENTERPRISE": "true", "GEMINI_API_KEY": "k"}))
+        self.assertTrue(role.has_key({"GOOGLE_GENAI_USE_ENTERPRISE": "true", "GOOGLE_CLOUD_PROJECT": "p"}))
 
 
 class XaiTests(unittest.TestCase):
