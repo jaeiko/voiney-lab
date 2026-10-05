@@ -41,6 +41,7 @@ from voiney_lab.cascade_filler import (
     cascade_filler_status_speech_enabled,
 )
 from voiney_lab.curated_protocol import (
+    STT_CONTROL_KEYTERMS,
     control_words,
     ClaimAdmissionStatus,
     CuratedProtocolAction,
@@ -5883,6 +5884,17 @@ def cascade_transcription_context(
     )
 
 
+def keyterm_dump_terms(keyterms:tuple[str,...])->tuple[str,...]:
+    """The key terms a transcript may not be made only of, less the control words.
+
+    The pause and resume words are sent to the STT provider (lane XO,
+    decision 4) but are never read as a key-term dump: "잠깐 멈춰 정지 스톱"
+    is a researcher, not the provider reading back its prompt.
+    """
+
+    return tuple(term for term in keyterms if term not in STT_CONTROL_KEYTERMS)
+
+
 def transcribe_cascade_audio(
     pcm:bytes,
     context:CascadeTranscriptionContext,
@@ -7884,7 +7896,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         return
     input_decision=classify_input_event(
         transcription,
-        keyterms=stt_keyterms,
+        keyterms=keyterm_dump_terms(stt_keyterms),
         duration_seconds=transcription.duration_seconds,
     )
     if not input_decision.accepted:
@@ -9946,7 +9958,7 @@ async def voice_socket(websocket:WebSocket):
                         continue
                     input_decision=classify_input_event(
                         transcription,
-                        keyterms=stt_context.keyterms,
+                        keyterms=keyterm_dump_terms(stt_context.keyterms),
                         duration_seconds=transcription.duration_seconds,
                     )
                     if not input_decision.accepted:

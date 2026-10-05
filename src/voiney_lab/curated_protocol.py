@@ -2510,8 +2510,10 @@ _PAUSE_PATTERNS = (
 _FRONT_PAUSE_COMMAND = re.compile(
     r"(?:(?:잠깐|잠깐만|잠시|잠시만)\s+)?"
     r"(?:(?:실험|프로토콜|안내|절차)(?:을|를)?\s*)?"
-    r"(?:잠깐(?:만(?:요|예)?)?|잠시만(?:요)?|멈춰|멈처|정지|일시\s*정지|일시\s*중지|"
-    r"중지|중단|스톱|stop|pause|"
+    # "잠깐만예" as STT writes it: "잠깐만 얘", "잠깐만, 얘", "잠깐만래" (lane
+    # XO, decision 3); "포즈" is "pause" written in Hangul.
+    r"(?:잠깐(?:만(?:요|예|래|,?\s*얘)?)?|잠시만(?:요)?|멈춰|멈처|정지|일시\s*정지|일시\s*중지|"
+    r"중지|중단|스톱|stop|pause|포즈|"
     # "쫌만 기다려 봐", "잠깐 기다려 줘" (lane R part 2-b).
     r"(?:(?:쫌|좀|조금|잠깐|잠시)\s*만?\s*)?기다려)"
     r"(?:\s*(?:봐|봐요|줘|줘요|요|해|해요|해줘|해\s*줘|주세요|해\s*주세요))?",
@@ -2593,6 +2595,16 @@ _CONTROL_WORD = re.compile(
 )
 
 
+#: The pause and resume words sent to the STT provider as key terms (lane XO,
+#: decision 4), so "재개" is not written "3개" or "제개". Every speech
+#: provider the server uses takes key terms (xAI, ElevenLabs, Google).
+#: They are not counted when a transcript is checked for being nothing but
+#: key terms: a researcher saying "잠깐 멈춰 정지 스톱" is not reading a list.
+STT_CONTROL_KEYTERMS: tuple[str, ...] = (
+    "잠깐", "멈춰", "정지", "일시정지", "스톱", "재개", "다시 시작",
+)
+
+
 def control_words(text: str) -> frozenset[str]:
     """The pause and end words in ``text``, spaces removed, case folded."""
 
@@ -2600,6 +2612,11 @@ def control_words(text: str) -> frozenset[str]:
         re.sub(r"\s+", "", match.group(0)).casefold()
         for match in _CONTROL_WORD.finditer(text or "")
     )
+
+
+#: A completion said alone, naming nothing (lane XO, decision 5): asked about
+#: once by the front rules, whichever model the router runs.
+_SHORT_COMPLETION = re.compile(r"끝|(?:다\s*)?끝났어(?:요)?")
 
 
 def _completion_question(step_label: str) -> str:
@@ -2662,6 +2679,9 @@ FRONT_RULES: dict[str, str] = {
     "step_lookup": "a lookup that points at a step -- a numbered, the last or "
                    "the next step, or the current step read out -- read from "
                    "the source as it is (lane R3, decision 4)",
+    "short_completion": "'끝났어', '다 끝났어' or '끝' said alone: a completion "
+                        "naming no step, asked about once, 'N단계 완료하셨나요?' "
+                        "(lane XO, decision 5)",
     "quantity_target": "a quantity or concentration asked with no target: two "
                        "or more substances with a value in the current step's "
                        "source are asked back, one is said as the source words "
@@ -2748,6 +2768,63 @@ _RESUME_PATTERNS = (
     re.compile(r"(?:다시\s*(?:시작|진행)|재개|계속\s*(?:하자|할게|해줘)|계속\s*진행)"),
     re.compile(r"^(?:resume(?:\s+(?:the\s+)?(?:protocol|experiment))?|continue(?:\s+the\s+protocol)?)$", re.I),
 )
+# --- "재개" misheard while paused (lane XO, decision 8a) -----------------------
+#: The resume words of _RESUME_PATTERNS, each with the endings it is said
+#: with, as one string without spaces.
+_RESUME_BASES = ("재개", "다시시작", "다시진행", "계속진행")
+_RESUME_ENDINGS = ("", "해", "해줘", "해요", "하자", "할게", "합시다")
+RESUME_NEAR_MISS_PROPOSAL = "다시 시작"
+RESUME_NEAR_MISS_QUESTION = {"ko": "다시 시작할까요?", "en": "Shall I resume?"}
+_HANGUL_INITIALS = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+_HANGUL_MEDIALS = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+_HANGUL_FINALS = ("", *"ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ")
+
+
+def _jamo(text: str) -> str:
+    """Hangul syllables split into their letters; anything else kept."""
+
+    letters: list[str] = []
+    for char in text:
+        code = ord(char) - 0xAC00
+        if 0 <= code < 11172:
+            letters.append(_HANGUL_INITIALS[code // 588])
+            letters.append(_HANGUL_MEDIALS[(code % 588) // 28])
+            letters.append(_HANGUL_FINALS[code % 28])
+        else:
+            letters.append(char)
+    return "".join(letters)
+
+
+def _edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for i, a in enumerate(left, 1):
+        current = [i]
+        for j, b in enumerate(right, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
+        previous = current
+    return previous[-1]
+
+
+def _near_resume_word(transcript: str) -> bool:
+    """One letter (jamo) away from a resume word, and not one itself.
+
+    "제개" and "재게" are; "재개" is the word itself, and anything with a
+    digit is not -- "3개" may be a real count. Measured by distance, not
+    listed: the resume words are the ones the front rules already read.
+    """
+
+    key = re.sub(r"[\s.,!?~]+", "", _utterance_key(transcript))
+    if not key or re.search(r"\d", key) or any(
+        pattern.search(_utterance_key(transcript)) for pattern in _RESUME_PATTERNS
+    ):
+        return False
+    heard = _jamo(key)
+    return any(
+        _edit_distance(heard, _jamo(base + ending)) == 1
+        for base in _RESUME_BASES for ending in _RESUME_ENDINGS
+    )
+
+
 _TIMER_START_PATTERNS = (
     re.compile(r"(?:타이머|시간\s*측정|배양\s*시간).*(?:시작|재기\s*시작|재줘|틀어)"),
     re.compile(r"^(?:지금\s*)?시작했어$"),
@@ -3471,6 +3548,163 @@ def step_value_candidates(
                 merged.append([start, end])
         result.append((spelled[key], " / ".join(flat[start:end] for start, end in merged)))
     return tuple(result)
+
+
+# --- Saying a step's value as a sentence (lane XO, decision 9) ----------------
+_AMOUNT = r"\d+(?:\.\d+)?\s*(?:µL|μL|uL|ul|mL|ml)"
+_CONCENTRATION = r"\d+(?:\.\d+)?\s*(?:" + _CONCENTRATION_UNIT + r")"
+#: "500 µL of solution A", "200 µL 25mM AMBIC", "25uL of the above trypsin
+#: solution": one amount, then what it is of.
+_AMOUNT_OF = re.compile(
+    r"(?P<amount>" + _AMOUNT + r")\s+(?:of\s+)?(?:the\s+)?(?:above\s+)?"
+    r"(?P<what>(?:" + _CONCENTRATION + r"\s+)?[^\d\s].*)"
+)
+#: "25mM AMBIC", "trypsin solution of 6ng/uL": one concentration and its substance.
+_CONCENTRATION_OF = re.compile(
+    r"(?P<conc>" + _CONCENTRATION + r")\s+(?:of\s+)?(?P<what>[^\d].*)"
+    r"|(?P<what2>[^\d][^:]*?)\s+of\s+(?P<conc2>" + _CONCENTRATION + r")"
+)
+#: A source qualifier said before an amount, and how it is said in Korean.
+_APPROXIMATELY = re.compile(r"(?:approximately|approx\.|about|ca\.|~)\s*$", re.I)
+#: Letters whose Korean name ends in a final consonant (엘, 엠, 엔, 알).
+_LETTERS_WITH_FINAL = frozenset("LMNR")
+_DIGITS_WITH_FINAL = frozenset("013678")  # 영 일 삼 육 칠 팔
+
+
+def _has_final_consonant(word: str) -> bool:
+    """Whether ``word`` is read with a final consonant, for choosing 을/를.
+
+    Hangul by its last syllable; a number by its Korean reading; a unit by
+    its name (mM 밀리몰 has one, µL 마이크로리터 and % 퍼센트 do not); an
+    abbreviation by its last letter's name; an English word by its ending
+    sound (l, m, n, ng, c, k, p, t: "acetonitrile" 아세토나이트릴, "trypsin"
+    트립신, "AMBIC" 앰빅). The English rule is an approximation, and only
+    picks a particle.
+    """
+
+    text = re.sub(r"[\s)\]\}\"'”’.,:;]+$", "", word)
+    if not text:
+        return False
+    last = text[-1]
+    if "가" <= last <= "힣":
+        return (ord(last) - ord("가")) % 28 != 0
+    if re.search(r"(?:mM|µM|μM|nM|(?<![A-Za-z])M)$", text):
+        return True
+    if re.search(r"(?:µL|μL|uL|ul|mL|ml|/[A-Za-zµμ]+|%|v/v|w/v)$", text):
+        return False
+    if last.isdigit():
+        return last in _DIGITS_WITH_FINAL
+    token = re.search(r"[A-Za-z]+$", text)
+    if token is None:
+        return False
+    letters = token.group(0)
+    if letters.isupper() and (len(letters) < 4 or not re.search(r"[AEIOU]", letters)):
+        # Read letter by letter: DTT 디티티, HPLC, FA. A longer one with a
+        # vowel is read as a word (AMBIC 앰빅, TRIS 트리스) and falls through.
+        return letters[-1] in _LETTERS_WITH_FINAL
+    lowered = letters.casefold()
+    return lowered.endswith(("ng", "le", "me", "ne")) or lowered[-1] in "lmnckpt"
+
+
+def _josa(word: str, with_final: str, without_final: str) -> str:
+    """The particle ``word`` takes: 을/를, 이/가, 과/와, 이에요/예요 ..."""
+
+    return with_final if _has_final_consonant(word) else without_final
+
+
+def _korean_list(names: Sequence[str]) -> str:
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])}{_josa(names[-2], '과', '와')} {names[-1]}"
+
+
+def _english_list(names: Sequence[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _qualified(amount: str, phrase: str, source: str, korean: bool) -> str:
+    """The amount with the source's "approximately" kept ("약 200 µL")."""
+
+    at = source.find(phrase)
+    if at > 0 and _APPROXIMATELY.search(source[:at]):
+        return f"약 {amount}" if korean else f"approximately {amount}"
+    return amount
+
+
+def _what(text: str) -> str:
+    """What a value is of, as the source names it ("solution B: 25mM ..."
+    becomes "solution B(25mM ...)" so it reads as one name)."""
+
+    name, separator, rest = text.partition(": ")
+    return f"{name}({rest})" if separator else text
+
+
+def _parsed_value(kind: str, phrase: str) -> tuple[str, str] | None:
+    """(value, what it is of) when the source pairs exactly one value, else None."""
+
+    if kind == "amount":
+        match = _AMOUNT_OF.fullmatch(phrase)
+        # A second amount, or a ratio ("2 parts of ..."), is not one pairing.
+        if match is None or re.search(_AMOUNT + r"|\bparts?\b", match.group("what")):
+            return None
+        return match.group("amount"), _what(match.group("what"))
+    match = _CONCENTRATION_OF.fullmatch(phrase)
+    if match is None:
+        return None
+    if match.group("conc") is not None:
+        what = match.group("what")
+        if re.search(_CONCENTRATION, what):
+            return None
+        return match.group("conc"), what
+    return match.group("conc2"), match.group("what2")
+
+
+def _quantity_short(
+    kind: str, phrase: str, name: str, source: str, *, korean: bool = True,
+) -> str:
+    """One step's value in a few words: "25mM AMBIC 약 200 µL", else the source."""
+
+    parsed = _parsed_value(kind, phrase)
+    if parsed is None:
+        return phrase
+    value, what = parsed
+    if kind == "amount":
+        amount = _qualified(value, phrase, source, korean)
+        return f"{what} {amount}" if korean else f"{amount} of {what}"
+    return f"{what} {value}"
+
+
+def _quantity_sentence(
+    kind: str, where: str, label: str, phrase: str, name: str, source: str,
+) -> str:
+    """One step's value said as a Korean sentence, or the source read out."""
+
+    parsed = _parsed_value(kind, phrase)
+    if parsed is None:
+        return (
+            f"{where} {label}단계 원문에는 '{phrase}'{_josa(phrase, '이라고', '라고')} "
+            "되어 있어요."
+        )
+    value, what = parsed
+    if kind == "amount":
+        return (
+            f"{where} {label}단계에서는 {what}{_josa(what, '을', '를')} "
+            f"{_qualified(value, phrase, source, True)} 넣어요."
+        )
+    return (
+        f"{where} {label}단계에서 {what} 농도는 {value}"
+        f"{_josa(value, '이에요', '예요')}."
+    )
+
+
+def _quantity_sentence_en(kind: str, label: str, phrase: str, name: str, source: str) -> str:
+    parsed = _parsed_value(kind, phrase)
+    if parsed is None:
+        return f"Step {label}'s source says: {phrase}"
+    value, what = parsed
+    if kind == "amount":
+        return f"At step {label}, add {_qualified(value, phrase, source, False)} of {what}."
+    return f"At step {label}, {what} is {value}."
 
 
 def _parameter_role(unit: str, text: str) -> str:
@@ -6245,16 +6479,22 @@ class CuratedProtocolSession:
             self._vocabulary_cache = cached
         return cached[1]
 
-    def _quantity_candidates(self, kind: str) -> tuple[tuple[str, str], ...]:
-        """The current step's substances with a value (decision 5a), or ().
+    def _quantity_candidates(
+        self, kind: str, index: int | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """A step's substances with a value (decision 5a), or ().
 
-        Only while a step is running and not paused, and only from the
-        step's own source text; the substance names are the protocol's
-        materials, labelled reagents ("Solution A") and defined
-        abbreviations ("AMBIC").
+        ``index`` is the step, the current one by default. Only while a step
+        is running and not paused, and only from that step's own source
+        text; the substance names are the protocol's materials, labelled
+        reagents ("Solution A") and defined abbreviations ("AMBIC").
         """
 
-        if not self.active or self._pause_state == "paused":
+        index = self.current_index if index is None else index
+        if (
+            not self.active or self._pause_state == "paused"
+            or not 0 <= index < len(self.fixture.steps)
+        ):
             return ()
         vocabulary = self._protocol_vocabulary()
         materials = {name.casefold() for name in vocabulary.materials}
@@ -6264,7 +6504,7 @@ class CuratedProtocolSession:
             or _LABELLED_REAGENT.fullmatch(term.text)
             or re.fullmatch(r"[A-Z][A-Z0-9]+", term.text)
         ]
-        step = self.fixture.steps[self.current_index]
+        step = self.fixture.steps[index]
         return step_value_candidates(
             step.instruction_source_text, substances, kind=kind,
         )
@@ -6272,58 +6512,139 @@ class CuratedProtocolSession:
     def _quantity_target_plan(
         self, intent: CuratedControlIntent, *, language: str,
     ) -> CuratedProtocolTurnPlan:
-        """Ask which substance, or say the one value as the source words it."""
+        """Say the value of the current and the next step, as a sentence.
+
+        Lane XO, decision 9 (2026-10-05): the candidates are the current
+        step's and the next step's source values. A step with several
+        substances is asked back, as before; one step with one substance is
+        said as a sentence ("지금 3단계에서는 solution A를 500 µL 넣어요."); two
+        steps with values are both said, and the researcher asked which.
+        Values and units are the source's own, never converted; a value that
+        is not an amount added, or a pairing the source does not make plain,
+        is read as the source words it.
+        """
 
         steps = self.fixture.steps
         step = steps[self.current_index]
-        candidates = self._quantity_candidates(intent.question_kind or "amount")
-        names = tuple(name for name, _phrase in candidates)
+        kind = intent.question_kind or "amount"
+        here = self._quantity_candidates(kind)
+        following_index = self.current_index + 1
+        following = self._quantity_candidates(kind, following_index)
         common = {
             "facts": (),
             "step_label": step.source_label,
             "final_step": self.current_index == len(steps) - 1,
             "state_changed": False,
             "intent_kind": intent.intent_kind,
-            "requested_entities": names,
             "question_kind": intent.question_kind,
             "normalized_transcript": intent.normalized_transcript,
             "target_step": step.source_label,
         }
-        if len(candidates) == 1:
-            phrase = candidates[0][1]
-            response = (
-                f"{step.source_label}단계 원문: {phrase}" if language == "ko"
-                else f"Step {step.source_label} source: {phrase}"
-            )
-            fact = next(
-                (item for item in self.fixture.facts_for_step(self.current_index)
+
+        def step_fact(index: int) -> CuratedProtocolFact | None:
+            return next(
+                (item for item in self.fixture.facts_for_step(index)
                  if item.fact_id == "current_step"),
                 None,
             )
+
+        if len(here) > 1 or (not here and len(following) > 1):
+            # Several substances in one step: asked back, as before.
+            index = self.current_index if here else following_index
+            names = tuple(name for name, _phrase in (here or following))
+            label = steps[index].source_label
+            lead = "이 단계에는" if here else f"다음 {label}단계에는"
+            response = (
+                f"{lead} {_korean_list(names)}{_josa(names[-1], '이', '가')} 있어요. "
+                "어느 쪽을 말씀하세요?"
+                if language == "ko" else
+                ("This step has " if here else f"The next step, {label}, has ")
+                + f"{_english_list(names)}. Which one do you mean?"
+            )
             return CuratedProtocolTurnPlan(
-                action=CuratedProtocolAction.QUESTION,
+                action=CuratedProtocolAction.CLARIFY_PARAMETER,
                 display_text=response, speech_text=response, primary_text=response,
-                speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
-                source_texts=(fact.text,) if fact is not None else (),
-                source_pages=(fact.source_page,) if fact is not None else (),
-                evidence_ids=("current_step",) if fact is not None else (),
-                **{**common, "facts": (fact,) if fact is not None else ()},
+                speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                requested_entities=names,
+                **common,
             )
-        if language == "ko":
-            listed = (
-                f"{', '.join(names[:-1])}와 {names[-1]}" if len(names) > 1 else names[0]
+        said: list[tuple[int, tuple[tuple[str, str], ...]]] = [
+            (index, values)
+            for index, values in ((self.current_index, here), (following_index, following))
+            if values
+        ]
+        facts = tuple(
+            fact for fact in (step_fact(index) for index, _values in said)
+            if fact is not None
+        )
+        source = {
+            index: " ".join(steps[index].instruction_source_text.split())
+            for index, _values in said
+        }
+        if len(said) == 1:
+            index, ((name, phrase),) = said[0]
+            label = steps[index].source_label
+            where = "지금" if index == self.current_index else "다음"
+            response = (
+                _quantity_sentence(kind, where, label, phrase, name, source[index])
+                if language == "ko" else
+                _quantity_sentence_en(kind, label, phrase, name, source[index])
             )
-            response = f"이 단계에는 {listed}가 있어요. 어느 쪽을 말씀하세요?"
+            names = (name,)
         else:
-            listed = (
-                f"{', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else names[0]
-            )
-            response = f"This step has {listed}. Which one do you mean?"
+            (here_index, ((here_name, here_phrase),)), (next_index, next_values) = said
+            here_label = steps[here_index].source_label
+            next_label = steps[next_index].source_label
+            here_short = _quantity_short(kind, here_phrase, here_name, source[here_index])
+            names = (here_name, *(name for name, _phrase in next_values))
+            if language == "ko":
+                if len(next_values) == 1:
+                    next_short = _quantity_short(
+                        kind, next_values[0][1], next_values[0][0], source[next_index])
+                    response = (
+                        f"지금 {here_label}단계라면 {here_short}, 다음 {next_label}단계라면 "
+                        f"{next_short}{_josa(next_short, '이에요', '예요')}. "
+                        "어느 쪽인지 말씀해 주세요."
+                    )
+                else:
+                    listed = tuple(name for name, _phrase in next_values)
+                    response = (
+                        f"지금 {here_label}단계라면 {here_short}, "
+                        f"다음 {next_label}단계에는 {_korean_list(listed)}"
+                        f"{_josa(listed[-1], '이', '가')} 있어요. 어느 쪽인지 말씀해 주세요."
+                    )
+            else:
+                here_short = _quantity_short(
+                    kind, here_phrase, here_name, source[here_index], korean=False)
+                next_short = (
+                    _quantity_short(
+                        kind, next_values[0][1], next_values[0][0], source[next_index],
+                        korean=False)
+                    if len(next_values) == 1 else
+                    _english_list(tuple(name for name, _phrase in next_values))
+                )
+                response = (
+                    f"At step {here_label} it is {here_short}; at the next step, "
+                    f"{next_label}, {next_short}. Which one do you mean?"
+                )
         return CuratedProtocolTurnPlan(
-            action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            action=(
+                CuratedProtocolAction.QUESTION if len(said) == 1
+                else CuratedProtocolAction.CLARIFY_PARAMETER
+            ),
             display_text=response, speech_text=response, primary_text=response,
-            speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-            **common,
+            speech_mode=(
+                CuratedProtocolSpeechMode.VERIFIED_FACT if len(said) == 1
+                else CuratedProtocolSpeechMode.BLOCKED
+            ),
+            source_texts=tuple(fact.text for fact in facts),
+            source_pages=tuple(fact.source_page for fact in facts),
+            evidence_ids=(
+                ("current_step",) if said[0][0] == self.current_index
+                and step_fact(self.current_index) is not None else ()
+            ),
+            requested_entities=names,
+            **{**common, "facts": facts},
         )
 
     def research_scope(self) -> dict[str, Any]:
@@ -6367,7 +6688,7 @@ class CuratedProtocolSession:
             control_korean = (
                 "아니", "네", "현재 단계", "이번 단계", "완료", "완료했어",
                 "시작", "다음 단계", "다시 알려줘",
-            )
+            ) + STT_CONTROL_KEYTERMS
         fixed = tuple(dict.fromkeys(step_tokens + control_korean))
         scientific = tuple(
             term for term in self._protocol_vocabulary().keyterms_near(index)
@@ -9482,6 +9803,8 @@ class CuratedProtocolSession:
         self._last_semantic_decision = None
         # The front rule that owns this turn, once one does (FRONT_RULES).
         front_rule: str | None = None
+        # "끝났어", "다 끝났어", "끝" said alone (lane XO, decision 5).
+        short_completion = False
         # What the rules made of the words, before the step's gates.
         classified: CuratedControlIntent | None = None
         command_key = _utterance_key(transcript)
@@ -9996,6 +10319,46 @@ class CuratedProtocolSession:
                     normalized_transcript=_utterance_key(transcript),
                 )
             else:
+                if (
+                    self.active
+                    and self._pause_state == "paused"
+                    and observation_hold is None
+                    and _near_resume_word(transcript)
+                ):
+                    # Decision 8a (lane XO): "재개" heard as "제개" while
+                    # paused is asked about once; a yes resumes, through the
+                    # same transcript confirmation a repaired word uses.
+                    step = self.fixture.steps[self.current_index]
+                    self._pending_transcript_confirmation = PendingTranscriptConfirmation(
+                        configuration_id=configuration_id,
+                        step_id=step.step_id,
+                        step_index=self.current_index,
+                        step_label=step.source_label,
+                        workflow_revision=self._revision,
+                        requested_turn_id=turn_id,
+                        requested_generation=generation,
+                        proposed_transcript=RESUME_NEAR_MISS_PROPOSAL,
+                        proposed_action=CuratedProtocolAction.RESUME,
+                    )
+                    question = RESUME_NEAR_MISS_QUESTION.get(
+                        language, RESUME_NEAR_MISS_QUESTION["ko"]
+                    )
+                    plan = CuratedProtocolTurnPlan(
+                        action=CuratedProtocolAction.TRANSCRIPT_UNRELIABLE,
+                        display_text=question,
+                        speech_text=question,
+                        speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                        facts=(),
+                        step_label=step.source_label,
+                        final_step=self.current_index == len(self.fixture.steps) - 1,
+                        state_changed=False,
+                        primary_text=question,
+                        intent_kind="resume_near_miss_confirmation_required",
+                        target_step=step.source_label,
+                    )
+                    self._last_front_rule = "stt_unreliable"
+                    self._replay[turn_id] = plan
+                    return plan
                 if self.active and 0 <= self.current_index < len(self.fixture.steps):
                     step_lbl = self.fixture.steps[self.current_index].source_label
                     repair = classify_contextual_transcript_repair(transcript, step_lbl, language)
@@ -10047,6 +10410,30 @@ class CuratedProtocolSession:
                     arbitration=shared_decision,
                 )
                 classified = intent
+                if (
+                    observation_hold is None
+                    and self.active
+                    and self._pause_state != "paused"
+                    and _SHORT_COMPLETION.fullmatch(command_key)
+                    # "끝났어?" asks; it is not a report.
+                    and not _CONTROL_QUESTION.search(transcript)
+                ):
+                    # Read as "끝났어" always was: a completion naming no
+                    # step, asked about once below ("N단계 완료하셨나요?"),
+                    # or the endpoint asked for at a repeat-until step. As a
+                    # front rule it no longer waits on the router's model.
+                    short_completion = True
+                    intent = replace(
+                        intent,
+                        intent_kind="report_completion_untargeted",
+                        action=CuratedProtocolAction.NEXT,
+                        reported_completion=True,
+                        requested_transition="next",
+                        requested_followup="describe_new_current_step",
+                        target_step="authoritative_current_step",
+                        allows_state_mutation=True,
+                        normalized_transcript=command_key,
+                    )
                 # The deterministic result above is the fast path and the
                 # default.  A semantic proposal only ever gets to replace a
                 # catch-all outcome, and only after server-owned policy accepts
@@ -10250,7 +10637,11 @@ class CuratedProtocolSession:
             and intent.intent_kind == "off_topic"
         ):
             quantity_kind = untargeted_quantity_question(transcript)
-            if quantity_kind is not None and self._quantity_candidates(quantity_kind):
+            if quantity_kind is not None and (
+                self._quantity_candidates(quantity_kind)
+                # Lane XO, decision 9: the next step's values count too.
+                or self._quantity_candidates(quantity_kind, self.current_index + 1)
+            ):
                 # Decision 5a (lane M1): a quantity asked with no target.
                 front_rule = "quantity_target"
                 intent = replace(
@@ -10260,6 +10651,12 @@ class CuratedProtocolSession:
                     question_kind=quantity_kind,
                     allows_state_mutation=False,
                 )
+        if (
+            front_rule is None
+            and short_completion
+            and intent.action is CuratedProtocolAction.CLARIFY_COMPLETION
+        ):
+            front_rule = "short_completion"
         if front_rule is None:
             front_rule = self._front_rule_for(intent, classified)
         self._last_front_rule = front_rule
@@ -10359,7 +10756,7 @@ class CuratedProtocolSession:
             CuratedProtocolAction.PAUSE,
         }:
             response = (
-                "현재 실험 안내가 일시정지 상태입니다. '재개'라고 말씀하시거나 재개 버튼을 눌러주세요."
+                "현재 실험 안내가 일시정지 상태입니다. '다시 시작'이라고 말씀하시거나 재개 버튼을 눌러주세요."
                 if language == "ko" else
                 "Workflow guidance is currently paused. Please say 'resume' or click the resume button to continue."
             )
@@ -10367,7 +10764,7 @@ class CuratedProtocolSession:
             # so a researcher who forgot the pause hears why nothing happens;
             # after that the notice is shown only. Nothing else changes.
             spoken = "" if self._paused_notice_spoken else (
-                "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+                "지금 일시정지 중이에요. '다시 시작'이라고 말씀해 주세요."
                 if language == "ko" else
                 "Guidance is paused right now. Say 'resume' to continue."
             )
@@ -10651,7 +11048,7 @@ class CuratedProtocolSession:
             # The timer is mentioned only when a step timer is running.
             timer_running = self.timer_status().get("state") == "running"
             response = (
-                "일시정지했어요. '재개'라고 하시면 이어서 할게요."
+                "일시정지했어요. '다시 시작'이라고 하시면 이어서 할게요."
                 + (" 타이머는 실제로는 계속 흐르고 있어요." if timer_running else "")
                 if language == "ko" else
                 "Paused. Say 'resume' to continue."
@@ -13685,7 +14082,7 @@ class CuratedProtocolSession:
         elif code in {"workflow_paused", "already_paused"}:
             action = CuratedProtocolAction.PAUSE
             response = (
-                "지금 일시정지 중이에요. '재개'라고 말씀해 주세요."
+                "지금 일시정지 중이에요. '다시 시작'이라고 말씀해 주세요."
                 if ko else
                 "Guidance is paused right now. Say 'resume' to continue."
             )

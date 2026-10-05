@@ -3,9 +3,14 @@
 Decision of 2026-10-04: "얼마나 넣어?" and "농도가 어떻게 돼?" name no
 substance. When the current step's source gives a value to two or more
 substances the server asks back, "이 단계에는 A와 B가 있어요. 어느 쪽을
-말씀하세요?"; when it gives one, the server says that value as the source
-words it. The candidates come only from the current step's own source text.
-Nothing changes, and no model is asked.
+말씀하세요?". Nothing changes, and no model is asked.
+
+Lane XO, decision 9 (2026-10-05): the candidates are the current step's and
+the next step's source values. One step with one value is said as a sentence
+("지금 4단계에서는 trypsin solution을 25uL 넣어요."); two steps with values
+are both said and the researcher is asked which. Values and units are the
+source's own; a value that is not an amount added is read as the source
+words it.
 """
 
 from __future__ import annotations
@@ -87,45 +92,69 @@ class QuantityTargetFrontRuleTests(unittest.TestCase):
                 self.assertFalse(plan.state_changed)
                 self.assertEqual(_projection(session), before)
 
-    def test_one_substance_with_a_value_is_answered_as_the_source_words_it(self) -> None:
-        for index, phrase in ((0, "500 µL of Buffer 1"), (3, "25uL of the above trypsin solution")):
-            for said in QUANTITY_QUESTIONS[:2]:
-                with self.subTest(step=index + 1, said=said):
-                    session = _session(index)
-                    before = _projection(session)
-                    plan = _front(session, said)
-                    self.assertIsNotNone(plan)
-                    self.assertEqual(session.last_front_rule, "quantity_target")
-                    self.assertIs(plan.action, CuratedProtocolAction.QUESTION)
-                    self.assertEqual(plan.speech_text, f"{index + 1}단계 원문: {phrase}")
-                    self.assertIn(phrase, STEPS[index])
-                    self.assertEqual(plan.evidence_ids, ("current_step",))
-                    self.assertFalse(plan.state_changed)
-                    self.assertEqual(_projection(session), before)
+    def test_one_substance_with_a_value_is_said_as_a_sentence(self) -> None:
+        # Step 4 gives trypsin a volume and step 5 gives nothing.
+        for said in QUANTITY_QUESTIONS[:2]:
+            with self.subTest(said=said):
+                session = _session(3)
+                before = _projection(session)
+                plan = _front(session, said)
+                self.assertIsNotNone(plan)
+                self.assertEqual(session.last_front_rule, "quantity_target")
+                self.assertIs(plan.action, CuratedProtocolAction.QUESTION)
+                self.assertEqual(plan.speech_text, "지금 4단계에서는 trypsin solution을 25uL 넣어요.")
+                self.assertIn("25uL", STEPS[3])
+                self.assertEqual(plan.evidence_ids, ("current_step",))
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(_projection(session), before)
+
+    def test_the_current_and_the_next_step_are_both_said(self) -> None:
+        # Step 1 gives Buffer 1 a volume; step 2 gives DTT and iodoacetamide one each.
+        session = _session(0)
+        before = _projection(session)
+        plan = _front(session, "얼마나 넣어?")
+        self.assertEqual(session.last_front_rule, "quantity_target")
+        self.assertIs(plan.action, CuratedProtocolAction.CLARIFY_PARAMETER)
+        self.assertEqual(
+            plan.speech_text,
+            "지금 1단계라면 Buffer 1 500 µL, 다음 2단계에는 DTT와 iodoacetamide가 있어요. "
+            "어느 쪽인지 말씀해 주세요.",
+        )
+        self.assertEqual(plan.source_pages, (1, 1))
+        self.assertEqual(_projection(session), before)
+
+    def test_only_the_next_step_having_a_value_says_the_next_step(self) -> None:
+        plan = _front(_session(2), "얼마나 넣어?")
+        self.assertEqual(plan.speech_text, "다음 4단계에서는 trypsin solution을 25uL 넣어요.")
+        self.assertEqual(plan.evidence_ids, ())
 
     def test_english_is_answered_in_english(self) -> None:
-        session = _session(0)
+        session = _session(3)
         plan = _front(session, "how much do I add?", language="en")
-        self.assertEqual(plan.speech_text, "Step 1 source: 500 µL of Buffer 1")
+        self.assertEqual(plan.speech_text, "At step 4, add 25uL of trypsin solution.")
         plan = _front(_session(1), "what is the concentration?", language="en")
         self.assertEqual(
             plan.speech_text, "This step has DTT and iodoacetamide. Which one do you mean?",
         )
 
     def test_a_concentration_question_reads_only_concentrations(self) -> None:
-        # Step 1 gives a volume and no concentration: nothing to say, so the
-        # turn is handed on exactly as before.
-        session = _session(0)
-        self.assertIsNone(_front(session, "농도가 어떻게 돼?"))
+        # Step 1 gives a volume and no concentration; step 2 gives two.
+        plan = _front(_session(0), "농도가 어떻게 돼?")
+        self.assertEqual(
+            plan.speech_text, "다음 2단계에는 DTT와 iodoacetamide가 있어요. 어느 쪽을 말씀하세요?",
+        )
+        # Step 4 gives a volume, step 5 nothing: handed on.
+        self.assertIsNone(_front(_session(3), "농도가 어떻게 돼?"))
 
     def test_a_step_without_values_is_handed_on(self) -> None:
+        # Step 5, the last, has no value and no next step.
         for said in ("얼마나 넣어?", "농도가 어떻게 돼?"):
             with self.subTest(said=said):
-                session = _session(2)
+                session = _session(4)
                 self.assertIsNone(_front(session, said))
                 self.assertIsNone(session.last_front_rule)
 
-    def test_candidates_come_only_from_the_current_step(self) -> None:
+    def test_candidates_come_only_from_the_current_and_the_next_step(self) -> None:
         # Step 4's source names trypsin only; DTT and iodoacetamide (step 2)
         # are never offered there.
         plan = _front(_session(3), "얼마나 넣어?")
@@ -184,12 +213,26 @@ class InGelQuantityTargetTests(unittest.TestCase):
                 plan = _front(_session(9, in_gel_fixture()), said)
                 self.assertEqual(
                     plan.speech_text,
-                    "이 단계에는 DTT, iodoacetamide와 AMBIC가 있어요. 어느 쪽을 말씀하세요?",
+                    "이 단계에는 DTT, iodoacetamide와 AMBIC이 있어요. 어느 쪽을 말씀하세요?",
                 )
 
     def test_step_3_says_the_volume_of_solution_a(self) -> None:
         plan = _front(_session(2, in_gel_fixture()), "얼마나 넣어?")
-        self.assertEqual(plan.speech_text, "3단계 원문: 500 µL of solution A")
+        self.assertEqual(plan.speech_text, "지금 3단계에서는 solution A를 500 µL 넣어요.")
+
+    def test_step_1_keeps_approximately_and_names_the_next_step(self) -> None:
+        plan = _front(_session(0, in_gel_fixture()), "얼마나 넣어?")
+        self.assertEqual(
+            plan.speech_text,
+            "지금 1단계라면 25mM AMBIC 약 200 µL, 다음 2단계에는 Solution A, ammonium "
+            "bicarbonate, acetonitrile과 Solution B가 있어요. 어느 쪽인지 말씀해 주세요.",
+        )
+
+    def test_a_ratio_is_read_as_the_source_words_it(self) -> None:
+        plan = _front(_session(23, in_gel_fixture()), "얼마나 넣어?")
+        self.assertEqual(
+            plan.speech_text, "지금 24단계 원문에는 'formic acid (FA, 10% v/v)'라고 되어 있어요.",
+        )
 
 
 if __name__ == "__main__":
