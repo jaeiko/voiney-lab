@@ -187,7 +187,9 @@ test.describe('Researcher / Bench workspace', () => {
       },
     }));
     await expect(page.locator('#start')).toHaveText('실험 이어하기');
-    await expect(page.locator('#experiment-context-version')).toHaveText('pdf-1-analysis-4');
+    // Lane U decision 2: the revision id is folded into the developer details.
+    await expect(page.locator('#experiment-context-version')).toContainText('저장된 실험의 버전');
+    await expect(page.locator('#experiment-context-version .dev-code-details')).toContainText('pdf-1-analysis-4');
     await expect(page.locator('#experiment-context-step')).toContainText('2단계');
     await expect(page.locator('#experiment-resume-disclosure')).toContainText('서버 복구 확인 완료');
     await expect(page.locator('#experiment-resume-disclosure')).toContainText('완료 확인 대기');
