@@ -64,6 +64,7 @@ from voiney_lab.answer_checks import (
     outside_pdf_violations,
     server_value_violations,
 )
+from voiney_lab.model_providers import DEFAULT_MODELS, RoleModel
 from voiney_lab.semantic_intent import (
     evidence_fence_rejection,
     has_completion_evidence,
@@ -660,9 +661,11 @@ def _missing_action_word(action: str | None, evidence: str) -> str | None:
 # --- Settings ----------------------------------------------------------------------
 
 LLM_ROUTER_ENABLED_ENV = "VOINEY_LAB_LLM_ROUTER_ENABLED"
-LLM_ROUTER_MODEL_ENV = "VOINEY_LAB_LLM_ROUTER_MODEL"
 LLM_ROUTER_TIMEOUT_ENV = "VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS"
-DEFAULT_LLM_ROUTER_MODEL = "grok-4.20-0309-non-reasoning"
+#: The router role's provider, model and reasoning are model_providers'
+#: router settings: VOINEY_LAB_ROUTER_PROVIDER, VOINEY_LAB_ROUTER_MODEL and
+#: VOINEY_LAB_ROUTER_REASONING (lane M1, decision 1).
+DEFAULT_LLM_ROUTER_MODEL = DEFAULT_MODELS["router"]
 DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS = 2.5
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _BOOLEAN = _TRUE | {"0", "false", "no", "off"}
@@ -680,6 +683,12 @@ class LlmRouterSettings:
     model: str = DEFAULT_LLM_ROUTER_MODEL
     timeout_seconds: float = DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS
     max_output_tokens: int = 400
+    provider: str = "xai"
+    reasoning: str | None = None
+
+    @property
+    def role_model(self) -> RoleModel:
+        return RoleModel("router", self.provider, self.model, self.reasoning)
 
     @classmethod
     def from_environment(
@@ -689,7 +698,7 @@ class LlmRouterSettings:
         raw = env.get(LLM_ROUTER_ENABLED_ENV, "false").strip().casefold()
         if raw not in _BOOLEAN:
             raise ValueError(f"{LLM_ROUTER_ENABLED_ENV} must be a boolean")
-        model = env.get(LLM_ROUTER_MODEL_ENV, "").strip() or DEFAULT_LLM_ROUTER_MODEL
+        role = RoleModel.from_environment("router", env)
         timeout_raw = env.get(
             LLM_ROUTER_TIMEOUT_ENV, str(DEFAULT_LLM_ROUTER_TIMEOUT_SECONDS),
         ).strip()
@@ -699,7 +708,10 @@ class LlmRouterSettings:
             raise ValueError(f"{LLM_ROUTER_TIMEOUT_ENV} must be a number") from exc
         if not 0.2 <= timeout <= 30.0:
             raise ValueError(f"{LLM_ROUTER_TIMEOUT_ENV} must be between 0.2 and 30")
-        return cls(enabled=raw in _TRUE, model=model, timeout_seconds=timeout)
+        return cls(
+            enabled=raw in _TRUE, model=role.model or DEFAULT_LLM_ROUTER_MODEL,
+            timeout_seconds=timeout, provider=role.provider, reasoning=role.reasoning,
+        )
 
     def public_capability(self) -> dict[str, object]:
         return {

@@ -15,7 +15,8 @@ import unittest
 from pathlib import Path
 
 from voiney_lab.setting_names import AREAS, BY_NAME, EXTERNAL_NAMES, SETTINGS
-from voiney_lab.setting_renames import NEW_PREFIX, OLD_PREFIX, RENAMED, renamed
+from voiney_lab.model_providers import ROLE_SETTINGS
+from voiney_lab.setting_renames import NEW_PREFIX, OLD_PREFIX, RENAMED, ROLE_RENAMED, renamed
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE_FILES = {
@@ -130,14 +131,24 @@ class SettingTableTests(unittest.TestCase):
                 self.assertTrue(reason.strip())
 
     def test_every_old_name_maps_to_a_table_name(self):
+        role_settings = {name for names in ROLE_SETTINGS.values() for name in names}
         for old, new in RENAMED.items():
             with self.subTest(old=old):
                 self.assertIn(new, BY_NAME)
                 self.assertTrue(new.startswith(NEW_PREFIX))
                 rest = old[len(OLD_PREFIX):] if old.startswith(OLD_PREFIX) else old
-                self.assertEqual(new, NEW_PREFIX + rest)
+                prefixed_name = NEW_PREFIX + rest if not old.startswith(NEW_PREFIX) else old
+                if prefixed_name in ROLE_RENAMED:
+                    # Lane M1 moved a model setting to a role setting: the
+                    # old name (and the one before it) maps straight there.
+                    self.assertIn(new, role_settings)
+                    self.assertEqual(new, RENAMED[prefixed_name])
+                else:
+                    self.assertEqual(new, NEW_PREFIX + rest)
         prefixed = {name for name in BY_NAME if name.startswith(NEW_PREFIX)}
-        self.assertEqual(prefixed, set(RENAMED.values()))
+        # Every prefixed name is a rename target, or a role setting new in
+        # lane M1 (a provider or reasoning setting).
+        self.assertEqual(prefixed, set(RENAMED.values()) | role_settings)
 
     def test_code_spells_exactly_the_table_names(self):
         spelled: dict[str, str] = {}

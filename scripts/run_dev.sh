@@ -85,8 +85,8 @@ export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
 # route answers provider_configuration_missing, and an accidental upload during
 # a walkthrough cannot reach the budget. Registration and the source record are
 # unaffected. To analyse a new document, run the server without this launcher
-# (or export VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL after it) so the call is a deliberate act.
-export VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL=""
+# (or export VOINEY_LAB_ANALYSIS_MODEL after it) so the call is a deliberate act.
+export VOINEY_LAB_ANALYSIS_MODEL=""
 export VOINEY_LAB_PROTOCOL_ENABLED="true"
 export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
 export VOINEY_LAB_MOSS_ENABLED="false"
@@ -96,7 +96,7 @@ export VOINEY_LAB_WORKSPACE_ENABLED="true"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
 export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true"
 export VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE="open"
-export VOINEY_LAB_EXTERNAL_REFERENCE_MODEL="grok-4.6"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"
 export VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS="90"
 export VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS="5"
 export VOINEY_LAB_EXTERNAL_REFERENCE_READ_TIMEOUT_SECONDS="90"
@@ -108,7 +108,7 @@ export VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS="4"
 # enforced. Report Brain is a separate async derivation path and is not part of
 # the latency-critical Answer/Source/Visual start() fan-out.
 export VOINEY_LAB_MULTI_BRAIN_ENABLED="true"
-export VOINEY_LAB_MULTI_BRAIN_MODEL="grok-4.6"
+export VOINEY_LAB_ANSWER_MODEL="grok-4.6"
 export VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS="1.25"
 export VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS="8"
 export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
@@ -116,7 +116,7 @@ export VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS="6"
 # PROJECT-ENGINEERING: this development launcher enables one bounded Grok-only
 # background tier; production/operator launchers may keep the feature disabled.
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="true"
-export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL="grok-4.6"
+export VOINEY_LAB_SUPPLEMENTAL_MODEL="grok-4.6"
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS="8"
 export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="true"
 export VOINEY_LAB_GENERATED_VISUALS_ENABLED="true"

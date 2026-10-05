@@ -16,6 +16,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from voiney_lab.model_providers import RoleModel
+
 
 log = logging.getLogger("voiney_lab.external_references")
 
@@ -140,14 +142,21 @@ class ExternalReferenceSettings:
             raise ValueError(
                 "VOINEY_LAB_EXTERNAL_REFERENCE_DOMAINS is invalid"
             )
-        model = (_aliased_value(
-            "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",
-            "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL",
-            default="grok-4.6",
-        ) or "").strip()
+        # The supplemental role's model (lane M1, decision 1). The search
+        # is xAI's web_search tool, so it runs only on the xai provider: any
+        # other provider is refused here, visibly, not sent to xAI.
+        role = RoleModel.from_environment("supplemental")
+        if role.provider != "xai":
+            raise ValueError(
+                "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED needs "
+                "VOINEY_LAB_SUPPLEMENTAL_PROVIDER=xai: the web reference "
+                "search is xAI's web_search tool"
+            )
+        # Set but empty is a mistake, as it was before the rename.
+        model = os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6").strip()
         if not model:
             raise ValueError(
-                "VOINEY_LAB_EXTERNAL_REFERENCE_MODEL is invalid"
+                "VOINEY_LAB_SUPPLEMENTAL_MODEL is invalid"
             )
         default_timeout = "20" if profile == "candidate_a" else "90"
         timeout_raw = (_aliased_value(
@@ -211,7 +220,7 @@ class ExternalReferenceSettings:
         if service_tier not in {"default", "priority"}:
             raise ValueError("VOINEY_LAB_EXTERNAL_REFERENCE_SERVICE_TIER is invalid")
         reasoning_effort = os.environ.get(
-            "VOINEY_LAB_EXTERNAL_REFERENCE_REASONING_EFFORT", "low"
+            "VOINEY_LAB_SUPPLEMENTAL_REASONING", "low"
         ).strip().casefold()
         if reasoning_effort not in {"low", "medium", "high"}:
             reasoning_effort = "low"
@@ -270,12 +279,9 @@ class SupplementalKnowledgeSettings:
     def from_environment(cls) -> "SupplementalKnowledgeSettings":
         if not _enabled("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"):
             return cls(False)
-        model = os.environ.get(
-            "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL",
-            os.environ.get("VOINEY_LAB_EXTERNAL_REFERENCE_MODEL", "grok-4.6"),
-        ).strip()
+        model = os.environ.get("VOINEY_LAB_SUPPLEMENTAL_MODEL", "grok-4.6").strip()
         if not model:
-            raise ValueError("VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_MODEL is invalid")
+            raise ValueError("VOINEY_LAB_SUPPLEMENTAL_MODEL is invalid")
         try:
             timeout = float(os.environ.get(
                 "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS", "8"

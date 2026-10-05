@@ -1579,7 +1579,7 @@ class ProtocolCatalog:
                     "retryable": latest_failure
                     not in {"ocr_required", "protocol_pdf_too_large"},
                     "action": (
-                        "Configure XAI_API_KEY and VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL, then retry."
+                        "Configure XAI_API_KEY and VOINEY_LAB_ANALYSIS_MODEL, then retry."
                         if latest_failure == "provider_configuration_missing"
                         else "Review the failure code and explicitly retry analysis."
                     ),

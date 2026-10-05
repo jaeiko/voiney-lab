@@ -191,7 +191,7 @@ conditional/parallel/repeat constructs and missing or conflicting execution valu
 remain explicit and block execution.
 
 Structured protocol analysis requires the deployment-supplied
-`VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
+`VOINEY_LAB_ANALYSIS_MODEL`; the current deployment example is `grok-4.6`. This is
 separate from the bounded low-latency semantic-intent model and timeout policy.
 When the default-off deployment gate
 `VOINEY_LAB_PROTOCOL_CLAIM_CHUNKS_ENABLED` is enabled, text-native

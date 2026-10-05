@@ -170,7 +170,7 @@ UI: registerSelectedProtocol()
 
 ```bash
 # scripts/run_candidate_a.sh
-export VOINEY_LAB_PROTOCOL_ANALYSIS_MODEL=""
+export VOINEY_LAB_ANALYSIS_MODEL=""
 ```
 
 `require_env` 는 **빈 값을 미설정으로 취급**하므로, 워크스루 중 실수로 PDF 를

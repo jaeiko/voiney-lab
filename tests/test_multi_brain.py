@@ -342,7 +342,7 @@ class MultiBrainTests(unittest.IsolatedAsyncioTestCase):
     def test_settings_are_explicit_and_bounded(self):
         with patch.dict(os.environ, {
             "VOINEY_LAB_MULTI_BRAIN_ENABLED": "true",
-            "VOINEY_LAB_MULTI_BRAIN_MODEL": "grok-test",
+            "VOINEY_LAB_ANSWER_MODEL": "grok-test",
             "VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS": "0.5",
             "VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS": "7",
             "VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS": "5",
