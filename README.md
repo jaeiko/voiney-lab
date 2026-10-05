@@ -323,6 +323,25 @@ the turn's language (`ko-KR-Chirp3-HD-Charon` speaks an English turn as
   `keyterms`); TTS is `POST /v1/text-to-speech/{voice_id}` with
   `output_format=pcm_16000`.
 
+The pause and resume words ("잠깐", "멈춰", "정지", "일시정지", "스톱", "재개",
+"다시 시작") go to every STT provider as key terms; a transcript made of them
+is never dropped as a key-term dump.
+
+**The agent's own voice (lane XO, decision 6).** Only the xAI request carries
+`vad_threshold`; an empty transcript sends a barge-in candidate back to the
+playback it interrupted. Google's and ElevenLabs' batch STT take no such
+threshold, so a laptop speaker's sound came back as the researcher's turn.
+The server remembers each sentence it synthesizes; a barge-in candidate, or a
+turn begun within 3 s after playback, whose transcript (12 characters or more)
+lies 80% or more inside 3-character runs of one of them is dropped, logged as
+"메아리로 버림" (`self_echo`), and nothing changes. A pause or end word the
+sentence did not have keeps the transcript. Echo cancellation in the browser
+is the screen's.
+
+While a turn waits, the browser plays a tone and the screen shows the state.
+The spoken status sentence ("요청을 확인하고 있습니다.") is off unless
+`VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED=true` (lane XO, decision 7).
+
 Switching provider does not move the safety boundary: the emergency gate, the
 deterministic front rules (pause/stop/end confirmation) and server validation
 read the transcript the same way whichever provider wrote it. A provider error
@@ -431,8 +450,12 @@ On, a turn goes:
   "종료" words, a yes/no to an open question, replies while an endpoint
   question is open, an endpoint stated at a repeat-until step, timer status,
   "그거", repeat, cancel, transcript quality, a completion naming the current
-  step, and a start of an experiment never started or already ended. These
-  never wait on a model.
+  step, "끝났어", "다 끝났어" or "끝" said alone (asked about, "N단계
+  완료하셨나요?"), a quantity asked with no target (the current and the next
+  step's source values, said as a sentence or asked back), and a start of an
+  experiment never started or already ended. These never wait on a model.
+  While paused, a word one letter from "재개" or "다시 시작" ("제개") is asked
+  about, "다시 시작할까요?"; a word with a digit ("3개") is not.
 - **One model call** — otherwise `llm_router.route_turn_with_llm_router` sends
   the server snapshot, the nearby protocol steps with their facts, and the
   router history, and the model replies with exactly one call: `answer`,
@@ -680,19 +703,28 @@ Two wrappers around that same `uvicorn` process exist so the two runtime
 profiles are not assembled by hand. Both bind `127.0.0.1` by default and take
 `HOST` / `PORT` from the environment; `server.py` calls
 `load_dotenv(..., override=False)`, so what a launcher exports wins over the
-same key in a repo-root `.env`.
+same key in a repo-root `.env`. Their optional settings are only defaults
+(lane XO, decision 1): a name already set in the shell is left alone, and a
+name written in the `.env` keeps the file's value
+(`configuration.launcher_defaults`). The settings a launcher fixes for safety
+-- the paths it verified, the analysis model the development launcher clears,
+the pilot's safety catalog, usage scope and test mode -- stay fixed.
 
 ```bash
 ./scripts/run_dev.sh                 # development, port 8000
 ./scripts/run_dev.sh --bootstrap-only  # load the curated fixture, do not serve
 ./scripts/run_dev.sh --test-mode       # also skip execution readiness gates
+./scripts/run_dev.sh --check-only      # print the settings, touch nothing under data/runtime
 ./scripts/run_pilot.sh               # controlled pilot, port 8080
 ./scripts/run_pilot.sh --check-only  # print the configuration, do not serve
 ```
 
 `scripts/run_dev.sh` is the full development launcher: it verifies the
-Candidate A fixture and its externally licensed source PDF by SHA-256, loads
-the curated fixture, and enables the xAI-dependent optional features. Its
+Candidate A fixture and its externally licensed source PDF by SHA-256 and
+loads the curated fixture. It names no model: each role keeps its default
+below unless the `.env` chooses one. The four features only xAI provides --
+external reference search, web image search, generated images and semantic
+intent -- default to off. Its
 `--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
 `VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
 without the flag neither variable is set. `scripts/run_candidate_a.sh` is the
@@ -702,9 +734,10 @@ former name and now forwards to it.
 `data/runtime/pilot/`, and turns every feature that reaches outside the
 approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
 `VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED`,
-`VOINEY_LAB_GENERATED_VISUALS_ENABLED` — along with
-`VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator exported
-themselves, so enabling one is a deliberate act taken before startup. Test
+`VOINEY_LAB_GENERATED_VISUALS_ENABLED`, `VOINEY_LAB_SEMANTIC_INTENT_ENABLED` —
+along with `VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator set in
+the shell (and, but for MOSS, wrote in the `.env`), so enabling one is a
+deliberate act taken before startup. Test
 mode is forced off whatever the environment said. Dry-lab workflows and the
 eLabFTW ELN write-back have no flag of their own: both sit behind the
 commercial workspace that the reviewer inbox and experiment timeline also
@@ -806,7 +839,7 @@ the tool; keep the one you want.
 
 | Variable | Purpose |
 |---|---|
-| `XAI_API_KEY` | Server-only xAI credential (the default provider of every role) |
+| `XAI_API_KEY` | Server-only xAI credential (the default provider of every role). Needed only when a role, STT or TTS names `xai`, or one of the four xAI-only features is on: the server and both launchers refuse to start, naming the feature, when one is on without it |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` | Credentials of the other providers, read only when a role names them |
 | `VOINEY_LAB_<ROLE>_PROVIDER`, `_MODEL`, `_REASONING` | The model behind each role; see [Model providers by role](#model-providers-by-role) |
 | `VOINEY_LAB_ANALYSIS_MODEL` | Required structured protocol analysis model; current deployment example: `grok-4.6` |
