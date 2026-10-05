@@ -427,3 +427,50 @@ class GeminiThinkingRoomTests(unittest.TestCase):
         self.assertEqual(self.sent("high", max_completion_tokens=60_000)["max_output_tokens"],
                          mp.GEMINI_MAX_OUTPUT_TOKENS)
 
+
+class JsonObjectTests(unittest.TestCase):
+    """Lane G (2026-10-05): a json_object request (the report writer's) to Anthropic.
+
+    The Anthropic adapter sent no JSON mode and no instruction, and live
+    claude-sonnet-5-5 wrapped its report in a ```json fence, so the writer's
+    json.loads failed and the report fell back to the deterministic prose.
+    Contract-tested against fake SDK clients.
+    """
+
+    FENCED = '```json\n{"title": "보고서", "objective": "목적"}\n```'
+
+    def ask(self, provider: str, model: str, text: str, response_format: dict | None) -> tuple[SyncFake, str]:
+        fake = SyncFake(provider, text)
+        client = chat_client(RoleModel("report", provider, model, None), asynchronous=False, sdk_client=fake)
+        extra = {"response_format": response_format} if response_format else {}
+        response = client.chat.completions.create(
+            model=model, messages=[{"role": "system", "content": "RULES"}, {"role": "user", "content": "CTX"}],
+            max_tokens=1800, **extra)
+        return fake, response.choices[0].message.content
+
+    def test_anthropic_says_json_object_in_the_system_prompt(self) -> None:
+        fake, _ = self.ask("anthropic", "claude-sonnet-5-5", "{}", {"type": "json_object"})
+        request = fake.requests[0]
+        self.assertEqual([block["text"] for block in request["system"]], ["RULES", mp._JSON_OBJECT_INSTRUCTION])
+        self.assertNotIn("format", request.get("output_config", {}))
+
+    def test_a_fenced_json_reply_is_unwrapped(self) -> None:
+        for provider, model in (("anthropic", "claude-sonnet-5-5"), ("openai", "gpt-6-luna"),
+                                ("google", "gemini-3.8-flash")):
+            with self.subTest(provider=provider):
+                _, content = self.ask(provider, model, self.FENCED, {"type": "json_object"})
+                self.assertEqual(json.loads(content), {"title": "보고서", "objective": "목적"})
+
+    def test_a_fence_around_something_that_is_not_json_is_left_for_the_server(self) -> None:
+        text = "```json\n{\"title\": \"cut\n```"
+        _, content = self.ask("anthropic", "claude-sonnet-5-5", text, {"type": "json_object"})
+        self.assertEqual(content, text)
+
+    def test_a_reply_to_a_plain_request_is_not_touched(self) -> None:
+        fake, content = self.ask("anthropic", "claude-sonnet-5-5", self.FENCED, None)
+        self.assertEqual(content, self.FENCED)
+        self.assertEqual([block["text"] for block in fake.requests[0]["system"]], ["RULES"])
+
+    def test_a_fenced_reply_to_a_schema_is_unwrapped_and_its_nulls_dropped(self) -> None:
+        _, content = call("anthropic", "claude-opus-5-5", SMALL, '```json\n{"korean": "a", "tags": null}\n```')
+        self.assertEqual(json.loads(content), {"korean": "a"})

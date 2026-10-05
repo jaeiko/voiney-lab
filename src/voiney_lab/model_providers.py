@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -461,6 +462,12 @@ ANTHROPIC_MAX_UNION_PROPERTIES = 16
 #: schemas the other roles send stay well under this.
 GEMINI_MAX_SCHEMA_PROPERTIES = 100
 
+#: Anthropic has no JSON mode: a json_object request says so in the system
+#: prompt instead (OpenAI and Gemini send their own JSON modes).
+_JSON_OBJECT_INSTRUCTION = (
+    "Return exactly one JSON object, with no prose, Markdown or code fences."
+)
+
 _SCHEMA_INSTRUCTION = (
     "Return exactly one JSON object, with no prose, Markdown or code fences, "
     "that conforms to the JSON Schema named {name} below. Omit an optional "
@@ -662,14 +669,38 @@ def _drop_unasked_nulls(root: Mapping[str, Any], node: Any, value: Any) -> Any:
     return out
 
 
+#: One Markdown code fence around a whole reply ("```json ... ```").
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json|JSON)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.S)
+
+
+def _unfenced(content: str) -> str:
+    """A JSON reply a model wrapped in one code fence, without the fence --
+    only when what is inside parses (lane G: claude-sonnet-5-5 fenced its
+    json_object report, live, and the writer's json.loads failed)."""
+
+    match = _FENCED_REPLY.match(content)
+    if match is None:
+        return content
+    try:
+        json.loads(match.group(1))
+    except ValueError:
+        return content
+    return match.group(1)
+
+
 def _restore_structured_reply(content: str, request: "_Request") -> str:
     schema = request.json_schema()
-    if schema is None or not content:
+    if (schema is None and not request.wants_json_object) or not content:
         return content
     try:
         parsed = json.loads(content)
     except ValueError:
-        return content  # the server's own parser reports it
+        unfenced = _unfenced(content)
+        if unfenced is content:
+            return content  # the server's own parser reports it
+        content, parsed = unfenced, json.loads(unfenced)
+    if schema is None:
+        return content
     restored = _drop_unasked_nulls(schema[1], schema[1], parsed)
     if restored == parsed:
         return content
@@ -1106,6 +1137,8 @@ class _AnthropicBackend:
                 params.setdefault("system", []).append(
                     {"type": "text", "text": _schema_instruction(schema[0], schema[1])}
                 )
+        elif request.wants_json_object:
+            params.setdefault("system", []).append({"type": "text", "text": _JSON_OBJECT_INSTRUCTION})
         if output_config:
             params["output_config"] = output_config
         if request.timeout is not None:
