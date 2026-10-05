@@ -143,6 +143,42 @@ Timeline endpoints are:
 - `GET /api/workspace/experiments/{session_id}/evidence/{evidence_id}`; and
 - `POST /api/workspace/reviewer/experiments/{session_id}/actions`.
 
+## Researcher screen wording
+
+The researcher screen is written for a wet-lab bench (decision of 2026-10-05,
+lane U). It only changes what is shown; every state it shows is the server's.
+
+- **Identifiers stay folded.** Revision ids, hashes, record ids and principal
+  ids are not in the body. Each sits in a closed "개발 상세 정보" block next to
+  the readable name, so it can still be checked later. An experiment record
+  reads "실험 기록 · {protocol title} · {start date and time}" (two records of
+  one protocol started the same day are numbered "· 2번째"); the approval reads
+  "개발용 초안(승인 전)" or "승인본 · {approval date} · {approver role}". The
+  names are built in the browser from `experiment.report.state` (`started_at`,
+  `protocol_id`) and the catalog entry (`title`, `approval`).
+- **Evidence candidates** in a reviewer finding are one row each — checkbox,
+  page, a one-line excerpt (full excerpt on hover) — in a list of fixed height
+  that scrolls inside itself. Pressing the finding button with nothing ticked
+  says so beside the button and sends nothing; the server refuses an uncited
+  finding either way.
+- **A refused finding** says why and what to do on one line beside the button.
+  `protocol_approval_denied` is the catalog's refusal of the finding's content
+  (for example a citation that does not resolve), not a permission check, and
+  is shown that way; `authorization_denied` names the reviewer role.
+- **A turn card shows one status.** The end of a turn ("완료", "중단됨",
+  "차단됨", "오류") is shown once; the red line under it is kept for the text of
+  a real failure. When a later utterance is committed, an earlier card that
+  never received its end state stops showing a progress label such as
+  "재생 중…"; its developer details say the end state was not received.
+- **Pause.** While `protocol.fixture.state` says `workflow_status:"paused"`, the
+  step card shows a large "다시 시작" button and the rail button reads
+  "▶ 다시 시작". `experiment.ended` and `workflow.control.refused` disable both
+  and say why.
+- **Microphone.** Capture asks for `echoCancellation`, `noiseSuppression` and
+  `autoGainControl`, and reads back what the browser applied. When echo
+  cancellation is not on, the body says the speaker may be heard as the
+  researcher's words and suggests headphones.
+
 ## Protocol onboarding and lifecycle
 
 The browser implements the explicit lifecycle:
@@ -533,8 +569,10 @@ entry points, configuration/schema/environment files, declared rules or
 processes, engine metadata, repository identity, and commit. Reviewer decisions
 are append-only. An explicit link connects a real tenant-owned durable
 ExperimentSession, its matching source-hash-bound wet-lab lineage revision, and
-one approved computational workflow revision. The researcher cockpit shows that
-link with its repository, commit, and entry point; the API always reports
+one approved computational workflow revision. The researcher cockpit keeps the
+link panel folded and closed under "개발 상세 정보" (the pilot market is wet-lab;
+see "Researcher screen wording"), where it shows the repository, and the commit
+and entry point in its developer details; the API always reports
 `execution_supported:false` and `execution_started:false`.
 
 There is no arbitrary workflow execution, validation sandbox, or Seqera launch in
