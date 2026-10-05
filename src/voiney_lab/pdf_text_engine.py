@@ -405,6 +405,30 @@ def _document_payload(document: EngineDocument) -> dict[str, object]:
     }
 
 
+def _cap_address_space(limit: int) -> bool:
+    """Cap this process's address space at ``limit`` bytes; True if it was.
+
+    Linux (server, pilot labs, CI) always gets the cap, and a refusal there
+    fails the request as before.  macOS is development only and its kernel
+    does not enforce ``RLIMIT_AS``: setting it below the unlimited maximum
+    raises ``ValueError`` ("current limit exceeds maximum limit"), measured on
+    2026-10-05 (macOS 27.0.1, arm64, Python 3.14.8).  There alone, that
+    refusal is accepted and the child reads without a memory cap; the time
+    limit and the output size limit still apply (decision of 2026-10-04).
+    Any other error, or a refusal on any other platform, still propagates.
+    """
+
+    import resource
+
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    except (ValueError, OSError):
+        if sys.platform == "darwin":
+            return False
+        raise
+    return True
+
+
 def main() -> int:
     """Child entry point: cap the address space, do one request, exit.
 
@@ -419,9 +443,7 @@ def main() -> int:
         request = json.loads(sys.stdin.read())
         limit = int(request.get("address_space_bytes") or 0)
         if limit > 0:
-            import resource
-
-            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+            _cap_address_space(limit)
         operation = request.get("operation", "read")
         if operation == "read":
             reply = _document_payload(read_document_in_process(request["path"]))
