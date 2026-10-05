@@ -475,16 +475,20 @@ class ExperimentProtocolTests(unittest.TestCase):
 
     def test_source_step_label_and_stable_identifiers_are_required(self):
         base = minimal_protocol()
-        for bad_step in (
-            replace(base.sections[0].steps[0], source_label=""),
-            replace(base.sections[0].steps[0], step_id="not stable"),
+        step = base.sections[0].steps[0]
+        # Lane P3 (human decision 2026-10-05): an empty label means the source
+        # prints no step numbers, so it is refused only beside a labelled step.
+        unlabelled = replace(step, step_id=f"{step.step_id}-b", source_label="")
+        for bad_steps in (
+            (step, unlabelled),
+            (replace(step, step_id="not stable"),),
         ):
             with self.assertRaises(ProtocolValidationError):
                 validate_protocol(
                     replace(
                         base,
                         sections=(
-                            replace(base.sections[0], steps=(bad_step,)),
+                            replace(base.sections[0], steps=bad_steps),
                         ),
                     )
                 )

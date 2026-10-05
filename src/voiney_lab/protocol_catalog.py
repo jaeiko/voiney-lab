@@ -62,6 +62,7 @@ from voiney_lab.protocol_claim_analysis import (
     serialize_chunk_claim_analysis,
     unaccounted_segments_by_page,
 )
+from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
     OcrResult,
     ProtocolOcrProvider,
@@ -348,6 +349,46 @@ def _display_filename(value: str) -> str:
             "Protocol filename must be one plain PDF filename."
         )
     return value
+
+
+def protocol_with_display_step_labels(
+    protocol: domain.ExperimentProtocol,
+) -> domain.ExperimentProtocol:
+    """The Protocol with its steps numbered in order when the source prints none.
+
+    An empty source_label means the source prints no step numbers (human
+    decision 2026-10-05, lane P3). The stored analysis keeps it empty -- that
+    is what the source says -- and the screen and the run number the steps
+    1, 2, 3 ... in their order instead. A labelled Protocol is returned as is.
+    """
+
+    steps = [step for section in protocol.sections for step in section.steps]
+    if not steps or any(step.source_label.strip() for step in steps):
+        return protocol
+    ordinal = iter(range(1, len(steps) + 1))
+    return replace(
+        protocol,
+        sections=tuple(
+            replace(
+                section,
+                steps=tuple(
+                    replace(step, source_label=str(next(ordinal)))
+                    for step in section.steps
+                ),
+            )
+            for section in protocol.sections
+        ),
+    )
+
+
+def _review_sections(protocol: domain.ExperimentProtocol) -> object:
+    shown = protocol_with_display_step_labels(protocol)
+    sections = _review_value(shown.sections)
+    if shown is not protocol:
+        for section in sections:
+            for step in section["steps"]:
+                step["source_label_printed"] = False
+    return sections
 
 
 def _review_value(value: object) -> object:
@@ -721,6 +762,7 @@ class ProtocolCatalog:
         if not isinstance(pages, list) or len(pages) != extraction.page_count:
             raise ProtocolOcrReviewError("Accepted OCR page evidence is invalid.")
         reconstructed = []
+        result_provider = projection.get("provider")
         for expected_number, page in enumerate(pages, start=1):
             if (
                 not isinstance(page, dict)
@@ -738,6 +780,11 @@ class ProtocolCatalog:
                     text=page["text"],
                     text_empty=not page["text"].strip(),
                     warning="Text was produced by OCR and accepted for structured review.",
+                    # A page the provider kept from the text layer is not OCR
+                    # text; a provider that names one engine for every page
+                    # names it on the result only.
+                    ocr_derived=(page.get("provider") or result_provider)
+                    != OCR_TEXT_LAYER_PROVIDER,
                 )
             )
         return replace(
@@ -1581,6 +1628,10 @@ class ProtocolCatalog:
                     "action": (
                         "Configure XAI_API_KEY and VOINEY_LAB_ANALYSIS_MODEL, then retry."
                         if latest_failure == "provider_configuration_missing"
+                        else "The analysis call ran past its time limit "
+                        "(VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS, default 600 s). "
+                        "Retry, or raise the limit for a long document."
+                        if latest_failure == "protocol_analysis_timeout"
                         else "Review the failure code and explicitly retry analysis."
                     ),
                 }
@@ -1661,7 +1712,7 @@ class ProtocolCatalog:
                 "before_start": _review_value(protocol.before_start),
                 "materials": _review_value(protocol.materials),
                 "equipment": _review_value(protocol.equipment),
-                "sections": _review_value(protocol.sections),
+                "sections": _review_sections(protocol),
                 "constructs": [
                     {
                         "construct_type": type(construct).__name__,
@@ -3681,7 +3732,7 @@ class ProtocolCatalog:
         extraction = extract_protocol_pdf(source)
         draft = ProtocolAnalysisDraft(
             extraction=extraction,
-            protocol=analysis.protocol,
+            protocol=protocol_with_display_step_labels(analysis.protocol),
             readiness=analysis.readiness,
             capability_policy=domain.P1_CAPABILITY_POLICY,
             analysis_schema_version=analysis.analysis_schema_version,
@@ -3689,7 +3740,7 @@ class ProtocolCatalog:
         )
         labels = tuple(
             step.source_label
-            for section in analysis.protocol.sections
+            for section in draft.protocol.sections
             for step in section.steps
         )
         # Which pages the analysis could not finish accounting for. STEP 28

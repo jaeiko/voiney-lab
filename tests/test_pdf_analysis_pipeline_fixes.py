@@ -246,7 +246,9 @@ class AnalysisTimeLimitTests(unittest.TestCase):
         # Existing status values; no new one was needed for the screen.
         self.assertEqual(status["state"], "analysis_failed")
         self.assertEqual(status["lifecycle_state"], "blocked")
-        self.assertEqual(status["failure_code"], "protocol_analysis_model_failed")
+        # Its own code since lane P3 (human decision 2026-10-05); it was
+        # protocol_analysis_model_failed, like a refused key.
+        self.assertEqual(status["failure_code"], "protocol_analysis_timeout")
 
 
 # --- 2. required list fields -------------------------------------------------

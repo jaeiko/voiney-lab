@@ -1283,6 +1283,7 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
 
     section_locations: dict[str, str] = {}
     step_locations: dict[str, str] = {}
+    step_labelled: bool | None = None
     step_sections: dict[str, str] = {}
     action_locations: dict[tuple[str, str], str] = {}
     edges: dict[tuple[str, str, str], set[tuple[str, str, str]]] = {}
@@ -1318,10 +1319,24 @@ def validate_protocol(protocol: ExperimentProtocol) -> ExperimentProtocol:
                 )
             step_locations[step.step_id] = step_location
             step_sections[step.step_id] = section.section_id
-            if not isinstance(step.source_label, str) or not step.source_label.strip():
+            if not isinstance(step.source_label, str):
                 raise _error(
                     ProtocolValidationCode.MISSING_SOURCE_LABEL,
                     "source step must preserve its original number or label",
+                    step_location,
+                )
+            # Empty means the source prints no step numbers (human decision
+            # 2026-10-05, lane P3); the screen numbers such steps in order.
+            # That is a property of the whole source, so the steps are either
+            # all labelled or all unlabelled.
+            labelled = bool(step.source_label.strip())
+            if step_labelled is None:
+                step_labelled = labelled
+            elif labelled != step_labelled:
+                raise _error(
+                    ProtocolValidationCode.MISSING_SOURCE_LABEL,
+                    "source steps must all preserve their original number or "
+                    "label, or all be unlabelled",
                     step_location,
                 )
             _text(
