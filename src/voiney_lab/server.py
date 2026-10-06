@@ -90,6 +90,7 @@ from voiney_lab.external_references import (
     XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
     plan_research_query,
+    supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
 from voiney_lab.generated_visuals import (
@@ -1095,8 +1096,8 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
     """Who generates a revision's translations here, or None when nobody may.
 
     Generation runs only where a stored translation can be kept and read
-    (the tenant workspace is enabled) and the read-only answer model role
-    the per-turn reader translation uses is enabled with a key.
+    (the tenant workspace is enabled) and the translation role has a key --
+    whether or not the answer brain is on (lane F, decision 1).
     ``app.state.revision_translation_runner`` (a callable taking the
     fixture) stands in for it.
     """
@@ -1106,7 +1107,7 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
         return runner
     settings=MultiBrainSettings.from_environment()
     if (not _workspace_settings().enabled
-            or not settings.answer_brain_enabled
+            or not settings.translation_enabled
             or not RoleModel.from_environment("translation").has_key()):
         return None
     return _start_revision_translation
@@ -6832,8 +6833,9 @@ async def _apply_reader_translation(
 )->Any:
     """Speak a checked Korean reading of a step the reader asked to hear.
 
-    Only for a step with no reviewed translation, only when the read-only
-    model roles are enabled, and only a reading that keeps every number,
+    Only for a step with no reviewed translation, only when translation is
+    on (the translation role's own settings, not the answer brain -- lane F,
+    decision 1), and only a reading that keeps every number,
     unit and protocol term (``reader_translation_issue``). The reading is
     spoken after "자동 번역입니다." and shown above the unchanged source with
     no label of its own -- the page says once, at the head of the protocol
@@ -6843,7 +6845,7 @@ async def _apply_reader_translation(
     """
 
     settings=session.multi_brain_settings
-    if not settings.answer_brain_enabled:
+    if not settings.translation_enabled:
         return plan
     label,statement,terms=target
     key=(curated.fixture.fixture_sha256,label,statement)
@@ -7252,7 +7254,12 @@ async def _queue_curated_research(
                         supplemental_client,
                         session.supplemental_knowledge_settings,
                     ).explain(
-                        ctx["reference_query"],language=turn_language),
+                        # Lane F, decision 2: with the step the rules answered.
+                        supplemental_explanation_query(
+                            ctx["reference_query"],
+                            step_label=ctx["step"].source_label,
+                            step_text=ctx["step"].instruction_source_text),
+                        language=turn_language),
                     timeout=research_remaining(
                         session.supplemental_knowledge_settings.timeout_seconds),
                 )
@@ -9510,7 +9517,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if speech_policy=="speak":
             await sender.segment(turn_id,0,frames,generation)
         await current_text(
-            "reply.complete",turn_id=turn_id,text=display_text)
+            "reply.complete",turn_id=turn_id,text=display_text,
+            # Lane F, decision 3: the delta's document again, so the screen
+            # need not keep the delta's copy.
+            display_document=getattr(plan, "display_document", None))
         if (
             speech_policy=="speak" and research_context is not None
             and research_context.get("outside_pdf") is not None

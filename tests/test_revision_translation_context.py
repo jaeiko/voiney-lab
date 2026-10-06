@@ -375,9 +375,13 @@ class SessionStartTests(unittest.TestCase):
 
     def test_without_the_model_role_nothing_starts(self) -> None:
         server_module.app.state.revision_translation_runner = None
+        # Lane F, decision 1: the model role is the translation role's key,
+        # not the answer brain -- set apart from a repository .env's key.
         with patch.dict(os.environ, {
             "VOINEY_LAB_MULTI_BRAIN_ENABLED": "false",
             "VOINEY_LAB_ANSWER_BRAIN_ENABLED": "false",
+            "VOINEY_LAB_TRANSLATION_PROVIDER": "xai",
+            "XAI_API_KEY": "",
         }), patch.object(server_module, "_start_revision_translation") as start:
             server_module._with_revision_translations(rich_fixture())
         start.assert_not_called()

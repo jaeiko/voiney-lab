@@ -227,8 +227,9 @@ lane U). It only changes what is shown; every state it shows is the server's.
   limitation — is drawn in a light dashed frame named "PDF 밖 설명 · AI 일반
   지식" in the conversation card and the panel. The mark is kept from
   `reply.delta` for the `reply.complete` render, which carries the text
-  alone; a `reply.complete` that carries `display_document` itself (lane F)
-  is drawn from its own value. With web references off
+  alone; a `reply.complete` that carries `display_document` itself is drawn
+  from its own value. On a protocol turn it now carries the same
+  `display_document` as its `reply.delta` (lane F, decision 3). With web references off
   (`research_capabilities.external_text` not `enabled`), a reference check
   that ends without an answer is not shown to the researcher; it is a line in
   the turn's developer details.
@@ -641,6 +642,14 @@ On, a turn goes:
   carries `source_label: "AI 일반 지식"` and `outside_pdf: true`. Late, failed
   or refused, the rules' answer stands alone. A quantity question the source
   answers never gets one.
+- **Written general explanation (lane F, decision 2)** — a related question
+  the spoken path above does not take ("이 단계 배경 지식 알려줘") may get a
+  longer written general explanation from the same supplemental role, shown
+  as "AI 일반 지식". Its request now carries the source text of
+  the step the rules answered (`Step N source text: …`, at most 500
+  characters), as the spoken path does, so the model knows which step is
+  meant. The web search query is unchanged. D4's 120-character rule stays
+  with the spoken path only.
 - **Fallback** — when the model is late, fails, says nothing usable, is
   refused, or its answer fails a check, the turn takes the rules' own path,
   exactly as with the router off ("PDF에서 확인할 수 없어요." where the rules
@@ -980,6 +989,19 @@ behaves as before.
 | `ANALYSIS` | the structured PDF protocol analysis | `xai` · none (required), reasoning `high` |
 | `REPORT` | the experiment report's prose | `xai` · `VOINEY_LAB_SUPPLEMENTAL_MODEL`, then `grok-4.6` |
 | `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `xai` · `grok-4.6`, reasoning `low` |
+
+**Answer role in the voice turn, and step translation (lane F, decision 1,
+2026-10-06).** The voice turn's multi-brain Answer role is used only when its
+answer is back within 1.25 s, and no measured model made it (0/57), so
+`run_dev.sh` now sets `VOINEY_LAB_ANSWER_BRAIN_ENABLED=false` by default (a
+value in the shell or `.env` wins; `true` brings the role back, unchanged).
+The Source and Visual roles still follow `VOINEY_LAB_MULTI_BRAIN_ENABLED`.
+`run_pilot.sh` sets neither and follows the `.env`. Step translation -- the
+automatic reading of a step with no reviewed translation ("이 단계 읽어줘")
+and generating an authorized revision's translations -- no longer follows the
+answer role: it is on whenever the `TRANSLATION` role has its provider's key
+(and, for a revision, the workspace is on). `run_dev.sh --check-only` prints
+`answer_brain:` and `step_translation:`.
 
 Each role reads `VOINEY_LAB_<ROLE>_PROVIDER` (`xai`, `anthropic`, `openai` or
 `google`), `VOINEY_LAB_<ROLE>_MODEL` and `VOINEY_LAB_<ROLE>_REASONING`

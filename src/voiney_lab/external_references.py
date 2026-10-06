@@ -1320,6 +1320,24 @@ def plan_research_query(
     )
 
 
+def supplemental_explanation_query(
+    reference_query: str, *, step_label: str, step_text: str,
+) -> str:
+    """The written supplemental explanation's query, with the step it is about.
+
+    Lane F, decision 2: the search query names entities only, so "N단계 왜
+    해?" reached the model with no word of the step. The step's source text
+    is added, as the spoken outside-PDF explanation carries it -- the step
+    the rules answered. It is data the model reads, not instructions; the
+    search query itself is unchanged.
+    """
+
+    text = " ".join(step_text.split())
+    if not text:
+        return reference_query
+    return f"{reference_query}\nStep {step_label} source text: {text[:500]}"
+
+
 @dataclass(frozen=True)
 class SearchResult:
     """Normalized search reference returned by any text search provider."""
