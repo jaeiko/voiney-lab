@@ -245,13 +245,28 @@ def source_sha256(text: str) -> str:
 
 _HANGUL = re.compile(r"[가-힣]")
 _LATIN = re.compile(r"[A-Za-z]")
+_ENDS_IN_HANGUL = re.compile(r"[가-힣][\s.!?)\]…]*$")
 
 
 def is_korean(text: str) -> bool:
-    """Whether a source sentence is already written in Korean."""
+    """Whether a source sentence is already written in Korean.
 
-    hangul = len(_HANGUL.findall(text))
-    return hangul > 0 and hangul >= len(_LATIN.findall(text))
+    Korean with more Hangul than Latin letters, or a sentence that ends in
+    Hangul and keeps at least a quarter as many Hangul letters as Latin
+    ones: a Korean protocol names its instruments in English ("안정화를
+    위해서 Seahorse XFe/XF Analyzer 를 켜서 예열합니다"), and such a sentence
+    is Korean already -- translating it added a step label the check then
+    refused (measured 2026-10-06, glycolysis).
+    """
+
+    stripped = text.strip()
+    hangul = len(_HANGUL.findall(stripped))
+    latin = len(_LATIN.findall(stripped))
+    if hangul == 0:
+        return False
+    if hangul >= latin:
+        return True
+    return hangul >= 4 and 4 * hangul >= latin and _ENDS_IN_HANGUL.search(stripped) is not None
 
 
 def protocol_context(fixture: CuratedProtocolFixture) -> ProtocolContext:
@@ -360,6 +375,8 @@ _SIBILANT_PLURAL = ("ches", "shes", "xes", "sses", "zes")
 
 def _singular(word: str) -> str:
     lowered = word.casefold()
+    if lowered.endswith(("'s", "\u2019s")):
+        return lowered  # a possessive ("Ringer's"), not a plural
     if lowered.endswith(_SIBILANT_PLURAL):
         return lowered[:-2]
     if len(lowered) > 3 and lowered.endswith("s") and not lowered.endswith("ss"):
@@ -379,33 +396,63 @@ def _looks_like_a_name(term: str) -> bool:
     return any(character.isupper() for character in term)
 
 
+def _name_words(term: str) -> tuple[str, ...]:
+    """The words of a term that carry a name: those with a capital letter
+    ("Porapak" of "Porapak tubes", "Ringer's" of "Ringer's solution"), as
+    stems. A Korean sentence keeps the name and may put the common noun in
+    Korean ("Porapak 튜브"), so these are what the check looks for."""
+
+    return tuple(dict.fromkeys(
+        _singular(word) for word in _WORD.findall(term)
+        if any(character.isupper() for character in word)
+    ))
+
+
+def _required_strings(term: str) -> tuple[str, ...]:
+    return _name_words(term) or ((term_stem(term),) if term_stem(term) else ())
+
+
 def required_terms_for(
     unit: TranslationUnit, glossary: Sequence[GlossaryEntry] = (),
 ) -> tuple[str, ...]:
     """What this sentence's Korean must keep in English, as stems.
 
-    A vocabulary term the glossary knows follows the glossary: required when
-    an entry naming it (or named by it) says ``keep_english``, free to be
-    Korean otherwise. A term the glossary does not know is required only
-    when it is written like a name.
+    A vocabulary term the glossary knows follows the glossary. The entry
+    that names the term exactly decides; failing that, an entry the term
+    contains ("LB agar" in "LB agar plates") decides; an entry that merely
+    contains the term ("agar" in "LB agar") says nothing about the term
+    itself. A required term is looked for by its name words, so "Porapak
+    tubes" is kept by "Porapak 튜브". A term the glossary does not know is
+    required only when it is written like a name.
     """
 
-    stems = {term_stem(entry.source): entry.keep_english for entry in glossary
-             if entry.source.strip()}
+    entries = [
+        (term_stem(entry.source), entry) for entry in glossary if entry.source.strip()
+    ]
     required: list[str] = []
+
+    def add(strings: Sequence[str]) -> None:
+        for string in strings:
+            if string and string not in required:
+                required.append(string)
+
     for term in unit.required_terms:
         stem = term_stem(term)
         if not stem:
             continue
-        matching = [
-            keep for source, keep in stems.items()
-            if source == stem or f" {stem} " in f" {source} " or f" {source} " in f" {stem} "
-        ]
-        if matching:
-            if any(matching) and stem not in required:
-                required.append(stem)
-        elif _looks_like_a_name(term) and stem not in required:
-            required.append(stem)
+        exact = [entry for source, entry in entries if source == stem]
+        if exact:
+            if any(entry.keep_english for entry in exact):
+                add(_required_strings(
+                    next(entry.source for entry in exact if entry.keep_english)))
+            continue
+        within = [entry for source, entry in entries if f" {source} " in f" {stem} "]
+        if within:
+            if any(entry.keep_english for entry in within):
+                add(_required_strings(term))
+            continue
+        if _looks_like_a_name(term):
+            add(_required_strings(term))
     return tuple(required)
 
 

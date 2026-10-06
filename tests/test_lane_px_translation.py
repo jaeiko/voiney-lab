@@ -281,21 +281,68 @@ class RequiredTermsTests(unittest.TestCase):
         self.assertEqual(term_stem("rubber septa"), "rubber septa")
         self.assertEqual(term_stem("glass"), "glass")
         self.assertEqual(term_stem("(10 mL)"), "(10 ml)")
+        self.assertEqual(term_stem("Ringer's solution"), "ringer's solution")
 
-    def test_glossary_names_are_required_and_glossary_words_are_free(self) -> None:
+    def test_glossary_names_are_required_by_their_name_words_and_glossary_words_are_free(self) -> None:
         unit = TranslationUnit(
             "step-6/current_step", "step",
             "6 Transfer 10 mL of autoclaved LB into two 50 mL falcon tubes on agar in Petri dishes.",
             ("falcon tubes", "LB", "agar", "Petri dishes", "glass Pasteur pipette"),
             step_index=5, step_label="6")
-        self.assertEqual(
-            required_terms_for(unit, self.GLOSSARY), ("falcon tube", "lb"))
+        # "Falcon tube" is kept in English by the glossary: its name word is
+        # what the Korean must hold ("Falcon 튜브"). "LB" is a name on its
+        # own. "agar", "Petri dishes" and the Pasteur pipette are Korean words
+        # by the glossary.
+        self.assertEqual(required_terms_for(unit, self.GLOSSARY), ("falcon", "lb"))
+
+    def test_an_entry_that_merely_contains_the_term_says_nothing_about_it(self) -> None:
+        glossary = (
+            GlossaryEntry("LB agar", "LB agar", True),
+            GlossaryEntry("Macherey Nagel Screw Caps", "Macherey Nagel Screw Caps", True),
+            GlossaryEntry("agar", "한천", False),
+        )
+        unit = TranslationUnit("step-1/current_step", "step", "x", ("agar", "screw", "LB agar"))
+        self.assertEqual(required_terms_for(unit, glossary), ("lb",))
 
     def test_without_a_glossary_only_name_like_terms_are_required(self) -> None:
         unit = TranslationUnit(
             "step-1/current_step", "step", "x",
-            ("falcon tubes", "LB", "agar", "Petri dishes", "(10 mL)", "screw"))
-        self.assertEqual(required_terms_for(unit), ("lb", "petri dish", "(10 ml)"))
+            ("falcon tubes", "LB", "agar", "Petri dishes", "(10 mL)", "screw", "air entrainment kit"))
+        self.assertEqual(required_terms_for(unit), ("lb", "petri", "ml"))
+
+    def test_a_possessive_name_and_a_brand_before_a_korean_noun_pass(self) -> None:
+        glossary = (
+            GlossaryEntry("Ringer's solution", "링거액(Ringer's solution)", True),
+            GlossaryEntry("Porapak tube", "Porapak 튜브(Porapak tube)", True),
+        )
+        ringer = TranslationUnit(
+            "step-14/current_step", "step",
+            "14 Transfer 10 mL of Ringer's solution into the falcon tube containing the bacterial pellet.",
+            ("Ringer's solution",), step_index=13, step_label="14")
+        self.assertEqual(check_translation(
+            ringer, "14단계: 링거액(Ringer's solution) 10 mL를 세균 펠릿이 들어 있는 Falcon tube에 옮깁니다.",
+            glossary), "passed")
+        porapak = TranslationUnit(
+            "step-36/current_step", "step",
+            "36 In a fume hood, clamp the Porapak tubes so they are suspended.",
+            ("Porapak tubes",), step_index=35, step_label="36")
+        self.assertEqual(check_translation(
+            porapak, "36단계: 흄 후드 안에서 Porapak 튜브가 매달리도록 클램프로 고정합니다.", glossary),
+            "passed")
+        self.assertEqual(check_translation(
+            porapak, "36단계: 흄 후드 안에서 포라팍 튜브가 매달리도록 클램프로 고정합니다.", glossary),
+            "term_missing")
+
+    def test_a_korean_sentence_naming_an_instrument_in_english_is_korean(self) -> None:
+        from voiney_lab.protocol_translation import is_korean
+
+        self.assertTrue(is_korean("1. 안정화를 위해서 Seahorse XFe/XF Analyzer 를 켜서 예열합니다."))
+        self.assertTrue(is_korean(
+            "3. 센서 카트리지(sensor cartridge)를 Seahorse XF Calibrant (37°C in a non-CO2 incubator)에서 "
+            "오버나잇 동안 hydrate 합니다."))
+        self.assertFalse(is_korean("Add 5 mL buffer (완충액)."))
+        self.assertFalse(is_korean("API ZYM"))
+        self.assertFalse(is_korean("1 Prepare 400 mL of LB broth (25 g per litre)."))
 
     def test_the_headspace_sentences_refused_on_2026_10_06_now_pass(self) -> None:
         cases = (
