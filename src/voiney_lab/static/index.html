@@ -248,7 +248,7 @@
               <div id="task-requested-visual-content" class="step-visual"></div>
             </section>
             <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
-              <h2 id="web-ref-title">웹 참고 자료</h2>
+              <h2 id="web-ref-title">참고 자료</h2>
               <div id="task-web-reference-content"></div>
             </section>
           </div>
@@ -777,13 +777,14 @@ function updateWorkflowTimer(){
   if(step.state==="running"){
    const deadline=Date.parse(step.deadline_at);
    const remaining=Number.isFinite(deadline)?Math.max(0,Math.ceil((deadline-Date.now())/1000)):Math.max(0,Number(step.remaining_seconds)||0);
-   parts.push(remaining>0?`단계 ${remaining}초 남음`:`단계 완료 · ${step.duration_seconds||0}초`);
-   if(railTimer)railTimer.textContent=`⏱ 단계 ${remaining}s`;
+   // Lane U2 decision 5: minutes and seconds left, "14:55 남음".
+   parts.push(remaining>0?`단계 ${formatElapsedClock(remaining)} 남음`:`단계 완료 · ${formatElapsedClock(step.duration_seconds)}`);
+   if(railTimer)railTimer.textContent=`⏱ ${formatElapsedClock(remaining)} 남음`;
    if(remaining===0)stopWorkflowTimer();
   }else if(step.state==="not_started"&&Number(step.duration_seconds)>0){
-   parts.push(`단계 대기 · 고정 ${step.duration_seconds}초`);
+   parts.push(`단계 타이머 ${formatElapsedClock(step.duration_seconds)} · 시작 전`);
   }else if(step.state==="stopped"||step.state==="completed"){
-   parts.push(`단계 종료 · ${step.duration_seconds||0}초`);
+   parts.push(`단계 종료 · ${formatElapsedClock(step.duration_seconds)}`);
   }
  }
  if(node)node.textContent=parts.length?parts.join(" · "):"이 단계에는 타이머가 없습니다.";
@@ -801,7 +802,7 @@ function startWorkflowTimer(){
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
 function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
-function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`Step ${event.step_label}`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
+function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 function selectedDevProfile(){return $("dev-identity-profile")?.value||"";}
 function workspaceFetch(url,options={}){const profile=selectedDevProfile(),headers={...(options.headers||{})};if(profile)headers["X-Voice-Dev-Profile"]=profile;return fetch(url,{...options,headers});}
 const RESEARCHER_ERROR_MESSAGES=Object.freeze({
@@ -1251,13 +1252,15 @@ function renderCuratedProtocolState(message){
  curatedProtocolState={...value};curatedStateRevision=Math.max(curatedStateRevision,value.revision);curatedScreenFields=message.screen&&typeof message.screen==="object"&&!Array.isArray(message.screen)?message.screen:null;procedureState={attached:false,timer:(value.timers&&value.timers.step)||value.timer||null};stopWorkflowTimer();
  $("procedure-title").textContent=value.display_name;
  if($("rail-pdf-title"))$("rail-pdf-title").textContent=value.display_name;
- $("procedure-meta").textContent=value.development_only?"개발용 초안(승인 전)":"승인본";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id]]);
+ $("procedure-meta").textContent=value.development_only?"개발용 초안(승인 전)":"승인본";appendDevCodeDetails($("procedure-meta"),[["protocol_id",value.protocol_id],["revision_id",value.revision_id],["readiness_status",value.readiness_status],["development_only",String(value.development_only)]]);
  updatePauseState(value.workflow_status==="paused");
  const blocked=value.block_reason!==null,status=blocked?"진행 차단":value.active?`진행 중 · ${value.development_only?"개발용":"승인됨"}`:previewValid?(value.workflow_status==="ready"?"구성됨 · 시작 전":"선택됨 · 대기"):"선택됨 · 대기";
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
- $("procedure-progress").textContent=(value.active||previewValid)?`현재 ${value.current_step_label}/${value.total_steps}`:`비활성 · 총 ${value.total_steps}단계`;
- if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`Step ${value.current_step_label} / ${value.total_steps}`:"대기";
- $("procedure-step-title").textContent=(value.active||previewValid)?`Step ${value.current_step_label}`:"";
+ // Lane U2 decision 5: the step is named once, in Korean ("4단계 · 전체 25단계");
+ // the English "Step N" line beside it is gone.
+ $("procedure-progress").textContent=(value.active||previewValid)?`${value.current_step_label}단계 · 전체 ${value.total_steps}단계`:`비활성 · 총 ${value.total_steps}단계`;
+ if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`${value.current_step_label}단계 / ${value.total_steps}`:"대기";
+ $("procedure-step-title").textContent="";
  // Korean body with the source folded under it; with no Korean, or for an
  // English reader, the source is the body and nothing is folded.
  const stepShown=value.active||previewValid,koreanStep=koreanIsBody()&&nonempty(value.primary_summary);
@@ -1268,8 +1271,12 @@ function renderCuratedProtocolState(message){
  $("procedure-spoken-summary").textContent=value.active&&nonempty(value.spoken_summary)?normalizePresentationText(value.spoken_summary):"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?`원문 PDF · p.${value.source_page_refs.join(", ")}`:"원문 페이지 정보 없음";
  startWorkflowTimer();$("procedure-observation").textContent="자동 관찰 없음";renderStepVisual($("procedure-visual"),value);
- $("procedure-handoff").textContent=blocked?`진행 제한 · ${serverCodeText(["block_reason","readiness_reason"],value.block_reason)}`:"넘긴 보고 없음";
- $("procedure-audit").textContent=`준비 상태 ${serverCodeText("readiness_status",value.readiness_status)} · ${value.development_only?"개발용":"승인 버전"}`;
+ // Lane U2 decision 5: the handoff row (red) is shown only for a real block;
+ // "nothing handed over" is not a problem and is not shown. The readiness
+ // and development status are developer details (procedure-meta above).
+ $("procedure-handoff").textContent=blocked?`진행 제한 · ${serverCodeText(["block_reason","readiness_reason"],value.block_reason)}`:"";
+ if($("handoff-container"))$("handoff-container").hidden=!blocked;
+ $("procedure-audit").textContent="";if($("audit-container"))$("audit-container").hidden=true;
  $("source-filename").textContent=nonempty(value.source_filename)?value.source_filename:"파일명 정보 없음";
  $("source-page-number").textContent=value.active&&Array.isArray(value.source_page_refs)&&value.source_page_refs.length?value.source_page_refs.map(page=>`p.${page}`).join(", "):"—";
  $("source-short-hash").textContent=typeof value.source_sha256==="string"&&/^[0-9a-f]{64}$/.test(value.source_sha256)?`${value.source_sha256.slice(0,12)}…`:"—";
@@ -1301,7 +1308,7 @@ function renderProcedureState(value){
   $("procedure-warning").textContent="";$("procedure-warning").hidden=true;
   $("procedure-spoken-summary").textContent="현재 단계가 시작되면 표시됩니다.";
   $("procedure-source").textContent="—";$("procedure-timer").textContent="—";
-  $("procedure-observation").textContent="—";$("procedure-handoff").textContent="—";
+  $("procedure-observation").textContent="—";$("procedure-handoff").textContent="—";if($("handoff-container"))$("handoff-container").hidden=true;
   $("procedure-audit").textContent="—";renderStepVisual($("procedure-visual"),null);
   renderExperimentContext();
   return;
@@ -1327,8 +1334,8 @@ function renderProcedureState(value){
  $("procedure-warning").hidden=!value.warning_text;
  $("procedure-spoken-summary").textContent=value.spoken_instruction||"짧은 음성 안내가 준비되면 표시됩니다.";
  $("procedure-source").textContent=`승인 지침 v${value.version}`;
- $("procedure-handoff").textContent=blocked&&value.handoff?"관리자에게 넘긴 안전 보고가 있습니다":"넘긴 보고 없음";if(blocked&&value.handoff)appendDevCodeDetails($("procedure-handoff"),[["handoff_report_id",typeof value.handoff.report_id==="string"?value.handoff.report_id:null]]);
- $("procedure-audit").textContent=`감사 상태: ${serverCodeText("procedure_status",value.status)}`;
+ $("procedure-handoff").textContent=blocked&&value.handoff?"관리자에게 넘긴 안전 보고가 있습니다":blocked?"관리자 인계로 진행 차단":"";if($("handoff-container"))$("handoff-container").hidden=!blocked;if(blocked&&value.handoff)appendDevCodeDetails($("procedure-handoff"),[["handoff_report_id",typeof value.handoff.report_id==="string"?value.handoff.report_id:null]]);
+ $("procedure-audit").textContent="";if($("audit-container"))$("audit-container").hidden=true;appendDevCodeDetails($("procedure-meta"),[["procedure_status",value.status]]);
  startWorkflowTimer();
 }
 
@@ -1426,6 +1433,25 @@ function splitAnswerText(text){
 function developmentInfo(text){const details=document.createElement("details");details.className="dev-info";const summary=document.createElement("summary");summary.textContent="개발 정보";const body=document.createElement("div");body.className="dev-info-body";body.textContent=text;details.appendChild(summary);details.appendChild(body);return details;}
 function answerSourceToggle(source,citation,open){const details=sourceToggle(source||"",{open});if(citation){const line=document.createElement("div");line.className="answer-citation";line.textContent=citation;details.appendChild(line);}return details;}
 
+// Lane U2 decisions 5–7: a reference card and the reference panel are named
+// by where their words come from. An explanation the server marked as from
+// outside the PDF (R6: research.result outside_pdf/source_label, or a reply
+// whose display_document carries the "notice" section) is drawn in its own
+// light frame, never in the same shape as an answer grounded in the source.
+const OUTSIDE_PDF_LABEL="PDF 밖 설명 · AI 일반 지식";
+let researchCapabilityState=null;
+function webReferencesOn(){return researchCapabilityState?.external_text?.status==="enabled";}
+function researchOutsidePdf(message){return message?.outside_pdf===true||(message?.answer_origin==="supplemental_model_knowledge"&&Array.isArray(message?.limitations)&&message.limitations.includes("outside_pdf_explanation"));}
+function researchOriginTitle(message){
+ if(researchOutsidePdf(message))return `PDF 밖 설명 · ${typeof message.source_label==="string"&&message.source_label.trim()?message.source_label.trim():"AI 일반 지식"}`;
+ if(message?.answer_origin==="external_authoritative_reference")return Array.isArray(message.citations)&&message.citations.length?"웹 참고 자료":"참고 설명 · 웹 출처 없음";
+ if(message?.answer_origin==="supplemental_model_knowledge")return "일반 참고 설명 · AI 지식";
+ return "추가 참고 자료";
+}
+// The server's outside-PDF notice for a reply, "" when it is marked without
+// one, null when the reply is not from outside the PDF.
+function replyOutsidePdfNotice(message){const notice=Array.isArray(message?.display_document?.sections)?message.display_document.sections.find(item=>item?.kind==="notice"&&typeof item.text==="string"&&item.text.trim()):null;return notice?notice.text.trim():researchOutsidePdf(message)?"":null;}
+function outsidePdfFrame(parent){const frame=document.createElement("div");frame.className="answer-block outside-pdf";const label=document.createElement("b");label.className="outside-pdf-label";label.textContent=OUTSIDE_PDF_LABEL;frame.appendChild(label);parent.appendChild(frame);return frame;}
 function renderStructuredReply(node,message){
  const target=node?.querySelector?.(".reply");if(!target)return false;
  const snapshot=beginChatPatch(node);
@@ -1438,27 +1464,30 @@ function renderStructuredReply(node,message){
  if(message.is_delta || message.type==="reply.delta"){
   // What the delta carries beside its text is kept for the final render,
   // whose reply.complete holds the text alone.
-  node.replyExtras={...(node.replyExtras||{}),...(typeof message.development_note==="string"?{development_note:message.development_note}:{}),...(typeof message.translation_status==="string"?{translation_status:message.translation_status}:{})};
+  node.replyExtras={...(node.replyExtras||{}),...(typeof message.development_note==="string"?{development_note:message.development_note}:{}),...(typeof message.translation_status==="string"?{translation_status:message.translation_status}:{}),...(replyOutsidePdfNotice(message)!==null?{outside_pdf_notice:replyOutsidePdfNotice(message)}:{})};
   if(message.translation_status==="model_assisted_unreviewed"){autoTranslationShown=true;renderTranslationNote();}
   const parts=splitAnswerText(message.text);
   target.textContent+=(correction?normalizePresentationText(correction)+"\n":"")+normalizePresentationText(parts.body||parts.source)+" ";
   finishChatPatch(snapshot);return false;
  }
  target.replaceChildren();
+ const outsideNotice=replyOutsidePdfNotice(message)??(typeof node.replyExtras?.outside_pdf_notice==="string"?node.replyExtras.outside_pdf_notice:null);
  const add=(parent,className,label,text)=>{const block=document.createElement("div");block.className=`answer-block ${className}`;if(label){const heading=document.createElement("b");heading.textContent=label;block.appendChild(heading);}renderMarkdownToContainer(block,text);parent.appendChild(block);};
  if(correction)add(target,"answer-correction","음성 인식 보정",correction);
+ const answerBody=outsideNotice!==null?outsidePdfFrame(target):target;
+ if(outsideNotice&&!message.display_document?.sections?.some(item=>item?.kind==="notice")){const notice=document.createElement("div");notice.className="answer-block answer-notice";notice.textContent=outsideNotice;answerBody.appendChild(notice);}
 
  let parsedSource=false;
  if(message.display_document && Array.isArray(message.display_document.sections) && message.display_document.sections.length > 0){
-  const bodyHeading=heading=>typeof heading==="string"&&!ANSWER_LABEL_LINES.some(([pattern,kind])=>kind==="body"&&pattern.test(heading.trim()))?heading:"";
+  const bodyHeading=heading=>typeof heading==="string"&&!ANSWER_LABEL_LINES.some(([pattern,kind])=>kind==="answerBody"&&pattern.test(heading.trim()))?heading:"";
   for(const sec of message.display_document.sections){
    if(sec.kind==="notice" && sec.text){
     // The server's own mark above an explanation the PDF does not give.
     const notice=document.createElement("div");notice.className="answer-block answer-notice";
-    notice.textContent=sec.text;target.appendChild(notice);
+    notice.textContent=sec.text;answerBody.appendChild(notice);
    }else if(sec.kind==="lead" && sec.text){
     const leadBlock=document.createElement("div");leadBlock.className="answer-block answer-lead";
-    const p=document.createElement("p");p.textContent=normalizePresentationText(sec.text);leadBlock.appendChild(p);target.appendChild(leadBlock);
+    const p=document.createElement("p");p.textContent=normalizePresentationText(sec.text);leadBlock.appendChild(p);answerBody.appendChild(leadBlock);
    }else if(sec.kind==="bullets" && Array.isArray(sec.items) && sec.items.length){
     const bulletBlock=document.createElement("div");bulletBlock.className="answer-block answer-primary";
     if(bodyHeading(sec.heading)){const heading=document.createElement("b");heading.textContent=sec.heading;bulletBlock.appendChild(heading);}
@@ -1466,25 +1495,25 @@ function renderStructuredReply(node,message){
     for(const item of sec.items){
      const li=document.createElement("li");renderMarkdownToContainer(li,item);ul.appendChild(li);
     }
-    bulletBlock.appendChild(ul);target.appendChild(bulletBlock);
+    bulletBlock.appendChild(ul);answerBody.appendChild(bulletBlock);
    }else if(sec.kind==="source" && sec.text){
     const citation=message.display_document.sections.find(item=>item?.kind==="citation"&&item.text);
-    target.appendChild(answerSourceToggle(sec.text,citation?citation.text:"",false));
+    answerBody.appendChild(answerSourceToggle(sec.text,citation?citation.text:"",false));
    }else if(sec.kind==="citation" && sec.text){
-    if(!message.display_document.sections.some(item=>item?.kind==="source"&&item.text))target.appendChild(answerSourceToggle("",sec.text,false));
+    if(!message.display_document.sections.some(item=>item?.kind==="source"&&item.text))answerBody.appendChild(answerSourceToggle("",sec.text,false));
    }else if(sec.text){
-    add(target,"answer-primary",bodyHeading(sec.heading),sec.text);
+    add(answerBody,"answer-primary",bodyHeading(sec.heading),sec.text);
    }
   }
  }else{
   // Where the answer came from is named only when it is not the protocol.
-  const originLabel=message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":"";
+  const originLabel=outsideNotice!==null?"":message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":"";
   let cleanPrimary = primary || message.text || "";
   if(message.answer_origin==="external_authoritative_reference") cleanPrimary = sanitizeExternalResearchAnswer(cleanPrimary);
   const parts=splitAnswerText(cleanPrimary);
-  if(parts.body)add(target,"answer-primary",originLabel,parts.body);
-  if(parts.source||parts.citation){target.appendChild(answerSourceToggle(parts.source,parts.citation,parts.sourceOpen));parsedSource=true;}
-  if(parts.dev&&developmentRun())target.appendChild(developmentInfo(parts.dev));
+  if(parts.body)add(answerBody,"answer-primary",originLabel,parts.body);
+  if(parts.source||parts.citation){answerBody.appendChild(answerSourceToggle(parts.source,parts.citation,parts.sourceOpen));parsedSource=true;}
+  if(parts.dev&&developmentRun())answerBody.appendChild(developmentInfo(parts.dev));
  }
  const developmentNote=typeof message.development_note==="string"?message.development_note:node.replyExtras?.development_note;
  if(nonemptyText(developmentNote)&&developmentRun())target.appendChild(developmentInfo(developmentNote));
@@ -1605,10 +1634,10 @@ function updateTaskWebReference(message,turnId){
  let rawText=message.primary_text||"";
  if(external)rawText=sanitizeExternalResearchAnswer(rawText);
 
- const originName=external?"웹 참고 자료":supplemental?"일반 참고 설명":"추가 참고 자료";
  const record={
   turnId,
-  origin:originName,
+  origin:researchOriginTitle(message),
+  outside:researchOutsidePdf(message),
   text:rawText,
   citations:Array.isArray(message.citations)?message.citations:[],
   timestamp:new Date().toLocaleTimeString()
@@ -1616,22 +1645,23 @@ function updateTaskWebReference(message,turnId){
  webReferenceHistory.unshift(record);
 
  content.replaceChildren();
+ setText("web-ref-title",record.origin);
 
  const currentOrigin=document.createElement("div");
  currentOrigin.className="web-ref-origin";
- currentOrigin.textContent=`Turn ${turnId} · ${record.origin} (${record.timestamp})`;
+ currentOrigin.textContent=`Turn ${turnId} · ${record.timestamp}`;
  content.appendChild(currentOrigin);
 
  const currentSummary=document.createElement("div");
  currentSummary.className="web-ref-summary";
  currentSummary.textContent=normalizePresentationText(record.text);
- content.appendChild(currentSummary);
+ (record.outside?outsidePdfFrame(content):content).appendChild(currentSummary);
 
  if(record.citations.length){
   const details=document.createElement("details");
   details.className="reference-details";
   const summary=document.createElement("summary");
-  summary.textContent=`웹 참고 자료 출처 (${record.citations.length})`;
+  summary.textContent=`${external?"웹 참고 자료 출처":"참고 자료 출처"} (${record.citations.length})`;
   details.appendChild(summary);
   for(const item of record.citations){
    const line=document.createElement("div");
@@ -1654,7 +1684,7 @@ function updateTaskWebReference(message,turnId){
   const histDetails=document.createElement("details");
   histDetails.className="web-ref-history";
   const histSummary=document.createElement("summary");
-  histSummary.textContent=`이전 웹 참고 자료 (${webReferenceHistory.length-1})`;
+  histSummary.textContent=`이전 참고 자료 (${webReferenceHistory.length-1})`;
   histDetails.appendChild(histSummary);
   for(let i=1;i<webReferenceHistory.length;i++){
    const h=webReferenceHistory[i];
@@ -1699,12 +1729,20 @@ function applyResearchResult(message,browserGeneration=sessionGeneration){
    const heading=document.createElement("b");
    const external=message.answer_origin==="external_authoritative_reference";
    const supplemental=message.answer_origin==="supplemental_model_knowledge";
-   heading.textContent=external?"웹 참고 자료":supplemental?"일반 참고 설명":"추가 참고 자료";
+   const outside=researchOutsidePdf(message);
+   if(outside){block.className="research-supplement outside-pdf";heading.className="outside-pdf-label";}
+   heading.textContent=outside?researchOriginTitle(message):external?"웹 참고 자료":supplemental?"일반 참고 설명":"추가 참고 자료";
    const body=document.createElement("span");
    const cleanPrimary=external?sanitizeExternalResearchAnswer(message.primary_text||""):(message.primary_text||"");
    body.textContent=normalizePresentationText(cleanPrimary);
    block.appendChild(heading);block.appendChild(body);
   }
+ }else if(!webReferencesOn()){
+  // Lane U2 decision 7: with web references off, a limit or failure of the
+  // reference check is not the researcher's concern; it stays in the turn's
+  // developer details.
+  const details=node.querySelector?.(".turn-diagnostics-body");
+  if(details){let line=details.querySelector?.(".research-limit");if(!line){line=document.createElement("div");line.className="research-limit";details.appendChild(line);}line.textContent=`참고 자료 확인 · ${message.terminal_status||message.status||"unknown"} · ${normalizePresentationText(message.limitation||"추가 내용 없음")}`;}
  }else{
   const reply=node.querySelector?.(".reply");
   if(reply){
@@ -2050,8 +2088,10 @@ function reviewEvidenceText(evidence){return evidence&&Number.isInteger(evidence
 function reviewScientificValues(values){return(Array.isArray(values)?values:[]).map(value=>value?.source_text).filter(value=>typeof value==="string"&&value).join(", ");}
 function appendProtocolReviewGroup(title,lines,codes=[]){
  const content=$("protocol-review-content");if(!content)return;
+ // Lane U2 decision 5: a group with nothing to say is not drawn.
+ const shown=lines.filter(value=>typeof value==="string"&&value.trim());if(!shown.length){appendDevCodeDetails(content,codes);return;}
  const group=document.createElement("section"),heading=document.createElement("h4");group.className="protocol-review-group";heading.textContent=title;group.appendChild(heading);
- for(const line of lines.filter(value=>typeof value==="string"&&value.trim())){const paragraph=document.createElement("p");paragraph.textContent=line;group.appendChild(paragraph);}
+ for(const line of shown){const paragraph=document.createElement("p");paragraph.textContent=line;group.appendChild(paragraph);}
  appendDevCodeDetails(group,codes);
  content.appendChild(group);
 }
@@ -2153,7 +2193,7 @@ function renderProtocolBlockers(review){
    const decision=document.createElement("select");
    for(const option of (Array.isArray(item.decision_options)?item.decision_options:[])){
     const choice=document.createElement("option");choice.value=option;
-    choice.textContent=option===item.clearing_decision?`${serverCodeText("ambiguity_decision",option)} · 이 판단이 사유를 해제합니다`:`${serverCodeText("ambiguity_decision",option)} · 기록되지만 해제하지 않습니다`;
+    choice.textContent=option===item.clearing_decision?`${serverCodeText("ambiguity_decision",option)} · 이 근거로 해결된 것으로 표시`:`${serverCodeText("ambiguity_decision",option)} · 기록만 하고 해결로 표시하지 않음`;
     codes.push(["decision",option]);
     decision.appendChild(choice);
    }
@@ -2407,7 +2447,7 @@ async function registerSelectedProtocol(){
  }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const activate=$("protocol-development-activate");if(activate&&!activate.hidden)activate.disabled=false;}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode=mode;acknowledgedLanguage=language;const names={auto:"자동 감지",ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","입력 · "+(names[language]||"한국어"));}
-function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
+function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;researchCapabilityState=value;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
 function confirmNewSession(){
  if(sessionActive){
   const modal=$("new-session-modal");

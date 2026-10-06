@@ -1133,6 +1133,26 @@
     .audio-echo-notice{margin:.35rem 0 0;color:var(--amber);font-size:.8rem;font-weight:700}
     .audio-echo-notice[hidden]{display:none}
 
+    /* Lane U2 decision 5: a hidden detail row stays hidden (the row's own
+       display:flex beat the UA [hidden] rule, so "관리자 인계 · 넘긴 보고 없음"
+       and the developer-only "확인 기록" row were always on screen). */
+    .workflow-detail-row[hidden]{display:none}
+    #procedure-step-title:empty{display:none}
+
+    /* Lane U2 decision 6: an explanation from outside the PDF has its own
+       light dashed frame and name, never the shape of a source-grounded
+       answer. */
+    .outside-pdf{
+      margin-top:.45rem;
+      padding:.6rem .8rem;
+      border:1px dashed var(--muted);
+      border-radius:var(--radius-sm);
+      background:rgba(148,155,164,.06);
+    }
+    .research-supplement.outside-pdf{border-left:1px dashed var(--muted);border-radius:var(--radius-sm)}
+    .outside-pdf .outside-pdf-label,.research-supplement.outside-pdf b.outside-pdf-label{display:block;color:var(--muted);font-size:.72rem;font-weight:800;margin-bottom:.25rem;text-transform:none;letter-spacing:0}
+    .outside-pdf .answer-notice{margin-bottom:.3rem}
+
     /* Lane U2 decisions 3–4: microphone choice and recovery. */
     .mic-device-status{display:block;margin-top:.2rem;color:var(--muted);font-size:.74rem}
     .mic-device-status:empty{display:none}
