@@ -273,6 +273,14 @@ class ItemUseTests(_ReportCase):
         self.assertIn("| Promega trypsin Promega Catalog #V5113 |   | 3 |", text)
         self.assertNotIn("원심 분리", text)
 
+    def test_drawing_liquid_up_is_not_a_safety_word(self) -> None:
+        # Live run, headspace: "흡입" for a pipette controller is drawing liquid
+        # up, not breathing in; a warning still says so in other words.
+        narrative, _ = self.write(dict(GOOD_REPLY, item_uses=[
+            {"번호": 8, "용도": "피펫 용액 흡입 조절기"}, {"번호": 7, "용도": "증기 흡입 주의"}]))
+        self.assertEqual(dict(narrative.item_uses), {"Glass Pasteur pipette (150 mm)": "피펫 용액 흡입 조절기"})
+        self.assertEqual(list(narrative.item_uses_rejected), [("Glass pipettes (10 mL)", "안전 지시 “주의”")])
+
     def test_no_model_a_failed_call_or_no_passing_use_leaves_no_use_column(self) -> None:
         server = er.ReportWriterBrain().build_deterministic_narrative(
             self.doc(), list(self.doc()["events"]), fixture=self.fixture)

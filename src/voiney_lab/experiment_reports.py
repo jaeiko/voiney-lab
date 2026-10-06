@@ -1941,8 +1941,10 @@ _USE_UNIT = re.compile(
     r"(?<![A-Za-zµμ])(?:°\s*C|[µμu]?[Ll]|m[Ll]|[mµμun]M|M|mg|[µμu]g|ng|kg|g|rpm|RPM|[x×]\s*g|"
     r"min|h|hr|sec|s|kDa|cm|mm|[µμ]m|nm|v/v|w/v)(?![A-Za-z])|%|℃|°"
 )
+#: Not "흡입": for a pipette it is drawing liquid up (live run, headspace);
+#: a warning about breathing something in still holds "주의", "위험" or "하지 마".
 _USE_SAFETY = ("주의", "위험", "안전", "유해", "독성", "부식", "인화", "폭발", "화상", "응급", "보호",
-               "장갑", "보안경", "고글", "마스크", "환기", "후드", "흡입", "피부", "눈에", "눈을",
+               "장갑", "보안경", "고글", "마스크", "환기", "후드", "피부", "눈에", "눈을",
                "금지", "MSDS")
 _USE_INSTRUCTION = re.compile(
     r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|먼저|다음에|후에|전에|동안|까지|"
