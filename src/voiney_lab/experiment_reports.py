@@ -1003,6 +1003,16 @@ class ReportRecord:
 
 
 @dataclass(frozen=True)
+class ReportReturn:
+    """A confirmed return within a repeat (lane R7's repeat_returned event)."""
+
+    from_label: str
+    to_label: str
+    round: int | None  # counted from returns confirmed in words, not rounds done
+    at: str  # local HH:MM
+
+
+@dataclass(frozen=True)
 class ReportItem:
     """A material or a piece of equipment, as the protocol lists it."""
 
@@ -1054,6 +1064,7 @@ class ReportFacts:
     #: (label, source text) of every step an item is used in, for the model's
     #: uses (decision 4).
     item_step_texts: tuple[tuple[str, str], ...] = ()
+    returns: tuple[ReportReturn, ...] = ()
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1415,6 +1426,22 @@ def build_report_facts(
     blocked: list[str] = []
     experimenter = ""
     gates_skipped = False
+    # Lane R7's events (decision 6): every completion with its round, every
+    # timer start, a later start's skipped steps, and returns within a repeat.
+    completions: dict[str, list[tuple[datetime | None, int | None]]] = {}
+    timer_starts: dict[str, list[tuple[datetime | None, int]]] = {}
+    skip: tuple[str, list[str]] | None = None
+    returns: list[ReportReturn] = []
+
+    def step_record(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        record = payload.get("step_record")
+        return record if isinstance(record, Mapping) else {}
+
+    def whole_number(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def add_record(label: str, kind: str, text: str, at: datetime | None) -> None:
         records.append(ReportRecord(
@@ -1431,6 +1458,9 @@ def build_report_facts(
         legacy = [str(item).strip() for item in payload.get("observations") or () if str(item).strip()]
         if kind == "step_completed" and label:
             completed_at.setdefault(label, at)
+            record = step_record(payload)
+            completions.setdefault(label, []).append((at, whole_number(record.get("round")) if (
+                record.get("kind") == "repeat_round_completion") else None))
             if wording:
                 add_record(label, "관찰", wording, at)
             timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
@@ -1461,6 +1491,18 @@ def build_report_facts(
                 seconds = None
             if seconds:
                 timer_started[label] = (at, seconds)
+                timer_starts.setdefault(label, []).append((at, seconds))
+        elif kind == "steps_skipped" and skip is None:
+            record = step_record(payload)
+            skipped = [str(item) for item in record.get("skipped_step_labels") or ()]
+            if skipped:
+                skip = (str(record.get("start_step") or label), skipped)
+        elif kind == "repeat_returned":
+            record = step_record(payload)
+            returns.append(ReportReturn(
+                from_label=str(record.get("from_step") or ""), to_label=str(record.get("to_step") or label),
+                round=whole_number(record.get("round")), at=at.strftime("%H:%M") if at else "",
+            ))
         elif kind == "workflow_paused":
             pauses.append((label, at, None))
         elif kind == "workflow_resumed" and pauses and pauses[-1][2] is None:
@@ -1489,11 +1531,43 @@ def build_report_facts(
     completed_labels = sorted(completed_at, key=lambda item: order.get(item, 10_000 + len(item)))
     total = len(source_steps) or len(completed_labels)
 
+    def in_rounds(label: str) -> bool:
+        return any(round_ is not None for _, round_ in completions.get(label, ()))
+
+    def completion_words(label: str) -> str:
+        """When the step was completed; in each round once a return was confirmed."""
+
+        done = completions.get(label) or []
+        if not in_rounds(label):
+            first = done[0][0] if done else None
+            return first.strftime("%H:%M") if first else ""
+        return ", ".join(f"{round_ or 1}회차 {at:%H:%M}" if at else f"{round_ or 1}회차"
+                         for at, round_ in done)
+
+    def timer_actual(label: str) -> str:
+        """Each completion against the last timer start before it, after the completion before."""
+
+        starts = [at for at, _ in timer_starts.get(label, ()) if at is not None]
+        parts: list[str] = []
+        previous: datetime | None = None
+        for done, round_ in completions.get(label, ()):
+            if done is None:
+                continue
+            started = [at for at in starts if at <= done and (previous is None or at >= previous)]
+            previous = done
+            if started:
+                words = _duration_words((done - started[-1]).total_seconds())
+                parts.append(f"{round_ or 1}회차 {words}" if in_rounds(label) else words)
+        return ", ".join(parts)
+
     steps: list[ReportStepFacts] = []
     shown = list(completed_labels)
     for record in records:
         if record.step_label not in shown and record.step_label != "—":
             shown.append(record.step_label)
+    for back in returns:
+        if back.from_label and back.from_label not in shown:
+            shown.append(back.from_label)
     shown.sort(key=lambda item: order.get(item, 10_000))
     for label in shown:
         source = by_label.get(label, {})
@@ -1503,30 +1577,37 @@ def build_report_facts(
             elapsed, duration = early[label]
             note = f"원문 {_duration_words(duration or defined)} / {_duration_words(elapsed)}에 끝냄"
         elif label in timer_started:
-            start, seconds = timer_started[label]
-            end = completed_at.get(label)
-            actual = _duration_words((end - start).total_seconds()) if start and end else ""
+            seconds = timer_started[label][1]
+            actual = timer_actual(label)
             note = f"원문 {_duration_words(seconds)} / 실제 {actual}" if actual else f"원문 {_duration_words(seconds)}"
         elif defined:
             note = f"원문 {_duration_words(defined)} / 타이머 기록 없음"
-        done = completed_at.get(label)
         steps.append(ReportStepFacts(
             label=label, step_id=str(source.get("step_id") or ""),
             section=_SECTION_DURATION.sub("", str(source.get("section") or "")).strip(),
             text=str(source.get("text") or ""), source_text=str(source.get("source_text") or ""),
             translated=bool(source.get("translated")), expected=tuple(source.get("expected") or ()),
             source_timer_seconds=defined, completed=label in completed_at,
-            completed_at=done.strftime("%H:%M") if done else "",
+            completed_at=completion_words(label),
             timer_note=note, records=tuple(r for r in records if r.step_label == label),
         ))
 
     # What was done differently from the source, from the record only.
     deviations: list[str] = []
-    if source_steps and completed_labels:
+    if skip is not None:
+        # Decision 6: a confirmed later start, as its event records it.
+        deviations.append(f"{skip[0]}단계부터 시작({_ranges(skip[1])} 건너뜀).")
+    elif source_steps and completed_labels:
+        # No event says so: inferred from the first step recorded.
         first = min(order.get(label, 0) for label in completed_labels)
         before = [step["label"] for step in source_steps[:first]]
         if before:
             deviations.append(f"{_ranges(before)}는 이 기록에 없다({completed_labels[0]}단계부터 기록됨).")
+    for back in returns:
+        # The round counts returns confirmed in words, not rounds done at the bench.
+        round_words = f"{back.round}회차(말로 확인한 돌아가기 기준)" if back.round else "회차 기록 없음"
+        deviations.append(f"{back.from_label}단계에서 {back.to_label}단계로 돌아갔다 — {round_words}"
+                          + (f", {back.at}." if back.at else "."))
     for label in completed_labels:
         if label in early:
             elapsed, duration = early[label]
@@ -1642,7 +1723,7 @@ def build_report_facts(
         purpose_from_pdf=purpose, keywords=keywords, sections=tuple(sections),
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
-        zone=zone, items=items,
+        zone=zone, items=items, returns=tuple(returns),
         item_step_texts=tuple(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
@@ -2557,13 +2638,21 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     else:
         blocks.append(("note", "원문에서 재료 목록을 불러오지 못했다."))
     blocks.append(("h2", "3-2. 수행한 단계"))
-    rows = tuple(
-        (step.label, (step.text + ("" if step.translated else " (원문 영어)")) if step.text else "(원문을 불러오지 못함)",
-         step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—")
-        for step in facts.steps
-    )
+    rows: list[tuple[str, ...]] = []
+    for step in facts.steps:
+        rows.append((
+            step.label,
+            (step.text + ("" if step.translated else " (원문 영어)")) if step.text else "(원문을 불러오지 못함)",
+            step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—"))
+        # Decision 6: a confirmed return, under the step it was made at.
+        for back in facts.returns:
+            if back.from_label == step.label:
+                round_words = (f"{back.round}회차 시작(회차는 말로 확인한 돌아가기 기준)" if back.round
+                               else "회차 기록 없음")
+                rows.append((f"{back.from_label}→{back.to_label}",
+                             f"{back.to_label}단계로 돌아감 — {round_words}", back.at or "—", "—"))
     if rows:
-        blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), rows))
+        blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), tuple(rows)))
     else:
         blocks.append(("note", "수행한 단계가 기록되지 않았다."))
     blocks += [("h2", "3-3. 방법 요약"), ("p", narrative.methods_summary),

@@ -11,6 +11,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import tempfile
+import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -18,6 +21,7 @@ from docx import Document
 from docx.shared import Pt
 
 from tests.test_lab_report import GOOD_REPLY, _Client, _ReportCase, _step, protocol_double
+from tests.test_lane_r7_rule_gaps import _report_events, _Turns
 from voiney_lab import experiment_reports as er
 
 
@@ -302,3 +306,132 @@ class ItemUseTests(_ReportCase):
             self.store.export_docx(self.report_id)
         self.assertEqual(len(client.calls), 1)
         self.assertIn("| Promega trypsin Promega Catalog #V5113 | 단백질 분해 효소 | 3 |", text)
+
+
+def _skip_record(start: str, skipped: list[str]) -> dict:
+    return {"step_record": {"kind": "start_at_step", "start_step": start, "skipped_step_labels": skipped,
+                            "skipped_step_ids": [f"p-step-0{label}" for label in skipped],
+                            "experiment_started": True}}
+
+
+def _return_record(from_step: str, to_step: str, round_: int) -> dict:
+    return {"step_record": {"kind": "repeat_return", "repetition_id": "repeat-2-4",
+                            "repeated_step_labels": ["2", "4"], "stated_at_step": from_step,
+                            "from_step": from_step, "to_step": to_step, "returns_confirmed": round_ - 1,
+                            "round": round_, "round_counted_from": "confirmed_returns"}}
+
+
+def _round_completion(round_: int) -> dict:
+    return {"step_record": {"kind": "repeat_round_completion", "repetition_id": "repeat-2-4",
+                            "round": round_, "round_counted_from": "confirmed_returns",
+                            "completed_before": True}}
+
+
+class LaterStartAndReturnTests(_ReportCase):
+    """Decision 6: lane R7's steps_skipped and repeat_returned, read as recorded."""
+
+    def markdown(self) -> str:
+        return self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+
+    def deviations(self, text: str) -> list[str]:
+        block = text.split("### 3-4. 원문과 다르게 한 점 (기록에서)")[1].split("## 4.")[0]
+        return [line[2:] for line in block.splitlines() if line.startswith("- ")]
+
+    def test_a_later_start_is_written_from_its_event(self) -> None:
+        self.event("00:30", "session_started", "3")
+        self.event("00:30", "steps_skipped", "3", payload=_skip_record("3", ["1", "2"]))
+        self.event("00:41", "step_completed", "3")
+        deviations = self.deviations(self.markdown())
+        self.assertEqual(deviations[0], "3단계부터 시작(1–2단계 건너뜀).")
+        self.assertFalse(any("이 기록에 없다" in line for line in deviations))
+
+    def test_without_the_event_the_first_step_recorded_still_says_so(self) -> None:
+        self.event("00:30", "session_started", "3")
+        self.event("00:41", "step_completed", "3")
+        self.assertEqual(self.deviations(self.markdown())[0], "1–2단계는 이 기록에 없다(3단계부터 기록됨).")
+
+    def run_with_a_return(self) -> None:
+        self.event("00:30", "session_started", "1")
+        self.event("00:36", "step_completed", "1")
+        self.event("00:40", "step_completed", "2")
+        self.event("00:41", "timer_started", "3", payload={"timer": {"duration_seconds": 900}})
+        self.event("00:56", "step_completed", "3")
+        self.event("00:58", "step_completed", "4")
+        self.event("01:00", "repeat_returned", "2", payload=_return_record("4", "2", 2))
+        self.event("01:05", "step_completed", "2", payload=_round_completion(2))
+        self.event("01:06", "timer_started", "3", payload={"timer": {"duration_seconds": 900}})
+        self.event("01:16", "step_completed", "3", payload=_round_completion(2))
+
+    def test_a_return_is_in_the_step_table_and_the_deviations_with_its_round(self) -> None:
+        self.run_with_a_return()
+        text = self.markdown()
+        self.assertIn("4단계에서 2단계로 돌아갔다 — 2회차(말로 확인한 돌아가기 기준), 10:00.",
+                      self.deviations(text))
+        rows = [line for line in text.split("### 3-2. 수행한 단계")[1].split("### 3-3.")[0].splitlines()
+                if line.startswith("| ") and not line.startswith("| 단계")]
+        self.assertEqual([row.split(" | ")[0] for row in rows], ["| 1", "| 2", "| 3", "| 4", "| 4→2"])
+        self.assertIn("| 1회차 09:40, 2회차 10:05 |", rows[1])
+        self.assertTrue(rows[0].endswith("| 09:36 | — |"), rows[0])
+        self.assertEqual(rows[4], "| 4→2 | 2단계로 돌아감 — 2회차 시작(회차는 말로 확인한 돌아가기 기준) | 10:00 | — |")
+        document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
+        cells = [[cell.text for cell in row.cells] for table in document.tables for row in table.rows]
+        self.assertIn(["4→2", "2단계로 돌아감 — 2회차 시작(회차는 말로 확인한 돌아가기 기준)", "10:00", "—"], cells)
+
+    def test_each_round_times_its_own_timer(self) -> None:
+        # The second round's timer started after the first completion: the
+        # first round is not timed against it (it read "실제 0분").
+        self.run_with_a_return()
+        row = next(line for line in self.markdown().splitlines() if line.startswith("| 3 | "))
+        self.assertTrue(row.endswith("| 1회차 09:56, 2회차 10:16 | 원문 15분 / 실제 1회차 15분, 2회차 10분 |"), row)
+
+    def test_the_model_reads_the_start_and_the_return_as_recorded(self) -> None:
+        self.run_with_a_return()
+        client = _Client(GOOD_REPLY)
+        brain = er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=5)
+        doc = self.doc()
+        asyncio.run(brain.generate_narrative(doc, list(doc["events"]), fixture=self.fixture))
+        sent = json.loads(client.calls[0]["messages"][1]["content"])
+        self.assertIn("4단계에서 2단계로 돌아갔다 — 2회차(말로 확인한 돌아가기 기준), 10:00.",
+                      sent["원문과 다르게 한 점"])
+        steps = {step["단계"]: step for step in sent["수행한 단계"]}
+        self.assertEqual(steps["2"]["완료 시각"], "1회차 09:40, 2회차 10:05")
+
+
+class RulesToReportTests(_Turns, unittest.TestCase):
+    """The production path: the rules move the run, the server records it, the report reads it."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.listener = SimpleNamespace(
+            session_id="lane-rp2-session",
+            experiment_report_store=er.ExperimentReportStore(Path(tmp.name) / "r.sqlite"),
+            experiment_report_id=None,
+        )
+
+    def record(self, *said: str) -> None:
+        for text in said:
+            before = self.session.current_index
+            plan = self.say(text)
+            if plan.state_changed:
+                _report_events(self.session, plan, before, turn_id=self.turn_id, listener=self.listener)
+
+    def markdown(self) -> str:
+        return self.listener.experiment_report_store.export_markdown(
+            self.listener.experiment_report_id, fixture=self.session.fixture).decode()
+
+    def test_a_confirmed_return_reaches_the_report_with_its_round(self) -> None:
+        self.open(None)
+        self.record("프로토콜 시작해줘", "1단계 완료했어", "2단계 완료했어", "3단계 완료했어",
+                    "4단계 완료했어", "2단계로 돌아가", "응", "2단계 완료했어")
+        text = self.markdown()
+        self.assertRegex(text, r"- 5단계에서 2단계로 돌아갔다 — 2회차\(말로 확인한 돌아가기 기준\), \d\d:\d\d\.")
+        self.assertRegex(text, r"\| 5→2 \| 2단계로 돌아감 — 2회차 시작\(회차는 말로 확인한 돌아가기 기준\) \| \d\d:\d\d \| — \|")
+        self.assertRegex(text, r"\| 2 \| [^|]+ \| 1회차 \d\d:\d\d, 2회차 \d\d:\d\d \|")
+
+    def test_a_confirmed_later_start_reaches_the_report_as_recorded(self) -> None:
+        self.open(None)
+        self.record("4단계부터 시작해줘", "응", "4단계 완료했어")
+        text = self.markdown()
+        self.assertIn("- 4단계부터 시작(1–3단계 건너뜀).", text)
+        self.assertNotIn("이 기록에 없다", text)
