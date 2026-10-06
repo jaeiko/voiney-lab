@@ -41,6 +41,7 @@ from voiney_lab.protocol_translation import (
     generate_revision_translations,
     openai_batch_translator,
     source_sha256,
+    translation_revision_key,
     translation_units,
     with_stored_translations,
 )
@@ -232,7 +233,7 @@ class CheckTests(unittest.TestCase):
     def test_a_row_is_checked_again_when_it_is_read(self) -> None:
         fixture = rich_fixture()
         forged = FactTranslationRecord(
-            fixture.revision_id, "step-2/current_step", "ko",
+            translation_revision_key(fixture), "step-2/current_step", "ko",
             source_sha256(MINIPREP_STEPS[1]), "한국어 번역: lysozyme 100 µL",
             "machine", "passed", "grok-test", "grok-test", "2026-10-03T00:00:00+00:00")
         self.assertIsNone(
@@ -261,11 +262,13 @@ class StorageTests(unittest.TestCase):
         try:
             self.assertEqual(store.record_fact_translations(report.records), 10)
             rows = {row.fact_key: row for row in store.fact_translations(
-                fixture.revision_id, "ko")}
+                translation_revision_key(fixture), "ko")}
         finally:
             store.close()
         row = rows["step-1/sub_action_1"]
-        self.assertEqual(row.revision_id, "fictional-miniprep-v1")
+        # Lane PX: stored under protocol/revision, a catalog revision id alone
+        # ("pdf-1-analysis-1") being the same string for every uploaded PDF.
+        self.assertEqual(row.revision_id, "fictional-miniprep/fictional-miniprep-v1")
         self.assertEqual(row.language, "ko")
         self.assertEqual(row.translated_text, good_korean(SUB_ACTION))
         self.assertEqual(row.status, "machine")
@@ -283,7 +286,7 @@ class StorageTests(unittest.TestCase):
             store.record_fact_translations(generate(fixture, FakeTranslator()).records)
             again = FakeTranslator()
             report = generate(
-                fixture, again, store.fact_translations(fixture.revision_id, "ko"))
+                fixture, again, store.fact_translations(translation_revision_key(fixture), "ko"))
             self.assertEqual(again.batches, [])
             self.assertEqual(report.skipped_stored, 10)
             self.assertEqual(store.record_fact_translations(report.records), 0)
@@ -298,11 +301,11 @@ class StorageTests(unittest.TestCase):
             second = rich_fixture("fictional-miniprep-v2")
             translator = FakeTranslator()
             generate(second, translator,
-                     store.fact_translations(second.revision_id, "ko"))
+                     store.fact_translations(translation_revision_key(second), "ko"))
             self.assertEqual(sum(len(batch) for batch in translator.batches), 10)
             # The first revision's rows do not reach the second.
             self.assertIsNone(with_stored_translations(
-                second, store.fact_translations(first.revision_id, "ko"),
+                second, store.fact_translations(translation_revision_key(first), "ko"),
             ).machine_localizations)
         finally:
             store.close()
@@ -403,7 +406,7 @@ class PickingOrderTests(unittest.TestCase):
     def test_a_stored_reviewed_row_counts_as_reviewed(self) -> None:
         fixture = rich_fixture()
         reviewed = FactTranslationRecord(
-            fixture.revision_id, "step-2/current_step", "ko",
+            translation_revision_key(fixture), "step-2/current_step", "ko",
             source_sha256(MINIPREP_STEPS[1]), "2단계: 검토자가 고친 번역 10 µL lysozyme 5 times",
             "reviewed", "passed", "reviewer", "reviewer", "2026-10-03T00:00:00+00:00")
         records = [*generate(fixture, FakeTranslator()).records, reviewed]

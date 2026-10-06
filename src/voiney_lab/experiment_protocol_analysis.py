@@ -877,11 +877,20 @@ def _is_hangul(character: str) -> bool:
     )
 
 
+#: A protocols.io duration widget standing alone on its line ("03:00:00"):
+#: the time the step states again, drawn as its own text block.
+_DURATION_WIDGET_LINE = re.compile(r"(?m)^[ \t\u00a0]*\d{1,2}:\d{2}:\d{2}[ \t\u00a0]*$")
+#: Punctuation a space may stand before in the page text ("00:30:00 .").
+_SPACE_BEFORE_PUNCTUATION = frozenset(".,;:)")
+
+
 def _normalized_text_with_bounds(
     value: str,
     *,
     join_line_end_hyphens: bool = False,
     join_hangul_line_breaks: bool = False,
+    skip_duration_widget_lines: bool = False,
+    drop_space_before_punctuation: bool = False,
 ) -> tuple[str, list[int], list[int]]:
     """Canonicalize representation-only differences and retain source bounds.
 
@@ -901,14 +910,38 @@ def _normalized_text_with_bounds(
     "짜를" compares as "개봉한 날짜를" (human decision 2026-10-05, lane P3).
     Only for a page whose text came from OCR, and in comparison only, like
     the hyphen rule. A break between digits or other letters is kept.
+
+    With ``skip_duration_widget_lines`` a line holding nothing but a
+    duration ("03:00:00") is left out, so a protocols.io step whose text
+    layer draws the stated time again as its own block ("... for 3 h." /
+    "03:00:00" / "During that time ...") compares as the sentence the model
+    reads. With ``drop_space_before_punctuation`` a whitespace run right
+    before ``. , ; : )`` is left out ("for 00:30:00 ." compares as "for
+    00:30:00."). Both are the human decision of 2026-10-06 (lane PX, rule
+    7, from lane PA's (w) and (p)): comparison forms only, tried after the
+    forms above, so the page text, its hash and the evidence identities are
+    untouched and anything the earlier forms accept is still accepted.
     """
 
     normalized: list[str] = []
     starts: list[int] = []
     ends: list[int] = []
     units: list[tuple[str, int, int, bool]] = []
+    skipped: list[tuple[int, int]] = (
+        [match.span() for match in _DURATION_WIDGET_LINE.finditer(value)]
+        if skip_duration_widget_lines else []
+    )
     index = 0
     while index < len(value):
+        if skipped and skipped[0][0] == index:
+            index = skipped.pop(0)[1]
+            if units and units[-1][3]:
+                # The break before the widget and the one after it are one
+                # whitespace run once the widget is gone.
+                units.pop()
+            if index < len(value) and not value[index].isspace() and units:
+                units.append((" ", index, index, True))
+            continue
         if value[index].isspace():
             start = index
             while index < len(value) and value[index].isspace():
@@ -928,6 +961,14 @@ def _normalized_text_with_bounds(
                 and _is_hangul(units[-1][0])
                 and _is_hangul(value[index])
                 and any(character in "\n\r" for character in value[start:index])
+            ):
+                continue
+            if (
+                drop_space_before_punctuation
+                and units
+                and index < len(value)
+                and value[index] in _SPACE_BEFORE_PUNCTUATION
+                and not (skipped and skipped[0][0] == index)
             ):
                 continue
             units.append((" ", start, index, True))
@@ -963,12 +1004,20 @@ def _comparison_forms(ocr_derived: bool) -> tuple[dict[str, bool], ...]:
 
     Every form is tried, so an excerpt accepted in an earlier form is still
     accepted ("5- 10" for a source "5-" / "10", "날 짜" for "날" / "짜"), and a
-    span found by several forms is the same source span, counted once.
+    span found by several forms is the same source span, counted once. The
+    forms that also discount protocols.io time marks (lane PX, rule 7) come
+    after every form that does not.
     """
 
     hangul = (False, True) if ocr_derived else (False,)
     return tuple(
-        {"join_line_end_hyphens": join, "join_hangul_line_breaks": joined}
+        {
+            "join_line_end_hyphens": join,
+            "join_hangul_line_breaks": joined,
+            "skip_duration_widget_lines": time_marks,
+            "drop_space_before_punctuation": time_marks,
+        }
+        for time_marks in (False, True)
         for joined in hangul
         for join in (False, True)
     )

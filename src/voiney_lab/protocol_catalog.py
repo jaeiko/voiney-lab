@@ -165,6 +165,9 @@ _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 _DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
 _DEVELOPMENT_DEACTIVATION_EVENT = "protocol_development_deactivated"
+#: The authority an upload-time OCR acceptance is recorded under (lane PX,
+#: decision 3). A person's review carries ``human_review``.
+AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
 _OCR_REQUESTED_EVENT = "protocol_ocr_requested"
 _OCR_COMPLETED_EVENT = "protocol_ocr_completed"
 _OCR_FAILED_EVENT = "protocol_ocr_failed"
@@ -352,9 +355,17 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "'분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 듭니다). "
         "원문은 바뀌지 않습니다."
     ),
+    "protocol_analysis_invalid_response": (
+        "분석 모델의 응답이 정해진 형식(JSON 스키마)에 맞지 않아 결과를 쓰지 않았습니다. "
+        "'분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 듭니다). "
+        "원문은 바뀌지 않습니다."
+    ),
     "ocr_required": (
-        "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 이 먼저 필요합니다. "
-        "'OCR 텍스트 추출'을 누르고 원문과 대조해 승인한 뒤 분석하세요."
+        "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 글이 먼저 필요합니다. "
+        "업로드 때 OCR 이 자동으로 돌지 않았다면 OCR 공급자 설정"
+        "(VOINEY_LAB_OCR_PROVIDERS 와 그 엔진의 키)을 확인하고 서버를 다시 시작한 뒤 "
+        "PDF 를 다시 올리거나 'OCR 텍스트 추출'을 누르세요. OCR 이 끝나면 분석이 "
+        "바로 시작됩니다."
     ),
     "protocol_pdf_too_large": (
         "PDF 가 등록 한도보다 큽니다. 더 작은 파일로 다시 올리세요."
@@ -364,6 +375,136 @@ _DEFAULT_ANALYSIS_RECOVERY_ACTION = (
     "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
     "바뀌지 않습니다."
 )
+
+#: One Korean line per readiness reason: what blocks execution and what a
+#: person does about it (lane PX, decision 4 of 2026-10-06). The English
+#: ``ReadinessReason.message`` the domain records is unchanged; the review
+#: carries this beside it as ``message_ko``. ``{pages}`` is filled from the
+#: recorded message by ``readiness_reason_korean``.
+READINESS_REASON_KO: dict[str, str] = {
+    "invalid_protocol": "구조화된 프로토콜이 올바르지 않습니다. '분석 다시 시도'를 누르세요.",
+    "source_text_cross_check_failed": (
+        "옛 추출 대조 판정입니다(2026-10-02 뒤로는 만들어지지 않음). 분석을 다시 돌리면 "
+        "사라집니다."),
+    "source_text_cross_check_unavailable": (
+        "옛 추출 대조 판정입니다(2026-10-02 뒤로는 만들어지지 않음). 분석을 다시 돌리면 "
+        "사라집니다."),
+    "no_executable_steps": (
+        "실행할 단계를 원문에서 찾지 못했습니다. 원문을 확인하고 '분석 다시 시도'를 누르세요."),
+    "unsupported_conditional_branch": (
+        "조건·선택 분기(예: '새로 만든 튜브면 36~41단계를 두 번 더 반복')가 있어 아직 실행 "
+        "기능이 없습니다. 테스트 모드에서는 시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_fixed_range_repetition": (
+        "정해진 범위의 단계 반복은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 수 "
+        "있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_operator_determined_repetition": (
+        "작업자가 횟수를 정하는 반복은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 "
+        "수 있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_repeat_until": (
+        "조건이 될 때까지 반복하는 지시는 아직 실행 기능이 없습니다. 테스트 모드에서는 "
+        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_parallel_background_work": (
+        "동시에 또는 백그라운드로 진행하는 작업은 아직 실행 기능이 없습니다. 테스트 "
+        "모드에서는 시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_recurring_reminder": (
+        "반복 알림은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 수 있고, 운영에서는 "
+        "검토자가 판단합니다."),
+    "unsupported_recurring_action": (
+        "일정 간격으로 되풀이하는 동작은 아직 실행 기능이 없습니다. 테스트 모드에서는 "
+        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+    "unsupported_reusable_subprocedure": (
+        "다른 곳에서 다시 쓰는 하위 절차는 아직 실행 기능이 없습니다. 테스트 모드에서는 "
+        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+    "unresolved_ambiguity": (
+        "원문에 서로 다른 두 서술이 있어 어느 쪽이 맞는지 정해지지 않았습니다. 검토자가 "
+        "검토 화면에서 기준이 되는 서술 하나와 그 원문 근거를 고릅니다."),
+    "unresolved_execution_value_conflict": (
+        "실행에 쓰는 값이 서로 충돌합니다. 연구자가 어느 값을 쓸지 정해야 합니다."),
+    "safety_critical_conflict": (
+        "안전에 중요한 충돌이 있어 실행할 수 없습니다. 검토자 확인이 필요합니다."),
+    "no_declared_safety_warnings": (
+        "이 프로토콜의 안전 경고를 검토자가 실행 전에 확인해야 합니다. 분석이 뽑은 경고는 "
+        "모델 판단이라 그 자체로 확인을 대신하지 못합니다."),
+    "source_page_requires_ocr": (
+        "원문 {pages}쪽은 글자 층이 없어 OCR 글이 필요합니다. 업로드 때 OCR 이 돌고 나면 "
+        "다음 분석부터 이 사유는 사라집니다."),
+    "source_page_not_fully_read": (
+        "분석이 원문 {pages}쪽에 적힌 값을 다 다루지 못했습니다. 검토자가 그 쪽을 읽고 "
+        "확인합니다."),
+    "declined_value_not_resolved": (
+        "분석이 지시가 아니라고 본 원문 값이 있습니다. 검토자가 그 판단이 맞는지 확인합니다."),
+    "excessive_declined_values": (
+        "지시가 아니라고 본 원문 값이 너무 많습니다. 쪽을 제대로 읽지 않았을 수 있어 "
+        "검토자가 확인합니다."),
+    "source_states_an_uncaptured_repetition": (
+        "원문에 적힌 반복 지시를 분석이 놓쳤습니다. 검토자가 그 구절을 읽고 확인합니다."),
+    "unconfirmed_fixed_repetition": (
+        "정해진 반복 횟수를 검토자가 실행 전에 확인해야 합니다. 분석이 적은 횟수는 모델 "
+        "판단입니다."),
+    "missing_execution_critical_value": (
+        "실행에 꼭 필요한 값이 원문에 없습니다. 검토자가 원문을 확인합니다."),
+}
+_READINESS_LABEL_KO = {
+    "guidance_ready": "실행 안내 준비 완료",
+    "analysis_required": "실행 전 확인할 사유가 남아 있음",
+}
+_ANALYSIS_REQUIRED_LABEL_KO = "구조 분석이 아직 끝나지 않았습니다."
+_ANALYSIS_REQUIRED_MESSAGE_KO = "검토와 실행에 앞서 구조 분석이 통과해야 합니다. 업로드 직후 자동으로 시작됩니다."
+_PAGE_NUMBERS = re.compile(r"(?<![\w.])\d+(?![\w.])")
+
+#: Where a document stands on its way to a start, in Korean (decision 4).
+PIPELINE_STAGE_KO: dict[str, str] = {
+    "extraction": "원문 읽기",
+    "ocr": "OCR",
+    "analysis": "분석",
+    "evidence": "근거 대조",
+    "readiness": "실행 준비",
+    "activation": "사람 확인",
+    "translation": "번역",
+    "ready": "실행 가능",
+}
+_ANALYSIS_FAILURE_KO: dict[str, str] = {
+    "provider_configuration_missing": "분석 모델 설정이 없어 분석을 시작하지 못했습니다.",
+    "protocol_analysis_timeout": "분석 호출이 제한 시간 안에 끝나지 않았습니다.",
+    "protocol_analysis_invalid_evidence": (
+        "분석 모델이 낸 근거가 원문 쪽의 글과 맞지 않아 결과를 쓰지 않았습니다."),
+    "protocol_analysis_invalid_response": (
+        "분석 모델의 응답이 정해진 형식에 맞지 않아 결과를 쓰지 않았습니다."),
+    "protocol_analysis_not_configured": "분석 모델 설정이 없어 분석을 시작하지 못했습니다.",
+    "ocr_required": "글자 층이 없는 쪽의 OCR 글이 아직 없어 분석할 수 없습니다.",
+    "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
+    "analysis_cancelled": "분석이 취소되었습니다.",
+    "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
+    "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
+}
+
+
+def readiness_reason_korean(code: str, message: str | None = None) -> str | None:
+    """The Korean line for one readiness reason, pages filled in."""
+
+    template = READINESS_REASON_KO.get(code)
+    if template is None:
+        return None
+    if "{pages}" not in template:
+        return template
+    numbers = _PAGE_NUMBERS.findall(message or "")
+    if code == "source_page_not_fully_read":
+        pages = numbers[0] if numbers else "일부"
+    else:
+        pages = ", ".join(numbers) if numbers else "일부"
+    return template.format(pages=pages)
+
+
+def _with_korean_reasons(readiness: dict[str, object]) -> dict[str, object]:
+    status = str(readiness.get("status") or "")
+    readiness["label_ko"] = _READINESS_LABEL_KO.get(status, readiness.get("label"))
+    reasons = readiness.get("reasons")
+    if isinstance(reasons, list):
+        for reason in reasons:
+            if isinstance(reason, dict):
+                reason["message_ko"] = readiness_reason_korean(
+                    str(reason.get("code") or ""), str(reason.get("message") or ""))
+    return readiness
 
 
 def _protocol_id(checksum: str) -> str:
@@ -592,6 +733,9 @@ class ProtocolCatalog:
         on_execution_authorized: (
             Callable[["ProtocolCatalog", str], None] | None
         ) = None,
+        on_analysis_ready: (
+            Callable[["ProtocolCatalog", str], None] | None
+        ) = None,
     ) -> None:
         """``skip_readiness_gates`` is the development test-mode switch.
 
@@ -610,6 +754,24 @@ class ProtocolCatalog:
         #: translated once (``protocol_translation``). It adds no authority
         #: and its failure never undoes the decision already recorded.
         self.on_execution_authorized = on_execution_authorized
+        #: Told the protocol id as soon as an analysis has passed and is
+        #: waiting for review -- the moment its sentences start being
+        #: translated (lane PX, human decision 1 of 2026-10-06), so the
+        #: Korean is ready by the time a person makes it executable. Like
+        #: the hook above it adds no authority and its failure changes
+        #: nothing the catalog recorded.
+        self.on_analysis_ready = on_analysis_ready
+
+    def _analysis_ready(self, entry: ProtocolCatalogEntry) -> None:
+        if self.on_analysis_ready is None or entry.analysis_status != "review_required":
+            return
+        try:
+            self.on_analysis_ready(self, entry.protocol_id)
+        except Exception as exc:  # noqa: BLE001 - see on_analysis_ready
+            logging.getLogger(__name__).warning(
+                "protocol.analysis_ready.hook_failed protocol_id=%s error=%s",
+                entry.protocol_id, type(exc).__name__,
+            )
 
     def _execution_authorized(self, entry: ProtocolCatalogEntry) -> None:
         if self.on_execution_authorized is None or not entry.available_for_execution:
@@ -820,17 +982,35 @@ class ProtocolCatalog:
                 raise ProtocolOcrReviewError(
                     "Accepted OCR page evidence failed integrity validation."
                 )
+            # A page the provider kept from the text layer is not OCR text;
+            # a provider that names one engine for every page names it on
+            # the result only.
+            ocr_derived = (
+                (page.get("provider") or result_provider) != OCR_TEXT_LAYER_PROVIDER
+            )
+            original = extraction.pages[expected_number - 1]
+            # The text layer's own page keeps its geometry: the footer band
+            # and the text blocks the page-boundary rule (lane PA, decision
+            # 3) reads. Measured 2026-10-06 (lane PX): with them dropped for
+            # every page after an OCR acceptance, ANKOM's step 21 -- "21
+            # Flush procedure:" ending page 19, its sentence opening page 20
+            # -- was refused, while the same response passed on the raw
+            # extraction. OCR text has no geometry, so an OCR page keeps none.
+            keeps_text_layer = not ocr_derived and page["text"] == original.text
             reconstructed.append(
                 ProtocolPdfPage(
                     source_page_number=expected_number,
                     text=page["text"],
                     text_empty=not page["text"].strip(),
-                    warning="Text was produced by OCR and accepted for structured review.",
-                    # A page the provider kept from the text layer is not OCR
-                    # text; a provider that names one engine for every page
-                    # names it on the result only.
-                    ocr_derived=(page.get("provider") or result_provider)
-                    != OCR_TEXT_LAYER_PROVIDER,
+                    warning=(
+                        original.warning if keeps_text_layer
+                        else "Text was produced by OCR and accepted for structured review."
+                    ),
+                    bottom_band_offset=(
+                        original.bottom_band_offset if keeps_text_layer else None
+                    ),
+                    blocks=original.blocks if keeps_text_layer else (),
+                    ocr_derived=ocr_derived,
                 )
             )
         return replace(
@@ -852,7 +1032,21 @@ class ProtocolCatalog:
         provider: ProtocolOcrProvider,
         *,
         ocr_id: str,
+        accepted_automatically: bool = False,
     ) -> dict[str, object]:
+        """Read the pages without a usable text layer with the OCR provider.
+
+        With ``accepted_automatically`` (lane PX, human decision 3 of
+        2026-10-06: OCR runs at upload for the pages whose text layer is
+        missing or unreadable) the validated result is accepted for analysis
+        at once, under the authority ``automatic_upload_ocr`` written into
+        the ledger, and the one confirmation a person gives before execution
+        (test-mode start, or review and approval) covers it; there is no
+        separate OCR approval step. Each OCR page keeps its provider and its
+        numeric-review mark, so the review still shows which pages came from
+        OCR and where the two engines read different numbers.
+        """
+
         if not _STABLE_PROTOCOL_ID.fullmatch(ocr_id):
             raise ProtocolOcrReviewError("OCR request identity is invalid.")
         revision = self._latest_protocol_revision(protocol_id)
@@ -907,6 +1101,35 @@ class ProtocolCatalog:
                 _OCR_COMPLETED_EVENT,
                 payload,
             )
+            if accepted_automatically:
+                ocr_pages = [
+                    page.source_page_number for page in validated.pages
+                    if page.provider != OCR_TEXT_LAYER_PROVIDER
+                    and (page.provider is not None
+                         or validated.provider != OCR_TEXT_LAYER_PROVIDER)
+                ]
+                self.store.append_event(
+                    f"ocr-reviewed-{ocr_id}-accepted",
+                    protocol_id,
+                    revision.revision_number,
+                    _OCR_REVIEWED_EVENT,
+                    {
+                        "ocr_id": ocr_id,
+                        "decision": "accepted",
+                        "authority": AUTOMATIC_OCR_AUTHORITY,
+                        "comment": (
+                            "Upload-time OCR of the pages without a usable text "
+                            "layer; covered by the one confirmation a person "
+                            "gives before execution."
+                        ),
+                        "executable": False,
+                        "ocr_page_numbers": ocr_pages,
+                        "numeric_review_page_numbers": [
+                            page.source_page_number for page in validated.pages
+                            if page.numeric_review_required
+                        ],
+                    },
+                )
         except Exception as exc:
             failure_code = getattr(exc, "code", "protocol_ocr_failed")
             if not isinstance(failure_code, str) or not re.fullmatch(
@@ -1717,10 +1940,12 @@ class ProtocolCatalog:
             "readiness": {
                 "status": domain.ReadinessStatus.ANALYSIS_REQUIRED.value,
                 "label": "Structured analysis has not been completed.",
+                "label_ko": _ANALYSIS_REQUIRED_LABEL_KO,
                 "reasons": [
                     {
                         "code": entry.analysis_status,
                         "message": "Explicit structured analysis is required before review or execution.",
+                        "message_ko": _ANALYSIS_REQUIRED_MESSAGE_KO,
                     }
                 ],
             },
@@ -1734,6 +1959,12 @@ class ProtocolCatalog:
             },
             "reviewer_actions": ["retry_analysis"],
         }
+        ocr_projection = base["ocr"]
+        base["pipeline"] = self._pipeline(
+            entry, analysis, revision,
+            ocr=ocr_projection if isinstance(ocr_projection, dict) else {},
+            failure_code=latest_failure,
+        )
         if analysis is None:
             return base
 
@@ -1778,7 +2009,7 @@ class ProtocolCatalog:
                     }
                     for construct in protocol.constructs
                 ],
-                "readiness": _review_value(analysis.readiness),
+                "readiness": _with_korean_reasons(_review_value(analysis.readiness)),
                 "capability_policy_id": analysis.capability_policy_id,
                 "analysis_payload_sha256": analysis.payload_sha256,
                 "page_coverage": [
@@ -1894,6 +2125,156 @@ class ProtocolCatalog:
         },
     }
 
+    def pipeline_status(self, protocol_id: str) -> dict[str, object]:
+        """Where this document stands on the way to a start (lane PX, 4)."""
+
+        revision = self._latest_protocol_revision(protocol_id)
+        entry = self._entry_for_revision(revision)
+        analysis = self._latest_analysis(revision)
+        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
+        if pdf_object is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol source object is unavailable."
+            )
+        source = self.store.file_store.object_path(
+            revision.pdf_checksum, expected_size=pdf_object.byte_size
+        )
+        extraction = extract_protocol_pdf(source)
+        failure = next(
+            (
+                event.payload.get("failure_code")
+                for event in reversed(self.store.list_events(revision.experiment_id))
+                if event.protocol_revision_number == revision.revision_number
+                and event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+                and isinstance(event.payload, dict)
+                and isinstance(event.payload.get("failure_code"), str)
+            ),
+            None,
+        )
+        return self._pipeline(
+            entry, analysis, revision,
+            ocr=self._ocr_projection(revision, extraction, include_text=False),
+            failure_code=failure,
+        )
+
+    def _pipeline(
+        self,
+        entry: ProtocolCatalogEntry,
+        analysis: AnalysisRevisionRecord | None,
+        revision: ProtocolRevisionRecord,
+        *,
+        ocr: dict[str, object],
+        failure_code: str | None,
+    ) -> dict[str, object]:
+        """One Korean line: the stage a document is at, whether it is stuck
+        there, why, and what a person does (lane PX, decision 4).
+
+        Stages, in order: 원문 읽기 → OCR → 분석 → 근거 대조 → 실행 준비 →
+        사람 확인 → 실행 가능. Translation is added by the server, which
+        holds the translation store. A document that reached this method
+        was read, so 원문 읽기 never blocks here.
+        """
+
+        def result(stage: str, *, blocked: bool, message: str, action: str | None = None,
+                   **extra: object) -> dict[str, object]:
+            return {
+                "stage": stage, "stage_ko": PIPELINE_STAGE_KO[stage], "blocked": blocked,
+                "message": message, "action": action, **extra,
+            }
+
+        ocr_state = str(ocr.get("state") or "not_required")
+        ocr_pages = [
+            page["source_page_number"] for page in (ocr.get("pages") or ())
+            if isinstance(page, dict) and page.get("provider") != OCR_TEXT_LAYER_PROVIDER
+            and isinstance(page.get("source_page_number"), int)
+        ] if isinstance(ocr.get("pages"), list) else []
+        if entry.available_for_execution:
+            return result(
+                "ready", blocked=False,
+                message="실행할 수 있습니다. '실행할 프로토콜'에서 골라 실험을 시작하세요.",
+                ocr_page_numbers=ocr_pages)
+        if analysis is None:
+            if ocr_state in {"queued", "in_progress"}:
+                return result(
+                    "ocr", blocked=False,
+                    message="글자 층이 없는 쪽을 OCR 로 읽는 중입니다. 끝나면 분석이 바로 시작됩니다.")
+            if ocr_state in {"failed", "rejected"}:
+                code = str(ocr.get("failure_code") or "protocol_ocr_failed")
+                return result(
+                    "ocr", blocked=True,
+                    message=("OCR 결과를 거절했습니다." if ocr_state == "rejected"
+                             else "글자 층이 없는 쪽의 OCR 이 실패했습니다."),
+                    action="'OCR 텍스트 추출'을 눌러 다시 시도하세요. 원문은 바뀌지 않습니다.",
+                    failure_code=code)
+            if ocr_state == "ocr_required" and entry.analysis_status in {"ocr_required"}:
+                return result(
+                    "ocr", blocked=True,
+                    message="글자 층이 없는 쪽이 있어 OCR 글이 먼저 필요합니다.",
+                    action=("OCR 공급자가 설정돼 있으면 업로드 때 자동으로 돕니다. 돌지 않았다면 "
+                            "서버의 OCR 설정(VOINEY_LAB_OCR_PROVIDERS 와 엔진 키)을 확인하고 "
+                            "'OCR 텍스트 추출'을 누르세요."))
+            if failure_code is not None and entry.lifecycle_state not in {
+                "analysis_pending", "analyzing",
+            }:
+                stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
+                         else "analysis")
+                return result(
+                    stage, blocked=True,
+                    message=_ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다."),
+                    action=_ANALYSIS_RECOVERY_ACTIONS.get(
+                        failure_code, _DEFAULT_ANALYSIS_RECOVERY_ACTION),
+                    failure_code=failure_code)
+            if entry.lifecycle_state in {"analysis_pending", "analyzing"} or (
+                entry.analysis_status in {
+                    "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
+                }
+            ):
+                return result(
+                    "analysis", blocked=False,
+                    message="분석 중입니다. 원문 근거를 확인하고 있습니다.")
+            if entry.analysis_status in {"chunk_analysis_failed", "merge_conflict",
+                                         "chunk_analysis_cancelled"}:
+                return result(
+                    "analysis", blocked=True,
+                    message=_ANALYSIS_FAILURE_KO.get(entry.analysis_status, "분석이 실패했습니다."),
+                    action=_DEFAULT_ANALYSIS_RECOVERY_ACTION)
+            return result(
+                "analysis", blocked=False,
+                message="분석 대기 중입니다. 업로드 직후 자동으로 시작되며, 시작되지 않았다면 "
+                        "'분석 다시 시도'를 누르세요.",
+                ocr_page_numbers=ocr_pages)
+        reasons = list(analysis.readiness.reasons)
+        cleared = self._readiness_gates_cleared(
+            revision.experiment_id, revision.revision_number, analysis)
+        if analysis.readiness.status is domain.ReadinessStatus.GUIDANCE_READY or cleared:
+            return result(
+                "activation", blocked=False,
+                message="분석을 통과했고 남은 준비 사유가 없습니다. 실행 전 사람 확인 한 번이 남았습니다.",
+                action="'이 프로토콜로 시작'을 누르거나, 운영에서는 검토자가 승인합니다.",
+                ocr_page_numbers=ocr_pages)
+        if self.skip_readiness_gates:
+            return result(
+                "activation", blocked=False,
+                message=(f"분석을 통과했습니다. 남은 준비 사유 {len(reasons)}건은 테스트 모드에서 "
+                         "건너뛰고 시작할 수 있습니다."),
+                action="'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다.",
+                remaining_reason_codes=[reason.code.value for reason in reasons],
+                ocr_page_numbers=ocr_pages)
+        first = readiness_reason_korean(
+            reasons[0].code.value, reasons[0].message) if reasons else "실행 준비 사유가 남아 있습니다."
+        capability = [
+            reason.code.value for reason in reasons
+            if reason.code.value not in self._BLOCKER_RESOLUTION
+        ]
+        return result(
+            "readiness", blocked=True,
+            message=f"{first}" + (f" (외 {len(reasons) - 1}건)" if len(reasons) > 1 else ""),
+            action=("실행 기능이 없는 사유가 있어 사람이 해제할 수 없습니다. 테스트 모드에서만 시작할 "
+                    "수 있습니다." if capability
+                    else "검토자가 검토 화면에서 사유를 하나씩 확인·해제한 뒤 승인합니다."),
+            remaining_reason_codes=[reason.code.value for reason in reasons],
+            ocr_page_numbers=ocr_pages)
+
     def _outstanding_blockers(
         self, revision: ProtocolRevisionRecord, analysis: Any
     ) -> list[dict[str, object]]:
@@ -1914,6 +2295,7 @@ class ProtocolCatalog:
                 {
                     "code": code,
                     "message": reason.message,
+                    "message_ko": readiness_reason_korean(code, reason.message),
                     # A capability this profile does not have is not a
                     # judgement anyone is withholding. Saying so is the
                     # difference between "fetch a reviewer" and "wait for a
@@ -2466,7 +2848,9 @@ class ProtocolCatalog:
             "review",
             analysis.analysis_revision_number,
         )
-        return self.get_entry(revision.experiment_id)
+        entry = self.get_entry(revision.experiment_id)
+        self._analysis_ready(entry)
+        return entry
 
     def analyze(
         self,
@@ -2575,7 +2959,9 @@ class ProtocolCatalog:
             },
             analysis_revision_number=analysis.analysis_revision_number,
         )
-        return self.get_entry(protocol_id)
+        entry = self.get_entry(protocol_id)
+        self._analysis_ready(entry)
+        return entry
 
     def request_analysis(self, protocol_id: str, analysis_id: str) -> ProtocolCatalogEntry:
         """Persist an explicit analysis request without contacting a provider."""
@@ -3785,6 +4171,43 @@ class ProtocolCatalog:
             raise ProtocolCatalogUnavailableError(
                 "Protocol revision is not approved and ready for execution."
             )
+        return self._fixture_for_analysis(
+            revision, analysis, entry, status="approved_revision"
+        )
+
+    def load_analysis_fixture(self, protocol_id: str) -> CuratedProtocolFixture:
+        """The fixture a session *would* run for the latest passed analysis.
+
+        For translation only (lane PX, decision 1): the same steps, facts,
+        ``revision_id`` and ``fixture_sha256`` the executable fixture will
+        carry, so the Korean made from it is the Korean the session shows --
+        but marked ``analysis_draft``, and never handed to a session: no
+        authority is read or granted here. Refuses while no analysis has
+        passed.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol analysis is required before translation."
+            )
+        entry = self._entry_for_revision(revision)
+        return self._fixture_for_analysis(
+            revision, analysis, entry,
+            status="approved_revision" if entry.available_for_execution
+            else "analysis_draft",
+        )
+
+    def _fixture_for_analysis(
+        self,
+        revision: ProtocolRevisionRecord,
+        analysis: AnalysisRevisionRecord,
+        entry: ProtocolCatalogEntry,
+        *,
+        status: str,
+    ) -> CuratedProtocolFixture:
+        protocol_id = revision.experiment_id
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
         if pdf_object is None:
             raise ProtocolCatalogUnavailableError(
@@ -3820,7 +4243,7 @@ class ProtocolCatalog:
         )
         return CuratedProtocolFixture(
             draft=draft,
-            status="approved_revision",
+            status=status,
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
             revision_id=entry.revision_id,

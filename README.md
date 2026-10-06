@@ -849,7 +849,7 @@ One PDF engine reads every Protocol PDF, behind one module.
 
 | Component | Job | Licence |
 | --- | --- | --- |
-| `pymupdf` (PyMuPDF / MuPDF), only through `src/voiney_lab/pdf_text_engine.py` | Page count, encryption, document metadata, page text, text blocks (coordinates, font size, bold), and page images for OCR. Runs in a child process per document. | AGPL-3.0 — accepted on 2026-10-02 on the condition that it stays behind that one module, so it can be replaced there without touching the rest of the server |
+| `pymupdf` (PyMuPDF / MuPDF), only through `src/voiney_lab/pdf_text_engine.py` | Page count, encryption, document metadata, page text, text blocks (coordinates, font size, bold), image positions, and page images for OCR. Runs in a child process per document. | AGPL-3.0 / commercial dual licence. Decision of 2026-10-06: PyMuPDF is the one engine; before commercialisation either a commercial PyMuPDF licence is bought or the engine is replaced behind this one module. Accepted on 2026-10-02 on the condition that it stays behind that module, so it can be replaced there without touching the rest of the server |
 | `pypdf` | Not used to read Protocol PDFs. Still used by `curated_protocol.py` and by the tests' PDF fixture writers. | BSD-3-Clause |
 
 What `experiment_protocol_pdf.py` records about a source, independently of the
