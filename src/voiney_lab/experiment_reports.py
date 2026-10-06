@@ -1832,6 +1832,9 @@ def _record_texts(facts: ReportFacts) -> list[str]:
         texts += [step.label, step.text, step.source_text, step.completed_at, step.timer_note, *step.expected]
         if step.source_timer_seconds:
             texts.append(_duration_words(step.source_timer_seconds))
+    # The source steps the model reads for the items' uses (decision 4) are
+    # the source too, performed or not.
+    texts += [text for _, text in facts.item_step_texts]
     texts += [f"{record.number} {record.text} {record.at}" for record in facts.records]
     texts.append(str(facts.total_steps))
     texts.append(" ".join(str(n) for n in range(1, facts.total_steps + 1)))

@@ -214,6 +214,7 @@ class ItemUseTests(_ReportCase):
         self.store.finalize(self.report_id, status="stopped", event_key="turn-final")
 
     def write(self, reply) -> tuple[er.ReportNarrative, _Client]:
+        er._NARRATIVE_CACHE.clear()  # each reply is a new call, not the record's kept narrative
         client = _Client(reply)
         brain = er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=5)
         doc = self.doc()
@@ -280,6 +281,15 @@ class ItemUseTests(_ReportCase):
             {"번호": 8, "용도": "피펫 용액 흡입 조절기"}, {"번호": 7, "용도": "증기 흡입 주의"}]))
         self.assertEqual(dict(narrative.item_uses), {"Glass Pasteur pipette (150 mm)": "피펫 용액 흡입 조절기"})
         self.assertEqual(list(narrative.item_uses_rejected), [("Glass pipettes (10 mL)", "안전 지시 “주의”")])
+
+    def test_a_value_from_an_item_step_the_model_read_is_the_sources(self) -> None:
+        # Live run, D and E: the model read step 21's and step 10's text for
+        # the uses and quoted their values in next_steps; those steps were not
+        # done, and the number check knew only the steps done.
+        narrative, _ = self.write(dict(GOOD_REPLY, next_steps=["4단계에서 포름산을 10% v/v 로 넣는다."]))
+        self.assertEqual(narrative.section_origin["next_steps"], "모델")
+        narrative, _ = self.write(dict(GOOD_REPLY, next_steps=["4단계에서 포름산을 37% 로 넣는다."]))
+        self.assertEqual(narrative.rejected["next_steps"], ("기록·원문에 없는 값 37%",))
 
     def test_no_model_a_failed_call_or_no_passing_use_leaves_no_use_column(self) -> None:
         server = er.ReportWriterBrain().build_deterministic_narrative(
