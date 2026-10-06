@@ -502,6 +502,64 @@ Decisions of 2026-10-06, from two voice tests:
   research step is announced unless it has something to show, so nothing ends
   in "웹 참고 자료 확인 제한".
 
+## Spills, going back within a repeat, and a later start (lane R7)
+
+Decisions of 2026-10-06, from gaps lane RP found running an in-gel day on the
+rules' path. What is mechanical is a rule; a state change needs an explicit
+request, a server check and a yes.
+
+- **Spilling is an anomaly.** "흘렸어", "엎질렀어", "쏟았어", "넘쳤어" and their
+  forms (엎었어, 엎어졌어, 쏟아졌어, 흘러넘쳤어, 넘쳐버렸어, 넘치고 있어, 흘린 것
+  같아, …), with or without what spilled ("튜브를 흘렸어" used to be read as a
+  question about tubes), are recorded as an anomaly at the current step, a
+  question after the spill included ("흘렸는데 어떡해"), and under an open
+  endpoint question too (the question stays open, as for "튜브가 터졌어").
+  Nothing is said about what to do: no guidance the source and the approved
+  safety material do not give. Spilling asked about, supposed, permitted,
+  guarded against or denied ("흘렸어?", "흘려도 돼?", "쏟으면 어떡해?",
+  "흘리지 않게", "안 흘렸어") stays what it was. The emergency gate is unchanged
+  and still runs first.
+- **Going back within a repeat** (`repeat_return` front rule). "2단계로
+  돌아가", "2단계부터 다시 할게", "다시 2단계로", "2단계로 다시 가자" ask
+  "2단계로 돌아갈까요?" only at the step whose source text states a repeat
+  (in-gel: 2-7 at step 7, 8-9 at step 9, 17-18 at step 20) and only for an
+  earlier step of that repeat; a yes moves back ("2단계로 돌아왔습니다."), a no
+  or anything else moves nothing. Elsewhere nothing moves and the reason is
+  said: "원문이 7단계에서 말하는 반복 구간은 2~7단계예요. 1단계는 그 안의 앞
+  단계가 아니어서 이동하지 않았어요.", "원문은 7단계에서 2~7단계를 반복하라고
+  해요. 앞 단계로 돌아가기는 7단계에서만 할 수 있어서 …", "원문은 12단계에서
+  반복 구간을 말하지 않아요. …". A question ("2단계로 돌아가도 돼?") asks
+  nothing.
+  The earlier repeat policy holds: the agent says no number of rounds and
+  never that a round was enough; the hand-over record
+  (`human_led_repeat_disclosure`, `repeat_interval_record`) and
+  `declare_repeat_interval_complete` carry no count; the step that states the
+  repeat still waits on the person's observation of the endpoint.
+- **A later start** (`start_at_step` front rule). Before the experiment, or at
+  its first step, "10단계부터 시작해줘" asks "1~9단계는 건너뛰고 10단계부터
+  시작할까요?"; a yes starts at step 10. Past the first step: "시작 단계는
+  실험을 시작하기 전이나 1단계에서만 고를 수 있어요." "1단계부터 시작해줘" is the
+  ordinary start.
+- **What is recorded** (`CuratedProtocolTurnPlan.step_record`, written by
+  `server.py`'s event mapping, in the payload as `step_record`):
+  - a return: experiment-report event `repeat_returned` at the step returned
+    to, with `repetition_id`, `repeated_step_labels`, `from_step`, `to_step`,
+    `returns_confirmed` and `round` (`round_counted_from:
+    "confirmed_returns"` -- a round run without a spoken return is not in it);
+    the workspace session moves to that step (`repeat_returned`);
+  - a step completed again in a later round: `step_completed` with `round`
+    and `completed_before`; a step already marked completed in the workspace
+    is not marked again (the durable session keeps one completion per step);
+  - a later start: `session_started` then `steps_skipped`
+    (`skipped_step_labels`, `skipped_step_ids`, `start_step`), or
+    `steps_skipped` alone at the first step; the workspace session starts at
+    that step.
+- **Resuming after a return.** `restore_experiment_progress` also accepts a
+  run that went back within a repeat: every step before the current one
+  complete, and the steps completed past it inside that repeat. A run started
+  at a later step is not resumed yet: recovery still requires every earlier
+  step completed, and the server does not pass the skipped steps to it.
+
 ## Semantic intent fallback
 
 Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
@@ -605,7 +663,9 @@ On, a turn goes:
   step's source values, said as a sentence or asked back), a quantity asked of
   a named step ("N단계 얼마나 넣어?", "다음 단계는 얼마나 넣어?", "두 번째
   단계 …"), a read-only question naming "2단계" or "이 단계" away from step 2
-  (`step_homophone`, below), and a start of an experiment never started or
+  (`step_homophone`, below), a return to an earlier step of a repeat
+  (`repeat_return`) and a later start (`start_at_step`) with the yes to
+  either (lane R7, above), and a start of an experiment never started or
   already ended. These never wait on a model.
   While paused, a word one letter from "재개" or "다시 시작" ("제개") is asked
   about, "다시 시작할까요?"; a word with a digit ("3개") is not.
