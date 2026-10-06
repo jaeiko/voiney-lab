@@ -1132,3 +1132,10 @@
     .finding-status{color:var(--amber);font-weight:700}
     .audio-echo-notice{margin:.35rem 0 0;color:var(--amber);font-size:.8rem;font-weight:700}
     .audio-echo-notice[hidden]{display:none}
+
+    /* Lane U2 decisions 3–4: microphone choice and recovery. */
+    .mic-device-status{display:block;margin-top:.2rem;color:var(--muted);font-size:.74rem}
+    .mic-device-status:empty{display:none}
+    .mic-recovery{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.45rem 0 0;padding:.55rem .7rem;border:1px solid var(--amber);border-radius:var(--radius-sm);color:var(--amber);font-size:.82rem;font-weight:700}
+    .mic-recovery[hidden]{display:none}
+    .mic-recovery button{font-weight:800}

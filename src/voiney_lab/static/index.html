@@ -65,6 +65,10 @@
               <div id="state">준비</div>
               <div id="status">준비됨 · 세션 시작을 한 번 눌러주세요.</div>
               <p id="audio-echo-notice" class="audio-echo-notice" role="status" hidden></p>
+              <div id="mic-recovery" class="mic-recovery" role="alert" hidden>
+                <span id="mic-recovery-text"></span>
+                <button id="mic-reconnect" type="button">마이크 다시 연결</button>
+              </div>
             </div>
             <div class="controls">
               <button id="start" type="button" disabled>새 실험 시작</button>
@@ -110,6 +114,9 @@
                 <option value="auto">자동 감지</option>
                 <option value="en">English</option>
               </select></label>
+              <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
+                <option value="">기본 마이크 (시스템 설정)</option>
+              </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
             </div>
             <details id="protocol-review-panel" class="protocol-review" hidden open>
               <summary>올린 PDF 검토 · 원문 근거와 실행 준비</summary>
@@ -1791,20 +1798,120 @@ function resamplePcm16(input,sourceRate,targetRate){
  for(let i=0;i<length;i++){const position=i*sourceRate/targetRate,left=Math.min(Math.floor(position),input.length-1),right=Math.min(left+1,input.length-1),fraction=position-left,sample=input[left]*(1-fraction)+input[right]*fraction;output[i]=Math.max(-32768,Math.min(32767,Math.round(sample*32767)));}
  return output;
 }
+// Lane U2 (2026-10-06): the microphone is opened once per session and kept
+// open across turns, playback, pause and resume. Nothing here closes or
+// reopens it on its own except a device that went away: a track that ended
+// or a devicechange that took the device with it. Then, after a short wait,
+// it is opened again once; a second loss within MIC_AUTO_RECONNECT_GAP_MS, or
+// a failed attempt, stops and shows the reason with a "마이크 다시 연결"
+// button. Frames are sent exactly as before: while the session is active
+// and the socket is open (the worklet handler below is unchanged).
+const MIC_RECONNECT_DELAY_MS=800,MIC_AUTO_RECONNECT_GAP_MS=30000,MIC_DEVICE_STORAGE_KEY="voiney-lab.mic-device";
+let micReconnectTimer=null,micReconnecting=false,micAutoReconnectAt=0,micTrackWatched=null;
+function readStoredMicDevice(){try{const raw=localStorage.getItem(MIC_DEVICE_STORAGE_KEY),value=raw?JSON.parse(raw):null;return value&&typeof value.deviceId==="string"&&value.deviceId?{deviceId:value.deviceId,label:typeof value.label==="string"?value.label:""}:null;}catch(_){return null;}}
+function storeMicDevice(value){try{if(value)localStorage.setItem(MIC_DEVICE_STORAGE_KEY,JSON.stringify(value));else localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);}catch(_){}}
+async function listMicDevices(){try{const all=await navigator.mediaDevices?.enumerateDevices?.();return Array.isArray(all)?all.filter(item=>item.kind==="audioinput"&&item.deviceId&&!["default","communications"].includes(item.deviceId)):[];}catch(_){return [];}}
+// The chosen device when it is connected now (by id, else by its name, which
+// Safari keeps while it rotates ids); null means the system default.
+function chosenMicDeviceId(inputs){const stored=readStoredMicDevice();if(!stored)return null;const byId=inputs.find(item=>item.deviceId===stored.deviceId);if(byId)return byId.deviceId;const byLabel=stored.label?inputs.find(item=>item.label===stored.label):null;return byLabel?byLabel.deviceId:null;}
+async function renderMicDevices(inputs=null){
+ const select=$("mic-device");if(!select)return;
+ const list=inputs||await listMicDevices(),stored=readStoredMicDevice(),chosen=chosenMicDeviceId(list);
+ select.replaceChildren();
+ const fallback=document.createElement("option");fallback.value="";fallback.textContent="기본 마이크 (시스템 설정)";select.appendChild(fallback);
+ list.forEach((item,index)=>{const option=document.createElement("option");option.value=item.deviceId;option.textContent=item.label||`마이크 ${index+1}`;select.appendChild(option);});
+ if(stored&&!chosen){const missing=document.createElement("option");missing.value=stored.deviceId;missing.textContent=`${stored.label||"고른 마이크"} · 연결 안 됨, 기본 마이크 사용`;select.appendChild(missing);}
+ select.value=stored?(chosen||stored.deviceId):"";
+}
+function currentMicTrack(){return micStream?.getAudioTracks?.()[0]||micStream?.getTracks?.()[0]||null;}
+async function openMicStream(){
+ const supported=navigator.mediaDevices.getSupportedConstraints?.()||null,audioConstraints={channelCount:1};
+ for(const name of ["echoCancellation","noiseSuppression","autoGainControl"]){if(!supported||supported[name]===true)audioConstraints[name]=true;}
+ if(readStoredMicDevice()){const deviceId=chosenMicDeviceId(await listMicDevices());if(deviceId)audioConstraints.deviceId={exact:deviceId};}
+ return {stream:await navigator.mediaDevices.getUserMedia({audio:audioConstraints}),audioConstraints};
+}
+function reportMicSettings(stream,audioConstraints){
+ const names=["echoCancellation","noiseSuppression","autoGainControl"],track=stream.getAudioTracks?.()[0]||stream.getTracks?.()[0]||null,settings=track?.getSettings?.()||{},actual=Object.fromEntries(names.map(name=>[name,typeof settings[name]==="boolean"?settings[name]:null]));
+ sendControl("client.audio_constraints",{requested:Object.fromEntries(names.map(name=>[name,audioConstraints[name]===true])),actual});
+ setText("audio-processing-capability",actual.echoCancellation===true?"에코 제거 확인":actual.echoCancellation===false?"에코 제거 꺼짐 · 헤드폰 권장":"에코 제거 확인 불가 · 헤드폰 권장");
+ // Lane U decision 7: when the browser did not turn echo cancellation on,
+ // the speaker can be heard again as the researcher's words. Say so in the
+ // body, with what to do, instead of only in the developer chip.
+ const echoNotice=$("audio-echo-notice");if(echoNotice){echoNotice.hidden=actual.echoCancellation===true;echoNotice.textContent=actual.echoCancellation===true?"":"이 마이크는 에코 제거가 켜지지 않아 스피커 소리가 내 말로 들어갈 수 있습니다. 헤드폰을 쓰거나 스피커 소리를 줄이세요.";}
+ const name=track?.label;setText("mic-device-status",name?`사용 중 · ${name}`:"");
+}
+function onMicTrackEnded(){scheduleMicReconnect("ended");}
+function watchMicTrack(){
+ if(micTrackWatched){try{micTrackWatched.removeEventListener?.("ended",onMicTrackEnded);}catch(_){}micTrackWatched=null;}
+ const track=currentMicTrack();if(track?.addEventListener){track.addEventListener("ended",onMicTrackEnded);micTrackWatched=track;}
+}
+function showMicRecovery(text){
+ const box=$("mic-recovery");if(!box)return;
+ setText("mic-recovery-text",text);box.hidden=false;
+ const button=$("mic-reconnect");if(button)setDisabled(button,false);
+ if(visibleState==="LISTENING")$("status").textContent="마이크가 끊겼습니다 · 아래 ‘마이크 다시 연결’을 눌러 주세요.";
+ announceMilestone(text);
+}
+function hideMicRecovery(){const box=$("mic-recovery");if(box)box.hidden=true;setText("mic-recovery-text","");}
+function micErrorText(error){
+ const name=error?.name||"";
+ if(name==="NotAllowedError"||name==="SecurityError")return "브라우저가 마이크 사용을 막았습니다. 주소창의 마이크 권한을 허용한 뒤 다시 연결하세요.";
+ if(name==="NotFoundError"||name==="OverconstrainedError")return "연결된 마이크를 찾지 못했습니다. 마이크(아이폰·헤드셋)가 연결됐는지 확인한 뒤 다시 연결하세요.";
+ if(name==="NotReadableError"||name==="AbortError")return "마이크가 응답하지 않습니다. 다른 앱이 마이크를 쓰고 있지 않은지 확인한 뒤 다시 연결하세요.";
+ return "마이크를 다시 열지 못했습니다. 마이크 연결을 확인한 뒤 다시 연결하세요.";
+}
+// "lost": the track ended or its device is gone. "switch": it works, but the
+// chosen device is back and differs. null: nothing to do.
+async function micReconnectNeed(){
+ const track=currentMicTrack();if(!track||track.readyState!=="live")return "lost";
+ let inputs;try{const listed=await navigator.mediaDevices?.enumerateDevices?.();if(!Array.isArray(listed))return null;inputs=listed.filter(item=>item.kind==="audioinput");}catch(_){return null;}
+ // The track's device is still listed by id, or, for the "default" entry
+ // whose id does not name the hardware, by its name.
+ const current=track.getSettings?.().deviceId,label=track.label||"";
+ if(!inputs.some(item=>(current&&item.deviceId===current&&!["default","communications"].includes(current))||(label&&item.label&&(item.label===label||item.label.endsWith(label)))))return "lost";
+ const wanted=chosenMicDeviceId(inputs.filter(item=>item.deviceId&&!["default","communications"].includes(item.deviceId)));
+ return wanted&&current&&wanted!==current?"switch":null;
+}
+function scheduleMicReconnect(reason){
+ if(!micWorkletNode||micReconnectTimer||micReconnecting)return;
+ const generation=sessionGeneration;
+ micReconnectTimer=setTimeout(()=>{micReconnectTimer=null;void autoReconnectMic(reason,generation);},MIC_RECONNECT_DELAY_MS);
+}
+async function autoReconnectMic(reason,generation){
+ if(generation!==sessionGeneration||!micWorkletNode||micReconnecting)return;
+ const need=await micReconnectNeed();if(!need||generation!==sessionGeneration)return;
+ if(Date.now()-micAutoReconnectAt<MIC_AUTO_RECONNECT_GAP_MS){if(need==="lost")showMicRecovery("마이크 연결이 다시 끊겼습니다. 마이크 연결을 확인한 뒤 다시 연결하세요.");return;}
+ micAutoReconnectAt=Date.now();
+ await reconnectMic(generation,reason);
+}
+async function reconnectMic(generation=sessionGeneration,reason="manual"){
+ if(micReconnecting||!micWorkletNode||!micContext)return false;
+ micReconnecting=true;setText("mic-device-status","마이크를 다시 연결하는 중…");
+ const button=$("mic-reconnect");if(button)setDisabled(button,true);
+ try{
+  const {stream,audioConstraints}=await openMicStream();
+  if(generation!==sessionGeneration||!micWorkletNode||!micContext){for(const track of stream.getTracks?.()||[])try{track.stop();}catch(_){}return false;}
+  const previous=micStream,source=micContext.createMediaStreamSource(stream);
+  if(micSource){try{micSource.disconnect();}catch(_){}}
+  micStream=stream;micSource=source;micSource.connect(micWorkletNode);
+  if(previous&&previous!==stream){try{for(const track of previous.getTracks())track.stop();}catch(_){}}
+  watchMicTrack();reportMicSettings(stream,audioConstraints);hideMicRecovery();
+  if(micContext.state!=="running")await micContext.resume();
+  if(visibleState==="LISTENING")$("status").textContent="마이크를 다시 연결했습니다 · 듣고 있습니다…";
+  announceMilestone("마이크를 다시 연결했습니다.");void renderMicDevices();
+  return true;
+ }catch(error){
+  if(generation===sessionGeneration&&micWorkletNode)showMicRecovery(`${reason==="manual"?"":"마이크 연결이 끊겼고 다시 연결하지 못했습니다. "}${micErrorText(error)}`);
+  return false;
+ }finally{micReconnecting=false;}
+}
 async function ensureAudio(generation){
  if(!micWorkletNode){
   if(typeof AudioWorkletNode!=="function")throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");
-  const supported=navigator.mediaDevices.getSupportedConstraints?.()||null,audioConstraints={channelCount:1};
-  for(const name of ["echoCancellation","noiseSuppression","autoGainControl"]){if(!supported||supported[name]===true)audioConstraints[name]=true;}
-  micStream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});
+  const opened=await openMicStream();
+  micStream=opened.stream;
   try{
-   const names=["echoCancellation","noiseSuppression","autoGainControl"],track=micStream.getAudioTracks?.()[0]||micStream.getTracks?.()[0]||null,settings=track?.getSettings?.()||{},actual=Object.fromEntries(names.map(name=>[name,typeof settings[name]==="boolean"?settings[name]:null]));
-   sendControl("client.audio_constraints",{requested:Object.fromEntries(names.map(name=>[name,audioConstraints[name]===true])),actual});
-   setText("audio-processing-capability",actual.echoCancellation===true?"에코 제거 확인":actual.echoCancellation===false?"에코 제거 꺼짐 · 헤드폰 권장":"에코 제거 확인 불가 · 헤드폰 권장");
-   // Lane U decision 7: when the browser did not turn echo cancellation on,
-   // the speaker can be heard again as the researcher's words. Say so in the
-   // body, with what to do, instead of only in the developer chip.
-   const echoNotice=$("audio-echo-notice");if(echoNotice){echoNotice.hidden=actual.echoCancellation===true;echoNotice.textContent=actual.echoCancellation===true?"":"이 마이크는 에코 제거가 켜지지 않아 스피커 소리가 내 말로 들어갈 수 있습니다. 헤드폰을 쓰거나 스피커 소리를 줄이세요.";}
+   reportMicSettings(micStream,opened.audioConstraints);
    micContext=new AudioContext();
    if(!micContext.audioWorklet?.addModule)throw new Error("이 브라우저는 AudioWorklet을 지원하지 않습니다.");
    await micContext.audioWorklet.addModule("/mic-capture-worklet.js");
@@ -1826,6 +1933,7 @@ async function ensureAudio(generation){
     socket.send(p.buffer);
    };
    micSource.connect(micWorkletNode);
+   micAutoReconnectAt=0;watchMicTrack();hideMicRecovery();void renderMicDevices();
   }catch(error){await closeAudio();throw error;}
  }
  playContext||=new AudioContext();
@@ -1836,6 +1944,9 @@ async function ensureAudio(generation){
  }
 }
 async function closeAudio(){
+ if(micReconnectTimer){clearTimeout(micReconnectTimer);micReconnectTimer=null;}
+ if(micTrackWatched){try{micTrackWatched.removeEventListener?.("ended",onMicTrackEnded);}catch(_){}micTrackWatched=null;}
+ hideMicRecovery();setText("mic-device-status","");
  if(micWorkletNode){
   try{micWorkletNode.port.onmessage=null;}catch(_){}
   try{micWorkletNode.disconnect();}catch(_){}
@@ -2438,6 +2549,13 @@ async function onMessage(e,generation,current){
  if(m.type==="error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;renderLanguageState(acknowledgedLanguageMode,acknowledgedLanguage);fail(researcherErrorMessage(m.message),m.turn_id);}
 }
 
+// Lane U2 decisions 3–4: the chosen microphone is remembered in this
+// browser; a device that comes or goes refreshes the list and, while a
+// session holds the microphone, is checked once after a short wait.
+$("mic-device")?.addEventListener("change",async event=>{const value=event.target.value,device=(await listMicDevices()).find(item=>item.deviceId===value);storeMicDevice(value?{deviceId:value,label:device?.label||readStoredMicDevice()?.label||""}:null);if(micWorkletNode)await reconnectMic(sessionGeneration,"manual");else void renderMicDevices();});
+$("mic-reconnect")?.addEventListener("click",()=>{void reconnectMic(sessionGeneration,"manual");});
+globalThis.navigator?.mediaDevices?.addEventListener?.("devicechange",()=>{void renderMicDevices();if(micWorkletNode)scheduleMicReconnect("devicechange");});
+void renderMicDevices();
 $("start").addEventListener("click",startSession);$("stop").addEventListener("click",stopSession);init();
 $("rail-new-session")?.addEventListener("click",confirmNewSession);
 $("rail-pause-session")?.addEventListener("click",togglePauseSession);
