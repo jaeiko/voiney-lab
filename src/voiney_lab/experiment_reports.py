@@ -1504,7 +1504,14 @@ _IDENTIFIER_SHAPES = (
     ("영어 상태값·명령 이름", re.compile(
         r"\b(?:[a-z]+(?:_[a-z]+)+|stopped|completed|blocked|incomplete|in progress)\b")),
 )
-_QUOTED = re.compile(r"[“\"‘'「『]([^”\"’'」』]{2,})[”\"’'」』]")
+#: A quotation is closed by its own closing mark: a straight quote by a
+#: straight quote, “ by ”, and so on. A record that itself holds curly quotes
+#: (an endpoint answer quotes the source) can then sit inside straight ones.
+_QUOTE_MARKS = (('"', '"'), ("“", "”"), ("‘", "’"), ("'", "'"), ("「", "」"), ("『", "』"))
+_QUOTED = re.compile("|".join(
+    f"{re.escape(opening)}([^{re.escape(closing)}]{{2,}}){re.escape(closing)}"
+    for opening, closing in _QUOTE_MARKS
+))
 _SPECULATION = ("추정", "것으로 보인", "보인다", "아마", "가능성", "것 같", "듯하", "듯이", "인 듯", "한 듯")
 _SENTENCE = re.compile(r"(?<=[.!?。])\s+")
 
@@ -1658,8 +1665,8 @@ def check_report_sections(
                     problems.append(f"추측 표현 “{word}”")
                     break
         if key == "results_summary":
-            for quoted in _QUOTED.findall(text):
-                quoted = " ".join(quoted.split())
+            for match in _QUOTED.finditer(text):
+                quoted = " ".join(next(group for group in match.groups() if group is not None).split())
                 if not any(quoted in record or record in quoted for record in record_texts):
                     problems.append(f"기록에 없는 관찰 “{quoted[:30]}”")
                     break

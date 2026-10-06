@@ -620,3 +620,32 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertIn("| 4 | 사진 | 사진 첨부 — gel.png | 10:30 |", text)
         self.assertIn(GOOD_REPLY["purpose"], text)
         self.assertEqual(len(client.calls), 1)
+
+
+class QuotedObservationTests(_ReportCase):
+    """The results check pairs each quotation mark with its own closing mark.
+
+    Found in the round-2 live run (scenario C): a recorded endpoint answer
+    quotes the source in curly quotes; the model quoted that record in
+    straight quotes, and the check paired the marks wrongly and refused a
+    sentence that only quoted the record.
+    """
+
+    def check(self, results: str) -> list[str]:
+        self.event("00:30", "session_started", "1")
+        self.event("00:31", "observation", "4",
+                   user_wording="원문 종점 “The gel should look white.” — 답: 네",
+                   confirmation_state="user_reported")
+        self.event("00:32", "observation", "4", user_wording="젤 조각이 다 흡수했어",
+                   confirmation_state="user_reported")
+        facts = er.ReportWriterBrain.facts_for(self.doc(), fixture=self.fixture)
+        return er.check_report_sections({"results_summary": results}, facts).get("results_summary", [])
+
+    def test_a_record_with_curly_quotes_quoted_in_straight_ones_passes(self) -> None:
+        self.assertEqual(self.check(
+            '4단계에서 "원문의 끝 조건(“The gel should look white.”)을 충족했다고 답했다"로 확인되었으며, '
+            '"젤 조각이 다 흡수했어"가 기록되었다.'), [])
+
+    def test_an_unrecorded_quotation_is_still_refused(self) -> None:
+        self.assertEqual(self.check('4단계에서 “젤이 노랗게 변했다”가 기록되었다.'),
+                         ["기록에 없는 관찰 “젤이 노랗게 변했다”"])
