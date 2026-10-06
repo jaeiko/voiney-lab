@@ -604,6 +604,7 @@ const SERVER_CODE_LABELS=Object.freeze({
  analysis_failure:Object.freeze({provider_configuration_missing:"분석 모델 설정 없음",protocol_analysis_not_configured:"분석 모델 설정 없음",protocol_analysis_error:"분석 오류",protocol_analysis_invalid_input:"분석 입력이 올바르지 않음",protocol_analysis_input_too_large:"분석 입력이 너무 큼",protocol_analysis_model_failed:"분석 모델 호출 실패",protocol_analysis_timeout:"분석 시간 초과(제한 시간 안에 끝나지 않음)",protocol_analysis_invalid_response:"분석 모델 응답 형식이 올바르지 않음",protocol_analysis_invalid_evidence:"분석 근거가 원문과 맞지 않음",protocol_analysis_persistence_failed:"분석 결과 저장 실패",chunk_timeout:"문서 일부 분석 시간 초과",chunk_result_too_large:"문서 일부 분석 결과가 너무 큼",invalid_source_revision:"원문 버전이 맞지 않음",analysis_cancelled:"분석 취소됨",analysis_failed:"분석 실패",chunk_analysis_failed:"대형 문서 일부 분석 실패",merge_conflict:"대형 문서 분석 결과 병합 충돌"}),
  construct_type:Object.freeze({ConditionalBranch:"조건 분기",FixedRangeRepetition:"정해진 범위 반복",OperatorDeterminedRepetition:"작업자가 횟수를 정하는 반복",RepeatUntil:"조건 충족까지 반복",ParallelWork:"동시 작업",RecurringAction:"반복 동작",ReusableSubprocedure:"재사용 하위 절차",SourceAmbiguity:"원문의 모호한 부분",ProtocolConflict:"원문 값 충돌"}),
  blocker_kind:Object.freeze({reviewer_can_clear:"검토자가 해제 가능",capability_required:"새 능력 필요 · 사람이 해제 불가"}),
+ pipeline_stage:Object.freeze({extraction:"원문 읽기",ocr:"OCR",analysis:"분석",evidence:"근거 대조",readiness:"실행 준비",activation:"사람 확인",translation:"번역",ready:"실행 가능"}),
  ambiguity_decision:Object.freeze({single_statement_is_authoritative:"한 진술이 기준임",statements_are_distinct:"두 진술은 서로 다른 내용임"}),
  finding_kind:Object.freeze({gate_acknowledged:"확인 처리",repetition_confirmed:"고정 반복 확인",repetition_confirmation_revoked:"고정 반복 확인 철회",ambiguity_resolved:"모호성 해결"}),
  finding_error:Object.freeze({reason_code_required:"확인할 사유가 지정되지 않았습니다",repetition_id_required:"반복 항목이 지정되지 않았습니다",repeat_count_required:"반복 횟수가 지정되지 않았습니다",ambiguity_id_required:"모호한 항목이 지정되지 않았습니다",decision_required:"판단을 선택하지 않았습니다",protocol_catalog_not_found:"프로토콜을 찾을 수 없습니다",protocol_catalog_unavailable:"프로토콜 저장소를 사용할 수 없습니다",protocol_approval_denied:"서버가 이 판단을 받지 않았습니다(권한 문제는 아닙니다). 고른 원문 근거가 이 항목과 맞는지 확인하거나 ‘검토 새로고침’ 뒤 다시 눌러 주세요",authorization_denied:"검토자 계정으로 로그인한 뒤 다시 눌러 주세요",finding_evidence_missing:"원문 근거를 하나 이상 고른 뒤 다시 눌러 주세요",finding_evidence_span_mismatch:"고른 근거가 그 쪽 원문과 맞지 않습니다. ‘검토 새로고침’ 뒤 근거를 다시 골라 주세요",ambiguity_not_found:"이 버전에는 그 모호한 항목이 없습니다. ‘검토 새로고침’ 뒤 다시 확인해 주세요",analysis_revision_missing:"검증된 분석이 아직 없습니다. 분석이 끝난 뒤 다시 눌러 주세요",finding_target_not_found:"이 버전에서 그 항목을 찾지 못했습니다. ‘검토 새로고침’ 뒤 다시 골라 주세요",finding_value_mismatch:"적은 횟수가 분석된 횟수와 다릅니다. 원문을 다시 보고 횟수를 고쳐 주세요",finding_not_recorded:"되돌릴 판단 기록이 없습니다. ‘검토 새로고침’ 뒤 다시 확인해 주세요",finding_unsupported:"이 항목은 이 방법으로 해결할 수 없습니다. 다른 선택지를 골라 주세요",finding_value_invalid:"횟수는 1 이상의 숫자로 적어 주세요",authentication_required:"로그인해야 기록할 수 있습니다. 로그인한 뒤 다시 눌러 주세요",protocol_catalog_error:"서버가 이 기록을 받지 않았습니다. ‘검토 새로고침’ 뒤 다시 눌러 주세요",unexpected_server_error:"서버 오류가 발생했습니다"}),
@@ -2223,6 +2224,7 @@ function renderProtocolBlockers(review){
    +(item.already_acknowledged?" · 확인됨":"")
    +(item.source_page_number?` · p.${item.source_page_number}`:"");
   group.appendChild(row);
+  if(typeof item.message_ko==="string"&&item.message_ko.trim()){const why=document.createElement("p");why.className="protocol-review-status";why.textContent=item.message_ko;group.appendChild(why);}
   if(typeof item.source_excerpt==="string"&&item.source_excerpt.trim()){
    const quote=document.createElement("p");quote.className="protocol-review-status";
    quote.textContent=item.source_excerpt.slice(0,400);group.appendChild(quote);
@@ -2342,6 +2344,16 @@ function renderProtocolReview(review,options={}){
  lastProtocolReview=review;renderProtocolBlockers(review);renderProtocolFindings(review);
  const source=review?.source||{},readiness=review?.readiness||{},reasons=Array.isArray(readiness.reasons)?readiness.reasons:[];
  status.textContent=`${review?.title||source.filename||"업로드 프로토콜"} · ${catalogStatus(review).label}`;
+ // Lane PX decision 4: one line says where the document stands on its way
+ // to a start, whether it is stuck there, why, and what a person does.
+ const pipeline=review?.pipeline&&typeof review.pipeline==="object"?review.pipeline:null;
+ if(pipeline&&typeof pipeline.stage==="string"){
+  const lines=[`${pipeline.blocked===true?"막힘":"진행"} · ${serverCodeText("pipeline_stage",pipeline.stage)} · ${pipeline.message||""}`];
+  if(typeof pipeline.action==="string"&&pipeline.action)lines.push(`할 일 · ${pipeline.action}`);
+  if(Array.isArray(pipeline.ocr_page_numbers)&&pipeline.ocr_page_numbers.length)lines.push(`OCR 쪽 · p.${pipeline.ocr_page_numbers.join(", ")} (글자 층이 없어 OCR 로 읽음)`);
+  if(pipeline.translation&&typeof pipeline.translation.message==="string")lines.push(`번역 · ${pipeline.translation.message}`);
+  appendProtocolReviewGroup("진행 상태",lines,[["pipeline_stage",pipeline.stage],["translation_state",pipeline.translation?.state||null],["failure_code",pipeline.failure_code||null]]);
+ }
  appendProtocolReviewGroup("원문 파일",[
   `파일 · ${source.filename||review?.source_filename||"—"}`,
   `페이지 · ${Number.isInteger(source.page_count)?`${source.page_count}쪽`:"—"} · ${review?.analysis_payload_sha256?"분석 끝남":"분석 전"}`,
@@ -2350,9 +2362,9 @@ function renderProtocolReview(review,options={}){
  appendProtocolReviewGroup("실행 준비 판정",[
   `처리 단계 · ${serverCodeText("lifecycle_state",lifecycleCode)}`,
   `상태 · ${serverCodeText("readiness_status",readinessCode)}`,
-  ...reasons.map(reason=>`${serverCodeText(["readiness_reason","analysis_status"],reason.code)} · ${reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
+  ...reasons.map(reason=>`${serverCodeText(["readiness_reason","analysis_status"],reason.code)} · ${reason.message_ko||reason.message||""}${reason.evidence?` · ${reviewEvidenceText(reason.evidence)}`:""}`),
   review?.available_for_execution===true?"실행 가능":"검토·승인 또는 명시적 개발 활성화 전 실행 불가",
- ],[["lifecycle_state",lifecycleCode],["readiness_status",readinessCode],["readiness_label",typeof readiness.label==="string"?readiness.label:null],...reasons.map(reason=>["reason",reason?.code])]);
+ ],[["lifecycle_state",lifecycleCode],["readiness_status",readinessCode],["readiness_label",typeof readiness.label==="string"?readiness.label:null],...reasons.map(reason=>["reason",reason?.code]),...reasons.map(reason=>["reason_message",typeof reason?.message==="string"?reason.message:null])]);
  const ocr=review?.ocr||{},ocrPages=Array.isArray(ocr.pages)?ocr.pages:[];
  if(ocr.state&&ocr.state!=="not_required"){
   appendProtocolReviewGroup("OCR 원문 대조 · 실행 권한 없음",[

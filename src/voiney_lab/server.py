@@ -234,9 +234,11 @@ from voiney_lab.eln_connectors import (
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
     glossary_entries,
+    is_korean,
     openai_batch_translator,
     openai_glossary_maker,
     translation_revision_key,
+    translation_units,
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
@@ -4840,11 +4842,94 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
                 )
                 and review.get("available_for_execution") is not True
             )
+            review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
             store.close()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+def _pipeline_with_translation(
+    catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
+)->dict[str,object]:
+    """The catalog's stage line, with what the server alone knows (lane PX 4).
+
+    Whether the person's one confirmation is a press here (test mode) or a
+    reviewer's approval, and how far the revision's Korean has come.
+    """
+
+    pipeline=dict(review.get("pipeline") or {})
+    if not pipeline:
+        return pipeline
+    if pipeline.get("stage")=="activation":
+        pipeline["action"]=(
+            "'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다."
+            if review.get("development_activation_allowed") else
+            "검토자가 검토 화면에서 남은 사유를 확인·해제하고 이 분석 버전을 승인하면 "
+            "실행할 수 있습니다.")
+    if review.get("analysis_available") is True:
+        try:
+            pipeline["translation"]=_translation_progress(catalog,protocol_id)
+        except Exception as exc:  # noqa: BLE001 - the stage line stands without it
+            log.warning("revision_translation progress_failed error=%s",type(exc).__name__)
+            pipeline["translation"]={"state":"unknown","message":"번역 상태를 읽지 못했습니다."}
+    return pipeline
+
+
+def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,object]:
+    """How much of a passed analysis's Korean exists, in one Korean line."""
+
+    fixture=catalog.load_analysis_fixture(protocol_id)
+    key=translation_revision_key(fixture)
+    units=translation_units(fixture)
+    step_keys=[f"{step.step_id}/current_step" for step in fixture.steps]
+    korean_source={unit.fact_key for unit in units if is_korean(unit.source_text)}
+    needed=[unit for unit in units if unit.fact_key not in korean_source]
+    store=_revision_translation_store()
+    if store is None:
+        return {
+            "state":"off","units":len(units),"needed":len(needed),
+            "steps_total":len(step_keys),
+            "steps_korean":sum(1 for k in step_keys if k in korean_source),
+            "message":"자동 번역이 꺼져 있습니다(작업공간이 꺼짐). 단계는 원문으로 안내합니다.",
+        }
+    try:
+        rows=store.fact_translations(key,"ko")
+        glossary=glossary_entries(store.translation_glossary(key,"ko"))
+    finally:
+        store.close()
+    attached=with_stored_translations(fixture,rows,glossary)
+    machine=getattr(attached,"machine_localizations",None) or {}
+    reviewed=getattr(attached,"localizations",None) or {}
+    passed={key_ for key_ in (*machine,*reviewed)}
+    steps_korean=sum(1 for k in step_keys if k in passed or k in korean_source)
+    refused=sum(1 for row in rows if row.check_result!="passed")
+    with _REVISION_TRANSLATIONS_LOCK:
+        running=key in _REVISION_TRANSLATIONS_RUNNING
+    runner=_revision_translation_runner()
+    if not needed:
+        state,message="done","번역할 문장이 없습니다. 원문이 이미 한국어입니다."
+    elif running:
+        state="running"
+        message=f"번역 준비 중 · 한국어 단계 {steps_korean}/{len(step_keys)} · 준비되면 다음 안내부터 씁니다."
+    elif rows:
+        state="done"
+        message=f"번역 끝 · 한국어 단계 {steps_korean}/{len(step_keys)}"
+        if refused:
+            message+=f" · 검사 실패 {refused}문장은 원문으로 보입니다"
+    elif runner is None:
+        state="off"
+        message=("자동 번역이 꺼져 있습니다(번역 역할 키 또는 작업공간 없음). 단계는 원문으로 "
+                 "안내합니다.")
+    else:
+        state="pending"
+        message="번역 대기 중입니다. 분석 통과 직후 시작됩니다."
+    return {
+        "state":state,"units":len(units),"needed":len(needed),"passed":len(passed),
+        "refused":refused,"steps_total":len(step_keys),"steps_korean":steps_korean,
+        "message":message,
+    }
 
 
 @app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
