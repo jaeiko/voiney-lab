@@ -897,6 +897,14 @@ def _record_workspace_experiment_progress(
                 "deadline_at","started_at",
             )
         }
+    # Lane R7: a return within a repeat and a step completed again in a
+    # later round are recorded as what they are. A step already
+    # marked completed is not marked again: the durable session keeps one
+    # completion per step and refuses a second, which would roll the turn back.
+    record=getattr(plan,"step_record",None) or {}
+    move_kind=record.get("kind")
+    if record:
+        event_payload["step_record"]=record
     principal,store=_commercial_workspace()
     try:
         state=store.record_experiment_progress(
@@ -905,6 +913,8 @@ def _record_workspace_experiment_progress(
             expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
+                "repeat_returned"
+                if move_kind=="repeat_return" else
                 "protocol_started"
                 if plan.action is CuratedProtocolAction.START else
                 "timer_started"
@@ -918,6 +928,7 @@ def _record_workspace_experiment_progress(
             mark_completed=bool(
                 plan.action is CuratedProtocolAction.NEXT
                 and plan.reported_completion
+                and not record.get("completed_before")
             ),
             payload=event_payload,
         )
@@ -7368,6 +7379,17 @@ def _record_experiment_report_plan(
         "approved_lab_corpus","external_authoritative_reference",
     }:
         event_type="source_consulted"
+    # Lane R7, decision 2: what a return or a step done again keeps. A
+    # return within a repeat is its own event, at the step returned to, with
+    # its round by confirmed returns; a step completed again says in which
+    # round.
+    record=getattr(plan,"step_record",None) or {}
+    if record:
+        payload["step_record"]=record
+    if plan.state_changed and record.get("kind")=="repeat_return":
+        event_type="repeat_returned"
+        step_id=post_step.step_id if post_step is not None else step_id
+        step_label=post_step.source_label if post_step is not None else step_label
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,

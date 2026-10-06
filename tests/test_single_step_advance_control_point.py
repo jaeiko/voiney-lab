@@ -90,10 +90,15 @@ class OneDoorTests(unittest.TestCase):
         Kept as its own assertion so that adding one is a deliberate act: if
         this count changes, someone introduced a new way to place the cursor
         and has to say which of the three it is -- start, reset, or recovery.
+
+        Lane R7 (decision 2 of 2026-10-06) added the seventh, in
+        ``_move_to_step``: a confirmed return, which puts the run back on an
+        earlier step of the repeat the source states at the current step,
+        after "N단계로 돌아갈까요?" and a yes. It never moves the run forward.
         """
 
         plain = [line for line, kind in self._index_writes() if kind == "plain"]
-        self.assertEqual(len(plain), 6, sorted(plain))
+        self.assertEqual(len(plain), 7, sorted(plain))
 
     def test_the_control_point_consults_the_gate(self) -> None:
         """2-3: it is not a wrapper. It asks before it moves."""

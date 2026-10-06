@@ -1,19 +1,29 @@
 """Gaps lane RP found on the rules' path, closed by rule (lane R7).
 
 Decisions of 2026-10-06 (the professor's advice of 9/22: what is mechanical is
-a rule; no safety guidance the source and the approved safety material do not
-give):
+a rule; a state change needs an explicit request, a deterministic check and a
+confirmation; no safety guidance the source and the approved safety material
+do not give):
 
 1. Spilling, knocking over or overflowing -- "흘렸어", "엎질렀어", "쏟았어",
    "넘쳤어", with or without what it was -- is recorded as an anomaly.
    "튜브를 흘렸어" used to be a question about tubes. A question about it
    ("흘려도 돼?") stays a question, and the emergency gate is unchanged.
+2. In a repeat, "2단계로 돌아가" / "2단계부터 다시 할게" goes back, after
+   "N단계로 돌아갈까요?", only to an earlier step of the repeat the source
+   states at the current step; the return is recorded with its round (by
+   confirmed returns). Anywhere else nothing moves and the reason is said.
+
+The earlier repeat policy holds: nothing here says how many rounds to run or
+that a round was enough, the hand-over record carries no count, and the step
+that states the repeat still waits on the person's observation.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,12 +34,16 @@ from tests.protocol_vocabulary_support import SOURCE_PDF, build_fixture, in_gel_
 from voiney_lab import experiment_protocol as domain
 from voiney_lab import server as server_module
 from voiney_lab.curated_protocol import (
+    FRONT_RULES,
     CuratedProtocolAction,
+    CuratedProtocolFixtureError,
     CuratedProtocolSession,
 )
 from voiney_lab.emergency import recognize_emergency
 from voiney_lab.experiment_reports import ExperimentReportStore
+from voiney_lab.identity import Principal, Role
 from voiney_lab.runtime_routing import route_curated_runtime_turn
+from voiney_lab.workspace_store import WorkspaceSettings, initialize_workspace_store
 
 STEPS = (
     "1 Cut the stained band into pieces and place them in a 1.5 mL tube.",
@@ -186,6 +200,236 @@ class SpillIsRecordedAsAnAnomalyTests(_Turns, unittest.TestCase):
         )
 
 
+# --- Decision 2 --------------------------------------------------------------
+
+
+class ReturnWithinARepeatTests(_Turns, unittest.TestCase):
+    """Decision 2: back to an earlier step of the repeat stated here, on a yes."""
+
+    def test_a_return_is_asked_about_and_moves_only_on_a_yes(self) -> None:
+        for said in (
+            "2단계로 돌아가", "2단계부터 다시 할게", "2단계로 돌아갈게",
+            "다시 2단계로", "2단계부터 다시", "2단계로 다시 가자",
+            "2단계부터 다시 시작할게", "두 번째 단계로 돌아가",
+        ):
+            with self.subTest(said=said):
+                self.open(4)
+                before = self.projection()
+                asked = self.say(said)
+                self.assertEqual(self.session.last_front_rule, "repeat_return")
+                self.assertIs(asked.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+                self.assertEqual(asked.speech_text, "2단계로 돌아갈까요?")
+                self.assertFalse(asked.state_changed)
+                self.assertEqual(self.projection(), before)
+                moved = self.say("응")
+                self.assertEqual(self.session.last_front_rule, "yes_no_open_question")
+                self.assertIs(moved.action, CuratedProtocolAction.NEXT)
+                self.assertTrue(moved.state_changed)
+                self.assertFalse(moved.reported_completion)
+                self.assertEqual(moved.intent_kind, "repeat_return_confirmed")
+                self.assertEqual(self.label(), "2")
+                self.assertTrue(moved.speech_text.startswith("2단계로 돌아왔습니다."))
+
+    def test_the_return_is_recorded_with_its_round_by_confirmed_returns(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        first = self.say("네")
+        self.assertEqual(first.step_record, {
+            "kind": "repeat_return",
+            "repetition_id": "repeat-2-4",
+            "repeated_step_labels": ["2", "4"],
+            "stated_at_step": "5",
+            "from_step": "5",
+            "to_step": "2",
+            "returns_confirmed": 1,
+            "round": 2,
+            "round_counted_from": "confirmed_returns",
+            "source_text": "until the band is clear",
+            "source_page_number": 1,
+        })
+        for step in ("2", "3", "4"):
+            self.say(f"{step}단계 완료했어")
+        self.assertEqual(self.label(), "5")
+        self.say("3단계로 돌아가")
+        second = self.say("응")
+        self.assertEqual(self.label(), "3")
+        self.assertEqual(
+            (second.step_record["returns_confirmed"], second.step_record["round"]), (2, 3),
+        )
+
+    def test_nothing_said_counts_rounds_or_judges_the_repeat(self) -> None:
+        self.open(4)
+        asked = self.say("2단계로 돌아가")
+        moved = self.say("응")
+        for spoken in (asked.speech_text, moved.speech_text, moved.display_text):
+            for phrase in ("회차", "회째", "번째 반복", "충분", "완료되었", "보통"):
+                with self.subTest(phrase=phrase):
+                    self.assertNotIn(phrase, spoken)
+
+    def test_the_hand_over_record_still_carries_no_count(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        self.say("응")
+        disclosure = self.session.human_led_repeat_disclosure(1)
+        self.assertIsNotNone(disclosure)
+        for key in ("round", "rounds", "iteration", "repeat_count"):
+            self.assertNotIn(key, disclosure)
+        record = self.session.repeat_interval_record("repeat-2-4")
+        self.assertNotIn("rounds", record)
+        self.assertNotIn("completed_at", record)
+
+    def test_the_step_stating_the_repeat_still_waits_on_the_observation(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        self.say("응")
+        for step in ("2", "3", "4"):
+            self.say(f"{step}단계 완료했어")
+        plan = self.say("5단계 완료했어")
+        self.assertEqual(plan.intent_kind, "observation_confirmation_required")
+        self.assertEqual(self.label(), "5")
+
+    def test_a_step_done_again_is_said_to_be_done_again(self) -> None:
+        self.open(1)
+        for step in ("2", "3", "4"):
+            first_time = self.say(f"{step}단계 완료했어")
+            self.assertIsNone(first_time.step_record)
+        self.say("2단계로 돌아가")
+        self.say("응")
+        again = self.say("2단계 완료했어")
+        self.assertTrue(again.state_changed)
+        self.assertEqual(again.step_record, {
+            "kind": "repeat_round_completion", "repetition_id": "repeat-2-4",
+            "round": 2, "round_counted_from": "confirmed_returns",
+            "completed_before": True,
+        })
+
+    def test_a_no_keeps_the_step(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        before = self.projection()
+        plan = self.say("아니")
+        self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION)
+        self.assertEqual(plan.speech_text, "알겠습니다. 2단계로 돌아가지 않았습니다. 지금 5단계입니다.")
+        self.assertEqual(self.projection(), before)
+
+    def test_anything_else_lets_the_question_go(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        self.say("타이머 얼마나 남았어?")
+        plan = self.say("응")
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(self.label(), "5")
+
+    def test_a_return_outside_the_repeat_is_refused_with_the_reason(self) -> None:
+        cases = (
+            (4, "1단계로 돌아가",
+             "원문이 5단계에서 말하는 반복 구간은 2~4단계예요. 1단계는 그 안의 앞 단계가 "
+             "아니어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
+            (4, "6단계로 돌아가",
+             "원문이 5단계에서 말하는 반복 구간은 2~4단계예요. 6단계는 그 안의 앞 단계가 "
+             "아니어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
+            (2, "2단계로 돌아가",
+             "원문은 5단계에서 2~4단계를 반복하라고 해요. 앞 단계로 돌아가기는 5단계에서만 "
+             "할 수 있어서 이동하지 않았어요. 지금 3단계를 유지합니다."),
+            (5, "2단계로 돌아가",
+             "원문은 6단계에서 반복 구간을 말하지 않아요. 그래서 2단계로 이동하지 않았어요. "
+             "지금 6단계를 유지합니다."),
+            (4, "5단계로 돌아가", "지금이 5단계예요. 단계를 옮기지 않았어요."),
+            (4, "9단계로 돌아가",
+             "이 프로토콜은 1~6단계예요. 9단계는 없어서 이동하지 않았어요. 지금 5단계를 유지합니다."),
+        )
+        for index, said, reason in cases:
+            with self.subTest(said=said, at=index + 1):
+                self.open(index)
+                before = self.projection()
+                plan = self.say(said)
+                self.assertEqual(self.session.last_front_rule, "repeat_return")
+                self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION)
+                self.assertEqual(plan.speech_text, reason)
+                self.assertEqual(self.projection(), before)
+                self.assertFalse(self.say("응").state_changed)
+                self.assertEqual(self.projection(), before)
+
+    def test_a_protocol_with_no_repeat_moves_nowhere(self) -> None:
+        self.open(4, fixture=_fixture(with_repeat=False))
+        plan = self.say("2단계로 돌아가")
+        self.assertEqual(
+            plan.speech_text,
+            "원문은 5단계에서 반복 구간을 말하지 않아요. 그래서 2단계로 이동하지 않았어요. "
+            "지금 5단계를 유지합니다.",
+        )
+        self.assertEqual(self.label(), "5")
+
+    def test_a_question_about_going_back_asks_nothing(self) -> None:
+        for said in ("2단계로 돌아가도 돼?", "2단계로 돌아가야 해?", "2단계로 돌아갈까?"):
+            with self.subTest(said=said):
+                self.open(4)
+                self.say(said)
+                self.assertNotEqual(self.session.last_front_rule, "repeat_return")
+                self.assertFalse(self.session.awaiting_server_confirmation)
+                self.assertFalse(self.say("응").state_changed)
+                self.assertEqual(self.label(), "5")
+
+    def test_an_open_note_question_does_not_take_the_request_as_a_note(self) -> None:
+        self.open(4)
+        self.say("관찰 기록")
+        self.assertTrue(self.session.awaiting_server_confirmation)
+        plan = self.say("2단계로 돌아가")
+        self.assertFalse(plan.reported_observation)
+        self.assertEqual(plan.speech_text, "2단계로 돌아갈까요?")
+
+    def test_while_paused_the_pause_answers(self) -> None:
+        self.open(4)
+        self.say("잠깐 멈춰")
+        plan = self.say("2단계로 돌아가")
+        self.assertIs(plan.action, CuratedProtocolAction.PAUSE)
+        self.assertFalse(self.session.awaiting_server_confirmation)
+
+    def test_the_front_rules_take_the_request_and_the_yes(self) -> None:
+        self.open(4)
+        asked = self.say("2단계로 돌아가", front=True)
+        self.assertIsNotNone(asked)
+        self.assertEqual(self.session.last_front_rule, "repeat_return")
+        moved = self.say("응", front=True)
+        self.assertIsNotNone(moved)
+        self.assertEqual(self.session.last_front_rule, "yes_no_open_question")
+        self.assertEqual(self.label(), "2")
+        self.assertIn("repeat_return", FRONT_RULES)
+
+    def test_a_return_rolls_back_with_its_turn(self) -> None:
+        self.open(4)
+        self.say("2단계로 돌아가")
+        checkpoint = self.session._checkpoint()
+        self.say("응")
+        self.assertEqual(self.session._repeat_returns, {"repeat-2-4": 1})
+        self.session._restore(checkpoint)
+        self.assertEqual(self.label(), "5")
+        self.assertEqual(self.session._repeat_returns, {})
+        self.assertIsNotNone(self.session._pending_step_move)
+
+    def test_a_run_inside_a_later_round_can_be_resumed(self) -> None:
+        fixture = _fixture()
+        steps = [step.step_id for step in fixture.steps]
+        session = CuratedProtocolSession(fixture)
+        session.restore_experiment_progress(
+            current_step_id="step-2", completed_step_ids=tuple(steps[:4]),
+        )
+        self.assertEqual(session.current_index, 1)
+        # Every earlier step must still be complete, as for any run.
+        with self.assertRaises(CuratedProtocolFixtureError):
+            CuratedProtocolSession(fixture).restore_experiment_progress(
+                current_step_id="step-3", completed_step_ids=("step-1", "step-3", "step-4"),
+            )
+        # And what is complete past the current step lies in its repeat.
+        with self.assertRaises(CuratedProtocolFixtureError):
+            CuratedProtocolSession(fixture).restore_experiment_progress(
+                current_step_id="step-2", completed_step_ids=tuple(steps[:5]) + ("step-6",),
+            )
+
+
+# --- The experiment record (server.py's mapping) ------------------------------
+
+
 def _report_events(session, plan, pre_index, *, turn_id, store=None, listener=None):
     """Append ``plan`` as server.py does and return the report's events."""
 
@@ -204,6 +448,123 @@ def _report_events(session, plan, pre_index, *, turn_id, store=None, listener=No
     return listener.experiment_report_store.get_report(listener.experiment_report_id)["events"]
 
 
+class ExperimentRecordTests(_Turns, unittest.TestCase):
+    """The return, the later start and the round are written to the record."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.listener = SimpleNamespace(
+            session_id="lane-r7-session",
+            experiment_report_store=ExperimentReportStore(Path(tmp.name) / "r.sqlite"),
+            experiment_report_id=None,
+        )
+
+    def record(self, said: str):
+        before = self.session.current_index
+        plan = self.say(said)
+        if plan.state_changed:
+            _report_events(self.session, plan, before, turn_id=self.turn_id,
+                           listener=self.listener)
+        return plan
+
+    def events(self):
+        report = self.listener.experiment_report_store.get_report(
+            self.listener.experiment_report_id)
+        return [
+            (e["event_type"], e["step_label"], (e.get("payload") or {}).get("step_record"))
+            for e in report["events"]
+        ]
+
+    def test_a_return_is_its_own_event_at_the_step_returned_to(self) -> None:
+        self.open(None)
+        self.record("프로토콜 시작해줘")
+        self.session.current_index = 4
+        self.record("2단계로 돌아가")
+        self.record("응")
+        kinds = [(kind, label) for kind, label, _ in self.events()]
+        self.assertEqual(kinds, [("session_started", "1"), ("repeat_returned", "2")])
+        record = self.events()[-1][2]
+        self.assertEqual((record["round"], record["returns_confirmed"]), (2, 1))
+        self.assertEqual(record["from_step"], "5")
+
+
+class DurableSessionTests(_Turns, unittest.TestCase):
+    """With the workspace on, as the pilot runs: nothing is completed twice."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        directory = Path(tmp.name) / "workspace"
+        environment = patch.dict(os.environ, {
+            "VOINEY_LAB_WORKSPACE_ENABLED": "true",
+            "VOINEY_LAB_WORKSPACE_DATA_DIR": str(directory),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.principal = Principal(
+            principal_id="principal-r7", subject="dev:r7", organization_id="tenant-r7",
+            display_name="r7", roles=frozenset({Role.RESEARCHER}),
+            authentication_method="development",
+        )
+        self.store = initialize_workspace_store(WorkspaceSettings(True, directory))
+        self.addCleanup(self.store.close)
+        self.store.bootstrap_principal(self.principal)
+        token = server_module._REQUEST_PRINCIPAL.set(self.principal)
+        self.addCleanup(server_module._REQUEST_PRINCIPAL.reset, token)
+
+    def begin(self) -> None:
+        self.open(None)
+        state = self.store.start_experiment(
+            self.principal, protocol_id="lane-r7-wash",
+            protocol_revision_id=self.session.fixture.revision_id,
+            current_step_id="step-1", current_step_label="1",
+        )
+        self.listener = SimpleNamespace(
+            session_id=state["session_id"], experiment_state_version=state["version"],
+            voice_connection_id=None, accepted_configuration_id=1,
+        )
+
+    def mirror(self, said: str):
+        before = self.session.current_index
+        plan = self.say(said)
+        if plan.state_changed:
+            state = server_module._record_workspace_experiment_progress(
+                self.listener, self.session, plan, turn_id=self.turn_id,
+                generation=1, pre_transition_index=before,
+            )
+            self.listener.experiment_state_version = state["version"]
+        return plan
+
+    def state(self):
+        return self.store.get_experiment(self.principal, self.listener.session_id)
+
+    def test_a_round_completes_its_steps_again_without_a_second_mark(self) -> None:
+        self.begin()
+        for said in ("프로토콜 시작해줘", "1단계 완료했어", "2단계 완료했어",
+                     "3단계 완료했어", "4단계 완료했어", "2단계로 돌아가", "응"):
+            self.mirror(said)
+        self.assertEqual(self.state()["current_step_label"], "2")
+        for said in ("2단계 완료했어", "3단계 완료했어"):
+            plan = self.mirror(said)
+            self.assertTrue(plan.state_changed)
+        state = self.state()
+        self.assertEqual(state["current_step_label"], "4")
+        self.assertEqual(
+            [item["step_label"] for item in state["completed_steps"]], ["1", "2", "3", "4"],
+        )
+        events = [(e["event_type"], e["step_label"]) for e in state["events"]]
+        self.assertIn(("repeat_returned", "5"), events)
+        self.assertEqual(events[-2:], [("step_completed", "2"), ("step_completed", "3")])
+        # Stopped here, the run is resumed where it stood.
+        resumed = CuratedProtocolSession(self.session.fixture)
+        resumed.restore_experiment_progress(
+            current_step_id=str(state["current_step_id"]),
+            completed_step_ids=tuple(item["step_id"] for item in state["completed_steps"]),
+        )
+        self.assertEqual(resumed.current_index, 3)
+
+
 # --- The real in-gel protocol (lane RP's scenario) ----------------------------
 
 
@@ -220,6 +581,22 @@ class InGelScenarioTests(_Turns, unittest.TestCase):
         self.open(12, fixture=self.fixture)
         plan = self.say("튜브를 흘렸어")
         self.assertIs(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+
+    def test_going_back_to_step_2_from_step_7(self) -> None:
+        self.open(6, fixture=self.fixture)
+        self.assertEqual(self.say("2단계부터 다시 할게").speech_text, "2단계로 돌아갈까요?")
+        moved = self.say("응")
+        self.assertEqual(self.label(), "2")
+        self.assertEqual(moved.step_record["repeated_step_labels"], ["2", "7"])
+        self.assertEqual(moved.step_record["source_text"], "7 Repeat steps 2-7 until the gel band is fully destained")
+
+    def test_the_repeat_stated_at_step_20_returns_to_17(self) -> None:
+        self.open(19, fixture=self.fixture)
+        self.assertEqual(self.say("17단계로 돌아가").speech_text, "17단계로 돌아갈까요?")
+        self.say("응")
+        self.assertEqual(self.label(), "17")
+        self.open(17, fixture=self.fixture)
+        self.assertTrue(re.match(r"원문은 20단계에서 17~18단계를", self.say("17단계로 돌아가").speech_text))
 
 
 if __name__ == "__main__":
