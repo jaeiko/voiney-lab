@@ -9388,7 +9388,10 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         if speech_policy=="speak":
             await sender.segment(turn_id,0,frames,generation)
         await current_text(
-            "reply.complete",turn_id=turn_id,text=display_text)
+            "reply.complete",turn_id=turn_id,text=display_text,
+            # Lane F, decision 3: the delta's document again, so the screen
+            # need not keep the delta's copy.
+            display_document=getattr(plan, "display_document", None))
         if (
             speech_policy=="speak" and research_context is not None
             and research_context.get("outside_pdf") is not None
