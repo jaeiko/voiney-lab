@@ -62,15 +62,12 @@ python -B -m voiney_lab.setting_names || exit 1
 export VOINEY_LAB_CURATED_PROTOCOL_FIXTURE="$FIXTURE"
 export VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE="$PROVENANCE"
 export VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="$SOURCE_PDF"
-# Registering a PDF in the browser POSTs /api/protocols/{id}/analysis straight
-# away, which spends a provider call with no confirmation. This launcher walks
-# the pre-analysed curated fixture and needs no analysis of its own, so the
-# model name is cleared here: require_env treats an empty value as unset, the
-# route answers provider_configuration_missing, and an accidental upload during
-# a walkthrough cannot reach the budget. Registration and the source record are
-# unaffected. To analyse a new document, run the server without this launcher
-# (or export VOINEY_LAB_ANALYSIS_MODEL after it) so the call is a deliberate act.
-export VOINEY_LAB_ANALYSIS_MODEL=""
+# The analysis model is not touched here (lane PA, human decision 2 as changed
+# on 2026-10-06). Registering a PDF in the browser starts its analysis with the
+# analysis role a person chose (VOINEY_LAB_ANALYSIS_PROVIDER, _MODEL and
+# _REASONING in the shell or the .env). The same PDF uploaded again never calls
+# an analysis that already ended; a failed one is called again only when a
+# person presses "분석 다시 시도".
 export VOINEY_LAB_PROTOCOL_DATA_DIR="$PROTOCOL_DATA_DIR"
 export VOINEY_LAB_EXPERIMENT_REPORT_DB="$PROTOCOL_DATA_DIR/experiment_reports.sqlite"
 export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"

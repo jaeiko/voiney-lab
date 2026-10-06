@@ -309,6 +309,10 @@ class ProtocolAnalysisRunStatus:
     merge_status: str | None = None
     restart_behavior: str = "explicit_analysis_request_only"
     lifecycle_state: str = "uploaded"
+    #: When the run on screen was requested (the ledger's own time, UTC), so
+    #: the screen can say how long the analysis has taken. None before any
+    #: request.
+    requested_at: str | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -326,7 +330,40 @@ class ProtocolAnalysisRunStatus:
             "merge_status": self.merge_status,
             "restart_behavior": self.restart_behavior,
             "lifecycle_state": self.lifecycle_state,
+            "requested_at": self.requested_at,
         }
+
+
+#: What a person does after an analysis failure, by failure code (lane PA
+#: decision 4). Every code not listed gets the default.
+_ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
+    "provider_configuration_missing": (
+        "분석 역할 설정이 없습니다. .env 의 VOINEY_LAB_ANALYSIS_PROVIDER·"
+        "VOINEY_LAB_ANALYSIS_MODEL 과 그 공급자의 API 키를 확인하고 서버를 다시 "
+        "시작한 뒤 '분석 다시 시도'를 누르세요."
+    ),
+    "protocol_analysis_timeout": (
+        "분석 호출이 제한 시간(VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS, "
+        "기본 600초) 안에 끝나지 않았습니다. '분석 다시 시도'를 누르거나, 긴 "
+        "문서라면 제한 시간을 늘리세요."
+    ),
+    "protocol_analysis_invalid_evidence": (
+        "분석 모델이 낸 근거가 원문 쪽의 글과 맞지 않아 결과를 쓰지 않았습니다. "
+        "'분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 듭니다). "
+        "원문은 바뀌지 않습니다."
+    ),
+    "ocr_required": (
+        "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 이 먼저 필요합니다. "
+        "'OCR 텍스트 추출'을 누르고 원문과 대조해 승인한 뒤 분석하세요."
+    ),
+    "protocol_pdf_too_large": (
+        "PDF 가 등록 한도보다 큽니다. 더 작은 파일로 다시 올리세요."
+    ),
+}
+_DEFAULT_ANALYSIS_RECOVERY_ACTION = (
+    "실패 원인을 확인한 뒤 '분석 다시 시도'를 누르세요. 다시 시도해도 원문은 "
+    "바뀌지 않습니다."
+)
 
 
 def _protocol_id(checksum: str) -> str:
@@ -1136,6 +1173,14 @@ class ProtocolCatalog:
                 ),
                 None,
             )
+            requested_at = next(
+                (
+                    event.recorded_at
+                    for event in reversed(lifecycle_events)
+                    if event.event_type == _ANALYSIS_REQUESTED_EVENT
+                ),
+                None,
+            )
             state = entry.analysis_status
             if lifecycle_events:
                 state = {
@@ -1158,6 +1203,7 @@ class ProtocolCatalog:
                 failure_code=latest_failure,
                 failure_detail=latest_failure_detail,
                 lifecycle_state=entry.lifecycle_state,
+                requested_at=requested_at,
             )
         plan_event = next(
             event for event in events if event.event_type == _CHUNK_PLAN_EVENT
@@ -1277,6 +1323,8 @@ class ProtocolCatalog:
                 }
                 else "analyzing"
             ),
+            # The plan is the run's first record.
+            requested_at=plan_event.recorded_at,
         )
 
     def _entry_for_revision(
@@ -1639,14 +1687,10 @@ class ProtocolCatalog:
                     "detail": latest_failure_detail,
                     "retryable": latest_failure
                     not in {"ocr_required", "protocol_pdf_too_large"},
-                    "action": (
-                        "Configure XAI_API_KEY and VOINEY_LAB_ANALYSIS_MODEL, then retry."
-                        if latest_failure == "provider_configuration_missing"
-                        else "The analysis call ran past its time limit "
-                        "(VOINEY_LAB_PROTOCOL_ANALYSIS_TIMEOUT_SECONDS, default 600 s). "
-                        "Retry, or raise the limit for a long document."
-                        if latest_failure == "protocol_analysis_timeout"
-                        else "Review the failure code and explicitly retry analysis."
+                    # Lane PA decision 4 (2026-10-06): the recovery guidance
+                    # is the server's, in Korean.
+                    "action": _ANALYSIS_RECOVERY_ACTIONS.get(
+                        latest_failure, _DEFAULT_ANALYSIS_RECOVERY_ACTION
                     ),
                 }
                 if latest_failure is not None
