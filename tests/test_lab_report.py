@@ -258,8 +258,8 @@ class ReportWriterTests(_ReportCase):
         for content in ("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", "밴드가 투명해졌어",
                         "튜브를 쏟았어", "원문 15분 / 10분에 끝냄", "09:30"):
             self.assertIn(content, sent)
-        self.assertEqual(set(narrative.section_origin.values()), {"모델", "대체"})
-        self.assertEqual(narrative.section_origin["background_external"], "대체")
+        self.assertEqual(set(narrative.section_origin.values()), {"모델", "모델이 비움 — 서버 문장"})
+        self.assertEqual(narrative.section_origin["background_external"], "모델이 비움 — 서버 문장")
         self.assertEqual(narrative.purpose, GOOD_REPLY["purpose"])
         self.assertEqual(narrative.discussion_review,
                          ("검토 제안 (항목 2): 쏟은 양이 결과에 영향을 주었는지 검토한다.",))

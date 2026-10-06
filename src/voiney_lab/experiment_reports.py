@@ -1743,7 +1743,13 @@ def narrative_from_sections(
             chosen[key], origin[key] = value, "모델"
         else:
             chosen[key] = fallback[key]
-            origin[key] = "대체" if model is not None else "서버"
+            if model is None:
+                origin[key] = "서버"
+            elif key in rejected or not model:
+                origin[key] = "대체"
+            else:
+                # The model left it empty: not a refusal, but not its words.
+                origin[key] = "모델이 비움 — 서버 문장"
     return ReportNarrative(
         title=f"{facts.protocol_title} 실험 보고서" if facts.protocol_title else "실험 보고서",
         purpose=chosen["purpose"], background_pdf=chosen["background_pdf"],
