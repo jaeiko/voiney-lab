@@ -82,10 +82,7 @@
     /* One line at the head of the protocol card, only when its Korean is an
        automatic translation or there is none. */
     .translation-note{margin-top:.25rem;font-size:.72rem;color:var(--muted)}
-    /* The current step's text: one size and one shape whether it is the
-       Korean or, with no Korean yet, the source itself (lane PX decision 1).
-       Named with the card so it is not shrunk by the card's paragraph rule. */
-    .step-body,.procedure-card p.step-body{margin:.35rem 0 0;font-size:1.12rem;font-weight:600;line-height:1.55;color:var(--ink);white-space:pre-wrap}
+    .step-body{margin:.35rem 0 0;font-size:1rem;line-height:1.55;color:var(--ink);white-space:pre-wrap}
     /* One folded source per block, small, closed by default. */
     .source-toggle{margin:.3rem 0 0;font-size:.75rem;color:var(--muted)}
     .source-toggle summary{cursor:pointer;user-select:none;font-weight:700;color:var(--muted)}

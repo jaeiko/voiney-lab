@@ -458,10 +458,11 @@ assert(node("procedure-instruction").textContent==="","the source is also in the
         self.assertEqual(result.returncode, 0, result.stderr)
         html = INDEX.read_text(encoding="utf-8")
         self.assertIn('<p id="procedure-primary" class="step-body"></p>', html)
-        css = (ROOT / "src" / "voiney_lab" / "static" / "app.css").read_text(encoding="utf-8")
-        # The card's own paragraph rule (.procedure-card p) outranks a bare
-        # class, so the step body is named with the card to keep its size.
-        self.assertIn(".procedure-card p.step-body", css)
+        # The card's own paragraph rule (.procedure-card p, app.css) outranks
+        # a bare class, so the step body is named with the card to keep its
+        # size; the rule lives with the page.
+        self.assertIn(".procedure-card p.step-body{", html)
+        self.assertIn("font-size:1.12rem", html.split(".procedure-card p.step-body{", 1)[1].split("}", 1)[0])
 
 
 class StepTextUsesTheTranslationTests(unittest.TestCase):

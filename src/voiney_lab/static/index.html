@@ -6,6 +6,13 @@
   <meta name="theme-color" content="#0a0d3a">
   <title>Voiney Lab · Lab Copilot</title>
   <link rel="stylesheet" href="/app.css">
+  <style>
+    /* The current step's text on the '지금 할 일' card: one size and one shape
+       whether it is the Korean or, with no Korean yet, the source itself (lane
+       PX decision 1). Named with the card so the card's paragraph rule in
+       app.css (.procedure-card p, 0.88rem) does not shrink it. */
+    .procedure-card p.step-body{margin:.35rem 0 0;font-size:1.12rem;font-weight:600;line-height:1.55;color:var(--ink);white-space:pre-wrap}
+  </style>
 </head>
 <body>
   <div id="test-mode-banner" class="test-mode-banner" role="alert" hidden>테스트 모드: 실행 준비 확인 조건을 건너뜀 · 개발 전용 · 남은 차단 사유는 그대로 표시됩니다</div>
