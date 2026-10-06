@@ -454,11 +454,17 @@ class ProtocolAnalysisSchemaTests(unittest.TestCase):
                     # Segment handles are server-computed identities. Asking a
                     # provider for one would invite it to invent an identity,
                     # so the field is withheld from the provider schema for
-                    # the same reason the extraction record is.
+                    # the same reason the extraction record is. The second
+                    # page of a statement cut at a page end is the server's
+                    # finding too (lane PA, decision 3).
                     record_fields = tuple(
                         field
                         for field in record_fields
-                        if field.name != "evidence_segment_ids"
+                        if field.name not in {
+                            "evidence_segment_ids",
+                            "continued_on_page_number",
+                            "continued_excerpt",
+                        }
                     )
                 expected_names = {field.name for field in record_fields}
                 expected_required = {

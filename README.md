@@ -950,7 +950,12 @@ the pilot's safety catalog, usage scope and test mode -- stay fixed.
 `scripts/run_dev.sh` is the full development launcher: it verifies the
 Candidate A fixture and its externally licensed source PDF by SHA-256 and
 loads the curated fixture. It names no model: each role keeps its default
-below unless the `.env` chooses one. The four features only xAI provides --
+below unless the `.env` chooses one. That includes the analysis role: a PDF
+registered in the browser is analysed straight away with
+`VOINEY_LAB_ANALYSIS_PROVIDER`/`_MODEL`/`_REASONING` (lane PA, 2026-10-06; the
+launcher used to clear the analysis model). The same PDF uploaded again never
+calls an analysis that already ended; a failed one runs again only when a
+person presses "분석 다시 시도". The four features only xAI provides --
 external reference search, web image search, generated images and semantic
 intent -- default to off. Its
 `--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
@@ -1076,6 +1081,66 @@ settings, and their reasoning settings) are old names now:
 one is set. Two of them in one `.env` that became the same role setting stop
 the tool; keep the one you want.
 
+### The experiment report (`.docx` and `.md`)
+
+Decisions of 2026-10-06 (lane RP): `GET /api/experiment-reports/{id}.docx`
+and `.md` are an experiment report a researcher reads, not a log of the
+system. Both have one structure (`experiment_reports.report_blocks`):
+
+- a title and a run table: date, start and end in
+  `VOINEY_LAB_REPORT_TIMEZONE` (default `Asia/Seoul`); 실험자, the display
+  name of the signed-in person who started the experiment (blank for the
+  researcher to fill where no workspace names anyone); time taken; steps
+  completed n/N; completed, or stopped at which step; the protocol's
+  approval state in words; and, for a test-mode run, that the readiness
+  gates were skipped;
+- 1 purpose and 2 background and principle, from the protocol's PDF only;
+- 3 materials and methods: the steps done (in Korean where a translation
+  exists, source values unchanged) and what was done differently from the
+  source, from the record only;
+- 4 results: the researcher's observations, anomalies and photos as a table,
+  or "기록된 관찰이 없습니다.";
+- 5 discussion: (가) what the record shows and (나) what needs checking are
+  lists the server builds from the record, (다) review suggestions only on a
+  recorded anomaly or deviation, marked as suggestions, (라) a blank
+  "연구자 해석";
+- 6 conclusion, the references (the protocol's PDF), and a last line saying
+  whether AI (and which model) or the server wrote the sentences, and when.
+
+Identifiers, hashes, status values and the raw event list are not in these
+two reports; the event ledger and the JSON and CSV exports keep them. Every
+table has fixed column shares (`experiment_reports.TABLE_WIDTHS`): short
+values narrow, content wide.
+
+The report role's model writes only the prose sections, from experiment
+content with no identifiers, and the server checks each before using it: a
+number with a unit in the methods, results or discussion must appear with the
+same unit in the record or the source (`15분` = `15 min`, `µL` = `uL`), a
+bare number must appear in them, the purpose and background carry no
+experiment-condition numbers and cite the PDF, nothing identifier-shaped,
+quoted observations must be recorded ones, and cause suggestions must name a
+recorded item. A section that fails gets the server's own sentence.
+
+The report uses no outside sources. Google Search grounding was tried and
+taken out, because Google's service terms for grounded results forbid caching
+or storing them and modifying them or mixing them with other content, and a
+report is a stored file other people read.
+
+The prose is written once per experiment. When an experiment stops or
+completes the server calls the report model on a background thread (bounded
+by `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`, 25) and keeps the reply with
+the report (`experiment_report_prose`, derived output beside the ledger);
+with no model configured, or when the call fails, the server's own sentences
+stand. Downloads use what was kept, checked again against the record as it
+is then, so a photo added later still appears in the tables.
+`GET /api/experiment-reports/{id}/prose` says whether it is being prepared or
+ready, and the record card shows that; `POST` to the same path writes it
+again, only when a person presses "보고서 문장 다시 만들기".
+
+An image uploaded as evidence (`POST /api/workspace/experiments/{id}/evidence`)
+puts a photo on the report at its step, captioned with the optional `caption`
+parameter or else the file name. The image is never read.
+
 ### Core configuration
 
 | Variable | Purpose |
@@ -1145,7 +1210,17 @@ label, and the review screen and the run number such steps 1, 2, 3 … in order
 text is accepted OCR output, evidence comparison also joins a line break
 between two Hangul letters ("날⏎짜" compares as "날짜"), like the line-end
 hyphen rule: comparison only, the page text, its hash and evidence identities
-are unchanged, and a break between digits is not joined. A
+are unchanged, and a break between digits is not joined. A statement that a
+page cuts at its end and the next page finishes (in-gel step 24, "…which will
+contain the" / "peptides.") is accepted only when it is found exactly in the
+two pages joined: the body text that ends the first page -- the lowest text
+block above the running footer, so a side-column duration and the footer are
+not part of it -- followed by the next page's opening text. Both pages are
+recorded: the evidence keeps the first page's own text, and the server adds
+`continued_on_page_number` and `continued_excerpt` (the next page's own
+text); a provider cannot supply either field. A continuation that is
+invented, out of order, not at the page end or the next page's start, or past
+the last page is refused (lane PA, 2026-10-06). A
 metadata field (`created_date_evidence`, …) and a value or duration may carry
 its own evidence on the page where it is printed; without it the claim is
 checked on its owner's evidence page as before.

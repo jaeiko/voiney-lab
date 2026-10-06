@@ -6,6 +6,7 @@ It never infers completion, approval, or a laboratory result from model output.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import csv
 import io
@@ -15,10 +16,13 @@ import os
 import re
 import secrets
 import sqlite3
-from dataclasses import dataclass
+import threading
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from voiney_lab.report_projection import project_protocol_for_report, project_step_for_report
 
@@ -133,6 +137,16 @@ class ExperimentReportStore:
               payload TEXT NOT NULL,
               created_at TEXT NOT NULL,
               UNIQUE(report_id, event_key)
+            );
+            -- Lane RP, decision 9: the report's prose, written once when the
+            -- experiment ends. Derived output, not part of the event ledger.
+            CREATE TABLE IF NOT EXISTS experiment_report_prose (
+              report_id TEXT PRIMARY KEY REFERENCES experiment_reports(report_id),
+              writer TEXT NOT NULL,
+              reply TEXT,
+              failure TEXT NOT NULL DEFAULT '',
+              event_count INTEGER NOT NULL,
+              prepared_at TEXT NOT NULL
             );
             """
         )
@@ -468,45 +482,71 @@ class ExperimentReportStore:
             ) + "\n"
         ).encode()
 
-    def export_markdown(self, report_id: str) -> bytes:
+    def export_markdown(
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None,
+    ) -> bytes:
+        """The researcher's report as Markdown (same structure as the .docx).
+
+        Without a narrative the server's own sentences fill every section.
+        ``fixture`` is the protocol the session ran; left out, it is looked up
+        the way the server loads it.
+        """
+
+        return render_markdown(self._narrative(report_id, narrative, fixture)).encode()
+
+    def _narrative(
+        self, report_id: str, narrative: ReportNarrative | None, fixture: Any,
+    ) -> ReportNarrative:
+        """The given narrative, else the prepared prose, else the server's sentences.
+
+        Prepared prose is checked again against the record as it is now, so a
+        photo or note added after it was written still appears in the tables.
+        """
+
+        if narrative is not None and narrative.facts is not None:
+            return narrative
         report = self.get_report(report_id)
-        lines = [
-            f"# Experiment report {report['report_id']}",
-            "",
-            f"- Protocol: {report['protocol_title']} ({report['protocol_id']})",
-            f"- Revision: {report['protocol_revision']}",
-            f"- Source SHA-256: {report['protocol_sha256']}",
-            f"- Readiness: {report['readiness_status']}",
-            f"- Development only: {str(report['development_only']).lower()}",
-            f"- Status: {report['status']}",
-            f"- Started: {report['started_at']}",
-            f"- Ended: {report['ended_at'] or '—'}",
-            "",
-            "## Event timeline",
-            "",
-        ]
-        for event in report["events"]:
-            payload = event.get("payload") or {}
-            detail = event["user_wording"] or payload.get("summary") or ""
-            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
-            timer_bits = []
-            for key, label in (
-                ("source_duration_seconds", "defined"),
-                ("started_at", "started"),
-                ("elapsed_seconds", "elapsed"),
-                ("remaining_seconds", "remaining"),
-                ("completion_state", "completion"),
-                ("demo_bypassed", "demo_bypassed"),
-            ):
-                if timer.get(key) not in (None, ""):
-                    timer_bits.append(f"{label}={timer[key]}")
-            extra = " · ".join(item for item in (detail, "; ".join(timer_bits)) if item)
-            lines.append(
-                f"- {event['created_at']} · {event['event_type']} · "
-                f"step {event['step_label'] or '—'}"
-                + (f" · {extra}" if extra else "")
+        facts = ReportWriterBrain.facts_for(
+            report, list(report["events"]), fixture=_AUTO if fixture is None else fixture)
+        prose = self.get_prose(report_id)
+        if prose is None or prose["writer"] == SERVER_WRITER:
+            return narrative_from_sections(facts)
+        return narrative_from_reply(
+            facts, prose["reply"], failure=prose["failure"], writer=prose["writer"],
+            written_at=prose["prepared_at"],
+        )
+
+    def save_prose(
+        self, report_id: str, *, writer: str, reply: Mapping[str, Any] | None,
+        failure: str, event_count: int,
+    ) -> None:
+        """Keep one report's prose (replacing any earlier one)."""
+
+        report_id = _clean_identifier(report_id, "report_id")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO experiment_report_prose(
+                  report_id,writer,reply,failure,event_count,prepared_at
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (report_id, writer[:200],
+                 None if reply is None else json.dumps(reply, ensure_ascii=False),
+                 failure[:200], int(event_count), _now()),
             )
-        return ("\n".join(lines) + "\n").encode()
+
+    def get_prose(self, report_id: str) -> dict[str, Any] | None:
+        report_id = _clean_identifier(report_id, "report_id")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_report_prose WHERE report_id=?", (report_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        prose = dict(row)
+        prose["reply"] = json.loads(prose["reply"]) if prose["reply"] is not None else None
+        return prose
 
     def export_csv(self, report_id: str) -> bytes:
         """Export the stable event timeline as UTF-8 CSV."""
@@ -543,193 +583,16 @@ class ExperimentReportStore:
         return self.export_docx(report_id)
 
     def export_docx(
-        self, report_id: str, narrative: ReportNarrative | None = None
+        self, report_id: str, narrative: ReportNarrative | None = None,
+        *, fixture: Any = None,
     ) -> bytes:
-        """Export a bounded undergraduate lab-report .docx from the event ledger.
+        """The researcher's report as .docx (same structure as the Markdown).
 
-        Student metadata fields stay blank. The SQLite event ledger remains the
-        authority; this document is a derived, human-readable projection.
+        The SQLite event ledger remains the authority; this document is a
+        derived, human-readable projection of it.
         """
 
-        from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Cm, Pt, RGBColor
-
-        report = self.get_report(report_id)
-        document = Document()
-        section = document.sections[0]
-        section.page_width = Cm(21.0)
-        section.page_height = Cm(29.7)
-        section.left_margin = Cm(2.5)
-        section.right_margin = Cm(2.5)
-        section.top_margin = Cm(2.5)
-        section.bottom_margin = Cm(2.5)
-
-        title = document.add_paragraph()
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run("Laboratory Experiment Report / 실험 결과 보고서")
-        run.bold = True
-        run.font.size = Pt(16)
-
-        subtitle = document.add_paragraph()
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        sub_run = subtitle.add_run(f"Protocol: {report.get('protocol_title') or 'Authoritative Protocol'}")
-        sub_run.font.size = Pt(11)
-        sub_run.font.color.rgb = RGBColor(80, 80, 80)
-
-        # Faithful header fields. Never invent student metadata.
-        for label in ("Title", "Course", "Student number", "Name", "Advisor"):
-            paragraph = document.add_paragraph()
-            paragraph.add_run(f"{label}: ").bold = True
-
-        events = list(report.get("events") or ())
-        event_cap = 100
-        truncated = len(events) > event_cap
-        visible_events = events[:event_cap]
-        timeline = [
-            _human_event_label(event) for event in visible_events
-        ]
-        if truncated:
-            timeline.append(
-                "Additional events omitted to keep the report within standard length."
-            )
-
-        started = _human_event_clock(report.get("started_at"))
-        ended = _human_event_clock(report.get("ended_at"))
-
-        # Extract anomalies from events
-        anomaly_events = [
-            e for e in events
-            if e.get("event_type") in ("anomaly", "system_anomaly") or e.get("anomaly_category")
-        ]
-        anomaly_lines = []
-        for ae in anomaly_events:
-            clock = _human_event_clock(ae.get("created_at"))
-            step = ae.get("step_label") or "—"
-            cat = ae.get("anomaly_category") or ae.get("event_type") or "anomaly"
-            note = ae.get("user_wording") or (ae.get("payload") or {}).get("text") or "Recorded issue"
-            anomaly_lines.append(f"• [{clock}] Step {step} ({cat}): {note}")
-
-        # Extract observations
-        observation_events = [e for e in events if e.get("event_type") == "observation"]
-        observation_lines = []
-        for obs in observation_events:
-            clock = _human_event_clock(obs.get("created_at"))
-            step = obs.get("step_label") or "—"
-            text = obs.get("user_wording") or (obs.get("payload") or {}).get("text") or "Observation"
-            observation_lines.append(f"• [{clock}] Step {step}: {text}")
-
-        # Extract pauses
-        pause_events = [e for e in events if e.get("event_type") == "workflow_paused"]
-        pause_lines = []
-        for pe in pause_events:
-            clock = _human_event_clock(pe.get("created_at"))
-            reason = pe.get("user_wording") or (pe.get("payload") or {}).get("reason") or "Paused"
-            pause_lines.append(f"• [{clock}] Paused: {reason}")
-
-        timeline = [_human_event_label(e) for e in events if _human_event_label(e)]
-
-        # Use narrative if provided, otherwise deterministic narrative
-        if narrative is None:
-            writer = ReportWriterBrain()
-            narrative = writer.build_deterministic_narrative(report, events)
-
-        sections = (
-            (
-                "I. Purpose / 실험 목적",
-                f"Protocol: {report.get('protocol_title') or '—'} ({report.get('protocol_id') or '—'}).\n"
-                f"Session Report ID: {report_id}.\n"
-                f"{narrative.objective}"
-            ),
-            (
-                "II. Materials and Methods / 재료 및 실험 방법",
-                f"Protocol Revision: {report.get('protocol_revision') or '—'}.\n"
-                f"Readiness Status: {report.get('readiness_status') or '—'}.\n"
-                f"Protocol SHA-256: {report.get('protocol_sha256') or '—'}.\n"
-                f"{narrative.materials_and_methods}"
-            ),
-            (
-                "III. Results / 수행 내용 및 관찰 결과",
-                ((f"Execution Event Timeline:\n" + "\n".join(f"• {item}" for item in timeline) + "\n\n") if timeline else "")
-                + f"{narrative.results_and_observations}"
-            ),
-            (
-                "IV. Discussion / 고찰",
-                f"Recorded anomalies: {int(report.get('anomaly_count') or 0)}. Recorded blockers: {int(report.get('blocker_count') or 0)}.\n"
-                f"{narrative.discussion}"
-            ),
-            (
-                "V. Conclusion / 결론",
-                f"Status: {report.get('status') or '—'}. Started: {started or '—'}. Ended: {ended or '—'}.\n"
-                f"Cryptographic Ledger Events: {len(events)} events committed.\n"
-                f"{narrative.conclusion}"
-            ),
-            (
-                "VI. Limitations / 한계 및 미기록 항목",
-                f"{narrative.limitations}"
-            ),
-        )
-        for heading, body in sections:
-            heading_paragraph = document.add_paragraph()
-            heading_run = heading_paragraph.add_run(heading)
-            heading_run.bold = True
-            heading_run.font.size = Pt(12)
-            heading_run.font.color.rgb = RGBColor(20, 50, 35)
-            for line in str(body).split("\n"):
-                p = document.add_paragraph(line)
-                p.paragraph_format.space_after = Pt(2)
-
-        # Structured Event Table as Appendix
-        if visible_events:
-            table_heading = document.add_paragraph()
-            table_run = table_heading.add_run("Appendix: Detailed Event Ledger / 상세 이벤트 감사 기록")
-            table_run.bold = True
-            table_run.font.size = Pt(11)
-            table_run.font.color.rgb = RGBColor(20, 50, 35)
-
-            table = document.add_table(rows=1, cols=5)
-            table.style = 'Table Grid'
-            hdr_cells = table.rows[0].cells
-            headers = ("Step", "Event / Action", "Time", "Timer Status", "Notes / Description")
-            for i, header_text in enumerate(headers):
-                hdr_cells[i].text = header_text
-                hdr_cells[i].paragraphs[0].runs[0].bold = True
-                hdr_cells[i].paragraphs[0].runs[0].font.size = Pt(9)
-
-            for ev in visible_events:
-                row_cells = table.add_row().cells
-                ev_type = str(ev.get("event_type") or "")
-                verb = _HUMAN_EVENT_VERBS.get(ev_type, ev_type.replace("_", " "))
-                step_str = str(ev.get("step_label") or "—")
-                clock_str = _human_event_clock(ev.get("created_at"))
-                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-                timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
-                duration = timer.get("source_duration_seconds", timer.get("duration_seconds"))
-                elapsed = timer.get("elapsed_seconds")
-                remaining = timer.get("remaining_seconds")
-                t_parts = []
-                if duration not in (None, ""):
-                    t_parts.append(f"총 {_format_elapsed_clock(duration)}")
-                if elapsed not in (None, ""):
-                    t_parts.append(f"경과 {_format_elapsed_clock(elapsed)}")
-                if remaining not in (None, ""):
-                    t_parts.append(f"잔여 {_format_elapsed_clock(remaining)}")
-                timer_str = " · ".join(t_parts) if t_parts else "—"
-                notes_str = str(ev.get("user_wording") or (ev.get("payload") or {}).get("text") or "")
-
-                row_cells[0].text = step_str
-                row_cells[1].text = verb
-                row_cells[2].text = clock_str
-                row_cells[3].text = timer_str
-                row_cells[4].text = notes_str
-                for cell in row_cells:
-                    for p in cell.paragraphs:
-                        for r in p.runs:
-                            r.font.size = Pt(8.5)
-
-        buffer = io.BytesIO()
-        document.save(buffer)
-        return buffer.getvalue()
+        return render_docx(self._narrative(report_id, narrative, fixture))
 
 
 @dataclass(frozen=True)
@@ -844,6 +707,9 @@ class GroundedReportContext:
 def build_grounded_report_context(
     report_data: dict[str, Any],
     events: list[dict[str, Any]] | None = None,
+    *,
+    fixture: Any = None,
+    lookup: bool = True,
 ) -> GroundedReportContext:
     """Rehydrate protocol steps and merge execution event timestamps, observations, and timers."""
     if events is None:
@@ -881,24 +747,11 @@ def build_grounded_report_context(
         elif ev_type in ("workflow_paused", "workflow_blocked"):
             deviation_list.append(e)
 
-    # Try rehydrating stored protocol from database or candidate fixture
-    stored_protocol = None
-    protocol_revision = str(report_data.get("protocol_revision") or "1")
-    try:
-        from voiney_lab.server import _open_protocol_catalog, _configured_candidate_fixture, server_config
-        cfg = server_config()
-        candidate = _configured_candidate_fixture(cfg)
-        if candidate is not None and candidate.protocol_id == protocol_id:
-            stored_protocol = candidate.draft.protocol
-        else:
-            cat, st = _open_protocol_catalog()
-            try:
-                fix = cat.load_executable_fixture(protocol_id, protocol_revision)
-                stored_protocol = fix.draft.protocol
-            finally:
-                st.close()
-    except Exception:
-        stored_protocol = None
+    # The protocol the session ran, looked up the way the server loads it
+    # (report_protocol_fixture) unless the caller passes it or asks not to.
+    if fixture is None and lookup:
+        fixture, _ = report_protocol_fixture(report_data)
+    stored_protocol = fixture.draft.protocol if fixture is not None else None
 
     all_steps: list[StepExecutionContext] = []
     executed_steps: list[StepExecutionContext] = []
@@ -989,7 +842,9 @@ def build_grounded_report_context(
             completed = next((_human_event_clock(ev.get("created_at")) for ev in evs if ev.get("event_type") == "step_completed"), None)
             state = "completed" if completed else "in_progress"
 
-            inst = snap.get("instruction_source_text") or snap.get("instruction") or f"Step {lbl} instruction."
+            # Lane RP: no placeholder text. A step whose words are unknown
+            # stays empty, and the report says the source could not be read.
+            inst = snap.get("instruction_source_text") or snap.get("instruction") or ""
             sec_title = snap.get("section_title") or "Experiment Execution"
             quantities = tuple(snap.get("quantities") or ())
             conditions = tuple(snap.get("conditions") or ())
@@ -1075,20 +930,940 @@ def build_grounded_report_context(
     )
 
 
+# --- The report a researcher reads (lane RP, decisions of 2026-10-06) -------------
+#
+# The report is an experiment report, not a log of the system: purpose,
+# background, materials and methods, results, discussion, conclusion,
+# and references. The record's identifiers, hashes and raw event list stay in
+# the ledger and the JSON export; the researcher's report leaves them out.
+#
+# The server builds every fact from the ledger and the protocol it ran
+# (``build_report_facts``): the step tables, the results table, what was done
+# differently from the source, and what still needs checking. The model writes
+# only the prose around those facts, from a projection with no identifiers,
+# hashes, status values or command names in it, and each of its sections is
+# checked before it is used (``check_report_sections``); a section that fails
+# is replaced by the server's own sentence for it. The report uses no outside
+# knowledge: Google Search grounding was taken out (decision of 2026-10-06,
+# option (a)) because the service terms forbid caching, storing, or rewriting
+# grounded results, and a report is a stored file other people read.
+
+REPORT_TIMEZONE_SETTING = "VOINEY_LAB_REPORT_TIMEZONE"
+DEFAULT_REPORT_TIMEZONE = "Asia/Seoul"
+
+#: The model-written sections, in report order.
+MODEL_SECTIONS = (
+    "purpose", "background", "methods_summary",
+    "results_summary", "discussion_review", "conclusion", "next_steps",
+)
+_SECTION_NAMES = {
+    "purpose": "1. 실험 목적",
+    "background": "2. 배경·원리",
+    "methods_summary": "3. 방법 요약",
+    "results_summary": "4. 결과 요약",
+    "discussion_review": "5. 고찰 (다)",
+    "conclusion": "6. 결론",
+    "next_steps": "6. 다음 할 일",
+}
+_WEEKDAYS = "월화수목금토일"
+
+
+def report_timezone(environment: Mapping[str, str] | None = None) -> ZoneInfo:
+    """The researcher's time zone for the report's clock times."""
+
+    env = os.environ if environment is None else environment
+    name = env.get(REPORT_TIMEZONE_SETTING, "").strip() or DEFAULT_REPORT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("report timezone setting is not a known zone; using %s", DEFAULT_REPORT_TIMEZONE)
+        return ZoneInfo(DEFAULT_REPORT_TIMEZONE)
+
+
+@dataclass(frozen=True)
+class ReportSource:
+    """One numbered reference: [1] is the protocol's own PDF."""
+
+    number: int
+    kind: str  # "protocol"
+    title: str
+    url: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ReportRecord:
+    """One thing the researcher recorded, in their own words."""
+
+    number: int
+    step_label: str
+    kind: str  # "관찰" | "이상" | "사진"
+    text: str
+    at: str  # local HH:MM
+
+
+@dataclass(frozen=True)
+class ReportStepFacts:
+    label: str
+    step_id: str
+    section: str
+    text: str
+    source_text: str
+    translated: bool
+    expected: tuple[str, ...]
+    source_timer_seconds: int | None
+    completed: bool
+    completed_at: str
+    timer_note: str
+    records: tuple[ReportRecord, ...]
+
+
+@dataclass(frozen=True)
+class ReportFacts:
+    """Everything the report states, built by the server from the record and the PDF."""
+
+    protocol_title: str
+    protocol_loaded: bool
+    total_steps: int
+    run_rows: tuple[tuple[str, str], ...]
+    completed_labels: tuple[str, ...]
+    outcome: str  # "completed" | "stopped" | "in_progress"
+    stop_label: str | None
+    steps: tuple[ReportStepFacts, ...]
+    records: tuple[ReportRecord, ...]
+    purpose_from_pdf: str
+    keywords: str
+    sections: tuple[str, ...]
+    materials: tuple[str, ...]
+    equipment: tuple[str, ...]
+    deviations: tuple[str, ...]
+    confirmed: tuple[str, ...]
+    to_check: tuple[str, ...]
+    protocol_reference: ReportSource
+    zone: ZoneInfo
+
+    @property
+    def record_texts(self) -> tuple[str, ...]:
+        return tuple(record.text for record in self.records)
+
+
+def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    timers = getattr(fixture, "timer_manifest", None) or {}
+    for section in fixture.draft.protocol.sections:
+        title = " ".join(str(getattr(section, "title_source_text", "") or "").split())
+        for step in section.steps:
+            source = " ".join(str(step.instruction_source_text or "").split())
+            korean = None
+            localized = getattr(fixture, "localized_fact", None)
+            if callable(localized):
+                korean = localized(step.step_id, "current_step")
+            if korean:
+                korean = re.sub(r"^\s*\d+\s*단계\s*[:：]\s*", "", " ".join(korean.split()))
+            expected = [" ".join(str(item.source_text).split()) for item in step.expected_results]
+            for action in getattr(step, "sub_actions", ()) or ():
+                for item in getattr(action, "expected_results", ()) or ():
+                    text = " ".join(str(item.source_text).split())
+                    if text not in expected:
+                        expected.append(text)
+            steps.append({
+                "label": str(step.source_label), "step_id": str(step.step_id),
+                "section": title, "source_text": source,
+                "text": korean or source, "translated": bool(korean),
+                "expected": tuple(expected),
+                "timer": timers.get(step.step_id),
+            })
+    return steps
+
+
+def _source_steps_from_context(context: "GroundedReportContext") -> list[dict[str, Any]]:
+    return [
+        {
+            "label": step.step_label, "step_id": step.step_id,
+            "section": step.section_title if step.section_title != "Experiment Execution" else "",
+            "source_text": step.instruction_source_text, "text": step.instruction_source_text,
+            "translated": False, "expected": tuple(step.expected_results), "timer": None,
+        }
+        for step in context.all_protocol_steps
+    ]
+
+
+def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
+    """The protocol a report's session ran, as sessions load it, or (None, why).
+
+    The configured development fixture when the record names it, otherwise the
+    catalog's executable fixture for the protocol, accepted only when its
+    revision is the one the record names. Lane RP: this lookup used to call
+    ``load_executable_fixture`` with a revision argument it does not take, and
+    any failure was swallowed, so the report printed placeholder steps.
+    """
+
+    protocol_id = str(report_data.get("protocol_id") or "")
+    revision = str(report_data.get("protocol_revision") or "")
+    try:
+        from voiney_lab.server import (
+            _configured_candidate_fixture,
+            _open_protocol_catalog,
+            server_config,
+        )
+
+        candidate = _configured_candidate_fixture(server_config())
+        if candidate is not None and candidate.protocol_id == protocol_id:
+            fixture = candidate
+        else:
+            catalog, store = _open_protocol_catalog()
+            try:
+                fixture = catalog.load_executable_fixture(protocol_id)
+            finally:
+                store.close()
+    except Exception as exc:  # noqa: BLE001 -- reported on the report, never raised
+        log.warning("report protocol lookup failed error=%s", type(exc).__name__)
+        return None, "프로토콜 원문을 불러오지 못했다"
+    if revision and getattr(fixture, "revision_id", revision) != revision:
+        return None, "기록의 프로토콜 버전과 지금 프로토콜 버전이 달라 원문을 싣지 않았다"
+    return fixture, ""
+
+
+def _local(value: Any, zone: ZoneInfo) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(zone)
+
+
+def _duration_words(seconds: float | int | None) -> str:
+    if seconds is None:
+        return ""
+    minutes = int(round(float(seconds) / 60))
+    hours, minutes = divmod(max(minutes, 0), 60)
+    if hours and minutes:
+        return f"{hours}시간 {minutes}분"
+    if hours:
+        return f"{hours}시간"
+    return f"{minutes}분"
+
+
+def _ranges(labels: Sequence[str]) -> str:
+    """'1, 2, 3, 5' -> '1–3, 5단계' for numeric step labels."""
+
+    numbers: list[int] = []
+    for label in labels:
+        if not str(label).isdigit():
+            return ", ".join(str(item) for item in labels) + "단계"
+        numbers.append(int(label))
+    if not numbers:
+        return ""
+    numbers = sorted(set(numbers))
+    parts: list[str] = []
+    start = previous = numbers[0]
+    for number in numbers[1:] + [None]:  # type: ignore[list-item]
+        if number is not None and number == previous + 1:
+            previous = number
+            continue
+        parts.append(f"{start}–{previous}" if previous != start else f"{start}")
+        if number is not None:
+            start = previous = number
+    return ", ".join(parts) + "단계"
+
+
+_ENDPOINT_ANSWER = re.compile(r"^원문 종점 “(?P<quote>.*)” — 답: (?P<answer>.+)$", re.S)
+
+
+def _readable_record_text(text: str) -> str:
+    """An endpoint answer the rules stored as one line, in plain words."""
+
+    match = _ENDPOINT_ANSWER.match(text.strip())
+    if match is None:
+        return text.strip()
+    quote = " ".join(match.group("quote").split())
+    if len(quote) > 90:
+        quote = quote[:88].rstrip() + "…"
+    answer = match.group("answer").strip()
+    verdict = "충족했다고 답했다" if answer in {"네", "응", "예", "yes"} else "아직 충족하지 않았다고 답했다"
+    return f"원문의 끝 조건(“{quote}”)을 {verdict}"
+
+
+def _approval_words(report_data: Mapping[str, Any]) -> str:
+    readiness = {
+        "guidance_ready": "안내 준비 완료",
+        "analysis_required": "분석 검토가 끝나지 않음",
+    }.get(str(report_data.get("readiness_status") or ""), "준비 상태 확인 필요")
+    if report_data.get("development_only"):
+        return f"개발용 시험 프로토콜 — 승인된 개정본이 아님 ({readiness})"
+    return f"실행이 허가된 프로토콜 개정본 ({readiness})"
+
+
+def _pdf_front_matter(fixture: Any) -> tuple[str, str, str, str]:
+    """(purpose sentence, keywords, DOI url, author line) from the PDF's first page."""
+
+    try:
+        pages = fixture.draft.protocol.metadata.pdf.pages
+        first = pages[0].text if pages else ""
+    except AttributeError:
+        return "", "", "", ""
+    text = first.replace("\xa0", " ")
+    keywords = ""
+    match = re.search(r"Keywords:\s*(.+?)(?:\n[A-Za-z ]+:|\nprotocols\.io|\Z)", text, re.S)
+    if match:
+        keywords = " ".join(match.group(1).split())
+    doi = ""
+    match = re.search(r"https?://(?:dx\.)?doi\.org/\S+", text)
+    if match:
+        doi = match.group(0).rstrip(".,)")
+    author = ""
+    match = re.search(r"Protocol Citation:\s*(.+?)(?:\n|$)", text)
+    if match:
+        author = " ".join(match.group(1).split())
+    purpose = ""
+    match = re.search(r"(?:Abstract|Purpose|Aim|Objective)s?\s*\n(.+?)(?:\n\s*\n|\Z)", text, re.S)
+    if match:
+        purpose = " ".join(match.group(1).split())[:600]
+    return purpose, keywords, doi, author
+
+
+_SECTION_DURATION = re.compile(r"\s+\d+\s*(?:m|min|h|hr|s)\s*$", re.I)
+
+
+def build_report_facts(
+    report_data: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    fixture: Any = None,
+    context: "GroundedReportContext | None" = None,
+    zone: ZoneInfo | None = None,
+    protocol_problem: str = "",
+) -> ReportFacts:
+    """The report's facts from the record and the protocol the session ran."""
+
+    zone = zone or report_timezone()
+    events = list(report_data.get("events") or ()) if events is None else list(events)
+    if fixture is not None:
+        source_steps = _source_steps_from_fixture(fixture)
+    elif context is not None:
+        source_steps = _source_steps_from_context(context)
+    else:
+        source_steps = []
+    by_label = {step["label"]: step for step in source_steps}
+    order = {step["label"]: index for index, step in enumerate(source_steps)}
+
+    completed_at: dict[str, datetime | None] = {}
+    advanced: list[str] = []
+    timer_started: dict[str, tuple[datetime | None, int | None]] = {}
+    early: dict[str, tuple[int, int]] = {}
+    records: list[ReportRecord] = []
+    pauses: list[tuple[str, datetime | None, datetime | None]] = []
+    stop_label: str | None = None
+    workflow_completed = False
+    blocked: list[str] = []
+    experimenter = ""
+    gates_skipped = False
+
+    def add_record(label: str, kind: str, text: str, at: datetime | None) -> None:
+        records.append(ReportRecord(
+            number=len(records) + 1, step_label=label, kind=kind,
+            text=_readable_record_text(text), at=at.strftime("%H:%M") if at else "",
+        ))
+
+    for event in events:
+        kind = str(event.get("event_type") or "")
+        label = str(event.get("step_label") or "")
+        at = _local(event.get("created_at"), zone)
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        wording = str(event.get("user_wording") or "").strip()
+        legacy = [str(item).strip() for item in payload.get("observations") or () if str(item).strip()]
+        if kind == "step_completed" and label:
+            completed_at.setdefault(label, at)
+            if wording:
+                add_record(label, "관찰", wording, at)
+            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+            if timer.get("step_exited_before_timer_elapsed") or (
+                timer.get("completion_state") == "step_exited_before_timer_elapsed"
+            ):
+                try:
+                    early[label] = (
+                        int(timer.get("elapsed_seconds") or 0),
+                        int(timer.get("source_duration_seconds") or timer.get("duration_seconds") or 0),
+                    )
+                except (TypeError, ValueError):
+                    pass
+        elif kind == "step_advanced" and label:
+            advanced.append(label)
+        elif kind == "observation" and label:
+            add_record(label, "관찰", wording or str(payload.get("text") or "관찰 기록"), at)
+        elif kind == "anomaly" and label:
+            add_record(label, "이상", wording or str(payload.get("text") or "이상 보고"), at)
+        elif kind == "photo_attached" and label:
+            add_record(label, "사진", f"사진 첨부 — {wording}" if wording else "사진 첨부", at)
+        elif kind == "timer_started" and label:
+            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+            seconds = timer.get("duration_seconds") or timer.get("source_duration_seconds")
+            try:
+                seconds = int(seconds) if seconds else None
+            except (TypeError, ValueError):
+                seconds = None
+            if seconds:
+                timer_started[label] = (at, seconds)
+        elif kind == "workflow_paused":
+            pauses.append((label, at, None))
+        elif kind == "workflow_resumed" and pauses and pauses[-1][2] is None:
+            pauses[-1] = (pauses[-1][0], pauses[-1][1], at)
+        elif kind == "session_stopped":
+            stop_label = label or None
+        elif kind == "workflow_completed":
+            workflow_completed = True
+        elif kind == "blocked" and label:
+            blocked.append(label)
+        elif kind == "experimenter_recorded" and not experimenter:
+            # The person who started the experiment, as the server knew them
+            # (decision 5): a development account's name today, the signed-in
+            # person's once sign-in is attached.
+            experimenter = " ".join(str(payload.get("display_name") or "").split())[:120]
+        elif kind == "test_mode_readiness_gates_skipped":
+            gates_skipped = True
+        for text in legacy:
+            add_record(label or "—", "관찰", text, at)
+
+    started = _local(report_data.get("started_at"), zone)
+    ended = _local(report_data.get("ended_at"), zone)
+    status = str(report_data.get("status") or "in_progress")
+    outcome = "completed" if workflow_completed or status == "completed" else (
+        "stopped" if status in {"stopped", "blocked", "incomplete"} else "in_progress")
+    completed_labels = sorted(completed_at, key=lambda item: order.get(item, 10_000 + len(item)))
+    total = len(source_steps) or len(completed_labels)
+
+    steps: list[ReportStepFacts] = []
+    shown = list(completed_labels)
+    for record in records:
+        if record.step_label not in shown and record.step_label != "—":
+            shown.append(record.step_label)
+    shown.sort(key=lambda item: order.get(item, 10_000))
+    for label in shown:
+        source = by_label.get(label, {})
+        note = ""
+        defined = source.get("timer")
+        if label in early:
+            elapsed, duration = early[label]
+            note = f"원문 {_duration_words(duration or defined)} / {_duration_words(elapsed)}에 끝냄"
+        elif label in timer_started:
+            start, seconds = timer_started[label]
+            end = completed_at.get(label)
+            actual = _duration_words((end - start).total_seconds()) if start and end else ""
+            note = f"원문 {_duration_words(seconds)} / 실제 {actual}" if actual else f"원문 {_duration_words(seconds)}"
+        elif defined:
+            note = f"원문 {_duration_words(defined)} / 타이머 기록 없음"
+        done = completed_at.get(label)
+        steps.append(ReportStepFacts(
+            label=label, step_id=str(source.get("step_id") or ""),
+            section=_SECTION_DURATION.sub("", str(source.get("section") or "")).strip(),
+            text=str(source.get("text") or ""), source_text=str(source.get("source_text") or ""),
+            translated=bool(source.get("translated")), expected=tuple(source.get("expected") or ()),
+            source_timer_seconds=defined, completed=label in completed_at,
+            completed_at=done.strftime("%H:%M") if done else "",
+            timer_note=note, records=tuple(r for r in records if r.step_label == label),
+        ))
+
+    # What was done differently from the source, from the record only.
+    deviations: list[str] = []
+    if source_steps and completed_labels:
+        first = min(order.get(label, 0) for label in completed_labels)
+        before = [step["label"] for step in source_steps[:first]]
+        if before:
+            deviations.append(f"{_ranges(before)}는 이 기록에 없다({completed_labels[0]}단계부터 기록됨).")
+    for label in completed_labels:
+        if label in early:
+            elapsed, duration = early[label]
+            deviations.append(
+                f"{label}단계: 원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냈다(타이머를 일찍 끝냄)."
+            )
+    for record in records:
+        if record.kind == "관찰" and "반복" in record.text:
+            deviations.append(f"{record.step_label}단계: 연구자 기록 — “{record.text}”.")
+    for label, paused_at, resumed_at in pauses:
+        if paused_at and resumed_at:
+            deviations.append(
+                f"{label}단계에서 {_duration_words((resumed_at - paused_at).total_seconds())} 동안 멈췄다가 다시 진행했다"
+                f"({paused_at:%H:%M}–{resumed_at:%H:%M})."
+            )
+        elif paused_at:
+            deviations.append(f"{label}단계에서 {paused_at:%H:%M}에 멈춘 뒤 다시 시작한 기록이 없다.")
+    for label in advanced:
+        deviations.append(f"{label}단계: 완료를 말하지 않고 다음 단계로 넘어갔다.")
+    if outcome == "stopped" and source_steps:
+        after = [step["label"] for step in source_steps
+                 if step["label"] not in completed_at
+                 and order.get(step["label"], 0) > max((order.get(l, -1) for l in completed_labels), default=-1)]
+        if after:
+            where = f"{stop_label}단계에서 " if stop_label else ""
+            deviations.append(f"{where}실험을 끝내 {_ranges(after)}는 수행하지 않았다.")
+
+    observations = [r for r in records if r.kind == "관찰"]
+    anomalies = [r for r in records if r.kind == "이상"]
+    photos = [r for r in records if r.kind == "사진"]
+    confirmed: list[str] = []
+    if completed_labels:
+        confirmed.append(f"완료로 기록된 단계는 {_ranges(completed_labels)}이다.")
+    for record in observations:
+        if record.text.startswith("원문의 끝 조건"):
+            confirmed.append(f"{record.step_label}단계: 연구자가 {record.text}.")
+        else:
+            confirmed.append(f"{record.step_label}단계에서 연구자가 “{record.text}”라고 기록했다.")
+    waited = [label for label in completed_labels if label in timer_started and label not in early]
+    if waited:
+        confirmed.append(f"타이머를 켠 {_ranges(waited)}는 타이머를 켠 뒤 완료했다(실제 걸린 시간은 3-2의 표).")
+    to_check: list[str] = []
+    if fixture is None:
+        to_check.append(f"{protocol_problem or '프로토콜 원문을 불러오지 못했다'} — 단계 원문과 원문 조건을 이 보고서에 싣지 못했다.")
+    for step in steps:
+        if step.completed and step.expected and not any(r.kind == "관찰" for r in step.records):
+            quote = step.expected[0] if len(step.expected[0]) <= 90 else step.expected[0][:88].rstrip() + "…"
+            to_check.append(f"{step.label}단계: 원문은 끝 조건(“{quote}”)을 적고 있으나 관찰이 기록되지 않았다.")
+        if step.completed and step.source_timer_seconds and step.label not in timer_started:
+            to_check.append(f"{step.label}단계: 원문 시간({_duration_words(step.source_timer_seconds)})이 있으나 타이머 기록이 없다.")
+        if step.label in early:
+            to_check.append(f"{step.label}단계: 타이머를 일찍 끝낸 것이 결과에 영향을 주었는지 확인한다.")
+    for record in anomalies:
+        to_check.append(f"{record.step_label}단계 이상(“{record.text}”) 뒤에 어떻게 처리했는지 기록되지 않았다.")
+    for record in photos:
+        to_check.append(f"{record.step_label}단계 사진은 시스템이 해석하지 않았다 — 사진에서 본 것을 연구자가 적는다.")
+    for label in blocked:
+        to_check.append(f"{label}단계에서 진행이 막힌 기록이 있다.")
+
+    if started and ended and ended.date() != started.date():
+        date_words = (f"{started.year}년 {started.month}월 {started.day}일 ({_WEEKDAYS[started.weekday()]}) – "
+                      f"{ended.month}월 {ended.day}일 ({_WEEKDAYS[ended.weekday()]})")
+        end_words = f"{ended.month}월 {ended.day}일 {ended:%H:%M}"
+    else:
+        date_words = (f"{started.year}년 {started.month}월 {started.day}일 ({_WEEKDAYS[started.weekday()]})"
+                      if started else "기록 없음")
+        end_words = f"{ended:%H:%M}" if ended else "기록 없음 (진행 중)"
+    if outcome == "completed":
+        outcome_words = "끝까지 완료"
+    elif outcome == "stopped":
+        outcome_words = f"중단 — {stop_label}단계에서 종료" if stop_label else "중단"
+    else:
+        outcome_words = "진행 중"
+    zone_name = "한국 시간 (Asia/Seoul)" if zone.key == "Asia/Seoul" else zone.key
+    run_rows = (
+        ("프로토콜", str(report_data.get("protocol_title") or "")),
+        ("날짜", date_words),
+        ("시작", f"{started:%H:%M}" if started else "기록 없음"),
+        ("끝", end_words),
+        ("시간 기준", zone_name),
+        ("실험자", experimenter),
+        ("걸린 시간", _duration_words((ended - started).total_seconds()) if started and ended else "진행 중"),
+        ("완료 단계", f"{len(completed_labels)} / {total}" if total else str(len(completed_labels))),
+        ("결과", outcome_words),
+        ("기록", f"관찰 {len(observations)}건 · 이상 {len(anomalies)}건 · 사진 {len(photos)}건"),
+        ("프로토콜 승인 상태", _approval_words(report_data)),
+    ) + ((("준비 검사", "시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀"),) if gates_skipped else ())
+
+    purpose, keywords, doi, author = _pdf_front_matter(fixture) if fixture is not None else ("", "", "", "")
+    protocol = getattr(getattr(fixture, "draft", None), "protocol", None)
+    materials = tuple(" ".join(m.name_source_text.split()) for m in getattr(protocol, "materials", ()) or ())
+    equipment = tuple(" ".join(e.name_source_text.split()) for e in getattr(protocol, "equipment", ()) or ())
+    sections: list[str] = []
+    for step in source_steps:
+        title = _SECTION_DURATION.sub("", step["section"]).strip()
+        if title and title not in sections:
+            sections.append(title)
+    title = str(report_data.get("protocol_title") or "")
+    reference = ReportSource(
+        number=1, kind="protocol",
+        title=f"{author}" if author else f"{title} (실험 PDF)",
+        url=doi, note="실험에 쓴 프로토콜 원문 PDF",
+    )
+    return ReportFacts(
+        protocol_title=title, protocol_loaded=bool(source_steps), total_steps=total,
+        run_rows=run_rows, completed_labels=tuple(completed_labels), outcome=outcome,
+        stop_label=stop_label, steps=tuple(steps), records=tuple(records),
+        purpose_from_pdf=purpose, keywords=keywords, sections=tuple(sections),
+        materials=materials, equipment=equipment, deviations=tuple(deviations),
+        confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
+        zone=zone,
+    )
+
+
+# --- The server's checks on model sections (decision 5) ------------------------
+
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+_CONDITION_NUMBER = re.compile(
+    r"\d+(?:[.,]\d+)?\s*(?:°\s*C|℃|도\b|분|min\b|시간|hours?\b|h\b|초|sec\b|s\b|mM\b|µM|μM|nM|M\b|"
+    r"µL|μL|uL|ul\b|mL|ml\b|L\b|rpm|x\s*g\b|×\s*g\b|g\b|mg|µg|ug|ng|%|v/v|w/v|mm\b|cm\b|일\b)",
+    re.I,
+)
+_IDENTIFIER_SHAPES = (
+    ("16자 이상 16진수", re.compile(r"\b[0-9a-fA-F]{16,}\b")),
+    ("ER-/fixture-/candidate- 식별자", re.compile(r"\b(?:ER|fixture|candidate)-[A-Za-z0-9-]+")),
+    ("밀리초 시각", re.compile(r"\d{1,2}:\d{2}:\d{2}\.\d+")),
+    ("영어 상태값·명령 이름", re.compile(
+        r"\b(?:[a-z]+(?:_[a-z]+)+|stopped|completed|blocked|incomplete|in progress)\b")),
+)
+#: A quotation is closed by its own closing mark: a straight quote by a
+#: straight quote, “ by ”, and so on. A record that itself holds curly quotes
+#: (an endpoint answer quotes the source) can then sit inside straight ones.
+_QUOTE_MARKS = (('"', '"'), ("“", "”"), ("‘", "’"), ("'", "'"), ("「", "」"), ("『", "』"))
+_QUOTED = re.compile("|".join(
+    f"{re.escape(opening)}([^{re.escape(closing)}]{{2,}}){re.escape(closing)}"
+    for opening, closing in _QUOTE_MARKS
+))
+_SPECULATION = ("추정", "것으로 보인", "보인다", "아마", "가능성", "것 같", "듯하", "듯이", "인 듯", "한 듯")
+_SENTENCE = re.compile(r"(?<=[.!?。])\s+")
+
+
+#: Units a number may carry, each written the ways a protocol or a person
+#: writes it, and the one form they are compared in (decision 3: "15분" is
+#: "15 min", "µL" is "uL"). A number with a unit must appear with the same
+#: unit in the record or the source; a bare number is checked as before.
+_UNIT_FORMS = (
+    (r"°\s*C|℃|도", "°C"),
+    (r"시간|hours?|hrs?|h", "h"),
+    (r"분|minutes?|mins?|min|m", "min"),
+    (r"초|seconds?|secs?|sec|s", "s"),
+    (r"[µμu][Ll]", "µL"),
+    (r"m[Ll]", "mL"),
+    (r"L", "L"),
+    (r"mM", "mM"),
+    (r"[µμu]M", "µM"),
+    (r"nM", "nM"),
+    (r"M", "M"),
+    (r"rpm|RPM", "rpm"),
+    (r"[x×]\s*g", "×g"),
+    (r"mg", "mg"),
+    (r"[µμu]g", "µg"),
+    (r"ng", "ng"),
+    (r"g", "g"),
+    (r"mm", "mm"),
+    (r"cm", "cm"),
+    (r"[µμ]m", "µm"),
+    (r"kDa", "kDa"),
+    (r"%", "%"),
+)
+_UNIT_PATTERNS = tuple((re.compile(pattern), unit) for pattern, unit in _UNIT_FORMS)
+_MEASURE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(" + "|".join(
+        # Longer spellings first so "min" is not read as "m" and "mL" not as "m".
+        sorted((p for pattern, _ in _UNIT_FORMS for p in pattern.split("|")), key=len, reverse=True)
+    ) + r")(?![A-Za-zµμ])"
+)
+
+
+def _plain(text: str) -> str:
+    """Text without citation marks or thousands separators."""
+
+    return re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", _CITATION.sub(" ", text))
+
+
+def _number_form(item: str) -> str:
+    return item if "." in item else (item.lstrip("0") or "0")
+
+
+def _numbers(text: str) -> set[str]:
+    return {_number_form(item) for item in _NUMBER.findall(_plain(text))}
+
+
+def _measures(text: str) -> list[tuple[str, str, str]]:
+    """(number, unit, as written) for every number that carries a unit."""
+
+    found = []
+    for match in _MEASURE.finditer(_plain(text)):
+        written = match.group(2)
+        unit = next(unit for pattern, unit in _UNIT_PATTERNS if pattern.fullmatch(written))
+        found.append((_number_form(match.group(1)), unit, match.group(0)))
+    return found
+
+
+def _record_texts(facts: ReportFacts) -> list[str]:
+    """Every text a number in a model section may come from."""
+
+    texts: list[str] = [facts.protocol_title, facts.keywords, facts.purpose_from_pdf]
+    texts += [value for _, value in facts.run_rows]
+    texts += list(facts.deviations) + list(facts.confirmed) + list(facts.to_check)
+    texts += list(facts.materials) + list(facts.equipment) + list(facts.sections)
+    for step in facts.steps:
+        texts += [step.label, step.text, step.source_text, step.completed_at, step.timer_note, *step.expected]
+        if step.source_timer_seconds:
+            texts.append(_duration_words(step.source_timer_seconds))
+    texts += [f"{record.number} {record.text} {record.at}" for record in facts.records]
+    texts.append(str(facts.total_steps))
+    texts.append(" ".join(str(n) for n in range(1, facts.total_steps + 1)))
+    texts.append(" ".join(str(n) for n in range(0, len(facts.records) + 1)))
+    texts.append(facts.protocol_reference.title)
+    return [str(text) for text in texts]
+
+
+def _allowed_numbers(facts: ReportFacts) -> set[str]:
+    allowed: set[str] = set()
+    for text in _record_texts(facts):
+        allowed |= _numbers(text)
+    return allowed
+
+
+def _allowed_measures(facts: ReportFacts) -> set[tuple[str, str]]:
+    return {(number, unit) for text in _record_texts(facts) for number, unit, _ in _measures(text)}
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        parts = []
+        for item in value:
+            if isinstance(item, Mapping):
+                parts.append(" ".join(str(v) for v in item.values()))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return "" if value is None else str(value)
+
+
+def check_report_sections(
+    sections: Mapping[str, Any],
+    facts: ReportFacts,
+) -> dict[str, list[str]]:
+    """Why each model section may not be used ({} for a section that passes)."""
+
+    allowed = _allowed_numbers(facts)
+    allowed_measures = _allowed_measures(facts)
+    record_texts = [" ".join(text.split()) for text in facts.record_texts]
+    reviewable = set(range(1, len(facts.records) + len(facts.deviations) + 1))
+    reasons: dict[str, list[str]] = {}
+    for key in MODEL_SECTIONS:
+        value = sections.get(key)
+        text = _as_text(value)
+        problems: list[str] = []
+        for name, shape in _IDENTIFIER_SHAPES:
+            if shape.search(_CITATION.sub(" ", text)):
+                problems.append(f"본문에 {name}")
+        cited = {int(n) for group in _CITATION.findall(text) for n in group.split(",")}
+        if key in {"purpose", "background"}:
+            if _CONDITION_NUMBER.search(_CITATION.sub(" ", text)):
+                problems.append("실험 조건 숫자")
+            if cited - {1}:
+                problems.append("없는 출처 번호")
+            if key == "purpose":
+                for sentence in filter(None, (s.strip() for s in _SENTENCE.split(text))):
+                    if not _CITATION.search(sentence):
+                        problems.append("출처 번호가 없는 문장")
+                        break
+        else:
+            unknown = [written for number, unit, written in _measures(text)
+                       if (number, unit) not in allowed_measures]
+            if unknown:
+                problems.append("기록·원문에 없는 값 " + ", ".join(dict.fromkeys(unknown)))
+            extra = _numbers(_MEASURE.sub(" ", _plain(text))) - allowed
+            if extra:
+                problems.append("기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6]))
+            if cited:
+                problems.append("방법·결과·고찰 칸의 출처 번호")
+        if key in {"results_summary", "methods_summary"}:
+            for word in _SPECULATION:
+                if word in text:
+                    problems.append(f"추측 표현 “{word}”")
+                    break
+        if key == "results_summary":
+            for match in _QUOTED.finditer(text):
+                quoted = " ".join(next(group for group in match.groups() if group is not None).split())
+                if not any(quoted in record or record in quoted for record in record_texts):
+                    problems.append(f"기록에 없는 관찰 “{quoted[:30]}”")
+                    break
+        if key == "discussion_review" and value:
+            for item in value if isinstance(value, (list, tuple)) else [value]:
+                number = item.get("항목 번호") if isinstance(item, Mapping) else None
+                try:
+                    number = int(number)
+                except (TypeError, ValueError):
+                    number = None
+                if number not in reviewable:
+                    problems.append("기록된 이상·편차에 붙지 않은 원인 추정")
+                    break
+        if problems:
+            reasons[key] = problems
+    return reasons
+
+
+# --- The narrative and the server's own sentences -------------------------------
+
+
 @dataclass(frozen=True)
 class ReportNarrative:
-    """Structured, professional narrative laboratory report produced by ReportWriterBrain."""
+    """The report's prose: model sections that passed, server sentences for the rest."""
 
     title: str
-    objective: str
-    session_summary: str
-    chronological_highlights: tuple[str, ...]
-    materials_and_methods: str
-    results_and_observations: str
-    discussion: str
-    anomalies_and_deviations: str
+    purpose: str
+    background: str
+    methods_summary: str
+    results_summary: str
+    discussion_confirmed: tuple[str, ...]
+    discussion_to_check: tuple[str, ...]
+    discussion_review: tuple[str, ...]
     conclusion: str
-    limitations: str
+    next_steps: tuple[str, ...]
+    facts: ReportFacts | None = None
+    sources: tuple[ReportSource, ...] = ()
+    section_origin: Mapping[str, str] = field(default_factory=dict)
+    rejected: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    writer: str = "서버 대체 문장"
+    written_at: str = ""
+
+    # Earlier names, kept for callers written before lane RP.
+    @property
+    def objective(self) -> str:
+        return self.purpose
+
+    @property
+    def materials_and_methods(self) -> str:
+        return self.methods_summary
+
+    @property
+    def results_and_observations(self) -> str:
+        lines = []
+        if self.facts is not None:
+            lines = [f"{r.step_label}단계 {r.kind}: {r.text}" for r in self.facts.records]
+            for step in self.facts.steps:
+                if not step.records:
+                    lines.append(f"{step.label}단계: 기록된 관찰이 없다.")
+        return "\n".join(lines + [self.results_summary])
+
+    @property
+    def discussion(self) -> str:
+        return "\n".join(self.discussion_confirmed + self.discussion_to_check + self.discussion_review)
+
+
+def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
+    """The server's own sentence for every model section."""
+
+    title = facts.protocol_title or "이 프로토콜"
+    if facts.purpose_from_pdf:
+        purpose = f"원문은 이 실험의 목적을 다음과 같이 적고 있다: “{facts.purpose_from_pdf}”[1]."
+    elif facts.keywords:
+        purpose = (f"이 실험은 '{title}' 프로토콜에 따라 수행했다[1]. "
+                   f"원문에는 목적을 따로 밝힌 문장이 없으며, 원문 키워드는 '{facts.keywords}'이다[1].")
+    else:
+        purpose = f"이 실험은 '{title}' 프로토콜에 따라 수행했다[1]. 원문에는 목적을 따로 밝힌 문장이 없다[1]."
+    background = (
+        "원문은 다음 순서의 단계 묶음으로 되어 있다: " + " → ".join(facts.sections) + "[1]."
+        if facts.sections else "원문에서 원리를 설명하는 부분을 찾지 못했다[1]."
+    )
+    groups: list[tuple[str, list[str]]] = []
+    for step in facts.steps:
+        if not step.completed:
+            continue
+        if groups and groups[-1][0] == step.section:
+            groups[-1][1].append(step.label)
+        else:
+            groups.append((step.section, [step.label]))
+    if groups:
+        methods = " ".join(
+            (f"‘{section}’ 묶음의 {_ranges(labels)}를 수행했다." if section else f"{_ranges(labels)}를 수행했다.")
+            for section, labels in groups
+        ) + " 단계별 절차와 원문 조건은 3-2의 표에 원문 그대로 적었다."
+    else:
+        methods = "완료로 기록된 단계가 없다."
+    counts = {kind: sum(1 for r in facts.records if r.kind == kind) for kind in ("관찰", "이상", "사진")}
+    if facts.records:
+        results = (f"관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다. "
+                   "내용은 위 표에 연구자가 말한 그대로 적었다.")
+    else:
+        results = "기록된 관찰이 없습니다."
+    done = len(facts.completed_labels)
+    if facts.outcome == "completed":
+        conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고 실험을 끝까지 마쳤다."
+    elif facts.outcome == "stopped":
+        where = f" {facts.stop_label}단계에서" if facts.stop_label else ""
+        conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고{where} 실험을 중단했다."
+    else:
+        conclusion = f"{facts.total_steps}단계 중 {done}단계가 완료로 기록되었고 실험이 진행 중이다."
+    conclusion += f" 관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다."
+    next_steps: list[str] = []
+    if facts.outcome == "stopped" and facts.stop_label:
+        next_steps.append(f"{facts.stop_label}단계부터 이어서 진행한다.")
+    if counts["이상"]:
+        next_steps.append("이상 기록의 처리 결과를 적는다.")
+    if counts["사진"]:
+        next_steps.append("사진에서 본 것을 결과에 적는다.")
+    next_steps.append("‘연구자 해석’ 칸을 채운다.")
+    return {
+        "purpose": purpose,
+        "background": background,
+        "methods_summary": methods,
+        "results_summary": results,
+        "discussion_confirmed": tuple(facts.confirmed) or ("기록에서 확인되는 완료 단계가 없다.",),
+        "discussion_to_check": tuple(facts.to_check) or ("기록에서 따로 확인할 점을 찾지 못했다.",),
+        "discussion_review": (),
+        "conclusion": conclusion,
+        "next_steps": tuple(next_steps),
+    }
+
+
+def _review_items(value: Any) -> tuple[str, ...]:
+    items = value if isinstance(value, (list, tuple)) else []
+    texts = []
+    for item in items:
+        if isinstance(item, Mapping):
+            text = " ".join(str(item.get("제안") or "").split())
+            number = item.get("항목 번호")
+            if text:
+                texts.append(f"검토 제안 (항목 {number}): {text}")
+    return tuple(texts)
+
+
+def _text_items(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(" ".join(str(item).split()) for item in value if str(item).strip())
+    text = " ".join(str(value or "").split())
+    return (text,) if text else ()
+
+
+def narrative_from_sections(
+    facts: ReportFacts,
+    model: Mapping[str, Any] | None = None,
+    *,
+    rejected: Mapping[str, Sequence[str]] | None = None,
+    writer: str = "서버 대체 문장",
+    written_at: str | None = None,
+) -> ReportNarrative:
+    fallback = deterministic_sections(facts)
+    rejected = {key: tuple(value) for key, value in (rejected or {}).items()}
+    chosen: dict[str, Any] = {}
+    origin: dict[str, str] = {}
+    for key in MODEL_SECTIONS:
+        value = None if model is None or key in rejected else model.get(key)
+        if key == "next_steps":
+            value = _text_items(value) if value else None
+        elif key == "discussion_review":
+            value = _review_items(value) if value else None
+        elif value is not None:
+            value = " ".join(str(value).split()) or None
+        if value:
+            chosen[key], origin[key] = value, "모델"
+        else:
+            chosen[key] = fallback[key]
+            if model is None:
+                origin[key] = "서버"
+            elif key in rejected or not model:
+                origin[key] = "대체"
+            else:
+                # The model left it empty: not a refusal, but not its words.
+                origin[key] = "모델이 비움 — 서버 문장"
+    # Discussion (가) and (나) are lists the server builds from the record
+    # (decision 2); the model does not write them.
+    for key in ("discussion_confirmed", "discussion_to_check"):
+        chosen[key], origin[key] = fallback[key], "서버"
+    return ReportNarrative(
+        title=f"{facts.protocol_title} 실험 보고서" if facts.protocol_title else "실험 보고서",
+        purpose=chosen["purpose"], background=chosen["background"],
+        methods_summary=chosen["methods_summary"], results_summary=chosen["results_summary"],
+        discussion_confirmed=tuple(chosen["discussion_confirmed"]),
+        discussion_to_check=tuple(chosen["discussion_to_check"]),
+        discussion_review=tuple(chosen["discussion_review"]),
+        conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
+        facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
+        rejected=rejected, writer=writer, written_at=written_at or _now(),
+    )
 
 
 @dataclass(frozen=True)
@@ -1135,11 +1910,79 @@ class ReportWriterSettings:
         return cls(enabled=enabled, model=model, timeout_seconds=timeout)
 
 
-_NARRATIVE_CACHE: dict[tuple[str, int, str, str, str], ReportNarrative] = {}
+_NARRATIVE_CACHE: dict[tuple[Any, ...], ReportNarrative] = {}
+_AUTO = object()
+
+_WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는다. 아래 JSON 은 서버가 실험 기록과 프로토콜 원문에서 뽑은 사실이다. 이 사실로 한국어 실험 보고서의 서술 칸만 쓴다. 표(수행 정보, 수행한 단계, 결과 표, 원문과 다르게 한 점)는 서버가 따로 넣으므로 다시 쓰지 않는다.
+
+문체: 간결하고 명확한 한국어 학술 문체(~했다/~이다). 핵심만 쓴다.
+
+지킬 것:
+- 기록에 없는 결과·관찰·측정·수치·오차 원인을 지어내지 않는다. 결과 칸은 기록된 사실만 쓰고 추측하지 않는다.
+- 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산해서 새 숫자를 만들지 않는다.
+- 목적·배경 칸에는 온도·시간·농도·부피·회전수 같은 실험 조건 숫자를 쓰지 않는다.
+- 목적 칸의 모든 문장 끝에 출처 번호 [1](프로토콜 원문)을 단다.
+- 'background' 는 프로토콜 원문에 있는 내용만 쓴다. 원문 밖의 지식(교과서·웹 지식)은 쓰지 않는다. 원문에 원리 설명이 없으면 없다고 쓴다.
+- 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
+- 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
+- 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
+
+JSON 객체 하나만 돌려준다. 키:
+purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
+results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
+discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록)."""
+
+
+def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
+    """What the model reads: experiment content only, no identifiers (decision 3)."""
+
+    reviewable = [
+        {"항목 번호": record.number, "단계": record.step_label, "내용": f"이상: {record.text}"}
+        for record in facts.records if record.kind == "이상"
+    ] + [
+        {"항목 번호": len(facts.records) + index, "내용": f"원문과 다르게 한 점: {text}"}
+        for index, text in enumerate(facts.deviations, 1)
+    ]
+    return {
+        "프로토콜": facts.protocol_title,
+        "원문 키워드": facts.keywords,
+        "원문에 적힌 목적": facts.purpose_from_pdf,
+        "원문 단계 묶음": list(facts.sections),
+        "재료": list(facts.materials),
+        "장비": list(facts.equipment),
+        "수행 정보": {name: value for name, value in facts.run_rows if value and name != "실험자"},
+        "수행한 단계": [
+            {
+                "단계": step.label, "묶음": step.section,
+                "원문": step.text, "완료": step.completed,
+                **({"완료 시각": step.completed_at} if step.completed_at else {}),
+                **({"타이머": step.timer_note} if step.timer_note else {}),
+                **({"원문 기대 결과": list(step.expected)} if step.expected else {}),
+            }
+            for step in facts.steps
+        ],
+        "기록": [
+            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at}
+            for r in facts.records
+        ],
+        "원문과 다르게 한 점": list(facts.deviations),
+        "서버가 찾은 확인이 필요한 점": list(facts.to_check),
+        "검토할 수 있는 항목": reviewable,
+    }
+
+
+def _parse_reply(content: str) -> dict[str, Any]:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("report reply is not an object")
+    return data
 
 
 class ReportWriterBrain:
-    """Specialist Brain generating faithful laboratory report prose from grounded step context."""
+    """Writes the report's prose sections; the server checks each before using it."""
 
     def __init__(
         self,
@@ -1150,6 +1993,7 @@ class ReportWriterBrain:
         self.client = client
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.last_usage: dict[str, Any] = {}
 
     def build_deterministic_draft(
         self,
@@ -1199,218 +2043,413 @@ class ReportWriterBrain:
             last_updated_at=_now(),
         )
 
+    @staticmethod
+    def facts_for(
+        report_data_or_context: Mapping[str, Any] | GroundedReportContext,
+        events: Sequence[Mapping[str, Any]] | None = None,
+        *,
+        fixture: Any = _AUTO,
+    ) -> ReportFacts:
+        if isinstance(report_data_or_context, GroundedReportContext):
+            context = report_data_or_context
+            report_data = {**context.report_metadata, **context.protocol_metadata,
+                           **context.session_timing}
+            return build_report_facts(report_data, list(events or context.event_ledger), context=context)
+        report_data = report_data_or_context
+        problem = ""
+        if fixture is _AUTO:
+            fixture, problem = report_protocol_fixture(report_data)
+        context = None
+        if fixture is None:
+            context = build_grounded_report_context(
+                dict(report_data), list(events or report_data.get("events") or ()), lookup=False)
+        return build_report_facts(report_data, events, fixture=fixture, context=context,
+                                  protocol_problem=problem)
+
     def build_deterministic_narrative(
         self,
         report_data_or_context: dict[str, Any] | GroundedReportContext,
         events: list[dict[str, Any]] | None = None,
         context: GroundedReportContext | None = None,
+        *,
+        fixture: Any = _AUTO,
     ) -> ReportNarrative:
-        """Create a faithful, unhallucinated report narrative grounded in executed protocol steps."""
-        if isinstance(report_data_or_context, GroundedReportContext):
-            context = report_data_or_context
-            report_data = context.report_metadata or {}
-            if events is None:
-                events = list(context.event_ledger or [])
-        else:
-            report_data = report_data_or_context
-            if events is None:
-                events = list(report_data.get("events") or [])
-            if context is None:
-                context = build_grounded_report_context(report_data, events)
+        """The report with the server's own sentence in every section."""
 
-        title = str(report_data.get("protocol_title") or context.protocol_metadata.get("protocol_title") or "Laboratory Experiment Report")
-        report_id = str(report_data.get("report_id") or "—")
-        status = str(report_data.get("status") or "in_progress")
-        started = _human_event_clock(report_data.get("started_at"))
-        ended = _human_event_clock(report_data.get("ended_at"))
+        facts = self.facts_for(context or report_data_or_context, events, fixture=fixture)
+        return narrative_from_sections(facts)
 
-        objective = (
-            f"본 실험 세션의 목적은 '{title}' 지침에 따라 검증된 절차를 체계적으로 수행하고, "
-            f"공정별 진행 상태 및 작업자 관찰 결과를 감사 가능한 전자 실험 기록으로 남기는 것이다. "
-            f"{context.experiment_objective}"
-        )
+    async def write_reply(self, facts: ReportFacts) -> tuple[dict[str, Any] | None, str]:
+        """One model call for the report's prose: (reply, "") or (None, why it failed)."""
 
-        completed_count = sum(1 for s in context.executed_steps if s.completion_state == "completed")
-        session_summary = (
-            f"본 실험 세션({report_id})은 시작 시간({started or '기록됨'})부터 종료 시점({ended or '진행 중'})까지 "
-            f"총 {len(events)}건의 검증된 이벤트가 등록되었으며, {completed_count}개의 단계가 완료 기록되었다. "
-            f"현재 세션의 최종 상태는 '{status}'(으)로 기록되었다."
-        )
-
-        highlights = [_human_event_label(e) for e in events if _human_event_label(e)]
-
-        # Materials & Methods
-        mat_items = []
-        if context.materials:
-            mat_items.append(f"• 주요 시약 및 재료: {', '.join(context.materials)}")
-        if context.equipment:
-            mat_items.append(f"• 사용 장비: {', '.join(context.equipment)}")
-        if context.prerequisites:
-            mat_items.append(f"• 사전 준비 사항: {', '.join(context.prerequisites)}")
-
-        method_items = []
-        for s in context.executed_steps:
-            item_txt = f"• [{s.section_title}] Step {s.step_label}: {s.instruction_source_text}"
-            if s.quantities:
-                item_txt += f" (수량: {', '.join(s.quantities)})"
-            if s.conditions:
-                item_txt += f" (조건: {', '.join(s.conditions)})"
-            method_items.append(item_txt)
-
-        materials = (
-            f"프로토콜 식별자: {context.protocol_metadata.get('protocol_id') or '—'} (버전: {context.protocol_metadata.get('protocol_revision') or '—'}).\n"
-            f"원문 문서 SHA-256: {context.protocol_metadata.get('protocol_sha256') or '—'}.\n"
-            + ("\n".join(mat_items) + "\n\n" if mat_items else "")
-            + "수행 절차 요약:\n"
-            + ("\n".join(method_items) if method_items else "기록된 실행 단계가 없습니다.")
-        )
-
-        # Results & Observations - detailed chronological narrative
-        res_paras = []
-        if context.executed_steps:
-            for s in context.executed_steps:
-                p_bits = [f"[{s.section_title}] {s.step_label}단계에서는 '{s.instruction_source_text}' 절차를 수행하였다."]
-                if s.quantities:
-                    p_bits.append(f"적용된 물질 및 수량은 {', '.join(s.quantities)}이다.")
-                if s.conditions:
-                    p_bits.append(f"실험 조건은 {', '.join(s.conditions)}이다.")
-                if s.timer_configuration:
-                    p_bits.append(f"설정된 타이머는 {s.timer_configuration}이며, 실제 {s.timer_actuals or '정상 시간'} 동안 유지되었다.")
-
-                # Distinguish user observation vs expected results vs no record
-                if s.user_confirmed_observations:
-                    obs_str = "; ".join(s.user_confirmed_observations)
-                    p_bits.append(f"작업자는 해당 단계에서 '{obs_str}'(이)라는 관찰 결과를 기록하였으며, 이 관찰이 완료 조건을 충족하였다.")
-                elif s.expected_results:
-                    exp_str = "; ".join(s.expected_results)
-                    p_bits.append(f"실험 PDF에서는 '{exp_str}'을(를) 예상 결과로 제시하고 있으나, 해당 단계에 대해 별도의 실제 관찰값은 기록되지 않았다.")
-                else:
-                    p_bits.append("해당 단계에 대해 별도의 관찰 결과가 기록되지 않았다.")
-
-                if s.completion_state == "completed":
-                    p_bits.append("해당 단계는 완료로 기록되었다.")
-
-                res_paras.append(" ".join(p_bits))
-        else:
-            res_paras.append("진행 중인 단계에 대한 수행 기록이 유지되고 있다.")
-
-        results_and_obs = "\n\n".join(res_paras)
-
-        # Discussion
-        discussion_parts = []
-        if context.anomalies:
-            discussion_parts.append(
-                f"세션 진행 중 {len(context.anomalies)}건의 이상/편차 사항이 보고되어 기록되었다."
+        if not self.client:
+            return None, ""
+        try:
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": _WRITER_INSTRUCTIONS},
+                        {"role": "user", "content": json.dumps(
+                            _writer_facts(facts), ensure_ascii=False, indent=1)},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=4000,
+                ),
+                timeout=self.timeout_seconds,
             )
-        else:
-            discussion_parts.append("절차 진행 중 보고된 비정상 편차나 위험 요인은 없었다.")
-
-        if context.deviations:
-            discussion_parts.append(f"총 {len(context.deviations)}회의 일시정지 및 재개가 발생하였다.")
-        discussion_parts.append("모든 수행 내역은 불변 SQLite 이벤트 원장에 무결하게 보존되었다.")
-        discussion = " ".join(discussion_parts)
-
-        # Anomalies
-        anomalies_dev = (
-            "\n".join(
-                f"• [{_human_event_clock(ae.get('created_at'))}] Step {ae.get('step_label') or '—'}: {ae.get('user_wording') or (ae.get('payload') or {}).get('text') or '이상 보고'}"
-                for ae in context.anomalies
-            )
-            if context.anomalies else "특이 이상 또는 절차 차단 사항 없음."
-        )
-
-        conclusion = (
-            f"실험 세션 {report_id}의 최종 상태는 '{status}'이며, "
-            f"총 {len(events)}개의 암호학적 원장 이벤트가 유효하게 확정되었다."
-        )
-
-        limitations = (
-            "본 보고서는 시스템에 등록된 실제 이벤트 기록 및 활성 실험 PDF에 한하여 작성되었으며, "
-            "작업자가 명시적으로 기록하지 않은 관찰값이나 측정 수치는 포함하지 않는다."
-        )
-
-        return ReportNarrative(
-            title=title,
-            objective=objective,
-            session_summary=session_summary,
-            chronological_highlights=tuple(highlights),
-            materials_and_methods=materials,
-            results_and_observations=results_and_obs,
-            discussion=discussion,
-            anomalies_and_deviations=anomalies_dev,
-            conclusion=conclusion,
-            limitations=limitations,
-        )
+            self.last_usage["writer"] = getattr(response, "usage", None)
+            return _parse_reply(response.choices[0].message.content or ""), ""
+        except Exception as exc:  # noqa: BLE001 -- the server's sentences stand in
+            log.warning("report writer failed error=%s; using the server's sentences", type(exc).__name__)
+            if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                return None, "모델 시간 초과"
+            return None, f"모델 답 실패({type(exc).__name__})"
 
     async def generate_narrative(
         self,
         report_data: dict[str, Any],
         events: list[dict[str, Any]],
+        *,
+        fixture: Any = _AUTO,
     ) -> ReportNarrative:
-        """Generate a rich, academic Korean narrative report grounded strictly in the ledger and protocol steps."""
-        context = build_grounded_report_context(report_data, events)
-        report_id = str(report_data.get("report_id") or "")
-        protocol_rev = str(report_data.get("protocol_revision") or "")
-        finalization_version = int(report_data.get("finalization_version") or 0)
-        latest_key = str(events[-1].get("event_key") if events else "")
-        cache_key = (report_id, finalization_version, latest_key, protocol_rev, self.model)
+        """The report's prose: one model call, each section checked before use."""
 
+        facts = self.facts_for(report_data, events, fixture=fixture)
+        latest_key = str(events[-1].get("event_key") if events else "")
+        cache_key = (
+            str(report_data.get("report_id") or ""), int(report_data.get("finalization_version") or 0),
+            latest_key, str(report_data.get("protocol_revision") or ""), self.model,
+        )
         cached = _NARRATIVE_CACHE.get(cache_key)
         if cached is not None:
             return cached
-
-        deterministic = self.build_deterministic_narrative(report_data, events, context=context)
         if not self.client:
-            _NARRATIVE_CACHE[cache_key] = deterministic
-            return deterministic
+            narrative = narrative_from_sections(facts)
+        else:
+            reply, failure = await self.write_reply(facts)
+            narrative = narrative_from_reply(facts, reply, failure=failure, writer=self.model)
+        _NARRATIVE_CACHE[cache_key] = narrative
+        return narrative
 
+
+def narrative_from_reply(
+    facts: ReportFacts, reply: Mapping[str, Any] | None, *, failure: str = "", writer: str,
+    written_at: str | None = None,
+) -> ReportNarrative:
+    """The report from one model reply, checked against the record as it is now."""
+
+    if reply is None:
+        return narrative_from_sections(
+            facts, {}, rejected={key: (failure or "모델 답 없음",) for key in MODEL_SECTIONS},
+            writer=f"{writer} (실패)", written_at=written_at,
+        )
+    return narrative_from_sections(
+        facts, reply, rejected=check_report_sections(reply, facts), writer=writer,
+        written_at=written_at,
+    )
+
+
+# --- Preparing the prose when the experiment ends (decision 9) --------------------
+
+#: The prose row's writer when no model wrote it.
+SERVER_WRITER = "서버"
+
+
+class ReportProsePreparer:
+    """Writes each finished report's prose once, in the background.
+
+    When an experiment ends the server asks for its report's prose; the report
+    role's model is called once on a background thread (or not at all when no
+    model is configured) and the reply is kept with the report. Downloads use
+    what was kept. A person asking for it again is the only other call.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running: dict[tuple[str, str], threading.Event] = {}
+
+    @staticmethod
+    def _key(store: ExperimentReportStore, report_id: str) -> tuple[str, str]:
+        return (str(store.path), report_id)
+
+    def start(
+        self, store: ExperimentReportStore, report_id: str, make_brain: Any, *, again: bool = False,
+    ) -> str:
+        """"preparing", "ready" (already kept), or "not_finished"."""
+
+        key = self._key(store, report_id)
+        with self._lock:
+            if key in self._running:
+                return "preparing"
+            report = store.get_report(report_id)
+            if report["status"] == "in_progress":
+                return "not_finished"
+            if not again and store.get_prose(report_id) is not None:
+                return "ready"
+            brain = make_brain()
+            if brain is None or not brain.client:
+                store.save_prose(report_id, writer=SERVER_WRITER, reply=None,
+                                 failure="보고서 모델이 설정되지 않음",
+                                 event_count=len(report["events"]))
+                return "ready"
+            done = threading.Event()
+            self._running[key] = done
+        threading.Thread(
+            target=self._prepare, args=(store, report_id, brain, key, done),
+            name=f"report-prose-{report_id}", daemon=True,
+        ).start()
+        return "preparing"
+
+    def _prepare(
+        self, store: ExperimentReportStore, report_id: str, brain: "ReportWriterBrain",
+        key: tuple[str, str], done: threading.Event,
+    ) -> None:
+        count = 0
         try:
-            prompt_context = context.public_dict()
-            system_prompt = (
-                "You are an experienced professional laboratory scientific report writer. "
-                "Write a formal, comprehensive laboratory session report in Korean based strictly on the provided verified experimental context and event ledger. "
-                "STYLE REQUIREMENTS: Write coherent, academic, natural narrative prose with full paragraphs. "
-                "FACTUAL INTEGRITY RULES: "
-                "1. Ground Materials and Methods and Results strictly in the provided executed steps, quantities, conditions, and timers. "
-                "2. Distinguish protocol expected results from actual user observations. If an expected result was in the protocol but no observation was recorded, explicitly state that no actual observation was logged ('해당 단계에 대해 별도의 관찰 결과가 기록되지 않았다.'). "
-                "3. Do NOT invent or hallucinate any unrecorded measurements, temperatures, reagent volumes, or success claims. "
-                "4. Return a valid JSON object matching the requested schema exactly."
-            )
-            user_prompt = f"Grounded Experimental Report Context:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}"
+            report = store.get_report(report_id)
+            events = list(report["events"])
+            count = len(events)
+            reply, failure = asyncio.run(brain.write_reply(brain.facts_for(report, events)))
+            store.save_prose(report_id, writer=brain.model, reply=reply, failure=failure,
+                             event_count=count)
+        except Exception as exc:  # noqa: BLE001 -- the server's sentences stand in
+            log.warning("report prose not prepared error=%s", type(exc).__name__)
+            try:
+                store.save_prose(report_id, writer=brain.model, reply=None,
+                                 failure=f"준비 실패({type(exc).__name__})", event_count=count)
+            except Exception:  # noqa: BLE001
+                log.warning("report prose failure not kept")
+        finally:
+            with self._lock:
+                self._running.pop(key, None)
+            done.set()
 
-            resp = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_tokens=1800,
-                ),
-                timeout=self.timeout_seconds,
-            )
-            content = resp.choices[0].message.content or ""
-            data = json.loads(content)
-            narrative = ReportNarrative(
-                title=str(data.get("title") or deterministic.title),
-                objective=str(data.get("objective") or deterministic.objective),
-                session_summary=str(data.get("session_summary") or deterministic.session_summary),
-                chronological_highlights=tuple(data.get("chronological_highlights") or deterministic.chronological_highlights),
-                materials_and_methods=str(data.get("materials_and_methods") or deterministic.materials_and_methods),
-                results_and_observations=str(data.get("results_and_observations") or deterministic.results_and_observations),
-                discussion=str(data.get("discussion") or deterministic.discussion),
-                anomalies_and_deviations=str(data.get("anomalies_and_deviations") or deterministic.anomalies_and_deviations),
-                conclusion=str(data.get("conclusion") or deterministic.conclusion),
-                limitations=str(data.get("limitations") or deterministic.limitations),
-            )
-            _NARRATIVE_CACHE[cache_key] = narrative
-            return narrative
-        except Exception as exc:
-            log.warning("ReportWriterBrain LLM generation failed (%s), using deterministic narrative", exc)
-            _NARRATIVE_CACHE[cache_key] = deterministic
-            return deterministic
+    def wait(self, store: ExperimentReportStore, report_id: str, timeout: float) -> bool:
+        with self._lock:
+            done = self._running.get(self._key(store, report_id))
+        return True if done is None else done.wait(timeout)
 
+    def status(self, store: ExperimentReportStore, report_id: str) -> dict[str, Any]:
+        """What the screen shows next to the record (decision 9)."""
+
+        with self._lock:
+            preparing = self._key(store, report_id) in self._running
+        report = store.get_report(report_id)
+        prose = None if preparing else store.get_prose(report_id)
+        status: dict[str, Any] = {"report_id": report_id, "ai_written": False, "new_records": 0}
+        if preparing:
+            status.update(state="preparing", label="보고서 준비 중 — 실험 기록으로 보고서 문장을 쓰고 있습니다.")
+        elif prose is not None:
+            ai = prose["reply"] is not None
+            status.update(state="ready", ai_written=ai, prepared_at=prose["prepared_at"],
+                          new_records=max(0, len(report["events"]) - int(prose["event_count"])))
+            if ai:
+                label = f"보고서 준비됨 — AI({prose['writer']}) 문장 중 서버 검사를 통과한 것만 씁니다."
+            elif prose["writer"] == SERVER_WRITER:
+                label = "보고서 준비됨 — 서버 문장 (보고서 모델이 설정되지 않음)."
+            else:
+                label = f"보고서 준비됨 — 서버 문장 (AI 문장을 쓰지 못함: {prose['failure']})."
+            if status["new_records"]:
+                label += f" 준비한 뒤 기록이 {status['new_records']}건 늘었습니다. 표에는 들어가며, 문장은 다시 만들 수 있습니다."
+            status["label"] = label
+        elif report["status"] == "in_progress":
+            status.update(state="not_finished", label="실험이 끝나면 보고서 문장을 준비합니다.")
+        else:
+            status.update(state="not_prepared", label="보고서 문장이 아직 준비되지 않았습니다.")
+        return status
+
+
+REPORT_PROSE = ReportProsePreparer()
+
+
+# --- One document, two renderings (Word and Markdown) -----------------------------
+
+
+def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
+    """The report as blocks: ("title"|"h1"|"h2"|"p"|"list"|"table"|"note", content)."""
+
+    facts = narrative.facts
+    assert facts is not None
+    blocks: list[tuple[str, Any]] = [("title", narrative.title)]
+    blocks.append(_table(("항목", "내용"), tuple(
+        (name, value or "(직접 적어 주세요)") for name, value in facts.run_rows)))
+
+    blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
+
+    blocks += [("h1", "2. 배경·원리"), ("p", narrative.background),
+               ("note", "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
+
+    blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비 (원문 그대로)")]
+    if facts.materials or facts.equipment:
+        blocks.append(("list", tuple(facts.materials) + tuple(f"장비: {item}" for item in facts.equipment)))
+    else:
+        blocks.append(("note", "원문에서 재료 목록을 불러오지 못했다."))
+    blocks.append(("h2", "3-2. 수행한 단계"))
+    rows = tuple(
+        (step.label, (step.text + ("" if step.translated else " (원문 영어)")) if step.text else "(원문을 불러오지 못함)",
+         step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—")
+        for step in facts.steps
+    )
+    if rows:
+        blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), rows))
+    else:
+        blocks.append(("note", "수행한 단계가 기록되지 않았다."))
+    blocks += [("h2", "3-3. 방법 요약"), ("p", narrative.methods_summary),
+               ("h2", "3-4. 원문과 다르게 한 점 (기록에서)")]
+    blocks.append(("list", facts.deviations) if facts.deviations else ("note", "기록에서 원문과 다르게 한 점을 찾지 못했다."))
+
+    blocks.append(("h1", "4. 결과"))
+    if facts.records:
+        blocks.append(_table(("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
+            (r.step_label, r.kind, r.text, r.at) for r in facts.records)))
+    else:
+        blocks.append(("p", "기록된 관찰이 없습니다."))
+    if facts.records:
+        blocks += [("h2", "요약"), ("p", narrative.results_summary)]
+
+    blocks += [("h1", "5. 고찰"),
+               ("h2", "(가) 기록에서 확인되는 점"), ("list", narrative.discussion_confirmed),
+               ("h2", "(나) 확인이 필요한 점"), ("list", narrative.discussion_to_check),
+               ("h2", "(다) 원인 검토 제안")]
+    if narrative.discussion_review:
+        blocks += [("note", "아래는 기록된 이상·편차에 붙인 검토 제안이며 확인된 원인이 아니다."),
+                   ("list", narrative.discussion_review)]
+    else:
+        blocks.append(("note", "기록된 이상·편차에 붙일 검토 제안이 없다."))
+    blocks += [("h2", "(라) 연구자 해석"), ("p", "(연구자가 직접 적는다)\n\n\n")]
+
+    blocks += [("h1", "6. 결론"), ("p", narrative.conclusion), ("h2", "다음 할 일"),
+               ("list", narrative.next_steps)]
+
+    blocks.append(("h1", "참고문헌"))
+    references = []
+    for source in narrative.sources:
+        text = f"[{source.number}] {source.title}"
+        if source.url:
+            text += f" {source.url}"
+        references.append(text + " — 실험에 쓴 프로토콜 원문")
+    blocks.append(("list", tuple(references)))
+    blocks.append(("note", authorship_line(narrative)))
+    return blocks
+
+
+def authorship_line(narrative: ReportNarrative) -> str:
+    """Who wrote the report's sentences, under the references (decision 6)."""
+
+    facts = narrative.facts
+    written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
+    when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
+    if any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
+        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
+                f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
+    return (f"이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
+            f"작성 {when}.")
+
+
+#: Each report table's column widths as shares of the text width (decision 4):
+#: short values (step, kind, time, timer, item) narrow, content wide.
+TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
+    ("항목", "내용"): (0.22, 0.78),
+    ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
+    ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
+}
+
+
+def _table(header: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> tuple[str, Any]:
+    return ("table", (header, rows, TABLE_WIDTHS[header]))
+
+
+def render_markdown(narrative: ReportNarrative) -> str:
+    def cell(value: Any) -> str:
+        return " ".join(str(value).split()).replace("|", "\\|") or " "
+
+    lines: list[str] = []
+    for kind, content in report_blocks(narrative):
+        if kind == "title":
+            lines += [f"# {content}", ""]
+        elif kind == "h1":
+            lines += [f"## {content}", ""]
+        elif kind == "h2":
+            lines += [f"### {content}", ""]
+        elif kind == "p":
+            lines += [str(content).strip(), ""]
+        elif kind == "note":
+            lines += [f"> {content}", ""]
+        elif kind == "list":
+            lines += [f"- {item}" for item in content] + [""]
+        elif kind == "table":
+            header, rows, widths = content
+            lines.append("| " + " | ".join(cell(h) for h in header) + " |")
+            # Markdown has no column widths; the dash counts carry the
+            # shares, which Pandoc reads as relative widths.
+            lines.append("|" + "|".join("-" * max(3, round(share * 40)) for share in widths) + "|")
+            lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_docx(narrative: ReportNarrative) -> bytes:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Pt, RGBColor
+
+    document = Document()
+    section = document.sections[0]
+    section.page_width, section.page_height = Cm(21.0), Cm(29.7)
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(section, side, Cm(2.2))
+    normal = document.styles["Normal"]
+    normal.font.size = Pt(10.5)
+    normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "맑은 고딕")
+    text_width = section.page_width - section.left_margin - section.right_margin
+
+    for kind, content in report_blocks(narrative):
+        if kind == "title":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = paragraph.add_run(str(content))
+            run.bold = True
+            run.font.size = Pt(16)
+        elif kind in {"h1", "h2"}:
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(str(content))
+            run.bold = True
+            run.font.size = Pt(13 if kind == "h1" else 11)
+            run.font.color.rgb = RGBColor(20, 50, 35)
+            paragraph.paragraph_format.space_before = Pt(10 if kind == "h1" else 6)
+        elif kind == "p":
+            for line in str(content).split("\n"):
+                document.add_paragraph(line)
+        elif kind == "note":
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(str(content))
+            run.italic = True
+            run.font.color.rgb = RGBColor(90, 90, 90)
+        elif kind == "list":
+            for item in content:
+                document.add_paragraph(f"• {item}")
+        elif kind == "table":
+            header, rows, widths = content
+            table = document.add_table(rows=1, cols=len(header))
+            table.style = "Table Grid"
+            for index, text in enumerate(header):
+                table.rows[0].cells[index].text = str(text)
+                for run in table.rows[0].cells[index].paragraphs[0].runs:
+                    run.bold = True
+                    run.font.size = Pt(9)
+            for row in rows:
+                cells = table.add_row().cells
+                for index, value in enumerate(row):
+                    cells[index].text = str(value)
+                    for paragraph in cells[index].paragraphs:
+                        for run in paragraph.runs:
+                            run.font.size = Pt(9)
+            _fix_column_widths(table, [int(text_width * share) for share in widths])
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def _format_elapsed_clock(value: Any) -> str:
@@ -1439,50 +2478,24 @@ def _human_event_clock(created_at: str | None) -> str:
     return parsed.strftime("%H:%M:%S")
 
 
-_HUMAN_EVENT_VERBS = {
-    "session_started": "시작",
-    "step_completed": "완료",
-    "step_advanced": "이동",
-    "step_presented": "안내",
-    "timer_started": "타이머 시작",
-    "workflow_paused": "일시정지",
-    "workflow_resumed": "재개",
-    "workflow_completed": "완료",
-    "session_stopped": "종료",
-    "anomaly": "이상 보고",
-    "blocked": "진행 차단",
-    "observation": "관찰",
-    "source_consulted": "참고 자료 확인",
-}
+def _fix_column_widths(table: Any, widths: Sequence[int]) -> None:
+    """Fixed column widths in Word: the grid, every cell, and a fixed layout."""
 
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
 
-def _human_event_label(event: dict[str, Any]) -> str:
-    event_type = str(event.get("event_type") or "")
-    verb = _HUMAN_EVENT_VERBS.get(event_type, event_type.replace("_", " "))
-    step_label = event.get("step_label")
-    head = f"Step {step_label} {verb}" if step_label else verb
-    parts = [head]
-    clock = _human_event_clock(event.get("created_at"))
-    if clock:
-        parts.append(clock)
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
-    duration = timer.get("source_duration_seconds", timer.get("duration_seconds"))
-    elapsed = timer.get("elapsed_seconds")
-    remaining = timer.get("remaining_seconds")
-    timer_bits = []
-    if duration not in (None, ""):
-        timer_bits.append(f"총 {_format_elapsed_clock(duration)}")
-    if elapsed not in (None, ""):
-        timer_bits.append(f"경과 {_format_elapsed_clock(elapsed)}")
-    if remaining not in (None, ""):
-        timer_bits.append(f"잔여 {_format_elapsed_clock(remaining)}")
-    if timer_bits:
-        parts.append("타이머 " + " · ".join(timer_bits))
-    wording = event.get("user_wording")
-    if wording:
-        parts.append(str(wording))
-    return " / ".join(parts)
+    table.autofit = False
+    properties = table._tbl.tblPr
+    layout = properties.find(qn("w:tblLayout"))
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        properties.append(layout)
+    layout.set(qn("w:type"), "fixed")
+    for column, width in zip(table.columns, widths):
+        column.width = width
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            cell.width = width
 
 
 def new_session_id() -> str:

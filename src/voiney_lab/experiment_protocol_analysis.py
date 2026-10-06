@@ -21,6 +21,7 @@ from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.experiment_protocol_pdf import (
     ProtocolPdfExtraction,
+    ProtocolPdfPage,
     extract_protocol_pdf,
 )
 from voiney_lab.experiment_protocol_store import (
@@ -140,6 +141,12 @@ _CONSTRUCT_NAMES = {
 }
 
 
+#: SourceEvidence fields the server fills after verification (lane PA).
+_CONTINUATION_FIELDS = ("continued_on_page_number", "continued_excerpt")
+#: SourceEvidence fields never asked of a provider.
+_SERVER_EVIDENCE_FIELDS = frozenset(("evidence_segment_ids", *_CONTINUATION_FIELDS))
+
+
 class _DomainResponseSchemaBuilder:
     """Build the exact finite JSON shape consumed by ``_DomainDecoder``."""
 
@@ -220,11 +227,13 @@ class _DomainResponseSchemaBuilder:
                 # server already owns.  Asking a provider for one would invite
                 # it to invent an identity, which is the opposite of why they
                 # exist, so this field is withheld exactly as the extraction
-                # record is withheld from ProtocolMetadata above.
+                # record is withheld from ProtocolMetadata above. The second
+                # page of a statement cut at a page end is the server's
+                # finding (lane PA), withheld for the same reason.
                 record_fields = tuple(
                     field
                     for field in record_fields
-                    if field.name != "evidence_segment_ids"
+                    if field.name not in _SERVER_EVIDENCE_FIELDS
                 )
             hints = get_type_hints(record_type)
             properties: dict[str, Any] = {}
@@ -808,6 +817,11 @@ class _DomainDecoder:
         record_fields = {field.name: field for field in fields(record_type)}
         if record_type is domain.ProtocolMetadata:
             record_fields.pop("pdf")
+        if record_type is domain.SourceEvidence:
+            # A provider cannot name the second page of a statement; the
+            # server finds it (lane PA).
+            for name in _CONTINUATION_FIELDS:
+                record_fields.pop(name)
         unknown = set(value) - set(record_fields)
         if unknown:
             raise ProtocolAnalysisResponseError(
@@ -1001,6 +1015,169 @@ def _matching_source_pages(
     )
 
 
+def _page_end_span(page: ProtocolPdfPage) -> tuple[int, int] | None:
+    """The span of ``page.text`` holding the body text that ends the page.
+
+    The body is the page text before its running-footer band. With text
+    blocks (the PDF text layer), it is the block whose bottom edge is lowest
+    among the blocks found exactly once in the body: a side-column note such
+    as a step's duration sits beside the step, not below it, and the footer is
+    not in the body. Geometry decides; no word is read. Without blocks (an OCR
+    page) it is the body itself, so the cut piece must end the body. None
+    where no such span can be fixed, which refuses the cut statement.
+    """
+
+    end = (
+        page.bottom_band_offset
+        if page.bottom_band_offset is not None
+        else len(page.text)
+    )
+    body = page.text[:end]
+    if not body.strip():
+        return None
+    if not page.blocks:
+        start = len(body) - len(body.lstrip())
+        return start, len(body.rstrip())
+    located: list[tuple[float, tuple[int, int]]] = []
+    for block in page.blocks:
+        spans = _canonical_match_spans(body, block.text, ocr_derived=page.ocr_derived)
+        if len(spans) == 1:
+            located.append((block.y1, spans[0]))
+    if not located:
+        return None
+    lowest = max(bottom for bottom, _ in located)
+    spans = [span for bottom, span in located if bottom == lowest]
+    return spans[0] if len(spans) == 1 else None
+
+
+@dataclass(frozen=True)
+class _PageCut:
+    """A statement found across a page end, as the two pages' own text."""
+
+    first_start: int
+    first_end: int
+    next_start: int
+    next_end: int
+
+
+def _statement_across_page_end(
+    statement: str,
+    extraction: ProtocolPdfExtraction,
+    page_number: int,
+) -> _PageCut | None:
+    """Find a statement cut at the end of ``page_number`` (lane PA, decision 3).
+
+    Human decision 2026-10-06: a step sentence that one page cuts at its end
+    and the next page continues is accepted only when it is found exactly in
+    the two pages joined -- the body text that ends this page, then the next
+    page's opening text -- and it must run across the join. The comparison is
+    the same as on one page (canonical whitespace, the hyphen and OCR Hangul
+    rules). A statement found more than once across the join is refused, as
+    an ambiguous one on a page is. Page text is never changed: the result is
+    two spans, each of its own page's characters.
+    """
+
+    if not 0 < page_number < extraction.page_count:
+        return None
+    page = extraction.pages[page_number - 1]
+    following = extraction.pages[page_number]
+    tail = _page_end_span(page)
+    if tail is None:
+        return None
+    next_end = (
+        following.bottom_band_offset
+        if following.bottom_band_offset is not None
+        else len(following.text)
+    )
+    next_body = following.text[:next_end]
+    next_start = len(next_body) - len(next_body.lstrip())
+    head = next_body[next_start:]
+    if not head.strip():
+        return None
+    first = page.text[tail[0] : tail[1]]
+    joined = f"{first}\n{head}"
+    junction = len(first)
+    crossing = [
+        (start, end)
+        for start, end in _canonical_match_spans(
+            joined,
+            statement,
+            ocr_derived=page.ocr_derived or following.ocr_derived,
+        )
+        if start < junction and end > junction + 1
+    ]
+    if len(crossing) != 1:
+        return None
+    start, end = crossing[0]
+    return _PageCut(
+        first_start=tail[0] + start,
+        first_end=tail[1],
+        next_start=next_start,
+        next_end=next_start + end - junction - 1,
+    )
+
+
+def _with_continuation(
+    evidence: domain.SourceEvidence,
+    cut: _PageCut,
+    extraction: ProtocolPdfExtraction,
+    *,
+    replace_first: bool,
+) -> domain.SourceEvidence:
+    page = extraction.pages[evidence.source_page_number - 1]
+    following = extraction.pages[evidence.source_page_number]
+    next_end = cut.next_end
+    if evidence.continued_excerpt is not None and evidence.continued_on_page_number == (
+        evidence.source_page_number + 1
+    ):
+        # Keep the longer of what is already recorded and this piece; both
+        # start where the next page's text starts.
+        next_end = max(next_end, cut.next_start + len(evidence.continued_excerpt))
+    changes: dict[str, object] = {
+        "continued_on_page_number": evidence.source_page_number + 1,
+        "continued_excerpt": following.text[cut.next_start : next_end],
+    }
+    if replace_first:
+        changes["source_excerpt"] = page.text[cut.first_start : cut.first_end]
+    return replace(evidence, **changes)
+
+
+def _verified_continuation(
+    evidence: domain.SourceEvidence,
+    extraction: ProtocolPdfExtraction,
+) -> domain.SourceEvidence:
+    """Re-check a recorded second page: it must continue the first exactly."""
+
+    if evidence.continued_on_page_number is None and evidence.continued_excerpt is None:
+        return evidence
+    cut = (
+        _statement_across_page_end(
+            f"{evidence.source_excerpt}\n{evidence.continued_excerpt}",
+            extraction,
+            evidence.source_page_number,
+        )
+        if evidence.continued_on_page_number == evidence.source_page_number + 1
+        and isinstance(evidence.continued_excerpt, str)
+        and evidence.continued_excerpt.strip()
+        else None
+    )
+    if cut is None:
+        raise ProtocolAnalysisEvidenceError(
+            "Protocol evidence records a second page that does not continue the first.",
+            diagnostic=_evidence_diagnostic(
+                extraction,
+                evidence,
+                reason_code="quote_not_found",
+                mismatch_class="fabricated_or_non_verbatim_quote",
+            ),
+        )
+    following = extraction.pages[evidence.source_page_number]
+    return replace(
+        evidence,
+        continued_excerpt=following.text[cut.next_start : cut.next_end],
+    )
+
+
 def _evidence_diagnostic(
     extraction: ProtocolPdfExtraction,
     evidence: domain.SourceEvidence,
@@ -1084,10 +1261,16 @@ def _verified_evidence(
     page = extraction.pages[evidence.source_page_number - 1]
     page_text = page.text
     if evidence.source_excerpt in page_text:
-        return evidence
+        return _verified_continuation(evidence, extraction)
     spans = _canonical_match_spans(
         page_text, evidence.source_excerpt, ocr_derived=page.ocr_derived
     )
+    if not spans and evidence.continued_on_page_number is None:
+        cut = _statement_across_page_end(
+            evidence.source_excerpt, extraction, evidence.source_page_number
+        )
+        if cut is not None:
+            return _with_continuation(evidence, cut, extraction, replace_first=True)
     if not spans:
         matching_pages = _matching_source_pages(
             evidence.source_excerpt,
@@ -1119,9 +1302,12 @@ def _verified_evidence(
             ),
         )
     original_start, original_end = spans[0]
-    return replace(
-        evidence,
-        source_excerpt=page_text[original_start:original_end],
+    return _verified_continuation(
+        replace(
+            evidence,
+            source_excerpt=page_text[original_start:original_end],
+        ),
+        extraction,
     )
 
 
@@ -1180,8 +1366,53 @@ def _verify_evidence_tree(
             )
             changes[field.name] = verified
             count += item_count
+        evidence = changes.get("evidence")
+        if (
+            isinstance(evidence, domain.SourceEvidence)
+            and type(value) in _CLAIM_FIELDS
+            and not isinstance(value, domain.ProtocolMetadata)
+        ):
+            changes["evidence"] = _evidence_for_cut_statements(
+                evidence, value, extraction
+            )
         return replace(value, **changes), count
     return value, 0
+
+
+def _record_claims(value: Any) -> tuple[str, ...]:
+    claims: list[str] = []
+    for field_name in _CLAIM_FIELDS.get(type(value), ()):
+        field_value = getattr(value, field_name)
+        for claim in field_value if isinstance(field_value, tuple) else (field_value,):
+            if isinstance(claim, str):
+                claims.append(claim)
+    return tuple(claims)
+
+
+def _evidence_for_cut_statements(
+    evidence: domain.SourceEvidence,
+    record: Any,
+    extraction: ProtocolPdfExtraction,
+) -> domain.SourceEvidence:
+    """Record the next page a statement of this record continues on.
+
+    Both pages are recorded on the evidence (human decision 3, 2026-10-06).
+    A statement found on its evidence page alone changes nothing; one that is
+    on neither is left for claim verification to refuse.
+    """
+
+    page = extraction.pages[evidence.source_page_number - 1]
+    for claim in _record_claims(record):
+        if _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived):
+            continue
+        cut = _statement_across_page_end(
+            claim, extraction, evidence.source_page_number
+        )
+        if cut is not None:
+            evidence = _with_continuation(
+                evidence, cut, extraction, replace_first=False
+            )
+    return evidence
 
 
 _CLAIM_FIELDS: dict[type[Any], tuple[str, ...]] = {
@@ -1226,7 +1457,17 @@ def _claim_occurs_on_evidence_page(
     extraction: ProtocolPdfExtraction,
 ) -> bool:
     page = extraction.pages[evidence.source_page_number - 1]
-    return _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived)
+    if _claim_occurs_in_text(claim, page.text, ocr_derived=page.ocr_derived):
+        return True
+    # A statement cut at the page end is supported only where the evidence
+    # records the next page, and only as found in the two pages joined.
+    return (
+        evidence.continued_on_page_number == evidence.source_page_number + 1
+        and _statement_across_page_end(
+            claim, extraction, evidence.source_page_number
+        )
+        is not None
+    )
 
 
 def _claim_occurs_in_text(

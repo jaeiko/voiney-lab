@@ -257,6 +257,8 @@ SETTINGS: tuple[Setting, ...] = (
             "USAGE_SCOPE 가 비었을 때 개발 활성화 판단에 쓰는 별칭"),
     Setting("VOINEY_LAB_FACILITY_ID", OTHER, _NONE, "시설 ID"),
     Setting("VOINEY_LAB_SESSION_LANGUAGE", OTHER, "ko", "기본 세션 언어"),
+    Setting("VOINEY_LAB_REPORT_TIMEZONE", OTHER, "Asia/Seoul",
+            "실험 보고서에 쓰는 연구자 시간대 (IANA 이름)"),
     Setting("VOINEY_LAB_ALLOWED_LANGUAGES", OTHER, "ko,en,vi", "허용 세션 언어"),
     Setting("VOINEY_LAB_ADMIN_TOKEN", OTHER, "(없음, 없으면 관리자 지표 닫힘)",
             "GET /api/admin/metrics 관리자 토큰"),
