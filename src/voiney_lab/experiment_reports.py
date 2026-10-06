@@ -1051,6 +1051,9 @@ class ReportFacts:
     protocol_reference: ReportSource
     zone: ZoneInfo
     items: tuple[ReportItem, ...] = ()
+    #: (label, source text) of every step an item is used in, for the model's
+    #: uses (decision 4).
+    item_step_texts: tuple[tuple[str, str], ...] = ()
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1640,6 +1643,10 @@ def build_report_facts(
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
         zone=zone, items=items,
+        item_step_texts=tuple(
+            (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
+            for step in source_steps if any(step["label"] in item.steps for item in items)
+        ),
     )
 
 
@@ -1840,6 +1847,84 @@ def check_report_sections(
     return reasons
 
 
+# --- The server's checks on each item's use (decision 4) -----------------------
+#
+# The model gives a short Korean use for each listed material and piece of
+# equipment in the same call as the prose. A use is a noun phrase of at most
+# 25 characters: no digit or unit, nothing about safety, nothing that tells a
+# person what to do, and only for an item the protocol lists. A use that
+# fails is left blank; the others stand.
+
+USE_LIMIT = 25
+_USE_UNIT = re.compile(
+    r"(?<![A-Za-zµμ])(?:°\s*C|[µμu]?[Ll]|m[Ll]|[mµμun]M|M|mg|[µμu]g|ng|kg|g|rpm|RPM|[x×]\s*g|"
+    r"min|h|hr|sec|s|kDa|cm|mm|[µμ]m|nm|v/v|w/v)(?![A-Za-z])|%|℃|°"
+)
+_USE_SAFETY = ("주의", "위험", "안전", "유해", "독성", "부식", "인화", "폭발", "화상", "응급", "보호",
+               "장갑", "보안경", "고글", "마스크", "환기", "후드", "흡입", "피부", "눈에", "눈을",
+               "금지", "MSDS")
+_USE_INSTRUCTION = re.compile(
+    r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|먼저|다음에|후에|전에|동안|까지|"
+    r"(?:다|요|오|라|것)\s*[.!]?\s*$|[.!?]\s*$"
+)
+
+
+def _use_problem(use: str) -> str:
+    if len(use) > USE_LIMIT:
+        return f"{USE_LIMIT}자 넘음"
+    if re.search(r"\d", use):
+        return "숫자"
+    unit = _USE_UNIT.search(use)
+    if unit:
+        return f"단위 “{unit.group(0)}”"
+    safety = next((word for word in _USE_SAFETY if word in use), None)
+    if safety:
+        return f"안전 지시 “{safety}”"
+    instruction = _USE_INSTRUCTION.search(use)
+    if instruction:
+        return f"절차 지시 “{instruction.group(0).strip() or use[-2:]}”"
+    return ""
+
+
+def check_item_uses(
+    value: Any, facts: ReportFacts,
+) -> tuple[dict[str, str], tuple[tuple[str, str], ...]]:
+    """(item name -> use that passed, ((item, why it was left blank), ...))."""
+
+    if isinstance(value, Mapping):
+        value = [{"번호": key, "용도": use} for key, use in value.items()]
+    if not isinstance(value, (list, tuple)):
+        return {}, ()
+    by_name = {item.name.casefold(): item for item in facts.items}
+    uses: dict[str, str] = {}
+    rejected: list[tuple[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            continue
+        use = " ".join(str(entry.get("용도") or "").split())
+        named = " ".join(str(entry.get("이름") or "").split())
+        number = entry.get("번호")
+        try:
+            item = facts.items[int(number) - 1] if int(number) >= 1 else None
+        except (TypeError, ValueError, IndexError):
+            item = None
+        if item is None and number in (None, "") and named:
+            item = by_name.get(named.casefold())
+        if item is not None and named and named.casefold() != item.name.casefold():
+            item = None  # the number names one item, the name another
+        if item is None:
+            rejected.append((named or f"번호 {number}", "원문에 없는 항목"))
+            continue
+        if not use or item.name in uses:
+            continue
+        problem = _use_problem(use)
+        if problem:
+            rejected.append((item.name, problem))
+        else:
+            uses[item.name] = use
+    return uses, tuple(rejected)
+
+
 # --- The narrative and the server's own sentences -------------------------------
 
 
@@ -1863,6 +1948,10 @@ class ReportNarrative:
     rejected: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     writer: str = "서버 대체 문장"
     written_at: str = ""
+    #: The model's use for each listed item that passed the server's check
+    #: (decision 4), by the item's name; and each use left blank, with why.
+    item_uses: Mapping[str, str] = field(default_factory=dict)
+    item_uses_rejected: tuple[tuple[str, str], ...] = ()
 
     # Earlier names, kept for callers written before lane RP.
     @property
@@ -1981,6 +2070,10 @@ def narrative_from_sections(
     writer: str = "서버 대체 문장",
     written_at: str | None = None,
 ) -> ReportNarrative:
+    if model:
+        item_uses, item_uses_rejected = check_item_uses(model.get("item_uses"), facts)
+    else:
+        item_uses, item_uses_rejected = {}, ()
     fallback = deterministic_sections(facts)
     rejected = {key: tuple(value) for key, value in (rejected or {}).items()}
     chosen: dict[str, Any] = {}
@@ -2018,6 +2111,7 @@ def narrative_from_sections(
         conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
         facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
         rejected=rejected, writer=writer, written_at=written_at or _now(),
+        item_uses=item_uses, item_uses_rejected=item_uses_rejected,
     )
 
 
@@ -2081,11 +2175,13 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
 - 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
 - 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
+- 'item_uses' 는 '재료·장비' 의 항목마다 그 항목이 이 실험에서 하는 일을 짧은 한국어 명사구로 쓴다(예: "세균 배양 배지", "휘발성 물질 흡착"). '재료·장비가 나오는 원문 단계' 에서 알 수 있는 것만 쓰고, 알 수 없으면 그 항목은 뺀다. 25자 안, 숫자·단위 없이, 안전 지시나 절차 지시("~하세요", "~한 뒤") 없이 쓴다. 목록에 없는 항목은 쓰지 않는다.
 
 JSON 객체 하나만 돌려준다. 키:
 purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
 results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
-discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록)."""
+discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록),
+item_uses (목록, 각 항목 {"번호": '재료·장비' 의 번호, "용도": 명사구})."""
 
 
 def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
@@ -2103,8 +2199,11 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
         "원문 키워드": facts.keywords,
         "원문에 적힌 목적": facts.purpose_from_pdf,
         "원문 단계 묶음": list(facts.sections),
-        "재료": list(facts.materials),
-        "장비": list(facts.equipment),
+        "재료·장비": [
+            {"번호": number, "종류": item.kind, "이름": item.name, "사용 단계": list(item.steps)}
+            for number, item in enumerate(facts.items, 1)
+        ],
+        "재료·장비가 나오는 원문 단계": dict(facts.item_step_texts),
         "수행 정보": {name: value for name, value in facts.run_rows if value and name != "실험자"},
         "수행한 단계": [
             {
@@ -2249,7 +2348,8 @@ class ReportWriterBrain:
                             _writer_facts(facts), ensure_ascii=False, indent=1)},
                     ],
                     response_format={"type": "json_object"},
-                    max_tokens=4000,
+                    # Room for one use per listed item (decision 4) beside the prose.
+                    max_tokens=6000,
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -2437,14 +2537,21 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
 
     blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비")]
     if facts.items:
-        # Decisions 2-3: materials and equipment each in their own table, the
-        # name as listed and the source steps that name it. A caption stands
-        # between the two, so Word does not join them into one table.
+        # Decisions 2-4: materials and equipment each in their own table, the
+        # name as listed, the model's use when one passed the server's check,
+        # and the source steps that name it. Without any use (no model, a
+        # failed call, every use refused) the tables have no use column. A
+        # caption stands between the two, so Word does not join them.
+        uses = narrative.item_uses
         for kind in ("재료", "장비"):
-            rows = tuple((item.name, _label_runs(item.steps) or "—")
-                         for item in facts.items if item.kind == kind)
+            rows = tuple(
+                (item.name, uses.get(item.name, ""), _label_runs(item.steps) or "—") if uses
+                else (item.name, _label_runs(item.steps) or "—")
+                for item in facts.items if item.kind == kind)
             if rows:
-                blocks += [("h3", kind), _table(ITEM_HEADER, rows)]
+                blocks += [("h3", kind), _table(ITEM_USE_HEADER if uses else ITEM_HEADER, rows)]
+        if uses:
+            blocks.append(("note", "용도는 AI 가 원문 단계를 바탕으로 정리했다."))
         blocks.append(("note", "사용 단계는 서버가 원문 단계 글에서 그 이름(또는 원문이 쓰는 줄임말)을 찾아 적었다. "
                                "찾지 못하면 —."))
     else:
@@ -2504,7 +2611,7 @@ def authorship_line(narrative: ReportNarrative) -> str:
     facts = narrative.facts
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
-    if any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
+    if narrative.item_uses or any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
         return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
                 f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
     return (f"이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
@@ -2513,12 +2620,14 @@ def authorship_line(narrative: ReportNarrative) -> str:
 
 #: Each report table's column widths as shares of the text width (decision 4):
 #: short values (step, kind, time, timer, item) narrow, content wide.
-#: The materials and equipment tables (decisions 2-3).
+#: The materials and equipment tables (decisions 2-4), with and without uses.
 ITEM_HEADER = ("이름 (원문 그대로)", "사용 단계")
+ITEM_USE_HEADER = ("이름 (원문 그대로)", "용도", "사용 단계")
 
 TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     ("항목", "내용"): (0.22, 0.78),
     ITEM_HEADER: (0.80, 0.20),
+    ITEM_USE_HEADER: (0.38, 0.44, 0.18),
     ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
     ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
 }
