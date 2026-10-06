@@ -54,6 +54,7 @@ from voiney_lab.llm_router import (
     RouterContext,
     RouterTurnFacts,
     ToolProposal,
+    tool_value_rule,
     validate_tool_proposals,
 )
 from voiney_lab.semantic_intent import (
@@ -1317,6 +1318,9 @@ class CuratedControlIntent:
     #: A move to another step asked for in words (lane R7, decisions 2-3):
     #: what was asked, and what the server checked before asking.
     step_move: dict[str, Any] | None = None
+    #: A spill, a knock-over or an overflow said as having happened (lane
+    #: R7's reading): the front rules record it (lane RT, decision 6).
+    spill_reported: bool = False
 
 
 class DiscourseFocusKind(str, Enum):
@@ -2599,6 +2603,17 @@ _END_COMMAND = re.compile(
 _CONTROL_QUESTION = re.compile(
     r"[?？]|(?:도|면)\s*(?:돼|되|될|괜찮)|해야|할까|나요|(?:되|돼)\s*(?:나|니)"
 )
+
+
+def _asked(transcript: str) -> bool:
+    """The words ask about a command rather than give it ("시작해?", "재개해도 돼?").
+
+    The pause and end words have read questions this way since 2026-10-02;
+    lane RT (decision 4) reads the start, stop, resume and timer words so too,
+    as the router's server ruling already did (interrogative_not_authorized).
+    """
+
+    return bool(_CONTROL_QUESTION.search(" ".join(transcript.casefold().split())))
 END_CONFIRMATION_QUESTION = {
     "ko": "실험을 종료할까요?",
     "en": "Do you want to end the experiment?",
@@ -2625,6 +2640,12 @@ HANDOFF_ON_SCREEN_REPLY = {
 ANSWER_NOT_CONFIRMED = {
     "ko": "PDF에서 확인할 수 없어요.",
     "en": "I could not confirm that in the PDF.",
+}
+#: A resume said before the experiment ever started (lane RT, decision 4):
+#: nothing starts, and how to start is said.
+RESUME_BEFORE_START_REPLY = {
+    "ko": "아직 실험을 시작하지 않았어요. 시작하려면 '프로토콜 시작해줘'라고 말씀해 주세요.",
+    "en": "The experiment has not started yet. To start it, say 'start protocol'.",
 }
 #: A start said after the experiment ended (decision 2, 2026-10-03): an ended
 #: experiment is never started again by voice; the next one is chosen on the
@@ -2751,6 +2772,11 @@ FRONT_RULES: dict[str, str] = {
                      "repeat the source states at the current step, and "
                      "otherwise refused with the reason; a yes moves back and "
                      "the return is recorded (lane R7, decision 2)",
+    "anomaly_report": "a spill, a knock-over or an overflow said as having "
+                      "happened ('시약을 엎질렀어', '흘렸는데 어떡해'), recorded "
+                      "as an anomaly whether or not the router is on; asked, "
+                      "supposed, permitted, guarded against or denied it is "
+                      "not (lane R7's reading; lane RT, decision 6)",
     "start_at_step": "'N단계부터 시작해줘' before the experiment or at its first "
                      "step: asked once, '1~(N-1)단계는 건너뛰고 N단계부터 "
                      "시작할까요?'; a yes starts at N and the skipped steps are "
@@ -2838,6 +2864,8 @@ def _with_ro(word: str) -> str:
 _RESUME_PATTERNS = (
     re.compile(r"(?:다시\s*(?:시작|진행)|재개|계속\s*(?:하자|할게|해줘)|계속\s*진행)"),
     re.compile(r"^(?:resume(?:\s+(?:the\s+)?(?:protocol|experiment))?|continue(?:\s+the\s+protocol)?)$", re.I),
+    # "계속", "프로토콜 계속" said alone (lane RT, decision 4).
+    re.compile(r"^(?:(?:프로토콜|실험)\s*)?계속$"),
 )
 # --- "재개" misheard while paused (lane XO, decision 8a) -----------------------
 #: The resume words of _RESUME_PATTERNS, each with the endings it is said
@@ -4495,7 +4523,9 @@ def classify_curated_control_intent(
     dimensions = question_dimensions(key)
     if len(normalized_entities) > 1 and "relationship" not in dimensions:
         dimensions = (*dimensions, "relationship")
-    if any(pattern.fullmatch(key) for pattern in _NATURAL_STOP_PATTERNS):
+    # A question about a command is not the command (lane RT, decision 4).
+    asked = _asked(transcript)
+    if not asked and any(pattern.fullmatch(key) for pattern in _NATURAL_STOP_PATTERNS):
         return CuratedControlIntent(
             intent_kind="workflow_command", action=CuratedProtocolAction.STOP,
             language=language, allows_state_mutation=True,
@@ -4573,7 +4603,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.fullmatch(key) for pattern in _START_COMMAND_PATTERNS) or any(pattern.search(key) for pattern in _START_COMMAND_PATTERNS):
+    if not asked and (any(pattern.fullmatch(key) for pattern in _START_COMMAND_PATTERNS) or any(pattern.search(key) for pattern in _START_COMMAND_PATTERNS)):
         if not re.search(r"(?:타이머|시간\s*측정|timer|반응|미리)", key):
             return CuratedControlIntent(
                 intent_kind="workflow_command",
@@ -4585,6 +4615,8 @@ def classify_curated_control_intent(
                 normalized_transcript=key,
             )
     exact = _WORKFLOW_COMMANDS.get(key)
+    if asked and exact in {CuratedProtocolAction.START, CuratedProtocolAction.STOP}:
+        exact = None
     if exact is not None:
         if exact is CuratedProtocolAction.NEXT:
             return CuratedControlIntent(
@@ -4638,7 +4670,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _RESUME_PATTERNS):
+    if not asked and any(pattern.search(key) for pattern in _RESUME_PATTERNS):
         return CuratedControlIntent(
             intent_kind="resume_workflow",
             action=CuratedProtocolAction.RESUME,
@@ -4654,9 +4686,14 @@ def classify_curated_control_intent(
             normalized_transcript=key,
         )
     if any(pattern.search(key) for pattern in _TIMER_START_PATTERNS):
+        # "타이머 시작했어?", "타이머 시작할까?" ask about the timer: the
+        # server's timer state is said, and nothing starts (decision 4).
         return CuratedControlIntent(
-            intent_kind="start_step_timer",
-            action=CuratedProtocolAction.START_TIMER,
+            intent_kind="step_timer_question" if asked else "start_step_timer",
+            action=(
+                CuratedProtocolAction.TIMER_STATUS if asked
+                else CuratedProtocolAction.START_TIMER
+            ),
             language=language,
             normalized_transcript=key,
         )
@@ -4960,6 +4997,7 @@ def classify_curated_control_intent(
             language=language,
             reported_anomaly=True,
             anomaly_category=category,
+            spill_reported=spill == "reported",
         )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
@@ -5325,12 +5363,10 @@ _WORKFLOW_COMMANDS = {
     "프로토콜을 진행해줘": CuratedProtocolAction.START,
     "프로토콜 진행해줘": CuratedProtocolAction.START,
     "절차를 진행해줘": CuratedProtocolAction.START,
-    "프로토콜 재개": CuratedProtocolAction.START,
-    "프로토콜 계속": CuratedProtocolAction.START,
-    "재개": CuratedProtocolAction.START,
-    "계속": CuratedProtocolAction.START,
+    # "재개", "계속", "resume" and "프로토콜 재개/계속" are resume words, read
+    # by _RESUME_PATTERNS only (lane RT, decision 4): here as START they
+    # began a protocol that had never started from step 1.
     "start": CuratedProtocolAction.START,
-    "resume": CuratedProtocolAction.START,
     "현재 단계": CuratedProtocolAction.CURRENT,
     "현재 단계를 알려줘": CuratedProtocolAction.CURRENT,
     "현재 단계 알려줘": CuratedProtocolAction.CURRENT,
@@ -10761,6 +10797,12 @@ class CuratedProtocolSession:
         if intent.confidence_source == "semantic_intent_fallback":
             # A model's reading is never a front rule.
             return None
+        if intent.action is CuratedProtocolAction.REPORT_ANOMALY and intent.spill_reported:
+            # Lane RT, decision 6: a spill said as having happened is the
+            # front rules' to record, router or not. With the router on, a
+            # model asked back instead ("어떤 시약을 엎질렀는지 알려주세요")
+            # and nothing was recorded (lane R7's live check, 2 of 9).
+            return "anomaly_report"
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
@@ -12042,7 +12084,7 @@ class CuratedProtocolSession:
         if (
             command in {
                 CuratedProtocolAction.START, CuratedProtocolAction.RESUME,
-                CuratedProtocolAction.PAUSE,
+                CuratedProtocolAction.PAUSE, CuratedProtocolAction.START_TIMER,
             }
             and self.experiment_ended
         ):
@@ -12400,6 +12442,32 @@ class CuratedProtocolSession:
                 primary_text=response,
                 intent_kind=intent.intent_kind,
             )
+        elif (
+            command is CuratedProtocolAction.RESUME
+            and not self.active and self._experiment_started_at is None
+        ):
+            # Lane RT, decision 4: a resume word never starts a protocol that
+            # has never started -- a resume only lifts a pause, as the
+            # router's server ruling has it (not_paused). "재개" used to begin
+            # the experiment from step 1. A pause said before the start is
+            # lifted; nothing starts, and how to start is said.
+            if self._pause_state == "paused":
+                self.undo_pause()
+            response = RESUME_BEFORE_START_REPLY.get(
+                language, RESUME_BEFORE_START_REPLY["ko"]
+            )
+            plan = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.INACTIVE,
+                display_text=response,
+                speech_text=response,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=None,
+                final_step=False,
+                state_changed=False,
+                primary_text=response,
+                intent_kind="resume_before_start",
+            )
         elif command is CuratedProtocolAction.RESUME:
             # A resume changes state only when it lifts a pause or starts a
             # protocol that was not running. "계속 진행" mid-step used to
@@ -12434,6 +12502,11 @@ class CuratedProtocolSession:
                 f"워크플로를 재개합니다. 현재 {step.source_label}단계입니다.{timer_suffix}"
                 if language == "ko" else
                 f"Resuming protocol. Currently at step {step.source_label}.{timer_suffix}"
+            ) if resumed else (
+                # Nothing was paused (lane RT, decision 4): no resume is claimed.
+                f"일시정지 상태가 아니에요. 현재 {step.source_label}단계입니다.{timer_suffix}"
+                if language == "ko" else
+                f"The protocol is not paused. Currently at step {step.source_label}.{timer_suffix}"
             )
             response, primary, sources, pages, evidence_ids, translation_status = (
                 _step_presentation(
@@ -12553,7 +12626,9 @@ class CuratedProtocolSession:
             rem = timer_info.get("remaining_seconds", 0)
             minutes = rem // 60
             seconds = rem % 60
-            if intent.intent_kind == "semantic_step_timer_information":
+            if intent.intent_kind in {
+                "semantic_step_timer_information", "step_timer_question",
+            }:
                 if state == "running":
                     time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
                     time_str_en = f"{minutes} min {seconds} s" if minutes > 0 else f"{seconds} s"
@@ -14713,6 +14788,34 @@ class CuratedProtocolSession:
             step_id=step.step_id if step is not None else None,
         )
 
+    def history_state(
+        self,
+        *,
+        next_turn_id: int,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        """What a router history bundle says the state was after a turn. Reads only.
+
+        Lane RT, decision 2: the step and status, the step timer when one is
+        running or has run out, and the server question the next turn could
+        answer. History is context; each call's snapshot stays the state.
+        """
+
+        timer = self.timer_status().get("state") if self.active else None
+        return {
+            "step": (
+                self.fixture.steps[self.current_index].source_label
+                if self.active else None
+            ),
+            "status": self.workflow_status,
+            "timer": timer if timer in {"running", "expired"} else None,
+            "question": self._open_questions(
+                turn_id=next_turn_id, configuration_id=configuration_id,
+                generation=generation,
+            ).first_open,
+        }
+
     def router_turn_facts(
         self,
         transcript: str,
@@ -15131,17 +15234,26 @@ class CuratedProtocolSession:
     def _intent_for_proposal(
         self, verdict: ProposalVerdict, common: dict[str, Any]
     ) -> CuratedControlIntent:
-        """The intent an accepted proposal is carried out as -- the rules' own."""
+        """The intent an accepted proposal is carried out as -- the rules' own.
+
+        The rules' action comes from the router's allow-list
+        (llm_router.tool_value_rule, lane RT decision 3); a value it does not
+        list has no branch here and is never read as another one.
+        """
 
         proposal = verdict.proposal
         assert proposal is not None
+        rule = tool_value_rule(proposal)
+        if rule is None:
+            raise ValueError(f"no allow-listed branch for {proposal.tool}:{proposal.action or proposal.log_type}")
+        action = CuratedProtocolAction(rule.runs_as)
         if proposal.tool == RECORD_LOG:
             if proposal.log_type == "observation":
                 # Recorded as a note: a model's reading never reports an
                 # endpoint, so it can never release a repeat-until step.
                 return CuratedControlIntent(
                     intent_kind="record_observation",
-                    action=CuratedProtocolAction.RECORD_OBSERVATION,
+                    action=action,
                     target_step="authoritative_current_step",
                     reported_observation=True,
                     observation_predicate="note",
@@ -15150,7 +15262,7 @@ class CuratedProtocolSession:
                 )
             return CuratedControlIntent(
                 intent_kind="record_anomaly",
-                action=CuratedProtocolAction.REPORT_ANOMALY,
+                action=action,
                 question_kind="anomaly",
                 reported_anomaly=True,
                 anomaly_category=_anomaly_category(common["normalized_transcript"]),
@@ -15163,7 +15275,7 @@ class CuratedProtocolSession:
                     if verdict.question == "observation"
                     else "next_step_confirmation_required"
                 ),
-                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                action=action,
                 requested_transition="next",
                 requested_followup="confirm_current_step_completion",
                 target_step="authoritative_current_step",
@@ -15176,32 +15288,30 @@ class CuratedProtocolSession:
             # to that question (decision D5).
             return CuratedControlIntent(
                 intent_kind="workflow_command",
-                action=CuratedProtocolAction.STOP,
+                action=action,
                 allows_state_mutation=True,
                 **common,
             )
         if proposal.action == "pause":
             return CuratedControlIntent(
-                intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
-                **common,
+                intent_kind="pause_workflow", action=action, **common,
             )
         if proposal.action == "resume":
             return CuratedControlIntent(
-                intent_kind="resume_workflow", action=CuratedProtocolAction.RESUME,
+                intent_kind="resume_workflow", action=action,
                 allows_state_mutation=True, **common,
             )
         if proposal.action == "start":
             return CuratedControlIntent(
                 intent_kind="workflow_command",
-                action=CuratedProtocolAction.START,
+                action=action,
                 requested_transition="start",
                 requested_followup="describe_new_current_step",
                 allows_state_mutation=True,
                 **common,
             )
         return CuratedControlIntent(
-            intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER,
-            **common,
+            intent_kind="start_step_timer", action=action, **common,
         )
 
     def _ask_timer_duration(

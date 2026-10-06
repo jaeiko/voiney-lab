@@ -561,6 +561,61 @@ request, a server check and a yes.
   at a later step is not resumed yet: recovery still requires every earlier
   step completed, and the server does not pass the skipped steps to it.
 
+## The router line: history, two tools, rule conflicts, spills, safety (lane RT)
+
+Decisions of 2026-10-06, after the 10/2 advice: the front rules' commands and
+state changes must reach the LLM's history, state changes and records are one
+tool each, and the front rules keep only what needs them.
+
+- **History** (decision 2). The router's history holds the last turns in the
+  order they happened, whoever handled them: the front rules' turns, the
+  emergency gate's turn (the words and the state, never its reply), and the
+  screen's pause and resume buttons and a run recovered on reconnect, each a
+  bundle of its own (`"source": "screen"`). Each bundle says what the server
+  did: `result`, `state_after` (step, status, and the step timer when it is
+  running or has run out), `question_open` (the server question the next turn
+  can answer) and `recorded` (the type and the words the server stored). The
+  reply kept is the one that went out: the speech when it was spoken, the
+  screen text otherwise. It stays bounded (6 turns, about 1,200 tokens), and
+  the server snapshot each call carries stays the state
+  (`llm_router.RouterHistoryTurn`, `history_turn`, `screen_history_turn`).
+- **Two tools, one allow-list** (decision 3). State changes are
+  `change_state(action)` and records `record_log(type)`; read-only questions
+  are answered with no state tool (the `answer` function is the reply's form
+  and changes nothing). `llm_router.CHANGE_STATE_RULES` and
+  `RECORD_LOG_RULES` list each value with the words its evidence must show,
+  what it needs running and the rules' action it runs as; the schema, the
+  parser, `validate_tool_proposals` and `apply_tool_proposal` all read them,
+  and a value off the list is refused wherever it arrives.
+- **Rule conflicts fixed** (decision 4).
+  - "재개", "계속", "resume", "프로토콜 재개/계속" are resume words only; they
+    used to be start words too and began an experiment never started.
+  - A resume never starts an experiment never started: "아직 실험을 시작하지
+    않았어요. 시작하려면 '프로토콜 시작해줘'라고 말씀해 주세요." (a pause said
+    before the start is lifted). With nothing paused it says "일시정지 상태가
+    아니에요. 현재 N단계입니다." instead of claiming a resume.
+  - A question about a command is not the command, as for the pause and end
+    words: "시작해?", "재개?", "종료?", "재개해도 돼?" change nothing, and
+    "타이머 시작했어?/할까?/해도 돼?" get the timer's state ("이 질문만으로는
+    타이머를 시작하지 않았습니다."). "1단계부터 해볼까" stays a start (lane R3).
+  - No timer starts on an ended experiment.
+- **Spills by front rule** (decision 6). A spill, a knock-over or an overflow
+  said as having happened (lane R7's reading) is the front rule
+  `anomaly_report`: recorded router on or off, with no model call. Asked,
+  supposed, permitted, guarded against or denied, it is handed on as before.
+- **No made-up safety instruction** (decision 7). A sentence of a router
+  answer that instructs (a request, a must or should, a don't, a
+  recommendation) about a safety topic -- a safety data sheet, spill
+  response, safety rules or officers, gloves, eye protection, a lab coat,
+  protective equipment, ventilation or a hood, evacuation, rinsing skin or
+  eyes, cleaning up a spill, waste disposal, medical or emergency help, fire
+  -- stays only when every topic it names is in the protocol's own text or an
+  approved (non-demo) safety document of the session's safety pack.
+  Otherwise the sentence is taken out, the rest of the answer kept, and "이
+  상황의 안전 안내는 원문에 없어요." said once
+  (`answer_checks.ungrounded_safety_instructions`,
+  `llm_router.without_ungrounded_safety`).
+
 ## Semantic intent fallback
 
 Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
@@ -666,15 +721,18 @@ On, a turn goes:
   단계 …"), a read-only question naming "2단계" or "이 단계" away from step 2
   (`step_homophone`, below), a return to an earlier step of a repeat
   (`repeat_return`) and a later start (`start_at_step`) with the yes to
-  either (lane R7, above), and a start of an experiment never started or
+  either (lane R7, above), a spill said as having happened
+  (`anomaly_report`, lane RT), and a start of an experiment never started or
   already ended. These never wait on a model.
   While paused, a word one letter from "재개" or "다시 시작" ("제개") is asked
   about, "다시 시작할까요?"; a word with a digit ("3개") is not.
 - **One model call** — otherwise `llm_router.route_turn_with_llm_router` sends
   the server snapshot, the nearby protocol steps with their facts, and the
-  router history, and the model replies with exactly one call: `answer`,
-  `change_state` (start, next, stop, pause, resume, start_timer) or
-  `record_log` (observation, anomaly).
+  router history (the last turns, those the front rules, the emergency gate
+  and the screen handled included; lane RT, above), and the model replies
+  with exactly one call: `answer`, `change_state` (start, next, stop, pause,
+  resume, start_timer) or `record_log` (observation, anomaly), the values of
+  one allow-list.
 - **Server ruling** — a proposal is validated and carried out through the same
   branches `plan()` uses. `next` never moves on: it opens the completion
   question (or the endpoint question) and only the researcher's answer moves
@@ -689,6 +747,9 @@ On, a turn goes:
   term of the protocol in at most 120 characters with no numbers, method,
   safety or completion content. The server marks such an answer "PDF 밖
   설명이니 유의" on the screen and says "PDF에는 따로 설명이 없어요." first.
+  Before these checks, a safety instruction neither the protocol nor an
+  approved safety document gives is taken out of the answer and "이 상황의
+  안전 안내는 원문에 없어요." said instead (lane RT, decision 7).
 - **Outside-PDF explanation after the answer (lane R6, decision 6)** — where
   a question asks what a word means or why a step is done and the source does
   not say (a term the PDF does not define, a step's purpose, or a router
