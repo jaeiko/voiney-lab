@@ -2376,6 +2376,7 @@ async def upload_workspace_experiment_evidence(
     request:Request,
     filename:str,
     idempotency_key:str,
+    caption:str|None=None,
 )->dict[str,object]:
     allowed={
         "image/jpeg":("image",".jpg"),
@@ -2488,7 +2489,10 @@ async def upload_workspace_experiment_evidence(
                 byte_size=byte_size,
                 sha256=checksum,
                 storage_reference=relative,
+                caption=caption or None,
             )
+            if evidence["evidence_kind"]=="image":
+                _record_report_photo(safe_session_id,evidence)
             return {
                 key:evidence[key]
                 for key in (
@@ -2507,6 +2511,42 @@ async def upload_workspace_experiment_evidence(
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _record_report_photo(session_id:str,evidence:dict)->None:
+    """Put an uploaded image on the experiment report (lane RP, decision 7).
+
+    The report's results table reads ``photo_attached`` events; the caption is
+    what the researcher wrote, else the file name. The image itself is never
+    read or interpreted. Best effort: the upload stands even when no report is
+    open for the session or the report store is off.
+    """
+
+    try:
+        settings=ExperimentReportSettings.from_environment()
+        if not settings.enabled or settings.database_path is None:
+            return
+        store=ExperimentReportStore(settings.database_path)
+        reports=store.list_reports(session_id=session_id)
+        if not reports:
+            return
+        caption=" ".join(str(evidence.get("caption") or "").split())
+        store.append_event(
+            reports[0]["report_id"],
+            event_key=f"photo-{evidence['evidence_id']}",
+            event_type="photo_attached",
+            step_id=evidence.get("protocol_step_id"),
+            step_label=evidence.get("protocol_step_label"),
+            user_wording=(caption or str(evidence["original_filename"]))[:800],
+            confirmation_state="user_reported",
+            payload={
+                "evidence_id":evidence["evidence_id"],
+                "media_type":evidence["media_type"],
+                "interpretation_status":"not_interpreted",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the upload itself already stands
+        log.warning("report photo event not written error=%s",type(exc).__name__)
 
 
 @app.get("/api/workspace/experiments/{session_id}/evidence/{evidence_id}")
