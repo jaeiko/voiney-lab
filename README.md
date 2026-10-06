@@ -194,6 +194,42 @@ lane U). It only changes what is shown; every state it shows is the server's.
   `autoGainControl`, and reads back what the browser applied. When echo
   cancellation is not on, the body says the speaker may be heard as the
   researcher's words and suggests headphones.
+- **The microphone stays open (lane U2, 2026-10-06).** It is opened once, at
+  `session.ready`, and kept open across turns, playback, pause and resume;
+  only ending the session (or an error that ends it) closes it. Frames are
+  sent as before — while the session is active and the socket is open. A
+  track that ends, or a `devicechange` that takes the device in use with it,
+  is checked after 0.8 s and the microphone is opened again once, into the
+  same AudioWorklet. A failed attempt, or a second loss within 30 s, is not
+  retried: the voice console shows the reason and a "마이크 다시 연결" button.
+- **Choosing the microphone.** "마이크" under the protocol choice lists the
+  browser's input devices by name. The choice is kept in this browser's
+  storage (`voiney-lab.mic-device`, id and name; Safari changes ids, so the
+  name is matched too). A remembered device that is not connected is marked
+  "연결 안 됨" and the system default is used. Changing it during a session
+  opens the new device once.
+- **Remaining words (lane U2, decision 5).** The step card names the step
+  once, "4단계 · 전체 25단계", and the rail "4단계 / 25"; the English
+  "Step N" line is gone. Timers read minutes and seconds, "⏱ 14:55 남음".
+  The "관리자 인계" row is shown, in red, only for a real block; with nothing
+  handed over it is not shown. The readiness and development status
+  ("확인 기록") is in the step card's "개발 상세 정보". A review choice reads
+  "이 근거로 해결된 것으로 표시" or "기록만 하고 해결로 표시하지 않음", and a
+  review group with nothing in it (an empty "실행 전 확인 조건") is not drawn.
+- **Where reference words come from (decisions 5–7).** The reference panel is
+  titled by its latest entry: "PDF 밖 설명 · AI 일반 지식" for an
+  outside-PDF explanation, "일반 참고 설명 · AI 지식" for other model
+  knowledge, "웹 참고 자료" only for an external answer with web citations,
+  "추가 참고 자료" for the approved lab corpus. An outside-PDF explanation —
+  `research.result` with `outside_pdf: true` (its `source_label`, "AI 일반
+  지식", is shown), or a reply whose `reply.delta` carries the
+  `display_document` "notice" section or the `outside_pdf_explanation`
+  limitation — is drawn in a light dashed frame named "PDF 밖 설명 · AI 일반
+  지식" in the conversation card and the panel. The mark is kept from
+  `reply.delta` for the `reply.complete` render, which carries the text
+  alone. With web references off (`research_capabilities.external_text` not
+  `enabled`), a reference check that ends without an answer is not shown to
+  the researcher; it is a line in the turn's developer details.
 
 ## Protocol onboarding and lifecycle
 
