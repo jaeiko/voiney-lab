@@ -31,6 +31,7 @@ from voiney_lab.protocol_translation import (
     generation_order,
     openai_glossary_maker,
     protocol_context,
+    translation_revision_key,
     translation_units,
 )
 import voiney_lab.server as server_module
@@ -94,13 +95,13 @@ class GlossaryTests(unittest.TestCase):
             {"source": "Tris-HCl buffer", "korean": "Tris-HCl buffer", "keep_english": True},
             {"source": "water", "korean": "물", "keep_english": False},
         ])
-        self.assertEqual(stored[0].revision_id, "fictional-miniprep-v1")
+        self.assertEqual(stored[0].revision_id, "fictional-miniprep/fictional-miniprep-v1")
 
     def test_a_stored_glossary_is_used_and_not_made_again(self) -> None:
         maker = FakeGlossary()
         translator = FakeTranslator()
         held = TranslationGlossaryRecord(
-            "fictional-miniprep-v1", "ko",
+            "fictional-miniprep/fictional-miniprep-v1", "ko",
             json.dumps([{"source": "PBS", "korean": "PBS", "keep_english": True}]),
             "grok-test", "grok-test", "2026-10-03T00:00:00+00:00")
         run(generate_revision_translations(
@@ -266,13 +267,13 @@ class OpenSessionTests(unittest.TestCase):
         async def go():
             server_module._subscribe_translations(session, sender)
             self.assertEqual(
-                server_module._open_session_steps(fixture.revision_id), [1, 2])
+                server_module._open_session_steps(translation_revision_key(fixture)), [1, 2])
             report = await generate_revision_translations(
                 fixture, FakeTranslator(), model="grok-test",
                 priority_steps=lambda: server_module._open_session_steps(
-                    fixture.revision_id),
+                    translation_revision_key(fixture)),
                 on_batch=lambda rows: server_module._publish_translations(
-                    fixture.revision_id, rows))
+                    translation_revision_key(fixture), rows))
             return report
 
         report = run(go())
@@ -304,7 +305,7 @@ class OpenSessionTests(unittest.TestCase):
             server_module._unsubscribe_translations(closed)
             report = await generate_revision_translations(
                 fixture, FakeTranslator(), model="grok-test")
-            await server_module._publish_translations(fixture.revision_id, report.records)
+            await server_module._publish_translations(translation_revision_key(fixture), report.records)
 
         run(go())
         self.assertEqual(senders[0].sent, [])
@@ -320,7 +321,7 @@ class OpenSessionTests(unittest.TestCase):
 
         async def go():
             server_module._subscribe_translations(session, _Sender())
-            await server_module._publish_translations(fixture.revision_id, first)
+            await server_module._publish_translations(translation_revision_key(fixture), first)
 
         run(go())
         shown = session.curated_protocol_session.fixture
@@ -355,7 +356,7 @@ class SessionStartTests(unittest.TestCase):
         self.assertEqual(self.started, ["fictional-miniprep-v1"])
 
     def test_a_running_generation_is_not_started_twice(self) -> None:
-        server_module._REVISION_TRANSLATIONS_RUNNING.add("fictional-miniprep-v1")
+        server_module._REVISION_TRANSLATIONS_RUNNING.add("fictional-miniprep/fictional-miniprep-v1")
         server_module._with_revision_translations(rich_fixture())
         self.assertEqual(self.started, [])
 
@@ -369,7 +370,7 @@ class SessionStartTests(unittest.TestCase):
                          good_korean(MINIPREP_STEPS[1]))
         store = initialize_workspace_store(WorkspaceSettings(True, Path(self.temp.name)))
         try:
-            self.assertIsNotNone(store.translation_glossary(fixture.revision_id, "ko"))
+            self.assertIsNotNone(store.translation_glossary(translation_revision_key(fixture), "ko"))
         finally:
             store.close()
 

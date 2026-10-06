@@ -1216,6 +1216,9 @@ function renderSafetyPack(pack){
 // automatic translation. Safety is one box holding every line.
 const AUTO_TRANSLATION_NOTE="한국어는 자동 번역입니다. 정확한 내용은 원문을 확인하세요.";
 const NO_TRANSLATION_NOTE="한국어 번역이 없어 원문으로 보여 드립니다.";
+// Lane PX decision 1: while the server is still making this revision's
+// Korean, the card says so; the next redraw after a batch lands is Korean.
+const PENDING_TRANSLATION_NOTE="한국어 번역을 준비하고 있습니다 · 준비되면 다음 안내부터 한국어로 보여 드립니다. 지금은 원문입니다.";
 function koreanIsBody(){return (acceptedSessionConfiguration?.input_language??acceptedSessionConfiguration?.language??"ko")!=="en";}
 // A development run is told apart by the one value a pilot never has: the
 // test-mode flag run_pilot.sh forces off. A development-only protocol is not
@@ -1228,7 +1231,7 @@ function renderTranslationNote(){
  let text="";
  if(shown&&koreanIsBody()){
   if(curatedScreenFields?.translation_source==="machine"||autoTranslationShown)text=AUTO_TRANSLATION_NOTE;
-  else if(!nonemptyText(value.primary_summary))text=NO_TRANSLATION_NOTE;
+  else if(!nonemptyText(value.primary_summary))text=curatedScreenFields?.translation_pending===true?PENDING_TRANSLATION_NOTE:NO_TRANSLATION_NOTE;
  }
  note.textContent=text;note.hidden=!text;
 }

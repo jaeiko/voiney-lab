@@ -232,8 +232,10 @@ from voiney_lab.eln_connectors import (
 )
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
+    glossary_entries,
     openai_batch_translator,
     openai_glossary_maker,
+    translation_revision_key,
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
@@ -1081,7 +1083,8 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     store=initialize_protocol_store(settings)
     return ProtocolCatalog(
         store,skip_readiness_gates=_test_mode_skips_readiness_gates(),
-        on_execution_authorized=_translate_authorized_revision),store
+        on_execution_authorized=_translate_authorized_revision,
+        on_analysis_ready=_translate_analyzed_revision),store
 
 
 def _revision_translation_store():
@@ -1129,11 +1132,31 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
 def _translate_authorized_revision(
     catalog:ProtocolCatalog,protocol_id:str,
 )->None:
-    """Translate an executable revision's sentences once, off the request."""
+    """Translate an executable revision's sentences once, off the request.
+
+    The same revision translated when its analysis passed makes no model
+    call here: every stored sentence is skipped.
+    """
 
     runner=_revision_translation_runner()
     if runner is not None:
         runner(_revision_translation_fixture(catalog,protocol_id))
+
+
+def _translate_analyzed_revision(
+    catalog:ProtocolCatalog,protocol_id:str,
+)->None:
+    """Start a passed analysis's Korean at once (lane PX, decision 1).
+
+    Off the request, in the background, purpose and safety first and then
+    the steps from step 1, so the first steps are Korean by the time a
+    person presses "이 프로토콜로 시작". The fixture is the one a session will
+    run (same revision id and content hash), read without any authority.
+    """
+
+    runner=_revision_translation_runner()
+    if runner is not None:
+        runner(catalog.load_analysis_fixture(protocol_id))
 
 
 _REVISION_TRANSLATIONS_RUNNING:set[str]=set()
@@ -1149,8 +1172,9 @@ class _TranslationSubscriber:
     loop:asyncio.AbstractEventLoop
 
 
-#: revision id -> the open sessions showing it. A batch of translations
-#: reaches them as soon as it is stored.
+#: translation key (protocol id / revision id) -> the open sessions showing
+#: that revision. A batch of translations reaches them as soon as it is
+#: stored.
 _TRANSLATION_SUBSCRIBERS:dict[str,list[_TranslationSubscriber]]={}
 
 
@@ -1164,7 +1188,7 @@ def _subscribe_translations(session:Any,sender:Any)->None:
     subscriber=_TranslationSubscriber(session,sender,asyncio.get_running_loop())
     with _REVISION_TRANSLATIONS_LOCK:
         _TRANSLATION_SUBSCRIBERS.setdefault(
-            curated.fixture.revision_id,[]).append(subscriber)
+            translation_revision_key(curated.fixture),[]).append(subscriber)
 
 
 def _unsubscribe_translations(session:Any)->None:
@@ -1183,21 +1207,33 @@ def _subscribers(revision_id:str)->list[_TranslationSubscriber]:
         return list(_TRANSLATION_SUBSCRIBERS.get(revision_id,()))
 
 
-def _open_session_steps(revision_id:str)->list[int]:
+def _open_session_steps(key:str)->list[int]:
     """The current and next step of every open session on this revision."""
 
     steps:list[int]=[]
-    for subscriber in _subscribers(revision_id):
+    for subscriber in _subscribers(key):
         curated=getattr(subscriber.session,"curated_protocol_session",None)
-        if curated is None or curated.fixture.revision_id!=revision_id:
+        if curated is None or translation_revision_key(curated.fixture)!=key:
             continue
         index=curated.current_index
         steps.extend((index,index+1))
     return steps
 
 
+def _translation_pending(fixture:Any)->bool:
+    """Whether this revision's Korean is still being made right now."""
+
+    try:
+        key=translation_revision_key(fixture)
+    except Exception:  # noqa: BLE001 - a fixture without ids has none pending
+        return False
+    with _REVISION_TRANSLATIONS_LOCK:
+        return key in _REVISION_TRANSLATIONS_RUNNING
+
+
 async def _apply_translations(
-    subscriber:_TranslationSubscriber,revision_id:str,rows:list[Any],
+    subscriber:_TranslationSubscriber,key:str,rows:list[Any],
+    glossary:Any=(),
 )->None:
     """Put a stored batch on an open session's fixture and redraw its card.
 
@@ -1208,9 +1244,9 @@ async def _apply_translations(
 
     session=subscriber.session
     curated=getattr(session,"curated_protocol_session",None)
-    if curated is None or curated.fixture.revision_id!=revision_id:
+    if curated is None or translation_revision_key(curated.fixture)!=key:
         return
-    updated=with_stored_translations(curated.fixture,rows)
+    updated=with_stored_translations(curated.fixture,rows,glossary)
     if updated is curated.fixture:
         return
     curated.fixture=updated
@@ -1228,14 +1264,14 @@ async def _apply_translations(
         log.info("revision_translation redraw_skipped error=%s",type(exc).__name__)
 
 
-async def _publish_translations(revision_id:str,rows:list[Any])->None:
+async def _publish_translations(key:str,rows:list[Any],glossary:Any=())->None:
     running=asyncio.get_running_loop()
-    for subscriber in _subscribers(revision_id):
+    for subscriber in _subscribers(key):
         if subscriber.loop is running:
-            await _apply_translations(subscriber,revision_id,rows)
+            await _apply_translations(subscriber,key,rows,glossary)
         elif not subscriber.loop.is_closed():
             asyncio.run_coroutine_threadsafe(
-                _apply_translations(subscriber,revision_id,rows),subscriber.loop)
+                _apply_translations(subscriber,key,rows,glossary),subscriber.loop)
 
 
 async def store_revision_translations(
@@ -1247,18 +1283,26 @@ async def store_revision_translations(
     store=_revision_translation_store()
     if store is None:
         return None
+    key=translation_revision_key(fixture)
     try:
+        glossary_record=store.translation_glossary(key,"ko")
+        current={"glossary":glossary_entries(glossary_record)}
+
+        def stored_glossary(record:Any)->None:
+            store.record_translation_glossary(record)
+            current["glossary"]=glossary_entries(record)
+
         async def stored_batch(rows:list[Any])->None:
             store.record_fact_translations(rows)
-            await _publish_translations(fixture.revision_id,rows)
+            await _publish_translations(key,rows,current["glossary"])
 
         return await generate_revision_translations(
             fixture,translate,model=model,
-            stored=store.fact_translations(fixture.revision_id,"ko"),
-            glossary=store.translation_glossary(fixture.revision_id,"ko"),
+            stored=store.fact_translations(key,"ko"),
+            glossary=glossary_record,
             make_glossary=make_glossary,
-            priority_steps=lambda:_open_session_steps(fixture.revision_id),
-            on_glossary=store.record_translation_glossary,
+            priority_steps=lambda:_open_session_steps(key),
+            on_glossary=stored_glossary,
             on_batch=stored_batch,
         )
     finally:
@@ -1268,10 +1312,11 @@ async def store_revision_translations(
 def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
     """Run the generation in its own thread, one at a time per revision."""
 
+    key=translation_revision_key(fixture)
     with _REVISION_TRANSLATIONS_LOCK:
-        if fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING:
+        if key in _REVISION_TRANSLATIONS_RUNNING:
             return
-        _REVISION_TRANSLATIONS_RUNNING.add(fixture.revision_id)
+        _REVISION_TRANSLATIONS_RUNNING.add(key)
     role=RoleModel.from_environment("translation")
     model=role.model
 
@@ -1288,13 +1333,13 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
         except Exception as exc:  # noqa: BLE001 - nothing stored, retried next time
             log.warning(
                 "revision_translation failed revision=%s error=%s",
-                fixture.revision_id,type(exc).__name__)
+                key,type(exc).__name__)
         finally:
             with _REVISION_TRANSLATIONS_LOCK:
-                _REVISION_TRANSLATIONS_RUNNING.discard(fixture.revision_id)
+                _REVISION_TRANSLATIONS_RUNNING.discard(key)
 
     threading.Thread(
-        target=work,name=f"revision-translation-{fixture.revision_id[:24]}",
+        target=work,name=f"revision-translation-{key[-48:]}",
         daemon=True).start()
 
 
@@ -1315,9 +1360,11 @@ def _with_revision_translations(
         return fixture
     if store is None:
         return fixture
+    key=translation_revision_key(fixture)
     try:
-        rows=store.fact_translations(fixture.revision_id,"ko")
-        attached=with_stored_translations(fixture,rows)
+        rows=store.fact_translations(key,"ko")
+        attached=with_stored_translations(
+            fixture,rows,glossary_entries(store.translation_glossary(key,"ko")))
     except Exception as exc:  # noqa: BLE001 - the source is shown instead
         log.warning("revision_translation read_failed error=%s",type(exc).__name__)
         return fixture
@@ -1325,7 +1372,7 @@ def _with_revision_translations(
         store.close()
     if not rows:
         with _REVISION_TRANSLATIONS_LOCK:
-            running=fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING
+            running=key in _REVISION_TRANSLATIONS_RUNNING
         runner=None if running else _revision_translation_runner()
         if runner is not None:
             try:
@@ -6732,7 +6779,13 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         source="reviewed"
     else:
         source="none"
-    return {"safety_items":items,"translation_source":source}
+    # Lane PX decision 1: while the revision's Korean is still being made the
+    # card says so ("번역 준비 중") instead of "no translation"; from the next
+    # redraw after a batch lands, the Korean is simply there.
+    return {
+        "safety_items":items,"translation_source":source,
+        "translation_pending":_translation_pending(fixture),
+    }
 
 
 #: Statuses that would call a stored machine translation something else.

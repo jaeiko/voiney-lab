@@ -592,6 +592,9 @@ class ProtocolCatalog:
         on_execution_authorized: (
             Callable[["ProtocolCatalog", str], None] | None
         ) = None,
+        on_analysis_ready: (
+            Callable[["ProtocolCatalog", str], None] | None
+        ) = None,
     ) -> None:
         """``skip_readiness_gates`` is the development test-mode switch.
 
@@ -610,6 +613,24 @@ class ProtocolCatalog:
         #: translated once (``protocol_translation``). It adds no authority
         #: and its failure never undoes the decision already recorded.
         self.on_execution_authorized = on_execution_authorized
+        #: Told the protocol id as soon as an analysis has passed and is
+        #: waiting for review -- the moment its sentences start being
+        #: translated (lane PX, human decision 1 of 2026-10-06), so the
+        #: Korean is ready by the time a person makes it executable. Like
+        #: the hook above it adds no authority and its failure changes
+        #: nothing the catalog recorded.
+        self.on_analysis_ready = on_analysis_ready
+
+    def _analysis_ready(self, entry: ProtocolCatalogEntry) -> None:
+        if self.on_analysis_ready is None or entry.analysis_status != "review_required":
+            return
+        try:
+            self.on_analysis_ready(self, entry.protocol_id)
+        except Exception as exc:  # noqa: BLE001 - see on_analysis_ready
+            logging.getLogger(__name__).warning(
+                "protocol.analysis_ready.hook_failed protocol_id=%s error=%s",
+                entry.protocol_id, type(exc).__name__,
+            )
 
     def _execution_authorized(self, entry: ProtocolCatalogEntry) -> None:
         if self.on_execution_authorized is None or not entry.available_for_execution:
@@ -2466,7 +2487,9 @@ class ProtocolCatalog:
             "review",
             analysis.analysis_revision_number,
         )
-        return self.get_entry(revision.experiment_id)
+        entry = self.get_entry(revision.experiment_id)
+        self._analysis_ready(entry)
+        return entry
 
     def analyze(
         self,
@@ -2575,7 +2598,9 @@ class ProtocolCatalog:
             },
             analysis_revision_number=analysis.analysis_revision_number,
         )
-        return self.get_entry(protocol_id)
+        entry = self.get_entry(protocol_id)
+        self._analysis_ready(entry)
+        return entry
 
     def request_analysis(self, protocol_id: str, analysis_id: str) -> ProtocolCatalogEntry:
         """Persist an explicit analysis request without contacting a provider."""
@@ -3785,6 +3810,43 @@ class ProtocolCatalog:
             raise ProtocolCatalogUnavailableError(
                 "Protocol revision is not approved and ready for execution."
             )
+        return self._fixture_for_analysis(
+            revision, analysis, entry, status="approved_revision"
+        )
+
+    def load_analysis_fixture(self, protocol_id: str) -> CuratedProtocolFixture:
+        """The fixture a session *would* run for the latest passed analysis.
+
+        For translation only (lane PX, decision 1): the same steps, facts,
+        ``revision_id`` and ``fixture_sha256`` the executable fixture will
+        carry, so the Korean made from it is the Korean the session shows --
+        but marked ``analysis_draft``, and never handed to a session: no
+        authority is read or granted here. Refuses while no analysis has
+        passed.
+        """
+
+        revision = self._latest_protocol_revision(protocol_id)
+        analysis = self._latest_analysis(revision)
+        if analysis is None:
+            raise ProtocolCatalogUnavailableError(
+                "Protocol analysis is required before translation."
+            )
+        entry = self._entry_for_revision(revision)
+        return self._fixture_for_analysis(
+            revision, analysis, entry,
+            status="approved_revision" if entry.available_for_execution
+            else "analysis_draft",
+        )
+
+    def _fixture_for_analysis(
+        self,
+        revision: ProtocolRevisionRecord,
+        analysis: AnalysisRevisionRecord,
+        entry: ProtocolCatalogEntry,
+        *,
+        status: str,
+    ) -> CuratedProtocolFixture:
+        protocol_id = revision.experiment_id
         pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
         if pdf_object is None:
             raise ProtocolCatalogUnavailableError(
@@ -3820,7 +3882,7 @@ class ProtocolCatalog:
         )
         return CuratedProtocolFixture(
             draft=draft,
-            status="approved_revision",
+            status=status,
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
             revision_id=entry.revision_id,
