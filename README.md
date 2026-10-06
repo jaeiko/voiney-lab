@@ -1024,9 +1024,8 @@ Both have one structure (`experiment_reports.report_blocks`): a title and a
 run table (date, start and end in `VOINEY_LAB_REPORT_TIMEZONE`, default
 `Asia/Seoul`; a blank performer row; time taken; steps completed n/N;
 completed or stopped at which step; the protocol's approval state in words),
-then 1 purpose, 2 background and principle (what the PDF says, and apart from
-it what an external source says), 3 materials and methods (the steps done,
-in Korean where a translation exists, with their source values unchanged; and
+then 1 purpose, 2 background and principle (what the PDF says), 3 materials
+and methods (the steps done, in Korean where a translation exists, with their source values unchanged; and
 what was done differently from the source, from the record only), 4 results
 (the researcher's own observations, anomalies and photos as a table, or
 "기록된 관찰이 없습니다."), 5 discussion (what the record shows, what needs
@@ -1045,13 +1044,12 @@ source on every sentence, nothing identifier-shaped, quoted observations
 must be recorded ones, and cause suggestions must name a recorded item. A
 section that fails, or every section when the model fails or exceeds
 `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS` (25), gets the server's own
-sentence; the appendix says which and why. When the report role's provider
-is `google` (and `VOINEY_LAB_REPORT_WEB_SEARCH_ENABLED` is not `false`), one
-grounded call with Google Search (bounded by
-`VOINEY_LAB_REPORT_SEARCH_TIMEOUT_SECONDS`, default 60) supplies cited pages
-for the purpose and background; with any other provider, or when the search
-fails, the report says it could not check external sources and writes from
-the PDF only. Photos are read from `photo_attached` ledger events; the
+sentence; the appendix says which and why. The report uses no outside
+sources: the purpose and background come from the protocol's PDF only, and
+the only reference is that PDF. Google Search grounding was tried and taken
+out (decision of 2026-10-06), because Google's service terms for grounded
+results forbid caching or storing them and modifying them or mixing them with
+other content, and a report is a stored file other people read. Photos are read from `photo_attached` ledger events; the
 evidence upload does not write one yet.
 
 ### Core configuration

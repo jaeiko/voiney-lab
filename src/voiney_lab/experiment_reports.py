@@ -888,26 +888,23 @@ def build_grounded_report_context(
 # only the prose around those facts, from a projection with no identifiers,
 # hashes, status values or command names in it, and each of its sections is
 # checked before it is used (``check_report_sections``); a section that fails
-# is replaced by the server's own sentence for it. External knowledge comes
-# only from Google Search grounding on the report role (decision 4) and is
-# always cited and kept apart from what the PDF says.
+# is replaced by the server's own sentence for it. The report uses no outside
+# knowledge: Google Search grounding was taken out (decision of 2026-10-06,
+# option (a)) because the service terms forbid caching, storing, or rewriting
+# grounded results, and a report is a stored file other people read.
 
 REPORT_TIMEZONE_SETTING = "VOINEY_LAB_REPORT_TIMEZONE"
 DEFAULT_REPORT_TIMEZONE = "Asia/Seoul"
-REPORT_WEB_SEARCH_SETTING = "VOINEY_LAB_REPORT_WEB_SEARCH_ENABLED"
-REPORT_SEARCH_TIMEOUT_SETTING = "VOINEY_LAB_REPORT_SEARCH_TIMEOUT_SECONDS"
-DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS = 60.0
 
 #: The model-written sections, in report order.
 MODEL_SECTIONS = (
-    "purpose", "background_pdf", "background_external", "methods_summary",
+    "purpose", "background", "methods_summary",
     "results_summary", "discussion_confirmed", "discussion_to_check",
     "discussion_review", "conclusion", "next_steps",
 )
 _SECTION_NAMES = {
     "purpose": "1. 실험 목적",
-    "background_pdf": "2. 배경·원리 (원문)",
-    "background_external": "2. 배경·원리 (외부 자료)",
+    "background": "2. 배경·원리",
     "methods_summary": "3. 방법 요약",
     "results_summary": "4. 결과 요약",
     "discussion_confirmed": "5. 고찰 (가)",
@@ -933,10 +930,10 @@ def report_timezone(environment: Mapping[str, str] | None = None) -> ZoneInfo:
 
 @dataclass(frozen=True)
 class ReportSource:
-    """One numbered reference: [1] is the protocol's own PDF, the rest are web pages."""
+    """One numbered reference: [1] is the protocol's own PDF."""
 
     number: int
-    kind: str  # "protocol" | "web"
+    kind: str  # "protocol"
     title: str
     url: str = ""
     note: str = ""
@@ -1475,7 +1472,7 @@ def _numbers(text: str) -> set[str]:
     return found
 
 
-def _allowed_numbers(facts: ReportFacts, sources: Sequence[ReportSource]) -> set[str]:
+def _allowed_numbers(facts: ReportFacts) -> set[str]:
     texts: list[str] = [facts.protocol_title, facts.keywords, facts.purpose_from_pdf]
     texts += [value for _, value in facts.run_rows]
     texts += list(facts.deviations) + list(facts.confirmed) + list(facts.to_check)
@@ -1488,7 +1485,7 @@ def _allowed_numbers(facts: ReportFacts, sources: Sequence[ReportSource]) -> set
     texts.append(str(facts.total_steps))
     texts.append(" ".join(str(n) for n in range(1, facts.total_steps + 1)))
     texts.append(" ".join(str(n) for n in range(0, len(facts.records) + 1)))
-    texts += [source.title for source in sources]
+    texts.append(facts.protocol_reference.title)
     allowed: set[str] = set()
     for text in texts:
         allowed |= _numbers(str(text))
@@ -1510,12 +1507,10 @@ def _as_text(value: Any) -> str:
 def check_report_sections(
     sections: Mapping[str, Any],
     facts: ReportFacts,
-    sources: Sequence[ReportSource],
 ) -> dict[str, list[str]]:
     """Why each model section may not be used ({} for a section that passes)."""
 
-    web = {source.number for source in sources if source.kind == "web"}
-    allowed = _allowed_numbers(facts, sources)
+    allowed = _allowed_numbers(facts)
     record_texts = [" ".join(text.split()) for text in facts.record_texts]
     reviewable = set(range(1, len(facts.records) + len(facts.deviations) + 1))
     reasons: dict[str, list[str]] = {}
@@ -1527,21 +1522,11 @@ def check_report_sections(
             if shape.search(_CITATION.sub(" ", text)):
                 problems.append(f"본문에 {name}")
         cited = {int(n) for group in _CITATION.findall(text) for n in group.split(",")}
-        if key in {"purpose", "background_pdf", "background_external"}:
+        if key in {"purpose", "background"}:
             if _CONDITION_NUMBER.search(_CITATION.sub(" ", text)):
                 problems.append("실험 조건 숫자")
-            unknown = cited - {1} - web
-            if unknown:
+            if cited - {1}:
                 problems.append("없는 출처 번호")
-            if key == "background_pdf" and cited - {1}:
-                problems.append("원문 칸에 외부 출처 번호")
-            if key == "background_external":
-                if text.strip() and not web:
-                    problems.append("외부 자료 없이 쓴 외부 지식")
-                for sentence in filter(None, (s.strip() for s in _SENTENCE.split(text))):
-                    if not any(int(n) in web for g in _CITATION.findall(sentence) for n in g.split(",")):
-                        problems.append("출처 번호가 없는 외부 지식 문장")
-                        break
             if key == "purpose":
                 for sentence in filter(None, (s.strip() for s in _SENTENCE.split(text))):
                     if not _CITATION.search(sentence):
@@ -1588,8 +1573,7 @@ class ReportNarrative:
 
     title: str
     purpose: str
-    background_pdf: str
-    background_external: str
+    background: str
     methods_summary: str
     results_summary: str
     discussion_confirmed: tuple[str, ...]
@@ -1601,8 +1585,6 @@ class ReportNarrative:
     sources: tuple[ReportSource, ...] = ()
     section_origin: Mapping[str, str] = field(default_factory=dict)
     rejected: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    search_status: str = "검색 안 함"
-    search_queries: tuple[str, ...] = ()
     writer: str = "서버 대체 문장"
 
     # Earlier names, kept for callers written before lane RP.
@@ -1640,7 +1622,7 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
                    f"원문에는 목적을 따로 밝힌 문장이 없으며, 원문 키워드는 '{facts.keywords}'이다[1].")
     else:
         purpose = f"이 실험은 '{title}' 프로토콜에 따라 수행했다[1]. 원문에는 목적을 따로 밝힌 문장이 없다[1]."
-    background_pdf = (
+    background = (
         "원문은 다음 순서의 단계 묶음으로 되어 있다: " + " → ".join(facts.sections) + "[1]."
         if facts.sections else "원문에서 원리를 설명하는 부분을 찾지 못했다[1]."
     )
@@ -1684,8 +1666,7 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
     next_steps.append("‘연구자 해석’ 칸을 채운다.")
     return {
         "purpose": purpose,
-        "background_pdf": background_pdf,
-        "background_external": "",
+        "background": background,
         "methods_summary": methods,
         "results_summary": results,
         "discussion_confirmed": tuple(facts.confirmed) or ("기록에서 확인되는 완료 단계가 없다.",),
@@ -1719,10 +1700,7 @@ def narrative_from_sections(
     facts: ReportFacts,
     model: Mapping[str, Any] | None = None,
     *,
-    sources: Sequence[ReportSource] = (),
     rejected: Mapping[str, Sequence[str]] | None = None,
-    search_status: str = "검색 안 함",
-    search_queries: Sequence[str] = (),
     writer: str = "서버 대체 문장",
 ) -> ReportNarrative:
     fallback = deterministic_sections(facts)
@@ -1731,8 +1709,6 @@ def narrative_from_sections(
     origin: dict[str, str] = {}
     for key in MODEL_SECTIONS:
         value = None if model is None or key in rejected else model.get(key)
-        if key == "background_external" and not sources:
-            value = None
         if key in {"discussion_confirmed", "discussion_to_check", "next_steps"}:
             value = _text_items(value) if value else None
         elif key == "discussion_review":
@@ -1752,16 +1728,14 @@ def narrative_from_sections(
                 origin[key] = "모델이 비움 — 서버 문장"
     return ReportNarrative(
         title=f"{facts.protocol_title} 실험 보고서" if facts.protocol_title else "실험 보고서",
-        purpose=chosen["purpose"], background_pdf=chosen["background_pdf"],
-        background_external=chosen["background_external"],
+        purpose=chosen["purpose"], background=chosen["background"],
         methods_summary=chosen["methods_summary"], results_summary=chosen["results_summary"],
         discussion_confirmed=tuple(chosen["discussion_confirmed"]),
         discussion_to_check=tuple(chosen["discussion_to_check"]),
         discussion_review=tuple(chosen["discussion_review"]),
         conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
-        facts=facts, sources=(facts.protocol_reference, *sources), section_origin=origin,
-        rejected=rejected, search_status=search_status, search_queries=tuple(search_queries),
-        writer=writer,
+        facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
+        rejected=rejected, writer=writer,
     )
 
 
@@ -1789,8 +1763,6 @@ class ReportWriterSettings:
     enabled: bool = True
     model: str = "grok-4.6"
     timeout_seconds: float = 25.0
-    web_search: bool = True
-    search_timeout_seconds: float = DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS
 
     @classmethod
     def from_environment(cls) -> "ReportWriterSettings":
@@ -1808,15 +1780,7 @@ class ReportWriterSettings:
             ).strip())
         except ValueError:
             timeout = 25.0
-        search = os.environ.get(REPORT_WEB_SEARCH_SETTING, "true").strip().casefold() not in _FALSE - {""}
-        try:
-            search_timeout = float(os.environ.get(
-                REPORT_SEARCH_TIMEOUT_SETTING, str(DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS)
-            ).strip())
-        except ValueError:
-            search_timeout = DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS
-        return cls(enabled=enabled, model=model, timeout_seconds=timeout,
-                   web_search=search, search_timeout_seconds=search_timeout)
+        return cls(enabled=enabled, model=model, timeout_seconds=timeout)
 
 
 _NARRATIVE_CACHE: dict[tuple[Any, ...], ReportNarrative] = {}
@@ -1830,35 +1794,19 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 기록에 없는 결과·관찰·측정·수치·오차 원인을 지어내지 않는다. 결과 칸은 기록된 사실만 쓰고 추측하지 않는다.
 - 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산해서 새 숫자를 만들지 않는다.
 - 목적·배경 칸에는 온도·시간·농도·부피·회전수 같은 실험 조건 숫자를 쓰지 않는다.
-- 목적 칸과 외부 자료 칸의 모든 문장 끝에 출처 번호를 단다: 프로토콜 원문은 [1], 외부 자료는 '외부 자료'의 번호. 출처가 없는 외부 지식은 쓰지 않는다.
-- 'background_pdf' 는 원문에 있는 내용만, 'background_external' 은 '외부 자료' 에 있는 내용만 쓴다. 외부 자료가 없으면 'background_external' 은 빈 문자열이다.
+- 목적 칸의 모든 문장 끝에 출처 번호 [1](프로토콜 원문)을 단다.
+- 'background' 는 프로토콜 원문에 있는 내용만 쓴다. 원문 밖의 지식(교과서·웹 지식)은 쓰지 않는다. 원문에 원리 설명이 없으면 없다고 쓴다.
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
 - 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
 
 JSON 객체 하나만 돌려준다. 키:
-purpose (1–3문장), background_pdf, background_external, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
+purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
 results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
 discussion_confirmed (문장 목록: 기록에서 확인되는 점), discussion_to_check (문장 목록: 확인이 필요한 점),
 discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록)."""
 
-_SEARCH_INSTRUCTIONS = (
-    "너는 실험 보고서의 배경을 조사한다. 구글 검색으로 확인한 내용만 한국어로 쓴다. "
-    "이 실험이 무엇을 위해 하는지와, 각 단계 묶음의 핵심 원리를 쉬운 말로 4–6문장으로 설명한다. "
-    "온도·시간·농도·부피·회전수 같은 실험 조건 숫자와 실험 지시는 쓰지 않는다."
-)
 
-
-def _search_prompt(facts: ReportFacts) -> str:
-    lines = [f"프로토콜 제목: {facts.protocol_title}"]
-    if facts.keywords:
-        lines.append(f"원문 키워드: {facts.keywords}")
-    if facts.sections:
-        lines.append("원문 단계 묶음: " + " → ".join(facts.sections))
-    lines.append("질문: 이 실험은 무엇을 위해 하는가? 각 단계 묶음은 왜 필요한가?")
-    return "\n".join(lines)
-
-
-def _writer_facts(facts: ReportFacts, sources: Sequence[ReportSource], notes: Sequence[str]) -> dict[str, Any]:
+def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
     """What the model reads: experiment content only, no identifiers (decision 3)."""
 
     reviewable = [
@@ -1893,10 +1841,6 @@ def _writer_facts(facts: ReportFacts, sources: Sequence[ReportSource], notes: Se
         "원문과 다르게 한 점": list(facts.deviations),
         "서버가 찾은 확인이 필요한 점": list(facts.to_check),
         "검토할 수 있는 항목": reviewable,
-        "외부 자료": [
-            {"번호": source.number, "사이트": source.title} for source in sources
-        ],
-        "외부 자료 내용": list(notes),
     }
 
 
@@ -1910,23 +1854,6 @@ def _parse_reply(content: str) -> dict[str, Any]:
     return data
 
 
-def resolve_source_url(url: str, timeout: float = 5.0) -> str:
-    """Google's grounding redirect link, followed once to the page it names."""
-
-    if "vertexaisearch.cloud.google.com/grounding-api-redirect/" not in url:
-        return url
-    try:
-        import httpx
-
-        response = httpx.head(url, follow_redirects=False, timeout=timeout)
-        location = response.headers.get("location", "")
-        if response.status_code in {301, 302, 303, 307, 308} and location.startswith("https://"):
-            return location
-    except Exception as exc:  # noqa: BLE001 -- the redirect link is kept instead
-        log.info("report source link not resolved error=%s", type(exc).__name__)
-    return url
-
-
 class ReportWriterBrain:
     """Writes the report's prose sections; the server checks each before using it."""
 
@@ -1935,17 +1862,10 @@ class ReportWriterBrain:
         client: Any = None,
         model: str = "grok-4.6",
         timeout_seconds: float = 25.0,
-        *,
-        search_client: Any = _AUTO,
-        search_timeout_seconds: float | None = None,
-        resolve_url: Any = None,
     ) -> None:
         self.client = client
         self.model = model
         self.timeout_seconds = timeout_seconds
-        self.search_client = search_client
-        self.search_timeout_seconds = search_timeout_seconds
-        self.resolve_url = resolve_url or resolve_source_url
         self.last_usage: dict[str, Any] = {}
 
     def build_deterministic_draft(
@@ -2032,71 +1952,32 @@ class ReportWriterBrain:
         facts = self.facts_for(context or report_data_or_context, events, fixture=fixture)
         return narrative_from_sections(facts)
 
-    def _search_client(self) -> tuple[Any, str]:
-        if self.search_client is not _AUTO:
-            return self.search_client, "" if self.search_client is not None else "검색을 쓰지 않도록 설정됨"
-        settings = ReportWriterSettings.from_environment()
-        if not settings.web_search:
-            return None, "검색을 쓰지 않도록 설정됨"
-        try:
-            from voiney_lab.model_providers import RoleModel, chat_client
+    async def write_reply(self, facts: ReportFacts) -> tuple[dict[str, Any] | None, str]:
+        """One model call for the report's prose: (reply, "") or (None, why it failed)."""
 
-            role = RoleModel.from_environment("report")
-            if role.provider != "google":
-                return None, "보고서 역할 공급자가 Google 이 아님"
-            if not role.has_key():
-                return None, "Google 키가 없음"
-            self.search_timeout_seconds = self.search_timeout_seconds or settings.search_timeout_seconds
-            return chat_client(role, timeout=self.search_timeout_seconds), ""
-        except Exception as exc:  # noqa: BLE001
-            return None, f"검색 준비 실패({type(exc).__name__})"
-
-    async def search(self, facts: ReportFacts) -> tuple[tuple[ReportSource, ...], tuple[str, ...], tuple[str, ...], str]:
-        """(sources numbered from 2, notes with their numbers, queries, status)."""
-
-        client, why = self._search_client()
-        if client is None:
-            return (), (), (), why
-        timeout = self.search_timeout_seconds or DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS
+        if not self.client:
+            return None, ""
         try:
             response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=self.model, web_search=True, max_tokens=1200,
-                    messages=[{"role": "system", "content": _SEARCH_INSTRUCTIONS},
-                              {"role": "user", "content": _search_prompt(facts)}],
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": _WRITER_INSTRUCTIONS},
+                        {"role": "user", "content": json.dumps(
+                            _writer_facts(facts), ensure_ascii=False, indent=1)},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=4000,
                 ),
-                timeout=timeout,
+                timeout=self.timeout_seconds,
             )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("report search failed error=%s", type(exc).__name__)
-            return (), (), (), f"검색 실패({type(exc).__name__})"
-        self.last_usage["search"] = getattr(response, "usage", None)
-        grounding = getattr(response, "grounding", None)
-        if grounding is None or not getattr(grounding, "sources", None) or not getattr(grounding, "supports", None):
-            return (), (), tuple(getattr(grounding, "queries", ()) or ()), "검색 결과에 출처가 없음"
-        numbers: dict[int, int] = {}
-        sources: list[ReportSource] = []
-        notes: list[str] = []
-        for support in grounding.supports:
-            cited = []
-            for index in support.source_indices:
-                if not 0 <= index < len(grounding.sources):
-                    continue
-                if index not in numbers:
-                    page = grounding.sources[index]
-                    numbers[index] = len(sources) + 2
-                    url = await asyncio.to_thread(self.resolve_url, page.uri) if page.uri else ""
-                    sources.append(ReportSource(
-                        number=numbers[index], kind="web",
-                        title=page.title or page.domain or "웹 문서", url=url,
-                    ))
-                cited.append(numbers[index])
-            text = " ".join(support.text.split())
-            if text and cited:
-                notes.append(f"{text} [{', '.join(str(n) for n in sorted(set(cited)))}]")
-        if not notes:
-            return (), (), tuple(grounding.queries), "검색 결과에 출처가 붙은 문장이 없음"
-        return tuple(sources), tuple(notes), tuple(grounding.queries), "검색 사용"
+            self.last_usage["writer"] = getattr(response, "usage", None)
+            return _parse_reply(response.choices[0].message.content or ""), ""
+        except Exception as exc:  # noqa: BLE001 -- the server's sentences stand in
+            log.warning("report writer failed error=%s; using the server's sentences", type(exc).__name__)
+            if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                return None, "모델 시간 초과"
+            return None, f"모델 답 실패({type(exc).__name__})"
 
     async def generate_narrative(
         self,
@@ -2105,58 +1986,39 @@ class ReportWriterBrain:
         *,
         fixture: Any = _AUTO,
     ) -> ReportNarrative:
-        """The report's prose: one model call (and, for Google, one grounded search)."""
+        """The report's prose: one model call, each section checked before use."""
 
         facts = self.facts_for(report_data, events, fixture=fixture)
         latest_key = str(events[-1].get("event_key") if events else "")
         cache_key = (
             str(report_data.get("report_id") or ""), int(report_data.get("finalization_version") or 0),
             latest_key, str(report_data.get("protocol_revision") or ""), self.model,
-            self.search_client is None,
         )
         cached = _NARRATIVE_CACHE.get(cache_key)
         if cached is not None:
             return cached
         if not self.client:
             narrative = narrative_from_sections(facts)
-            _NARRATIVE_CACHE[cache_key] = narrative
-            return narrative
-
-        sources, notes, queries, search_status = await self.search(facts)
-        try:
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": _WRITER_INSTRUCTIONS},
-                        {"role": "user", "content": json.dumps(
-                            _writer_facts(facts, sources, notes), ensure_ascii=False, indent=1)},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_tokens=4000,
-                ),
-                timeout=self.timeout_seconds,
-            )
-            self.last_usage["writer"] = getattr(response, "usage", None)
-            data = _parse_reply(response.choices[0].message.content or "")
-        except Exception as exc:  # noqa: BLE001 -- the server's sentences stand in
-            log.warning("report writer failed error=%s; using the server's sentences", type(exc).__name__)
-            reason = "모델 시간 초과" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else (
-                f"모델 답 실패({type(exc).__name__})")
-            narrative = narrative_from_sections(
-                facts, {}, sources=sources,
-                rejected={key: (reason,) for key in MODEL_SECTIONS},
-                search_status=search_status, search_queries=queries, writer=f"{self.model} (실패)",
-            )
-            _NARRATIVE_CACHE[cache_key] = narrative
-            return narrative
-        rejected = check_report_sections(data, facts, sources)
-        narrative = narrative_from_sections(
-            facts, data, sources=sources, rejected=rejected,
-            search_status=search_status, search_queries=queries, writer=self.model,
-        )
+        else:
+            reply, failure = await self.write_reply(facts)
+            narrative = narrative_from_reply(facts, reply, failure=failure, writer=self.model)
         _NARRATIVE_CACHE[cache_key] = narrative
         return narrative
+
+
+def narrative_from_reply(
+    facts: ReportFacts, reply: Mapping[str, Any] | None, *, failure: str = "", writer: str,
+) -> ReportNarrative:
+    """The report from one model reply, checked against the record as it is now."""
+
+    if reply is None:
+        return narrative_from_sections(
+            facts, {}, rejected={key: (failure or "모델 답 없음",) for key in MODEL_SECTIONS},
+            writer=f"{writer} (실패)",
+        )
+    return narrative_from_sections(
+        facts, reply, rejected=check_report_sections(reply, facts), writer=writer,
+    )
 
 
 # --- One document, two renderings (Word and Markdown) -----------------------------
@@ -2173,13 +2035,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
 
     blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
 
-    blocks += [("h1", "2. 배경·원리"), ("h2", "원문(PDF)에 있는 것"), ("p", narrative.background_pdf),
-               ("h2", "외부 자료에서 찾은 것")]
-    if narrative.background_external:
-        blocks.append(("p", narrative.background_external))
-    else:
-        why = narrative.search_status if narrative.search_status not in {"검색 사용"} else "출처를 확인한 문장이 없음"
-        blocks.append(("note", f"외부 자료를 확인하지 못했다({why}). 이 칸은 원문만으로 썼다."))
+    blocks += [("h1", "2. 배경·원리"), ("p", narrative.background),
+               ("note", "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
 
     blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비 (원문 그대로)")]
     if facts.materials or facts.equipment:
@@ -2226,23 +2083,16 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h1", "참고문헌"))
     references = []
     for source in narrative.sources:
-        if source.kind == "protocol":
-            text = f"[{source.number}] {source.title}"
-            if source.url:
-                text += f" {source.url}"
-            text += " — 실험에 쓴 프로토콜 원문"
-        else:
-            text = f"[{source.number}] {source.title}" + (f" — {source.url}" if source.url else "") + " (구글 검색)"
-        references.append(text)
+        text = f"[{source.number}] {source.title}"
+        if source.url:
+            text += f" {source.url}"
+        references.append(text + " — 실험에 쓴 프로토콜 원문")
     blocks.append(("list", tuple(references)))
 
     blocks += [("h1", "부록 · 기록 정보"), ("note", "아래는 감사용 기록이다. 본문에는 쓰지 않았다.")]
     writing = list(facts.appendix_rows) + [
         ("보고서 문장", narrative.writer),
-        ("외부 검색", narrative.search_status),
     ]
-    if narrative.search_queries:
-        writing.append(("검색어", " · ".join(narrative.search_queries)))
     for key in MODEL_SECTIONS:
         origin = narrative.section_origin.get(key, "서버")
         reasons = narrative.rejected.get(key)

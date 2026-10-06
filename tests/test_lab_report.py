@@ -228,8 +228,7 @@ class _Client:
 
 GOOD_REPLY = {
     "purpose": "이 실험은 젤 속 단백질을 분석할 수 있게 준비하는 것을 목적으로 한다[1].",
-    "background_pdf": "원문은 탈색과 탈수 순서로 진행한다[1].",
-    "background_external": "",
+    "background": "원문은 탈색과 탈수 순서로 진행한다[1].",
     "methods_summary": "1–4단계를 수행했고 3단계는 원문 15분 중 10분에 끝냈다.",
     "results_summary": "4단계에서 “밴드가 투명해졌어”라는 관찰과 “튜브를 쏟았어”라는 이상이 기록되었다.",
     "discussion_confirmed": ["1–4단계가 완료로 기록되었다."],
@@ -243,7 +242,7 @@ GOOD_REPLY = {
 class ReportWriterTests(_ReportCase):
     def write(self, reply: dict | str) -> tuple[er.ReportNarrative, _Client]:
         client = _Client(reply)
-        brain = er.ReportWriterBrain(client=client, model="fake", timeout_seconds=5, search_client=None)
+        brain = er.ReportWriterBrain(client=client, model="fake", timeout_seconds=5)
         doc = self.doc()
         narrative = asyncio.run(brain.generate_narrative(doc, list(doc["events"]), fixture=self.fixture))
         return narrative, client
@@ -258,8 +257,7 @@ class ReportWriterTests(_ReportCase):
         for content in ("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", "밴드가 투명해졌어",
                         "튜브를 쏟았어", "원문 15분 / 10분에 끝냄", "09:30"):
             self.assertIn(content, sent)
-        self.assertEqual(set(narrative.section_origin.values()), {"모델", "모델이 비움 — 서버 문장"})
-        self.assertEqual(narrative.section_origin["background_external"], "모델이 비움 — 서버 문장")
+        self.assertEqual(set(narrative.section_origin.values()), {"모델"})
         self.assertEqual(narrative.purpose, GOOD_REPLY["purpose"])
         self.assertEqual(narrative.discussion_review,
                          ("검토 제안 (항목 2): 쏟은 양이 결과에 영향을 주었는지 검토한다.",))
@@ -297,12 +295,20 @@ class ReportWriterTests(_ReportCase):
         self.assertEqual(narrative.section_origin["purpose"], "대체")
         self.assertIn("출처 번호가 없는 문장", narrative.rejected["purpose"])
 
-    def test_external_knowledge_without_a_search_is_refused(self) -> None:
+    def test_the_report_uses_no_outside_sources(self) -> None:
+        # Decision of 2026-10-06, option (a): no Google Search grounding, so
+        # nothing but the protocol is cited and the writer is never asked to
+        # search.
         self.run_steps_one_to_four_then_stop()
-        narrative, _ = self.write(dict(GOOD_REPLY, background_external="트립신은 단백질을 자른다[2]."))
-        self.assertEqual(narrative.background_external, "")
+        narrative, client = self.write(dict(GOOD_REPLY, background="트립신은 단백질을 자른다[2]."))
+        self.assertNotIn("web_search", client.calls[0])
+        self.assertNotIn("외부 자료", client.calls[0]["messages"][1]["content"])
+        self.assertEqual(narrative.section_origin["background"], "대체")
+        self.assertIn("없는 출처 번호", narrative.rejected["background"])
+        self.assertEqual([source.kind for source in narrative.sources], ["protocol"])
         text = er.render_markdown(narrative)
-        self.assertIn("외부 자료를 확인하지 못했다(검색을 쓰지 않도록 설정됨)", text)
+        self.assertIn("외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.", text)
+        self.assertNotIn("구글", text)
 
     def test_a_failed_model_keeps_the_same_structure_with_the_servers_sentences(self) -> None:
         self.run_steps_one_to_four_then_stop()

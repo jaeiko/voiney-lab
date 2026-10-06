@@ -370,7 +370,7 @@ def _chunk(
 _ACCEPTED = frozenset({
     "model", "messages", "tools", "tool_choice", "response_format", "temperature",
     "max_tokens", "max_completion_tokens", "stream", "stream_options",
-    "reasoning_effort", "timeout", "parallel_tool_calls", "web_search",
+    "reasoning_effort", "timeout", "parallel_tool_calls",
 })
 
 
@@ -389,11 +389,6 @@ class _Request:
     reasoning: str | None
     timeout: Any
     parallel_tool_calls: bool | None
-    #: Ask the provider to search the web and return its sources with the
-    #: reply (lane RP: the report's purpose and background). Only the google
-    #: adapter offers it; the others refuse the request rather than quietly
-    #: answer without sources.
-    web_search: bool = False
 
     @classmethod
     def read(cls, role_model: RoleModel, kwargs: Mapping[str, Any]) -> "_Request":
@@ -421,12 +416,7 @@ class _Request:
             reasoning=reasoning,
             timeout=timeout,
             parallel_tool_calls=kwargs.get("parallel_tool_calls"),
-            web_search=bool(kwargs.get("web_search")),
         )
-
-    def refuse_web_search(self, provider: str) -> None:
-        if self.web_search:
-            raise TypeError(f"web search is not offered by the {provider} adapter")
 
     def output_limit(self, thinks: bool) -> int:
         limit = self.max_tokens or DEFAULT_MAX_OUTPUT_TOKENS
@@ -950,7 +940,6 @@ class _OpenAIResponsesBackend:
 
     def create(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
-        request.refuse_web_search("openai")
         if request.stream:
             raise TypeError("streaming needs the asynchronous client")
         try:
@@ -966,7 +955,6 @@ class _OpenAIResponsesBackend:
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
-        request.refuse_web_search("openai")
         params = self._params(request)
         if not request.stream:
             try:
@@ -1190,7 +1178,6 @@ class _AnthropicBackend:
 
     def create(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
-        request.refuse_web_search("anthropic")
         if request.stream:
             raise TypeError("streaming needs the asynchronous client")
         try:
@@ -1201,7 +1188,6 @@ class _AnthropicBackend:
 
     async def acreate(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
-        request.refuse_web_search("anthropic")
         params = self._params(request)
         try:
             if not request.stream:
@@ -1338,10 +1324,6 @@ class _GeminiBackend:
                 system.append(_schema_instruction(schema[0], schema[1]))
         elif request.wants_json_object:
             config["response_mime_type"] = "application/json"
-        if request.web_search:
-            # Grounding with Google Search: the reply carries the pages it
-            # used (``_grounding``), which the caller numbers and cites.
-            config.setdefault("tools", []).append({"google_search": {}})
         if system:
             config["system_instruction"] = "\n\n".join(system)
         return {"model": request.model, "contents": contents, "config": config}
@@ -1366,44 +1348,6 @@ class _GeminiBackend:
         content = getattr(candidates[0], "content", None)
         return list(getattr(content, "parts", None) or ())
 
-    @staticmethod
-    def _grounding(response: Any) -> SimpleNamespace | None:
-        """The web pages a grounded reply used, in the provider's order.
-
-        ``sources`` are the grounding chunks (uri, title, domain as given --
-        on Vertex AI the uri is Google's redirect link); ``supports`` tie a
-        segment of the reply text to the chunk indices it rests on. None when
-        the reply was not grounded.
-        """
-
-        candidates = getattr(response, "candidates", None) or ()
-        metadata = getattr(candidates[0], "grounding_metadata", None) if candidates else None
-        if metadata is None:
-            return None
-        sources = []
-        for chunk in getattr(metadata, "grounding_chunks", None) or ():
-            web = getattr(chunk, "web", None)
-            if web is None:
-                continue
-            sources.append(SimpleNamespace(
-                uri=str(getattr(web, "uri", None) or ""),
-                title=str(getattr(web, "title", None) or ""),
-                domain=str(getattr(web, "domain", None) or ""),
-            ))
-        supports = []
-        for support in getattr(metadata, "grounding_supports", None) or ():
-            segment = getattr(support, "segment", None)
-            supports.append(SimpleNamespace(
-                text=str(getattr(segment, "text", None) or ""),
-                source_indices=tuple(
-                    int(index) for index in getattr(support, "grounding_chunk_indices", None) or ()
-                ),
-            ))
-        return SimpleNamespace(
-            sources=sources, supports=supports,
-            queries=[str(query) for query in getattr(metadata, "web_search_queries", None) or ()],
-        )
-
     @classmethod
     def _reply(cls, response: Any, model: str) -> SimpleNamespace:
         texts: list[str] = []
@@ -1420,14 +1364,12 @@ class _GeminiBackend:
                 ))
             elif getattr(part, "text", None):
                 texts.append(part.text)
-        completion = _completion(
+        return _completion(
             content="".join(texts), tool_calls=calls,
             usage=cls._usage(getattr(response, "usage_metadata", None)),
             model=str(getattr(response, "model_version", None) or model),
             finish_reason="tool_calls" if calls else "stop",
         )
-        completion.grounding = cls._grounding(response)
-        return completion
 
     def create(self, **kwargs: Any) -> Any:
         request = _Request.read(self.role_model, kwargs)
