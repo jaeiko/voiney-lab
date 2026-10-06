@@ -604,7 +604,7 @@ const SERVER_CODE_LABELS=Object.freeze({
  blocker_kind:Object.freeze({reviewer_can_clear:"검토자가 해제 가능",capability_required:"새 능력 필요 · 사람이 해제 불가"}),
  ambiguity_decision:Object.freeze({single_statement_is_authoritative:"한 진술이 기준임",statements_are_distinct:"두 진술은 서로 다른 내용임"}),
  finding_kind:Object.freeze({gate_acknowledged:"확인 처리",repetition_confirmed:"고정 반복 확인",repetition_confirmation_revoked:"고정 반복 확인 철회",ambiguity_resolved:"모호성 해결"}),
- finding_error:Object.freeze({reason_code_required:"확인할 사유가 지정되지 않았습니다",repetition_id_required:"반복 항목이 지정되지 않았습니다",repeat_count_required:"반복 횟수가 지정되지 않았습니다",ambiguity_id_required:"모호한 항목이 지정되지 않았습니다",decision_required:"판단을 선택하지 않았습니다",protocol_catalog_not_found:"프로토콜을 찾을 수 없습니다",protocol_catalog_unavailable:"프로토콜 저장소를 사용할 수 없습니다",protocol_approval_denied:"서버가 이 판단을 받지 않았습니다(권한 문제는 아닙니다). 고른 원문 근거가 이 항목과 맞는지 확인하거나 ‘검토 새로고침’ 뒤 다시 눌러 주세요",authorization_denied:"검토자 역할이 있는 계정만 기록할 수 있습니다. 검토자 계정으로 로그인한 뒤 다시 눌러 주세요",authentication_required:"로그인해야 기록할 수 있습니다. 로그인한 뒤 다시 눌러 주세요",protocol_catalog_error:"서버가 이 기록을 받지 않았습니다. ‘검토 새로고침’ 뒤 다시 눌러 주세요",unexpected_server_error:"서버 오류가 발생했습니다"}),
+ finding_error:Object.freeze({reason_code_required:"확인할 사유가 지정되지 않았습니다",repetition_id_required:"반복 항목이 지정되지 않았습니다",repeat_count_required:"반복 횟수가 지정되지 않았습니다",ambiguity_id_required:"모호한 항목이 지정되지 않았습니다",decision_required:"판단을 선택하지 않았습니다",protocol_catalog_not_found:"프로토콜을 찾을 수 없습니다",protocol_catalog_unavailable:"프로토콜 저장소를 사용할 수 없습니다",protocol_approval_denied:"서버가 이 판단을 받지 않았습니다(권한 문제는 아닙니다). 고른 원문 근거가 이 항목과 맞는지 확인하거나 ‘검토 새로고침’ 뒤 다시 눌러 주세요",authorization_denied:"검토자 계정으로 로그인한 뒤 다시 눌러 주세요",finding_evidence_missing:"원문 근거를 하나 이상 고른 뒤 다시 눌러 주세요",finding_evidence_span_mismatch:"고른 근거가 그 쪽 원문과 맞지 않습니다. ‘검토 새로고침’ 뒤 근거를 다시 골라 주세요",ambiguity_not_found:"이 버전에는 그 모호한 항목이 없습니다. ‘검토 새로고침’ 뒤 다시 확인해 주세요",analysis_revision_missing:"검증된 분석이 아직 없습니다. 분석이 끝난 뒤 다시 눌러 주세요",finding_target_not_found:"이 버전에서 그 항목을 찾지 못했습니다. ‘검토 새로고침’ 뒤 다시 골라 주세요",finding_value_mismatch:"적은 횟수가 분석된 횟수와 다릅니다. 원문을 다시 보고 횟수를 고쳐 주세요",finding_not_recorded:"되돌릴 판단 기록이 없습니다. ‘검토 새로고침’ 뒤 다시 확인해 주세요",finding_unsupported:"이 항목은 이 방법으로 해결할 수 없습니다. 다른 선택지를 골라 주세요",finding_value_invalid:"횟수는 1 이상의 숫자로 적어 주세요",authentication_required:"로그인해야 기록할 수 있습니다. 로그인한 뒤 다시 눌러 주세요",protocol_catalog_error:"서버가 이 기록을 받지 않았습니다. ‘검토 새로고침’ 뒤 다시 눌러 주세요",unexpected_server_error:"서버 오류가 발생했습니다"}),
  block_reason:Object.freeze({unsupported_repeat_until:"반복 종료 조건 미지원",unresolved_ambiguity:"실행 제어 미해결",final_step_boundary:"마지막 단계 경계",endpoint_observation_not_reported:"관찰 결과 보고 필요",repeat_interval_open:"반복 구간 진행 중",next_step_not_startable:"다음 단계 시작 불가 · 사람 확인 필요",already_at_final_step:"이미 마지막 단계",run_not_active:"실행 중이 아님"}),
  procedure_status:Object.freeze({active:"진행 중",blocked_for_handoff:"관리자 인계로 진행 차단",completed:"완료"}),
  experiment_report_status:Object.freeze({in_progress:"진행 중",completed:"완료",blocked:"진행 차단",stopped:"종료됨",incomplete:"미완료"}),
@@ -667,7 +667,10 @@ function localDateParts(iso){
  return{day:`${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`,time:`${pad(date.getHours())}:${pad(date.getMinutes())}`};
 }
 function localDateTimeText(iso){const parts=localDateParts(iso);return parts?`${parts.day} ${parts.time}`:"";}
-function approverText(approval){return ROLE_LABELS[approval?.actor_role]||(approval?.actor_role?"승인 권한자":"");}
+// Lane U3 decision 2: the approver's name the server recorded
+// (actor_display_name), else the role as before.
+function approverName(approval){return typeof approval?.actor_display_name==="string"&&approval.actor_display_name.trim()?approval.actor_display_name.trim():"";}
+function approverText(approval){return approverName(approval)||ROLE_LABELS[approval?.actor_role]||(approval?.actor_role?"승인 권한자":"");}
 function approvalContextLabel(entry){
  const approval=entry?.approval;
  if(entry?.development_only===true||approval?.status==="development_only")return "아직 승인 전";
@@ -684,13 +687,33 @@ function versionStatusLabel(entry){
  return "승인 전";
 }
 const experimentReportsSeen=new Map();
-function experimentReportLabel(report){
- // "실험 기록 · {프로토콜 제목} · {시작 날짜·시각}". Two records of the same
- // protocol started on the same day get a number, in start order.
- const id=report.report_id,title=protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
+// Lane U3 decision 1: a record is named by the server's protocol_title and
+// day_sequence. The server counts by the UTC day (day_sequence_date) and the
+// screen shows the researcher's local time, so its count is used only when
+// the two days are the same; otherwise, or without server values, the screen
+// counts what this browser has seen, as before.
+function serverProtocolTitle(item){return typeof item?.protocol_title==="string"&&item.protocol_title.trim()?item.protocol_title.trim():"";}
+function serverDaySequence(item){
+ if(!Number.isInteger(item?.day_sequence)||item.day_sequence<1||typeof item.day_sequence_date!=="string")return null;
+ return localDateParts(item.started_at)?.day===item.day_sequence_date?item.day_sequence:null;
+}
+// " · N번째" from the server's count: shown from the second record of a day,
+// and on the first once another record of that day is in the same list.
+function serverDayNumber(item,siblings,idKey){
+ const sequence=serverDaySequence(item);if(sequence===null)return null;
+ const others=Array.isArray(siblings)&&siblings.some(other=>other&&other[idKey]!==item[idKey]&&other.day_sequence_date===item.day_sequence_date);
+ return sequence>1||others?` · ${sequence}번째`:"";
+}
+function experimentReportLabel(report,siblings=[]){
+ // "실험 기록 · {프로토콜 제목} · {시작 날짜·시각}". Two records started on
+ // the same day get a number, in start order.
+ const id=report.report_id,title=serverProtocolTitle(report)||protocolCatalog.get(report.protocol_id)?.title||(curatedProtocolState?.protocol_id===report.protocol_id?curatedProtocolState.display_name:"")||"",parts=localDateParts(report.started_at);
  experimentReportsSeen.set(id,{title,day:parts?.day||"",started:report.started_at||""});
- const same=[...experimentReportsSeen.entries()].filter(([,item])=>item.title===title&&item.day===(parts?.day||"")).sort(([a,x],[b,y])=>x.started<y.started?-1:x.started>y.started?1:a<b?-1:1);
- const number=same.length>1?` · ${same.findIndex(([key])=>key===id)+1}번째`:"";
+ let number=serverDayNumber(report,siblings,"report_id");
+ if(number===null){
+  const same=[...experimentReportsSeen.entries()].filter(([,item])=>item.title===title&&item.day===(parts?.day||"")).sort(([a,x],[b,y])=>x.started<y.started?-1:x.started>y.started?1:a<b?-1:1);
+  number=same.length>1?` · ${same.findIndex(([key])=>key===id)+1}번째`:"";
+ }
  return ["실험 기록",title,parts?`${parts.day} ${parts.time}`:""].filter(Boolean).join(" · ")+number;
 }
 function setReportTitle(text,pairs=[]){setText("last-report-id",text);const dev=$("last-report-dev");if(dev){dev.replaceChildren();appendDevCodeDetails(dev,pairs);}}
@@ -801,7 +824,7 @@ function startWorkflowTimer(){
  }
 }
 function stopReportPolling(){if(reportPollHandle!==null){clearInterval(reportPollHandle);reportPollHandle=null;}}
-function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
+function renderExperimentReportList(reports){const container=$("experiment-report-list");if(!container)return false;container.replaceChildren();if(!Array.isArray(reports))return false;for(const report of reports){if(!report||typeof report.report_id!=="string"||!/^[A-Za-z0-9._:-]{1,160}$/.test(report.report_id))continue;const row=document.createElement("div");row.className="report-list-row";const title=document.createElement("b");title.textContent=`${experimentReportLabel(report,reports)} · ${serverCodeText("experiment_report_status",report.status)}`;row.appendChild(title);appendDevCodeDetails(row,[["status",report.status],["report_id",report.report_id]]);container.appendChild(row);}return true;}
 function renderExperimentReportEvents(events){const container=$("experiment-report-events");if(!container)return false;container.replaceChildren();if(!Array.isArray(events))return false;for(const event of events){if(!event||typeof event!=="object")continue;const row=document.createElement("div");row.className="report-event-row";const title=document.createElement("b");const stepLabel=event.step_label?`${event.step_label}단계`:"일반";title.textContent=`${stepLabel} ${serverCodeText("experiment_report_event",event.event_type,"이벤트")}`;const meta=document.createElement("span");const payload=event.payload&&typeof event.payload==="object"?event.payload:{};const timer=payload.timer&&typeof payload.timer==="object"?payload.timer:payload;const bits=[event.created_at,event.user_wording].filter(item=>typeof item==="string"&&item.trim());if(timer.source_duration_seconds!=null)bits.push(`정의 ${timer.source_duration_seconds}초`);if(timer.started_at)bits.push(`시작 ${timer.started_at}`);if(timer.elapsed_seconds!=null)bits.push(`경과 ${timer.elapsed_seconds}초`);if(timer.remaining_seconds!=null)bits.push(`잔여 ${timer.remaining_seconds}초`);if(timer.completion_state)bits.push(serverCodeText("timer_completion_state",String(timer.completion_state)));if(timer.demo_bypassed)bits.push("데모 우회");meta.textContent=bits.join(" · ");row.appendChild(title);row.appendChild(meta);appendDevCodeDetails(row,[["event_type",event.event_type],["completion_state",typeof timer.completion_state==="string"?timer.completion_state:null]]);container.appendChild(row);}return true;}
 function selectedDevProfile(){return $("dev-identity-profile")?.value||"";}
 function workspaceFetch(url,options={}){const profile=selectedDevProfile(),headers={...(options.headers||{})};if(profile)headers["X-Voice-Dev-Profile"]=profile;return fetch(url,{...options,headers});}
@@ -923,7 +946,7 @@ async function loadExperimentSessions(preferredId=currentExperimentSessionId){
   const empty=document.createElement("option");empty.value="";empty.textContent=experiments.length?"실험 고르기":"진행 중인 실험 없음";select.appendChild(empty);
   for(const item of experiments){
    if(!item||typeof item.session_id!=="string")continue;
-   const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=[protocolCatalog.get(item.protocol_id)?.title||"실험",localDateTimeText(item.started_at),`${item.current_step_label||"—"}단계`,stateInfo?.label||"상태 확인"].filter(Boolean).join(" · ");option.title=`${item.protocol_id} · ${item.session_id}`;select.appendChild(option);
+   const option=document.createElement("option"),stateInfo=sessionStateBadgeInfo(item.status);option.value=item.session_id;option.textContent=[serverProtocolTitle(item)||protocolCatalog.get(item.protocol_id)?.title||"실험",`${localDateTimeText(item.started_at)}${serverDayNumber(item,experiments,"session_id")||""}`,`${item.current_step_label||"—"}단계`,stateInfo?.label||"상태 확인"].filter(Boolean).join(" · ");option.title=`${item.protocol_id} · ${item.session_id}`;select.appendChild(option);
   }
   const selected=experiments.some(item=>item.session_id===preferredId)?preferredId:null;currentExperimentSessionId=selected;select.value=selected||"";return selected?loadExperimentTimeline(selected):loadExperimentTimeline(null);
  }catch(error){
@@ -1438,14 +1461,16 @@ function answerSourceToggle(source,citation,open){const details=sourceToggle(sou
 // outside the PDF (R6: research.result outside_pdf/source_label, or a reply
 // whose display_document carries the "notice" section) is drawn in its own
 // light frame, never in the same shape as an answer grounded in the source.
-const OUTSIDE_PDF_LABEL="PDF 밖 설명 · AI 일반 지식";
+// Lane U3 decision 5: model knowledge is named the same way everywhere, in
+// the turn card as in the reference panel and the outside-PDF frame.
+const SUPPLEMENTAL_LABEL="AI 일반 지식",OUTSIDE_PDF_LABEL=`PDF 밖 설명 · ${SUPPLEMENTAL_LABEL}`;
 let researchCapabilityState=null;
 function webReferencesOn(){return researchCapabilityState?.external_text?.status==="enabled";}
 function researchOutsidePdf(message){return message?.outside_pdf===true||(message?.answer_origin==="supplemental_model_knowledge"&&Array.isArray(message?.limitations)&&message.limitations.includes("outside_pdf_explanation"));}
 function researchOriginTitle(message){
  if(researchOutsidePdf(message))return `PDF 밖 설명 · ${typeof message.source_label==="string"&&message.source_label.trim()?message.source_label.trim():"AI 일반 지식"}`;
  if(message?.answer_origin==="external_authoritative_reference")return Array.isArray(message.citations)&&message.citations.length?"웹 참고 자료":"참고 설명 · 웹 출처 없음";
- if(message?.answer_origin==="supplemental_model_knowledge")return "일반 참고 설명 · AI 지식";
+ if(message?.answer_origin==="supplemental_model_knowledge")return SUPPLEMENTAL_LABEL;
  return "추가 참고 자료";
 }
 // The server's outside-PDF notice for a reply, "" when it is marked without
@@ -1507,7 +1532,7 @@ function renderStructuredReply(node,message){
   }
  }else{
   // Where the answer came from is named only when it is not the protocol.
-  const originLabel=outsideNotice!==null?"":message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?"일반 참고 설명":"";
+  const originLabel=outsideNotice!==null?"":message.answer_origin==="approved_lab_corpus"?"추가 참고 자료":message.answer_origin==="external_authoritative_reference"?"웹 참고 자료":message.answer_origin==="supplemental_model_knowledge"?SUPPLEMENTAL_LABEL:"";
   let cleanPrimary = primary || message.text || "";
   if(message.answer_origin==="external_authoritative_reference") cleanPrimary = sanitizeExternalResearchAnswer(cleanPrimary);
   const parts=splitAnswerText(cleanPrimary);
@@ -1731,7 +1756,7 @@ function applyResearchResult(message,browserGeneration=sessionGeneration){
    const supplemental=message.answer_origin==="supplemental_model_knowledge";
    const outside=researchOutsidePdf(message);
    if(outside){block.className="research-supplement outside-pdf";heading.className="outside-pdf-label";}
-   heading.textContent=outside?researchOriginTitle(message):external?"웹 참고 자료":supplemental?"일반 참고 설명":"추가 참고 자료";
+   heading.textContent=outside?researchOriginTitle(message):external?"웹 참고 자료":supplemental?SUPPLEMENTAL_LABEL:"추가 참고 자료";
    const body=document.createElement("span");
    const cleanPrimary=external?sanitizeExternalResearchAnswer(message.primary_text||""):(message.primary_text||"");
    body.textContent=normalizePresentationText(cleanPrimary);
@@ -1819,6 +1844,9 @@ function renderTurnState(node,state,route,serverKey){
  status.textContent=heldForObservation?"관찰 필요":TURN_STATE_LABELS[state];status.className=heldForObservation?"turn-status needs-observation":`turn-status${TURN_END_STATUS_CLASSES[state]?` ${TURN_END_STATUS_CLASSES[state]}`:""}`;
  const error=node.querySelector(".error");if(error&&TURN_TERMINAL_STATES.has(state)&&Object.values(TURN_STATE_LABELS).includes(error.textContent))error.textContent="";
  const details=node.querySelector?.(".turn-diagnostics-body");if(!details)return;
+ // Lane U3 decision 4: the server's own end (R6 sends complete/cancelled for
+ // a playback it cut off) replaces the screen's guess for an earlier card.
+ if(TURN_TERMINAL_STATES.has(state))details.querySelector?.(".turn-settled")?.remove?.();
  let line=details.querySelector?.(".turn-route");if(!line){line=document.createElement("div");line.className="turn-route";details.appendChild(line);}
  line.textContent=`처리 경로 · ${route?`${TURN_ROUTE_LABELS[route]} (${route})`:"확인 전"} · 턴 상태 ${state}${heldForObservation?` · block_reason ${OBSERVATION_HOLD_REASON}`:""}`;
 }
@@ -2554,7 +2582,7 @@ async function onMessage(e,generation,current){
  if(m.type==="turn.route_decision")applyRouteDecision(m,generation);
  const reportEventCurrent=()=>{const accepted=acceptedSessionConfiguration;if(!accepted||accepted.mode!=="cascade"||m.configuration_id!==accepted.configuration_id||!Number.isInteger(m.generation))return false;const known=Number.isInteger(m.turn_id)?turnServerGenerations.get(turnBrowserKey(m.turn_id,generation)):undefined;if(known!==undefined)return known===m.generation;const seen=[...turnServerGenerations.values()];return !seen.length||seen.includes(m.generation);};
  if(m.type==="experiment.report.state"&&reportEventCurrent()&&m.report&&typeof m.report.report_id==="string"){
-  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;setReportTitle(experimentReportLabel(report),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);updateElnWritebackAvailability(report);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
+  const report=m.report;lastReportId=report.report_id;lastReportStatus=report.status;setReportTitle(experimentReportLabel(report,report.reports),[["report_id",report.report_id],["started_at",typeof report.started_at==="string"?report.started_at:null],["day_sequence_date",typeof report.day_sequence_date==="string"?`${report.day_sequence_date} (${typeof report.timezone==="string"?report.timezone:"UTC"})`:null]]);$("last-report-state").textContent=`${serverCodeText("experiment_report_status",report.status)} · 이벤트 ${Number.isInteger(report.event_count)?report.event_count:0} · 이상 ${Number.isInteger(report.anomaly_count)?report.anomaly_count:0} · 차단 ${Number.isInteger(report.blocker_count)?report.blocker_count:0}`;appendDevCodeDetails($("last-report-state"),[["status",report.status]]);renderExperimentReportList(report.reports);renderExperimentReportEvents(report.events);updateElnWritebackAvailability(report);for(const [id,format] of [["export-report-markdown","md"],["export-report-json","json"],["export-report-csv","csv"],["export-report-docx","docx"]]){const link=$(id);if(!link)continue;link.href=`/api/experiment-reports/${encodeURIComponent(report.report_id)}.${format}`;link.setAttribute("aria-disabled","false");}
  }
  if(m.type==="experiment.report.error"&&reportEventCurrent()){if(Number.isInteger(m.turn_id))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;$("last-report-state").textContent="실험 기록을 갱신하지 못했습니다. 음성 절차 상태는 유지됩니다.";}
  if(m.type==="report.status"){if(m.report_id)setReportTitle("안전 보고 · 관리자에게 접수됨",[["report_id",m.report_id]]);const label=m.report_status?serverCodeText("report_status",m.report_status):"상태 확인 실패";$("last-report-state").textContent=m.attempts?`${label} · 시도 ${m.attempts}회`:label;appendDevCodeDetails($("last-report-state"),[["report_status",m.report_status]]);if(m.report_status==="handoff_ready"||m.report_status==="failed")stopReportPolling();}
