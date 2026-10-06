@@ -218,20 +218,43 @@ lane U). It only changes what is shown; every state it shows is the server's.
   review group with nothing in it (an empty "실행 전 확인 조건") is not drawn.
 - **Where reference words come from (decisions 5–7).** The reference panel is
   titled by its latest entry: "PDF 밖 설명 · AI 일반 지식" for an
-  outside-PDF explanation, "일반 참고 설명 · AI 지식" for other model
-  knowledge, "웹 참고 자료" only for an external answer with web citations,
+  outside-PDF explanation, "AI 일반 지식" for other model knowledge (the
+  same title as in the conversation card, lane U3 decision 5), "웹 참고 자료" only for an external answer with web citations,
   "추가 참고 자료" for the approved lab corpus. An outside-PDF explanation —
   `research.result` with `outside_pdf: true` (its `source_label`, "AI 일반
   지식", is shown), or a reply whose `reply.delta` carries the
   `display_document` "notice" section or the `outside_pdf_explanation`
   limitation — is drawn in a light dashed frame named "PDF 밖 설명 · AI 일반
   지식" in the conversation card and the panel. The mark is kept from
-  `reply.delta` for the `reply.complete` render. On a protocol turn
-  `reply.complete` now also carries the same `display_document` as its
-  `reply.delta` (lane F, decision 3), so the page can read it there instead
-  of keeping the delta's copy; the page does not read it yet. With web references off (`research_capabilities.external_text` not
-  `enabled`), a reference check that ends without an answer is not shown to
-  the researcher; it is a line in the turn's developer details.
+  `reply.delta` for the `reply.complete` render, which carries the text
+  alone; a `reply.complete` that carries `display_document` itself is drawn
+  from its own value. On a protocol turn it now carries the same
+  `display_document` as its `reply.delta` (lane F, decision 3). With web references off
+  (`research_capabilities.external_text` not `enabled`), a reference check
+  that ends without an answer is not shown to the researcher; it is a line in
+  the turn's developer details.
+- **Server values on the screen (lane U3).** The screen reads the values lane
+  R6 added for it and shows them, never changing what the server decided.
+  - *Record names.* An experiment record is "실험 기록 · {protocol_title} ·
+    {local date and time} · N번째", with N the server's `day_sequence` (shown
+    from the second record of a day, or on the first once another record of
+    that day is in the same list). The server counts by the UTC day
+    (`day_sequence_date`) and the screen shows local time, so the server
+    count is used only when the two days are the same; otherwise, and when
+    the server sends no such values, the screen counts the records this
+    browser has seen, as before. The experiment list
+    (`/api/workspace/experiments`) uses the same title and count.
+  - *Approver.* An approval reads "승인본 · {local date} · {actor_display_name}";
+    without a recorded name, the role as before.
+  - *Refused findings.* Each reason code from `/findings/*` (422/400) has one
+    line saying what to do, e.g. `finding_evidence_missing` "원문 근거를 하나
+    이상 고른 뒤 다시 눌러 주세요". Only a permission refusal (403
+    `authorization_denied`) reads "검토자 계정으로 로그인한 뒤 다시 눌러
+    주세요".
+  - *Cut-off playback.* A `turn.state` `complete` or `cancelled` that the
+    server sends for an earlier turn replaces the screen's own clearing of
+    that card: the card shows the server's end and the "화면 정리" line in
+    its developer details is removed.
 
 ## Protocol onboarding and lifecycle
 
@@ -622,7 +645,7 @@ On, a turn goes:
 - **Written general explanation (lane F, decision 2)** — a related question
   the spoken path above does not take ("이 단계 배경 지식 알려줘") may get a
   longer written general explanation from the same supplemental role, shown
-  as "일반 참고 설명 · AI 지식". Its request now carries the source text of
+  as "AI 일반 지식". Its request now carries the source text of
   the step the rules answered (`Step N source text: …`, at most 500
   characters), as the spoken path does, so the model knows which step is
   meant. The web search query is unchanged. D4's 120-character rule stays
