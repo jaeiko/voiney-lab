@@ -89,6 +89,7 @@ from voiney_lab.external_references import (
     XaiAuthoritativeWebSearch,
     XaiSupplementalKnowledge,
     plan_research_query,
+    supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
 from voiney_lab.generated_visuals import (
@@ -7137,7 +7138,12 @@ async def _queue_curated_research(
                         supplemental_client,
                         session.supplemental_knowledge_settings,
                     ).explain(
-                        ctx["reference_query"],language=turn_language),
+                        # Lane F, decision 2: with the step the rules answered.
+                        supplemental_explanation_query(
+                            ctx["reference_query"],
+                            step_label=ctx["step"].source_label,
+                            step_text=ctx["step"].instruction_source_text),
+                        language=turn_language),
                     timeout=research_remaining(
                         session.supplemental_knowledge_settings.timeout_seconds),
                 )
