@@ -515,9 +515,9 @@ class CuratedProtocolTurnPlan:
     display_document: dict[str, Any] | None = None
     speech_policy: Literal["speak", "silent"] = "speak"
     #: What the experiment record keeps about a step move or a step done
-    #: again (lane R7): the return within a repeat and its round, a
-    #: completion of a step already completed in an earlier round. None for
-    #: every other turn.
+    #: again (lane R7): the return within a repeat and its round, the steps
+    #: a later start skipped, a completion of a step already completed in an
+    #: earlier round. None for every other turn.
     step_record: dict[str, Any] | None = None
 
     @property
@@ -1149,7 +1149,7 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
     if _SPECIFIC_STEP_PATTERN.fullmatch(key):
         return True
     if step_move_request(transcript) is not None:
-        # "2단계로 돌아가", "2단계부터 다시 할게" (lane R7).
+        # "2단계로 돌아가", "10단계부터 시작해줘" (lane R7).
         return True
     if any(pattern.fullmatch(key) for pattern in _CURRENT_INFORMATION_PATTERNS):
         return True
@@ -1307,7 +1307,7 @@ class CuratedControlIntent:
     plausibility_reason: str | None = None
     range_start_step: int | None = None
     range_end_step: int | None = None
-    #: A move to another step asked for in words (lane R7, decision 2):
+    #: A move to another step asked for in words (lane R7, decisions 2-3):
     #: what was asked, and what the server checked before asking.
     step_move: dict[str, Any] | None = None
 
@@ -2744,6 +2744,10 @@ FRONT_RULES: dict[str, str] = {
                      "repeat the source states at the current step, and "
                      "otherwise refused with the reason; a yes moves back and "
                      "the return is recorded (lane R7, decision 2)",
+    "start_at_step": "'N단계부터 시작해줘' before the experiment or at its first "
+                     "step: asked once, '1~(N-1)단계는 건너뛰고 N단계부터 "
+                     "시작할까요?'; a yes starts at N and the skipped steps are "
+                     "recorded (lane R7, decision 3)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -3632,11 +3636,11 @@ def leading_step_reference(transcript: str) -> StepReference | None:
     return StepReference(kind, number, match.group("particle") or "", match.group("rest").strip())
 
 
-# --- A move to another step asked for in words (lane R7, decision 2) -----
-#: "2단계로 돌아가", "2단계부터 다시 할게", "다시 2단계로" ask to go back. Only
-#: these whole shapes are read, and only as requests: a question about a move
-#: ("2단계로 돌아가도 돼?") asks for nothing to be done and is left to the
-#: other rules.
+# --- A move to another step asked for in words (lane R7, decisions 2-3) ----
+#: "2단계로 돌아가", "2단계부터 다시 할게", "다시 2단계로" ask to go back;
+#: "10단계부터 시작해줘" asks to start later. Only these whole shapes are
+#: read, and only as requests: a question about a move ("2단계로 돌아가도
+#: 돼?") asks for nothing to be done and is left to the other rules.
 _STEP_MOVE_REQUEST = re.compile(
     r"(?:(?:그럼|그러면|자|이제|그냥|아)\s+)*"
     r"(?:(?P<again_before>다시)\s*)?"
@@ -3656,10 +3660,14 @@ _STEP_MOVE_REQUEST = re.compile(
 
 
 #: Besides the yes every server question takes, the move itself said back
-#: ("응 돌아가"): the reply key has its "응" already taken off.
+#: ("응 돌아가", "시작해줘"): the reply key has its "응" already taken off.
 _STEP_MOVE_AFFIRMATIVE: dict[str, re.Pattern[str]] = {
     "repeat_return": re.compile(
         r"(?:되?돌아\s*(?:가(?:자|요|\s*줘)?|갈게요?)|그렇게\s*해(?:줘|요)?|해줘|가자)"
+    ),
+    "start_at_step": re.compile(
+        r"(?:시작(?:해|해줘|해요|할게요?|하자)|건너뛰(?:어|어줘|어요|자)"
+        r"|그렇게\s*해(?:줘|요)?|해줘)"
     ),
 }
 
@@ -6500,9 +6508,9 @@ class CuratedProtocolSession:
         #: model proposed in words the rules do not read as a problem. Only
         #: apply_tool_proposal opens it; a yes on the next turn records them.
         self._pending_anomaly_confirmation: dict[str, Any] | None = None
-        #: The one-turn "N단계로 돌아갈까요?" question (lane R7, decision 2):
-        #: a move asked for in words opens it, and only a yes to it on the
-        #: next turn moves.
+        #: The one-turn "N단계로 돌아갈까요?" or "1~(N-1)단계는 건너뛰고 N단계부터
+        #: 시작할까요?" question (lane R7, decisions 2-3): a move asked for in
+        #: words opens it, and only a yes to it on the next turn moves.
         self._pending_step_move: dict[str, Any] | None = None
         #: repetition_id -> returns to an earlier step of that repeat which a
         #: person asked for and confirmed on this run (decision 2). A count of
@@ -7586,11 +7594,14 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         """A move asked for in words: asked about once, or refused with why.
 
-        Lane R7, decision 2: "2단계로 돌아가" goes back only to an earlier
+        Lane R7. Decision 2: "2단계로 돌아가" goes back only to an earlier
         step of the repeat the source states at the current step, after "N단계로
-        돌아갈까요?". Nothing moves on this turn. Left to the other rules: a
-        pause (it answers first), an ended experiment, a move ahead ("10단계로
-        가자", "10단계부터 할게"), and a step named while nothing has started.
+        돌아갈까요?". Decision 3: "N단계부터 시작해줘" before the experiment or
+        at its first step skips the steps before N, after "1~(N-1)단계는
+        건너뛰고 N단계부터 시작할까요?". Nothing moves on this turn. Left to
+        the other rules: a pause (it answers first), an ended experiment, a
+        start at the first step, a move ahead ("10단계로 가자"), and a step
+        named while nothing has started that is not a start.
         """
 
         if self._pause_state == "paused" or self._experiment_ended():
@@ -7601,11 +7612,19 @@ class CuratedProtocolSession:
         steps = self.fixture.steps
         target = self._step_index_for_label(str(request.number))
         current = self.current_index if self.active else None
-        if current is None:
+        never_started = current is None and self._experiment_started_at is None
+        if request.kind == "from" and (never_started or current == 0):
+            kind = "start_at_step"
+            if target == 0:
+                return None
+        elif current is None:
             return None
-        if request.kind in {"from", "go"} and (target is None or target >= current):
+        elif request.kind == "from" and (target is None or target > current):
+            kind = "start_at_step"
+        elif request.kind in {"from", "go"} and target is not None and target >= current:
             return None
-        kind = "repeat_return"
+        else:
+            kind = "repeat_return"
         move: dict[str, Any] = {
             "kind": kind,
             "said_number": request.number,
@@ -7626,7 +7645,16 @@ class CuratedProtocolSession:
         refusal = None
         if target is None:
             refusal = "no_such_step"
+        elif kind == "start_at_step":
+            if current is not None and current != 0:
+                refusal = "start_only_at_first_step"
+            else:
+                move.update(
+                    skipped_labels=[step.source_label for step in steps[:target]],
+                    skipped_step_ids=[step.step_id for step in steps[:target]],
+                )
         else:
+            assert current is not None
             refusal = self._repeat_return_refusal(current, target)
             if refusal is None:
                 interval = self.repetition_anchored_at(steps[current].step_id)
@@ -7703,6 +7731,11 @@ class CuratedProtocolSession:
                 f"이 프로토콜은 {steps[0].source_label}~{steps[-1].source_label}단계예요. "
                 f"{target}단계는 없어서 이동하지 않았어요.{keep}"
             )
+        if refusal == "start_only_at_first_step":
+            return (
+                "시작 단계는 실험을 시작하기 전이나 "
+                f"{steps[0].source_label}단계에서만 고를 수 있어요.{keep}"
+            )
         if refusal == "already_here":
             return f"지금이 {current}단계예요. 단계를 옮기지 않았어요."
         if refusal in {"outside_the_repeat", "repeat_stated_at_another_step"}:
@@ -7742,6 +7775,10 @@ class CuratedProtocolSession:
             )
         if refusal == "state_changed":
             return f"그 사이 진행 상태가 바뀌어 단계를 옮기지 않았어요.{keep}"
+        if move["kind"] == "start_at_step":
+            skipped = move["skipped_labels"]
+            span = skipped[0] if len(skipped) == 1 else f"{skipped[0]}~{skipped[-1]}"
+            return f"{span}단계는 건너뛰고 {target}단계부터 시작할까요?"
         return f"{target}단계로 돌아갈까요?"
 
     def _step_move_plan(
@@ -7762,10 +7799,21 @@ class CuratedProtocolSession:
                 key: value for key, value in move.items() if key != "refusal"
             }
         if intent.intent_kind.endswith("_declined"):
-            response = (
-                f"알겠습니다. {move.get('target_label')}단계로 돌아가지 않았습니다. "
-                f"지금 {current_label}단계입니다."
-            )
+            target = move.get("target_label")
+            if move["kind"] == "repeat_return":
+                response = (
+                    f"알겠습니다. {target}단계로 돌아가지 않았습니다. "
+                    f"지금 {current_label}단계입니다."
+                )
+            elif self.active:
+                response = (
+                    f"알겠습니다. 건너뛰지 않았습니다. 지금 {current_label}단계입니다."
+                )
+            else:
+                response = (
+                    "알겠습니다. 건너뛰지 않았습니다. 처음부터 시작하려면 "
+                    "'프로토콜 시작해줘'라고 말씀해 주세요."
+                )
         elif intent.intent_kind.endswith("_confirmed"):
             refusal = self._confirmed_move_refusal(move)
             if refusal is None:
@@ -7805,11 +7853,17 @@ class CuratedProtocolSession:
             or self._experiment_ended()
         ):
             return "state_changed"
-        if not self.active or self.current_index != move.get("from_index"):
-            return "state_changed"
-        refusal = self._repeat_return_refusal(self.current_index, target)
-        if refusal is not None:
-            return refusal
+        if move["kind"] == "start_at_step":
+            if self.active and self.current_index != 0:
+                return "state_changed"
+            if not self.active and self._experiment_started_at is not None:
+                return "state_changed"
+        else:
+            if not self.active or self.current_index != move.get("from_index"):
+                return "state_changed"
+            refusal = self._repeat_return_refusal(self.current_index, target)
+            if refusal is not None:
+                return refusal
         if not self.may_begin_step(steps[target].step_id):
             return "not_startable"
         return None
@@ -7821,16 +7875,21 @@ class CuratedProtocolSession:
         *,
         language: str,
     ) -> CuratedProtocolTurnPlan:
-        """Move the run back to the confirmed step and say where it now stands.
+        """Move the run to the confirmed step and say where it now stands.
 
-        The only place ``current_index`` moves other than forward by one step:
-        a return within a repeat (decision 2), after its own question, a yes,
-        and the checks above. The step timer of the step left is cleared, as
-        a completion clears it.
+        The only places ``current_index`` moves other than by one step: a
+        return within a repeat (decision 2) and a later start (decision 3),
+        each after its own question, a yes, and the checks above. The step
+        timer of the step left is cleared, as a completion clears it.
         """
 
         steps = self.fixture.steps
         target = int(move["target_index"])
+        started_now = not self.active
+        if started_now:
+            self._start_experiment_clock_once()
+            self.active = True
+            self._workflow_status = "active"
         self._block_reason = None
         self._clear_step_timer()
         self._pending_anomaly = None
@@ -7838,36 +7897,64 @@ class CuratedProtocolSession:
         self.current_index = target
         step = steps[target]
         label = step.source_label
-        repetition_id = str(move["repetition_id"])
-        returns = self._repeat_returns.get(repetition_id, 0) + 1
-        self._repeat_returns[repetition_id] = returns
-        record = {
-            "kind": "repeat_return",
-            "repetition_id": repetition_id,
-            "repeated_step_labels": list(move["repeated_step_labels"]),
-            "stated_at_step": move["stated_at_step"],
-            "from_step": move["from_label"],
-            "to_step": label,
-            # Confirmed returns on this run, so the round they open. A round
-            # run without a spoken return is not counted, and this is never a
-            # count of rounds the source asks for.
-            "returns_confirmed": returns,
-            "round": returns + 1,
-            "round_counted_from": "confirmed_returns",
-            "source_text": move.get("source_text") or "",
-            "source_page_number": move.get("source_page_number"),
-        }
-        control_text = _control_speech(
-            CuratedProtocolAction.NEXT, language, label,
-            development_only=self.fixture.development_only,
-            step_index=target, timer_active=False,
-            step_timer_seconds=self.timer_seconds_for_step(target),
-        ).replace(f"{label}단계로 이동했습니다.", f"{label}단계로 돌아왔습니다.", 1)
+        timer_seconds = self.timer_seconds_for_step(target)
+        if move["kind"] == "repeat_return":
+            repetition_id = str(move["repetition_id"])
+            returns = self._repeat_returns.get(repetition_id, 0) + 1
+            self._repeat_returns[repetition_id] = returns
+            record = {
+                "kind": "repeat_return",
+                "repetition_id": repetition_id,
+                "repeated_step_labels": list(move["repeated_step_labels"]),
+                "stated_at_step": move["stated_at_step"],
+                "from_step": move["from_label"],
+                "to_step": label,
+                # Confirmed returns on this run, so the round they open. A
+                # round run without a spoken return is not counted, and this
+                # is never a count of rounds the source asks for.
+                "returns_confirmed": returns,
+                "round": returns + 1,
+                "round_counted_from": "confirmed_returns",
+                "source_text": move.get("source_text") or "",
+                "source_page_number": move.get("source_page_number"),
+            }
+            control_text = _control_speech(
+                CuratedProtocolAction.NEXT, language, label,
+                development_only=self.fixture.development_only,
+                step_index=target, timer_active=False,
+                step_timer_seconds=timer_seconds,
+            ).replace(f"{label}단계로 이동했습니다.", f"{label}단계로 돌아왔습니다.", 1)
+            action = CuratedProtocolAction.NEXT
+        else:
+            skipped = list(move["skipped_labels"])
+            record = {
+                "kind": "start_at_step",
+                "start_step": label,
+                "skipped_step_labels": skipped,
+                "skipped_step_ids": list(move["skipped_step_ids"]),
+                "experiment_started": started_now,
+            }
+            span = skipped[0] if len(skipped) == 1 else f"{skipped[0]}~{skipped[-1]}"
+            control_text = _control_speech(
+                CuratedProtocolAction.START, language, label,
+                development_only=self.fixture.development_only,
+                step_index=target, timer_active=False,
+                step_timer_seconds=timer_seconds,
+            )
+            first = self._localized_fact(step.step_id, "current_step")
+            if first is not None:
+                first = _without_step_prefix(label, first)
+            control_text = (
+                f"{span}단계는 건너뛰고 {label}단계부터 시작합니다. 현재 {label}단계입니다. "
+                + (first or "안내를 화면에 표시했습니다.")
+                + control_text.partition("표시했습니다.")[2]
+            )
+            action = CuratedProtocolAction.START
         response, primary, sources, pages, evidence_ids, translation_status = (
             _step_presentation(self.fixture, target, language, control_text)
         )
         return CuratedProtocolTurnPlan(
-            action=CuratedProtocolAction.NEXT,
+            action=action,
             display_text=response,
             speech_text=control_text,
             speech_mode=CuratedProtocolSpeechMode.CONTROL,
@@ -9992,7 +10079,9 @@ class CuratedProtocolSession:
     def advance_one_step(self) -> str | None:
         """Move the run forward by one step, or refuse and say why.
 
-        The only place ``current_index`` moves forward. It used to be a bare
+        The only place ``current_index`` moves forward one step (a confirmed
+        start at a later step, lane R7, moves through ``_move_to_step`` after
+        its own question and checks). It used to be a bare
         ``current_index += 1`` inside the turn handler, with the gates that
         were supposed to guard it -- ``may_begin_step``,
         ``may_leave_repeat_interval`` -- sitting beside it as methods nobody
@@ -11058,8 +11147,9 @@ class CuratedProtocolSession:
             else None
         ) if step_move_valid and transcript_quality is None else None
         if move_reply is not None and self._pending_step_move is not None:
-            # A yes or no to "N단계로 돌아갈까요?" (lane R7, decision 2). Only
-            # a yes moves, and it is checked again before it does.
+            # A yes or no to "N단계로 돌아갈까요?" or "…N단계부터 시작할까요?"
+            # (lane R7, decisions 2-3). Only a yes moves, and it is checked
+            # again before it does.
             move = dict(self._pending_step_move)
             self._pending_step_move = None
             self._last_front_rule = "yes_no_open_question"
@@ -11072,6 +11162,8 @@ class CuratedProtocolSession:
                     action=(
                         CuratedProtocolAction.DECLINE_COMPLETION
                         if move_reply == "negative"
+                        else CuratedProtocolAction.START
+                        if move["kind"] == "start_at_step"
                         else CuratedProtocolAction.NEXT
                     ),
                     target_step=str(move["target_label"]),

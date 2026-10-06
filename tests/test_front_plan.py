@@ -254,8 +254,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "short_completion",
             # lane R6, decision 7
             "step_homophone",
-            # lane R7, decision 2
-            "repeat_return",
+            # lane R7, decisions 2 and 3
+            "repeat_return", "start_at_step",
         })
 
 

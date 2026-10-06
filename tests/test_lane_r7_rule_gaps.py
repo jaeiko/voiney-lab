@@ -1,4 +1,4 @@
-"""Gaps lane RP found on the rules' path, closed by rule (lane R7).
+"""Three gaps lane RP found on the rules' path, closed by rule (lane R7).
 
 Decisions of 2026-10-06 (the professor's advice of 9/22: what is mechanical is
 a rule; a state change needs an explicit request, a deterministic check and a
@@ -13,6 +13,9 @@ do not give):
    "N단계로 돌아갈까요?", only to an earlier step of the repeat the source
    states at the current step; the return is recorded with its round (by
    confirmed returns). Anywhere else nothing moves and the reason is said.
+3. "N단계부터 시작해줘" before the experiment or at its first step asks
+   "1~(N-1)단계는 건너뛰고 N단계부터 시작할까요?"; a yes starts at N and the
+   skipped steps are recorded.
 
 The earlier repeat policy holds: nothing here says how many rounds to run or
 that a round was enough, the hand-over record carries no count, and the step
@@ -395,6 +398,7 @@ class ReturnWithinARepeatTests(_Turns, unittest.TestCase):
         self.assertEqual(self.session.last_front_rule, "yes_no_open_question")
         self.assertEqual(self.label(), "2")
         self.assertIn("repeat_return", FRONT_RULES)
+        self.assertIn("start_at_step", FRONT_RULES)
 
     def test_a_return_rolls_back_with_its_turn(self) -> None:
         self.open(4)
@@ -425,6 +429,100 @@ class ReturnWithinARepeatTests(_Turns, unittest.TestCase):
             CuratedProtocolSession(fixture).restore_experiment_progress(
                 current_step_id="step-2", completed_step_ids=tuple(steps[:5]) + ("step-6",),
             )
+
+
+# --- Decision 3 --------------------------------------------------------------
+
+
+class StartAtAStepTests(_Turns, unittest.TestCase):
+    """Decision 3: a later start, asked about, with the skipped steps kept."""
+
+    def test_before_the_experiment_a_later_start_is_asked_about(self) -> None:
+        for said in ("4단계부터 시작해줘", "4단계부터 시작할게", "4단계부터 할게",
+                     "네 번째 단계부터 시작해줘", "프로토콜 4단계부터 시작해줘"):
+            with self.subTest(said=said):
+                self.open(None)
+                asked = self.say(said)
+                self.assertEqual(self.session.last_front_rule, "start_at_step")
+                self.assertIs(asked.action, CuratedProtocolAction.CLARIFY_COMPLETION)
+                self.assertEqual(asked.speech_text, "1~3단계는 건너뛰고 4단계부터 시작할까요?")
+                self.assertFalse(self.session.active)
+                started = self.say("응")
+                self.assertIs(started.action, CuratedProtocolAction.START)
+                self.assertTrue(started.state_changed)
+                self.assertTrue(self.session.active)
+                self.assertEqual(self.label(), "4")
+                self.assertTrue(started.speech_text.startswith(
+                    "1~3단계는 건너뛰고 4단계부터 시작합니다. 현재 4단계입니다."
+                ))
+                self.assertEqual(started.step_record, {
+                    "kind": "start_at_step", "start_step": "4",
+                    "skipped_step_labels": ["1", "2", "3"],
+                    "skipped_step_ids": ["step-1", "step-2", "step-3"],
+                    "experiment_started": True,
+                })
+
+    def test_one_skipped_step_is_named_alone(self) -> None:
+        self.open(None)
+        self.assertEqual(
+            self.say("2단계부터 시작해줘").speech_text, "1단계는 건너뛰고 2단계부터 시작할까요?",
+        )
+
+    def test_at_the_first_step_a_later_start_is_asked_about(self) -> None:
+        self.open(0)
+        asked = self.say("4단계부터 시작해줘")
+        self.assertEqual(asked.speech_text, "1~3단계는 건너뛰고 4단계부터 시작할까요?")
+        started = self.say("네")
+        self.assertEqual(self.label(), "4")
+        self.assertFalse(started.step_record["experiment_started"])
+
+    def test_past_the_first_step_the_start_is_not_chosen_again(self) -> None:
+        self.open(2)
+        before = self.projection()
+        plan = self.say("5단계부터 시작해줘")
+        self.assertEqual(self.session.last_front_rule, "start_at_step")
+        self.assertEqual(
+            plan.speech_text,
+            "시작 단계는 실험을 시작하기 전이나 1단계에서만 고를 수 있어요. 지금 3단계를 유지합니다.",
+        )
+        self.assertEqual(self.projection(), before)
+
+    def test_a_start_at_the_first_step_is_the_ordinary_start(self) -> None:
+        self.open(None)
+        plan = self.say("1단계부터 시작해줘")
+        self.assertEqual(self.session.last_front_rule, "start_command")
+        self.assertIs(plan.action, CuratedProtocolAction.START)
+        self.assertEqual(self.label(), "1")
+
+    def test_a_step_that_does_not_exist_is_said_so(self) -> None:
+        self.open(None)
+        plan = self.say("9단계부터 시작해줘")
+        self.assertEqual(plan.speech_text, "이 프로토콜은 1~6단계예요. 9단계는 없어서 이동하지 않았어요.")
+        self.assertFalse(self.session.active)
+
+    def test_a_no_starts_nothing(self) -> None:
+        self.open(None)
+        self.say("4단계부터 시작해줘")
+        plan = self.say("아니요")
+        self.assertIs(plan.action, CuratedProtocolAction.DECLINE_COMPLETION)
+        self.assertFalse(self.session.active)
+        self.assertIsNone(self.session._experiment_started_at)
+
+    def test_a_question_about_a_later_start_asks_nothing(self) -> None:
+        self.open(None)
+        self.say("4단계부터 시작해도 돼?")
+        self.assertFalse(self.session.awaiting_server_confirmation)
+        self.assertFalse(self.say("응").state_changed)
+        self.assertFalse(self.session.active)
+
+    def test_an_ended_experiment_is_not_started_later(self) -> None:
+        self.open(2)
+        self.say("실험 종료")
+        self.say("네")
+        self.say("4단계부터 시작해줘")
+        self.assertFalse(self.session.awaiting_server_confirmation)
+        self.assertFalse(self.say("응").state_changed)
+        self.assertFalse(self.session.active)
 
 
 # --- The experiment record (server.py's mapping) ------------------------------
@@ -487,6 +585,27 @@ class ExperimentRecordTests(_Turns, unittest.TestCase):
         record = self.events()[-1][2]
         self.assertEqual((record["round"], record["returns_confirmed"]), (2, 1))
         self.assertEqual(record["from_step"], "5")
+
+    def test_a_later_start_records_the_start_and_the_skipped_steps(self) -> None:
+        self.open(None)
+        self.record("4단계부터 시작해줘")
+        self.record("응")
+        events = self.events()
+        self.assertEqual(
+            [(kind, label) for kind, label, _ in events],
+            [("session_started", "4"), ("steps_skipped", "4")],
+        )
+        self.assertEqual(events[-1][2]["skipped_step_labels"], ["1", "2", "3"])
+
+    def test_a_later_start_at_the_first_step_records_the_skip_alone(self) -> None:
+        self.open(None)
+        self.record("프로토콜 시작해줘")
+        self.record("4단계부터 시작해줘")
+        self.record("응")
+        self.assertEqual(
+            [(kind, label) for kind, label, _ in self.events()],
+            [("session_started", "1"), ("steps_skipped", "4")],
+        )
 
 
 class DurableSessionTests(_Turns, unittest.TestCase):
@@ -564,6 +683,18 @@ class DurableSessionTests(_Turns, unittest.TestCase):
         )
         self.assertEqual(resumed.current_index, 3)
 
+    def test_a_later_start_moves_the_durable_session_to_that_step(self) -> None:
+        self.begin()
+        self.mirror("4단계부터 시작해줘")
+        self.mirror("응")
+        state = self.state()
+        self.assertEqual(state["status"], "in_progress")
+        self.assertEqual(state["current_step_label"], "4")
+        self.assertEqual(state["completed_steps"], [])
+        started = state["events"][-1]
+        self.assertEqual(started["event_type"], "protocol_started")
+        self.assertEqual(started["payload"]["step_record"]["skipped_step_labels"], ["1", "2", "3"])
+
 
 # --- The real in-gel protocol (lane RP's scenario) ----------------------------
 
@@ -597,6 +728,15 @@ class InGelScenarioTests(_Turns, unittest.TestCase):
         self.assertEqual(self.label(), "17")
         self.open(17, fixture=self.fixture)
         self.assertTrue(re.match(r"원문은 20단계에서 17~18단계를", self.say("17단계로 돌아가").speech_text))
+
+    def test_starting_at_step_10(self) -> None:
+        self.open(None, fixture=self.fixture)
+        self.assertEqual(
+            self.say("10단계부터 시작해줘").speech_text,
+            "1~9단계는 건너뛰고 10단계부터 시작할까요?",
+        )
+        self.say("응")
+        self.assertEqual(self.label(), "10")
 
 
 if __name__ == "__main__":
