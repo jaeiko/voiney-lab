@@ -894,6 +894,8 @@ def build_grounded_report_context(
 
 REPORT_TIMEZONE_SETTING = "VOINEY_LAB_REPORT_TIMEZONE"
 DEFAULT_REPORT_TIMEZONE = "Asia/Seoul"
+REPORT_WEB_SEARCH_SETTING = "VOINEY_LAB_REPORT_WEB_SEARCH_ENABLED"
+REPORT_SEARCH_TIMEOUT_SETTING = "VOINEY_LAB_REPORT_SEARCH_TIMEOUT_SECONDS"
 DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS = 60.0
 
 #: The model-written sections, in report order.
@@ -1781,6 +1783,8 @@ class ReportWriterSettings:
     enabled: bool = True
     model: str = "grok-4.6"
     timeout_seconds: float = 25.0
+    web_search: bool = True
+    search_timeout_seconds: float = DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS
 
     @classmethod
     def from_environment(cls) -> "ReportWriterSettings":
@@ -1798,7 +1802,15 @@ class ReportWriterSettings:
             ).strip())
         except ValueError:
             timeout = 25.0
-        return cls(enabled=enabled, model=model, timeout_seconds=timeout)
+        search = os.environ.get(REPORT_WEB_SEARCH_SETTING, "true").strip().casefold() not in _FALSE - {""}
+        try:
+            search_timeout = float(os.environ.get(
+                REPORT_SEARCH_TIMEOUT_SETTING, str(DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS)
+            ).strip())
+        except ValueError:
+            search_timeout = DEFAULT_REPORT_SEARCH_TIMEOUT_SECONDS
+        return cls(enabled=enabled, model=model, timeout_seconds=timeout,
+                   web_search=search, search_timeout_seconds=search_timeout)
 
 
 _NARRATIVE_CACHE: dict[tuple[Any, ...], ReportNarrative] = {}
@@ -2017,7 +2029,21 @@ class ReportWriterBrain:
     def _search_client(self) -> tuple[Any, str]:
         if self.search_client is not _AUTO:
             return self.search_client, "" if self.search_client is not None else "검색을 쓰지 않도록 설정됨"
-        return None, "검색 연결 없음"
+        settings = ReportWriterSettings.from_environment()
+        if not settings.web_search:
+            return None, "검색을 쓰지 않도록 설정됨"
+        try:
+            from voiney_lab.model_providers import RoleModel, chat_client
+
+            role = RoleModel.from_environment("report")
+            if role.provider != "google":
+                return None, "보고서 역할 공급자가 Google 이 아님"
+            if not role.has_key():
+                return None, "Google 키가 없음"
+            self.search_timeout_seconds = self.search_timeout_seconds or settings.search_timeout_seconds
+            return chat_client(role, timeout=self.search_timeout_seconds), ""
+        except Exception as exc:  # noqa: BLE001
+            return None, f"검색 준비 실패({type(exc).__name__})"
 
     async def search(self, facts: ReportFacts) -> tuple[tuple[ReportSource, ...], tuple[str, ...], tuple[str, ...], str]:
         """(sources numbered from 2, notes with their numbers, queries, status)."""

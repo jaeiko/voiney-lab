@@ -1021,9 +1021,13 @@ source on every sentence, nothing identifier-shaped, quoted observations
 must be recorded ones, and cause suggestions must name a recorded item. A
 section that fails, or every section when the model fails or exceeds
 `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS` (25), gets the server's own
-sentence; the appendix says which and why. External sources are used only
-when a source search supplies cited pages; without one the report says it
-could not check external sources and writes from the PDF only. Photos are read from `photo_attached` ledger events; the
+sentence; the appendix says which and why. When the report role's provider
+is `google` (and `VOINEY_LAB_REPORT_WEB_SEARCH_ENABLED` is not `false`), one
+grounded call with Google Search (bounded by
+`VOINEY_LAB_REPORT_SEARCH_TIMEOUT_SECONDS`, default 60) supplies cited pages
+for the purpose and background; with any other provider, or when the search
+fails, the report says it could not check external sources and writes from
+the PDF only. Photos are read from `photo_attached` ledger events; the
 evidence upload does not write one yet.
 
 ### Core configuration
