@@ -2094,8 +2094,8 @@ const PROTOCOL_UPLOAD_ERROR_MESSAGES=Object.freeze({
  protocol_catalog_unavailable:"프로토콜 등록 기능을 사용할 수 없습니다. 서버 관리자에게 문의해 주세요.",
  protocol_analysis_not_configured:"원문은 안전하게 저장되었습니다. 서버에 XAI_API_KEY와 VOINEY_LAB_ANALYSIS_MODEL을 설정한 뒤 분석 다시 시도를 눌러 주세요.",
  provider_configuration_missing:"원문은 안전하게 저장되었습니다. 서버에 XAI_API_KEY와 VOINEY_LAB_ANALYSIS_MODEL을 설정한 뒤 분석 다시 시도를 눌러 주세요.",
- ocr_required:"스캔 문서로 감지되어 OCR 텍스트 추출이 필요합니다. 원문을 수정하지 않고 별도 OCR 절차를 진행해 주세요.",
- protocol_ocr_not_configured:"원문은 안전하게 저장되었습니다. 관리자가 신뢰할 수 있는 OCR 공급자를 설정해야 합니다.",
+ ocr_required:"글자 층이 없는 쪽이 있어 OCR 글이 먼저 필요합니다. 업로드 때 OCR 이 자동으로 돌지 않았다면 'OCR 텍스트 추출'을 눌러 주세요. 끝나면 분석이 바로 시작됩니다.",
+ protocol_ocr_not_configured:"막힘 · OCR: 글자 층이 없는 쪽이 있는데 OCR 공급자가 설정되지 않았습니다. 할 일: 관리자가 VOINEY_LAB_OCR_PROVIDERS 와 그 엔진의 키를 설정하고 서버를 다시 시작한 뒤 PDF 를 다시 올립니다. 원문은 안전하게 저장되었습니다.",
  protocol_ocr_result_invalid:"OCR 결과가 원문 해시·페이지·크기 검증을 통과하지 못했습니다. 원문은 변경되지 않았습니다.",
  protocol_ocr_review_invalid:"현재 OCR 결과는 검토할 수 없습니다. 상태를 새로고침한 뒤 다시 시도해 주세요.",
  protocol_ocr_failed:"OCR 텍스트 추출에 실패했습니다. 원문은 보존되었으며 다시 시도할 수 있습니다.",
@@ -2359,11 +2359,11 @@ function renderProtocolReview(review,options={}){
    `상태 · ${serverCodeText("ocr_state",ocr.state)}`,
    ocr.provider?`공급자 · ${ocr.provider}${ocr.provider_version?` ${ocr.provider_version}`:""}`:"",
    Array.isArray(ocr.languages)&&ocr.languages.length?`언어 · ${ocr.languages.join(", ")}`:"",
-   ...ocrPages.map(page=>`원문 p.${page.source_page_number} · 신뢰도 ${Number.isFinite(page.confidence)?Math.round(page.confidence*100)+"%":"미제공"} · ${String(page.text||"")}`),
+   ...ocrPages.filter(page=>page.provider!=="pdf-text-layer").map(page=>`원문 p.${page.source_page_number} · OCR 출처${page.provider?` · ${page.provider}`:""} · 신뢰도 ${Number.isFinite(page.confidence)?Math.round(page.confidence*100)+"%":"미제공"}${page.numeric_review_required===true?" · 숫자 확인 필요(두 엔진이 읽은 숫자·단위가 다름)":""} · ${String(page.text||"")}`),
    ...(Array.isArray(ocr.warnings)?ocr.warnings.map(warning=>`주의 · ${warning}`):[]),
-   ocr.accepted_for_analysis===true?"사람의 원문 대조 승인 완료 · 구조 분석은 별도로 시작해야 함":"OCR 텍스트는 사람이 원본 PDF와 대조하기 전 구조 분석에 사용할 수 없음",
+   ocr.accepted_for_analysis===true?(ocr.review?.authority==="automatic_upload_ocr"?"업로드 때 자동 OCR · 따로 승인하지 않음 · 실행 전 사람 확인 한 번에 포함됨":"사람의 원문 대조 승인 완료"):"OCR 글이 들어오면 분석이 바로 시작됨",
    "OCR 결과 자체는 실행 가능한 프로토콜이 아님",
-  ],[["ocr_state",ocr.state]]);
+  ],[["ocr_state",ocr.state],["ocr_authority",ocr.review?.authority||null]]);
  }
  const failure=review?.analysis_failure;if(failure)appendProtocolReviewGroup("분석 실패와 복구",[`원인 · ${serverCodeText("analysis_failure",failure.code||"analysis_failed")}`,`재시도 · ${failure.retryable===true?"가능":"사람의 조치 필요"}`,failure.action||""],[["failure_code",failure.code||"analysis_failed"]]);
  const gates=review?.gates||{};appendProtocolReviewGroup("실행 전 확인 조건",Object.entries(gates).map(([name,value])=>`${serverCodeText("gate_name",name,"확인 항목")} · ${serverCodeText("gate_value",String(value))}`),Object.entries(gates).map(([name,value])=>[name,String(value)]));
@@ -2435,12 +2435,19 @@ async function pollProtocolAnalysisStatus(protocolId){
 function startProtocolAnalysisPolling(protocolId){stopProtocolAnalysisPolling();protocolAnalysisPollHandle=setInterval(()=>{void pollProtocolAnalysisStatus(protocolId);},1000);protocolAnalysisPollHandle?.unref?.();}
 async function pollProtocolOcrStatus(protocolId){
  if(protocolOcrPollBusy)return null;protocolOcrPollBusy=true;
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 텍스트를 추출하고 있습니다 · 원문 PDF는 변경되지 않습니다.";}else{stopProtocolOcrPolling();if(payload.state==="review_required"){if(status)status.textContent="OCR 추출 완료 · 원본 PDF와 페이지별 텍스트를 대조해 승인하거나 거절해 주세요.";}else if(payload.state==="failed"){if(status)status.textContent=protocolUploadErrorMessage(payload.failure_code||"protocol_ocr_failed");}await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){return null;}finally{protocolOcrPollBusy=false;}
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload)return null;if(currentProtocolReviewId!==protocolId)return null;const status=$("protocol-upload-status");if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent=`OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다${ocrElapsedText()} · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.`;}else{stopProtocolOcrPolling();if(payload.state==="accepted_for_analysis"){
+   // Lane PX decision 3: upload-time OCR is accepted automatically and the
+   // server starts the analysis itself; the page only follows it.
+   const pages=ocrPageNumbers(payload);showProtocolAnalysisNotice(protocolId,`OCR 끝${pages.length?` · OCR 쪽 p.${pages.join(", ")}`:""} · 분석을 시작합니다 · 실행 전 확인 한 번에 OCR 글도 포함됩니다.`,"분석 중 · 걸린 시간 0분 00초 · 실행 상태 변경 없음");protocolAnalysisStartedAt=Date.now();startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);return payload;}
+   if(payload.state==="review_required"){if(status)status.textContent="OCR 추출 완료 · 원본 PDF와 페이지별 텍스트를 대조해 승인하거나 거절해 주세요.";}else if(payload.state==="failed"){if(status)status.textContent=`막힘 · OCR: ${protocolUploadErrorMessage(payload.failure_code||"protocol_ocr_failed")} 할 일: 'OCR 텍스트 추출'을 눌러 다시 시도합니다.`;}await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){return null;}finally{protocolOcrPollBusy=false;}
 }
-function startProtocolOcrPolling(protocolId){stopProtocolOcrPolling();protocolOcrPollHandle=setInterval(()=>{void pollProtocolOcrStatus(protocolId);},1000);protocolOcrPollHandle?.unref?.();}
+let protocolOcrStartedAt=null;
+function ocrElapsedText(){if(!protocolOcrStartedAt)return "";const seconds=Math.max(0,Math.floor((Date.now()-protocolOcrStartedAt)/1000));return ` · 걸린 시간 ${Math.floor(seconds/60)}분 ${String(seconds%60).padStart(2,"0")}초`;}
+function ocrPageNumbers(payload){const pages=Array.isArray(payload?.pages)?payload.pages:[];return pages.filter(page=>page&&Number.isInteger(page.source_page_number)&&page.provider!=="pdf-text-layer").map(page=>page.source_page_number);}
+function startProtocolOcrPolling(protocolId){stopProtocolOcrPolling();protocolOcrStartedAt=Date.now();protocolOcrPollHandle=setInterval(()=>{void pollProtocolOcrStatus(protocolId);},1000);protocolOcrPollHandle?.unref?.();}
 async function runProtocolOcr(){
  const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),button=$("protocol-ocr-run");if(!protocolId||isRegisteringProtocol)return null;if(button)button.disabled=true;if(status)status.textContent="OCR 요청을 검증하고 있습니다…";
- try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 원문을 보존하며 페이지별 텍스트를 추출합니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
+ try{const response=await fetch(`/api/protocols/${encodeURIComponent(protocolId)}/ocr`,{method:"POST",headers:{Accept:"application/json"},redirect:"error"}),payload=await safeProtocolUploadPayload(response);if(!response.ok||!payload){const code=typeof payload?.detail==="string"?payload.detail:"protocol_ocr_failed";if(status)status.textContent=protocolUploadErrorMessage(code);await loadProtocolReview(protocolId);return null;}if(["queued","in_progress"].includes(payload.state)){if(status)status.textContent="OCR 요청 접수 · 글자 층이 없는 쪽을 읽습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.";startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}else{await loadProtocolReview(protocolId);await loadProtocolCatalog(protocolId);}return payload;}catch(_){if(status)status.textContent=protocolUploadErrorMessage("network_error");return null;}finally{if(button)button.disabled=false;}
 }
 async function reviewProtocolOcr(decision){
  const protocolId=currentProtocolReviewId,status=$("protocol-upload-status"),buttons=[$("protocol-ocr-accept"),$("protocol-ocr-reject")];if(!protocolId||!["accepted","rejected"].includes(decision)||isRegisteringProtocol)return null;for(const button of buttons)if(button)button.disabled=true;
@@ -2499,7 +2506,12 @@ async function registerSelectedProtocol(){
   // same PDF again never calls one that ended: a failed run waits for a
   // person to press "분석 다시 시도", a passed one is only shown again.
   const notStarted=["structured_analysis_ready","chunked_analysis_required"].includes(registered.analysis_status),failed=["analysis_failed","chunk_analysis_failed","merge_conflict","chunk_analysis_cancelled"].includes(registered.analysis_status),running=["analysis_pending","analyzing","chunk_planned","chunk_analysis_in_progress","merge_in_progress"].includes(registered.analysis_status);
+  const ocr=payload.ocr&&typeof payload.ocr==="object"?payload.ocr:null;
   if(registered.available_for_execution===true){if(status)status.textContent=payload.deduplicated?"동일한 실행 가능 PDF가 이미 등록되어 있습니다.":"등록 완료 · 실행 가능한 버전입니다.";await loadProtocolReview(protocolId);}
+  // Lane PX decision 3: pages without a text layer are OCR'd at upload and
+  // the server starts the analysis itself when the OCR text is in.
+  else if(ocr?.automatic===true){showProtocolAnalysisNotice(protocolId,"OCR 중 · 글자 층이 없는 쪽을 읽고 있습니다 · 끝나면 분석을 바로 시작합니다 · 원문 PDF는 바뀌지 않습니다.","OCR 중 · 실행 상태 변경 없음");startProtocolOcrPolling(protocolId);void pollProtocolOcrStatus(protocolId);}
+  else if(ocr?.blocked==="protocol_ocr_not_configured"){showProtocolAnalysisNotice(protocolId,protocolUploadErrorMessage("protocol_ocr_not_configured"),"막힘 · OCR 공급자 없음");await loadProtocolReview(protocolId);}
   else if(notStarted)await analyzeRegisteredProtocol(protocolId);
   else if(running){showProtocolAnalysisNotice(protocolId,PROTOCOL_ANALYSIS_RUNNING_NOTICE,"분석 중 · 실행 상태 변경 없음");startProtocolAnalysisPolling(protocolId);void pollProtocolAnalysisStatus(protocolId);}
   else if(failed){const review=await loadProtocolReview(protocolId);showProtocolAnalysisNotice(protocolId,protocolAnalysisFailureNotice(review?.analysis_failure?.code||registered.analysis_status),"");}

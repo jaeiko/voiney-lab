@@ -118,6 +118,7 @@ from voiney_lab.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
+from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
     ProtocolOcrError,
     ProtocolOcrProvider,
@@ -4235,9 +4236,11 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     category="protocol",metric_name="upload",
                     dimensions={"source_kind":"local_pdf","status":"stored"},
                 )
+                ocr=_automatic_ocr_on_upload(catalog,result.entry)
                 return {
                     "protocol":result.entry.public_dict(),
                     "deduplicated":result.deduplicated,
+                    "ocr":ocr,
                 }
             finally:
                 store.close()
@@ -4245,6 +4248,106 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+def _automatic_ocr_on_upload(
+    catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
+)->dict[str,object]:
+    """Start OCR for the pages without a usable text layer, if any (lane PX 3).
+
+    Decided 2026-10-06: a page whose text layer is missing or unreadable
+    (``experiment_protocol_pdf.page_ocr_reason``: no visible character, a
+    glyph with no Unicode mapping, or 5% private-use/unassigned characters)
+    is read by the configured OCR engines at upload, and the structured
+    analysis starts as soon as the OCR text is in. Nothing else changes:
+    the page text layer of every other page is kept, the OCR pages stay
+    marked as OCR, and the one confirmation a person gives before execution
+    covers the OCR text. Returns what the page shows: whether OCR was
+    needed, whether it started, and why not when it did not.
+    """
+
+    try:
+        status=catalog.ocr_status(entry.protocol_id,include_text=False)
+    except Exception as exc:  # noqa: BLE001 - the upload itself succeeded
+        log.warning("protocol.ocr.status_failed protocol_id=%s error=%s",
+                    entry.protocol_id,type(exc).__name__)
+        return {"state":"unknown","automatic":False,"blocked":"protocol_ocr_status_failed"}
+    state=str(status.get("state"))
+    if state=="not_required":
+        return {"state":state,"automatic":False}
+    if state in {"accepted_for_analysis","in_progress","review_required"}:
+        return {"state":state,"automatic":False,
+                "ocr_page_numbers":_ocr_page_numbers(status)}
+    running=_PROTOCOL_OCR_TASKS.get(entry.protocol_id)
+    if running is not None and not running.done():
+        return {"state":"queued","automatic":True}
+    try:
+        provider=_protocol_ocr_provider()
+    except ProtocolOcrUnavailableError:
+        return {"state":state,"automatic":False,"blocked":"protocol_ocr_not_configured"}
+    if entry.analysis_status not in {
+        "ocr_required","ocr_failed","ocr_rejected","structured_analysis_ready",
+        "chunked_analysis_required",
+    }:
+        # An analysis already ran or is running: OCR now would not feed it.
+        return {"state":state,"automatic":False,"blocked":"analysis_already_ran"}
+    ocr_id=f"ocr-{secrets.token_hex(16)}"
+    _schedule_ocr_then_analysis(
+        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
+    return {"state":"queued","automatic":True,"ocr_id":ocr_id}
+
+
+def _ocr_page_numbers(status:dict[str,object])->list[int]:
+    pages=status.get("pages")
+    return [
+        int(page["source_page_number"]) for page in pages
+        if isinstance(page,dict) and page.get("provider")!=OCR_TEXT_LAYER_PROVIDER
+        and isinstance(page.get("source_page_number"),int)
+    ] if isinstance(pages,list) else []
+
+
+def _schedule_ocr_then_analysis(
+    protocol_id:str,provider:ProtocolOcrProvider,*,ocr_id:str,
+    principal:Principal|None,
+)->asyncio.Task[None]:
+    """OCR in a worker, accepted automatically, then the analysis (lane PX 3)."""
+
+    def run_ocr()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.run_ocr(
+                protocol_id,provider,ocr_id=ocr_id,accepted_automatically=True)
+        finally:
+            store.close()
+
+    async def background_worker()->None:
+        try:
+            status=await asyncio.to_thread(run_ocr)
+        except Exception as exc:
+            log.warning(
+                "protocol.ocr.failed protocol_id=%s error=%s",
+                protocol_id,type(exc).__name__,
+            )
+            return
+        if status.get("accepted_for_analysis") is not True:
+            return
+        try:
+            await _begin_background_analysis(protocol_id,principal=principal)
+        except Exception as exc:  # noqa: BLE001 - recorded by the catalog
+            log.warning(
+                "protocol.analysis.after_ocr_failed protocol_id=%s error=%s",
+                protocol_id,type(exc).__name__,
+            )
+
+    task=asyncio.create_task(background_worker())
+    _PROTOCOL_OCR_TASKS[protocol_id]=task
+    task.add_done_callback(
+        lambda completed,pid=protocol_id: (
+            _PROTOCOL_OCR_TASKS.pop(pid,None)
+            if _PROTOCOL_OCR_TASKS.get(pid) is completed else None
+        )
+    )
+    return task
 
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
@@ -4386,39 +4489,18 @@ async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
         if current.get("state")=="not_required":
             raise ProtocolCatalogError("Protocol PDF does not require OCR.")
         ocr_id=f"ocr-{secrets.token_hex(16)}"
-
-        def run_ocr()->None:
-            catalog,store=_open_protocol_catalog()
-            try:
-                catalog.run_ocr(
-                    protocol_id,provider,ocr_id=ocr_id
-                )
-            finally:
-                store.close()
-
-        async def background_worker()->None:
-            try:
-                await asyncio.to_thread(run_ocr)
-            except Exception as exc:
-                log.warning(
-                    "protocol.ocr.failed protocol_id=%s error=%s",
-                    protocol_id,type(exc).__name__,
-                )
-
-        task=asyncio.create_task(background_worker())
-        _PROTOCOL_OCR_TASKS[protocol_id]=task
-        task.add_done_callback(
-            lambda completed,pid=protocol_id: (
-                _PROTOCOL_OCR_TASKS.pop(pid,None)
-                if _PROTOCOL_OCR_TASKS.get(pid) is completed else None
-            )
-        )
+        # Lane PX decision 3: a person's press runs the same chain an upload
+        # runs -- OCR of the marked pages, accepted under a recorded
+        # automatic authority, then the analysis. No separate approval step.
+        _schedule_ocr_then_analysis(
+            protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
         return {
             **current,
             "ocr_id":ocr_id,
             "state":"queued",
             "request_accepted":True,
-            "review_required":True,
+            "review_required":False,
+            "automatic":True,
             "executable":False,
         }
     except Exception as exc:
@@ -4513,17 +4595,6 @@ async def trigger_protocol_analysis(
     analysis_id=f"analysis-{secrets.token_hex(16)}"
     metric_principal=_REQUEST_PRINCIPAL.get()
 
-    def prepare_analysis()->dict[str,object]:
-        catalog,store=_open_protocol_catalog()
-        try:
-            entry=catalog.request_analysis(protocol_id,analysis_id)
-            public=entry.public_dict()
-            public["analysis_run"]=catalog.analysis_run_status(
-                protocol_id).public_dict()
-            return public
-        finally:
-            store.close()
-
     def run_explicit_analysis(*,request_first:bool)->dict[str,object]:
         # SQLite connections are thread-affine.  Construct and close the
         # catalog in the same worker that performs bounded Provider work.
@@ -4561,10 +4632,10 @@ async def trigger_protocol_analysis(
         finally:
             store.close()
 
-    async def background_worker()->None:
-        try:
+    try:
+        if not background:
             completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=False)
+                run_explicit_analysis,request_first=True)
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",
                 dimensions={
@@ -4572,6 +4643,90 @@ async def trigger_protocol_analysis(
                     "source_kind":"local_pdf",
                 },
                 principal=metric_principal,
+            )
+            return completed
+        ocr_running=_PROTOCOL_OCR_TASKS.get(protocol_id)
+        if ocr_running is not None and not ocr_running.done():
+            # Lane PX decision 3: the OCR chain starts the analysis itself
+            # once the OCR text is in; an analysis now would read the pages
+            # without it.
+            catalog,store=_open_protocol_catalog()
+            try:
+                public=catalog.get_entry(protocol_id).public_dict()
+                public["analysis_run"]=catalog.analysis_run_status(
+                    protocol_id).public_dict()
+                public["analysis_request_deferred"]="ocr_in_progress"
+                return public
+            finally:
+                store.close()
+        return await _begin_background_analysis(
+            protocol_id,principal=metric_principal,analysis_id=analysis_id)
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+async def _begin_background_analysis(
+    protocol_id:str,*,principal:Principal|None,analysis_id:str|None=None,
+)->dict[str,object]:
+    """Record the request, then run the analysis off the request path.
+
+    Shared by the analysis endpoint and the upload-time OCR chain (lane PX,
+    decision 3). A run already in progress, or an analysis that already
+    ended, is reported and not started again.
+    """
+
+    analysis_id=analysis_id or f"analysis-{secrets.token_hex(16)}"
+
+    def prepare_analysis()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.request_analysis(protocol_id,analysis_id)
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    def run_analysis()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            try:
+                model=_protocol_analysis_model()
+            except RuntimeError as exc:
+                catalog.fail_analysis_request(
+                    protocol_id,analysis_id,
+                    failure_code="provider_configuration_missing",
+                )
+                raise ProtocolAnalysisUnavailableError(
+                    "Protocol analysis provider is not configured."
+                ) from exc
+            entry=catalog.analyze(protocol_id,model,analysis_id=analysis_id)
+            if _auto_activate_ready_uploads_enabled():
+                try:
+                    rev=catalog._latest_protocol_revision(protocol_id)
+                    analysis=catalog._latest_analysis(rev)
+                    if analysis is not None and analysis.readiness.status.value=="guidance_ready":
+                        entry=catalog.activate_development(protocol_id)
+                except Exception as auto_exc:
+                    log.warning("Auto-activation skipped for %s: %s",protocol_id,auto_exc)
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    async def background_worker()->None:
+        try:
+            completed=await asyncio.to_thread(run_analysis)
+            _record_workspace_metric(
+                category="protocol",metric_name="analysis",
+                dimensions={
+                    "status":str(completed.get("analysis_status") or "complete")[:100],
+                    "source_kind":"local_pdf",
+                },
+                principal=principal,
             )
         except Exception as exc:
             # The catalog persists bounded failure codes.  Provider responses,
@@ -4613,50 +4768,35 @@ async def trigger_protocol_analysis(
                     "reason_code":str(getattr(exc,"code","analysis_failed"))[:100],
                     "source_kind":"local_pdf",
                 },
-                principal=metric_principal,
+                principal=principal,
             )
 
-    try:
-        if not background:
-            completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=True)
-            _record_workspace_metric(
-                category="protocol",metric_name="analysis",
-                dimensions={
-                    "status":str(completed.get("analysis_status") or "complete")[:100],
-                    "source_kind":"local_pdf",
-                },
-                principal=metric_principal,
-            )
-            return completed
-        running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
-        if running is not None and not running.done():
-            catalog,store=_open_protocol_catalog()
-            try:
-                public=catalog.get_entry(protocol_id).public_dict()
-                public["analysis_run"]=catalog.analysis_run_status(
-                    protocol_id).public_dict()
-                public["analysis_request_deduplicated"]=True
-                return public
-            finally:
-                store.close()
-        public=await asyncio.to_thread(prepare_analysis)
-        state=(public.get("analysis_run") or {}).get("state")
-        if state in {"review_required","approved","revoked"}:
+    running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
+    if running is not None and not running.done():
+        catalog,store=_open_protocol_catalog()
+        try:
+            public=catalog.get_entry(protocol_id).public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
             public["analysis_request_deduplicated"]=True
             return public
-        task=asyncio.create_task(background_worker())
-        _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
-        task.add_done_callback(
-            lambda completed,pid=protocol_id: (
-                _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
-                if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
-            )
-        )
-        public["analysis_request_accepted"]=True
+        finally:
+            store.close()
+    public=await asyncio.to_thread(prepare_analysis)
+    state=(public.get("analysis_run") or {}).get("state")
+    if state in {"review_required","approved","revoked"}:
+        public["analysis_request_deduplicated"]=True
         return public
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
+    task=asyncio.create_task(background_worker())
+    _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
+    task.add_done_callback(
+        lambda completed,pid=protocol_id: (
+            _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
+            if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
+        )
+    )
+    public["analysis_request_accepted"]=True
+    return public
 
 
 @app.get("/api/protocols/{protocol_id}/analysis/status")

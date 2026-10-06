@@ -165,6 +165,9 @@ _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
 _DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
 _DEVELOPMENT_DEACTIVATION_EVENT = "protocol_development_deactivated"
+#: The authority an upload-time OCR acceptance is recorded under (lane PX,
+#: decision 3). A person's review carries ``human_review``.
+AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
 _OCR_REQUESTED_EVENT = "protocol_ocr_requested"
 _OCR_COMPLETED_EVENT = "protocol_ocr_completed"
 _OCR_FAILED_EVENT = "protocol_ocr_failed"
@@ -353,8 +356,11 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "원문은 바뀌지 않습니다."
     ),
     "ocr_required": (
-        "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 이 먼저 필요합니다. "
-        "'OCR 텍스트 추출'을 누르고 원문과 대조해 승인한 뒤 분석하세요."
+        "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 글이 먼저 필요합니다. "
+        "업로드 때 OCR 이 자동으로 돌지 않았다면 OCR 공급자 설정"
+        "(VOINEY_LAB_OCR_PROVIDERS 와 그 엔진의 키)을 확인하고 서버를 다시 시작한 뒤 "
+        "PDF 를 다시 올리거나 'OCR 텍스트 추출'을 누르세요. OCR 이 끝나면 분석이 "
+        "바로 시작됩니다."
     ),
     "protocol_pdf_too_large": (
         "PDF 가 등록 한도보다 큽니다. 더 작은 파일로 다시 올리세요."
@@ -873,7 +879,21 @@ class ProtocolCatalog:
         provider: ProtocolOcrProvider,
         *,
         ocr_id: str,
+        accepted_automatically: bool = False,
     ) -> dict[str, object]:
+        """Read the pages without a usable text layer with the OCR provider.
+
+        With ``accepted_automatically`` (lane PX, human decision 3 of
+        2026-10-06: OCR runs at upload for the pages whose text layer is
+        missing or unreadable) the validated result is accepted for analysis
+        at once, under the authority ``automatic_upload_ocr`` written into
+        the ledger, and the one confirmation a person gives before execution
+        (test-mode start, or review and approval) covers it; there is no
+        separate OCR approval step. Each OCR page keeps its provider and its
+        numeric-review mark, so the review still shows which pages came from
+        OCR and where the two engines read different numbers.
+        """
+
         if not _STABLE_PROTOCOL_ID.fullmatch(ocr_id):
             raise ProtocolOcrReviewError("OCR request identity is invalid.")
         revision = self._latest_protocol_revision(protocol_id)
@@ -928,6 +948,35 @@ class ProtocolCatalog:
                 _OCR_COMPLETED_EVENT,
                 payload,
             )
+            if accepted_automatically:
+                ocr_pages = [
+                    page.source_page_number for page in validated.pages
+                    if page.provider != OCR_TEXT_LAYER_PROVIDER
+                    and (page.provider is not None
+                         or validated.provider != OCR_TEXT_LAYER_PROVIDER)
+                ]
+                self.store.append_event(
+                    f"ocr-reviewed-{ocr_id}-accepted",
+                    protocol_id,
+                    revision.revision_number,
+                    _OCR_REVIEWED_EVENT,
+                    {
+                        "ocr_id": ocr_id,
+                        "decision": "accepted",
+                        "authority": AUTOMATIC_OCR_AUTHORITY,
+                        "comment": (
+                            "Upload-time OCR of the pages without a usable text "
+                            "layer; covered by the one confirmation a person "
+                            "gives before execution."
+                        ),
+                        "executable": False,
+                        "ocr_page_numbers": ocr_pages,
+                        "numeric_review_page_numbers": [
+                            page.source_page_number for page in validated.pages
+                            if page.numeric_review_required
+                        ],
+                    },
+                )
         except Exception as exc:
             failure_code = getattr(exc, "code", "protocol_ocr_failed")
             if not isinstance(failure_code, str) or not re.fullmatch(

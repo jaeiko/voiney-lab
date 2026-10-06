@@ -1302,7 +1302,11 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         self.provider_factory.assert_not_called()
 
-    async def test_ocr_endpoint_uses_trusted_provider_then_requires_review(self):
+    async def test_ocr_endpoint_uses_trusted_provider_then_accepts_it_and_starts_the_analysis(self):
+        # Lane PX decision 3 (2026-10-06): the OCR result is accepted under a
+        # recorded automatic authority and the analysis starts at once; the
+        # one confirmation a person gives before execution covers the OCR
+        # text, so there is no separate OCR approval step any more.
         scanned = self.root / "scanned-endpoint.pdf"
         scanned_bytes = write_text_pdf(scanned, None, title="Scanned endpoint")
         registration = await self._request(
@@ -1354,12 +1358,19 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
             "VOINEY_LAB_WORKSPACE_ENABLED": "false",
             "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN": "review-token",
         }
+        analyses_started: list[str] = []
+
+        async def begin_analysis(protocol_id, *, principal, analysis_id=None):
+            analyses_started.append(protocol_id)
+            return {}
+
         with (
             patch.dict(os.environ, environment),
             patch.object(server_module, "_open_protocol_catalog", self._open_catalog),
             patch.object(
                 server_module, "_protocol_ocr_provider", return_value=provider
             ),
+            patch.object(server_module, "_begin_background_analysis", begin_analysis),
             patch(
                 "fastapi.routing.run_in_threadpool",
                 side_effect=_dedicated_to_thread,
@@ -1376,6 +1387,7 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 queued = await client.post(f"/api/protocols/{protocol_id}/ocr")
                 self.assertEqual(queued.status_code, 202, queued.text)
                 self.assertEqual(queued.json()["state"], "queued")
+                self.assertTrue(queued.json()["automatic"])
                 self.assertFalse(queued.json()["executable"])
                 task = server_module._PROTOCOL_OCR_TASKS.get(protocol_id)
                 if task is not None:
@@ -1383,24 +1395,24 @@ class ProtocolRegistrationEndpointTests(unittest.IsolatedAsyncioTestCase):
 
                 status = await client.get(f"/api/protocols/{protocol_id}/ocr")
                 self.assertEqual(status.status_code, 200, status.text)
-                self.assertEqual(status.json()["state"], "review_required")
+                self.assertEqual(status.json()["state"], "accepted_for_analysis")
                 self.assertEqual(status.json()["pages"][0]["source_page_number"], 1)
+                self.assertEqual(status.json()["review"]["authority"], "automatic_upload_ocr")
                 self.assertFalse(status.json()["executable"])
+                self.assertEqual(analyses_started, [protocol_id])
 
+                run = await client.get(f"/api/protocols/{protocol_id}/analysis/status")
+                self.assertEqual(run.json()["state"], "structured_analysis_ready")
+
+                # No separate OCR approval exists any more: there is nothing
+                # awaiting a person's review.
                 reviewed = await client.post(
                     f"/api/protocols/{protocol_id}/ocr/review",
                     json={"decision": "accepted", "comment": "Compared to PDF."},
                     headers={"X-Protocol-Approval-Token": "review-token"},
                 )
-                self.assertEqual(reviewed.status_code, 200, reviewed.text)
-                payload = reviewed.json()
-                self.assertEqual(payload["ocr"]["state"], "accepted_for_analysis")
-                self.assertEqual(
-                    payload["protocol"]["analysis_status"],
-                    "structured_analysis_ready",
-                )
-                self.assertFalse(payload["structured_analysis_started"])
-                self.assertFalse(payload["executable"])
+                self.assertEqual(reviewed.status_code, 409, reviewed.text)
+                self.assertEqual(reviewed.json(), {"detail": "protocol_ocr_review_invalid"})
         self.assertEqual(provider.calls, 1)
         self.assertTrue(provider.source_pdf.is_file())
         self.provider_factory.assert_not_called()
