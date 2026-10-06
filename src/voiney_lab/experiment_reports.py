@@ -6,6 +6,7 @@ It never infers completion, approval, or a laboratory result from model output.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import csv
 import io
