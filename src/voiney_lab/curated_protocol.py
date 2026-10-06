@@ -2237,6 +2237,9 @@ _OBSERVATION_PROMPT_PROBLEM = re.compile(
     r"|(?:예상|생각)(?:과|이랑|하고|했던\s*(?:것|거)(?:과|랑)?)\s*(?:달라|다르|다른|틀려)"
     r"|잘못|실수"
     r"|터졌|흘렸|쏟았|쏟아졌|깨졌|부서졌|금이\s*갔|튀었|누출|새고\s*있|샜"
+    # The rest of lane R7's spilling words (decision 1).
+    r"|흘려\s*버렸|흘러\s*넘쳤|엎질렀|엎질러\s*(?:졌|버렸)|엎었|엎어\s*(?:졌|버렸)"
+    r"|쏟아\s*버렸|넘쳤|넘쳐\s*(?:버렸|흘렀)|흘리고\s*있|쏟아지고\s*있|넘치고\s*있"
     r"|오염|고장|멈췄"
     r"|\b(?:wrong|problem|issue|anomal\w*|abnormal|unexpected\w*|spill\w*|broke\w*|leak\w*|contaminat\w*)\b"
 )
@@ -2984,6 +2987,22 @@ def _observation_capture(transcript: str) -> tuple[str, str | None] | None:
     return None
 
 
+# Lane R7, decision 1: something spilled, was knocked over or overflowed --
+# "흘렸어", "엎질렀어", "쏟았어", "넘쳤어" -- is a problem at the bench, whether or
+# not the words say what it was ("튜브를 흘렸어" was read as a question about
+# tubes, "흘렸어" alone as off topic). Said as having happened it is recorded,
+# a question after it included ("흘렸는데 어떡해"); asked, supposed, permitted,
+# guarded against or denied ("흘렸어?", "흘려도 돼?", "쏟으면 어떡해?", "흘리지
+# 않게", "안 흘렸어") it is not a report, and stays what it was.
+_SPILL_REPORT = re.compile(
+    r"흘렸|흘려\s*버렸|흘러\s*넘쳤|흘린\s*(?:것|거)\s*같"
+    r"|엎질렀|엎질러\s*(?:졌|버렸)|엎지른\s*(?:것|거)\s*같"
+    r"|엎었|엎어\s*(?:졌|버렸)|엎은\s*(?:것|거)\s*같"
+    r"|쏟았|쏟아\s*(?:졌|버렸)|쏟은\s*(?:것|거)\s*같"
+    r"|넘쳤|넘쳐\s*(?:버렸|흘렀)|넘친\s*(?:것|거)\s*같"
+    r"|흘리고\s*있|쏟아지고\s*있|넘치고\s*있"
+)
+
 _ANOMALY_PATTERNS = (
     (re.compile(r"(?:이상\s*(?:상황|현상|발생|사항|있어|생겼)|문제가\s*(?:생겼|발생|있어)|뭔가\s*이상|실수가\s*있었|something\s+went\s+wrong|there\s+is\s+an\s+issue|anomaly|abnormal)"), "protocol_block"),
     (re.compile(r"(?:용액|시약).*(?:잘못|틀리게).*(?:넣|준비)"), "reagent_preparation_issue"),
@@ -3001,7 +3020,31 @@ _ANOMALY_PATTERNS = (
     (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상|너무\s*높|너무\s*낮)"), "timing_temperature_deviation"),
     (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
     (re.compile(r"(?:깨졌|부서졌|금이\s*갔|터졌)"), "sample_deviation"),
+    (_SPILL_REPORT, "spill_exposure_safety_event"),
 )
+_SPILL_WORD = re.compile(r"흘리|흘려|흘렸|흘린|흘러\s*넘|엎|쏟|넘치|넘쳐|넘쳤|넘친")
+_SPILL_NOT_REPORTED = re.compile(
+    r"(?<![가-힣])(?:안|못)\s*(?:흘|엎|쏟|넘쳤)|아닌|아니야|않았|라고\s*(?:말|하면)"
+    r"|(?:흘리|엎지르|엎으|엎|쏟으|쏟|넘치)(?:면|지\s*(?:않|마|말)|도록|기\s*전)"
+    r"|(?:흘려|엎질러|엎어|쏟아|넘쳐)\s*도\s*(?:돼|되|괜찮)"
+    r"|(?:흘렸|엎질렀|엎질러졌|엎었|엎어졌|쏟았|쏟아졌|넘쳤|버렸)"
+    r"(?:는지|나요|니|냐|을까|을지)"
+)
+#: "흘렸어?": the spilling itself asked, the question mark right after it.
+_SPILL_ASKED = re.compile(
+    r"(?:흘렸|엎질렀|엎질러졌|엎었|엎어졌|쏟았|쏟아졌|넘쳤|버렸|같|있)"
+    r"(?:어요|어|다|지|나)?\s*[?？]"
+)
+
+
+def _spill_reading(key: str, transcript: str) -> str | None:
+    """"reported" or "not_reported" as above; None leaves the words as they were."""
+
+    if not _SPILL_WORD.search(key):
+        return None
+    if _SPILL_NOT_REPORTED.search(key) or _SPILL_ASKED.search(transcript):
+        return "not_reported"
+    return "reported" if _SPILL_REPORT.search(key) else None
 
 
 def _anomaly_category(key: str) -> str:
@@ -4796,16 +4839,28 @@ def classify_curated_control_intent(
             question_dimensions=("operational_deviation", "rationale"),
             protocol_scope="UNSUPPORTED_OPERATIONAL",
         )
+    spill = _spill_reading(key, transcript)
     for pattern, category in _ANOMALY_PATTERNS:
-        if pattern.search(key) and not _ANOMALY_NON_ASSERTION.search(key):
-            return CuratedControlIntent(
-                intent_kind="record_anomaly",
-                action=CuratedProtocolAction.REPORT_ANOMALY,
-                question_kind="anomaly",
-                language=language,
-                reported_anomaly=True,
-                anomaly_category=category,
-            )
+        match = pattern.search(key)
+        if match is None:
+            continue
+        if spill == "reported":
+            # A spill said as having happened is recorded (lane R7, decision
+            # 1), with a question after it too: "흘렸는데 어떡해".
+            pass
+        elif spill == "not_reported" and _SPILL_WORD.search(match.group(0)):
+            # The spilling words asked, supposed or denied: "쏟으면 어떡해?".
+            continue
+        elif _ANOMALY_NON_ASSERTION.search(key):
+            continue
+        return CuratedControlIntent(
+            intent_kind="record_anomaly",
+            action=CuratedProtocolAction.REPORT_ANOMALY,
+            question_kind="anomaly",
+            language=language,
+            reported_anomaly=True,
+            anomaly_category=category,
+        )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
             intent_kind="show_sources",
