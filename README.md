@@ -890,7 +890,12 @@ the pilot's safety catalog, usage scope and test mode -- stay fixed.
 `scripts/run_dev.sh` is the full development launcher: it verifies the
 Candidate A fixture and its externally licensed source PDF by SHA-256 and
 loads the curated fixture. It names no model: each role keeps its default
-below unless the `.env` chooses one. The four features only xAI provides --
+below unless the `.env` chooses one. That includes the analysis role: a PDF
+registered in the browser is analysed straight away with
+`VOINEY_LAB_ANALYSIS_PROVIDER`/`_MODEL`/`_REASONING` (lane PA, 2026-10-06; the
+launcher used to clear the analysis model). The same PDF uploaded again never
+calls an analysis that already ended; a failed one runs again only when a
+person presses "분석 다시 시도". The four features only xAI provides --
 external reference search, web image search, generated images and semantic
 intent -- default to off. Its
 `--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
@@ -1145,7 +1150,17 @@ label, and the review screen and the run number such steps 1, 2, 3 … in order
 text is accepted OCR output, evidence comparison also joins a line break
 between two Hangul letters ("날⏎짜" compares as "날짜"), like the line-end
 hyphen rule: comparison only, the page text, its hash and evidence identities
-are unchanged, and a break between digits is not joined. A
+are unchanged, and a break between digits is not joined. A statement that a
+page cuts at its end and the next page finishes (in-gel step 24, "…which will
+contain the" / "peptides.") is accepted only when it is found exactly in the
+two pages joined: the body text that ends the first page -- the lowest text
+block above the running footer, so a side-column duration and the footer are
+not part of it -- followed by the next page's opening text. Both pages are
+recorded: the evidence keeps the first page's own text, and the server adds
+`continued_on_page_number` and `continued_excerpt` (the next page's own
+text); a provider cannot supply either field. A continuation that is
+invented, out of order, not at the page end or the next page's start, or past
+the last page is refused (lane PA, 2026-10-06). A
 metadata field (`created_date_evidence`, …) and a value or duration may carry
 its own evidence on the page where it is printed; without it the claim is
 checked on its owner's evidence page as before.

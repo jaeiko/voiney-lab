@@ -2864,7 +2864,7 @@ def _workspace_catalog_analysis_gate(
         "execution_approval_allowed": False,
         "available_for_execution": False,
         "representation": "recovery_triage",
-        "action": "Regenerate valid structured analysis before approval.",
+        "action": "승인 전에 올바른 구조 분석을 다시 만들어 주세요.",
     }
     if (
         not isinstance(protocol_id, str)
@@ -2878,7 +2878,7 @@ def _workspace_catalog_analysis_gate(
             {
                 "analysis_status": "invalid_source_revision",
                 "failure_code": "invalid_source_revision",
-                "action": "Repair the immutable source/revision binding before review.",
+                "action": "검토 전에 원문과 버전의 연결을 바로잡아 주세요.",
             }
         )
         return base
@@ -2897,7 +2897,7 @@ def _workspace_catalog_analysis_gate(
         ProtocolFeatureDisabledError,
     ):
         base["failure_code"] = "protocol_catalog_unavailable"
-        base["action"] = "Restore the catalog before review or approval."
+        base["action"] = "검토·승인 전에 프로토콜 카탈로그를 복구해 주세요."
         return base
     analysis_failure = review.get("analysis_failure")
     readiness = review.get("readiness")
@@ -2933,16 +2933,16 @@ def _workspace_catalog_analysis_gate(
     if not exact_source:
         status = "invalid_source_revision"
         failure_code = "invalid_source_revision"
-        action = "Regenerate analysis for this exact immutable source revision."
+        action = "이 원문 버전으로 분석을 다시 해 주세요."
     elif failure_code is not None:
         status = "analysis_failed"
-        action = "Retry structured analysis; this item is recovery/triage only."
+        action = "구조 분석을 다시 시도해 주세요. 이 항목은 복구용이며 실행할 수 없습니다."
     elif not analyzed_revision:
         status = entry.analysis_status
-        action = "Complete structured analysis before execution approval."
+        action = "실행 승인 전에 구조 분석을 끝내 주세요."
     elif readiness_status != "guidance_ready":
         status = "analysis_not_ready"
-        action = "Resolve readiness and safety blockers before approval."
+        action = "승인 전에 실행 준비·안전 차단 항목을 해결해 주세요."
     elif entry.approval_status == "approved":
         status = "approved"
         action = "The exact analyzed revision is already execution-approved."

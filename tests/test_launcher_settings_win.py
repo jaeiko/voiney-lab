@@ -156,8 +156,9 @@ class DevLauncherTests(_LauncherCopy):
     def test_it_names_no_model(self) -> None:
         text = (ROOT / "scripts" / self.SCRIPT).read_text(encoding="utf-8")
         exported = re.findall(r'^export (VOINEY_LAB_\w*_MODEL)="([^"]*)"', text, re.M)
-        # Only the deliberate clearing of the analysis model is left.
-        self.assertEqual(exported, [("VOINEY_LAB_ANALYSIS_MODEL", "")])
+        # Lane PA decision 2 (2026-10-06): the analysis model is no longer
+        # cleared, so the launcher exports no model name at all.
+        self.assertEqual(exported, [])
         self.assertNotIn("grok-", text)
 
     def test_with_nothing_set_it_starts_without_an_xai_key(self) -> None:
