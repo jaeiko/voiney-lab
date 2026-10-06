@@ -210,6 +210,13 @@ class SourceEvidence:
     source_excerpt: str
     location_detail: str | None = None
     evidence_segment_ids: tuple[str, ...] = ()
+    #: A statement the page cuts at its end and the next page finishes (lane
+    #: PA, human decision 3, 2026-10-06): the next page and its own text that
+    #: completes the statement. Server-computed after the sentence was found
+    #: in the two pages joined; never taken from a provider. None for a
+    #: statement on one page.
+    continued_on_page_number: int | None = None
+    continued_excerpt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -754,6 +761,29 @@ def _validate_evidence(
         raise _error(
             ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
             "source excerpt is not present on the referenced page",
+            location,
+        )
+    if (
+        evidence.continued_on_page_number is None
+        and evidence.continued_excerpt is None
+    ):
+        return
+    if (
+        not isinstance(evidence.continued_on_page_number, int)
+        or isinstance(evidence.continued_on_page_number, bool)
+        or evidence.continued_on_page_number != evidence.source_page_number + 1
+        or evidence.continued_on_page_number > pdf.page_count
+    ):
+        raise _error(
+            ProtocolValidationCode.INVALID_SOURCE_PAGE,
+            "a continued statement must continue on the next page",
+            location,
+        )
+    continued = _text(evidence.continued_excerpt, f"{location}.continued_excerpt")
+    if continued not in pdf.pages[evidence.continued_on_page_number - 1].text:
+        raise _error(
+            ProtocolValidationCode.SOURCE_EXCERPT_MISMATCH,
+            "continued excerpt is not present on the next page",
             location,
         )
 
