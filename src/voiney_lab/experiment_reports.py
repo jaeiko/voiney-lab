@@ -2389,6 +2389,32 @@ def render_markdown(narrative: ReportNarrative) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+#: Word paragraph spacing (decision 1, 2026-10-06): points before, points
+#: after, and line spacing as a multiple of one line, by block kind. The
+#: template's default (10 pt after every paragraph, 1.15 lines) applied to
+#: body lines, list items and table text alike and left long gaps; headings
+#: keep room above them. A list's last item takes the body's space after.
+DOCX_SPACING: dict[str, tuple[float, float, float]] = {
+    "title": (0, 8, 1.0),
+    "h1": (12, 4, 1.0),
+    "h2": (8, 3, 1.0),
+    "p": (0, 4, 1.15),
+    "note": (2, 4, 1.15),
+    "list": (0, 1, 1.15),
+    "table": (0, 0, 1.0),
+}
+
+
+def _space(paragraph: Any, kind: str, *, after: float | None = None) -> None:
+    from docx.shared import Pt
+
+    before, default_after, line = DOCX_SPACING[kind]
+    form = paragraph.paragraph_format
+    form.space_before = Pt(before)
+    form.space_after = Pt(default_after if after is None else after)
+    form.line_spacing = line
+
+
 def render_docx(narrative: ReportNarrative) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -2403,6 +2429,11 @@ def render_docx(narrative: ReportNarrative) -> bytes:
     normal = document.styles["Normal"]
     normal.font.size = Pt(10.5)
     normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "맑은 고딕")
+    # Paragraphs a person adds in Word take the body's spacing, not the template's.
+    body_before, body_after, body_line = DOCX_SPACING["p"]
+    normal.paragraph_format.space_before = Pt(body_before)
+    normal.paragraph_format.space_after = Pt(body_after)
+    normal.paragraph_format.line_spacing = body_line
     text_width = section.page_width - section.left_margin - section.right_margin
 
     for kind, content in report_blocks(narrative):
@@ -2412,24 +2443,28 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             run = paragraph.add_run(str(content))
             run.bold = True
             run.font.size = Pt(16)
+            _space(paragraph, "title")
         elif kind in {"h1", "h2"}:
             paragraph = document.add_paragraph()
             run = paragraph.add_run(str(content))
             run.bold = True
             run.font.size = Pt(13 if kind == "h1" else 11)
             run.font.color.rgb = RGBColor(20, 50, 35)
-            paragraph.paragraph_format.space_before = Pt(10 if kind == "h1" else 6)
+            _space(paragraph, kind)
         elif kind == "p":
             for line in str(content).split("\n"):
-                document.add_paragraph(line)
+                _space(document.add_paragraph(line), "p")
         elif kind == "note":
             paragraph = document.add_paragraph()
             run = paragraph.add_run(str(content))
             run.italic = True
             run.font.color.rgb = RGBColor(90, 90, 90)
+            _space(paragraph, "note")
         elif kind == "list":
-            for item in content:
-                document.add_paragraph(f"• {item}")
+            for index, item in enumerate(content):
+                last = index == len(content) - 1
+                _space(document.add_paragraph(f"• {item}"), "list",
+                       after=DOCX_SPACING["p"][1] if last else None)
         elif kind == "table":
             header, rows, widths = content
             table = document.add_table(rows=1, cols=len(header))
@@ -2446,6 +2481,10 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:
                             run.font.size = Pt(9)
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        _space(paragraph, "table")
             _fix_column_widths(table, [int(text_width * share) for share in widths])
     buffer = io.BytesIO()
     document.save(buffer)
