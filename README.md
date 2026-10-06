@@ -1178,9 +1178,15 @@ system. Both have one structure (`experiment_reports.report_blocks`):
   approval state in words; and, for a test-mode run, that the readiness
   gates were skipped;
 - 1 purpose and 2 background and principle, from the protocol's PDF only;
-- 3 materials and methods: the steps done (in Korean where a translation
-  exists, source values unchanged) and what was done differently from the
-  source, from the record only;
+- 3 materials and methods: the materials and the equipment as two tables
+  (the name as the protocol lists it, its use, and the source steps that
+  name it), the steps done (in Korean where a translation exists, source
+  values unchanged; a step done in more than one round shows each round's
+  time), and what was done differently from the source, from the record
+  only -- among it a later start as its event records it ("10단계부터
+  시작(1–9단계 건너뜀)") and each return within a repeat with its round,
+  which the report says is counted from returns confirmed in words, not
+  rounds done at the bench;
 - 4 results: the researcher's observations, anomalies and photos as a table,
   or "기록된 관찰이 없습니다.";
 - 5 discussion: (가) what the record shows and (나) what needs checking are
@@ -1193,7 +1199,24 @@ system. Both have one structure (`experiment_reports.report_blocks`):
 Identifiers, hashes, status values and the raw event list are not in these
 two reports; the event ledger and the JSON and CSV exports keep them. Every
 table has fixed column shares (`experiment_reports.TABLE_WIDTHS`): short
-values narrow, content wide.
+values narrow, content wide. In Word, body text and notes run at 1.15 lines
+with 4 pt after, list items 1 pt apart, table text single-spaced with none,
+and headings keep 12 pt (sections) or 8 pt (subsections) above them
+(`experiment_reports.DOCX_SPACING`).
+
+A material's or a piece of equipment's steps are the server's
+(`experiment_reports.item_step_labels`): it looks for the item in each source
+step's text, by the name as listed without parentheses, a catalog number or
+what follows a comma; failing that, by the name without its company and grade
+words; and by a short name the source gives it ("Lysogeny Broth (LB)",
+"ammonium bicarbonate (AMBIC)"). A step that names none of these is not
+listed, and an item no step names shows "—". Its use comes from the same one
+report-model call as the prose and is checked like it: a noun phrase of at
+most 25 characters, no digit or unit, nothing about safety, nothing that tells
+a person what to do, and only for an item the protocol lists. A use that fails
+is left blank and "용도는 AI 가 원문 단계를 바탕으로 정리했다." stands under
+the tables; with no model, a failed call, or no use passing, the tables have
+no use column.
 
 The report role's model writes only the prose sections, from experiment
 content with no identifiers, and the server checks each before using it: a

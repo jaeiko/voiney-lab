@@ -439,8 +439,8 @@ class NumberAndUnitCheckTests(_ReportCase):
 class ReportLayoutTests(_ReportCase):
     """Decisions 4–6 (2026-10-06): column widths, the experimenter, authorship."""
 
-    NARROW = {"단계", "종류", "시각", "완료 시각", "타이머 (원문 / 실제)", "항목"}
-    WIDE = {"원문 단계", "기록 내용 (연구자가 말한 그대로)", "내용"}
+    NARROW = {"단계", "종류", "시각", "완료 시각", "타이머 (원문 / 실제)", "항목", "사용 단계"}
+    WIDE = {"원문 단계", "기록 내용 (연구자가 말한 그대로)", "내용", "이름 (원문 그대로)"}
 
     def narrative(self, reply: dict | None = None) -> er.ReportNarrative:
         doc = self.doc()
@@ -452,7 +452,8 @@ class ReportLayoutTests(_ReportCase):
     def test_every_table_has_widths_with_short_values_narrow(self) -> None:
         self.run_steps_one_to_four_then_stop()
         tables = [content for kind, content in er.report_blocks(self.narrative()) if kind == "table"]
-        self.assertEqual(len(tables), 3)
+        # Lane RP2, decision 2: materials and equipment are two tables of their own.
+        self.assertEqual(len(tables), 5)
         for header, _rows, widths in tables:
             self.assertEqual(len(widths), len(header), header)
             self.assertAlmostEqual(sum(widths), 1.0, places=6)
@@ -467,7 +468,7 @@ class ReportLayoutTests(_ReportCase):
 
         self.run_steps_one_to_four_then_stop()
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
-        self.assertEqual(len(document.tables), 3)
+        self.assertEqual(len(document.tables), 5)
         for table in document.tables:
             header = tuple(cell.text for cell in table.rows[0].cells)
             shares = er.TABLE_WIDTHS[header]
