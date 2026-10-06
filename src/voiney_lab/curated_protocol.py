@@ -14713,6 +14713,34 @@ class CuratedProtocolSession:
             step_id=step.step_id if step is not None else None,
         )
 
+    def history_state(
+        self,
+        *,
+        next_turn_id: int,
+        configuration_id: int | None = None,
+        generation: int | None = None,
+    ) -> dict[str, Any]:
+        """What a router history bundle says the state was after a turn. Reads only.
+
+        Lane RT, decision 2: the step and status, the step timer when one is
+        running or has run out, and the server question the next turn could
+        answer. History is context; each call's snapshot stays the state.
+        """
+
+        timer = self.timer_status().get("state") if self.active else None
+        return {
+            "step": (
+                self.fixture.steps[self.current_index].source_label
+                if self.active else None
+            ),
+            "status": self.workflow_status,
+            "timer": timer if timer in {"running", "expired"} else None,
+            "question": self._open_questions(
+                turn_id=next_turn_id, configuration_id=configuration_id,
+                generation=generation,
+            ).first_open,
+        }
+
     def router_turn_facts(
         self,
         transcript: str,
