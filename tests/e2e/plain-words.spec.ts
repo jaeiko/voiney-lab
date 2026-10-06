@@ -191,7 +191,7 @@ test.describe('Plain words on the researcher screen (lane U)', () => {
     await page.locator('#protocol-blockers .citation-row input').first().check();
     await page.locator('#protocol-blockers button', { hasText: '이 모호성을 해결' }).click();
     const note = page.locator('#protocol-blockers .finding-status');
-    await expect(note).toContainText('검토자 역할이 있는 계정만 기록할 수 있습니다');
+    await expect(note).not.toContainText('검토자 역할이 있는 계정만');
     await expect(note).toContainText('검토자 계정으로 로그인한 뒤 다시 눌러 주세요');
   });
 

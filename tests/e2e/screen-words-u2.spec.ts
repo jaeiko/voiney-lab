@@ -145,7 +145,7 @@ test.describe('Remaining screen words (lane U2)', () => {
       await send(page, { type: 'research.state', configuration_id: 7, turn_id: turn, generation: 0, status: 'running', phase: turn === 1 ? 'supplemental_model' : 'authoritative_web' });
     }
     await result(1, { primary_text: '일반적인 배경 설명', answer_origin: 'supplemental_model_knowledge', citations: [] });
-    await expect(page.locator('#web-ref-title')).toHaveText('일반 참고 설명 · AI 지식');
+    await expect(page.locator('#web-ref-title')).toHaveText('AI 일반 지식');
     await expect(page.locator('#task-web-reference-content .outside-pdf')).toHaveCount(0);
     await result(2, { primary_text: '권위 자료의 설명', answer_origin: 'external_authoritative_reference',
       citations: [{ title: 'Lab safety', domain: 'osha.gov', canonical_url: 'https://osha.gov/laboratory' }] });
