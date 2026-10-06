@@ -267,6 +267,10 @@ class RouterAnswerVoiceTests(VoiceSessionHarness, unittest.TestCase):
     def test_the_reply_carries_the_structure_and_the_marks(self) -> None:
         self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
         self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+        # The key is the router's. Step translation follows its own role's key
+        # (lane F, decision 1), so that role is left keyless here.
+        self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"
+        self.environment["ANTHROPIC_API_KEY"] = ""
         _FakeAsyncOpenAI.client = FakeRouterClient(answer_reply(
             "젤 조각을 담는 작은 시험관이에요.", source_kind="outside_pdf",
             outside_pdf_term="gel plug",
