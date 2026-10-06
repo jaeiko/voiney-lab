@@ -257,7 +257,8 @@ class ReportWriterTests(_ReportCase):
         for content in ("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", "밴드가 투명해졌어",
                         "튜브를 쏟았어", "원문 15분 / 10분에 끝냄", "09:30"):
             self.assertIn(content, sent)
-        self.assertEqual(set(narrative.section_origin.values()), {"모델"})
+        self.assertEqual(set(narrative.section_origin.values()), {"모델", "서버"})
+        self.assertEqual(narrative.section_origin["discussion_confirmed"], "서버")
         self.assertEqual(narrative.purpose, GOOD_REPLY["purpose"])
         self.assertEqual(narrative.discussion_review,
                          ("검토 제안 (항목 2): 쏟은 양이 결과에 영향을 주었는지 검토한다.",))
@@ -270,23 +271,37 @@ class ReportWriterTests(_ReportCase):
         bad["results_summary"] = "4단계에서 “젤이 노랗게 변했다”는 관찰이 기록되었다."
         bad["conclusion"] = f"기록 {self.report_id} 는 stopped 상태다."
         bad["discussion_review"] = [{"항목 번호": 99, "제안": "온도가 원인으로 보인다."}]
-        bad["discussion_confirmed"] = ["밴드가 투명해진 것은 탈색이 끝난 것으로 보인다."]
         narrative, _ = self.write(bad)
         fallback = er.deterministic_sections(narrative.facts)
         for key, reason in (
             ("purpose", "실험 조건 숫자"),
-            ("methods_summary", "기록·원문에 없는 숫자 20"),
+            ("methods_summary", "기록·원문에 없는 값 20분"),
             ("results_summary", "기록에 없는 관찰"),
             ("conclusion", "본문에 ER-/fixture-/candidate- 식별자"),
             ("discussion_review", "기록된 이상·편차에 붙지 않은 원인 추정"),
-            ("discussion_confirmed", "추측 표현"),
         ):
             self.assertEqual(narrative.section_origin[key], "대체", key)
             self.assertTrue(any(reason in item for item in narrative.rejected[key]), (key, narrative.rejected[key]))
             self.assertEqual(getattr(narrative, key), fallback[key] if not isinstance(fallback[key], tuple) else tuple(fallback[key]))
-        self.assertEqual(narrative.section_origin["discussion_to_check"], "모델")
+        self.assertEqual(narrative.section_origin["next_steps"], "모델")
         text = er.render_markdown(narrative)
         self.assertIn("| 1. 실험 목적 | 대체 — 실험 조건 숫자 |", text)
+
+    def test_discussion_confirmed_and_to_check_are_the_servers_lists(self) -> None:
+        # Decision 2 (2026-10-06): the model wrote "completed as specified"
+        # in (가), which the record does not say; (가) and (나) are now the
+        # server's lists only, whatever the model returns.
+        self.run_steps_one_to_four_then_stop()
+        narrative, client = self.write(dict(
+            GOOD_REPLY, discussion_confirmed=["모든 단계를 조건대로 정상적으로 완료했다."],
+            discussion_to_check=["특별히 확인할 점은 없다."]))
+        self.assertEqual(narrative.discussion_confirmed, narrative.facts.confirmed)
+        self.assertEqual(narrative.discussion_to_check, narrative.facts.to_check)
+        self.assertEqual(narrative.section_origin["discussion_confirmed"], "서버")
+        self.assertEqual(narrative.section_origin["discussion_to_check"], "서버")
+        text = er.render_markdown(narrative)
+        self.assertNotIn("조건대로 정상적으로", text)
+        self.assertNotIn("discussion_confirmed (", client.calls[0]["messages"][0]["content"])
 
     def test_purpose_sentences_need_a_source_number(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -314,7 +329,7 @@ class ReportWriterTests(_ReportCase):
         self.run_steps_one_to_four_then_stop()
         narrative, client = self.write("not json")
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual(set(narrative.section_origin.values()), {"대체"})
+        self.assertEqual({narrative.section_origin[key] for key in er.MODEL_SECTIONS}, {"대체"})
         deterministic = er.ReportWriterBrain().build_deterministic_narrative(
             self.doc(), list(self.doc()["events"]), fixture=self.fixture)
         def body(item: er.ReportNarrative) -> str:
@@ -390,3 +405,29 @@ class ReportExportRouteTests(_ReportCase):
             else:
                 text = "\n".join(p.text for p in Document(io.BytesIO(response.content)).paragraphs)
             self.assertIn(GOOD_REPLY["purpose"], text, suffix)
+
+
+class NumberAndUnitCheckTests(_ReportCase):
+    """Decision 3 (2026-10-06): a number with a unit is compared with its unit."""
+
+    def problems(self, methods: str) -> list[str]:
+        self.run_steps_one_to_four_then_stop()
+        facts = er.ReportWriterBrain.facts_for(self.doc(), fixture=self.fixture)
+        return er.check_report_sections({"methods_summary": methods}, facts).get("methods_summary", [])
+
+    def test_the_same_value_written_another_way_passes(self) -> None:
+        # The source says "500 µL", "37°C" and "15 min".
+        self.assertEqual(self.problems("3단계는 Solution A 500 uL로 37 ℃에서 15분 동안 세척했다."), [])
+        self.assertEqual(self.problems("3단계는 500μL, 37°C, 15min 조건이다."), [])
+
+    def test_a_known_number_with_another_unit_is_refused(self) -> None:
+        # 15 is in the record (15 min) but 15 hours is not.
+        self.assertEqual(self.problems("3단계를 15시간 동안 세척했다."), ["기록·원문에 없는 값 15시간"])
+        self.assertEqual(self.problems("3단계에 37 mL 를 썼다."), ["기록·원문에 없는 값 37 mL"])
+
+    def test_a_converted_value_is_refused(self) -> None:
+        self.assertEqual(self.problems("3단계를 0.25 h 동안 세척했다."), ["기록·원문에 없는 값 0.25 h"])
+
+    def test_numbers_without_a_unit_are_checked_as_before(self) -> None:
+        self.assertEqual(self.problems("1–4단계를 수행하고 10:06에 3단계를 마쳤다."), [])
+        self.assertEqual(self.problems("77개 조각을 만들었다."), ["기록·원문에 없는 숫자 77"])

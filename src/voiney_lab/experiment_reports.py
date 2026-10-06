@@ -899,16 +899,13 @@ DEFAULT_REPORT_TIMEZONE = "Asia/Seoul"
 #: The model-written sections, in report order.
 MODEL_SECTIONS = (
     "purpose", "background", "methods_summary",
-    "results_summary", "discussion_confirmed", "discussion_to_check",
-    "discussion_review", "conclusion", "next_steps",
+    "results_summary", "discussion_review", "conclusion", "next_steps",
 )
 _SECTION_NAMES = {
     "purpose": "1. 실험 목적",
     "background": "2. 배경·원리",
     "methods_summary": "3. 방법 요약",
     "results_summary": "4. 결과 요약",
-    "discussion_confirmed": "5. 고찰 (가)",
-    "discussion_to_check": "5. 고찰 (나)",
     "discussion_review": "5. 고찰 (다)",
     "conclusion": "6. 결론",
     "next_steps": "6. 다음 할 일",
@@ -1464,15 +1461,71 @@ _SPECULATION = ("추정", "것으로 보인", "보인다", "아마", "가능성"
 _SENTENCE = re.compile(r"(?<=[.!?。])\s+")
 
 
+#: Units a number may carry, each written the ways a protocol or a person
+#: writes it, and the one form they are compared in (decision 3: "15분" is
+#: "15 min", "µL" is "uL"). A number with a unit must appear with the same
+#: unit in the record or the source; a bare number is checked as before.
+_UNIT_FORMS = (
+    (r"°\s*C|℃|도", "°C"),
+    (r"시간|hours?|hrs?|h", "h"),
+    (r"분|minutes?|mins?|min|m", "min"),
+    (r"초|seconds?|secs?|sec|s", "s"),
+    (r"[µμu][Ll]", "µL"),
+    (r"m[Ll]", "mL"),
+    (r"L", "L"),
+    (r"mM", "mM"),
+    (r"[µμu]M", "µM"),
+    (r"nM", "nM"),
+    (r"M", "M"),
+    (r"rpm|RPM", "rpm"),
+    (r"[x×]\s*g", "×g"),
+    (r"mg", "mg"),
+    (r"[µμu]g", "µg"),
+    (r"ng", "ng"),
+    (r"g", "g"),
+    (r"mm", "mm"),
+    (r"cm", "cm"),
+    (r"[µμ]m", "µm"),
+    (r"kDa", "kDa"),
+    (r"%", "%"),
+)
+_UNIT_PATTERNS = tuple((re.compile(pattern), unit) for pattern, unit in _UNIT_FORMS)
+_MEASURE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(" + "|".join(
+        # Longer spellings first so "min" is not read as "m" and "mL" not as "m".
+        sorted((p for pattern, _ in _UNIT_FORMS for p in pattern.split("|")), key=len, reverse=True)
+    ) + r")(?![A-Za-zµμ])"
+)
+
+
+def _plain(text: str) -> str:
+    """Text without citation marks or thousands separators."""
+
+    return re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", _CITATION.sub(" ", text))
+
+
+def _number_form(item: str) -> str:
+    return item if "." in item else (item.lstrip("0") or "0")
+
+
 def _numbers(text: str) -> set[str]:
-    text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", _CITATION.sub(" ", text))
-    found = set()
-    for item in _NUMBER.findall(text):
-        found.add(item.lstrip("0") or "0" if "." not in item else item)
+    return {_number_form(item) for item in _NUMBER.findall(_plain(text))}
+
+
+def _measures(text: str) -> list[tuple[str, str, str]]:
+    """(number, unit, as written) for every number that carries a unit."""
+
+    found = []
+    for match in _MEASURE.finditer(_plain(text)):
+        written = match.group(2)
+        unit = next(unit for pattern, unit in _UNIT_PATTERNS if pattern.fullmatch(written))
+        found.append((_number_form(match.group(1)), unit, match.group(0)))
     return found
 
 
-def _allowed_numbers(facts: ReportFacts) -> set[str]:
+def _record_texts(facts: ReportFacts) -> list[str]:
+    """Every text a number in a model section may come from."""
+
     texts: list[str] = [facts.protocol_title, facts.keywords, facts.purpose_from_pdf]
     texts += [value for _, value in facts.run_rows]
     texts += list(facts.deviations) + list(facts.confirmed) + list(facts.to_check)
@@ -1486,10 +1539,18 @@ def _allowed_numbers(facts: ReportFacts) -> set[str]:
     texts.append(" ".join(str(n) for n in range(1, facts.total_steps + 1)))
     texts.append(" ".join(str(n) for n in range(0, len(facts.records) + 1)))
     texts.append(facts.protocol_reference.title)
+    return [str(text) for text in texts]
+
+
+def _allowed_numbers(facts: ReportFacts) -> set[str]:
     allowed: set[str] = set()
-    for text in texts:
-        allowed |= _numbers(str(text))
+    for text in _record_texts(facts):
+        allowed |= _numbers(text)
     return allowed
+
+
+def _allowed_measures(facts: ReportFacts) -> set[tuple[str, str]]:
+    return {(number, unit) for text in _record_texts(facts) for number, unit, _ in _measures(text)}
 
 
 def _as_text(value: Any) -> str:
@@ -1511,6 +1572,7 @@ def check_report_sections(
     """Why each model section may not be used ({} for a section that passes)."""
 
     allowed = _allowed_numbers(facts)
+    allowed_measures = _allowed_measures(facts)
     record_texts = [" ".join(text.split()) for text in facts.record_texts]
     reviewable = set(range(1, len(facts.records) + len(facts.deviations) + 1))
     reasons: dict[str, list[str]] = {}
@@ -1533,12 +1595,16 @@ def check_report_sections(
                         problems.append("출처 번호가 없는 문장")
                         break
         else:
-            extra = _numbers(text) - allowed
+            unknown = [written for number, unit, written in _measures(text)
+                       if (number, unit) not in allowed_measures]
+            if unknown:
+                problems.append("기록·원문에 없는 값 " + ", ".join(dict.fromkeys(unknown)))
+            extra = _numbers(_MEASURE.sub(" ", _plain(text))) - allowed
             if extra:
                 problems.append("기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6]))
             if cited:
                 problems.append("방법·결과·고찰 칸의 출처 번호")
-        if key in {"results_summary", "discussion_confirmed", "methods_summary"}:
+        if key in {"results_summary", "methods_summary"}:
             for word in _SPECULATION:
                 if word in text:
                     problems.append(f"추측 표현 “{word}”")
@@ -1709,7 +1775,7 @@ def narrative_from_sections(
     origin: dict[str, str] = {}
     for key in MODEL_SECTIONS:
         value = None if model is None or key in rejected else model.get(key)
-        if key in {"discussion_confirmed", "discussion_to_check", "next_steps"}:
+        if key == "next_steps":
             value = _text_items(value) if value else None
         elif key == "discussion_review":
             value = _review_items(value) if value else None
@@ -1726,6 +1792,10 @@ def narrative_from_sections(
             else:
                 # The model left it empty: not a refusal, but not its words.
                 origin[key] = "모델이 비움 — 서버 문장"
+    # Discussion (가) and (나) are lists the server builds from the record
+    # (decision 2); the model does not write them.
+    for key in ("discussion_confirmed", "discussion_to_check"):
+        chosen[key], origin[key] = fallback[key], "서버"
     return ReportNarrative(
         title=f"{facts.protocol_title} 실험 보고서" if facts.protocol_title else "실험 보고서",
         purpose=chosen["purpose"], background=chosen["background"],
@@ -1798,11 +1868,11 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 'background' 는 프로토콜 원문에 있는 내용만 쓴다. 원문 밖의 지식(교과서·웹 지식)은 쓰지 않는다. 원문에 원리 설명이 없으면 없다고 쓴다.
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
 - 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
+- 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
 
 JSON 객체 하나만 돌려준다. 키:
 purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
 results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
-discussion_confirmed (문장 목록: 기록에서 확인되는 점), discussion_to_check (문장 목록: 확인이 필요한 점),
 discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록)."""
 
 
