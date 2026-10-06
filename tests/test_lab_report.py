@@ -135,26 +135,29 @@ class _ReportCase(unittest.TestCase):
 
 
 class ReportStructureTests(_ReportCase):
-    def test_markdown_follows_the_report_order_with_identifiers_only_in_the_appendix(self) -> None:
+    def test_markdown_follows_the_report_order_without_identifiers(self) -> None:
+        # Decision 6 (2026-10-06): no appendix and no event list in the
+        # researcher's report; the ledger and the JSON export keep them.
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         headings = [line for line in text.splitlines() if line.startswith("#")]
-        order = ["# Test digestion protocol 실험 보고서", "## 1. 실험 목적", "## 2. 배경·원리",
-                 "## 3. 재료 및 방법", "## 4. 결과", "## 5. 고찰", "## 6. 결론", "## 참고문헌",
-                 "## 부록 · 기록 정보"]
-        self.assertEqual([h for h in headings if h in order], order)
-        body, appendix = text.split("## 부록 · 기록 정보")
-        for identifier in (self.report_id, *REPORT_ID_FIELDS, "stopped", "step_completed"):
-            self.assertNotIn(identifier, body)
+        self.assertEqual(headings[:2], ["# Test digestion protocol 실험 보고서", "## 1. 실험 목적"])
+        order = ["## 1. 실험 목적", "## 2. 배경·원리", "## 3. 재료 및 방법", "## 4. 결과",
+                 "## 5. 고찰", "## 6. 결론", "## 참고문헌"]
+        self.assertEqual([h for h in headings if h.startswith("## ")], order)
+        for identifier in (self.report_id, *REPORT_ID_FIELDS, "stopped", "step_completed",
+                           "부록", "시스템 사건"):
+            self.assertNotIn(identifier, text)
+        exported = self.store.export_json(self.report_id).decode()
         for identifier in (self.report_id, "rev-test-1", "9" * 64, "step_completed"):
-            self.assertIn(identifier, appendix)
+            self.assertIn(identifier, exported)
 
     def test_run_information_is_in_the_researchers_time_zone_and_plain_words(self) -> None:
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         for row in ("| 날짜 | 2026년 10월 6일 (화) |", "| 시작 | 09:30 |", "| 끝 | 10:15 |",
                     "| 걸린 시간 | 45분 |", "| 완료 단계 | 4 / 5 |", "| 결과 | 중단 — 5단계에서 종료 |",
-                    "| 수행자 | (직접 적어 주세요) |"):
+                    "| 실험자 | (직접 적어 주세요) |"):
             self.assertIn(row, text)
         self.assertIn("개발용 시험 프로토콜", text)
         with mock.patch.dict(os.environ, {"VOINEY_LAB_REPORT_TIMEZONE": "UTC"}):
@@ -188,7 +191,7 @@ class ReportStructureTests(_ReportCase):
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
         paragraphs = [p.text for p in document.paragraphs]
         for heading in ("Test digestion protocol 실험 보고서", "1. 실험 목적", "2. 배경·원리",
-                        "3. 재료 및 방법", "4. 결과", "5. 고찰", "6. 결론", "참고문헌", "부록 · 기록 정보"):
+                        "3. 재료 및 방법", "4. 결과", "5. 고찰", "6. 결론", "참고문헌"):
             self.assertIn(heading, paragraphs)
         cells = [[c.text for c in row.cells] for table in document.tables for row in table.rows]
         self.assertIn(["시작", "09:30"], cells)
@@ -284,8 +287,6 @@ class ReportWriterTests(_ReportCase):
             self.assertTrue(any(reason in item for item in narrative.rejected[key]), (key, narrative.rejected[key]))
             self.assertEqual(getattr(narrative, key), fallback[key] if not isinstance(fallback[key], tuple) else tuple(fallback[key]))
         self.assertEqual(narrative.section_origin["next_steps"], "모델")
-        text = er.render_markdown(narrative)
-        self.assertIn("| 1. 실험 목적 | 대체 — 실험 조건 숫자 |", text)
 
     def test_discussion_confirmed_and_to_check_are_the_servers_lists(self) -> None:
         # Decision 2 (2026-10-06): the model wrote "completed as specified"
@@ -333,7 +334,7 @@ class ReportWriterTests(_ReportCase):
         deterministic = er.ReportWriterBrain().build_deterministic_narrative(
             self.doc(), list(self.doc()["events"]), fixture=self.fixture)
         def body(item: er.ReportNarrative) -> str:
-            return er.render_markdown(item).split("## 3. 재료 및 방법")[1].split("## 부록")[0]
+            return er.render_markdown(item).split("## 3. 재료 및 방법")[1].split("> 이 보고서의 문장")[0]
 
         self.assertEqual(body(narrative), body(deterministic))
 
@@ -386,7 +387,7 @@ class ReportExportRouteTests(_ReportCase):
         text = response.text
         self.assertTrue(text.startswith("# Test digestion protocol 실험 보고서"))
         self.assertIn("| 4 | 이상 | 튜브를 쏟았어 | 10:09 |", text)
-        self.assertNotIn(self.report_id, text.split("## 부록 · 기록 정보")[0])
+        self.assertNotIn(self.report_id, text)
 
     def test_both_exports_use_the_report_model_when_it_has_a_key(self) -> None:
         from docx import Document
@@ -431,3 +432,82 @@ class NumberAndUnitCheckTests(_ReportCase):
     def test_numbers_without_a_unit_are_checked_as_before(self) -> None:
         self.assertEqual(self.problems("1–4단계를 수행하고 10:06에 3단계를 마쳤다."), [])
         self.assertEqual(self.problems("77개 조각을 만들었다."), ["기록·원문에 없는 숫자 77"])
+
+
+class ReportLayoutTests(_ReportCase):
+    """Decisions 4–6 (2026-10-06): column widths, the experimenter, authorship."""
+
+    NARROW = {"단계", "종류", "시각", "완료 시각", "타이머 (원문 / 실제)", "항목"}
+    WIDE = {"원문 단계", "기록 내용 (연구자가 말한 그대로)", "내용"}
+
+    def narrative(self, reply: dict | None = None) -> er.ReportNarrative:
+        doc = self.doc()
+        if reply is None:
+            return er.ReportWriterBrain().build_deterministic_narrative(doc, list(doc["events"]), fixture=self.fixture)
+        brain = er.ReportWriterBrain(client=_Client(reply), model="fake-model", timeout_seconds=5)
+        return asyncio.run(brain.generate_narrative(doc, list(doc["events"]), fixture=self.fixture))
+
+    def test_every_table_has_widths_with_short_values_narrow(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        tables = [content for kind, content in er.report_blocks(self.narrative()) if kind == "table"]
+        self.assertEqual(len(tables), 3)
+        for header, _rows, widths in tables:
+            self.assertEqual(len(widths), len(header), header)
+            self.assertAlmostEqual(sum(widths), 1.0, places=6)
+            narrow = [share for name, share in zip(header, widths) if name in self.NARROW]
+            wide = [share for name, share in zip(header, widths) if name in self.WIDE]
+            self.assertEqual(len(narrow) + len(wide), len(header), header)
+            self.assertLess(max(narrow), min(wide), header)
+
+    def test_word_applies_the_widths_and_a_fixed_layout(self) -> None:
+        from docx import Document
+        from docx.oxml.ns import qn
+
+        self.run_steps_one_to_four_then_stop()
+        document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
+        self.assertEqual(len(document.tables), 3)
+        for table in document.tables:
+            header = tuple(cell.text for cell in table.rows[0].cells)
+            shares = er.TABLE_WIDTHS[header]
+            grid = [column.width for column in table.columns]
+            for width, share in zip(grid, shares):
+                self.assertAlmostEqual(width / sum(grid), share, places=2, msg=header)
+            for row in table.rows:
+                self.assertEqual([cell.width for cell in row.cells], grid)
+            layout = table._tbl.tblPr.find(qn("w:tblLayout"))
+            self.assertEqual(layout.get(qn("w:type")), "fixed")
+
+    def test_markdown_dashes_carry_the_widths(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        lines = text.splitlines()
+        rule = lines[lines.index("| 단계 | 종류 | 기록 내용 (연구자가 말한 그대로) | 시각 |") + 1]
+        self.assertEqual([len(part) for part in rule.strip("|").split("|")], [3, 4, 29, 4])
+
+    def test_the_experimenter_is_the_name_the_server_recorded(self) -> None:
+        self.event("00:30", "experimenter_recorded", None, payload={"display_name": "김연구"})
+        self.event("00:31", "experimenter_recorded", None, payload={"display_name": "다른 사람"})
+        self.run_steps_one_to_four_then_stop()
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.assertIn("| 실험자 | 김연구 |", text)
+        self.assertNotIn("다른 사람", text)
+        self.assertNotIn("수행자", text)
+
+    def test_a_test_mode_run_says_so_in_the_run_table(self) -> None:
+        self.event("00:29", "test_mode_readiness_gates_skipped", None, payload={"switch": "X"})
+        self.run_steps_one_to_four_then_stop()
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.assertIn("| 준비 검사 | 시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀 |", text)
+        self.assertNotIn("test_mode", text)
+
+    def test_the_last_line_says_who_wrote_the_sentences_and_when(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        self.at("02:00")
+        model = er.render_markdown(self.narrative(GOOD_REPLY))
+        self.assertTrue(model.rstrip().endswith(
+            "> 이 보고서의 문장 일부는 AI(fake-model)가 실험 기록과 프로토콜 원문을 바탕으로 작성했으며, "
+            "외부 자료는 쓰지 않았다. 작성 2026년 10월 6일 11:00."), model[-300:])
+        server = er.render_markdown(self.narrative())
+        self.assertTrue(server.rstrip().endswith(
+            "> 이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
+            "작성 2026년 10월 6일 11:00."), server[-300:])

@@ -165,11 +165,12 @@ def test_docx_export_contains_10_sections(tmp_path):
     assert "5. 고찰" in full_text
     assert "6. 결론" in full_text
     assert "참고문헌" in full_text
-    assert "부록 · 기록 정보" in full_text
-    assert "수행자" in table_text
+    assert "실험자" in table_text
     assert "In-Gel Protein Digestion" in full_text
-    assert "시스템 사건 목록" in full_text
-    assert report_id in table_text
+    # Decision 6 (2026-10-06): identifiers and the event list stay in the
+    # ledger and the JSON export, not in the researcher's report.
+    assert "부록 · 기록 정보" not in full_text
+    assert report_id not in full_text + table_text
 
 
 def test_curated_protocol_turn_answer_envelope_rich_formatting():

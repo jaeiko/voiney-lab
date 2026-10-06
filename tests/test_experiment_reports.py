@@ -86,7 +86,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         markdown = self.store.export_markdown(report["report_id"]).decode()
         self.assertEqual(exported["readiness_status"], "analysis_required")
         self.assertTrue(exported["development_only"])
-        self.assertIn("source_consulted", markdown)
+        # Lane RP, decision 6: the event list stays in the ledger and the
+        # JSON export; the researcher's Markdown report leaves it out.
+        self.assertIn("source_consulted", [event["event_type"] for event in exported["events"]])
+        self.assertNotIn("source_consulted", markdown)
+        self.assertNotIn("chain_of_thought", markdown)
         self.assertNotIn("chain_of_thought", json.dumps(exported))
 
     def test_report_listing_and_csv_export_are_stable_and_utf8(self):
@@ -162,17 +166,20 @@ class ExperimentReportStoreTests(unittest.TestCase):
             [paragraph.text for paragraph in document.paragraphs]
             + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
         )
-        self.assertIn("수행자", text)
+        self.assertIn("실험자", text)
         self.assertIn("(직접 적어 주세요)", text)
         self.assertIn("1. 실험 목적", text)
         self.assertIn("3. 재료 및 방법", text)
         self.assertIn("4. 결과", text)
         self.assertIn("5. 고찰", text)
         self.assertIn("6. 결론", text)
-        self.assertIn("Step 3 완료", text)
-        self.assertIn("타이머 총 15:00", text)
-        self.assertIn("경과 00:20", text)
-        self.assertIn("잔여 14:40", text)
+        # Lane RP, decision 6: the raw event list (with its timer values) is
+        # no longer in the Word report; the ledger and JSON export keep it.
+        self.assertIn("현재 단계를 완료했어요.", text)
+        self.assertNotIn("잔여 14:40", text)
+        exported = json.loads(self.store.export_json(report["report_id"]))
+        self.assertEqual(exported["events"][0]["payload"]["timer"],
+                         {"source_duration_seconds": 900, "elapsed_seconds": 20, "remaining_seconds": 880})
         self.assertNotIn("Student number: 20", text)
         self.assertNotIn("홍길동", text)
         self.assertNotIn("chain_of_thought", text)
@@ -265,11 +272,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         docx_bytes = self.store.export_docx(report["report_id"])
         from docx import Document
         doc = Document(io.BytesIO(docx_bytes))
-        # Verify table exists in docx (lane RP: the event list is the last table)
+        # Verify table exists in docx (lane RP: the results table is the last one)
         self.assertGreater(len(doc.tables), 0)
         table_text = " ".join(cell.text for row in doc.tables[-1].rows for cell in row.cells)
         self.assertIn("단계", table_text)
-        self.assertIn("사건", table_text)
+        self.assertIn("기록 내용", table_text)
         self.assertIn("시약을 추가했습니다", table_text)
 
     def test_grounded_report_with_candidate_a_domain_protocol_rehydration(self):

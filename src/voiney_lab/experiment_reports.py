@@ -880,7 +880,8 @@ def build_grounded_report_context(
 #
 # The report is an experiment report, not a log of the system: purpose,
 # background, materials and methods, results, discussion, conclusion,
-# references, and only then an appendix with the record's identifiers.
+# and references. The record's identifiers, hashes and raw event list stay in
+# the ledger and the JSON export; the researcher's report leaves them out.
 #
 # The server builds every fact from the ledger and the protocol it ran
 # (``build_report_facts``): the step tables, the results table, what was done
@@ -985,9 +986,7 @@ class ReportFacts:
     confirmed: tuple[str, ...]
     to_check: tuple[str, ...]
     protocol_reference: ReportSource
-    appendix_rows: tuple[tuple[str, str], ...]
-    events: tuple[dict[str, Any], ...]
-    utc_note: str
+    zone: ZoneInfo
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1207,6 +1206,8 @@ def build_report_facts(
     stop_label: str | None = None
     workflow_completed = False
     blocked: list[str] = []
+    experimenter = ""
+    gates_skipped = False
 
     def add_record(label: str, kind: str, text: str, at: datetime | None) -> None:
         records.append(ReportRecord(
@@ -1263,6 +1264,13 @@ def build_report_facts(
             workflow_completed = True
         elif kind == "blocked" and label:
             blocked.append(label)
+        elif kind == "experimenter_recorded" and not experimenter:
+            # The person who started the experiment, as the server knew them
+            # (decision 5): a development account's name today, the signed-in
+            # person's once sign-in is attached.
+            experimenter = " ".join(str(payload.get("display_name") or "").split())[:120]
+        elif kind == "test_mode_readiness_gates_skipped":
+            gates_skipped = True
         for text in legacy:
             add_record(label or "—", "관찰", text, at)
 
@@ -1392,13 +1400,13 @@ def build_report_facts(
         ("시작", f"{started:%H:%M}" if started else "기록 없음"),
         ("끝", end_words),
         ("시간 기준", zone_name),
-        ("수행자", ""),
+        ("실험자", experimenter),
         ("걸린 시간", _duration_words((ended - started).total_seconds()) if started and ended else "진행 중"),
         ("완료 단계", f"{len(completed_labels)} / {total}" if total else str(len(completed_labels))),
         ("결과", outcome_words),
         ("기록", f"관찰 {len(observations)}건 · 이상 {len(anomalies)}건 · 사진 {len(photos)}건"),
         ("프로토콜 승인 상태", _approval_words(report_data)),
-    )
+    ) + ((("준비 검사", "시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀"),) if gates_skipped else ())
 
     purpose, keywords, doi, author = _pdf_front_matter(fixture) if fixture is not None else ("", "", "", "")
     protocol = getattr(getattr(fixture, "draft", None), "protocol", None)
@@ -1415,19 +1423,6 @@ def build_report_facts(
         title=f"{author}" if author else f"{title} (실험 PDF)",
         url=doi, note="실험에 쓴 프로토콜 원문 PDF",
     )
-    appendix = (
-        ("기록 ID", str(report_data.get("report_id") or "")),
-        ("세션 ID", str(report_data.get("session_id") or "")),
-        ("프로토콜 ID", str(report_data.get("protocol_id") or "")),
-        ("프로토콜 버전", str(report_data.get("protocol_revision") or "")),
-        ("원문 PDF SHA-256", str(report_data.get("protocol_sha256") or "")),
-        ("준비 상태 값", str(report_data.get("readiness_status") or "")),
-        ("개발용", "예" if report_data.get("development_only") else "아니요"),
-        ("기록 상태 값", status),
-        ("시작 (UTC)", str(report_data.get("started_at") or "")),
-        ("끝 (UTC)", str(report_data.get("ended_at") or "")),
-        ("원문 불러오기", "성공" if source_steps and fixture is not None else (protocol_problem or "기록 안의 단계 정보만 씀")),
-    )
     return ReportFacts(
         protocol_title=title, protocol_loaded=bool(source_steps), total_steps=total,
         run_rows=run_rows, completed_labels=tuple(completed_labels), outcome=outcome,
@@ -1435,8 +1430,7 @@ def build_report_facts(
         purpose_from_pdf=purpose, keywords=keywords, sections=tuple(sections),
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
-        appendix_rows=appendix, events=tuple(dict(event) for event in events),
-        utc_note=zone_name,
+        zone=zone,
     )
 
 
@@ -1652,6 +1646,7 @@ class ReportNarrative:
     section_origin: Mapping[str, str] = field(default_factory=dict)
     rejected: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     writer: str = "서버 대체 문장"
+    written_at: str = ""
 
     # Earlier names, kept for callers written before lane RP.
     @property
@@ -1805,7 +1800,7 @@ def narrative_from_sections(
         discussion_review=tuple(chosen["discussion_review"]),
         conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
         facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
-        rejected=rejected, writer=writer,
+        rejected=rejected, writer=writer, written_at=_now(),
     )
 
 
@@ -1893,7 +1888,7 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
         "원문 단계 묶음": list(facts.sections),
         "재료": list(facts.materials),
         "장비": list(facts.equipment),
-        "수행 정보": {name: value for name, value in facts.run_rows if value and name != "수행자"},
+        "수행 정보": {name: value for name, value in facts.run_rows if value and name != "실험자"},
         "수행한 단계": [
             {
                 "단계": step.label, "묶음": step.section,
@@ -2100,8 +2095,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     facts = narrative.facts
     assert facts is not None
     blocks: list[tuple[str, Any]] = [("title", narrative.title)]
-    blocks.append(("table", (("항목", "내용"), tuple(
-        (name, value or "(직접 적어 주세요)") for name, value in facts.run_rows))))
+    blocks.append(_table(("항목", "내용"), tuple(
+        (name, value or "(직접 적어 주세요)") for name, value in facts.run_rows)))
 
     blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
 
@@ -2120,7 +2115,7 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
         for step in facts.steps
     )
     if rows:
-        blocks.append(("table", (("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), rows)))
+        blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), rows))
     else:
         blocks.append(("note", "수행한 단계가 기록되지 않았다."))
     blocks += [("h2", "3-3. 방법 요약"), ("p", narrative.methods_summary),
@@ -2129,8 +2124,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
 
     blocks.append(("h1", "4. 결과"))
     if facts.records:
-        blocks.append(("table", (("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
-            (r.step_label, r.kind, r.text, r.at) for r in facts.records))))
+        blocks.append(_table(("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
+            (r.step_label, r.kind, r.text, r.at) for r in facts.records)))
     else:
         blocks.append(("p", "기록된 관찰이 없습니다."))
     if facts.records:
@@ -2158,23 +2153,34 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             text += f" {source.url}"
         references.append(text + " — 실험에 쓴 프로토콜 원문")
     blocks.append(("list", tuple(references)))
-
-    blocks += [("h1", "부록 · 기록 정보"), ("note", "아래는 감사용 기록이다. 본문에는 쓰지 않았다.")]
-    writing = list(facts.appendix_rows) + [
-        ("보고서 문장", narrative.writer),
-    ]
-    for key in MODEL_SECTIONS:
-        origin = narrative.section_origin.get(key, "서버")
-        reasons = narrative.rejected.get(key)
-        writing.append((_SECTION_NAMES[key], origin + (f" — {'; '.join(reasons)}" if reasons else "")))
-    blocks.append(("table", (("항목", "값"), tuple(writing))))
-    blocks.append(("h2", "시스템 사건 목록"))
-    blocks.append(("table", (("시각 (UTC)", "사건", "단계", "내용"), tuple(
-        (str(event.get("created_at") or ""), str(event.get("event_type") or ""),
-         str(event.get("step_label") or "—"), _human_event_label(event))
-        for event in facts.events
-    ))))
+    blocks.append(("note", authorship_line(narrative)))
     return blocks
+
+
+def authorship_line(narrative: ReportNarrative) -> str:
+    """Who wrote the report's sentences, under the references (decision 6)."""
+
+    facts = narrative.facts
+    written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
+    when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
+    if any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
+        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
+                f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
+    return (f"이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
+            f"작성 {when}.")
+
+
+#: Each report table's column widths as shares of the text width (decision 4):
+#: short values (step, kind, time, timer, item) narrow, content wide.
+TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
+    ("항목", "내용"): (0.22, 0.78),
+    ("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"): (0.07, 0.59, 0.12, 0.22),
+    ("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"): (0.07, 0.09, 0.73, 0.11),
+}
+
+
+def _table(header: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> tuple[str, Any]:
+    return ("table", (header, rows, TABLE_WIDTHS[header]))
 
 
 def render_markdown(narrative: ReportNarrative) -> str:
@@ -2196,9 +2202,11 @@ def render_markdown(narrative: ReportNarrative) -> str:
         elif kind == "list":
             lines += [f"- {item}" for item in content] + [""]
         elif kind == "table":
-            header, rows = content
+            header, rows, widths = content
             lines.append("| " + " | ".join(cell(h) for h in header) + " |")
-            lines.append("|" + "---|" * len(header))
+            # Markdown has no column widths; the dash counts carry the
+            # shares, which Pandoc reads as relative widths.
+            lines.append("|" + "|".join("-" * max(3, round(share * 40)) for share in widths) + "|")
             lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -2218,6 +2226,7 @@ def render_docx(narrative: ReportNarrative) -> bytes:
     normal = document.styles["Normal"]
     normal.font.size = Pt(10.5)
     normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "맑은 고딕")
+    text_width = section.page_width - section.left_margin - section.right_margin
 
     for kind, content in report_blocks(narrative):
         if kind == "title":
@@ -2245,7 +2254,7 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             for item in content:
                 document.add_paragraph(f"• {item}")
         elif kind == "table":
-            header, rows = content
+            header, rows, widths = content
             table = document.add_table(rows=1, cols=len(header))
             table.style = "Table Grid"
             for index, text in enumerate(header):
@@ -2260,6 +2269,7 @@ def render_docx(narrative: ReportNarrative) -> bytes:
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:
                             run.font.size = Pt(9)
+            _fix_column_widths(table, [int(text_width * share) for share in widths])
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
@@ -2291,50 +2301,24 @@ def _human_event_clock(created_at: str | None) -> str:
     return parsed.strftime("%H:%M:%S")
 
 
-_HUMAN_EVENT_VERBS = {
-    "session_started": "시작",
-    "step_completed": "완료",
-    "step_advanced": "이동",
-    "step_presented": "안내",
-    "timer_started": "타이머 시작",
-    "workflow_paused": "일시정지",
-    "workflow_resumed": "재개",
-    "workflow_completed": "완료",
-    "session_stopped": "종료",
-    "anomaly": "이상 보고",
-    "blocked": "진행 차단",
-    "observation": "관찰",
-    "source_consulted": "참고 자료 확인",
-}
+def _fix_column_widths(table: Any, widths: Sequence[int]) -> None:
+    """Fixed column widths in Word: the grid, every cell, and a fixed layout."""
 
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
 
-def _human_event_label(event: dict[str, Any]) -> str:
-    event_type = str(event.get("event_type") or "")
-    verb = _HUMAN_EVENT_VERBS.get(event_type, event_type.replace("_", " "))
-    step_label = event.get("step_label")
-    head = f"Step {step_label} {verb}" if step_label else verb
-    parts = [head]
-    clock = _human_event_clock(event.get("created_at"))
-    if clock:
-        parts.append(clock)
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
-    duration = timer.get("source_duration_seconds", timer.get("duration_seconds"))
-    elapsed = timer.get("elapsed_seconds")
-    remaining = timer.get("remaining_seconds")
-    timer_bits = []
-    if duration not in (None, ""):
-        timer_bits.append(f"총 {_format_elapsed_clock(duration)}")
-    if elapsed not in (None, ""):
-        timer_bits.append(f"경과 {_format_elapsed_clock(elapsed)}")
-    if remaining not in (None, ""):
-        timer_bits.append(f"잔여 {_format_elapsed_clock(remaining)}")
-    if timer_bits:
-        parts.append("타이머 " + " · ".join(timer_bits))
-    wording = event.get("user_wording")
-    if wording:
-        parts.append(str(wording))
-    return " / ".join(parts)
+    table.autofit = False
+    properties = table._tbl.tblPr
+    layout = properties.find(qn("w:tblLayout"))
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        properties.append(layout)
+    layout.set(qn("w:type"), "fixed")
+    for column, width in zip(table.columns, widths):
+        column.width = width
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            cell.width = width
 
 
 def new_session_id() -> str:

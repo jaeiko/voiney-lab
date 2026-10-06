@@ -581,6 +581,24 @@ def _voice_turn_actor()->tuple[str|None,str]:
     return actor.principal_id,role
 
 
+def _experimenter_display_name()->str|None:
+    """The signed-in principal's display name, or None where nobody is named.
+
+    Like ``_voice_turn_actor``: without a workspace this is a single-operator
+    host with no principal, and the report leaves the name for the researcher
+    to write. Never raises.
+    """
+
+    try:
+        if not _workspace_settings().enabled:
+            return None
+        actor=_REQUEST_PRINCIPAL.get()
+    except Exception:  # noqa: BLE001 - an unreadable setting names nobody
+        return None
+    name=" ".join(str(getattr(actor,"display_name","") or "").split())
+    return name[:120] or None
+
+
 def _scope_catalog_resource(
     protocol_id:str,*,bind:bool=False
 )->None:
@@ -7276,6 +7294,17 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        experimenter=_experimenter_display_name()
+        if experimenter:
+            # Lane RP, decision 5: the report's 실험자 is the display name of
+            # the person who started the experiment. The first one recorded
+            # stands (the key is fixed); none is written when nobody is named.
+            store.append_event(
+                session.experiment_report_id,
+                event_key="experimenter",
+                event_type="experimenter_recorded",
+                payload={"display_name":experimenter},
+            )
         if getattr(session,"test_mode_readiness_gates_skipped",False):
             readiness=curated.fixture.draft.readiness
             store.append_event(
