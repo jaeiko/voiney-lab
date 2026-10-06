@@ -309,6 +309,10 @@ class ProtocolAnalysisRunStatus:
     merge_status: str | None = None
     restart_behavior: str = "explicit_analysis_request_only"
     lifecycle_state: str = "uploaded"
+    #: When the run on screen was requested (the ledger's own time, UTC), so
+    #: the screen can say how long the analysis has taken. None before any
+    #: request.
+    requested_at: str | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -326,6 +330,7 @@ class ProtocolAnalysisRunStatus:
             "merge_status": self.merge_status,
             "restart_behavior": self.restart_behavior,
             "lifecycle_state": self.lifecycle_state,
+            "requested_at": self.requested_at,
         }
 
 
@@ -1136,6 +1141,14 @@ class ProtocolCatalog:
                 ),
                 None,
             )
+            requested_at = next(
+                (
+                    event.recorded_at
+                    for event in reversed(lifecycle_events)
+                    if event.event_type == _ANALYSIS_REQUESTED_EVENT
+                ),
+                None,
+            )
             state = entry.analysis_status
             if lifecycle_events:
                 state = {
@@ -1158,6 +1171,7 @@ class ProtocolCatalog:
                 failure_code=latest_failure,
                 failure_detail=latest_failure_detail,
                 lifecycle_state=entry.lifecycle_state,
+                requested_at=requested_at,
             )
         plan_event = next(
             event for event in events if event.event_type == _CHUNK_PLAN_EVENT
@@ -1277,6 +1291,8 @@ class ProtocolCatalog:
                 }
                 else "analyzing"
             ),
+            # The plan is the run's first record.
+            requested_at=plan_event.recorded_at,
         )
 
     def _entry_for_revision(

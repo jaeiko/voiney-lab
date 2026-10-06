@@ -890,7 +890,12 @@ the pilot's safety catalog, usage scope and test mode -- stay fixed.
 `scripts/run_dev.sh` is the full development launcher: it verifies the
 Candidate A fixture and its externally licensed source PDF by SHA-256 and
 loads the curated fixture. It names no model: each role keeps its default
-below unless the `.env` chooses one. The four features only xAI provides --
+below unless the `.env` chooses one. That includes the analysis role: a PDF
+registered in the browser is analysed straight away with
+`VOINEY_LAB_ANALYSIS_PROVIDER`/`_MODEL`/`_REASONING` (lane PA, 2026-10-06; the
+launcher used to clear the analysis model). The same PDF uploaded again never
+calls an analysis that already ended; a failed one runs again only when a
+person presses "분석 다시 시도". The four features only xAI provides --
 external reference search, web image search, generated images and semantic
 intent -- default to off. Its
 `--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
