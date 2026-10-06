@@ -992,6 +992,40 @@ settings, and their reasoning settings) are old names now:
 one is set. Two of them in one `.env` that became the same role setting stop
 the tool; keep the one you want.
 
+### The experiment report (`.docx` and `.md`)
+
+Decision of 2026-10-06 (lane RP): `GET /api/experiment-reports/{id}.docx` and
+`.md` are an experiment report a researcher reads, not a log of the system.
+Both have one structure (`experiment_reports.report_blocks`): a title and a
+run table (date, start and end in `VOINEY_LAB_REPORT_TIMEZONE`, default
+`Asia/Seoul`; a blank performer row; time taken; steps completed n/N;
+completed or stopped at which step; the protocol's approval state in words),
+then 1 purpose, 2 background and principle (what the PDF says, and apart from
+it what an external source says), 3 materials and methods (the steps done,
+in Korean where a translation exists, with their source values unchanged; and
+what was done differently from the source, from the record only), 4 results
+(the researcher's own observations, anomalies and photos as a table, or
+"기록된 관찰이 없습니다."), 5 discussion (what the record shows, what needs
+checking, review suggestions only on a recorded anomaly or deviation, and a
+blank "연구자 해석"), 6 conclusion, references, and last an appendix with
+the record's identifiers, revision, hash, how each section was written and
+the raw event list. Identifiers never appear above the appendix.
+
+The server builds every table and list from the ledger and the protocol the
+session ran. The report role's model writes only the prose sections, from
+experiment content with no identifiers, hashes, status values or command
+names, and the server checks each section before using it: numbers in the
+methods, results and discussion must be the record's or the source's, the
+purpose and background carry no experiment-condition numbers and cite a
+source on every sentence, nothing identifier-shaped, quoted observations
+must be recorded ones, and cause suggestions must name a recorded item. A
+section that fails, or every section when the model fails or exceeds
+`VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS` (25), gets the server's own
+sentence; the appendix says which and why. External sources are used only
+when a source search supplies cited pages; without one the report says it
+could not check external sources and writes from the PDF only. Photos are read from `photo_attached` ledger events; the
+evidence upload does not write one yet.
+
 ### Core configuration
 
 | Variable | Purpose |

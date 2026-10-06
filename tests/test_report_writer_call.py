@@ -56,20 +56,23 @@ class ReportWriterCallTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_the_model_is_called_once_and_its_prose_is_used(self) -> None:
-        client = _FakeClient({"objective": "모델이 쓴 목적 문장이다."})
-        brain = er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=5)
+        client = _FakeClient({"purpose": "모델이 쓴 목적 문장이다[1]."})
+        brain = er.ReportWriterBrain(
+            client=client, model="fake-model", timeout_seconds=5, search_client=None)
         narrative = asyncio.run(brain.generate_narrative(self.doc, list(self.doc["events"])))
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(client.calls[0]["model"], "fake-model")
-        self.assertEqual(narrative.objective, "모델이 쓴 목적 문장이다.")
+        self.assertEqual(narrative.purpose, "모델이 쓴 목적 문장이다[1].")
 
     def test_a_model_slower_than_the_limit_falls_back_to_the_servers_prose(self) -> None:
-        client = _FakeClient({"objective": "늦은 답"}, delay=1.0)
-        brain = er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=0.05)
+        client = _FakeClient({"purpose": "늦은 답[1]."}, delay=1.0)
+        brain = er.ReportWriterBrain(
+            client=client, model="fake-model", timeout_seconds=0.05, search_client=None)
         narrative = asyncio.run(brain.generate_narrative(self.doc, list(self.doc["events"])))
         deterministic = brain.build_deterministic_narrative(self.doc, list(self.doc["events"]))
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual(narrative.objective, deterministic.objective)
+        self.assertEqual(narrative.purpose, deterministic.purpose)
+        self.assertEqual(narrative.section_origin["purpose"], "대체")
 
 
 if __name__ == "__main__":

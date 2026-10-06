@@ -157,17 +157,18 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertTrue(content.startswith(b"PK"))
         from docx import Document
         document = Document(io.BytesIO(content))
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-        self.assertIn("Title:", text)
-        self.assertIn("Course:", text)
-        self.assertIn("Student number:", text)
-        self.assertIn("Name:", text)
-        self.assertIn("Advisor:", text)
-        self.assertIn("I. Purpose", text)
-        self.assertIn("II. Materials and Methods", text)
-        self.assertIn("III. Results", text)
-        self.assertIn("IV. Discussion", text)
-        self.assertIn("V. Conclusion", text)
+        # Lane RP: the run information and the audit event list are tables.
+        text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+        )
+        self.assertIn("수행자", text)
+        self.assertIn("(직접 적어 주세요)", text)
+        self.assertIn("1. 실험 목적", text)
+        self.assertIn("3. 재료 및 방법", text)
+        self.assertIn("4. 결과", text)
+        self.assertIn("5. 고찰", text)
+        self.assertIn("6. 결론", text)
         self.assertIn("Step 3 완료", text)
         self.assertIn("타이머 총 15:00", text)
         self.assertIn("경과 00:20", text)
@@ -239,7 +240,8 @@ class ExperimentReportStoreTests(unittest.TestCase):
         # Results should mention actual observation for step 1
         self.assertIn("투명하고 균일한 1 mm 크기", narrative.results_and_observations)
         # Results should strictly disclaim unobserved actual result for step 2 without claiming false success
-        self.assertIn("별도의 실제 관찰값은 기록되지 않았다", narrative.results_and_observations)
+        # Lane RP: a step-completion wording is the researcher's observation.
+        self.assertIn("워시 완충액을 넣었습니다", narrative.results_and_observations)
         self.assertNotIn("모든 단계가 정상적으로 완료되었다", narrative.results_and_observations)
 
     def test_docx_export_contains_grounded_step_table(self):
@@ -263,11 +265,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         docx_bytes = self.store.export_docx(report["report_id"])
         from docx import Document
         doc = Document(io.BytesIO(docx_bytes))
-        # Verify table exists in docx
+        # Verify table exists in docx (lane RP: the event list is the last table)
         self.assertGreater(len(doc.tables), 0)
-        table_text = " ".join(cell.text for row in doc.tables[0].rows for cell in row.cells)
-        self.assertIn("Step", table_text)
-        self.assertIn("Event / Action", table_text)
+        table_text = " ".join(cell.text for row in doc.tables[-1].rows for cell in row.cells)
+        self.assertIn("단계", table_text)
+        self.assertIn("사건", table_text)
         self.assertIn("시약을 추가했습니다", table_text)
 
     def test_grounded_report_with_candidate_a_domain_protocol_rehydration(self):
@@ -281,7 +283,17 @@ class ExperimentReportStoreTests(unittest.TestCase):
         fixture = load_curated_protocol_fixture(fixture_path, provenance_path, pdf_path)
         protocol = fixture.draft.protocol
 
-        report = self.open()
+        # Lane RP: the report must name the revision the fixture carries; a
+        # record of another revision is not shown with this fixture's text.
+        report = self.store.open_report(
+            session_id="session-test-1",
+            protocol_id="candidate-a-curated-development-v1",
+            protocol_title="Candidate A development fixture",
+            protocol_revision=fixture.revision_id,
+            protocol_sha256="6" * 64,
+            readiness_status="analysis_required",
+            development_only=True,
+        )
         self.store.append_event(
             report["report_id"],
             event_key="turn-1-complete",
@@ -293,7 +305,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         doc = self.store.get_report(report["report_id"])
 
         # Patch candidate fixture lookup to return the real candidate fixture
-        with unittest.mock.patch("voiney_lab.server._configured_candidate_fixture", return_value=fixture):
+        # Lane RP: server_config() is patched too. Without it the lookup
+        # failed before reaching the patched fixture, and the test passed only
+        # on the old "Step N instruction." placeholder text.
+        with unittest.mock.patch("voiney_lab.server._configured_candidate_fixture", return_value=fixture), \
+                unittest.mock.patch("voiney_lab.server.server_config", return_value=None):
             ctx = build_grounded_report_context(doc)
             self.assertIsNotNone(ctx)
             self.assertEqual(ctx.protocol_id, "candidate-a-curated-development-v1")

@@ -5176,6 +5176,40 @@ def get_admin_metrics(
     }
 
 
+def _experiment_report_narrative(store:ExperimentReportStore,report_id:str):
+    """The report role's prose for one report, or None for the server's own sentences."""
+
+    try:
+        writer_settings = ReportWriterSettings.from_environment()
+        if not writer_settings.enabled:
+            return None
+        report_role = RoleModel.from_environment("report")
+        if not report_role.has_key():
+            return None
+        try:
+            async_client = _role_client(
+                report_role,
+                timeout=writer_settings.timeout_seconds,
+            )
+            brain = ReportWriterBrain(
+                client=async_client,
+                model=writer_settings.model,
+                timeout_seconds=writer_settings.timeout_seconds,
+            )
+            report_doc = store.get_report(report_id)
+            events = list(report_doc.get("events") or ())
+            return asyncio.run(brain.generate_narrative(report_doc, events))
+        except Exception as llm_exc:
+            log.warning(
+                "Report LLM generation failed (%s), falling back to deterministic narrative",
+                llm_exc,
+            )
+            return None
+    except Exception as brain_exc:
+        log.warning("Report writer setup failed (%s), using deterministic narrative", brain_exc)
+        return None
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -5190,40 +5224,16 @@ def export_experiment_report(report_id:str,format_name:str):
             content=store.export_json(report_id)
             media_type="application/json"
         elif format_name=="md":
-            content=store.export_markdown(report_id)
+            # Lane RP: the Markdown report has the Word report's structure and
+            # the same writer (model sections checked, server sentences else).
+            content=store.export_markdown(
+                report_id,narrative=_experiment_report_narrative(store,report_id))
             media_type="text/markdown; charset=utf-8"
         elif format_name=="csv":
             content=store.export_csv(report_id)
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
-            narrative = None
-            try:
-                writer_settings = ReportWriterSettings.from_environment()
-                if writer_settings.enabled:
-                    report_role = RoleModel.from_environment("report")
-                    if report_role.has_key():
-                        try:
-                            async_client = _role_client(
-                                report_role,
-                                timeout=writer_settings.timeout_seconds,
-                            )
-                            brain = ReportWriterBrain(
-                                client=async_client,
-                                model=writer_settings.model,
-                                timeout_seconds=writer_settings.timeout_seconds,
-                            )
-                            report_doc = store.get_report(report_id)
-                            events = list(report_doc.get("events") or ())
-                            narrative = asyncio.run(brain.generate_narrative(report_doc, events))
-                        except Exception as llm_exc:
-                            log.warning(
-                                "Report LLM generation failed (%s), falling back to deterministic narrative",
-                                llm_exc,
-                            )
-                            narrative = None
-            except Exception as brain_exc:
-                log.warning("Report writer setup failed (%s), using deterministic narrative", brain_exc)
-                narrative = None
+            narrative=_experiment_report_narrative(store,report_id)
             content=store.export_docx(report_id, narrative=narrative)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
