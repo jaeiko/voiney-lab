@@ -12,6 +12,13 @@ or the model misjudges the current step:
   (action), and its records one, ``record_log`` (type); the server checks the
   action and type against one allow-list, wherever a proposal comes from, and
   rules on it as before; a read-only question is answered with no state tool;
+* decision 4 -- the plain conflicts between rules are fixed, each shown by the
+  evaluation set and the exhaustive check to change only what it meant to:
+  "재개"/"계속"/"resume" were START words and resume words at once, and began
+  a protocol that had never started; a resume never starts one now. A
+  question about a command ("시작해?", "타이머 시작했어?", "재개해도 돼?") is
+  not the command, as the pause and end words and the router's ruling
+  already had it. No timer starts on an ended experiment;
 
 Every model here is a fake (tests/router_fakes.py); nothing is live.
 """
@@ -387,6 +394,129 @@ class AllowListTests(unittest.TestCase):
             ))), turn_id=2)
         self.assertEqual(outcome.handled_by, "llm+tool")
         self.assertIs(outcome.plan.action, CuratedProtocolAction.START_TIMER)
+
+
+def _said(session, text, turn_id=9):
+    return route_curated_runtime_turn(
+        session, text, turn_id=turn_id, language="ko", configuration_id=1, generation=1,
+    ).plan
+
+
+def _fresh() -> CuratedProtocolSession:
+    session = CuratedProtocolSession(miniprep_fixture())
+    session.activate_configured()
+    return session
+
+
+class RuleConflictTests(unittest.TestCase):
+    """Decision 4: the same words no longer mean two different things."""
+
+    RESUME_WORDS = ("재개", "계속", "프로토콜 재개", "프로토콜 계속", "resume",
+                    "다시 시작", "계속하자", "재개해줘", "continue")
+
+    def test_a_resume_word_never_starts_an_experiment_never_started(self) -> None:
+        for word in self.RESUME_WORDS:
+            with self.subTest(word=word):
+                session = _fresh()
+                plan = _said(session, word)
+                self.assertFalse(session.active)
+                self.assertIsNone(session._experiment_started_at)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(
+                    plan.speech_text,
+                    "아직 실험을 시작하지 않았어요. 시작하려면 '프로토콜 시작해줘'라고 말씀해 주세요.",
+                )
+
+    def test_a_pause_before_the_start_is_lifted_and_the_start_still_works(self) -> None:
+        session = _fresh()
+        _said(session, "멈춰", 1)
+        plan = _said(session, "다시 시작", 2)
+        self.assertFalse(session.active)
+        self.assertNotEqual(session._pause_state, "paused")
+        self.assertFalse(plan.state_changed)
+        plan = _said(session, "프로토콜 시작해줘", 3)
+        self.assertIs(plan.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+
+    def test_a_resume_word_lifts_a_pause(self) -> None:
+        for word in self.RESUME_WORDS:
+            with self.subTest(word=word):
+                session = _miniprep(3)
+                session.pause_workflow()
+                plan = _said(session, word)
+                self.assertIs(plan.action, CuratedProtocolAction.RESUME)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.workflow_status, "active")
+
+    def test_a_resume_with_nothing_paused_claims_no_resume(self) -> None:
+        for word in ("재개", "재개해줘", "계속 진행"):
+            with self.subTest(word=word):
+                session = _miniprep(3)
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(plan.speech_text, "일시정지 상태가 아니에요. 현재 4단계입니다.")
+
+    def test_a_question_about_a_command_changes_nothing(self) -> None:
+        for word in ("시작해?", "시작?", "재개?", "종료?", "재개해도 돼?", "다시 시작해야 돼?",
+                     "프로토콜 시작해줘?"):
+            with self.subTest(word=word, state="not started"):
+                session = _fresh()
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertFalse(session.active)
+                self.assertEqual(session.workflow_status, "ready")
+        for word in ("타이머 시작했어?", "타이머 시작해야 돼?", "타이머 시작할까?", "타이머 시작해도 돼?"):
+            with self.subTest(word=word, state="timer step"):
+                session = _miniprep(3)
+                with patch.object(session, "timer_seconds_for_step", return_value=900):
+                    plan = _said(session, word)
+                self.assertIs(plan.action, CuratedProtocolAction.TIMER_STATUS)
+                self.assertIsNone(session._timer_started_at)
+                self.assertIn("이 질문만으로는 타이머를 시작하지 않았습니다", plan.speech_text)
+        for word in ("재개해도 돼?", "다시 시작해야 돼?"):
+            with self.subTest(word=word, state="paused"):
+                session = _miniprep(3)
+                session.pause_workflow()
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.workflow_status, "paused")
+
+    def test_the_decided_first_step_start_is_kept(self) -> None:
+        # Lane R3, decision 8: "자 이제 1단계부터 해볼까" starts the experiment.
+        session = _fresh()
+        plan = _said(session, "자 이제 1단계부터 해볼까")
+        self.assertIs(plan.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+
+    def test_no_timer_starts_after_the_experiment_ended(self) -> None:
+        session = _miniprep(3)
+        _said(session, "실험 종료", 2)
+        _said(session, "응", 3)
+        self.assertTrue(session.experiment_ended)
+        with patch.object(session, "timer_seconds_for_step", return_value=900):
+            plan = _said(session, "타이머 시작해줘", 4)
+        self.assertIsNone(session._timer_started_at)
+        self.assertFalse(plan.state_changed)
+        self.assertIn("이 실험은 이미 끝났어요", plan.speech_text)
+
+    def test_the_router_and_the_rules_agree_on_a_resume_word(self) -> None:
+        verdict = validate_tool_proposals(
+            [ToolProposal(tool="change_state", action="start", evidence="다시 시작")],
+            _facts("다시 시작", workflow_active=False, workflow_status="ready",
+                   experiment_started=False, experiment_running=False,
+                   step_id=None, current_step_label=None),
+            ProposalBasis(turn_id=5, generation=1, workflow_revision=3, step_id=None),
+        )
+        self.assertEqual((verdict.effect, verdict.reason_code), ("refuse", "no_start_word"))
+        # With the router on, a refused resume takes the rules' path, which no
+        # longer starts the experiment either.
+        session = _fresh()
+        outcome = _routed(session, "재개", FakeRouterClient(tool_reply((
+            "change_state", {"action": "resume", "evidence": "재개"},
+        ))), turn_id=2)
+        self.assertEqual(outcome.fallback_reason, "refused:workflow_not_active")
+        self.assertFalse(session.active)
+        self.assertIsNone(session._experiment_started_at)
 
 
 if __name__ == "__main__":

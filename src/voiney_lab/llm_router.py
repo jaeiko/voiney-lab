@@ -112,8 +112,13 @@ class ToolValueRule:
 
 # The word checks are looked up when called: the patterns are defined below.
 CHANGE_STATE_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
+    # A resume word ("다시 시작", "재개", "계속") is not a start: a resume only
+    # lifts a pause (lane RT, decision 4, as the rules now read it too).
     "start": ToolValueRule(
-        lambda evidence: bool(_START_WORD.search(evidence)) and not _TIMER_WORD.search(evidence),
+        lambda evidence: (
+            bool(_START_WORD.search(evidence))
+            and not _TIMER_WORD.search(evidence) and not _RESUME_WORD.search(evidence)
+        ),
         "no_start_word", True, "never_started", "start",
     ),
     "next": ToolValueRule(
