@@ -117,6 +117,7 @@ from voiney_lab.protocol_catalog import (
     ProtocolRegistrationError,
     SharedSecretApprovalPolicy,
 )
+from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
     ProtocolOcrError,
     ProtocolOcrProvider,
@@ -235,8 +236,12 @@ from voiney_lab.eln_connectors import (
 )
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
+    glossary_entries,
+    is_korean,
     openai_batch_translator,
     openai_glossary_maker,
+    translation_revision_key,
+    translation_units,
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
@@ -1084,7 +1089,8 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     store=initialize_protocol_store(settings)
     return ProtocolCatalog(
         store,skip_readiness_gates=_test_mode_skips_readiness_gates(),
-        on_execution_authorized=_translate_authorized_revision),store
+        on_execution_authorized=_translate_authorized_revision,
+        on_analysis_ready=_translate_analyzed_revision),store
 
 
 def _revision_translation_store():
@@ -1132,11 +1138,31 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
 def _translate_authorized_revision(
     catalog:ProtocolCatalog,protocol_id:str,
 )->None:
-    """Translate an executable revision's sentences once, off the request."""
+    """Translate an executable revision's sentences once, off the request.
+
+    The same revision translated when its analysis passed makes no model
+    call here: every stored sentence is skipped.
+    """
 
     runner=_revision_translation_runner()
     if runner is not None:
         runner(_revision_translation_fixture(catalog,protocol_id))
+
+
+def _translate_analyzed_revision(
+    catalog:ProtocolCatalog,protocol_id:str,
+)->None:
+    """Start a passed analysis's Korean at once (lane PX, decision 1).
+
+    Off the request, in the background, purpose and safety first and then
+    the steps from step 1, so the first steps are Korean by the time a
+    person presses "이 프로토콜로 시작". The fixture is the one a session will
+    run (same revision id and content hash), read without any authority.
+    """
+
+    runner=_revision_translation_runner()
+    if runner is not None:
+        runner(catalog.load_analysis_fixture(protocol_id))
 
 
 _REVISION_TRANSLATIONS_RUNNING:set[str]=set()
@@ -1152,8 +1178,9 @@ class _TranslationSubscriber:
     loop:asyncio.AbstractEventLoop
 
 
-#: revision id -> the open sessions showing it. A batch of translations
-#: reaches them as soon as it is stored.
+#: translation key (protocol id / revision id) -> the open sessions showing
+#: that revision. A batch of translations reaches them as soon as it is
+#: stored.
 _TRANSLATION_SUBSCRIBERS:dict[str,list[_TranslationSubscriber]]={}
 
 
@@ -1167,7 +1194,7 @@ def _subscribe_translations(session:Any,sender:Any)->None:
     subscriber=_TranslationSubscriber(session,sender,asyncio.get_running_loop())
     with _REVISION_TRANSLATIONS_LOCK:
         _TRANSLATION_SUBSCRIBERS.setdefault(
-            curated.fixture.revision_id,[]).append(subscriber)
+            translation_revision_key(curated.fixture),[]).append(subscriber)
 
 
 def _unsubscribe_translations(session:Any)->None:
@@ -1186,21 +1213,33 @@ def _subscribers(revision_id:str)->list[_TranslationSubscriber]:
         return list(_TRANSLATION_SUBSCRIBERS.get(revision_id,()))
 
 
-def _open_session_steps(revision_id:str)->list[int]:
+def _open_session_steps(key:str)->list[int]:
     """The current and next step of every open session on this revision."""
 
     steps:list[int]=[]
-    for subscriber in _subscribers(revision_id):
+    for subscriber in _subscribers(key):
         curated=getattr(subscriber.session,"curated_protocol_session",None)
-        if curated is None or curated.fixture.revision_id!=revision_id:
+        if curated is None or translation_revision_key(curated.fixture)!=key:
             continue
         index=curated.current_index
         steps.extend((index,index+1))
     return steps
 
 
+def _translation_pending(fixture:Any)->bool:
+    """Whether this revision's Korean is still being made right now."""
+
+    try:
+        key=translation_revision_key(fixture)
+    except Exception:  # noqa: BLE001 - a fixture without ids has none pending
+        return False
+    with _REVISION_TRANSLATIONS_LOCK:
+        return key in _REVISION_TRANSLATIONS_RUNNING
+
+
 async def _apply_translations(
-    subscriber:_TranslationSubscriber,revision_id:str,rows:list[Any],
+    subscriber:_TranslationSubscriber,key:str,rows:list[Any],
+    glossary:Any=(),
 )->None:
     """Put a stored batch on an open session's fixture and redraw its card.
 
@@ -1211,9 +1250,9 @@ async def _apply_translations(
 
     session=subscriber.session
     curated=getattr(session,"curated_protocol_session",None)
-    if curated is None or curated.fixture.revision_id!=revision_id:
+    if curated is None or translation_revision_key(curated.fixture)!=key:
         return
-    updated=with_stored_translations(curated.fixture,rows)
+    updated=with_stored_translations(curated.fixture,rows,glossary)
     if updated is curated.fixture:
         return
     curated.fixture=updated
@@ -1231,14 +1270,14 @@ async def _apply_translations(
         log.info("revision_translation redraw_skipped error=%s",type(exc).__name__)
 
 
-async def _publish_translations(revision_id:str,rows:list[Any])->None:
+async def _publish_translations(key:str,rows:list[Any],glossary:Any=())->None:
     running=asyncio.get_running_loop()
-    for subscriber in _subscribers(revision_id):
+    for subscriber in _subscribers(key):
         if subscriber.loop is running:
-            await _apply_translations(subscriber,revision_id,rows)
+            await _apply_translations(subscriber,key,rows,glossary)
         elif not subscriber.loop.is_closed():
             asyncio.run_coroutine_threadsafe(
-                _apply_translations(subscriber,revision_id,rows),subscriber.loop)
+                _apply_translations(subscriber,key,rows,glossary),subscriber.loop)
 
 
 async def store_revision_translations(
@@ -1250,18 +1289,26 @@ async def store_revision_translations(
     store=_revision_translation_store()
     if store is None:
         return None
+    key=translation_revision_key(fixture)
     try:
+        glossary_record=store.translation_glossary(key,"ko")
+        current={"glossary":glossary_entries(glossary_record)}
+
+        def stored_glossary(record:Any)->None:
+            store.record_translation_glossary(record)
+            current["glossary"]=glossary_entries(record)
+
         async def stored_batch(rows:list[Any])->None:
             store.record_fact_translations(rows)
-            await _publish_translations(fixture.revision_id,rows)
+            await _publish_translations(key,rows,current["glossary"])
 
         return await generate_revision_translations(
             fixture,translate,model=model,
-            stored=store.fact_translations(fixture.revision_id,"ko"),
-            glossary=store.translation_glossary(fixture.revision_id,"ko"),
+            stored=store.fact_translations(key,"ko"),
+            glossary=glossary_record,
             make_glossary=make_glossary,
-            priority_steps=lambda:_open_session_steps(fixture.revision_id),
-            on_glossary=store.record_translation_glossary,
+            priority_steps=lambda:_open_session_steps(key),
+            on_glossary=stored_glossary,
             on_batch=stored_batch,
         )
     finally:
@@ -1271,10 +1318,11 @@ async def store_revision_translations(
 def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
     """Run the generation in its own thread, one at a time per revision."""
 
+    key=translation_revision_key(fixture)
     with _REVISION_TRANSLATIONS_LOCK:
-        if fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING:
+        if key in _REVISION_TRANSLATIONS_RUNNING:
             return
-        _REVISION_TRANSLATIONS_RUNNING.add(fixture.revision_id)
+        _REVISION_TRANSLATIONS_RUNNING.add(key)
     role=RoleModel.from_environment("translation")
     model=role.model
 
@@ -1291,13 +1339,13 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
         except Exception as exc:  # noqa: BLE001 - nothing stored, retried next time
             log.warning(
                 "revision_translation failed revision=%s error=%s",
-                fixture.revision_id,type(exc).__name__)
+                key,type(exc).__name__)
         finally:
             with _REVISION_TRANSLATIONS_LOCK:
-                _REVISION_TRANSLATIONS_RUNNING.discard(fixture.revision_id)
+                _REVISION_TRANSLATIONS_RUNNING.discard(key)
 
     threading.Thread(
-        target=work,name=f"revision-translation-{fixture.revision_id[:24]}",
+        target=work,name=f"revision-translation-{key[-48:]}",
         daemon=True).start()
 
 
@@ -1318,9 +1366,11 @@ def _with_revision_translations(
         return fixture
     if store is None:
         return fixture
+    key=translation_revision_key(fixture)
     try:
-        rows=store.fact_translations(fixture.revision_id,"ko")
-        attached=with_stored_translations(fixture,rows)
+        rows=store.fact_translations(key,"ko")
+        attached=with_stored_translations(
+            fixture,rows,glossary_entries(store.translation_glossary(key,"ko")))
     except Exception as exc:  # noqa: BLE001 - the source is shown instead
         log.warning("revision_translation read_failed error=%s",type(exc).__name__)
         return fixture
@@ -1328,7 +1378,7 @@ def _with_revision_translations(
         store.close()
     if not rows:
         with _REVISION_TRANSLATIONS_LOCK:
-            running=fixture.revision_id in _REVISION_TRANSLATIONS_RUNNING
+            running=key in _REVISION_TRANSLATIONS_RUNNING
         runner=None if running else _revision_translation_runner()
         if runner is not None:
             try:
@@ -4191,9 +4241,11 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     category="protocol",metric_name="upload",
                     dimensions={"source_kind":"local_pdf","status":"stored"},
                 )
+                ocr=_automatic_ocr_on_upload(catalog,result.entry)
                 return {
                     "protocol":result.entry.public_dict(),
                     "deduplicated":result.deduplicated,
+                    "ocr":ocr,
                 }
             finally:
                 store.close()
@@ -4201,6 +4253,106 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
             raise
         except Exception as exc:
             raise _catalog_http_error(exc) from exc
+
+
+def _automatic_ocr_on_upload(
+    catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
+)->dict[str,object]:
+    """Start OCR for the pages without a usable text layer, if any (lane PX 3).
+
+    Decided 2026-10-06: a page whose text layer is missing or unreadable
+    (``experiment_protocol_pdf.page_ocr_reason``: no visible character, a
+    glyph with no Unicode mapping, or 5% private-use/unassigned characters)
+    is read by the configured OCR engines at upload, and the structured
+    analysis starts as soon as the OCR text is in. Nothing else changes:
+    the page text layer of every other page is kept, the OCR pages stay
+    marked as OCR, and the one confirmation a person gives before execution
+    covers the OCR text. Returns what the page shows: whether OCR was
+    needed, whether it started, and why not when it did not.
+    """
+
+    try:
+        status=catalog.ocr_status(entry.protocol_id,include_text=False)
+    except Exception as exc:  # noqa: BLE001 - the upload itself succeeded
+        log.warning("protocol.ocr.status_failed protocol_id=%s error=%s",
+                    entry.protocol_id,type(exc).__name__)
+        return {"state":"unknown","automatic":False,"blocked":"protocol_ocr_status_failed"}
+    state=str(status.get("state"))
+    if state=="not_required":
+        return {"state":state,"automatic":False}
+    if state in {"accepted_for_analysis","in_progress","review_required"}:
+        return {"state":state,"automatic":False,
+                "ocr_page_numbers":_ocr_page_numbers(status)}
+    running=_PROTOCOL_OCR_TASKS.get(entry.protocol_id)
+    if running is not None and not running.done():
+        return {"state":"queued","automatic":True}
+    try:
+        provider=_protocol_ocr_provider()
+    except ProtocolOcrUnavailableError:
+        return {"state":state,"automatic":False,"blocked":"protocol_ocr_not_configured"}
+    if entry.analysis_status not in {
+        "ocr_required","ocr_failed","ocr_rejected","structured_analysis_ready",
+        "chunked_analysis_required",
+    }:
+        # An analysis already ran or is running: OCR now would not feed it.
+        return {"state":state,"automatic":False,"blocked":"analysis_already_ran"}
+    ocr_id=f"ocr-{secrets.token_hex(16)}"
+    _schedule_ocr_then_analysis(
+        entry.protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
+    return {"state":"queued","automatic":True,"ocr_id":ocr_id}
+
+
+def _ocr_page_numbers(status:dict[str,object])->list[int]:
+    pages=status.get("pages")
+    return [
+        int(page["source_page_number"]) for page in pages
+        if isinstance(page,dict) and page.get("provider")!=OCR_TEXT_LAYER_PROVIDER
+        and isinstance(page.get("source_page_number"),int)
+    ] if isinstance(pages,list) else []
+
+
+def _schedule_ocr_then_analysis(
+    protocol_id:str,provider:ProtocolOcrProvider,*,ocr_id:str,
+    principal:Principal|None,
+)->asyncio.Task[None]:
+    """OCR in a worker, accepted automatically, then the analysis (lane PX 3)."""
+
+    def run_ocr()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            return catalog.run_ocr(
+                protocol_id,provider,ocr_id=ocr_id,accepted_automatically=True)
+        finally:
+            store.close()
+
+    async def background_worker()->None:
+        try:
+            status=await asyncio.to_thread(run_ocr)
+        except Exception as exc:
+            log.warning(
+                "protocol.ocr.failed protocol_id=%s error=%s",
+                protocol_id,type(exc).__name__,
+            )
+            return
+        if status.get("accepted_for_analysis") is not True:
+            return
+        try:
+            await _begin_background_analysis(protocol_id,principal=principal)
+        except Exception as exc:  # noqa: BLE001 - recorded by the catalog
+            log.warning(
+                "protocol.analysis.after_ocr_failed protocol_id=%s error=%s",
+                protocol_id,type(exc).__name__,
+            )
+
+    task=asyncio.create_task(background_worker())
+    _PROTOCOL_OCR_TASKS[protocol_id]=task
+    task.add_done_callback(
+        lambda completed,pid=protocol_id: (
+            _PROTOCOL_OCR_TASKS.pop(pid,None)
+            if _PROTOCOL_OCR_TASKS.get(pid) is completed else None
+        )
+    )
+    return task
 
 
 def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
@@ -4342,39 +4494,18 @@ async def trigger_protocol_ocr(protocol_id:str)->dict[str,object]:
         if current.get("state")=="not_required":
             raise ProtocolCatalogError("Protocol PDF does not require OCR.")
         ocr_id=f"ocr-{secrets.token_hex(16)}"
-
-        def run_ocr()->None:
-            catalog,store=_open_protocol_catalog()
-            try:
-                catalog.run_ocr(
-                    protocol_id,provider,ocr_id=ocr_id
-                )
-            finally:
-                store.close()
-
-        async def background_worker()->None:
-            try:
-                await asyncio.to_thread(run_ocr)
-            except Exception as exc:
-                log.warning(
-                    "protocol.ocr.failed protocol_id=%s error=%s",
-                    protocol_id,type(exc).__name__,
-                )
-
-        task=asyncio.create_task(background_worker())
-        _PROTOCOL_OCR_TASKS[protocol_id]=task
-        task.add_done_callback(
-            lambda completed,pid=protocol_id: (
-                _PROTOCOL_OCR_TASKS.pop(pid,None)
-                if _PROTOCOL_OCR_TASKS.get(pid) is completed else None
-            )
-        )
+        # Lane PX decision 3: a person's press runs the same chain an upload
+        # runs -- OCR of the marked pages, accepted under a recorded
+        # automatic authority, then the analysis. No separate approval step.
+        _schedule_ocr_then_analysis(
+            protocol_id,provider,ocr_id=ocr_id,principal=_REQUEST_PRINCIPAL.get())
         return {
             **current,
             "ocr_id":ocr_id,
             "state":"queued",
             "request_accepted":True,
-            "review_required":True,
+            "review_required":False,
+            "automatic":True,
             "executable":False,
         }
     except Exception as exc:
@@ -4469,17 +4600,6 @@ async def trigger_protocol_analysis(
     analysis_id=f"analysis-{secrets.token_hex(16)}"
     metric_principal=_REQUEST_PRINCIPAL.get()
 
-    def prepare_analysis()->dict[str,object]:
-        catalog,store=_open_protocol_catalog()
-        try:
-            entry=catalog.request_analysis(protocol_id,analysis_id)
-            public=entry.public_dict()
-            public["analysis_run"]=catalog.analysis_run_status(
-                protocol_id).public_dict()
-            return public
-        finally:
-            store.close()
-
     def run_explicit_analysis(*,request_first:bool)->dict[str,object]:
         # SQLite connections are thread-affine.  Construct and close the
         # catalog in the same worker that performs bounded Provider work.
@@ -4517,10 +4637,10 @@ async def trigger_protocol_analysis(
         finally:
             store.close()
 
-    async def background_worker()->None:
-        try:
+    try:
+        if not background:
             completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=False)
+                run_explicit_analysis,request_first=True)
             _record_workspace_metric(
                 category="protocol",metric_name="analysis",
                 dimensions={
@@ -4528,6 +4648,90 @@ async def trigger_protocol_analysis(
                     "source_kind":"local_pdf",
                 },
                 principal=metric_principal,
+            )
+            return completed
+        ocr_running=_PROTOCOL_OCR_TASKS.get(protocol_id)
+        if ocr_running is not None and not ocr_running.done():
+            # Lane PX decision 3: the OCR chain starts the analysis itself
+            # once the OCR text is in; an analysis now would read the pages
+            # without it.
+            catalog,store=_open_protocol_catalog()
+            try:
+                public=catalog.get_entry(protocol_id).public_dict()
+                public["analysis_run"]=catalog.analysis_run_status(
+                    protocol_id).public_dict()
+                public["analysis_request_deferred"]="ocr_in_progress"
+                return public
+            finally:
+                store.close()
+        return await _begin_background_analysis(
+            protocol_id,principal=metric_principal,analysis_id=analysis_id)
+    except Exception as exc:
+        raise _catalog_http_error(exc) from exc
+
+
+async def _begin_background_analysis(
+    protocol_id:str,*,principal:Principal|None,analysis_id:str|None=None,
+)->dict[str,object]:
+    """Record the request, then run the analysis off the request path.
+
+    Shared by the analysis endpoint and the upload-time OCR chain (lane PX,
+    decision 3). A run already in progress, or an analysis that already
+    ended, is reported and not started again.
+    """
+
+    analysis_id=analysis_id or f"analysis-{secrets.token_hex(16)}"
+
+    def prepare_analysis()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            entry=catalog.request_analysis(protocol_id,analysis_id)
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    def run_analysis()->dict[str,object]:
+        catalog,store=_open_protocol_catalog()
+        try:
+            try:
+                model=_protocol_analysis_model()
+            except RuntimeError as exc:
+                catalog.fail_analysis_request(
+                    protocol_id,analysis_id,
+                    failure_code="provider_configuration_missing",
+                )
+                raise ProtocolAnalysisUnavailableError(
+                    "Protocol analysis provider is not configured."
+                ) from exc
+            entry=catalog.analyze(protocol_id,model,analysis_id=analysis_id)
+            if _auto_activate_ready_uploads_enabled():
+                try:
+                    rev=catalog._latest_protocol_revision(protocol_id)
+                    analysis=catalog._latest_analysis(rev)
+                    if analysis is not None and analysis.readiness.status.value=="guidance_ready":
+                        entry=catalog.activate_development(protocol_id)
+                except Exception as auto_exc:
+                    log.warning("Auto-activation skipped for %s: %s",protocol_id,auto_exc)
+            public=entry.public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
+            return public
+        finally:
+            store.close()
+
+    async def background_worker()->None:
+        try:
+            completed=await asyncio.to_thread(run_analysis)
+            _record_workspace_metric(
+                category="protocol",metric_name="analysis",
+                dimensions={
+                    "status":str(completed.get("analysis_status") or "complete")[:100],
+                    "source_kind":"local_pdf",
+                },
+                principal=principal,
             )
         except Exception as exc:
             # The catalog persists bounded failure codes.  Provider responses,
@@ -4569,50 +4773,35 @@ async def trigger_protocol_analysis(
                     "reason_code":str(getattr(exc,"code","analysis_failed"))[:100],
                     "source_kind":"local_pdf",
                 },
-                principal=metric_principal,
+                principal=principal,
             )
 
-    try:
-        if not background:
-            completed=await asyncio.to_thread(
-                run_explicit_analysis,request_first=True)
-            _record_workspace_metric(
-                category="protocol",metric_name="analysis",
-                dimensions={
-                    "status":str(completed.get("analysis_status") or "complete")[:100],
-                    "source_kind":"local_pdf",
-                },
-                principal=metric_principal,
-            )
-            return completed
-        running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
-        if running is not None and not running.done():
-            catalog,store=_open_protocol_catalog()
-            try:
-                public=catalog.get_entry(protocol_id).public_dict()
-                public["analysis_run"]=catalog.analysis_run_status(
-                    protocol_id).public_dict()
-                public["analysis_request_deduplicated"]=True
-                return public
-            finally:
-                store.close()
-        public=await asyncio.to_thread(prepare_analysis)
-        state=(public.get("analysis_run") or {}).get("state")
-        if state in {"review_required","approved","revoked"}:
+    running=_PROTOCOL_ANALYSIS_TASKS.get(protocol_id)
+    if running is not None and not running.done():
+        catalog,store=_open_protocol_catalog()
+        try:
+            public=catalog.get_entry(protocol_id).public_dict()
+            public["analysis_run"]=catalog.analysis_run_status(
+                protocol_id).public_dict()
             public["analysis_request_deduplicated"]=True
             return public
-        task=asyncio.create_task(background_worker())
-        _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
-        task.add_done_callback(
-            lambda completed,pid=protocol_id: (
-                _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
-                if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
-            )
-        )
-        public["analysis_request_accepted"]=True
+        finally:
+            store.close()
+    public=await asyncio.to_thread(prepare_analysis)
+    state=(public.get("analysis_run") or {}).get("state")
+    if state in {"review_required","approved","revoked"}:
+        public["analysis_request_deduplicated"]=True
         return public
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
+    task=asyncio.create_task(background_worker())
+    _PROTOCOL_ANALYSIS_TASKS[protocol_id]=task
+    task.add_done_callback(
+        lambda completed,pid=protocol_id: (
+            _PROTOCOL_ANALYSIS_TASKS.pop(pid,None)
+            if _PROTOCOL_ANALYSIS_TASKS.get(pid) is completed else None
+        )
+    )
+    public["analysis_request_accepted"]=True
+    return public
 
 
 @app.get("/api/protocols/{protocol_id}/analysis/status")
@@ -4656,11 +4845,94 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
                 )
                 and review.get("available_for_execution") is not True
             )
+            review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
             store.close()
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
+
+
+def _pipeline_with_translation(
+    catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
+)->dict[str,object]:
+    """The catalog's stage line, with what the server alone knows (lane PX 4).
+
+    Whether the person's one confirmation is a press here (test mode) or a
+    reviewer's approval, and how far the revision's Korean has come.
+    """
+
+    pipeline=dict(review.get("pipeline") or {})
+    if not pipeline:
+        return pipeline
+    if pipeline.get("stage")=="activation":
+        pipeline["action"]=(
+            "'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다."
+            if review.get("development_activation_allowed") else
+            "검토자가 검토 화면에서 남은 사유를 확인·해제하고 이 분석 버전을 승인하면 "
+            "실행할 수 있습니다.")
+    if review.get("analysis_available") is True:
+        try:
+            pipeline["translation"]=_translation_progress(catalog,protocol_id)
+        except Exception as exc:  # noqa: BLE001 - the stage line stands without it
+            log.warning("revision_translation progress_failed error=%s",type(exc).__name__)
+            pipeline["translation"]={"state":"unknown","message":"번역 상태를 읽지 못했습니다."}
+    return pipeline
+
+
+def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,object]:
+    """How much of a passed analysis's Korean exists, in one Korean line."""
+
+    fixture=catalog.load_analysis_fixture(protocol_id)
+    key=translation_revision_key(fixture)
+    units=translation_units(fixture)
+    step_keys=[f"{step.step_id}/current_step" for step in fixture.steps]
+    korean_source={unit.fact_key for unit in units if is_korean(unit.source_text)}
+    needed=[unit for unit in units if unit.fact_key not in korean_source]
+    store=_revision_translation_store()
+    if store is None:
+        return {
+            "state":"off","units":len(units),"needed":len(needed),
+            "steps_total":len(step_keys),
+            "steps_korean":sum(1 for k in step_keys if k in korean_source),
+            "message":"자동 번역이 꺼져 있습니다(작업공간이 꺼짐). 단계는 원문으로 안내합니다.",
+        }
+    try:
+        rows=store.fact_translations(key,"ko")
+        glossary=glossary_entries(store.translation_glossary(key,"ko"))
+    finally:
+        store.close()
+    attached=with_stored_translations(fixture,rows,glossary)
+    machine=getattr(attached,"machine_localizations",None) or {}
+    reviewed=getattr(attached,"localizations",None) or {}
+    passed={key_ for key_ in (*machine,*reviewed)}
+    steps_korean=sum(1 for k in step_keys if k in passed or k in korean_source)
+    refused=sum(1 for row in rows if row.check_result!="passed")
+    with _REVISION_TRANSLATIONS_LOCK:
+        running=key in _REVISION_TRANSLATIONS_RUNNING
+    runner=_revision_translation_runner()
+    if not needed:
+        state,message="done","번역할 문장이 없습니다. 원문이 이미 한국어입니다."
+    elif running:
+        state="running"
+        message=f"번역 준비 중 · 한국어 단계 {steps_korean}/{len(step_keys)} · 준비되면 다음 안내부터 씁니다."
+    elif rows:
+        state="done"
+        message=f"번역 끝 · 한국어 단계 {steps_korean}/{len(step_keys)}"
+        if refused:
+            message+=f" · 검사 실패 {refused}문장은 원문으로 보입니다"
+    elif runner is None:
+        state="off"
+        message=("자동 번역이 꺼져 있습니다(번역 역할 키 또는 작업공간 없음). 단계는 원문으로 "
+                 "안내합니다.")
+    else:
+        state="pending"
+        message="번역 대기 중입니다. 분석 통과 직후 시작됩니다."
+    return {
+        "state":state,"units":len(units),"needed":len(needed),"passed":len(passed),
+        "refused":refused,"steps_total":len(step_keys),"steps_korean":steps_korean,
+        "message":message,
+    }
 
 
 @app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
@@ -6735,7 +7007,13 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
         source="reviewed"
     else:
         source="none"
-    return {"safety_items":items,"translation_source":source}
+    # Lane PX decision 1: while the revision's Korean is still being made the
+    # card says so ("번역 준비 중") instead of "no translation"; from the next
+    # redraw after a batch lands, the Korean is simply there.
+    return {
+        "safety_items":items,"translation_source":source,
+        "translation_pending":_translation_pending(fixture),
+    }
 
 
 #: Statuses that would call a stored machine translation something else.
