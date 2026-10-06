@@ -359,7 +359,7 @@ _DIRECTIVE = re.compile(
 #: in an answer, and the words that would ground it in the protocol's text or
 #: an approved safety document (English source, Korean readings). The topics
 #: are those of decision 7 -- what to follow, wear, ventilate, evacuate, wash,
-#: clean up or dispose of, and whom to call.
+#: clean up, dispose of or keep away from, and whom to call.
 #: English words are edged by letters, not by \b: "SDS와", "gloves를" -- a
 #: Hangul particle is a word character, so \b does not hold before it.
 SAFETY_INSTRUCTION_TOPICS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
@@ -370,9 +370,14 @@ SAFETY_INSTRUCTION_TOPICS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], .
      re.compile(r"유출\s*(?:대응|처리|키트|사고)|스필\s*키트|흡착\s*(?:패드|포|재)|"
                 r"(?<![a-z])spill\s+(?:kit|response|procedure|control)", re.I),
      re.compile(r"(?<![a-z])spill|유출|흡착", re.I)),
+    # "기관의 화재 대응 지침", "실험실 안전 규정", "안전관리자": a rule or a person
+    # of the institution, a word or two after what it is about.
     ("safety_rules",
-     re.compile(r"(?:안전|실험실|연구실|기관|시설)\s*(?:지침|규정|수칙|매뉴얼|절차|관리자|담당자)|"
-                r"(?<![a-z])safety\s+(?:officer|manager|guidelines?|rules?|procedures?|protocols?)(?![a-z])|(?<![a-z])sops?(?![a-z])", re.I),
+     re.compile(r"(?:안전|실험실|연구실|기관|시설|화재|비상|사고|응급)\S*\s*(?:\S+\s*){0,2}?"
+                r"(?:지침|규정|수칙|매뉴얼|절차|요령|관리자|담당자)|"
+                r"(?<![a-z])safety\s+(?:officer|manager|guidelines?|rules?|procedures?|protocols?)(?![a-z])|"
+                r"(?<![a-z])(?:institutional|emergency)\s+(?:procedures?|guidelines?|rules?)(?![a-z])|"
+                r"(?<![a-z])sops?(?![a-z])", re.I),
      re.compile(r"(?<![a-z])safety\s+(?:officer|manager|guidelines?|rules?|procedures?)(?![a-z])|(?<![a-z])sops?(?![a-z])|"
                 r"(?:안전|실험실|연구실)\s*(?:지침|규정|수칙|관리자)", re.I)),
     ("gloves",
@@ -409,13 +414,22 @@ SAFETY_INSTRUCTION_TOPICS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], .
                 r"(?<![a-z])waste\s+(?:container|bin|stream)(?![a-z])|(?<![a-z])dispos(?:e|al)\s+of(?![a-z])", re.I),
      re.compile(r"(?<![a-z])dispos|(?<![a-z])waste(?![a-z])|폐액|폐기물", re.I)),
     ("medical_help",
-     re.compile(r"119|응급|병원|진료|의료진|의사(?:의|에게|와)|(?<![a-z])medical(?![a-z])|(?<![a-z])emergency(?![a-z])|"
+     re.compile(r"119|응급|병원|진료|의료진|의사(?:의|에게|와)|비상\s*(?:연락|벨|버튼|샤워)|긴급\s*연락|신고|"
+                r"(?<![a-z])medical(?![a-z])|(?<![a-z])emergency(?![a-z])|"
                 r"(?<![a-z])physician(?![a-z])|(?<![a-z])doctor(?![a-z])", re.I),
      re.compile(r"(?<![a-z])medical(?![a-z])|(?<![a-z])emergency(?![a-z])|(?<![a-z])physician(?![a-z])|응급|의료", re.I)),
     # "소화" alone is also digestion ("소화물", in-gel's digest).
     ("fire",
-     re.compile(r"소화기|불을\s*끄|(?<![a-z])fire\s+extinguisher|(?<![a-z])extinguish", re.I),
-     re.compile(r"(?<![a-z])fire(?![a-z])|extinguish|소화기", re.I)),
+     re.compile(r"화재|소화기|불이\s*(?:나|났|붙)|불을\s*끄|(?<![a-z])fire(?![a-z])|(?<![a-z])extinguish", re.I),
+     re.compile(r"(?<![a-z])fire(?![a-z])|extinguish|소화기|화재", re.I)),
+    ("exposure",
+     re.compile(r"(?:피부|눈|호흡|흡입|접촉|증기|흄)\S*\s*(?:\S+\s*){0,2}?(?:피하|피해|막|조심|주의)|"
+                r"(?<![a-z])avoid\s+(?:skin|eye|contact|inhal|breathing)", re.I),
+     # Contact and exposure, not any "avoid" or "skin" ("avoid keratin
+     # contamination", "skin cells" in in-gel's dust warning).
+     re.compile(r"(?<![a-z])avoid\s+(?:skin|eye|contact|inhal|breath|exposure)|(?<![a-z])inhal|"
+                r"(?:skin|eye)\s+contact|(?:on|with)\s+(?:the\s+)?(?:skin|eyes)(?![a-z])|irritat|"
+                r"피부\s*(?:접촉|에\s*(?:닿|묻))|흡입", re.I)),
 )
 #: The sentences of a text: split after a sentence end or at a line break.
 _SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+|\n+")

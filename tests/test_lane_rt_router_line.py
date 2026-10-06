@@ -658,6 +658,31 @@ class SafetyInstructionCheckTests(unittest.TestCase):
             ("eye_protection", "ventilation"),
         )
 
+    def test_an_institutions_rules_fire_and_an_emergency_call_are_instructions(self) -> None:
+        # The live fire answers of the evaluation set (R240), which a first
+        # version let through.
+        for sentence, topics in (
+            ("기관의 화재 대응 지침을 따르세요.", ("safety_rules", "fire")),
+            ("기관의 화재 대응 지침을 따르고 비상 연락처에 연락하세요.",
+             ("safety_rules", "medical_help", "fire")),
+            ("피부 접촉을 피하세요.", ("exposure",)),
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(safety_instruction_topics(sentence), topics)
+                self.assertEqual(ungrounded_safety_instructions(sentence, ""), (sentence,))
+
+    def test_unrelated_source_words_ground_nothing(self) -> None:
+        # In-gel's dust warning: "avoid the dreaded keratin contamination",
+        # "skin cells"; its digest is "소화물", not fire.
+        grounding = ("This will avoid the dreaded keratin contamination. Most dust components "
+                     "are proteinaceous in nature (e.g., skin cells). 24단계: 소화물을 모읍니다.")
+        for sentence in ("피부 접촉을 피하세요.", "소화기를 쓰세요."):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(ungrounded_safety_instructions(sentence, grounding), (sentence,))
+        # A step's own method stays: washing a band is no safety instruction.
+        self.assertEqual(ungrounded_safety_instructions(
+            "Solution B 500 µL로 밴드를 세척하고, 37°C에서 15분 배양하세요.", ""), ())
+
     def test_the_note_is_said_once(self) -> None:
         outcome = self._answer("PDF에서 확인할 수 없어요. 안전관리자에게 문의하세요.")
         self.assertEqual(outcome.plan.speech_text, "PDF에서 확인할 수 없어요.")
