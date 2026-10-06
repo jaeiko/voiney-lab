@@ -78,6 +78,7 @@ from voiney_lab.experiment_protocol_store import (
 from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
+    REPORT_PROSE,
     ReportNarrative,
     ReportWriterBrain,
     ReportWriterSettings,
@@ -579,6 +580,24 @@ def _voice_turn_actor()->tuple[str|None,str]:
         return None,"voice_operator"
     role=next(iter(sorted(item.value for item in actor.roles)),"voice_operator")
     return actor.principal_id,role
+
+
+def _experimenter_display_name()->str|None:
+    """The signed-in principal's display name, or None where nobody is named.
+
+    Like ``_voice_turn_actor``: without a workspace this is a single-operator
+    host with no principal, and the report leaves the name for the researcher
+    to write. Never raises.
+    """
+
+    try:
+        if not _workspace_settings().enabled:
+            return None
+        actor=_REQUEST_PRINCIPAL.get()
+    except Exception:  # noqa: BLE001 - an unreadable setting names nobody
+        return None
+    name=" ".join(str(getattr(actor,"display_name","") or "").split())
+    return name[:120] or None
 
 
 def _scope_catalog_resource(
@@ -2358,6 +2377,7 @@ async def upload_workspace_experiment_evidence(
     request:Request,
     filename:str,
     idempotency_key:str,
+    caption:str|None=None,
 )->dict[str,object]:
     allowed={
         "image/jpeg":("image",".jpg"),
@@ -2470,7 +2490,10 @@ async def upload_workspace_experiment_evidence(
                 byte_size=byte_size,
                 sha256=checksum,
                 storage_reference=relative,
+                caption=caption or None,
             )
+            if evidence["evidence_kind"]=="image":
+                _record_report_photo(safe_session_id,evidence)
             return {
                 key:evidence[key]
                 for key in (
@@ -2489,6 +2512,42 @@ async def upload_workspace_experiment_evidence(
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _record_report_photo(session_id:str,evidence:dict)->None:
+    """Put an uploaded image on the experiment report (lane RP, decision 7).
+
+    The report's results table reads ``photo_attached`` events; the caption is
+    what the researcher wrote, else the file name. The image itself is never
+    read or interpreted. Best effort: the upload stands even when no report is
+    open for the session or the report store is off.
+    """
+
+    try:
+        settings=ExperimentReportSettings.from_environment()
+        if not settings.enabled or settings.database_path is None:
+            return
+        store=ExperimentReportStore(settings.database_path)
+        reports=store.list_reports(session_id=session_id)
+        if not reports:
+            return
+        caption=" ".join(str(evidence.get("caption") or "").split())
+        store.append_event(
+            reports[0]["report_id"],
+            event_key=f"photo-{evidence['evidence_id']}",
+            event_type="photo_attached",
+            step_id=evidence.get("protocol_step_id"),
+            step_label=evidence.get("protocol_step_label"),
+            user_wording=(caption or str(evidence["original_filename"]))[:800],
+            confirmation_state="user_reported",
+            payload={
+                "evidence_id":evidence["evidence_id"],
+                "media_type":evidence["media_type"],
+                "interpretation_status":"not_interpreted",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the upload itself already stands
+        log.warning("report photo event not written error=%s",type(exc).__name__)
 
 
 @app.get("/api/workspace/experiments/{session_id}/evidence/{evidence_id}")
@@ -5176,6 +5235,86 @@ def get_admin_metrics(
     }
 
 
+def _report_writer_brain()->ReportWriterBrain|None:
+    """The report role's writer, or None when no report model is configured."""
+
+    try:
+        writer_settings=ReportWriterSettings.from_environment()
+        if not writer_settings.enabled:
+            return None
+        report_role=RoleModel.from_environment("report")
+        if not report_role.has_key():
+            return None
+        return ReportWriterBrain(
+            client=_role_client(report_role,timeout=writer_settings.timeout_seconds),
+            model=writer_settings.model,
+            timeout_seconds=writer_settings.timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001 - the server's sentences stand in
+        log.warning("report writer setup failed error=%s",type(exc).__name__)
+        return None
+
+
+def _prepare_report_prose(store:ExperimentReportStore,report_id:str,*,again:bool=False)->str:
+    """Start the report's one model call in the background (lane RP, decision 9).
+
+    Called when an experiment ends; a download or a person's "다시 만들기"
+    calls it too. Never raises: a failure leaves the server's own sentences.
+    """
+
+    try:
+        return REPORT_PROSE.start(store,report_id,_report_writer_brain,again=again)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("report prose not started error=%s",type(exc).__name__)
+        return "failed"
+
+
+def _report_prose_store(report_id:str)->ExperimentReportStore:
+    _scope_tenant_resource("experiment_report",report_id)
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="experiment report unavailable")
+    return ExperimentReportStore(settings.database_path)
+
+
+@app.get("/api/experiment-reports/{report_id}/prose")
+def get_experiment_report_prose(report_id:str):
+    """Whether the report's prose is being prepared or ready (decision 9)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        return REPORT_PROSE.status(store,report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+@app.post("/api/experiment-reports/{report_id}/prose")
+def regenerate_experiment_report_prose(report_id:str):
+    """Write the report's prose again -- only when a person asks (decision 9)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        _prepare_report_prose(store,report_id,again=True)
+        return REPORT_PROSE.status(store,report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
+    """Let a download use the prepared prose, waiting for one being written.
+
+    A finished report with nothing prepared (one that ended before the server
+    restarted, say) is prepared now; that is still its one model call. A
+    report still in progress gets the server's own sentences.
+    """
+
+    if _prepare_report_prose(store,report_id)=="preparing":
+        REPORT_PROSE.wait(
+            store,report_id,
+            ReportWriterSettings.from_environment().timeout_seconds+5,
+        )
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -5190,41 +5329,17 @@ def export_experiment_report(report_id:str,format_name:str):
             content=store.export_json(report_id)
             media_type="application/json"
         elif format_name=="md":
+            # Lane RP: the Markdown report has the Word report's structure and
+            # the same writer (model sections checked, server sentences else).
+            _prepared_report_prose(store,report_id)
             content=store.export_markdown(report_id)
             media_type="text/markdown; charset=utf-8"
         elif format_name=="csv":
             content=store.export_csv(report_id)
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
-            narrative = None
-            try:
-                writer_settings = ReportWriterSettings.from_environment()
-                if writer_settings.enabled:
-                    report_role = RoleModel.from_environment("report")
-                    if report_role.has_key():
-                        try:
-                            async_client = _role_client(
-                                report_role,
-                                timeout=writer_settings.timeout_seconds,
-                            )
-                            brain = ReportWriterBrain(
-                                client=async_client,
-                                model=writer_settings.model,
-                                timeout_seconds=writer_settings.timeout_seconds,
-                            )
-                            report_doc = store.get_report(report_id)
-                            events = list(report_doc.get("events") or ())
-                            narrative = asyncio.run(brain.generate_narrative(report_doc, events))
-                        except Exception as llm_exc:
-                            log.warning(
-                                "Report LLM generation failed (%s), falling back to deterministic narrative",
-                                llm_exc,
-                            )
-                            narrative = None
-            except Exception as brain_exc:
-                log.warning("Report writer setup failed (%s), using deterministic narrative", brain_exc)
-                narrative = None
-            content=store.export_docx(report_id, narrative=narrative)
+            _prepared_report_prose(store,report_id)
+            content=store.export_docx(report_id)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
@@ -7266,6 +7381,17 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        experimenter=_experimenter_display_name()
+        if experimenter:
+            # Lane RP, decision 5: the report's 실험자 is the display name of
+            # the person who started the experiment. The first one recorded
+            # stands (the key is fixed); none is written when nobody is named.
+            store.append_event(
+                session.experiment_report_id,
+                event_key="experimenter",
+                event_type="experimenter_recorded",
+                payload={"display_name":experimenter},
+            )
         if getattr(session,"test_mode_readiness_gates_skipped",False):
             readiness=curated.fixture.draft.readiness
             store.append_event(
@@ -7398,6 +7524,7 @@ def _record_experiment_report_plan(
             status="stopped",
             event_key=f"{event_key}-finalize",
         )
+        _prepare_report_prose(store,session.experiment_report_id)
     elif (
         plan.action is CuratedProtocolAction.NEXT
         and plan.state_changed
@@ -7418,6 +7545,7 @@ def _record_experiment_report_plan(
             status="completed",
             event_key=f"{event_key}-finalize",
         )
+        _prepare_report_prose(store,session.experiment_report_id)
         _record_workspace_metric(
             category="workflow",metric_name="completion",
             dimensions={"event_kind":"workflow_completed","status":"completed"},

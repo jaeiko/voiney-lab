@@ -437,9 +437,15 @@ class SessionTestModeTests(_TestModeFixture):
             marks[0]["payload"]["switch"], READINESS_GATE_TEST_MODE_ENV
         )
         self.assertIn(GATE, marks[0]["payload"]["outstanding_reason_codes"])
+        # Lane RP, decision 6: the researcher's report says it in words;
+        # the event name stays in the ledger and the JSON export.
+        self.assertIn(
+            "| 준비 검사 | 시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀 |",
+            store.export_markdown(summary["report_id"]).decode(),
+        )
         self.assertIn(
             "test_mode_readiness_gates_skipped",
-            store.export_markdown(summary["report_id"]).decode(),
+            store.export_json(summary["report_id"]).decode(),
         )
 
     def test_switch_off_the_same_protocol_is_refused_and_nothing_is_marked(

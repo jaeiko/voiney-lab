@@ -156,20 +156,21 @@ def test_docx_export_contains_10_sections(tmp_path):
     doc = Document(io.BytesIO(docx_bytes))
     full_text = "\n".join(p.text for p in doc.paragraphs)
 
-    # Verify key sections and metadata
-    assert "I. Purpose" in full_text
-    assert "II. Materials and Methods" in full_text
-    assert "III. Results" in full_text
-    assert "IV. Discussion" in full_text
-    assert "V. Conclusion" in full_text
-    assert "Title:" in full_text
-    assert "Course:" in full_text
-    assert "Student number:" in full_text
-    assert "Name:" in full_text
-    assert "Advisor:" in full_text
+    # Verify key sections and metadata (lane RP: the researcher's report)
+    table_text = "\n".join(cell.text for table in doc.tables for row in table.rows for cell in row.cells)
+    assert "1. 실험 목적" in full_text
+    assert "2. 배경·원리" in full_text
+    assert "3. 재료 및 방법" in full_text
+    assert "4. 결과" in full_text
+    assert "5. 고찰" in full_text
+    assert "6. 결론" in full_text
+    assert "참고문헌" in full_text
+    assert "실험자" in table_text
     assert "In-Gel Protein Digestion" in full_text
-    assert "Execution Event Timeline:" in full_text
-    assert "Cryptographic Ledger Events:" in full_text
+    # Decision 6 (2026-10-06): identifiers and the event list stay in the
+    # ledger and the JSON export, not in the researcher's report.
+    assert "부록 · 기록 정보" not in full_text
+    assert report_id not in full_text + table_text
 
 
 def test_curated_protocol_turn_answer_envelope_rich_formatting():
