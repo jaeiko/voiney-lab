@@ -89,6 +89,11 @@ export VOINEY_LAB_MOSS_ENABLED="false"
 # enforced. Report Brain is a separate async derivation path and is not part of
 # the latency-critical Answer/Source/Visual start() fan-out.
 # CLASS-EXPLICIT: model prose cannot gain workflow or evidence authority.
+# Lane F, decision 1 (2026-10-06): the voice turn's Answer role is off by
+# default. Only an answer back within 1.25 s is used, and none of the measured
+# models made it (0/57), so the call cost and added nothing. Source and Visual
+# stay on with the multi-brain switch; step translation follows the
+# translation role, not this switch. Set it to true to turn the role back on.
 eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_PROTOCOL_ENABLED=true \
   VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true \
@@ -104,6 +109,7 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS=5 \
   VOINEY_LAB_EXTERNAL_REFERENCE_ENRICHMENT_BUDGET_SECONDS=4 \
   VOINEY_LAB_MULTI_BRAIN_ENABLED=true \
+  VOINEY_LAB_ANSWER_BRAIN_ENABLED=false \
   VOINEY_LAB_ANSWER_BRAIN_PRIMARY_BUDGET_SECONDS=1.25 \
   VOINEY_LAB_ANSWER_BRAIN_TIMEOUT_SECONDS=8 \
   VOINEY_LAB_PLANNER_BRAIN_TIMEOUT_SECONDS=6 \
@@ -163,6 +169,8 @@ print("external_search_read_timeout_seconds:", references.read_timeout_seconds)
 print("external_search_image_search_policy:", "on_visual_request")
 print("supplemental_model_knowledge:", "enabled" if supplemental.enabled else "disabled")
 print("hybrid_multi_brain:", "enabled" if multi_brain.enabled else "disabled")
+print("answer_brain:", "enabled" if multi_brain.answer_brain_enabled else "disabled")
+print("step_translation:", "enabled" if multi_brain.translation_enabled else "disabled")
 print("primary_answer_budget_seconds:", multi_brain.primary_answer_budget_seconds)
 print("authority_profile:", references.domain_profile or "custom")
 print("allowed_domain_count:", len(references.allowed_domains))

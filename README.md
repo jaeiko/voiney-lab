@@ -985,6 +985,19 @@ behaves as before.
 | `REPORT` | the experiment report's prose | `xai` · `VOINEY_LAB_SUPPLEMENTAL_MODEL`, then `grok-4.6` |
 | `SUPPLEMENTAL` | outside-the-PDF explanations and the web reference search | `xai` · `grok-4.6`, reasoning `low` |
 
+**Answer role in the voice turn, and step translation (lane F, decision 1,
+2026-10-06).** The voice turn's multi-brain Answer role is used only when its
+answer is back within 1.25 s, and no measured model made it (0/57), so
+`run_dev.sh` now sets `VOINEY_LAB_ANSWER_BRAIN_ENABLED=false` by default (a
+value in the shell or `.env` wins; `true` brings the role back, unchanged).
+The Source and Visual roles still follow `VOINEY_LAB_MULTI_BRAIN_ENABLED`.
+`run_pilot.sh` sets neither and follows the `.env`. Step translation -- the
+automatic reading of a step with no reviewed translation ("이 단계 읽어줘")
+and generating an authorized revision's translations -- no longer follows the
+answer role: it is on whenever the `TRANSLATION` role has its provider's key
+(and, for a revision, the workspace is on). `run_dev.sh --check-only` prints
+`answer_brain:` and `step_translation:`.
+
 Each role reads `VOINEY_LAB_<ROLE>_PROVIDER` (`xai`, `anthropic`, `openai` or
 `google`), `VOINEY_LAB_<ROLE>_MODEL` and `VOINEY_LAB_<ROLE>_REASONING`
 (`none`, `low`, `medium`, `high`, `xhigh`, `max`; unset leaves the provider's

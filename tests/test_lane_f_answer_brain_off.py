@@ -30,6 +30,7 @@ from voiney_lab.tools import ToolContext
 from voiney_lab.vad import TurnState
 
 from tests.protocol_vocabulary_support import MINIPREP_STEPS, miniprep_fixture
+from tests.test_launcher_settings_win import _LauncherCopy
 
 GOOD_READING = "1단계: 세포 덩어리를 Tris-HCl buffer로 만든 Buffer 1 250 µL에 다시 풀어 줍니다."
 
@@ -204,6 +205,24 @@ class RevisionTranslationTests(unittest.TestCase):
     def test_without_a_translation_key_nothing_starts(self) -> None:
         _, start = self._authorize({**DEV_ENV, **NO_TRANSLATION_KEY})
         start.assert_not_called()
+
+
+class DevLauncherDefaultTests(_LauncherCopy):
+    SCRIPT = "run_dev.sh"
+
+    def test_the_answer_brain_is_off_by_default(self) -> None:
+        result = self._run("--check-only")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("hybrid_multi_brain: enabled", result.stdout)
+        self.assertIn("answer_brain: disabled", result.stdout)
+
+    def test_a_person_value_wins(self) -> None:
+        result = self._run("--check-only", VOINEY_LAB_ANSWER_BRAIN_ENABLED="true")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("answer_brain: enabled", result.stdout)
+        self._dotenv("VOINEY_LAB_ANSWER_BRAIN_ENABLED=true\n")
+        result = self._run("--check-only")
+        self.assertIn("answer_brain: enabled", result.stdout)
 
 
 if __name__ == "__main__":
