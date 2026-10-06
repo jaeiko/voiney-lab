@@ -51,7 +51,7 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -64,6 +64,8 @@ from voiney_lab.answer_checks import (
     introduces_numbers,
     outside_pdf_violations,
     server_value_violations,
+    ungrounded_safety_instructions,
+    without_sentences,
 )
 from voiney_lab.brain import RouterTurnRecord
 from voiney_lab.model_providers import DEFAULT_MODELS, RoleModel
@@ -1288,6 +1290,81 @@ def parse_router_answer(content: str | Mapping[str, Any]) -> RouterAnswer | None
     )
 
 
+#: Said in place of a safety instruction taken out of an answer (lane RT,
+#: decision 7): that the source gives none for this, nothing more.
+SAFETY_NOT_IN_SOURCE = {
+    "ko": "이 상황의 안전 안내는 원문에 없어요.",
+    "en": "The protocol gives no safety instruction for this.",
+}
+_SAYS_NOT_IN_SOURCE = re.compile(
+    r"원문에\s*없|PDF에서\s*확인할\s*수\s*없|원문에서\s*확인할\s*수\s*없|"
+    r"\bnot\s+in\s+the\s+(?:pdf|protocol)\b|could\s+not\s+confirm",
+    re.I,
+)
+
+
+def approved_safety_text(session: Any) -> str:
+    """The approved safety documents' text the session holds, demo ones left out.
+
+    The facility SOPs, supplier SDSs and equipment manuals of the session's
+    safety pack (``CuratedProtocolSession.safety_pack``): titles, summaries
+    and reviewed translations. A demo stand-in is no approved document.
+    """
+
+    pack = getattr(session, "safety_pack", None)
+    if pack is None:
+        return ""
+    parts: list[str] = []
+    for kind in ("sop_documents", "sds_documents", "equipment_documents"):
+        for document in getattr(pack, kind, ()) or ():
+            if getattr(document, "is_demo", False):
+                continue
+            parts.append(getattr(document, "title", "") or "")
+            parts.append(getattr(document, "summary_text", "") or "")
+            parts.extend(text for _language, text in getattr(document, "reviewed_translations", ()) or ())
+    return "\n".join(part for part in parts if part)
+
+
+def without_ungrounded_safety(
+    answer: RouterAnswer, grounding: str, *, language: str,
+) -> tuple[RouterAnswer, tuple[str, ...]]:
+    """The answer with its safety instructions that have no source taken out.
+
+    Lane RT, decision 7: a sentence that tells the researcher what to follow,
+    wear, ventilate, evacuate, wash, clean up or dispose of, or whom to call,
+    stays only when the protocol's text or an approved safety document names
+    what it is about (answer_checks.ungrounded_safety_instructions). The rest
+    of the answer is kept, and that the source gives no such instruction is
+    said once -- never a replacement instruction. An answer left with nothing
+    else says only that, with no source cited.
+    """
+
+    removed = tuple(dict.fromkeys(
+        ungrounded_safety_instructions(answer.spoken, grounding)
+        + ungrounded_safety_instructions(answer.display, grounding)
+    ))
+    if not removed:
+        return answer, ()
+    note = SAFETY_NOT_IN_SOURCE.get(language, SAFETY_NOT_IN_SOURCE["ko"])
+
+    def noted(text: str) -> str:
+        kept = without_sentences(text, removed)
+        if not kept:
+            return note
+        return kept if _SAYS_NOT_IN_SOURCE.search(kept) else f"{kept} {note}"
+
+    spoken = " ".join(noted(answer.spoken).split())
+    display = noted(answer.display) if answer.display else ""
+    emptied = spoken == note
+    return replace(
+        answer,
+        spoken=spoken,
+        display=display,
+        source_kind="none" if emptied else answer.source_kind,
+        evidence_ids=() if emptied else answer.evidence_ids,
+    ), removed
+
+
 def answer_check_failures(
     answer: RouterAnswer,
     context: RouterContext,
@@ -1372,6 +1449,8 @@ class RouterTurnOutcome:
     rule_route: Any = None
     reply: RouterModelReply | None = None
     timings_ms: Mapping[str, float] = field(default_factory=dict)
+    #: Safety instructions with no source taken out of the answer (decision 7).
+    safety_removed: tuple[str, ...] = ()
 
     @property
     def model_called(self) -> bool:
@@ -1509,6 +1588,15 @@ async def route_turn_with_llm_router(
     answer = parse_router_answer(answer_calls[0][1] if answer_calls else reply.content)
     if answer is None:
         return await fall_back("answer_unreadable", reply=reply)
+    removed: tuple[str, ...] = ()
+    if answer.source_kind != "outside_pdf":
+        # An outside-PDF explanation may hold no safety content at all (D4);
+        # its own check still drops it whole.
+        answer, removed = without_ungrounded_safety(
+            answer,
+            "\n".join((context.protocol_text, context.evidence_text(), approved_safety_text(session))),
+            language=language,
+        )
     failures = list(answer_check_failures(answer, context, utterance=transcript))
     if (
         session.proposal_basis(turn_id=turn_id, generation=generation) != basis
@@ -1520,7 +1608,7 @@ async def route_turn_with_llm_router(
     if failures:
         return await fall_back(
             "answer_rejected:" + ",".join(failures), unconfirmed=True,
-            answer=answer, reply=reply,
+            answer=answer, reply=reply, safety_removed=removed,
         )
     plan = session.apply_router_answer(
         answer, context, turn_id=turn_id, language=language,
@@ -1528,4 +1616,5 @@ async def route_turn_with_llm_router(
     timings["total_ms"] = round((clock() - started) * 1000, 1)
     return RouterTurnOutcome(
         plan=plan, handled_by="llm", answer=answer, reply=reply, timings_ms=timings,
+        safety_removed=removed,
     )

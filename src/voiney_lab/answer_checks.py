@@ -4,7 +4,9 @@ A model may phrase an answer; it may not decide what the answer is allowed to
 contain. Each check here reads the answer text (and, where it needs one, the
 question or the server's own values) and says whether the answer may be used.
 None of them rewrites anything: a failed check means the caller drops the
-model's answer and falls back to the server's own reply.
+model's answer and falls back to the server's own reply. The one exception is
+a safety instruction with no source (lane RT, decision 7): the sentence is
+found here, and the router takes that sentence out rather than the answer.
 
 The number and mutation-claim checks moved here from ``multi_brain``, which
 keeps using them exactly as before. The outside-PDF, display-label and
@@ -334,6 +336,134 @@ def outside_pdf_violations(
     if display_label_violations(body):
         violations.append("answer_has_display_label")
     return tuple(violations)
+
+
+# --- Safety instructions with no source (lane RT, decision 7) --------------------
+
+#: An instruction to the researcher, by its form: a request ("…하세요",
+#: "…주십시오"), a must or a should ("…해야 합니다", "…는 것이 좋아요"), a
+#: don't ("…하지 마세요"), a recommendation ("권장", "필요합니다"), or the
+#: English imperative and modals.
+_DIRECTIVE = re.compile(
+    r"(?:세요|십시오|십시요|주세요|바랍니다)(?=[\s.!?,·~)]|$)"
+    r"|(?:해야|하여야|어야|아야)\s*(?:만\s*)?(?:합니다|해요|해|돼요|됩니다|하며|하고)"
+    r"|(?:는\s*것이|는\s*게)\s*(?:좋|안전|바람직)"
+    r"|하지\s*마|마십시오|금지|권장|필요(?:합니다|해요|해)|필수"
+    r"|\b(?:you\s+(?:should|must|need\s+to|have\s+to)|make\s+sure|be\s+sure\s+to"
+    r"|do\s+not|don(?:'|’)t|never|please)\b"
+    r"|^\s*(?:wear|follow|use|evacuate|ventilate|rinse|wash|flush|dispose|contact|call"
+    r"|consult|avoid|keep|leave|clean|wipe|absorb|put\s+on)\b",
+    re.I | re.M,
+)
+#: What a safety instruction is about: each topic with the words that name it
+#: in an answer, and the words that would ground it in the protocol's text or
+#: an approved safety document (English source, Korean readings). The topics
+#: are those of decision 7 -- what to follow, wear, ventilate, evacuate, wash,
+#: clean up or dispose of, and whom to call.
+#: English words are edged by letters, not by \b: "SDS와", "gloves를" -- a
+#: Hangul particle is a word character, so \b does not hold before it.
+SAFETY_INSTRUCTION_TOPICS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
+    ("safety_data_sheet",
+     re.compile(r"(?<![a-z])m?sds(?![a-z])|물질\s*안전\s*보건\s*자료|안전\s*보건\s*자료|safety\s+data\s+sheet", re.I),
+     re.compile(r"(?<![a-z])m?sds(?![a-z])|safety\s+data\s+sheet|물질\s*안전", re.I)),
+    ("spill_response",
+     re.compile(r"유출\s*(?:대응|처리|키트|사고)|스필\s*키트|흡착\s*(?:패드|포|재)|"
+                r"(?<![a-z])spill\s+(?:kit|response|procedure|control)", re.I),
+     re.compile(r"(?<![a-z])spill|유출|흡착", re.I)),
+    ("safety_rules",
+     re.compile(r"(?:안전|실험실|연구실|기관|시설)\s*(?:지침|규정|수칙|매뉴얼|절차|관리자|담당자)|"
+                r"(?<![a-z])safety\s+(?:officer|manager|guidelines?|rules?|procedures?|protocols?)(?![a-z])|(?<![a-z])sops?(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])safety\s+(?:officer|manager|guidelines?|rules?|procedures?)(?![a-z])|(?<![a-z])sops?(?![a-z])|"
+                r"(?:안전|실험실|연구실)\s*(?:지침|규정|수칙|관리자)", re.I)),
+    ("gloves",
+     re.compile(r"장갑|글러브|(?<![a-z])gloves?(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])gloves?(?![a-z])|장갑", re.I)),
+    ("eye_protection",
+     re.compile(r"보안경|고글|안면\s*보호|보호\s*안경|(?<![a-z])goggles?(?![a-z])|eye\s+protection|face\s+shield|"
+                r"safety\s+glasses", re.I),
+     re.compile(r"(?<![a-z])goggles?(?![a-z])|eye\s+protection|face\s+shield|safety\s+glasses|보안경|고글", re.I)),
+    ("lab_coat",
+     re.compile(r"실험복|실험\s*가운|(?<![a-z])lab\s+coats?(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])lab\s+coats?(?![a-z])|실험복|(?<![a-z])gowns?(?![a-z])", re.I)),
+    ("protective_equipment",
+     re.compile(r"보호구|보호\s*장비|보호\s*장구|(?<![a-z])ppe(?![a-z])|protective\s+(?:equipment|clothing|gear)", re.I),
+     re.compile(r"(?<![a-z])ppe(?![a-z])|protective|보호구", re.I)),
+    ("ventilation",
+     re.compile(r"환기|후드|(?<![a-z])fume\s+hood|(?<![a-z])hood(?![a-z])|ventilat", re.I),
+     re.compile(r"(?<![a-z])hood(?![a-z])|ventilat|환기|후드", re.I)),
+    ("evacuation",
+     re.compile(r"대피|(?<![a-z])evacuat", re.I),
+     re.compile(r"(?<![a-z])evacuat|대피", re.I)),
+    ("rinse_body",
+     re.compile(r"(?:피부|눈|손|얼굴)\S*\s*(?:\S+\s*){0,3}?(?:씻|세척|헹구|헹궈|흐르는\s*물)|세안|"
+                r"아이\s*워시|eye\s*wash|(?<![a-z])(?:rinse|flush)\s+(?:your\s+)?(?:eyes?|skin|hands?)(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])(?:rinse|flush|eye\s*wash)|세안|흐르는\s*물", re.I)),
+    ("spill_cleanup",
+     re.compile(r"(?:흘린|쏟은|엎지른|유출된|넘친)\S*\s*(?:\S+\s*){0,3}?(?:닦|흡수|치우|청소|제거)|"
+                r"(?<![a-z])(?:wipe|absorb|clean)\s+(?:it\s+|the\s+spill\s+)?up(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])spill|(?<![a-z])wipe(?![a-z])|(?<![a-z])absorb|유출|흡수", re.I)),
+    # Waste handling, not a step's own "discard the supernatant" ("상층액을
+    # 폐기하세요" is the protocol's method, and stays as such).
+    ("disposal",
+     re.compile(r"폐액|폐기물|지정(?:된)?\s*(?:폐기\s*)?(?:용기|통)|(?<![a-z])hazardous\s+waste(?![a-z])|"
+                r"(?<![a-z])waste\s+(?:container|bin|stream)(?![a-z])|(?<![a-z])dispos(?:e|al)\s+of(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])dispos|(?<![a-z])waste(?![a-z])|폐액|폐기물", re.I)),
+    ("medical_help",
+     re.compile(r"119|응급|병원|진료|의료진|의사(?:의|에게|와)|(?<![a-z])medical(?![a-z])|(?<![a-z])emergency(?![a-z])|"
+                r"(?<![a-z])physician(?![a-z])|(?<![a-z])doctor(?![a-z])", re.I),
+     re.compile(r"(?<![a-z])medical(?![a-z])|(?<![a-z])emergency(?![a-z])|(?<![a-z])physician(?![a-z])|응급|의료", re.I)),
+    # "소화" alone is also digestion ("소화물", in-gel's digest).
+    ("fire",
+     re.compile(r"소화기|불을\s*끄|(?<![a-z])fire\s+extinguisher|(?<![a-z])extinguish", re.I),
+     re.compile(r"(?<![a-z])fire(?![a-z])|extinguish|소화기", re.I)),
+)
+#: The sentences of a text: split after a sentence end or at a line break.
+_SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+|\n+")
+
+
+def safety_instruction_topics(sentence: str) -> tuple[str, ...]:
+    """The safety topics a sentence instructs about; empty when it is no instruction."""
+
+    if not _DIRECTIVE.search(sentence):
+        return ()
+    return tuple(name for name, said, _ground in SAFETY_INSTRUCTION_TOPICS if said.search(sentence))
+
+
+def ungrounded_safety_instructions(text: str, grounding: str) -> tuple[str, ...]:
+    """The sentences of ``text`` that give a safety instruction with no source.
+
+    Lane RT, decision 7. A sentence counts when its form is an instruction
+    and it names a safety topic (what to follow, wear, ventilate, evacuate,
+    wash, clean up or dispose of, whom to call). It stands only when every
+    topic it names is named in ``grounding`` -- the protocol's own text with
+    its reviewed readings, and the approved safety documents; otherwise it
+    is returned, to be taken out. Read per topic, over the whole of the
+    grounding: an instruction the source gives for another step still stands.
+    """
+
+    flagged: list[str] = []
+    for sentence in _SENTENCE_END.split(text):
+        topics = safety_instruction_topics(sentence)
+        if not topics:
+            continue
+        grounded = {
+            name for name, _said, ground in SAFETY_INSTRUCTION_TOPICS if ground.search(grounding)
+        }
+        if not set(topics) <= grounded:
+            flagged.append(sentence.strip())
+    return tuple(flagged)
+
+
+def without_sentences(text: str, sentences: Iterable[str]) -> str:
+    """``text`` with the given sentences taken out, its lines kept."""
+
+    drop = {item.strip() for item in sentences if item.strip()}
+    lines: list[str] = []
+    for line in text.splitlines():
+        kept = [part for part in re.split(r"(?<=[.!?。！？])\s+", line) if part.strip() not in drop]
+        if kept or not line.strip():
+            lines.append(" ".join(kept))
+    return "\n".join(lines).strip()
 
 
 # --- Values only the server owns -------------------------------------------------

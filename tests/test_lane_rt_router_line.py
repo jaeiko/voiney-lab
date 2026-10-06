@@ -22,6 +22,10 @@ or the model misjudges the current step:
 * decision 6 -- a spill, a knock-over or an overflow said as having happened
   (lane R7's reading) is recorded by the front rules even with the router on;
   asked, supposed, permitted, guarded against or denied it is not;
+* decision 7 -- a safety instruction in a router answer (what to follow,
+  wear, ventilate, evacuate, wash, clean up, dispose of) that neither the
+  protocol nor an approved safety document gives is taken out, and that the
+  source has none is said briefly; one they give stays.
 
 Every model here is a fake (tests/router_fakes.py); nothing is live.
 """
@@ -31,11 +35,16 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.protocol_vocabulary_support import miniprep_fixture
 from tests.router_fakes import FakeRouterClient, answer_call_reply, tool_reply
 from tests.test_voice_pause_resume_persistence import SOURCE_PDF, VoiceSessionHarness
+from voiney_lab.answer_checks import (
+    safety_instruction_topics,
+    ungrounded_safety_instructions,
+)
 from voiney_lab.brain import ConversationHistory
 from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
 from voiney_lab.llm_router import (
@@ -560,6 +569,98 @@ class SpillFrontRuleTests(unittest.TestCase):
             "원심분리기에서 이상한 소리가 나", turn_id=2, language="ko",
             configuration_id=1, generation=1,
         ))
+
+
+def _document(summary: str, *, demo: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        title="Facility chemical handling SOP", summary_text=summary, is_demo=demo,
+        reviewed_translations=(),
+    )
+
+
+class SafetyInstructionCheckTests(unittest.TestCase):
+    """Decision 7: no safety instruction the source does not give."""
+
+    NOTE = "이 상황의 안전 안내는 원문에 없어요."
+
+    def _answer(self, spoken, *, source_kind="none", evidence_ids=(), display="", session=None,
+                said="시약이 손에 묻었는데 어떡해?"):
+        session = session or _miniprep(3)
+        client = FakeRouterClient(answer_call_reply(
+            spoken, display=display, source_kind=source_kind, evidence_ids=evidence_ids,
+        ))
+        return _routed(session, said, client, turn_id=2)
+
+    def test_an_instruction_with_no_source_is_taken_out(self) -> None:
+        # Lane R7's live answer, word for word.
+        outcome = self._answer(
+            "어떤 시약을 엎질렀는지 알려주세요. 안전 절차는 해당 시약의 SDS와 실험실 유출 대응 지침을 따르세요.",
+        )
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, f"어떤 시약을 엎질렀는지 알려주세요. {self.NOTE}")
+        self.assertEqual(outcome.safety_removed, (
+            "안전 절차는 해당 시약의 SDS와 실험실 유출 대응 지침을 따르세요.",
+        ))
+        self.assertFalse(outcome.plan.state_changed)
+
+    def test_an_instruction_the_protocol_gives_stays(self) -> None:
+        # Miniprep's text says "Wear gloves."
+        outcome = self._answer("장갑을 착용하세요.", source_kind="pdf", evidence_ids=("S4.current_step",))
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, "장갑을 착용하세요.")
+        self.assertEqual(outcome.safety_removed, ())
+
+    def test_an_approved_safety_document_grounds_it_and_a_demo_one_does_not(self) -> None:
+        session = _miniprep(3)
+        session.set_safety_pack(SimpleNamespace(
+            sop_documents=(_document("Work inside a chemical fume hood."),),
+            sds_documents=(), equipment_documents=(),
+        ))
+        outcome = self._answer("후드 안에서 작업하세요.", session=session)
+        self.assertEqual(outcome.plan.speech_text, "후드 안에서 작업하세요.")
+        session = _miniprep(3)
+        session.set_safety_pack(SimpleNamespace(
+            sop_documents=(_document("Work inside a chemical fume hood.", demo=True),),
+            sds_documents=(), equipment_documents=(),
+        ))
+        outcome = self._answer("후드 안에서 작업하세요.", session=session)
+        self.assertEqual(outcome.plan.speech_text, self.NOTE)
+
+    def test_an_answer_of_nothing_else_says_only_that_with_no_source(self) -> None:
+        outcome = self._answer(
+            "보호구를 착용하고 환기가 잘 되는 곳에서 작업하세요.",
+            display="보호구를 착용하고 환기가 잘 되는 곳에서 작업하세요.",
+            source_kind="pdf", evidence_ids=("S4.current_step",),
+        )
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, self.NOTE)
+        self.assertEqual(outcome.plan.display_text, self.NOTE)
+        self.assertEqual(outcome.answer.source_kind, "none")
+        self.assertEqual(outcome.answer.evidence_ids, ())
+
+    def test_a_sentence_that_instructs_nothing_is_left_alone(self) -> None:
+        for spoken in (
+            "PDF에서 확인할 수 없어요.",
+            "원문에는 보호구 이야기가 없어요.",
+            "1 mL를 넣으세요.",
+            "상층액을 폐기하세요.",
+        ):
+            with self.subTest(spoken=spoken):
+                self.assertEqual(ungrounded_safety_instructions(spoken, ""), ())
+
+    def test_each_topic_it_names_must_be_grounded(self) -> None:
+        sentence = "장갑을 끼고 흐르는 물로 손을 씻으세요."
+        self.assertEqual(ungrounded_safety_instructions(sentence, "Wear gloves."), (sentence,))
+        self.assertEqual(ungrounded_safety_instructions(
+            sentence, "Wear gloves. Rinse skin with running water."), ())
+        self.assertEqual(
+            safety_instruction_topics("Wear goggles and work in a fume hood."),
+            ("eye_protection", "ventilation"),
+        )
+
+    def test_the_note_is_said_once(self) -> None:
+        outcome = self._answer("PDF에서 확인할 수 없어요. 안전관리자에게 문의하세요.")
+        self.assertEqual(outcome.plan.speech_text, "PDF에서 확인할 수 없어요.")
 
 
 if __name__ == "__main__":
