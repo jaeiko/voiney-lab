@@ -52,6 +52,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from voiney_lab.answer_checks import (
@@ -81,10 +82,77 @@ from voiney_lab.tools import _observation_matches_transcript
 
 CHANGE_STATE = "change_state"
 RECORD_LOG = "record_log"
-CHANGE_STATE_ACTIONS = ("start", "next", "stop", "pause", "resume", "start_timer")
-RECORD_LOG_TYPES = ("observation", "anomaly")
 EVIDENCE_MAX_CHARS = 200
 VALUE_MAX_CHARS = 500
+
+
+@dataclass(frozen=True)
+class ToolValueRule:
+    """One value a tool's ``action`` or ``type`` may take (lane RT, decision 3).
+
+    The allow-list the server rules by. Every place that knows the tool's
+    values -- the schema the model is offered, the parser, the validation and
+    the session that carries an accepted proposal out -- reads it from here,
+    so a value is added or taken away in one place, and a value not listed is
+    refused wherever it turns up.
+    """
+
+    #: Whether the evidence shows the words that carry it; None: no word needed.
+    has_word: Callable[[str], bool] | None
+    #: The refusal when the words are missing.
+    missing_word: str | None
+    #: Read by the evidence fence as a short control command ("잠깐", "재개").
+    bounded_control: bool
+    #: What it acts on: "running" (a protocol is active), "stoppable" (active,
+    #: or an experiment clock still running), or "never_started".
+    needs: str
+    #: The rules' action an accepted proposal runs as (a CuratedProtocolAction value).
+    runs_as: str
+
+
+# The word checks are looked up when called: the patterns are defined below.
+CHANGE_STATE_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
+    "start": ToolValueRule(
+        lambda evidence: bool(_START_WORD.search(evidence)) and not _TIMER_WORD.search(evidence),
+        "no_start_word", True, "never_started", "start",
+    ),
+    "next": ToolValueRule(
+        lambda evidence: has_completion_evidence(evidence) or bool(_NEXT_WORD.search(evidence)),
+        "no_completion_word", False, "running", "clarify_completion",
+    ),
+    "stop": ToolValueRule(
+        lambda evidence: bool(_END_WORD.search(evidence)),
+        "end_word_missing", False, "stoppable", "stop",
+    ),
+    "pause": ToolValueRule(
+        lambda evidence: bool(_PAUSE_WORD.search(evidence)),
+        "no_pause_word", True, "running", "pause",
+    ),
+    "resume": ToolValueRule(
+        lambda evidence: bool(_RESUME_WORD.search(evidence)),
+        "no_resume_word", True, "running", "resume",
+    ),
+    "start_timer": ToolValueRule(
+        lambda evidence: bool(_TIMER_WORD.search(evidence)),
+        "no_timer_word", True, "running", "start_timer",
+    ),
+})
+RECORD_LOG_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
+    "observation": ToolValueRule(None, None, True, "running", "record_observation"),
+    "anomaly": ToolValueRule(None, None, True, "running", "report_anomaly"),
+})
+CHANGE_STATE_ACTIONS = tuple(CHANGE_STATE_RULES)
+RECORD_LOG_TYPES = tuple(RECORD_LOG_RULES)
+
+
+def tool_value_rule(proposal: "ToolProposal") -> ToolValueRule | None:
+    """The allow-list entry for a proposal's tool and value, or None if it has none."""
+
+    if proposal.tool == CHANGE_STATE:
+        return CHANGE_STATE_RULES.get(proposal.action or "")
+    if proposal.tool == RECORD_LOG:
+        return RECORD_LOG_RULES.get(proposal.log_type or "")
+    return None
 
 CHANGE_STATE_TOOL: dict[str, Any] = {
     "type": "function",
@@ -459,9 +527,6 @@ def stated_duration_seconds(utterance: str) -> int | None:
 
 # --- Validation ---------------------------------------------------------------------
 
-_BOUNDED_CONTROL = frozenset({"pause", "resume", "start", "start_timer"})
-
-
 def validate_tool_proposals(
     proposals: Sequence[ToolProposal | str],
     facts: RouterTurnFacts,
@@ -494,6 +559,14 @@ def validate_tool_proposal(
     action = proposal.action if proposal.tool == CHANGE_STATE else None
     refuse = lambda code: _refuse(code, proposal)  # noqa: E731
 
+    # The allow-list first (decision 3): a tool or value it does not list is
+    # refused here too, however the proposal was made.
+    if proposal.tool not in (CHANGE_STATE, RECORD_LOG):
+        return refuse("tool_unknown")
+    rule = tool_value_rule(proposal)
+    if rule is None:
+        return refuse("arguments_invalid")
+
     # Fences: a proposal made for another moment is dropped, and a turn the
     # front rules own is not the model's.
     if (
@@ -513,14 +586,14 @@ def validate_tool_proposal(
         return refuse("pending_gate_owns_turn")
 
     # Whether there is a running protocol for the change to act on.
-    if action == "start":
+    if rule.needs == "never_started":
         if facts.workflow_active:
             return refuse("already_started")
         if facts.experiment_started or facts.workflow_status in {"stopped", "completed"}:
             return refuse("session_ended")
         if facts.paused:
             return refuse("workflow_paused")
-    elif action == "stop":
+    elif rule.needs == "stoppable":
         if not facts.workflow_active and not facts.experiment_running:
             return refuse("workflow_not_active")
     elif not facts.workflow_active:
@@ -532,15 +605,14 @@ def validate_tool_proposal(
     fence = evidence_fence_rejection(
         utterance=utterance,
         evidence=evidence,
-        bounded_control=proposal.tool == RECORD_LOG or action in _BOUNDED_CONTROL,
+        bounded_control=rule.bounded_control,
     )
     if fence is not None:
         return refuse(fence)
     if proposal.tool == CHANGE_STATE and facts.control_question:
         return refuse("interrogative_not_authorized")
-    word_missing = _missing_action_word(action, evidence)
-    if word_missing is not None:
-        return refuse(word_missing)
+    if rule.has_word is not None and not rule.has_word(evidence):
+        return refuse(str(rule.missing_word))
     if proposal.tool == CHANGE_STATE and not targets_current_step(
         proposal.target_step,
         current_step_label=facts.current_step_label,
@@ -638,26 +710,6 @@ def reports_a_problem(utterance: str) -> bool:
         return True
     key = rules._utterance_key(utterance)
     return any(pattern.search(key) for pattern, _category in rules._ANOMALY_PATTERNS)
-
-
-def _missing_action_word(action: str | None, evidence: str) -> str | None:
-    if action is None:
-        return None
-    if action == "next":
-        if has_completion_evidence(evidence) or _NEXT_WORD.search(evidence):
-            return None
-        return "no_completion_word"
-    if action == "stop":
-        return None if _END_WORD.search(evidence) else "end_word_missing"
-    if action == "start":
-        if _START_WORD.search(evidence) and not _TIMER_WORD.search(evidence):
-            return None
-        return "no_start_word"
-    if action == "pause":
-        return None if _PAUSE_WORD.search(evidence) else "no_pause_word"
-    if action == "resume":
-        return None if _RESUME_WORD.search(evidence) else "no_resume_word"
-    return None if _TIMER_WORD.search(evidence) else "no_timer_word"
 
 
 # --- Settings ----------------------------------------------------------------------

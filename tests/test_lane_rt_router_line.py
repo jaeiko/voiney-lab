@@ -8,6 +8,10 @@ or the model misjudges the current step:
   the reply that went out, what changed: step, pause, timer, record, an open
   question) are in the router's history in the order they happened, bounded
   to the last turns; the server's snapshot stays the state;
+* decision 3 -- the router's state changes are one tool, ``change_state``
+  (action), and its records one, ``record_log`` (type); the server checks the
+  action and type against one allow-list, wherever a proposal comes from, and
+  rules on it as before; a read-only question is answered with no state tool;
 
 Every model here is a fake (tests/router_fakes.py); nothing is live.
 """
@@ -23,15 +27,24 @@ from tests.protocol_vocabulary_support import miniprep_fixture
 from tests.router_fakes import FakeRouterClient, answer_call_reply, tool_reply
 from tests.test_voice_pause_resume_persistence import SOURCE_PDF, VoiceSessionHarness
 from voiney_lab.brain import ConversationHistory
-from voiney_lab.curated_protocol import CuratedProtocolSession
+from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
 from voiney_lab.llm_router import (
+    CHANGE_STATE_RULES,
+    CHANGE_STATE_TOOL,
+    RECORD_LOG_RULES,
+    RECORD_LOG_TOOL,
+    ROUTER_CALL_TOOLS,
     LlmRouterSettings,
+    ProposalBasis,
     RouterHistoryTurn,
-    build_router_messages,
+    RouterTurnFacts,
+    ToolProposal,
     history_before,
     history_turn,
+    parse_tool_call,
     route_turn_with_llm_router,
     screen_history_turn,
+    validate_tool_proposals,
 )
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 
@@ -274,6 +287,106 @@ class HistoryBundleTests(unittest.TestCase):
             if message["content"].startswith("SERVER SNAPSHOT")
         )
         self.assertIn('"phase":"paused"', snapshot)
+
+
+def _facts(utterance: str, **changes: object) -> RouterTurnFacts:
+    values: dict[str, object] = dict(
+        utterance=utterance, language="ko", turn_id=5, generation=1,
+        workflow_revision=3, step_id="step-4", current_step_label="4",
+        workflow_active=True, workflow_status="active", paused=False,
+        experiment_started=True, experiment_running=True, open_question=None,
+        observation_step=False, step_timer_seconds=900, timer_running=False,
+        control_question=False, transcript_unreliable=False,
+    )
+    values.update(changes)
+    return RouterTurnFacts(**values)  # type: ignore[arg-type]
+
+
+_BASIS = ProposalBasis(turn_id=5, generation=1, workflow_revision=3, step_id="step-4")
+
+
+class AllowListTests(unittest.TestCase):
+    """Decision 3: one allow-list for each tool's values, read everywhere."""
+
+    def test_the_offered_values_are_the_allow_list(self) -> None:
+        self.assertEqual(
+            [tool["function"]["name"] for tool in ROUTER_CALL_TOOLS],
+            ["answer", "change_state", "record_log"],
+        )
+        self.assertEqual(
+            CHANGE_STATE_TOOL["function"]["parameters"]["properties"]["action"]["enum"],
+            list(CHANGE_STATE_RULES),
+        )
+        self.assertEqual(
+            RECORD_LOG_TOOL["function"]["parameters"]["properties"]["type"]["enum"],
+            list(RECORD_LOG_RULES),
+        )
+        self.assertEqual(
+            parse_tool_call("change_state", {"action": "skip", "evidence": "x"}),
+            "arguments_invalid",
+        )
+
+    def test_a_value_off_the_list_is_refused_however_it_arrives(self) -> None:
+        # Given straight to the validation, these used to be ruled on as a
+        # timer start (any other action or tool) or an anomaly (any other type).
+        cases = (
+            (ToolProposal(tool="change_state", action="skip", evidence="타이머 시작해줘"),
+             "arguments_invalid"),
+            (ToolProposal(tool="advance_step", action="next", evidence="타이머 시작해줘"),
+             "tool_unknown"),
+            (ToolProposal(tool="record_log", log_type="note", value="시료를 흘렸어",
+                          evidence="시료를 흘렸어"), "arguments_invalid"),
+        )
+        for proposal, code in cases:
+            with self.subTest(proposal=proposal):
+                verdict = validate_tool_proposals(
+                    [proposal], _facts(proposal.evidence), _BASIS,
+                )
+                self.assertEqual((verdict.effect, verdict.reason_code), ("refuse", code))
+
+    def test_every_listed_value_runs_as_the_rules_own_action(self) -> None:
+        cases = (
+            ("change_state", "next", "이제 다음 거 하자", 3, CuratedProtocolAction.CLARIFY_COMPLETION),
+            ("change_state", "stop", "오늘은 이쯤에서 종료하는 게 좋겠어", 3, CuratedProtocolAction.STOP),
+            ("change_state", "pause", "잠깐 쉬었다 할게", 3, CuratedProtocolAction.PAUSE),
+            ("change_state", "start", "자 이제 실험 시작해 볼까", None, CuratedProtocolAction.START),
+            ("record_log", "observation", "관찰 기록해줘 침전이 생겼어", 3, CuratedProtocolAction.RECORD_OBSERVATION),
+            ("record_log", "anomaly", "튜브가 터졌어", 3, CuratedProtocolAction.REPORT_ANOMALY),
+        )
+        for tool, value, said, step, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(
+                    (CHANGE_STATE_RULES if tool == "change_state" else RECORD_LOG_RULES)[value].runs_as,
+                    expected.value,
+                )
+                session = _miniprep(step)
+                arguments = (
+                    {"type": value, "value": said, "evidence": said}
+                    if tool == "record_log" else {"action": value, "evidence": said}
+                )
+                outcome = _routed(
+                    session, said, FakeRouterClient(tool_reply((tool, arguments))), turn_id=2,
+                )
+                self.assertEqual(outcome.handled_by, "llm+tool")
+                self.assertIs(outcome.plan.action, expected)
+
+    def test_resume_and_the_timer_run_as_the_rules_own_action(self) -> None:
+        self.assertEqual(CHANGE_STATE_RULES["resume"].runs_as, "resume")
+        self.assertEqual(CHANGE_STATE_RULES["start_timer"].runs_as, "start_timer")
+        session = _miniprep(3)
+        session.pause_workflow()
+        outcome = _routed(session, "이어서 하자", FakeRouterClient(tool_reply((
+            "change_state", {"action": "resume", "evidence": "이어서 하자"},
+        ))), turn_id=2)
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.RESUME)
+        session = _miniprep(3)
+        with patch.object(session, "timer_seconds_for_step", return_value=600):
+            outcome = _routed(session, "이 단계 시간 재 줘", FakeRouterClient(tool_reply((
+                "change_state", {"action": "start_timer", "evidence": "시간 재 줘"},
+            ))), turn_id=2)
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.START_TIMER)
 
 
 if __name__ == "__main__":

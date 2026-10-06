@@ -54,6 +54,7 @@ from voiney_lab.llm_router import (
     RouterContext,
     RouterTurnFacts,
     ToolProposal,
+    tool_value_rule,
     validate_tool_proposals,
 )
 from voiney_lab.semantic_intent import (
@@ -15159,17 +15160,26 @@ class CuratedProtocolSession:
     def _intent_for_proposal(
         self, verdict: ProposalVerdict, common: dict[str, Any]
     ) -> CuratedControlIntent:
-        """The intent an accepted proposal is carried out as -- the rules' own."""
+        """The intent an accepted proposal is carried out as -- the rules' own.
+
+        The rules' action comes from the router's allow-list
+        (llm_router.tool_value_rule, lane RT decision 3); a value it does not
+        list has no branch here and is never read as another one.
+        """
 
         proposal = verdict.proposal
         assert proposal is not None
+        rule = tool_value_rule(proposal)
+        if rule is None:
+            raise ValueError(f"no allow-listed branch for {proposal.tool}:{proposal.action or proposal.log_type}")
+        action = CuratedProtocolAction(rule.runs_as)
         if proposal.tool == RECORD_LOG:
             if proposal.log_type == "observation":
                 # Recorded as a note: a model's reading never reports an
                 # endpoint, so it can never release a repeat-until step.
                 return CuratedControlIntent(
                     intent_kind="record_observation",
-                    action=CuratedProtocolAction.RECORD_OBSERVATION,
+                    action=action,
                     target_step="authoritative_current_step",
                     reported_observation=True,
                     observation_predicate="note",
@@ -15178,7 +15188,7 @@ class CuratedProtocolSession:
                 )
             return CuratedControlIntent(
                 intent_kind="record_anomaly",
-                action=CuratedProtocolAction.REPORT_ANOMALY,
+                action=action,
                 question_kind="anomaly",
                 reported_anomaly=True,
                 anomaly_category=_anomaly_category(common["normalized_transcript"]),
@@ -15191,7 +15201,7 @@ class CuratedProtocolSession:
                     if verdict.question == "observation"
                     else "next_step_confirmation_required"
                 ),
-                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                action=action,
                 requested_transition="next",
                 requested_followup="confirm_current_step_completion",
                 target_step="authoritative_current_step",
@@ -15204,32 +15214,30 @@ class CuratedProtocolSession:
             # to that question (decision D5).
             return CuratedControlIntent(
                 intent_kind="workflow_command",
-                action=CuratedProtocolAction.STOP,
+                action=action,
                 allows_state_mutation=True,
                 **common,
             )
         if proposal.action == "pause":
             return CuratedControlIntent(
-                intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
-                **common,
+                intent_kind="pause_workflow", action=action, **common,
             )
         if proposal.action == "resume":
             return CuratedControlIntent(
-                intent_kind="resume_workflow", action=CuratedProtocolAction.RESUME,
+                intent_kind="resume_workflow", action=action,
                 allows_state_mutation=True, **common,
             )
         if proposal.action == "start":
             return CuratedControlIntent(
                 intent_kind="workflow_command",
-                action=CuratedProtocolAction.START,
+                action=action,
                 requested_transition="start",
                 requested_followup="describe_new_current_step",
                 allows_state_mutation=True,
                 **common,
             )
         return CuratedControlIntent(
-            intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER,
-            **common,
+            intent_kind="start_step_timer", action=action, **common,
         )
 
     def _ask_timer_duration(
