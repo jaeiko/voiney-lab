@@ -226,8 +226,10 @@ lane U). It only changes what is shown; every state it shows is the server's.
   `display_document` "notice" section or the `outside_pdf_explanation`
   limitation — is drawn in a light dashed frame named "PDF 밖 설명 · AI 일반
   지식" in the conversation card and the panel. The mark is kept from
-  `reply.delta` for the `reply.complete` render, which carries the text
-  alone. With web references off (`research_capabilities.external_text` not
+  `reply.delta` for the `reply.complete` render. On a protocol turn
+  `reply.complete` now also carries the same `display_document` as its
+  `reply.delta` (lane F, decision 3), so the page can read it there instead
+  of keeping the delta's copy; the page does not read it yet. With web references off (`research_capabilities.external_text` not
   `enabled`), a reference check that ends without an answer is not shown to
   the researcher; it is a line in the turn's developer details.
 
@@ -617,6 +619,14 @@ On, a turn goes:
   carries `source_label: "AI 일반 지식"` and `outside_pdf: true`. Late, failed
   or refused, the rules' answer stands alone. A quantity question the source
   answers never gets one.
+- **Written general explanation (lane F, decision 2)** — a related question
+  the spoken path above does not take ("이 단계 배경 지식 알려줘") may get a
+  longer written general explanation from the same supplemental role, shown
+  as "일반 참고 설명 · AI 지식". Its request now carries the source text of
+  the step the rules answered (`Step N source text: …`, at most 500
+  characters), as the spoken path does, so the model knows which step is
+  meant. The web search query is unchanged. D4's 120-character rule stays
+  with the spoken path only.
 - **Fallback** — when the model is late, fails, says nothing usable, is
   refused, or its answer fails a check, the turn takes the rules' own path,
   exactly as with the router off ("PDF에서 확인할 수 없어요." where the rules
