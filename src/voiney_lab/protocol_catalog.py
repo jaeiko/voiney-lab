@@ -355,6 +355,11 @@ _ANALYSIS_RECOVERY_ACTIONS: dict[str, str] = {
         "'분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 듭니다). "
         "원문은 바뀌지 않습니다."
     ),
+    "protocol_analysis_invalid_response": (
+        "분석 모델의 응답이 정해진 형식(JSON 스키마)에 맞지 않아 결과를 쓰지 않았습니다. "
+        "'분석 다시 시도'를 누르면 새로 분석합니다(분석 모델 호출 비용이 듭니다). "
+        "원문은 바뀌지 않습니다."
+    ),
     "ocr_required": (
         "이 PDF 는 읽을 수 있는 글자가 없는 쪽이 있어 OCR 글이 먼저 필요합니다. "
         "업로드 때 OCR 이 자동으로 돌지 않았다면 OCR 공급자 설정"
@@ -463,6 +468,8 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "protocol_analysis_timeout": "분석 호출이 제한 시간 안에 끝나지 않았습니다.",
     "protocol_analysis_invalid_evidence": (
         "분석 모델이 낸 근거가 원문 쪽의 글과 맞지 않아 결과를 쓰지 않았습니다."),
+    "protocol_analysis_invalid_response": (
+        "분석 모델의 응답이 정해진 형식에 맞지 않아 결과를 쓰지 않았습니다."),
     "protocol_analysis_not_configured": "분석 모델 설정이 없어 분석을 시작하지 못했습니다.",
     "ocr_required": "글자 층이 없는 쪽의 OCR 글이 아직 없어 분석할 수 없습니다.",
     "protocol_pdf_too_large": "PDF 가 등록 한도보다 큽니다.",
@@ -975,17 +982,35 @@ class ProtocolCatalog:
                 raise ProtocolOcrReviewError(
                     "Accepted OCR page evidence failed integrity validation."
                 )
+            # A page the provider kept from the text layer is not OCR text;
+            # a provider that names one engine for every page names it on
+            # the result only.
+            ocr_derived = (
+                (page.get("provider") or result_provider) != OCR_TEXT_LAYER_PROVIDER
+            )
+            original = extraction.pages[expected_number - 1]
+            # The text layer's own page keeps its geometry: the footer band
+            # and the text blocks the page-boundary rule (lane PA, decision
+            # 3) reads. Measured 2026-10-06 (lane PX): with them dropped for
+            # every page after an OCR acceptance, ANKOM's step 21 -- "21
+            # Flush procedure:" ending page 19, its sentence opening page 20
+            # -- was refused, while the same response passed on the raw
+            # extraction. OCR text has no geometry, so an OCR page keeps none.
+            keeps_text_layer = not ocr_derived and page["text"] == original.text
             reconstructed.append(
                 ProtocolPdfPage(
                     source_page_number=expected_number,
                     text=page["text"],
                     text_empty=not page["text"].strip(),
-                    warning="Text was produced by OCR and accepted for structured review.",
-                    # A page the provider kept from the text layer is not OCR
-                    # text; a provider that names one engine for every page
-                    # names it on the result only.
-                    ocr_derived=(page.get("provider") or result_provider)
-                    != OCR_TEXT_LAYER_PROVIDER,
+                    warning=(
+                        original.warning if keeps_text_layer
+                        else "Text was produced by OCR and accepted for structured review."
+                    ),
+                    bottom_band_offset=(
+                        original.bottom_band_offset if keeps_text_layer else None
+                    ),
+                    blocks=original.blocks if keeps_text_layer else (),
+                    ocr_derived=ocr_derived,
                 )
             )
         return replace(

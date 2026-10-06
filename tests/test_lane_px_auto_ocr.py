@@ -26,6 +26,7 @@ from tests.test_pdf_text_engine import _write_raw_pages
 from tests.test_protocol_catalog import _dedicated_to_thread, write_text_pdf
 from tests.test_protocol_ocr import FakeOcrProvider
 from tests.test_screen_cleanup import run_page_script
+from voiney_lab import experiment_protocol as domain
 from voiney_lab import server as server_module
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_pdf import clear_protocol_pdf_cache, extract_protocol_pdf
@@ -136,6 +137,43 @@ class CatalogAutomaticAcceptanceTests(_CatalogCase):
         self.assertEqual(status["review"]["numeric_review_page_numbers"], [2])
         self.assertEqual(status["pages"][1]["provider"], "clova")
         self.assertEqual(status["pages"][0]["provider"], TEXT_LAYER)
+
+    def test_text_layer_pages_keep_their_geometry_after_an_ocr_acceptance(self) -> None:
+        # Lane PA's page-boundary rule reads the footer band and the text
+        # blocks. Measured 2026-10-06 on ANKOM: with them dropped for every
+        # page after an OCR acceptance, step 21 ("21 Flush procedure:" ending
+        # page 19, its sentence opening page 20) was refused, while the same
+        # response passed on the raw extraction.
+        cut = self.root / "cut-with-scan.pdf"
+        line = lambda y, text: f"BT /F1 12 Tf 72 {y} Td ({text}) Tj ET "  # noqa: E731
+        _write_raw_pages(cut, (
+            line(720, "Peptide extraction") + line(706, "24 Spin down the digest. Keep the solution, which will contain the")
+            + line(20, "example.org | protocol 1/3"),
+            line(720, "peptides. Pool the peptides.") + line(706, "25 Dry the extracted peptides.")
+            + line(20, "example.org | protocol 2/3"),
+            None,
+        ))
+        entry = self.register(cut, "cut-with-scan.pdf")
+        self.catalog.run_ocr(entry.protocol_id, MixedProvider(), ocr_id="ocr-cut", accepted_automatically=True)
+        revision = self.catalog._latest_protocol_revision(entry.protocol_id)
+        raw = extract_protocol_pdf(cut)
+        analysed = self.catalog._extraction_for_analysis(revision, raw)
+        for number in (1, 2):
+            with self.subTest(page=number):
+                self.assertEqual(analysed.pages[number - 1].bottom_band_offset, raw.pages[number - 1].bottom_band_offset)
+                self.assertIsNotNone(analysed.pages[number - 1].bottom_band_offset)
+                self.assertEqual(analysed.pages[number - 1].blocks, raw.pages[number - 1].blocks)
+                self.assertFalse(analysed.pages[number - 1].ocr_derived)
+        self.assertIsNone(analysed.pages[2].bottom_band_offset)
+        self.assertEqual(analysed.pages[2].blocks, ())
+        self.assertTrue(analysed.pages[2].ocr_derived)
+        from voiney_lab import experiment_protocol_analysis as analysis_module
+
+        statement = "Keep the solution, which will contain the peptides."
+        self.assertIsNotNone(analysis_module._statement_across_page_end(statement, analysed, 1))
+        verified = analysis_module._verified_evidence(
+            domain.SourceEvidence(1, statement), analysed)
+        self.assertEqual(verified.continued_on_page_number, 2)
 
     def test_without_the_flag_a_result_still_waits_for_a_person(self) -> None:
         entry = self.register(self.mixed, "mixed.pdf")
