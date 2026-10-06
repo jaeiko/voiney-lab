@@ -185,6 +185,17 @@ class SpillIsRecordedAsAnAnomalyTests(_Turns, unittest.TestCase):
         self.assertFalse(held.accepts_yes_no)
         self.assertEqual(self.label(), "5")
 
+    def test_a_denied_spill_beside_an_open_anomaly_stays_its_detail(self) -> None:
+        # Lane Q's exhaustive check, step 7 after "시료를 흘렸어": words that
+        # deny something and say "흘렸어" were added to the open anomaly, and
+        # still are. The new spilling words did not make them a new report.
+        self.open(4)
+        self.say("5단계 완료했어")
+        self.say("시료를 흘렸어")
+        plan = self.say("흘렸어 탈색되지 않았어 젤이 투명한가요")
+        self.assertEqual(plan.intent_kind, "enrich_pending_anomaly")
+        self.assertTrue(plan.reported_anomaly)
+
     def test_the_emergency_gate_is_unchanged(self) -> None:
         self.assertIsNotNone(recognize_emergency("불이 났어"))
         self.assertIsNotNone(recognize_emergency("용액 누출됐어"))

@@ -1183,7 +1183,14 @@ def _utterance_looks_like_new_command(transcript: str) -> bool:
         return True
     if any(pattern.search(key) for _scope, pattern in _PROTOCOL_SCOPE_PATTERNS):
         return True
-    if any(pattern.search(key) for pattern, _category in _ANOMALY_PATTERNS):
+    spill_not_reported = _spill_reading(key, transcript) == "not_reported"
+    if any(
+        pattern.search(key)
+        # Spilling asked about, supposed or denied is no new report (lane
+        # R7): "흘렸어 … 탈색되지 않았어" stays detail to an open anomaly.
+        and not (spill_not_reported and pattern is _SPILL_REPORT)
+        for pattern, _category in _ANOMALY_PATTERNS
+    ):
         return True
     if _COMPLETION_CLAIM.search(key) or _NEXT_STEP_REQUEST.search(key):
         return True
