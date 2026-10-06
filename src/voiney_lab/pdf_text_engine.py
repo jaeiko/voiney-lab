@@ -7,9 +7,12 @@ together with the decision to keep every call behind this one module.
 
 What the rest of the server receives is plain data: page count, encryption,
 document metadata, and per page the text, where its running footer starts,
-and its text blocks with coordinates, font size and weight.  Nothing here
-decides whether a Protocol is trustworthy; ``experiment_protocol_pdf`` owns
-byte identity and every decision.
+its text blocks with coordinates, font size and weight, and where its
+pictures sit (lane PX, decision 2 of 2026-10-06: every read of a PDF --
+text, text positions, picture positions, whether a text layer exists -- is
+this one library, so a later change of library touches this module alone).
+Nothing here decides whether a Protocol is trustworthy;
+``experiment_protocol_pdf`` owns byte identity and every decision.
 
 MuPDF is a C library, so it runs in a child process that is allowed to die.
 The process boundary was introduced for pdfium after two crashes inside the
@@ -118,6 +121,20 @@ class PdfTextBlock(NamedTuple):
     text: str
 
 
+class PdfImageBox(NamedTuple):
+    """Where one picture sits on the page: points, top-left origin.
+
+    Reported by the engine for the next structure measurement (a figure
+    beside a step, a scanned region); nothing stores or decides on it yet,
+    so a stored analysis is unchanged by it.
+    """
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 @dataclass(frozen=True)
 class EnginePage:
     #: None marks a page the engine could not read.
@@ -125,6 +142,8 @@ class EnginePage:
     #: Offset where the trailing bottom-band run begins, or None.
     bottom_band_offset: int | None
     blocks: tuple[PdfTextBlock, ...]
+    #: The page's pictures, in the engine's order.
+    images: tuple[PdfImageBox, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -243,7 +262,12 @@ def _page_text(page, pymupdf) -> EnginePage:
     raw = _raw_page(page, pymupdf)
     lines = _raw_lines(raw)
     blocks: list[PdfTextBlock] = []
+    images: list[PdfImageBox] = []
     for block in raw.get("blocks", ()):
+        if block.get("type") == 1:
+            x0, y0, x1, y1 = block["bbox"]
+            images.append(PdfImageBox(round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)))
+            continue
         if block.get("type") != 0:
             continue
         sizes: list[float] = []
@@ -311,7 +335,9 @@ def _page_text(page, pymupdf) -> EnginePage:
             if top / height >= BOTTOM_BAND_FRACTION:
                 break
             band = offset
-    return EnginePage(text=text, bottom_band_offset=band, blocks=tuple(blocks))
+    return EnginePage(
+        text=text, bottom_band_offset=band, blocks=tuple(blocks), images=tuple(images),
+    )
 
 
 def read_document_in_process(path: str | Path) -> EngineDocument:
@@ -344,7 +370,7 @@ def read_document_in_process(path: str | Path) -> EngineDocument:
             try:
                 pages.append(_page_text(document[page_index], pymupdf))
             except Exception:  # noqa: BLE001 - one bad page, not all
-                pages.append(EnginePage(None, None, ()))
+                pages.append(EnginePage(None, None, (), ()))
         warnings = tuple(
             dict.fromkeys(
                 line.strip()
@@ -399,6 +425,7 @@ def _document_payload(document: EngineDocument) -> dict[str, object]:
                 "text": page.text,
                 "bottom_band_offset": page.bottom_band_offset,
                 "blocks": [list(block) for block in page.blocks],
+                "images": [list(image) for image in page.images],
             }
             for page in document.pages
         ],
@@ -519,6 +546,19 @@ def _parse_block(raw: object) -> PdfTextBlock:
     return PdfTextBlock(*(float(item) for item in raw[:5]), raw[5], raw[6])
 
 
+def _parse_image(raw: object) -> PdfImageBox:
+    if (
+        not isinstance(raw, list)
+        or len(raw) != 4
+        or not all(
+            isinstance(item, (int, float)) and not isinstance(item, bool)
+            for item in raw
+        )
+    ):
+        raise PdfEngineError("PDF engine returned an unusable result.")
+    return PdfImageBox(*(float(item) for item in raw))
+
+
 def read_document(path: str | Path) -> EngineDocument:
     """Read one document in a fresh child process and validate the reply.
 
@@ -559,10 +599,12 @@ def read_document(path: str | Path) -> EngineDocument:
         text = page.get("text")
         band = page.get("bottom_band_offset")
         blocks = page.get("blocks")
+        images = page.get("images", [])
         if (
             (text is not None and not isinstance(text, str))
             or (band is not None and not _is_offset(band))
             or not isinstance(blocks, list)
+            or not isinstance(images, list)
         ):
             raise PdfEngineError("PDF engine returned an unusable result.")
         if text is None:
@@ -572,6 +614,7 @@ def read_document(path: str | Path) -> EngineDocument:
                 text=text,
                 bottom_band_offset=band,
                 blocks=tuple(_parse_block(block) for block in blocks),
+                images=tuple(_parse_image(image) for image in images),
             )
         )
     return EngineDocument(
