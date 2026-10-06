@@ -1,0 +1,692 @@
+"""Lane RT: the router line -- history, the two tools, rule conflicts, spills, safety.
+
+Decisions of the people running the pilot (2026-10-06), after the 10/2 advice
+that the front rules' commands and state changes must reach the LLM's history
+or the model misjudges the current step:
+
+* decision 2 -- the turns the front rules and the server handled (the words,
+  the reply that went out, what changed: step, pause, timer, record, an open
+  question) are in the router's history in the order they happened, bounded
+  to the last turns; the server's snapshot stays the state;
+* decision 3 -- the router's state changes are one tool, ``change_state``
+  (action), and its records one, ``record_log`` (type); the server checks the
+  action and type against one allow-list, wherever a proposal comes from, and
+  rules on it as before; a read-only question is answered with no state tool;
+* decision 4 -- the plain conflicts between rules are fixed, each shown by the
+  evaluation set and the exhaustive check to change only what it meant to:
+  "재개"/"계속"/"resume" were START words and resume words at once, and began
+  a protocol that had never started; a resume never starts one now. A
+  question about a command ("시작해?", "타이머 시작했어?", "재개해도 돼?") is
+  not the command, as the pause and end words and the router's ruling
+  already had it. No timer starts on an ended experiment;
+* decision 6 -- a spill, a knock-over or an overflow said as having happened
+  (lane R7's reading) is recorded by the front rules even with the router on;
+  asked, supposed, permitted, guarded against or denied it is not;
+* decision 7 -- a safety instruction in a router answer (what to follow,
+  wear, ventilate, evacuate, wash, clean up, dispose of) that neither the
+  protocol nor an approved safety document gives is taken out, and that the
+  source has none is said briefly; one they give stays.
+
+Every model here is a fake (tests/router_fakes.py); nothing is live.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from tests.protocol_vocabulary_support import miniprep_fixture
+from tests.router_fakes import FakeRouterClient, answer_call_reply, tool_reply
+from tests.test_voice_pause_resume_persistence import SOURCE_PDF, VoiceSessionHarness
+from voiney_lab.answer_checks import (
+    safety_instruction_topics,
+    ungrounded_safety_instructions,
+)
+from voiney_lab.brain import ConversationHistory
+from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
+from voiney_lab.llm_router import (
+    CHANGE_STATE_RULES,
+    CHANGE_STATE_TOOL,
+    RECORD_LOG_RULES,
+    RECORD_LOG_TOOL,
+    ROUTER_CALL_TOOLS,
+    LlmRouterSettings,
+    ProposalBasis,
+    RouterHistoryTurn,
+    RouterTurnFacts,
+    ToolProposal,
+    history_before,
+    history_turn,
+    parse_tool_call,
+    route_turn_with_llm_router,
+    screen_history_turn,
+    validate_tool_proposals,
+)
+from voiney_lab.runtime_routing import route_curated_runtime_turn
+
+ON = LlmRouterSettings(enabled=True, model="fake-router-model", timeout_seconds=1.0)
+
+
+def _miniprep(step_index: int | None = 3) -> CuratedProtocolSession:
+    session = CuratedProtocolSession(miniprep_fixture())
+    session.activate_configured()
+    if step_index is not None:
+        session.plan("시작", turn_id=1, language="ko", configuration_id=1, generation=1)
+        session.current_index = step_index
+    return session
+
+
+def _routed(session, said, client, *, turn_id, history=()):
+    async def rules():
+        return route_curated_runtime_turn(
+            session, said, turn_id=turn_id, language="ko",
+            configuration_id=1, generation=1,
+        )
+
+    return asyncio.run(route_turn_with_llm_router(
+        session, said, turn_id=turn_id, language="ko", settings=ON,
+        client_factory=lambda: client, rule_route=rules, history=history,
+        configuration_id=1, generation=1,
+    ))
+
+
+def _recent_turns(request: dict) -> list[dict]:
+    """The RECENT TURNS block of one router request, as data."""
+
+    for message in request["messages"]:
+        if message["content"].startswith("RECENT TURNS"):
+            return json.loads(message["content"].split("\n", 1)[1])
+    return []
+
+
+class _FakeAsyncOpenAI:
+    """Stands in for AsyncOpenAI in server.py; hands out one scripted client."""
+
+    client: FakeRouterClient | None = None
+
+    def __new__(cls, *args, **kwargs):
+        return cls.client
+
+
+@unittest.skipUnless(
+    SOURCE_PDF.is_file(),
+    f"requires the externally licensed Candidate A source PDF at {SOURCE_PDF}",
+)
+class ServerHistoryTests(VoiceSessionHarness, unittest.TestCase):
+    """Decision 2 over the WebSocket: what the router's history holds after
+    turns the front rules, the emergency gate and the screen handled."""
+
+    def _run(self, scenario_steps, script=()):
+        self.environment["VOINEY_LAB_LLM_ROUTER_ENABLED"] = "true"
+        self.environment["XAI_API_KEY"] = "test-only-not-a-key"
+        self.environment["VOINEY_LAB_TRANSLATION_PROVIDER"] = "anthropic"
+        self.environment["ANTHROPIC_API_KEY"] = ""
+        client = FakeRouterClient(*script)
+        _FakeAsyncOpenAI.client = client
+        seen: dict = {}
+
+        async def scenario(socket, listener, say):
+            await scenario_steps(socket, listener, say, seen)
+            seen["history"] = listener.history.router_history()
+
+        socket, _ = self._session(
+            scenario, patch("voiney_lab.server.AsyncOpenAI", _FakeAsyncOpenAI),
+        )
+        return socket, seen, client
+
+    def test_a_front_rule_step_change_keeps_the_reply_that_went_out(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "1단계 완료했어")
+
+        socket, seen, _ = self._run(steps)
+        last = seen["history"][-1]
+        self.assertEqual(last["handled_by"], "front:targeted_completion")
+        self.assertEqual(last["server"]["result"], "executed")
+        self.assertEqual(last["server"]["state_after"]["step"], "2")
+        spoken = socket.for_turn(2, "reply.delta")[-1]["speech_text"]
+        self.assertEqual(last["assistant"], " ".join(spoken.split())[:200])
+
+    def test_the_emergency_gate_turn_is_kept_without_its_reply(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "불이 났어")
+
+        _, seen, _ = self._run(steps)
+        self.assertEqual(
+            [(item["handled_by"], item["user"]) for item in seen["history"]],
+            [("front:start_command", "프로토콜 시작해줘"), ("front:emergency", "불이 났어")],
+        )
+        self.assertIsNone(seen["history"][-1]["assistant"])
+        self.assertEqual(seen["history"][-1]["server"]["state_after"]["step"], "1")
+
+    def test_a_pause_pressed_on_the_screen_is_kept_in_order(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            socket.control({"type": "workflow.pause"})
+            await socket.wait_for(lambda item: (
+                item["type"] == "protocol.fixture.state" and item.get("action") == "pause"
+            ))
+            socket.control({"type": "workflow.resume"})
+            await socket.wait_for(lambda item: (
+                item["type"] == "protocol.fixture.state" and item.get("action") == "resume"
+            ))
+            await say(2, "버퍼 1은 뭐야?")
+
+        _, seen, client = self._run(
+            steps, script=(answer_call_reply("PDF에서 확인할 수 없어요.", source_kind="none"),),
+        )
+        self.assertEqual(
+            [item["handled_by"] if "handled_by" in item else "screen:" + item["control"]
+             for item in seen["history"]],
+            ["front:start_command", "screen:pause", "screen:resume", "llm"],
+        )
+        pause = seen["history"][1]
+        self.assertEqual(pause["source"], "screen")
+        self.assertEqual(pause["server"]["result"], "executed")
+        self.assertEqual(pause["server"]["state_after"]["status"], "paused")
+        # The model saw both presses, before the turn it answered.
+        shown = _recent_turns(client.requests[0])
+        self.assertEqual(
+            [item.get("control") for item in shown], [None, "pause", "resume"],
+        )
+
+    def test_a_record_says_what_was_stored(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "관찰 기록해줘 젤이 투명해")
+
+        _, seen, _ = self._run(steps, script=(tool_reply((
+            "record_log",
+            {"type": "observation", "value": "젤이 투명해", "evidence": "관찰 기록해줘 젤이 투명해"},
+        )),))
+        last = seen["history"][-1]
+        self.assertEqual(last["server"]["result"], "recorded")
+        self.assertEqual(
+            last["server"]["recorded"], {"type": "observation", "words": "젤이 투명해"},
+        )
+
+    def test_a_started_timer_is_in_the_state_after(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "1단계 완료했어")
+            await say(3, "2단계 완료했어")
+            await say(4, "타이머 시작해줘")
+
+        _, seen, _ = self._run(steps, script=(tool_reply((
+            "change_state", {"action": "start_timer", "evidence": "타이머 시작해줘"},
+        )),))
+        last = seen["history"][-1]
+        self.assertEqual(last["server"]["state_after"]["step"], "3")
+        self.assertEqual(last["server"]["state_after"]["timer"], "running")
+
+    def test_a_question_the_server_left_open_is_named(self) -> None:
+        async def steps(socket, listener, say, seen):
+            await say(1, "프로토콜 시작해줘")
+            await say(2, "실험 종료")
+
+        _, seen, _ = self._run(steps)
+        last = seen["history"][-1]
+        self.assertEqual(last["handled_by"], "front:end_command")
+        self.assertEqual(last["server"]["result"], "stop_prompt_opened")
+        self.assertEqual(last["server"]["question_open"], "stop")
+
+
+class HistoryBundleTests(unittest.TestCase):
+    """Decision 2 on the bundles themselves (no PDF needed)."""
+
+    def test_a_screen_control_is_a_bundle_of_its_own(self) -> None:
+        session = _miniprep()
+        before = history_before(session)
+        session.pause_workflow()
+        bundle = screen_history_turn(session, before, control="pause", changed=True)
+        self.assertEqual(bundle.prompt_payload(), {
+            "at_step": "4", "status": "active", "source": "screen", "control": "pause",
+            "server": {"result": "executed", "state_after": {"step": "4", "status": "paused"}},
+        })
+        with self.assertRaises(ValueError):
+            screen_history_turn(session, before, control="next", changed=True)
+
+    def test_what_was_stored_is_kept_short_and_typed(self) -> None:
+        bundle = RouterHistoryTurn(
+            at_step="4", status="active", user="메모해줘 " + "가" * 200,
+            handled_by="llm+tool", proposal_tool="record_log", proposal_kind="observation",
+            server_result="recorded", state_after=("4", "active"),
+            recorded=("observation", "가" * 200),
+        )
+        words = bundle.prompt_payload()["server"]["recorded"]["words"]
+        self.assertEqual(len(words), 120)
+        self.assertTrue(words.endswith("…"))
+        with self.assertRaises(ValueError):
+            RouterHistoryTurn(
+                at_step="4", status="active", user="x", handled_by="llm",
+                server_result="recorded", recorded=("note", "x"),
+            )
+
+    def test_a_front_turn_bundle_says_the_state_and_the_open_question(self) -> None:
+        session = _miniprep()
+        before = history_before(session)
+        outcome = _routed(session, "실험 종료", FakeRouterClient(), turn_id=2)
+        bundle = history_turn(
+            session, outcome, before, user="실험 종료", plan=outcome.plan,
+            said=outcome.plan.speech_text, next_turn_id=3,
+            configuration_id=1, generation=1,
+        )
+        payload = bundle.prompt_payload()
+        self.assertEqual(payload["handled_by"], "front:end_command")
+        self.assertEqual(payload["server"]["question_open"], "stop")
+        self.assertEqual(payload["assistant"], "실험을 종료할까요?")
+
+    def test_the_model_reads_the_front_and_screen_turns_in_order(self) -> None:
+        session = _miniprep()
+        history = ConversationHistory()
+        before = history_before(session)
+        outcome = _routed(session, "4단계 완료했어", FakeRouterClient(), turn_id=2)
+        history.record_router_turn(history_turn(
+            session, outcome, before, user="4단계 완료했어", plan=outcome.plan,
+            said=outcome.plan.speech_text, next_turn_id=3, configuration_id=1, generation=1,
+        ))
+        before = history_before(session)
+        session.pause_workflow()
+        history.record_router_turn(
+            screen_history_turn(session, before, control="pause", changed=True)
+        )
+        client = FakeRouterClient(answer_call_reply("지금은 일시정지 중이에요.", source_kind="server_state"))
+        _routed(session, "지금 어디까지 했지?", client, turn_id=3, history=history.router_history())
+        shown = _recent_turns(client.requests[0])
+        self.assertEqual(shown[0]["handled_by"], "front:targeted_completion")
+        self.assertEqual(shown[0]["server"]["state_after"]["step"], "5")
+        self.assertEqual(shown[1]["control"], "pause")
+        self.assertEqual(shown[1]["server"]["state_after"]["status"], "paused")
+        snapshot = next(
+            message["content"] for message in client.requests[0]["messages"]
+            if message["content"].startswith("SERVER SNAPSHOT")
+        )
+        self.assertIn('"phase":"paused"', snapshot)
+
+
+def _facts(utterance: str, **changes: object) -> RouterTurnFacts:
+    values: dict[str, object] = dict(
+        utterance=utterance, language="ko", turn_id=5, generation=1,
+        workflow_revision=3, step_id="step-4", current_step_label="4",
+        workflow_active=True, workflow_status="active", paused=False,
+        experiment_started=True, experiment_running=True, open_question=None,
+        observation_step=False, step_timer_seconds=900, timer_running=False,
+        control_question=False, transcript_unreliable=False,
+    )
+    values.update(changes)
+    return RouterTurnFacts(**values)  # type: ignore[arg-type]
+
+
+_BASIS = ProposalBasis(turn_id=5, generation=1, workflow_revision=3, step_id="step-4")
+
+
+class AllowListTests(unittest.TestCase):
+    """Decision 3: one allow-list for each tool's values, read everywhere."""
+
+    def test_the_offered_values_are_the_allow_list(self) -> None:
+        self.assertEqual(
+            [tool["function"]["name"] for tool in ROUTER_CALL_TOOLS],
+            ["answer", "change_state", "record_log"],
+        )
+        self.assertEqual(
+            CHANGE_STATE_TOOL["function"]["parameters"]["properties"]["action"]["enum"],
+            list(CHANGE_STATE_RULES),
+        )
+        self.assertEqual(
+            RECORD_LOG_TOOL["function"]["parameters"]["properties"]["type"]["enum"],
+            list(RECORD_LOG_RULES),
+        )
+        self.assertEqual(
+            parse_tool_call("change_state", {"action": "skip", "evidence": "x"}),
+            "arguments_invalid",
+        )
+
+    def test_a_value_off_the_list_is_refused_however_it_arrives(self) -> None:
+        # Given straight to the validation, these used to be ruled on as a
+        # timer start (any other action or tool) or an anomaly (any other type).
+        cases = (
+            (ToolProposal(tool="change_state", action="skip", evidence="타이머 시작해줘"),
+             "arguments_invalid"),
+            (ToolProposal(tool="advance_step", action="next", evidence="타이머 시작해줘"),
+             "tool_unknown"),
+            (ToolProposal(tool="record_log", log_type="note", value="시료를 흘렸어",
+                          evidence="시료를 흘렸어"), "arguments_invalid"),
+        )
+        for proposal, code in cases:
+            with self.subTest(proposal=proposal):
+                verdict = validate_tool_proposals(
+                    [proposal], _facts(proposal.evidence), _BASIS,
+                )
+                self.assertEqual((verdict.effect, verdict.reason_code), ("refuse", code))
+
+    def test_every_listed_value_runs_as_the_rules_own_action(self) -> None:
+        cases = (
+            ("change_state", "next", "이제 다음 거 하자", 3, CuratedProtocolAction.CLARIFY_COMPLETION),
+            ("change_state", "stop", "오늘은 이쯤에서 종료하는 게 좋겠어", 3, CuratedProtocolAction.STOP),
+            ("change_state", "pause", "잠깐 쉬었다 할게", 3, CuratedProtocolAction.PAUSE),
+            ("change_state", "start", "자 이제 실험 시작해 볼까", None, CuratedProtocolAction.START),
+            ("record_log", "observation", "관찰 기록해줘 침전이 생겼어", 3, CuratedProtocolAction.RECORD_OBSERVATION),
+            ("record_log", "anomaly", "튜브가 터졌어", 3, CuratedProtocolAction.REPORT_ANOMALY),
+        )
+        for tool, value, said, step, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(
+                    (CHANGE_STATE_RULES if tool == "change_state" else RECORD_LOG_RULES)[value].runs_as,
+                    expected.value,
+                )
+                session = _miniprep(step)
+                arguments = (
+                    {"type": value, "value": said, "evidence": said}
+                    if tool == "record_log" else {"action": value, "evidence": said}
+                )
+                outcome = _routed(
+                    session, said, FakeRouterClient(tool_reply((tool, arguments))), turn_id=2,
+                )
+                self.assertEqual(outcome.handled_by, "llm+tool")
+                self.assertIs(outcome.plan.action, expected)
+
+    def test_resume_and_the_timer_run_as_the_rules_own_action(self) -> None:
+        self.assertEqual(CHANGE_STATE_RULES["resume"].runs_as, "resume")
+        self.assertEqual(CHANGE_STATE_RULES["start_timer"].runs_as, "start_timer")
+        session = _miniprep(3)
+        session.pause_workflow()
+        outcome = _routed(session, "이어서 하자", FakeRouterClient(tool_reply((
+            "change_state", {"action": "resume", "evidence": "이어서 하자"},
+        ))), turn_id=2)
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.RESUME)
+        session = _miniprep(3)
+        with patch.object(session, "timer_seconds_for_step", return_value=600):
+            outcome = _routed(session, "이 단계 시간 재 줘", FakeRouterClient(tool_reply((
+                "change_state", {"action": "start_timer", "evidence": "시간 재 줘"},
+            ))), turn_id=2)
+        self.assertEqual(outcome.handled_by, "llm+tool")
+        self.assertIs(outcome.plan.action, CuratedProtocolAction.START_TIMER)
+
+
+def _said(session, text, turn_id=9):
+    return route_curated_runtime_turn(
+        session, text, turn_id=turn_id, language="ko", configuration_id=1, generation=1,
+    ).plan
+
+
+def _fresh() -> CuratedProtocolSession:
+    session = CuratedProtocolSession(miniprep_fixture())
+    session.activate_configured()
+    return session
+
+
+class RuleConflictTests(unittest.TestCase):
+    """Decision 4: the same words no longer mean two different things."""
+
+    RESUME_WORDS = ("재개", "계속", "프로토콜 재개", "프로토콜 계속", "resume",
+                    "다시 시작", "계속하자", "재개해줘", "continue")
+
+    def test_a_resume_word_never_starts_an_experiment_never_started(self) -> None:
+        for word in self.RESUME_WORDS:
+            with self.subTest(word=word):
+                session = _fresh()
+                plan = _said(session, word)
+                self.assertFalse(session.active)
+                self.assertIsNone(session._experiment_started_at)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(
+                    plan.speech_text,
+                    "아직 실험을 시작하지 않았어요. 시작하려면 '프로토콜 시작해줘'라고 말씀해 주세요.",
+                )
+
+    def test_a_pause_before_the_start_is_lifted_and_the_start_still_works(self) -> None:
+        session = _fresh()
+        _said(session, "멈춰", 1)
+        plan = _said(session, "다시 시작", 2)
+        self.assertFalse(session.active)
+        self.assertNotEqual(session._pause_state, "paused")
+        self.assertFalse(plan.state_changed)
+        plan = _said(session, "프로토콜 시작해줘", 3)
+        self.assertIs(plan.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+
+    def test_a_resume_word_lifts_a_pause(self) -> None:
+        for word in self.RESUME_WORDS:
+            with self.subTest(word=word):
+                session = _miniprep(3)
+                session.pause_workflow()
+                plan = _said(session, word)
+                self.assertIs(plan.action, CuratedProtocolAction.RESUME)
+                self.assertTrue(plan.state_changed)
+                self.assertEqual(session.workflow_status, "active")
+
+    def test_a_resume_with_nothing_paused_claims_no_resume(self) -> None:
+        for word in ("재개", "재개해줘", "계속 진행"):
+            with self.subTest(word=word):
+                session = _miniprep(3)
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(plan.speech_text, "일시정지 상태가 아니에요. 현재 4단계입니다.")
+
+    def test_a_question_about_a_command_changes_nothing(self) -> None:
+        for word in ("시작해?", "시작?", "재개?", "종료?", "재개해도 돼?", "다시 시작해야 돼?",
+                     "프로토콜 시작해줘?"):
+            with self.subTest(word=word, state="not started"):
+                session = _fresh()
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertFalse(session.active)
+                self.assertEqual(session.workflow_status, "ready")
+        for word in ("타이머 시작했어?", "타이머 시작해야 돼?", "타이머 시작할까?", "타이머 시작해도 돼?"):
+            with self.subTest(word=word, state="timer step"):
+                session = _miniprep(3)
+                with patch.object(session, "timer_seconds_for_step", return_value=900):
+                    plan = _said(session, word)
+                self.assertIs(plan.action, CuratedProtocolAction.TIMER_STATUS)
+                self.assertIsNone(session._timer_started_at)
+                self.assertIn("이 질문만으로는 타이머를 시작하지 않았습니다", plan.speech_text)
+        for word in ("재개해도 돼?", "다시 시작해야 돼?"):
+            with self.subTest(word=word, state="paused"):
+                session = _miniprep(3)
+                session.pause_workflow()
+                plan = _said(session, word)
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(session.workflow_status, "paused")
+
+    def test_the_decided_first_step_start_is_kept(self) -> None:
+        # Lane R3, decision 8: "자 이제 1단계부터 해볼까" starts the experiment.
+        session = _fresh()
+        plan = _said(session, "자 이제 1단계부터 해볼까")
+        self.assertIs(plan.action, CuratedProtocolAction.START)
+        self.assertTrue(session.active)
+
+    def test_no_timer_starts_after_the_experiment_ended(self) -> None:
+        session = _miniprep(3)
+        _said(session, "실험 종료", 2)
+        _said(session, "응", 3)
+        self.assertTrue(session.experiment_ended)
+        with patch.object(session, "timer_seconds_for_step", return_value=900):
+            plan = _said(session, "타이머 시작해줘", 4)
+        self.assertIsNone(session._timer_started_at)
+        self.assertFalse(plan.state_changed)
+        self.assertIn("이 실험은 이미 끝났어요", plan.speech_text)
+
+    def test_the_router_and_the_rules_agree_on_a_resume_word(self) -> None:
+        verdict = validate_tool_proposals(
+            [ToolProposal(tool="change_state", action="start", evidence="다시 시작")],
+            _facts("다시 시작", workflow_active=False, workflow_status="ready",
+                   experiment_started=False, experiment_running=False,
+                   step_id=None, current_step_label=None),
+            ProposalBasis(turn_id=5, generation=1, workflow_revision=3, step_id=None),
+        )
+        self.assertEqual((verdict.effect, verdict.reason_code), ("refuse", "no_start_word"))
+        # With the router on, a refused resume takes the rules' path, which no
+        # longer starts the experiment either.
+        session = _fresh()
+        outcome = _routed(session, "재개", FakeRouterClient(tool_reply((
+            "change_state", {"action": "resume", "evidence": "재개"},
+        ))), turn_id=2)
+        self.assertEqual(outcome.fallback_reason, "refused:workflow_not_active")
+        self.assertFalse(session.active)
+        self.assertIsNone(session._experiment_started_at)
+
+
+class SpillFrontRuleTests(unittest.TestCase):
+    """Decision 6: the router no longer decides whether a spill is recorded."""
+
+    #: Lane R7's live check: the nine spill lines the router decided (two of
+    #: them, "시약을 엎질렀어" and "흘렸는데 어떡해", it only asked back about).
+    SPILLS = ("튜브를 흘렸어", "흘렸어", "엎질렀어", "넘쳤어", "시약을 엎질렀어", "용액이 넘쳤어",
+              "튜브를 엎었어", "흘렸는데 어떡해", "아 흘렸다 어떡하지")
+
+    def test_a_spill_is_recorded_by_rule_with_the_router_on(self) -> None:
+        for said in self.SPILLS:
+            with self.subTest(said=said):
+                session = _miniprep(3)
+                client = FakeRouterClient(answer_call_reply(
+                    "어떤 시약을 엎질렀는지 알려주세요.", source_kind="none",
+                ))
+                outcome = _routed(session, said, client, turn_id=2)
+                self.assertEqual(outcome.handled_by, "front:anomaly_report")
+                self.assertEqual(client.requests, [])
+                self.assertIs(outcome.plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+                self.assertTrue(outcome.plan.reported_anomaly)
+                self.assertEqual(outcome.plan.anomaly_text, said)
+
+    def test_a_spill_asked_supposed_or_denied_is_still_handed_on(self) -> None:
+        for said in ("흘려도 돼?", "쏟으면 어떡해?", "시료를 흘렸어?", "흘리지 않게 조심해야 돼?",
+                     "안 흘렸어", "흘린 거 아니야"):
+            with self.subTest(said=said):
+                session = _miniprep(3)
+                self.assertIsNone(session.front_plan(
+                    said, turn_id=2, language="ko", configuration_id=1, generation=1,
+                ))
+
+    def test_other_problems_stay_with_the_router(self) -> None:
+        # Only lane R7's spill reading moved to the front rules.
+        session = _miniprep(3)
+        self.assertIsNone(session.front_plan(
+            "원심분리기에서 이상한 소리가 나", turn_id=2, language="ko",
+            configuration_id=1, generation=1,
+        ))
+
+
+def _document(summary: str, *, demo: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        title="Facility chemical handling SOP", summary_text=summary, is_demo=demo,
+        reviewed_translations=(),
+    )
+
+
+class SafetyInstructionCheckTests(unittest.TestCase):
+    """Decision 7: no safety instruction the source does not give."""
+
+    NOTE = "이 상황의 안전 안내는 원문에 없어요."
+
+    def _answer(self, spoken, *, source_kind="none", evidence_ids=(), display="", session=None,
+                said="시약이 손에 묻었는데 어떡해?"):
+        session = session or _miniprep(3)
+        client = FakeRouterClient(answer_call_reply(
+            spoken, display=display, source_kind=source_kind, evidence_ids=evidence_ids,
+        ))
+        return _routed(session, said, client, turn_id=2)
+
+    def test_an_instruction_with_no_source_is_taken_out(self) -> None:
+        # Lane R7's live answer, word for word.
+        outcome = self._answer(
+            "어떤 시약을 엎질렀는지 알려주세요. 안전 절차는 해당 시약의 SDS와 실험실 유출 대응 지침을 따르세요.",
+        )
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, f"어떤 시약을 엎질렀는지 알려주세요. {self.NOTE}")
+        self.assertEqual(outcome.safety_removed, (
+            "안전 절차는 해당 시약의 SDS와 실험실 유출 대응 지침을 따르세요.",
+        ))
+        self.assertFalse(outcome.plan.state_changed)
+
+    def test_an_instruction_the_protocol_gives_stays(self) -> None:
+        # Miniprep's text says "Wear gloves."
+        outcome = self._answer("장갑을 착용하세요.", source_kind="pdf", evidence_ids=("S4.current_step",))
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, "장갑을 착용하세요.")
+        self.assertEqual(outcome.safety_removed, ())
+
+    def test_an_approved_safety_document_grounds_it_and_a_demo_one_does_not(self) -> None:
+        session = _miniprep(3)
+        session.set_safety_pack(SimpleNamespace(
+            sop_documents=(_document("Work inside a chemical fume hood."),),
+            sds_documents=(), equipment_documents=(),
+        ))
+        outcome = self._answer("후드 안에서 작업하세요.", session=session)
+        self.assertEqual(outcome.plan.speech_text, "후드 안에서 작업하세요.")
+        session = _miniprep(3)
+        session.set_safety_pack(SimpleNamespace(
+            sop_documents=(_document("Work inside a chemical fume hood.", demo=True),),
+            sds_documents=(), equipment_documents=(),
+        ))
+        outcome = self._answer("후드 안에서 작업하세요.", session=session)
+        self.assertEqual(outcome.plan.speech_text, self.NOTE)
+
+    def test_an_answer_of_nothing_else_says_only_that_with_no_source(self) -> None:
+        outcome = self._answer(
+            "보호구를 착용하고 환기가 잘 되는 곳에서 작업하세요.",
+            display="보호구를 착용하고 환기가 잘 되는 곳에서 작업하세요.",
+            source_kind="pdf", evidence_ids=("S4.current_step",),
+        )
+        self.assertEqual(outcome.handled_by, "llm")
+        self.assertEqual(outcome.plan.speech_text, self.NOTE)
+        self.assertEqual(outcome.plan.display_text, self.NOTE)
+        self.assertEqual(outcome.answer.source_kind, "none")
+        self.assertEqual(outcome.answer.evidence_ids, ())
+
+    def test_a_sentence_that_instructs_nothing_is_left_alone(self) -> None:
+        for spoken in (
+            "PDF에서 확인할 수 없어요.",
+            "원문에는 보호구 이야기가 없어요.",
+            "1 mL를 넣으세요.",
+            "상층액을 폐기하세요.",
+        ):
+            with self.subTest(spoken=spoken):
+                self.assertEqual(ungrounded_safety_instructions(spoken, ""), ())
+
+    def test_each_topic_it_names_must_be_grounded(self) -> None:
+        sentence = "장갑을 끼고 흐르는 물로 손을 씻으세요."
+        self.assertEqual(ungrounded_safety_instructions(sentence, "Wear gloves."), (sentence,))
+        self.assertEqual(ungrounded_safety_instructions(
+            sentence, "Wear gloves. Rinse skin with running water."), ())
+        self.assertEqual(
+            safety_instruction_topics("Wear goggles and work in a fume hood."),
+            ("eye_protection", "ventilation"),
+        )
+
+    def test_an_institutions_rules_fire_and_an_emergency_call_are_instructions(self) -> None:
+        # The live fire answers of the evaluation set (R240), which a first
+        # version let through.
+        for sentence, topics in (
+            ("기관의 화재 대응 지침을 따르세요.", ("safety_rules", "fire")),
+            ("기관의 화재 대응 지침을 따르고 비상 연락처에 연락하세요.",
+             ("safety_rules", "medical_help", "fire")),
+            ("피부 접촉을 피하세요.", ("exposure",)),
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(safety_instruction_topics(sentence), topics)
+                self.assertEqual(ungrounded_safety_instructions(sentence, ""), (sentence,))
+
+    def test_unrelated_source_words_ground_nothing(self) -> None:
+        # In-gel's dust warning: "avoid the dreaded keratin contamination",
+        # "skin cells"; its digest is "소화물", not fire.
+        grounding = ("This will avoid the dreaded keratin contamination. Most dust components "
+                     "are proteinaceous in nature (e.g., skin cells). 24단계: 소화물을 모읍니다.")
+        for sentence in ("피부 접촉을 피하세요.", "소화기를 쓰세요."):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(ungrounded_safety_instructions(sentence, grounding), (sentence,))
+        # A step's own method stays: washing a band is no safety instruction.
+        self.assertEqual(ungrounded_safety_instructions(
+            "Solution B 500 µL로 밴드를 세척하고, 37°C에서 15분 배양하세요.", ""), ())
+
+    def test_the_note_is_said_once(self) -> None:
+        outcome = self._answer("PDF에서 확인할 수 없어요. 안전관리자에게 문의하세요.")
+        self.assertEqual(outcome.plan.speech_text, "PDF에서 확인할 수 없어요.")
+
+
+if __name__ == "__main__":
+    unittest.main()

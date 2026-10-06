@@ -19,7 +19,6 @@ from voiney_lab.audio import FRAME_BYTES, FrameBuffer, clean_path, pcm_to_wav
 from voiney_lab.brain import (
     REPORT_CONFIRMATION_CLARIFICATION_TEXT,
     ConversationHistory,
-    RouterTurnRecord,
     SentenceSegment,
     answer_approved_reference_question,
     answer_curated_protocol_question,
@@ -178,8 +177,12 @@ from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse
 from voiney_lab.llm_router import (
     LlmRouterSettings,
     RouterTurnOutcome,
+    front_history_turn,
+    history_before,
+    history_turn,
     refuse_two_turn_deciders,
     route_turn_with_llm_router,
+    screen_history_turn,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab.runtime_routing import (
@@ -8303,69 +8306,72 @@ def _claim_admitted_answer(
     )
 
 
-def _router_state(curated:CuratedProtocolSession)->tuple[str|None,str]:
-    """The step and status a router history bundle records (design §4-2)."""
-
-    label=(
-        curated.fixture.steps[curated.current_index].source_label
-        if curated.active else None
-    )
-    return label,curated.workflow_status
-
-
-def _router_server_result(outcome:RouterTurnOutcome,plan:Any)->str:
-    """What the server did with a router turn, for its history bundle."""
-
-    if outcome.handled_by=="fallback_rules" and outcome.fallback_reason:
-        if outcome.fallback_reason.startswith("refused:"):
-            return outcome.fallback_reason
-    kind=getattr(plan,"intent_kind",None)
-    if kind in {"next_step_confirmation_required","observation_confirmation_required"}:
-        return (
-            "observation_prompt_opened"
-            if kind=="observation_confirmation_required" else "confirm_opened"
-        )
-    if kind=="stop_confirmation_required":
-        return "stop_prompt_opened"
-    if kind=="timer_duration_confirmation_required":
-        return "timer_prompt_opened"
-    if kind=="anomaly_record_confirmation_required":
-        return "anomaly_prompt_opened"
-    if getattr(plan,"reported_anomaly",False) or (
-        getattr(plan,"reported_observation",False)
-        and plan.action is not CuratedProtocolAction.NEXT
-    ):
-        return "recorded"
-    if getattr(plan,"state_changed",False):
-        return "executed"
-    return "none"
-
-
 def _record_router_history(
     session:"ListenerSession",curated:CuratedProtocolSession,
     outcome:RouterTurnOutcome,before:tuple[str|None,str],*,
-    user:str,plan:Any,interrupted:bool=False,
+    user:str,plan:Any,turn_id:int,generation:int,said:str|None=None,
+    interrupted:bool=False,
 )->None:
-    """Keep one routed turn in the router's history (D14), front turns too."""
+    """Keep one routed turn in the router's history (D14), front turns too.
 
-    proposal=next(
-        (item for item in outcome.proposals if not isinstance(item,str)),None)
+    Lane RT, decision 2: ``said`` is the reply that went out (the speech
+    when spoken, the screen text otherwise), and the bundle says what the
+    server did -- what it stored, the timer and the question left open.
+    """
+
     try:
-        session.history.record_router_turn(RouterTurnRecord(
-            at_step=before[0],status=before[1],user=user,
-            handled_by=outcome.handled_by,
-            assistant=(None if plan is None else plan.speech_text or plan.display_text),
-            proposal_tool=proposal.tool if proposal is not None else None,
-            proposal_kind=(
-                (proposal.action if proposal.tool=="change_state" else proposal.log_type)
-                if proposal is not None else None
-            ),
-            server_result=(None if plan is None else _router_server_result(outcome,plan)),
-            state_after=_router_state(curated),
-            interrupted=interrupted,
+        session.history.record_router_turn(history_turn(
+            curated,outcome,before,user=user,plan=plan,said=said,
+            next_turn_id=turn_id+1,
+            configuration_id=session.accepted_configuration_id,
+            generation=generation,interrupted=interrupted,
         ))
     except ValueError:
         log.warning("router history bundle rejected handled_by=%s",outcome.handled_by)
+
+
+def _record_emergency_history(
+    session:"ListenerSession",transcript:str,*,turn_id:int,generation:int,
+)->None:
+    """The emergency gate's turn (F1), kept in the router's history.
+
+    Lane RT, decision 2: the words and the state are kept, never the reply,
+    so the model does not imitate a safety reply it did not make.
+    """
+
+    curated=session.curated_protocol_session
+    if curated is None or not session.llm_router_settings.enabled:
+        return
+    session.history.record_router_turn(front_history_turn(
+        curated,history_before(curated),user=transcript,rule="emergency",
+        next_turn_id=turn_id+1,configuration_id=session.accepted_configuration_id,
+        generation=generation,
+    ))
+
+
+def _record_screen_history(
+    session:"ListenerSession",before:tuple[str|None,str]|None,*,
+    control:str,changed:bool,
+)->None:
+    """A bench control the screen pressed, kept in the router's history.
+
+    Lane RT, decision 2: with the router on, the screen's pause and resume
+    and a recovered run are history like a spoken turn, so the next model
+    call reads them in order with the turns around them.
+    """
+
+    curated=session.curated_protocol_session
+    if (
+        curated is None or before is None
+        or not session.llm_router_settings.enabled
+    ):
+        return
+    try:
+        session.history.record_router_turn(screen_history_turn(
+            curated,before,control=control,changed=changed,
+        ))
+    except ValueError:
+        log.warning("router history screen bundle rejected control=%s",control)
 
 
 def _router_development_note(
@@ -8729,6 +8735,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         return
     emergency=recognize_emergency(transcript)
     if emergency is not None:
+        _record_emergency_history(
+            session,transcript,turn_id=turn_id,generation=generation)
         text=emergency.response
         timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
         if not await current_text("reply.delta",turn_id=turn_id,segment_index=0,text=text): return
@@ -8860,7 +8868,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         source_boundary_note=None
         router_outcome:RouterTurnOutcome|None=None
         router_before=(
-            _router_state(curated)
+            history_before(curated)
             if session.llm_router_settings.enabled else None
         )
         try:
@@ -9699,7 +9707,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if router_outcome is not None and router_before is not None:
                 _record_router_history(
                     session,curated,router_outcome,router_before,
-                    user=transcript,plan=None,interrupted=True,
+                    user=transcript,plan=None,turn_id=turn_id,
+                    generation=generation,interrupted=True,
                 )
             raise
         except BaseException:
@@ -9864,7 +9873,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         ):
             _record_router_history(
                 session,curated,router_outcome,router_before,
-                user=transcript,plan=plan,
+                user=transcript,plan=plan,turn_id=turn_id,
+                generation=generation,
+                said=speech_text if speech_policy=="speak" else display_text,
             )
         if plan.action is CuratedProtocolAction.AUDIO_RECOVERY:
             await current_text(
@@ -11081,12 +11092,15 @@ async def voice_socket(websocket:WebSocket):
                             if recovery_version is not None else None
                         ),
                     )
+                    restored_before=None
                     if (
                         recovery_session_id is not None
                         and experiment_state is not None
                         and session.curated_protocol_session is not None
                         and experiment_state["status"]=="in_progress"
                     ):
+                        restored_before=history_before(
+                            session.curated_protocol_session)
                         session.curated_protocol_session.restore_experiment_progress(
                             current_step_id=str(experiment_state["current_step_id"]),
                             completed_step_ids=tuple(
@@ -11099,6 +11113,11 @@ async def voice_socket(websocket:WebSocket):
                         configuration_id,pipeline,context.language,
                         requested_protocol_id,selected_revision_id,
                         requested_input_language)
+                    if restored_before is not None:
+                        # Lane RT, decision 2: the run recovered here is the
+                        # first thing the router's history holds.
+                        _record_screen_history(
+                            session,restored_before,control="restore",changed=True)
                 except (RuntimeError,ValueError,WorkspaceError) as exc:
                     field_names=getattr(exc,"field_names",())
                     safe_detail=(
@@ -11280,6 +11299,7 @@ async def voice_socket(websocket:WebSocket):
                 ))
             elif control["type"]=="workflow.pause":
                 if session.active and session.curated_protocol_session is not None:
+                    screen_before=history_before(session.curated_protocol_session)
                     changed=session.curated_protocol_session.pause_workflow()
                     if changed and session.experiment_state_version is not None:
                         try:
@@ -11313,6 +11333,8 @@ async def voice_socket(websocket:WebSocket):
                     if task and not task.done():
                         await _finish_all_research_operations(sender,session,"cancelled")
                         task.cancel()
+                    _record_screen_history(
+                        session,screen_before,control="pause",changed=changed)
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",
@@ -11323,6 +11345,7 @@ async def voice_socket(websocket:WebSocket):
                     ))
             elif control["type"]=="workflow.resume":
                 if session.active and session.curated_protocol_session is not None:
+                    screen_before=history_before(session.curated_protocol_session)
                     changed=session.curated_protocol_session.resume_workflow()
                     if changed and session.experiment_state_version is not None:
                         try:
@@ -11351,6 +11374,8 @@ async def voice_socket(websocket:WebSocket):
                         if experiment_state is not None:
                             await websocket.send_text(event(
                                 "experiment.session.state",state=experiment_state))
+                    _record_screen_history(
+                        session,screen_before,control="resume",changed=changed)
                     fixture_state=session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state",

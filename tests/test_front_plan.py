@@ -256,6 +256,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "step_homophone",
             # lane R7, decisions 2 and 3
             "repeat_return", "start_at_step",
+            # lane RT, decision 6
+            "anomaly_report",
         })
 
 
@@ -297,12 +299,14 @@ class InGelObservationFrontTests(_Twins, unittest.TestCase):
     def test_no_endpoint_and_no_question_is_handed_on(self) -> None:
         # The endpoint phrase families read none of these as a verdict, so the
         # rules do not judge them and the turn is handed on: "탈색이 안 됐어"
-        # is a question about the step to them, and "탈색이 됐는데 흘렸어" a
-        # problem report.
+        # is a question about the step to them.
         for said in ("어 지금", "완료했어", "다 했어", "탈색 아직 덜 됐는데 그냥 다음 단계 가자",
-                     "탈색이 안 됐어", "탈색이 됐는데 흘렸어"):
+                     "탈색이 안 됐어"):
             with self.subTest(said=said):
                 self.assert_handed_on((said,), step_index=self.step_7)
+        # "탈색이 됐는데 흘렸어" reports a spill: lane RT, decision 6 has the
+        # front rules record it (it was handed on to the router).
+        self.assert_front(("탈색이 됐는데 흘렸어",), "anomaly_report", step_index=self.step_7)
         # Lane R6, decision 7: "이 단계 왜 해?" is the homophone rule's.
         self.assert_front(("이 단계 왜 해?",), "step_homophone", step_index=self.step_7)
 
