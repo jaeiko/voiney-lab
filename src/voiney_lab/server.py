@@ -917,6 +917,14 @@ def _record_workspace_experiment_progress(
                 "deadline_at","started_at",
             )
         }
+    # Lane R7: a return within a repeat, a later start and a step completed
+    # again in a later round are recorded as what they are. A step already
+    # marked completed is not marked again: the durable session keeps one
+    # completion per step and refuses a second, which would roll the turn back.
+    record=getattr(plan,"step_record",None) or {}
+    move_kind=record.get("kind")
+    if record:
+        event_payload["step_record"]=record
     principal,store=_commercial_workspace()
     try:
         state=store.record_experiment_progress(
@@ -925,6 +933,10 @@ def _record_workspace_experiment_progress(
             expected_voice_connection_id=session.voice_connection_id,
             event_key=key,
             event_type=(
+                "repeat_returned"
+                if move_kind=="repeat_return" else
+                "steps_skipped"
+                if move_kind=="start_at_step" and not record.get("experiment_started") else
                 "protocol_started"
                 if plan.action is CuratedProtocolAction.START else
                 "timer_started"
@@ -938,6 +950,7 @@ def _record_workspace_experiment_progress(
             mark_completed=bool(
                 plan.action is CuratedProtocolAction.NEXT
                 and plan.reported_completion
+                and not record.get("completed_before")
             ),
             payload=event_payload,
         )
@@ -7501,6 +7514,25 @@ def _record_experiment_report_plan(
         "approved_lab_corpus","external_authoritative_reference",
     }:
         event_type="source_consulted"
+    # Lane R7, decisions 2-3: what a step move or a step done again keeps.
+    # A return within a repeat is its own event, at the step returned to,
+    # with its round by confirmed returns; a later start records the steps it
+    # skipped (after the start itself when it began the experiment); a step
+    # completed again says in which round.
+    record=getattr(plan,"step_record",None) or {}
+    move_kind=record.get("kind")
+    skipped_after_start=False
+    if record:
+        payload["step_record"]=record
+    if plan.state_changed and move_kind=="repeat_return":
+        event_type="repeat_returned"
+        step_id=post_step.step_id if post_step is not None else step_id
+        step_label=post_step.source_label if post_step is not None else step_label
+    elif plan.state_changed and move_kind=="start_at_step":
+        if record.get("experiment_started"):
+            skipped_after_start=True
+        else:
+            event_type="steps_skipped"
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,
@@ -7523,6 +7555,15 @@ def _record_experiment_report_plan(
                 hashlib.sha256(str(item).encode()).hexdigest()
                 for item in plan.evidence_ids
             ),
+            payload=payload,
+        )
+    if skipped_after_start:
+        report=store.append_event(
+            session.experiment_report_id,
+            event_key=f"{event_key}-steps-skipped",
+            event_type="steps_skipped",
+            step_id=step_id,
+            step_label=step_label,
             payload=payload,
         )
     if plan.action is CuratedProtocolAction.STOP and plan.state_changed:
