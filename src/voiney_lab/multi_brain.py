@@ -63,6 +63,11 @@ class MultiBrainSettings:
     source_brain_model: str | None = None
     visual_brain_enabled: bool | None = None
     visual_brain_model: str | None = None
+    #: The step translations (the reader's automatic reading and an
+    #: authorized revision's translations). Not a brain role: from the
+    #: environment it follows the translation role's own settings only (lane
+    #: F, decision 1); made in code with no value, it keeps its old default.
+    translation_enabled: bool | None = None
 
     def __post_init__(self) -> None:
         if self.answer_brain_enabled is None:
@@ -77,6 +82,8 @@ class MultiBrainSettings:
             object.__setattr__(self, "visual_brain_enabled", self.enabled)
         if self.visual_brain_model is None:
             object.__setattr__(self, "visual_brain_model", self.model)
+        if self.translation_enabled is None:
+            object.__setattr__(self, "translation_enabled", self.enabled)
 
     @classmethod
     def from_environment(cls) -> "MultiBrainSettings":
@@ -109,6 +116,9 @@ class MultiBrainSettings:
             source_brain_model=source_model,
             visual_brain_enabled=visual_enabled,
             visual_brain_model=visual_model,
+            # Lane F, decision 1: translation is on with a translation-role
+            # key, whatever the answer brain is.
+            translation_enabled=RoleModel.from_environment("translation").has_key(),
         )
 
     def public_capability(self) -> dict[str, object]:
