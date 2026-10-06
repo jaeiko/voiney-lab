@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -136,6 +137,16 @@ class ExperimentReportStore:
               payload TEXT NOT NULL,
               created_at TEXT NOT NULL,
               UNIQUE(report_id, event_key)
+            );
+            -- Lane RP, decision 9: the report's prose, written once when the
+            -- experiment ends. Derived output, not part of the event ledger.
+            CREATE TABLE IF NOT EXISTS experiment_report_prose (
+              report_id TEXT PRIMARY KEY REFERENCES experiment_reports(report_id),
+              writer TEXT NOT NULL,
+              reply TEXT,
+              failure TEXT NOT NULL DEFAULT '',
+              event_count INTEGER NOT NULL,
+              prepared_at TEXT NOT NULL
             );
             """
         )
@@ -487,12 +498,55 @@ class ExperimentReportStore:
     def _narrative(
         self, report_id: str, narrative: ReportNarrative | None, fixture: Any,
     ) -> ReportNarrative:
+        """The given narrative, else the prepared prose, else the server's sentences.
+
+        Prepared prose is checked again against the record as it is now, so a
+        photo or note added after it was written still appears in the tables.
+        """
+
         if narrative is not None and narrative.facts is not None:
             return narrative
         report = self.get_report(report_id)
-        return ReportWriterBrain().build_deterministic_narrative(
-            report, list(report["events"]), fixture=_AUTO if fixture is None else fixture,
+        facts = ReportWriterBrain.facts_for(
+            report, list(report["events"]), fixture=_AUTO if fixture is None else fixture)
+        prose = self.get_prose(report_id)
+        if prose is None or prose["writer"] == SERVER_WRITER:
+            return narrative_from_sections(facts)
+        return narrative_from_reply(
+            facts, prose["reply"], failure=prose["failure"], writer=prose["writer"],
+            written_at=prose["prepared_at"],
         )
+
+    def save_prose(
+        self, report_id: str, *, writer: str, reply: Mapping[str, Any] | None,
+        failure: str, event_count: int,
+    ) -> None:
+        """Keep one report's prose (replacing any earlier one)."""
+
+        report_id = _clean_identifier(report_id, "report_id")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO experiment_report_prose(
+                  report_id,writer,reply,failure,event_count,prepared_at
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (report_id, writer[:200],
+                 None if reply is None else json.dumps(reply, ensure_ascii=False),
+                 failure[:200], int(event_count), _now()),
+            )
+
+    def get_prose(self, report_id: str) -> dict[str, Any] | None:
+        report_id = _clean_identifier(report_id, "report_id")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_report_prose WHERE report_id=?", (report_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        prose = dict(row)
+        prose["reply"] = json.loads(prose["reply"]) if prose["reply"] is not None else None
+        return prose
 
     def export_csv(self, report_id: str) -> bytes:
         """Export the stable event timeline as UTF-8 CSV."""
@@ -1763,6 +1817,7 @@ def narrative_from_sections(
     *,
     rejected: Mapping[str, Sequence[str]] | None = None,
     writer: str = "서버 대체 문장",
+    written_at: str | None = None,
 ) -> ReportNarrative:
     fallback = deterministic_sections(facts)
     rejected = {key: tuple(value) for key, value in (rejected or {}).items()}
@@ -1800,7 +1855,7 @@ def narrative_from_sections(
         discussion_review=tuple(chosen["discussion_review"]),
         conclusion=chosen["conclusion"], next_steps=tuple(chosen["next_steps"]),
         facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
-        rejected=rejected, writer=writer, written_at=_now(),
+        rejected=rejected, writer=writer, written_at=written_at or _now(),
     )
 
 
@@ -2073,17 +2128,132 @@ class ReportWriterBrain:
 
 def narrative_from_reply(
     facts: ReportFacts, reply: Mapping[str, Any] | None, *, failure: str = "", writer: str,
+    written_at: str | None = None,
 ) -> ReportNarrative:
     """The report from one model reply, checked against the record as it is now."""
 
     if reply is None:
         return narrative_from_sections(
             facts, {}, rejected={key: (failure or "모델 답 없음",) for key in MODEL_SECTIONS},
-            writer=f"{writer} (실패)",
+            writer=f"{writer} (실패)", written_at=written_at,
         )
     return narrative_from_sections(
         facts, reply, rejected=check_report_sections(reply, facts), writer=writer,
+        written_at=written_at,
     )
+
+
+# --- Preparing the prose when the experiment ends (decision 9) --------------------
+
+#: The prose row's writer when no model wrote it.
+SERVER_WRITER = "서버"
+
+
+class ReportProsePreparer:
+    """Writes each finished report's prose once, in the background.
+
+    When an experiment ends the server asks for its report's prose; the report
+    role's model is called once on a background thread (or not at all when no
+    model is configured) and the reply is kept with the report. Downloads use
+    what was kept. A person asking for it again is the only other call.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running: dict[tuple[str, str], threading.Event] = {}
+
+    @staticmethod
+    def _key(store: ExperimentReportStore, report_id: str) -> tuple[str, str]:
+        return (str(store.path), report_id)
+
+    def start(
+        self, store: ExperimentReportStore, report_id: str, make_brain: Any, *, again: bool = False,
+    ) -> str:
+        """"preparing", "ready" (already kept), or "not_finished"."""
+
+        key = self._key(store, report_id)
+        with self._lock:
+            if key in self._running:
+                return "preparing"
+            report = store.get_report(report_id)
+            if report["status"] == "in_progress":
+                return "not_finished"
+            if not again and store.get_prose(report_id) is not None:
+                return "ready"
+            brain = make_brain()
+            if brain is None or not brain.client:
+                store.save_prose(report_id, writer=SERVER_WRITER, reply=None,
+                                 failure="보고서 모델이 설정되지 않음",
+                                 event_count=len(report["events"]))
+                return "ready"
+            done = threading.Event()
+            self._running[key] = done
+        threading.Thread(
+            target=self._prepare, args=(store, report_id, brain, key, done),
+            name=f"report-prose-{report_id}", daemon=True,
+        ).start()
+        return "preparing"
+
+    def _prepare(
+        self, store: ExperimentReportStore, report_id: str, brain: "ReportWriterBrain",
+        key: tuple[str, str], done: threading.Event,
+    ) -> None:
+        count = 0
+        try:
+            report = store.get_report(report_id)
+            events = list(report["events"])
+            count = len(events)
+            reply, failure = asyncio.run(brain.write_reply(brain.facts_for(report, events)))
+            store.save_prose(report_id, writer=brain.model, reply=reply, failure=failure,
+                             event_count=count)
+        except Exception as exc:  # noqa: BLE001 -- the server's sentences stand in
+            log.warning("report prose not prepared error=%s", type(exc).__name__)
+            try:
+                store.save_prose(report_id, writer=brain.model, reply=None,
+                                 failure=f"준비 실패({type(exc).__name__})", event_count=count)
+            except Exception:  # noqa: BLE001
+                log.warning("report prose failure not kept")
+        finally:
+            with self._lock:
+                self._running.pop(key, None)
+            done.set()
+
+    def wait(self, store: ExperimentReportStore, report_id: str, timeout: float) -> bool:
+        with self._lock:
+            done = self._running.get(self._key(store, report_id))
+        return True if done is None else done.wait(timeout)
+
+    def status(self, store: ExperimentReportStore, report_id: str) -> dict[str, Any]:
+        """What the screen shows next to the record (decision 9)."""
+
+        with self._lock:
+            preparing = self._key(store, report_id) in self._running
+        report = store.get_report(report_id)
+        prose = None if preparing else store.get_prose(report_id)
+        status: dict[str, Any] = {"report_id": report_id, "ai_written": False, "new_records": 0}
+        if preparing:
+            status.update(state="preparing", label="보고서 준비 중 — 실험 기록으로 보고서 문장을 쓰고 있습니다.")
+        elif prose is not None:
+            ai = prose["reply"] is not None
+            status.update(state="ready", ai_written=ai, prepared_at=prose["prepared_at"],
+                          new_records=max(0, len(report["events"]) - int(prose["event_count"])))
+            if ai:
+                label = f"보고서 준비됨 — AI({prose['writer']}) 문장 중 서버 검사를 통과한 것만 씁니다."
+            elif prose["writer"] == SERVER_WRITER:
+                label = "보고서 준비됨 — 서버 문장 (보고서 모델이 설정되지 않음)."
+            else:
+                label = f"보고서 준비됨 — 서버 문장 (AI 문장을 쓰지 못함: {prose['failure']})."
+            if status["new_records"]:
+                label += f" 준비한 뒤 기록이 {status['new_records']}건 늘었습니다. 표에는 들어가며, 문장은 다시 만들 수 있습니다."
+            status["label"] = label
+        elif report["status"] == "in_progress":
+            status.update(state="not_finished", label="실험이 끝나면 보고서 문장을 준비합니다.")
+        else:
+            status.update(state="not_prepared", label="보고서 문장이 아직 준비되지 않았습니다.")
+        return status
+
+
+REPORT_PROSE = ReportProsePreparer()
 
 
 # --- One document, two renderings (Word and Markdown) -----------------------------

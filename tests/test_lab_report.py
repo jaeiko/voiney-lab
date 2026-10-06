@@ -389,13 +389,15 @@ class ReportExportRouteTests(_ReportCase):
         self.assertIn("| 4 | 이상 | 튜브를 쏟았어 | 10:09 |", text)
         self.assertNotIn(self.report_id, text)
 
-    def test_both_exports_use_the_report_model_when_it_has_a_key(self) -> None:
+    def test_both_exports_use_one_model_call_for_the_finished_report(self) -> None:
+        # Decision 9 (2026-10-06): one model call per experiment. A finished
+        # report with nothing prepared is prepared by the first download;
+        # the second download uses what was kept.
         from docx import Document
 
         self.run_steps_one_to_four_then_stop()
+        client = _Client(GOOD_REPLY)
         for suffix in ("md", "docx"):
-            er._NARRATIVE_CACHE.clear()
-            client = _Client(GOOD_REPLY)
             response = self.fetch(suffix, client, {
                 "VOINEY_LAB_REPORT_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "test-key",
                 "VOINEY_LAB_REPORT_MODEL": "fake-report-model"})
@@ -511,3 +513,110 @@ class ReportLayoutTests(_ReportCase):
         self.assertTrue(server.rstrip().endswith(
             "> 이 보고서의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었으며 AI 가 쓴 문장은 없다. "
             "작성 2026년 10월 6일 11:00."), server[-300:])
+
+
+class _SlowClient(_Client):
+    """A fake model that answers only when the test lets it."""
+
+    def __init__(self, reply: dict | str) -> None:
+        super().__init__(reply)
+        import threading
+
+        self.release = threading.Event()
+        answer = self.chat.completions.create
+
+        async def create(**kwargs):
+            await asyncio.to_thread(self.release.wait, 5)
+            return await answer(**kwargs)
+
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+
+
+class ReportProsePreparationTests(_ReportCase):
+    """Decision 9 (2026-10-06): the prose is written once when the experiment ends."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.preparer = er.ReportProsePreparer()
+        fixture = mock.patch.object(er, "report_protocol_fixture", return_value=(self.fixture, ""))
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
+    def brain(self, client: object) -> er.ReportWriterBrain:
+        return er.ReportWriterBrain(client=client, model="fake-model", timeout_seconds=5)
+
+    def prepare(self, client: object, *, again: bool = False) -> str:
+        state = self.preparer.start(self.store, self.report_id, lambda: self.brain(client), again=again)
+        self.assertTrue(self.preparer.wait(self.store, self.report_id, 10))
+        return state
+
+    def test_an_experiment_in_progress_is_not_prepared(self) -> None:
+        self.event("00:30", "session_started", "1")
+        client = _Client(GOOD_REPLY)
+        self.assertEqual(self.preparer.start(self.store, self.report_id, lambda: self.brain(client)),
+                         "not_finished")
+        self.assertEqual(client.calls, [])
+        self.assertEqual(self.preparer.status(self.store, self.report_id)["state"], "not_finished")
+
+    def test_a_finished_report_is_written_once_and_downloads_use_it(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        client = _SlowClient(GOOD_REPLY)
+        self.assertEqual(self.preparer.start(self.store, self.report_id, lambda: self.brain(client)),
+                         "preparing")
+        status = self.preparer.status(self.store, self.report_id)
+        self.assertEqual(status["state"], "preparing")
+        self.assertIn("보고서 준비 중", status["label"])
+        self.assertEqual(self.preparer.start(self.store, self.report_id, lambda: self.brain(client)),
+                         "preparing")
+        client.release.set()
+        self.assertTrue(self.preparer.wait(self.store, self.report_id, 10))
+        status = self.preparer.status(self.store, self.report_id)
+        self.assertEqual((status["state"], status["ai_written"]), ("ready", True))
+        self.assertIn("AI(fake-model)", status["label"])
+        self.assertEqual(self.preparer.start(self.store, self.report_id, lambda: self.brain(client)), "ready")
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.store.export_docx(self.report_id, fixture=self.fixture)
+        self.assertEqual(len(client.calls), 1)
+        self.assertIn(GOOD_REPLY["purpose"], text)
+        self.assertIn("AI(fake-model)", text)
+
+    def test_asking_again_is_a_second_call(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        client = _Client(GOOD_REPLY)
+        self.prepare(client)
+        self.prepare(client, again=True)
+        self.assertEqual(len(client.calls), 2)
+
+    def test_without_a_model_the_servers_sentences_are_ready_at_once(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        self.assertEqual(self.preparer.start(self.store, self.report_id, lambda: None), "ready")
+        status = self.preparer.status(self.store, self.report_id)
+        self.assertEqual((status["state"], status["ai_written"]), ("ready", False))
+        self.assertIn("서버 문장", status["label"])
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.assertIn("AI 가 쓴 문장은 없다", text)
+
+    def test_a_failed_model_leaves_the_servers_sentences(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        client = _Client("not json")
+        self.prepare(client)
+        status = self.preparer.status(self.store, self.report_id)
+        self.assertEqual((status["state"], status["ai_written"]), ("ready", False))
+        self.assertIn("AI 문장을 쓰지 못함: 모델 답 실패(JSONDecodeError)", status["label"])
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.assertNotIn(GOOD_REPLY["purpose"], text)
+        self.assertIn("AI 가 쓴 문장은 없다", text)
+
+    def test_records_added_after_preparing_appear_and_are_counted(self) -> None:
+        self.run_steps_one_to_four_then_stop()
+        client = _Client(GOOD_REPLY)
+        self.prepare(client)
+        self.event("01:30", "photo_attached", "4", user_wording="gel.png",
+                   confirmation_state="user_reported")
+        status = self.preparer.status(self.store, self.report_id)
+        self.assertEqual(status["new_records"], 1)
+        self.assertIn("기록이 1건 늘었습니다", status["label"])
+        text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
+        self.assertIn("| 4 | 사진 | 사진 첨부 — gel.png | 10:30 |", text)
+        self.assertIn(GOOD_REPLY["purpose"], text)
+        self.assertEqual(len(client.calls), 1)

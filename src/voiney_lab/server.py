@@ -78,6 +78,7 @@ from voiney_lab.experiment_protocol_store import (
 from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
+    REPORT_PROSE,
     ReportNarrative,
     ReportWriterBrain,
     ReportWriterSettings,
@@ -5234,38 +5235,84 @@ def get_admin_metrics(
     }
 
 
-def _experiment_report_narrative(store:ExperimentReportStore,report_id:str):
-    """The report role's prose for one report, or None for the server's own sentences."""
+def _report_writer_brain()->ReportWriterBrain|None:
+    """The report role's writer, or None when no report model is configured."""
 
     try:
-        writer_settings = ReportWriterSettings.from_environment()
+        writer_settings=ReportWriterSettings.from_environment()
         if not writer_settings.enabled:
             return None
-        report_role = RoleModel.from_environment("report")
+        report_role=RoleModel.from_environment("report")
         if not report_role.has_key():
             return None
-        try:
-            async_client = _role_client(
-                report_role,
-                timeout=writer_settings.timeout_seconds,
-            )
-            brain = ReportWriterBrain(
-                client=async_client,
-                model=writer_settings.model,
-                timeout_seconds=writer_settings.timeout_seconds,
-            )
-            report_doc = store.get_report(report_id)
-            events = list(report_doc.get("events") or ())
-            return asyncio.run(brain.generate_narrative(report_doc, events))
-        except Exception as llm_exc:
-            log.warning(
-                "Report LLM generation failed (%s), falling back to deterministic narrative",
-                llm_exc,
-            )
-            return None
-    except Exception as brain_exc:
-        log.warning("Report writer setup failed (%s), using deterministic narrative", brain_exc)
+        return ReportWriterBrain(
+            client=_role_client(report_role,timeout=writer_settings.timeout_seconds),
+            model=writer_settings.model,
+            timeout_seconds=writer_settings.timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001 - the server's sentences stand in
+        log.warning("report writer setup failed error=%s",type(exc).__name__)
         return None
+
+
+def _prepare_report_prose(store:ExperimentReportStore,report_id:str,*,again:bool=False)->str:
+    """Start the report's one model call in the background (lane RP, decision 9).
+
+    Called when an experiment ends; a download or a person's "다시 만들기"
+    calls it too. Never raises: a failure leaves the server's own sentences.
+    """
+
+    try:
+        return REPORT_PROSE.start(store,report_id,_report_writer_brain,again=again)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("report prose not started error=%s",type(exc).__name__)
+        return "failed"
+
+
+def _report_prose_store(report_id:str)->ExperimentReportStore:
+    _scope_tenant_resource("experiment_report",report_id)
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="experiment report unavailable")
+    return ExperimentReportStore(settings.database_path)
+
+
+@app.get("/api/experiment-reports/{report_id}/prose")
+def get_experiment_report_prose(report_id:str):
+    """Whether the report's prose is being prepared or ready (decision 9)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        return REPORT_PROSE.status(store,report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+@app.post("/api/experiment-reports/{report_id}/prose")
+def regenerate_experiment_report_prose(report_id:str):
+    """Write the report's prose again -- only when a person asks (decision 9)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        _prepare_report_prose(store,report_id,again=True)
+        return REPORT_PROSE.status(store,report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
+    """Let a download use the prepared prose, waiting for one being written.
+
+    A finished report with nothing prepared (one that ended before the server
+    restarted, say) is prepared now; that is still its one model call. A
+    report still in progress gets the server's own sentences.
+    """
+
+    if _prepare_report_prose(store,report_id)=="preparing":
+        REPORT_PROSE.wait(
+            store,report_id,
+            ReportWriterSettings.from_environment().timeout_seconds+5,
+        )
 
 
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
@@ -5284,15 +5331,15 @@ def export_experiment_report(report_id:str,format_name:str):
         elif format_name=="md":
             # Lane RP: the Markdown report has the Word report's structure and
             # the same writer (model sections checked, server sentences else).
-            content=store.export_markdown(
-                report_id,narrative=_experiment_report_narrative(store,report_id))
+            _prepared_report_prose(store,report_id)
+            content=store.export_markdown(report_id)
             media_type="text/markdown; charset=utf-8"
         elif format_name=="csv":
             content=store.export_csv(report_id)
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
-            narrative=_experiment_report_narrative(store,report_id)
-            content=store.export_docx(report_id, narrative=narrative)
+            _prepared_report_prose(store,report_id)
+            content=store.export_docx(report_id)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
@@ -7477,6 +7524,7 @@ def _record_experiment_report_plan(
             status="stopped",
             event_key=f"{event_key}-finalize",
         )
+        _prepare_report_prose(store,session.experiment_report_id)
     elif (
         plan.action is CuratedProtocolAction.NEXT
         and plan.state_changed
@@ -7497,6 +7545,7 @@ def _record_experiment_report_plan(
             status="completed",
             event_key=f"{event_key}-finalize",
         )
+        _prepare_report_prose(store,session.experiment_report_id)
         _record_workspace_metric(
             category="workflow",metric_name="completion",
             dimensions={"event_kind":"workflow_completed","status":"completed"},
