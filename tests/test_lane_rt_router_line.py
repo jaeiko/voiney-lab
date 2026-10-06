@@ -19,6 +19,9 @@ or the model misjudges the current step:
   question about a command ("시작해?", "타이머 시작했어?", "재개해도 돼?") is
   not the command, as the pause and end words and the router's ruling
   already had it. No timer starts on an ended experiment;
+* decision 6 -- a spill, a knock-over or an overflow said as having happened
+  (lane R7's reading) is recorded by the front rules even with the router on;
+  asked, supposed, permitted, guarded against or denied it is not;
 
 Every model here is a fake (tests/router_fakes.py); nothing is live.
 """
@@ -517,6 +520,46 @@ class RuleConflictTests(unittest.TestCase):
         self.assertEqual(outcome.fallback_reason, "refused:workflow_not_active")
         self.assertFalse(session.active)
         self.assertIsNone(session._experiment_started_at)
+
+
+class SpillFrontRuleTests(unittest.TestCase):
+    """Decision 6: the router no longer decides whether a spill is recorded."""
+
+    #: Lane R7's live check: the nine spill lines the router decided (two of
+    #: them, "시약을 엎질렀어" and "흘렸는데 어떡해", it only asked back about).
+    SPILLS = ("튜브를 흘렸어", "흘렸어", "엎질렀어", "넘쳤어", "시약을 엎질렀어", "용액이 넘쳤어",
+              "튜브를 엎었어", "흘렸는데 어떡해", "아 흘렸다 어떡하지")
+
+    def test_a_spill_is_recorded_by_rule_with_the_router_on(self) -> None:
+        for said in self.SPILLS:
+            with self.subTest(said=said):
+                session = _miniprep(3)
+                client = FakeRouterClient(answer_call_reply(
+                    "어떤 시약을 엎질렀는지 알려주세요.", source_kind="none",
+                ))
+                outcome = _routed(session, said, client, turn_id=2)
+                self.assertEqual(outcome.handled_by, "front:anomaly_report")
+                self.assertEqual(client.requests, [])
+                self.assertIs(outcome.plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+                self.assertTrue(outcome.plan.reported_anomaly)
+                self.assertEqual(outcome.plan.anomaly_text, said)
+
+    def test_a_spill_asked_supposed_or_denied_is_still_handed_on(self) -> None:
+        for said in ("흘려도 돼?", "쏟으면 어떡해?", "시료를 흘렸어?", "흘리지 않게 조심해야 돼?",
+                     "안 흘렸어", "흘린 거 아니야"):
+            with self.subTest(said=said):
+                session = _miniprep(3)
+                self.assertIsNone(session.front_plan(
+                    said, turn_id=2, language="ko", configuration_id=1, generation=1,
+                ))
+
+    def test_other_problems_stay_with_the_router(self) -> None:
+        # Only lane R7's spill reading moved to the front rules.
+        session = _miniprep(3)
+        self.assertIsNone(session.front_plan(
+            "원심분리기에서 이상한 소리가 나", turn_id=2, language="ko",
+            configuration_id=1, generation=1,
+        ))
 
 
 if __name__ == "__main__":

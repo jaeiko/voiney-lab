@@ -1318,6 +1318,9 @@ class CuratedControlIntent:
     #: A move to another step asked for in words (lane R7, decisions 2-3):
     #: what was asked, and what the server checked before asking.
     step_move: dict[str, Any] | None = None
+    #: A spill, a knock-over or an overflow said as having happened (lane
+    #: R7's reading): the front rules record it (lane RT, decision 6).
+    spill_reported: bool = False
 
 
 class DiscourseFocusKind(str, Enum):
@@ -2769,6 +2772,11 @@ FRONT_RULES: dict[str, str] = {
                      "repeat the source states at the current step, and "
                      "otherwise refused with the reason; a yes moves back and "
                      "the return is recorded (lane R7, decision 2)",
+    "anomaly_report": "a spill, a knock-over or an overflow said as having "
+                      "happened ('시약을 엎질렀어', '흘렸는데 어떡해'), recorded "
+                      "as an anomaly whether or not the router is on; asked, "
+                      "supposed, permitted, guarded against or denied it is "
+                      "not (lane R7's reading; lane RT, decision 6)",
     "start_at_step": "'N단계부터 시작해줘' before the experiment or at its first "
                      "step: asked once, '1~(N-1)단계는 건너뛰고 N단계부터 "
                      "시작할까요?'; a yes starts at N and the skipped steps are "
@@ -4989,6 +4997,7 @@ def classify_curated_control_intent(
             language=language,
             reported_anomaly=True,
             anomaly_category=category,
+            spill_reported=spill == "reported",
         )
     if any(pattern.search(key) for pattern in _SOURCE_REQUEST_PATTERNS):
         return CuratedControlIntent(
@@ -10788,6 +10797,12 @@ class CuratedProtocolSession:
         if intent.confidence_source == "semantic_intent_fallback":
             # A model's reading is never a front rule.
             return None
+        if intent.action is CuratedProtocolAction.REPORT_ANOMALY and intent.spill_reported:
+            # Lane RT, decision 6: a spill said as having happened is the
+            # front rules' to record, router or not. With the router on, a
+            # model asked back instead ("어떤 시약을 엎질렀는지 알려주세요")
+            # and nothing was recorded (lane R7's live check, 2 of 9).
+            return "anomaly_report"
         rule = _FRONT_RULE_BY_ACTION.get(intent.action)
         if rule is not None:
             return rule
