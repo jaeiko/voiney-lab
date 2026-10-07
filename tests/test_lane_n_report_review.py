@@ -277,15 +277,50 @@ class ScreenChecklistTests(unittest.TestCase):
 class UnconfirmedValuesInProseTests(unittest.TestCase):
     """Model prose may not state a value the researcher did not confirm."""
 
-    def facts(self, *, confirmed: bool) -> er.ReportFacts:
+    def facts(self, *, confirmed: bool, asked: bool = True) -> er.ReportFacts:
         events = [
             _event("observation", "m", wording="pH 7.2", category="measurement"),
+            _event("anomaly", "a", "3", wording="튜브를 쏟았어"),
         ]
         if confirmed:
             events.append(_event(er.REVIEW_CONFIRMED, "c", payload={"item_id": "r.m", "text": "pH 7.2"}))
+            events.append(_event(er.REVIEW_CONFIRMED, "c2", payload={"item_id": "r.a", "text": "튜브를 쏟았어"}))
+        elif asked:
+            events.append(_event(er.REVIEW_DEFERRED, "later", payload={"item_ids": ["r.m", "r.a"]}))
         report = {"protocol_title": "Fictional wash", "status": "stopped", "events": events,
                   "started_at": "2026-10-07T00:00:00+00:00", "ended_at": "2026-10-07T01:00:00+00:00"}
         return er.build_report_facts(report, fixture=notes_fixture())
+
+    def test_a_cause_suggestion_may_not_build_on_an_unconfirmed_item(self) -> None:
+        reply = {"discussion_review": [{"항목 번호": 2, "제안": "쏟은 양을 확인한다."}]}
+        refused = er.check_report_sections(reply, self.facts(confirmed=False))
+        self.assertIn("discussion_review", refused)
+        offered = er._writer_facts(self.facts(confirmed=False))["검토할 수 있는 항목"]
+        self.assertNotIn(2, [item["항목 번호"] for item in offered])
+        self.assertIn(2, [item["항목 번호"] for item in er._writer_facts(self.facts(confirmed=True))["검토할 수 있는 항목"]])
+        self.assertEqual(er.check_report_sections(reply, self.facts(confirmed=True)), {})
+
+    def test_a_deviation_note_not_confirmed_is_not_offered_either(self) -> None:
+        events = [
+            _event("observation", "d", wording="원문과 다르게 용액 A를 두 번 버렸어", category="deviation"),
+            _event(er.REVIEW_DEFERRED, "later", payload={"item_ids": ["r.d"]}),
+        ]
+        report = {"protocol_title": "Fictional wash", "status": "stopped", "events": events,
+                  "started_at": "2026-10-07T00:00:00+00:00", "ended_at": "2026-10-07T01:00:00+00:00"}
+        facts = er.build_report_facts(report, fixture=notes_fixture())
+        line = "2단계: 연구자 기록 — “원문과 다르게 용액 A를 두 번 버렸어”."
+        number = len(facts.records) + facts.deviations.index(line) + 1
+        offered = [item["항목 번호"] for item in er._writer_facts(facts)["검토할 수 있는 항목"]]
+        self.assertNotIn(number, offered)
+        reply = {"discussion_review": [{"항목 번호": number, "제안": "버린 횟수를 확인한다."}]}
+        self.assertIn("discussion_review", er.check_report_sections(reply, facts))
+
+    def test_before_the_researcher_was_asked_nothing_is_held_back(self) -> None:
+        facts = self.facts(confirmed=False, asked=False)
+        self.assertEqual(facts.unconfirmed_texts, ())
+        self.assertEqual(
+            er.check_report_sections({"results_summary": "2단계에서 pH 7.2를 측정했다."}, facts), {})
+        self.assertNotIn("확인되지 않은 값", er.render_markdown(er.narrative_from_sections(facts)))
 
     def test_an_unconfirmed_value_is_refused_and_a_confirmed_one_kept(self) -> None:
         reply = {"results_summary": "2단계에서 pH 7.2를 측정했다."}
@@ -295,7 +330,7 @@ class UnconfirmedValuesInProseTests(unittest.TestCase):
 
     def test_the_model_reads_which_values_are_unconfirmed(self) -> None:
         sent = er._writer_facts(self.facts(confirmed=False))
-        self.assertEqual(sent["확인되지 않은 값"], ["2단계 측정: pH 7.2"])
+        self.assertEqual(sent["확인되지 않은 값"], ["2단계 측정: pH 7.2", "3단계 이상: 튜브를 쏟았어"])
         self.assertEqual(sent["기록"], [])
         sent = er._writer_facts(self.facts(confirmed=True))
         self.assertEqual(sent["확인되지 않은 값"], [])

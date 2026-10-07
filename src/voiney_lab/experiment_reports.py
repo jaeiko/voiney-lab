@@ -1646,8 +1646,14 @@ def build_report_facts(
     }
     # Lane N, decision 3: the values the report holds, and which were confirmed.
     review = report_review_items(events)
+    # A value is "not confirmed" once the researcher was asked about it (by
+    # voice, or on the screen) and has not confirmed it; before any review a
+    # record makes no claim either way.
+    review_offered = any(str(event.get("event_type") or "") in REVIEW_EVENT_TYPES for event in events)
     confirmed_keys = {item["source_key"] for item in review if item["confirmed"]}
-    unconfirmed_keys = {item["source_key"] for item in review if not item["confirmed"]}
+    unconfirmed_keys = (
+        {item["source_key"] for item in review if not item["confirmed"]} if review_offered else set()
+    )
     unconfirmed_texts: list[str] = []
 
     def add_record(label: str, kind: str, text: str, at: datetime | None, key: str = "") -> None:
@@ -1851,6 +1857,8 @@ def build_report_facts(
             continue
         if record.kind == "편차" or (record.kind == "관찰" and "반복" in record.text):
             line = f"{record.step_label}단계: 연구자 기록 — “{record.text}”."
+            if record.key and record.key in unconfirmed_keys:
+                unconfirmed_texts.append(line)
             deviations.append(
                 (line[:-1] + " (실험자 확인).") if record.confirmed and record.kind == "편차" else line)
     for label, paused_at, resumed_at in pauses:
@@ -1966,7 +1974,8 @@ def build_report_facts(
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
         zone=zone, items=items, returns=tuple(returns),
-        review=tuple(review), unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
+        review=tuple(review) if review_offered else (),
+        unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
         item_step_texts=tuple(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
@@ -2172,7 +2181,14 @@ def check_report_sections(
     allowed = _allowed_numbers(facts)
     allowed_measures = _allowed_measures(facts)
     record_texts = [" ".join(text.split()) for text in facts.record_texts]
-    reviewable = set(range(1, len(facts.records) + len(facts.deviations) + 1))
+    # Lane N: an item the researcher did not confirm is not one to build on.
+    unconfirmed = set(facts.unconfirmed_texts)
+    reviewable = {
+        number for number in range(1, len(facts.records) + len(facts.deviations) + 1)
+        if not (number <= len(facts.records) and facts.records[number - 1].text in unconfirmed)
+        and not (number > len(facts.records)
+                 and facts.deviations[number - len(facts.records) - 1] in unconfirmed)
+    }
     reasons: dict[str, list[str]] = {}
     for key in MODEL_SECTIONS:
         value = sections.get(key)
@@ -2598,15 +2614,30 @@ discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장
 item_uses (목록, 각 항목 {"번호": '재료·장비' 의 번호, "용도": 명사구})."""
 
 
+def _reviewable_numbers(facts: ReportFacts) -> dict[int, str]:
+    """The items a cause suggestion may name: anomalies and deviations, less
+    what the researcher was asked about and did not confirm (lane N)."""
+
+    unconfirmed = set(facts.unconfirmed_texts)
+    items = {
+        record.number: f"이상: {record.text}"
+        for record in facts.records
+        if record.kind == "이상" and record.status != "취소됨" and record.text not in unconfirmed
+    }
+    items.update({
+        len(facts.records) + index: f"원문과 다르게 한 점: {text}"
+        for index, text in enumerate(facts.deviations, 1) if text not in unconfirmed
+    })
+    return items
+
+
 def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
     """What the model reads: experiment content only, no identifiers (decision 3)."""
 
+    labels = {record.number: record.step_label for record in facts.records}
     reviewable = [
-        {"항목 번호": record.number, "단계": record.step_label, "내용": f"이상: {record.text}"}
-        for record in facts.records if record.kind == "이상"
-    ] + [
-        {"항목 번호": len(facts.records) + index, "내용": f"원문과 다르게 한 점: {text}"}
-        for index, text in enumerate(facts.deviations, 1)
+        {"항목 번호": number, **({"단계": labels[number]} if number in labels else {}), "내용": text}
+        for number, text in sorted(_reviewable_numbers(facts).items())
     ]
     return {
         "프로토콜": facts.protocol_title,
