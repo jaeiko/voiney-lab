@@ -672,6 +672,97 @@ researcher before they go in.
   before the start in place of completions; a checkpoint restart carries
   them (`steps_skipped_carried_over`).
 
+## A source condition, a count the person decides, and repeat rounds (lane CB)
+
+Decisions of 2026-10-07, stage 1 of guiding a protocol's conditions and
+repeats. The server owns the state: questions, answers and moves are made and
+recorded by rule, never by a model. A question's words are the source's own
+condition or sentence (its Korean when a translation of that sentence is
+stored). No condition or count is invented, no branch is chosen before the
+person answers, and whether a repeat was done enough is never the agent's
+judgement: the count is the source's or the person's. Every value the run
+acts on carries where it came from (`value_source`: `source`, `operator`, or
+`lab_default` -- the place lane LA's lab-adapted protocol will fill).
+
+- **A source condition** (decision 1, front rule `branch_condition`). On
+  entering a step whose source states a condition (headspace 42: "If using
+  newly made Porapak tubes, repeat steps 36-41 twice more") the server asks
+  "이 단계에는 원문 조건이 있어요: “If using newly made Porapak tubes”. 이 조건에
+  해당하나요? 맞으면 '네', 아니면 '아니요', 모르면 '모르겠어'라고 해 주세요.", and
+  the question stays open at that step. "네" records the answer and takes
+  the branch: a repeat written under the condition applies with the count
+  the source states, and when that repeat ends at this very step the next
+  round is asked about at once. "아니요" skips the branch's steps -- now, when
+  the run stands on one ("42단계는 건너뛰고 43단계로 이동했습니다"), on arrival
+  when they follow -- through the one forward move, recorded and not
+  completed. "모르겠어" reads the condition again. "42단계 완료했어" or "다음
+  단계" before the answer: "먼저 원문 조건에 답해 주세요: … 단계를 넘기지 않았어요."
+  A later start at the step asks too; a new run asks again. "36단계로 돌아가"
+  (lane R7) at the step still works: it is the person's explicit request.
+- **A count the source leaves to the person** (decision 2, front rule
+  `repeat_count`). On first entering a range whose count the source hands to
+  the experimenter (headspace 21: "Repeat steps 19-20 for the required number
+  of bacterial isolates/replicates") the server asks "19~20단계는 원문이 횟수를
+  정하지 않아요: “…”. 몇 번(몇 개) 하시나요? 아직 모르면 '아직 몰라'라고 해
+  주세요." A number ("세 번", "3번", "3개", "3") is read back in lane N's form,
+  never asked about -- "세 번으로 기록했어요. 19~20단계를 세 번 하고, 지금은 3회
+  중 1회차예요." -- and the repeat is registered with it (`value_source:
+  operator`); "아직 몰라" registers it with no count, to be asked after each
+  round. Before the answer nothing moves on ("먼저 19~20단계를 몇 번(몇 개)
+  하실지 말씀해 주세요. …"). Nothing defaults the count; "네" alone and zero are
+  no count. A count given on the screen (`provide_operator_repetition_count`)
+  is not asked again. The range's first step may begin, since that is where
+  the count is asked; the steps after it still wait on the number.
+- **Repeat rounds** (decision 3, front rule `repeat_round`). When the last
+  step of a led repeat's span is completed -- the step whose text states the
+  repeat when it follows the range, as lane R7's return reads the span
+  (headspace 16 for 12-15, 21 for 19-20, 42 for 36-41) -- and rounds are
+  left: "12~15단계를 한 번 더 해야 해요(2/3회차). 12단계로 돌아갈까요?" (aloud,
+  "3회 중 2회차"). A yes goes back the way lane R7's return does -- "3회 중
+  2회차를 시작해요. 12단계로 돌아왔습니다." -- and the return is recorded with
+  the count it counts towards (`rounds_required`, `count_source`). A no
+  carries out the completion and keeps the rounds not done as a point done
+  differently: "알겠어요. 12~15단계는 1회차까지만 한 것으로 기록했어요(원문은
+  3회). 17단계로 이동했습니다." "아직" is neither a yes nor a no: nothing moves.
+  With every round done the run moves on: "12~15단계 3회를 모두 마쳤어요.
+  17단계로 이동했습니다." With no count: "19~20단계를 1회 했어요. 한 번 더
+  하시나요? 하시면 19단계로 돌아갈게요."; a no closes it with the rounds done as
+  the person's count. "완료했어" and "다음 단계" are still asked about first
+  ("16단계 완료하셨나요?", lane XO); their yes then meets the round question.
+  "12단계로 돌아가" (lane R7) still works and shares the round count. Rounds
+  are counted from returns confirmed in words, as before. A fixed repetition
+  is led by the count the source states -- a reviewer confirms it before an
+  approved run, a development run takes the analysis's reading -- so in an
+  approved run only reviewer-confirmed repeats are led, as before. A bounded
+  repetition's step no longer gets an observed-endpoint question: its end is
+  a count. A repeat-until (in-gel 7, 9, 20) is unchanged: it waits on the
+  person's observation.
+- **The card** (decision 4). The progress line carries the round ("12단계 ·
+  전체 62단계 · 2/3회차") and a line under the step shows the server question
+  open there, from the screen fields beside the state
+  (`curated_screen_fields`: `repeat_round`, `open_question`).
+- **The record and the report** (decision 5). Experiment-report events:
+  `branch_answered` at the step asked (`answer`, `value_source`,
+  `skipped_step_labels`, the repeats `registered`), `branch_steps_skipped`
+  after an arrival that passed a branch's steps, `repeat_registered` at the
+  step the count was asked, `repeat_returned` (with `rounds_required`,
+  `count_source` and `guided`), `repeat_rounds_declined` and `repeat_closed`
+  after the completion that carried them out. The durable session mirrors a
+  skip (`branch_steps_skipped`) and a guided return, and recovery accepts the
+  skipped steps (`branch_skipped_step_ids`). The report's method table (3-2)
+  gets "조건: “…” → 예 (사람이 답함)" under the step and "반복 횟수 3회 — 사람이
+  답함" under the step asked; a round declined is a point done differently;
+  all three are values the researcher confirms before the report states them
+  (lane N, decision 3). The writer's facts carry them under "조건 답" and
+  "반복 횟수".
+- **Not yet** (stage 2): parallel work and recurring actions (a timer beside
+  a step, interval reminders). A condition's Korean is read only when a
+  translation of the condition sentence itself is stored
+  (`localized_fact(step_id, "condition_<branch_id>")`); otherwise the source
+  words are read. The answers and the voice-given counts are not persisted
+  for recovery: after a reconnect the open question is asked again where the
+  run stands.
+
 ## Semantic intent fallback
 
 Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and

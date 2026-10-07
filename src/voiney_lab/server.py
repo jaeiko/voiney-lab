@@ -859,6 +859,27 @@ def _workspace_skipped_step_ids(state:Any)->tuple[str,...]:
     return ()
 
 
+def _workspace_branch_skipped_step_ids(state:Any)->tuple[str,...]:
+    """The steps a source condition answered "no" passed over (lane CB, decision 1).
+
+    Read from the durable record's step records -- the answer that skipped
+    the step the run stood on, or an arrival that passed the branch's steps
+    -- so a run can be continued past them after the connection dropped.
+    """
+
+    found:list[str]=[]
+    for event in (state or {}).get("events") or ():
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        record=payload.get("step_record")
+        if isinstance(record,dict) and record.get("kind") in {
+            "branch_answer","branch_steps_skipped",
+        }:
+            for item in record.get("skipped_step_ids") or ():
+                if str(item) not in found:
+                    found.append(str(item))
+    return tuple(found)
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -965,9 +986,14 @@ def _record_workspace_experiment_progress(
             event_key=key,
             event_type=(
                 "repeat_returned"
-                if move_kind=="repeat_return" else
+                if move_kind in {"repeat_return","repeat_round"} else
                 "steps_skipped"
                 if move_kind=="start_at_step" and not record.get("experiment_started") else
+                # Lane CB, decision 1: the answer that skipped the step the run
+                # stood on; a skip on arrival keeps the completion's own type
+                # and carries the passed steps in its record.
+                "branch_steps_skipped"
+                if move_kind=="branch_answer" else
                 "protocol_started"
                 if plan.action is CuratedProtocolAction.START else
                 "timer_started"
@@ -7203,7 +7229,7 @@ def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
 
 
 def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
-    """What the page draws beside a fixture state: the one safety list.
+    """What the page draws beside a fixture state: the safety list, the round, the open question.
 
     Sent next to ``state``, not in it, so the state stays the session's own.
     ``translation_source`` says where the Korean on the step card comes from
@@ -7236,9 +7262,16 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # Lane PX decision 1: while the revision's Korean is still being made the
     # card says so ("번역 준비 중") instead of "no translation"; from the next
     # redraw after a batch lands, the Korean is simply there.
+    # Lane CB, decision 4: the round the step is in ("2/3회차") and the server
+    # question open at this step (the condition, the count, the next round),
+    # both the session's own words.
+    round_status=getattr(curated,"repeat_round_status",None)
+    open_question=getattr(curated,"open_server_question",None)
     return {
         "safety_items":items,"translation_source":source,
         "translation_pending":_translation_pending(fixture),
+        "repeat_round":round_status() if callable(round_status) else None,
+        "open_question":open_question() if callable(open_question) else None,
     }
 
 
@@ -8063,7 +8096,7 @@ def _record_experiment_report_plan(
     skipped_after_start=False
     if record:
         payload["step_record"]=record
-    if plan.state_changed and move_kind=="repeat_return":
+    if plan.state_changed and move_kind in {"repeat_return","repeat_round"}:
         event_type="repeat_returned"
         step_id=post_step.step_id if post_step is not None else step_id
         step_label=post_step.source_label if post_step is not None else step_label
@@ -8072,6 +8105,21 @@ def _record_experiment_report_plan(
             skipped_after_start=True
         else:
             event_type="steps_skipped"
+    # Lane CB (decisions 1-3): a source condition answered, with where its
+    # value came from, at the step it was asked; a repeat's count given by
+    # voice; a round declined, and an open count closed, after the completion
+    # that carried them out; steps a "no" passed over, after the arrival.
+    elif move_kind=="branch_answer":
+        event_type="branch_answered"
+        step_id=str(record.get("step_id") or step_id or "")
+        step_label=str(record.get("step_label") or step_label or "")
+    elif move_kind=="repeat_registered":
+        event_type="repeat_registered"
+    followed_by=(
+        "repeat_rounds_declined" if move_kind=="repeat_declined" else
+        "repeat_closed" if move_kind=="repeat_closed" else
+        "branch_steps_skipped" if move_kind=="branch_steps_skipped" else None
+    )
     wording=plan.anomaly_text or plan.observation_outcome
     category=plan.anomaly_category or plan.observation_predicate
     if event_type in {"record_corrected","record_retracted"}:
@@ -8115,6 +8163,15 @@ def _record_experiment_report_plan(
             event_type="steps_skipped",
             step_id=step_id,
             step_label=step_label,
+            payload=payload,
+        )
+    if followed_by is not None and plan.state_changed:
+        report=store.append_event(
+            session.experiment_report_id,
+            event_key=f"{event_key}-{followed_by.replace('_','-')}",
+            event_type=followed_by,
+            step_id=pre_step.step_id if pre_step is not None else step_id,
+            step_label=pre_step.source_label if pre_step is not None else step_label,
             payload=payload,
         )
     if plan.action is CuratedProtocolAction.STOP and plan.state_changed:
@@ -8328,9 +8385,16 @@ _REPORTED_WHEN_CHANGED=frozenset({
 })
 
 
+#: Lane CB: the records that reach the report although their turn moved
+#: nothing -- a condition answered yes, a count given by voice.
+_RECORDED_STEP_RECORD_KINDS=frozenset({"branch_answer","repeat_registered"})
+
+
 def _reportable(plan:Any)->bool:
     """Whether a turn's plan goes to the experiment report."""
 
+    if (getattr(plan,"step_record",None) or {}).get("kind") in _RECORDED_STEP_RECORD_KINDS:
+        return True
     return plan.action in _EXPERIMENT_REPORT_ACTIONS and (
         plan.state_changed or plan.action not in _REPORTED_WHEN_CHANGED)
 
@@ -10372,6 +10436,12 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             "completion_and_next_transition"
             if plan.action is CuratedProtocolAction.NEXT
             and plan.reported_completion
+            # Lane CB: a condition's answer or a repeat's count recorded in
+            # place is not a declined completion.
+            else "branch_repeat_recorded"
+            if plan.action is CuratedProtocolAction.DECLINE_COMPLETION
+            and (getattr(plan,"step_record",None) or {}).get("kind")
+            in _RECORDED_STEP_RECORD_KINDS
             else operation_labels[plan.action]
         )
         await current_text(
@@ -11676,6 +11746,10 @@ async def voice_socket(websocket:WebSocket):
                             # Lane N, decision 9: a run opened with a later
                             # start, or continued from such a run's checkpoint.
                             skipped_step_ids=_workspace_skipped_step_ids(experiment_state),
+                            # Lane CB, decision 1: steps a source condition
+                            # answered "no" passed over.
+                            branch_skipped_step_ids=_workspace_branch_skipped_step_ids(
+                                experiment_state),
                         )
                     pipeline="cascade"
                     session.accept_configuration(

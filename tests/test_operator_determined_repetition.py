@@ -181,7 +181,10 @@ class TheSessionWillNotStartItUnnumberedTests(unittest.TestCase):
         self.assertEqual(
             self.session.repetitions_awaiting_a_count(), ("repetition-1",)
         )
-        self.assertFalse(self.session.may_begin_step("step-1"))
+        # Lane CB, decision 2 (2026-10-07): the range's first step may begin,
+        # because the count is asked on entering it; the rest of the range
+        # still waits on the number.
+        self.assertTrue(self.session.may_begin_step("step-1"))
         self.assertFalse(self.session.may_begin_step("step-2"))
 
     def test_a_step_outside_the_repetition_is_unaffected(self) -> None:
@@ -220,7 +223,9 @@ class TheSessionWillNotStartItUnnumberedTests(unittest.TestCase):
                         actor_principal_id="operator@example.org",
                         actor_role="operator",
                     )
-        self.assertFalse(self.session.may_begin_step("step-1"))
+        # Lane CB, decision 2: the range's first step is where the count is
+        # asked; the step after it is what a refused count keeps closed.
+        self.assertFalse(self.session.may_begin_step("step-2"))
 
     def test_an_unnamed_actor_is_refused(self) -> None:
         for principal, role in (("", "operator"), ("someone", "")):
@@ -246,7 +251,9 @@ class TheSessionWillNotStartItUnnumberedTests(unittest.TestCase):
         """No number appears from anywhere until a person supplies one."""
 
         self.assertEqual(self.session.operator_repetition_counts(), {})
-        self.assertFalse(self.session.may_begin_step("step-1"))
+        # Lane CB, decision 2: the range's first step is where the count is
+        # asked; the step after it is what the missing count keeps closed.
+        self.assertFalse(self.session.may_begin_step("step-2"))
 
 
 if __name__ == "__main__":
