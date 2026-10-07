@@ -10799,6 +10799,16 @@ class CuratedProtocolSession:
             if current_step is not None
             else None
         )
+        # Lane FX, decision 3: the current step's source language. A step
+        # written in Korean is never translated, and the page leaves out its
+        # "no translation" line for it.
+        from voiney_lab.protocol_translation import is_korean  # imports this module
+
+        source_language = (
+            "ko"
+            if current_step is not None and is_korean(current_step.instruction_source_text)
+            else "en"
+        )
         warning_presentations = []
         if current_step is not None:
             for index, item in enumerate(current_step.warnings, 1):
@@ -10834,7 +10844,7 @@ class CuratedProtocolSession:
                 else None
             ),
             "primary_summary": current_primary,
-            "source_language": "en",
+            "source_language": source_language,
             "spoken_summary": spoken_summary,
             "source_filename": (
                 getattr(self.fixture, "source_filename", None)
