@@ -1025,7 +1025,15 @@ registered in the browser is analysed straight away with
 `VOINEY_LAB_ANALYSIS_PROVIDER`/`_MODEL`/`_REASONING` (lane PA, 2026-10-06; the
 launcher used to clear the analysis model). The same PDF uploaded again never
 calls an analysis that already ended; a failed one runs again only when a
-person presses "분석 다시 시도". The four features only xAI provides --
+person presses "분석 다시 시도", with one exception (lane AN, 2026-10-07): when
+the revision's first analysis request ends in
+`protocol_analysis_invalid_response` -- the model's JSON parsed but broke the
+structure the domain validation demands -- the server sends the same request
+once more by itself, recorded as `protocol_analysis_retry_started` with
+authority `automatic_invalid_response_retry`, and the progress line says
+"다시 시도 중(1/1)". A failed source-evidence check, a time-out or a missing
+provider is never sent again by itself, nor is a person's own retry; if the
+second answer fails too, a person presses "분석 다시 시도". The four features only xAI provides --
 external reference search, web image search, generated images and semantic
 intent -- default to off. Its
 `--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and

@@ -8,7 +8,9 @@ Human decision 2 as changed on 2026-10-06:
   analysis model.
 * Uploading the same PDF again (same SHA-256) never calls an analysis that
   already ended. A failed one is retried only when a person presses
-  "분석 다시 시도"; there is no automatic retry.
+  "분석 다시 시도"; there is no automatic retry. (Lane AN, 2026-10-07: one
+  exception, a first request's ``protocol_analysis_invalid_response`` is sent
+  once more by the server -- tests/test_lane_an_analysis_retry.py.)
 * While the analysis runs the screen says "분석 중" with the time taken; when
   it ends it says 통과 or 실패, with the reason, in Korean.
 * After a pass the execution rules are unchanged. Where the server allows a

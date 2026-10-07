@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
@@ -153,6 +153,17 @@ _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
 _ANALYSIS_READY_EVENT = "protocol_analysis_ready"
 _ANALYSIS_FAILED_EVENT = "protocol_analysis_failed"
+_ANALYSIS_RETRY_EVENT = "protocol_analysis_retry_started"
+#: Lane AN, decision 1 (2026-10-07), changing lane PA's "no automatic
+#: retry": an analysis whose response broke the structure the domain
+#: validation demands -- and only that failure, only on the revision's first
+#: analysis request -- is sent once more, the same request, by itself. A
+#: failed source-evidence check, a time-out and a missing provider are not:
+#: sending them again costs a call and settles nothing a person need not see.
+#: Measured 2026-10-06 (lane PX): ANKOM ended so once and passed on other runs.
+AUTOMATIC_RETRY_FAILURE_CODES = frozenset({"protocol_analysis_invalid_response"})
+AUTOMATIC_RETRY_LIMIT = 1
+AUTOMATIC_RETRY_AUTHORITY = "automatic_invalid_response_retry"
 _CHUNK_PLAN_EVENT = "protocol_chunk_plan_created"
 _CHUNK_STARTED_EVENT = "protocol_chunk_analysis_started"
 _CHUNK_COMPLETED_EVENT = "protocol_chunk_analysis_completed"
@@ -316,6 +327,10 @@ class ProtocolAnalysisRunStatus:
     #: the screen can say how long the analysis has taken. None before any
     #: request.
     requested_at: str | None = None
+    #: The run's automatic retry (lane AN, decision 1): attempt, limit, state
+    #: (``in_progress``, ``passed``, ``failed``) and the failure it retried.
+    #: None when the run on screen had none.
+    automatic_retry: dict[str, object] | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -334,7 +349,60 @@ class ProtocolAnalysisRunStatus:
             "restart_behavior": self.restart_behavior,
             "lifecycle_state": self.lifecycle_state,
             "requested_at": self.requested_at,
+            "automatic_retry": self.automatic_retry,
         }
+
+
+def _failures_not_retried(events: Sequence[Any]) -> tuple[Any, ...]:
+    """The events without the analysis failures an automatic retry followed.
+
+    The failure a retry was sent for is not the run's result (lane AN,
+    decision 1): while the retry runs the run is analysing, and when it
+    passes nothing failed. The failure stays in the ledger.
+    """
+
+    last_retry = max(
+        (index for index, event in enumerate(events)
+         if event.event_type == _ANALYSIS_RETRY_EVENT),
+        default=-1,
+    )
+    return tuple(
+        event for index, event in enumerate(events)
+        if not (index < last_retry and event.event_type == _ANALYSIS_FAILED_EVENT)
+    )
+
+
+def _automatic_retry_status(events: Sequence[Any]) -> dict[str, object] | None:
+    """The automatic retry of the run on screen, or None.
+
+    A retry belongs to the run a person's request opened; a later request
+    (a person pressing "분석 다시 시도") is a new run without one.
+    """
+
+    retry_index = max(
+        (index for index, event in enumerate(events)
+         if event.event_type == _ANALYSIS_RETRY_EVENT),
+        default=-1,
+    )
+    if retry_index < 0 or any(
+        event.event_type == _ANALYSIS_REQUESTED_EVENT
+        for event in events[retry_index + 1:]
+    ):
+        return None
+    retry = events[retry_index]
+    payload = retry.payload if isinstance(retry.payload, dict) else {}
+    state = "in_progress"
+    for event in events[retry_index + 1:]:
+        if event.event_type == _ANALYSIS_FAILED_EVENT:
+            state = "failed"
+        elif event.event_type in {_ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT}:
+            state = "passed"
+    return {
+        "attempt": payload.get("attempt", 1),
+        "limit": payload.get("limit", AUTOMATIC_RETRY_LIMIT),
+        "state": state,
+        "reason_code": payload.get("reason_code"),
+    }
 
 
 #: What a person does after an analysis failure, by failure code (lane PA
@@ -1361,14 +1429,16 @@ class ProtocolCatalog:
                     _ANALYSIS_REQUESTED_EVENT,
                     _ANALYSIS_STARTED_EVENT,
                     _ANALYSIS_FAILED_EVENT,
+                    _ANALYSIS_RETRY_EVENT,
                     _ANALYSIS_READY_EVENT,
                     _SINGLE_REVIEW_REQUIRED_EVENT,
                 }
             )
+            not_retried = _failures_not_retried(lifecycle_events)
             latest_failure = next(
                 (
                     event.payload.get("failure_code")
-                    for event in reversed(lifecycle_events)
+                    for event in reversed(not_retried)
                     if event.event_type == _ANALYSIS_FAILED_EVENT
                     and isinstance(event.payload, dict)
                     and isinstance(event.payload.get("failure_code"), str)
@@ -1378,7 +1448,7 @@ class ProtocolCatalog:
             latest_failure_detail = next(
                 (
                     event.payload.get("evidence_failure")
-                    for event in reversed(lifecycle_events)
+                    for event in reversed(not_retried)
                     if event.event_type == _ANALYSIS_FAILED_EVENT
                     and isinstance(event.payload, dict)
                     and isinstance(
@@ -1410,6 +1480,7 @@ class ProtocolCatalog:
                     _ANALYSIS_REQUESTED_EVENT: "analysis_pending",
                     _ANALYSIS_STARTED_EVENT: "analyzing",
                     _ANALYSIS_FAILED_EVENT: "analysis_failed",
+                    _ANALYSIS_RETRY_EVENT: "analyzing",
                     _ANALYSIS_READY_EVENT: "analysis_ready",
                     _SINGLE_REVIEW_REQUIRED_EVENT: "review_required",
                 }[lifecycle_events[-1].event_type]
@@ -1427,6 +1498,7 @@ class ProtocolCatalog:
                 failure_detail=latest_failure_detail,
                 lifecycle_state=entry.lifecycle_state,
                 requested_at=requested_at,
+                automatic_retry=_automatic_retry_status(lifecycle_events),
             )
         plan_event = next(
             event for event in events if event.event_type == _CHUNK_PLAN_EVENT
@@ -1600,11 +1672,11 @@ class ProtocolCatalog:
             failed = next(
                 (
                     event
-                    for event in reversed(
-                        self.store.list_events(revision.experiment_id)
-                    )
-                    if event.protocol_revision_number == revision.revision_number
-                    and event.event_type == _ANALYSIS_FAILED_EVENT
+                    for event in reversed(_failures_not_retried(tuple(
+                        event for event in self.store.list_events(revision.experiment_id)
+                        if event.protocol_revision_number == revision.revision_number
+                    )))
+                    if event.event_type == _ANALYSIS_FAILED_EVENT
                 ),
                 None,
             )
@@ -1618,6 +1690,7 @@ class ProtocolCatalog:
                     _ANALYSIS_REQUESTED_EVENT,
                     _ANALYSIS_STARTED_EVENT,
                     _ANALYSIS_FAILED_EVENT,
+                    _ANALYSIS_RETRY_EVENT,
                 }
             )
             if lifecycle_events:
@@ -1625,6 +1698,7 @@ class ProtocolCatalog:
                     _ANALYSIS_REQUESTED_EVENT: "analysis_pending",
                     _ANALYSIS_STARTED_EVENT: "analyzing",
                     _ANALYSIS_FAILED_EVENT: "blocked",
+                    _ANALYSIS_RETRY_EVENT: "analyzing",
                 }[lifecycle_events[-1].event_type]
             elif analysis_status == "ocr_required":
                 lifecycle_state = "blocked"
@@ -1879,10 +1953,11 @@ class ProtocolCatalog:
             for event in self.store.list_events(revision.experiment_id)
             if event.protocol_revision_number == revision.revision_number
         )
+        not_retried = _failures_not_retried(revision_events)
         latest_failure = next(
             (
                 event.payload.get("failure_code")
-                for event in reversed(revision_events)
+                for event in reversed(not_retried)
                 if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
                 and isinstance(event.payload.get("failure_code"), str)
@@ -1892,7 +1967,7 @@ class ProtocolCatalog:
         latest_failure_detail = next(
             (
                 event.payload.get("evidence_failure")
-                for event in reversed(revision_events)
+                for event in reversed(not_retried)
                 if event.event_type
                 in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
@@ -1964,6 +2039,7 @@ class ProtocolCatalog:
             entry, analysis, revision,
             ocr=ocr_projection if isinstance(ocr_projection, dict) else {},
             failure_code=latest_failure,
+            automatic_retry=_automatic_retry_status(revision_events),
         )
         if analysis is None:
             return base
@@ -2140,12 +2216,15 @@ class ProtocolCatalog:
             revision.pdf_checksum, expected_size=pdf_object.byte_size
         )
         extraction = extract_protocol_pdf(source)
+        revision_events = tuple(
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        )
         failure = next(
             (
                 event.payload.get("failure_code")
-                for event in reversed(self.store.list_events(revision.experiment_id))
-                if event.protocol_revision_number == revision.revision_number
-                and event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
+                for event in reversed(_failures_not_retried(revision_events))
+                if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
                 and isinstance(event.payload.get("failure_code"), str)
             ),
@@ -2155,6 +2234,7 @@ class ProtocolCatalog:
             entry, analysis, revision,
             ocr=self._ocr_projection(revision, extraction, include_text=False),
             failure_code=failure,
+            automatic_retry=_automatic_retry_status(revision_events),
         )
 
     def _pipeline(
@@ -2165,6 +2245,7 @@ class ProtocolCatalog:
         *,
         ocr: dict[str, object],
         failure_code: str | None,
+        automatic_retry: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """One Korean line: the stage a document is at, whether it is stuck
         there, why, and what a person does (lane PX, decision 4).
@@ -2172,8 +2253,12 @@ class ProtocolCatalog:
         Stages, in order: 원문 읽기 → OCR → 분석 → 근거 대조 → 실행 준비 →
         사람 확인 → 실행 가능. Translation is added by the server, which
         holds the translation store. A document that reached this method
-        was read, so 원문 읽기 never blocks here.
+        was read, so 원문 읽기 never blocks here. An automatic retry (lane
+        AN, decision 1) is said while it runs and after it failed.
         """
+
+        retry = automatic_retry or {}
+        retry_count = f"{retry.get('attempt', 1)}/{retry.get('limit', AUTOMATIC_RETRY_LIMIT)}"
 
         def result(stage: str, *, blocked: bool, message: str, action: str | None = None,
                    **extra: object) -> dict[str, object]:
@@ -2218,9 +2303,12 @@ class ProtocolCatalog:
             }:
                 stage = ("evidence" if failure_code == "protocol_analysis_invalid_evidence"
                          else "analysis")
+                message = _ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다.")
+                if retry.get("state") == "failed":
+                    message += f" 같은 요청을 자동으로 한 번 다시 보냈지만 자동 재시도({retry_count})도 실패했습니다."
                 return result(
                     stage, blocked=True,
-                    message=_ANALYSIS_FAILURE_KO.get(failure_code, "분석이 실패했습니다."),
+                    message=message,
                     action=_ANALYSIS_RECOVERY_ACTIONS.get(
                         failure_code, _DEFAULT_ANALYSIS_RECOVERY_ACTION),
                     failure_code=failure_code)
@@ -2229,6 +2317,12 @@ class ProtocolCatalog:
                     "chunk_planned", "chunk_analysis_in_progress", "merge_in_progress",
                 }
             ):
+                if retry.get("state") == "in_progress":
+                    return result(
+                        "analysis", blocked=False,
+                        message=(f"분석 중입니다 · 다시 시도 중({retry_count}). 첫 응답이 정해진 형식에 "
+                                 "맞지 않아 같은 요청을 자동으로 한 번 다시 보냈습니다."),
+                        automatic_retry=retry)
                 return result(
                     "analysis", blocked=False,
                     message="분석 중입니다. 원문 근거를 확인하고 있습니다.")
@@ -2900,31 +2994,38 @@ class ProtocolCatalog:
         try:
             draft = analyze_protocol_extraction(extraction, model)
         except Exception as exc:
-            failure_code = getattr(exc, "code", "analysis_failed")
-            if not isinstance(failure_code, str) or not failure_code:
-                failure_code = "analysis_failed"
-            failure_digest = hashlib.sha256(
-                analysis_id.encode("utf-8")
-            ).hexdigest()[:24]
-            failure_payload: dict[str, object] = {
-                "status": "failed",
-                "failure_code": failure_code,
-            }
-            evidence_failure = _safe_evidence_failure(
-                exc,
-                source_revision=_revision_id(revision.revision_number),
-                source_hash=revision.pdf_checksum,
-            )
-            if evidence_failure is not None:
-                failure_payload["evidence_failure"] = evidence_failure
+            failure_code = self._record_analysis_failure(
+                revision, analysis_id, exc)
+            if not self._automatic_retry_allowed(revision, failure_code):
+                raise
+            # The same request again: the same extraction to the same model,
+            # nothing about the failure added (lane AN, decision 1).
+            retry_of, analysis_id = analysis_id, f"{analysis_id}-retry-1"
             self.store.append_event(
-                f"analysis-failed-{failure_digest}",
+                f"analysis-retry-{analysis_id}",
                 protocol_id,
                 revision.revision_number,
-                _ANALYSIS_FAILED_EVENT,
-                failure_payload,
+                _ANALYSIS_RETRY_EVENT,
+                {
+                    "status": "analyzing",
+                    "analysis_id": analysis_id,
+                    "retry_of": retry_of,
+                    "attempt": 1,
+                    "limit": AUTOMATIC_RETRY_LIMIT,
+                    "reason_code": failure_code,
+                    "authority": AUTOMATIC_RETRY_AUTHORITY,
+                },
             )
-            raise
+            logging.getLogger(__name__).info(
+                "protocol.analysis.automatic_retry protocol_id=%s attempt=1 limit=%d "
+                "reason_code=%s",
+                protocol_id, AUTOMATIC_RETRY_LIMIT, failure_code,
+            )
+            try:
+                draft = analyze_protocol_extraction(extraction, model)
+            except Exception as retry_exc:
+                self._record_analysis_failure(revision, analysis_id, retry_exc)
+                raise
         if draft.protocol.protocol_id != protocol_id:
             assigned_protocol = replace(draft.protocol, protocol_id=protocol_id)
             domain.validate_protocol(assigned_protocol)
@@ -2962,6 +3063,65 @@ class ProtocolCatalog:
         entry = self.get_entry(protocol_id)
         self._analysis_ready(entry)
         return entry
+
+    def _record_analysis_failure(
+        self,
+        revision: ProtocolRevisionRecord,
+        analysis_id: str,
+        exc: BaseException,
+    ) -> str:
+        """Persist one attempt's bounded failure code; return the code."""
+
+        failure_code = getattr(exc, "code", "analysis_failed")
+        if not isinstance(failure_code, str) or not failure_code:
+            failure_code = "analysis_failed"
+        failure_digest = hashlib.sha256(
+            analysis_id.encode("utf-8")
+        ).hexdigest()[:24]
+        failure_payload: dict[str, object] = {
+            "status": "failed",
+            "failure_code": failure_code,
+        }
+        evidence_failure = _safe_evidence_failure(
+            exc,
+            source_revision=_revision_id(revision.revision_number),
+            source_hash=revision.pdf_checksum,
+        )
+        if evidence_failure is not None:
+            failure_payload["evidence_failure"] = evidence_failure
+        self.store.append_event(
+            f"analysis-failed-{failure_digest}",
+            revision.experiment_id,
+            revision.revision_number,
+            _ANALYSIS_FAILED_EVENT,
+            failure_payload,
+        )
+        return failure_code
+
+    def _automatic_retry_allowed(
+        self,
+        revision: ProtocolRevisionRecord,
+        failure_code: str,
+    ) -> bool:
+        """Whether this failure is sent again by itself (lane AN, decision 1).
+
+        Mechanical: the failure is a response that broke the structure, the
+        revision has had at most one analysis request (none when a caller
+        analyses without recording one), and no automatic retry was sent for
+        the revision before. A person's "분석 다시 시도" is a second request,
+        so it is never retried automatically.
+        """
+
+        if failure_code not in AUTOMATIC_RETRY_FAILURE_CODES:
+            return False
+        events = [
+            event for event in self.store.list_events(revision.experiment_id)
+            if event.protocol_revision_number == revision.revision_number
+        ]
+        requests = sum(
+            1 for event in events if event.event_type == _ANALYSIS_REQUESTED_EVENT)
+        retried = any(event.event_type == _ANALYSIS_RETRY_EVENT for event in events)
+        return requests <= 1 and not retried
 
     def request_analysis(self, protocol_id: str, analysis_id: str) -> ProtocolCatalogEntry:
         """Persist an explicit analysis request without contacting a provider."""
