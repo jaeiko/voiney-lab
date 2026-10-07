@@ -12724,6 +12724,10 @@ class CuratedProtocolSession:
             record_fix=record_fix_valid,
             # Open until every value is answered or left for the screen.
             report_review=self._report_review is not None and not self.active,
+            # Lane CB: open at the step until answered; the router and the
+            # semantic fallback leave such a turn to the rules.
+            branch=self._branch_question_open(),
+            repeat_count=self._count_question_open(),
         )
 
     def _front_rule_for(
@@ -14162,6 +14166,24 @@ class CuratedProtocolSession:
             and intent.action is CuratedProtocolAction.CLARIFY_COMPLETION
         ):
             front_rule = "short_completion"
+        if (
+            front_rule is None
+            and language == "ko"
+            and (
+                intent.action is CuratedProtocolAction.NEXT
+                or (
+                    intent.action is CuratedProtocolAction.CLARIFY_COMPLETION
+                    and intent.intent_kind == "next_step_confirmation_required"
+                )
+            )
+            and (self._branch_question_open() or self._count_question_open())
+        ):
+            # Lane CB, decisions 1-2: a move on while the condition or the
+            # count at this step is unanswered is the rules' turn -- it is
+            # asked again and nothing moves -- so no model is consulted.
+            front_rule = (
+                "branch_condition" if self._branch_question_open() else "repeat_count"
+            )
         if front_rule is None:
             front_rule = self._front_rule_for(intent, classified)
         self._last_front_rule = front_rule
