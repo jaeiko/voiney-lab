@@ -24,7 +24,9 @@ step 1, with the steps open sessions are on (current and next) ahead of the
 rest. Every batch is checked and handed on as soon as it returns, so an open
 session's card turns Korean while the rest is still being made. Each
 sentence is held to ``reader_translation_issue``; a sentence that fails is
-stored as failed and never shown, so the screen keeps its source. The names
+stored as failed. Whether a stored sentence is shown is decided again when it
+is read, by today's check, not by the verdict stored with it (lane FX,
+decision 2); one that fails is not shown, so the screen keeps its source. The names
 it must keep in English are the glossary's ``keep_english`` entries (matched
 in singular or plural); an ordinary word the glossary gives in Korean
 ("Petri dish", "agar", "metal plate") is not demanded in English, and a
@@ -42,6 +44,7 @@ sidecar, or a stored ``reviewed`` row), stored machine translation, source.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -724,33 +727,72 @@ async def _maybe_await(value: Any) -> None:
         await value
 
 
-def stored_localizations(
+@functools.lru_cache(maxsize=8192)
+def _checked_today(
+    unit: TranslationUnit, korean: str, glossary: tuple[GlossaryEntry, ...],
+) -> str:
+    """``check_translation`` of one stored sentence, computed once.
+
+    The sentence, its Korean and the revision's glossary decide the result,
+    so it is kept for each of them: the status line reads every row of a
+    revision each second (headspace, 68 rows: about 130 ms a reading).
+    """
+
+    return check_translation(unit, korean, glossary)
+
+
+def stored_checks(
     fixture: CuratedProtocolFixture,
     records: Iterable[FactTranslationRecord],
     glossary: Sequence[GlossaryEntry] = (),
-) -> tuple[dict[str, str], dict[str, str]]:
-    """(reviewed, machine) Korean by fact key, from rows that still hold.
+    *,
+    units: Sequence[TranslationUnit] | None = None,
+) -> list[tuple[FactTranslationRecord, str]]:
+    """Each row that belongs here, with today's check of it.
 
-    A row is used only when it belongs to this revision (stored under
-    ``translation_revision_key``), was made from the sentence the revision
-    holds now, and passes the check again here -- with the revision's
-    glossary, the same way it was checked when it was made.
+    A row belongs when it is of this revision (stored under
+    ``translation_revision_key``) and was made from the sentence the revision
+    holds now. It is checked with the revision's glossary, the way it was
+    checked when it was made, by today's ``check_translation``: the verdict
+    stored with the row is not read (lane FX, human decision 2 of
+    2026-10-07), so a check fixed later reaches a revision already translated
+    and a row an older check passed is not shown once today's check refuses
+    it. Nothing stored changes.
     """
 
-    units = {unit.fact_key: unit for unit in translation_units(fixture)}
+    by_key = {unit.fact_key: unit for unit in (
+        translation_units(fixture) if units is None else units)}
     key = translation_revision_key(fixture)
-    reviewed: dict[str, str] = {}
-    machine: dict[str, str] = {}
+    entries = tuple(glossary)
+    checked: list[tuple[FactTranslationRecord, str]] = []
     for record in records:
-        unit = units.get(record.fact_key)
+        unit = by_key.get(record.fact_key)
         if (
             unit is None
             or record.revision_id != key
             or record.language != TARGET_LANGUAGE
             or record.source_sha256 != unit.source_sha256
-            or record.check_result != "passed"
-            or check_translation(unit, record.translated_text, glossary) != "passed"
         ):
+            continue
+        checked.append((record, _checked_today(unit, record.translated_text, entries)))
+    return checked
+
+
+def stored_localizations(
+    fixture: CuratedProtocolFixture,
+    records: Iterable[FactTranslationRecord],
+    glossary: Sequence[GlossaryEntry] = (),
+) -> tuple[dict[str, str], dict[str, str]]:
+    """(reviewed, machine) Korean by fact key, from the rows today's check passes.
+
+    See ``stored_checks``: a row today's check refuses leaves its sentence
+    in the source.
+    """
+
+    reviewed: dict[str, str] = {}
+    machine: dict[str, str] = {}
+    for record, result in stored_checks(fixture, records, glossary):
+        if result != "passed":
             continue
         target = reviewed if record.status == "reviewed" else machine
         target[record.fact_key] = record.translated_text
