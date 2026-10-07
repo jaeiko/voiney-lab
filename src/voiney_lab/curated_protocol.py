@@ -6723,8 +6723,14 @@ _SOURCE_NEGATION = re.compile(
     r"cannot|can't)\b",
     re.IGNORECASE,
 )
+#: Lane FX, human decision 1 of 2026-10-07: the 없이 of "관계없이" and
+#: "상관없이" ("regardless") is not a negation, so a reading that drops the
+#: source's "not" behind one is refused ("Do not vortex the tube, regardless
+#: of the volume." ↔ "부피와 관계없이 튜브를 볼텍스합니다." passed before).
+#: "무관하게" holds no word of this list.
 _KOREAN_NEGATION = re.compile(
-    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피(?:하|합|해|했|할)|못\s|않)"
+    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|(?<!관계)(?<!상관)(?<!관계\s)(?<!상관\s)없이|"
+    r"말고|피(?:하|합|해|했|할)|못\s|않)"
 )
 #: A source word negated by its "un-" prefix ("uninoculated", "unlabelled",
 #: "unopened"), not a word that merely begins with "un" ("until", "uniform",

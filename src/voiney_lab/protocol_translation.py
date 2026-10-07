@@ -471,7 +471,10 @@ def required_terms_for(
 #: is a regular expression; English ones match whole words, any case.
 #: ``ko_not_negation`` holds words that carry 없 or 못 without negating the
 #: action ("관계없이" is "regardless", "잘못" is "wrongly"); they are taken out
-#: before the Korean side is read.
+#: before the Korean side is read. Lane FX, human decision 1 of 2026-10-07:
+#: "관계없이", "상관없이" and "무관하게", in any form, are not negations here
+#: nor in the narrow check (``curated_protocol._KOREAN_NEGATION``); 무관 holds
+#: no negation word and is listed so the table names all three.
 NEGATION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "en": (
         r"not", r"no", r"never", r"none", r"nor", r"neither", r"without",
@@ -485,7 +488,7 @@ NEGATION_VOCABULARY: dict[str, tuple[str, ...]] = {
         r"피(?:하|합|해|했|할|함)", r"방지", r"삼가",
     ),
     "ko_not_negation": (
-        r"관계\s*없", r"상관\s*없", r"끊임\s*없", r"틀림\s*없", r"잘못",
+        r"관계\s*없", r"상관\s*없", r"무관", r"끊임\s*없", r"틀림\s*없", r"잘못",
     ),
 }
 _NEGATION_PATTERNS = {

@@ -85,14 +85,16 @@ class OneSidedNegationTests(unittest.TestCase):
             "negation_changed")
 
     def test_regardless_is_not_a_negation_on_either_side(self) -> None:
-        # ANKOM, 2026-10-06: still refused -- the source holds no negation.
+        # ANKOM, 2026-10-06: refused here until lane FX (decision 1 of
+        # 2026-10-07) took 관계없이 out of the narrow check as well; the source
+        # holds no negation and neither does the Korean.
         unit = TranslationUnit(
             "step-7/note_1", "note",
             "NOTE: All nine trays must be used regardless of the number of bags being processed.",
             step_index=6, step_label="7")
         self.assertEqual(
             check_translation(unit, "참고: 처리하는 백의 개수와 관계없이 9개의 트레이를 모두 사용해야 합니다."),
-            "negation_changed")
+            "passed")
 
     def test_a_dropped_negation_is_not_covered_by_a_word_that_only_looks_negative(self) -> None:
         for korean in ("3단계: 부피와 상관없는 튜브를 볼텍스합니다.",
