@@ -1201,6 +1201,20 @@ class ReportStepFacts:
     completed_at: str
     timer_note: str
     records: tuple[ReportRecord, ...]
+    #: "machine" for a stored automatic translation, "reviewed" for a
+    #: reviewed one, "" for the source (lane N, decision 6).
+    translation: str = ""
+
+
+@dataclass(frozen=True)
+class StackedCell:
+    """A table cell with a line below in small type: the source under its Korean."""
+
+    main: str
+    below: str
+
+    def __str__(self) -> str:
+        return f"{self.main} — 원문: {self.below}"
 
 
 @dataclass(frozen=True)
@@ -1255,6 +1269,9 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 korean = localized(step.step_id, "current_step")
             if korean:
                 korean = re.sub(r"^\s*\d+\s*단계\s*[:：]\s*", "", " ".join(korean.split()))
+            origin = getattr(fixture, "localization_source", None)
+            # Lane N, decision 6: a stored machine translation is shown as one.
+            translation = (origin(step.step_id, "current_step") or "") if korean and callable(origin) else ""
             expected = [" ".join(str(item.source_text).split()) for item in step.expected_results]
             whole = [source]
             for action in getattr(step, "sub_actions", ()) or ():
@@ -1267,6 +1284,7 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 "label": str(step.source_label), "step_id": str(step.step_id),
                 "section": title, "source_text": source,
                 "text": korean or source, "translated": bool(korean),
+                "translation": translation,
                 "expected": tuple(expected),
                 "timer": timers.get(step.step_id),
                 # The step's whole source text, its sub-actions too: where a
@@ -1304,6 +1322,7 @@ def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
         from voiney_lab.server import (
             _configured_candidate_fixture,
             _open_protocol_catalog,
+            _with_revision_translations,
             server_config,
         )
 
@@ -1321,6 +1340,12 @@ def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
         return None, "프로토콜 원문을 불러오지 못했다"
     if revision and getattr(fixture, "revision_id", revision) != revision:
         return None, "기록의 프로토콜 버전과 지금 프로토콜 버전이 달라 원문을 싣지 않았다"
+    # Lane N, decision 6: the Korean a session shows for the steps -- stored
+    # translations that pass their check again -- read, never started here.
+    try:
+        fixture = _with_revision_translations(fixture, start_missing=False)
+    except Exception as exc:  # noqa: BLE001 -- the source is used instead
+        log.warning("report translations not read error=%s", type(exc).__name__)
     return fixture, ""
 
 
@@ -1795,6 +1820,7 @@ def build_report_facts(
             source_timer_seconds=defined, completed=label in completed_at,
             completed_at=completion_words(label),
             timer_note=note, records=tuple(r for r in records if r.step_label == label),
+            translation=str(source.get("translation") or ""),
         ))
 
     # What was done differently from the source, from the record only.
@@ -2088,6 +2114,55 @@ def _as_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+#: Lane N, decision 8: a number of rounds or repetitions in a model sentence
+#: ("총 2회 반복", "2회차", "두 번 반복"). Rounds are counted from returns
+#: confirmed in words, and a sentence giving one must say so.
+_ROUND_COUNT = re.compile(
+    r"\d+\s*(?:회|번)\s*(?:째\s*)?(?:반복|차)|회차|반복\s*\d+\s*(?:회|번)"
+    r"|(?:한|두|세|네|다섯)\s*(?:번|차례)\s*(?:째\s*)?(?:반복|돌|수행)"
+    r"|\d+\s*회\s*(?:수행|실시|진행)"
+)
+ROUND_BASIS = "말로 확인한 돌아가기 기준"
+
+#: Lane N, decision 7: the words a general-knowledge background may not hold
+#: -- an instruction, a safety direction -- beyond numbers, units, citations
+#: and identifiers.
+_GENERAL_INSTRUCTION = re.compile(
+    r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|반드시|금지"
+)
+GENERAL_BACKGROUND_LABEL = "AI 일반 지식 — 출처 없음, 확인 필요"
+#: A background that says the source has none ("원문에는 원리가 기재되어 있지 않다").
+_SOURCE_SAYS_NONE = re.compile(
+    r"(?:원문|프로토콜|문서|자료)[^.。]{0,40}(?:없[다으음었]|않[다는았으음]|찾지\s*못)"
+)
+
+
+def general_background_problems(text: str) -> list[str]:
+    """Why a general-knowledge background may not be used (decision 7)."""
+
+    problems: list[str] = []
+    plain = " ".join(text.split())
+    if not plain:
+        return ["빈 문단"]
+    if re.search(r"\d", plain):
+        problems.append("숫자")
+    if _USE_UNIT.search(plain):
+        problems.append("단위")
+    if _CITATION.search(plain):
+        problems.append("출처 번호")
+    if _GENERAL_INSTRUCTION.search(plain):
+        problems.append("절차·지시")
+    if any(word in plain for word in _USE_SAFETY):
+        problems.append("안전 지시")
+    for name, shape in _IDENTIFIER_SHAPES:
+        if shape.search(plain):
+            problems.append(f"본문에 {name}")
+    sentences = [part for part in _SENTENCE.split(plain) if part.strip()]
+    if not 2 <= len(sentences) <= 5 or len(plain) > 500:
+        problems.append("길이(3–4문장)")
+    return problems
+
+
 def check_report_sections(
     sections: Mapping[str, Any],
     facts: ReportFacts,
@@ -2127,6 +2202,9 @@ def check_report_sections(
                 problems.append("기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6]))
             if cited:
                 problems.append("방법·결과·고찰 칸의 출처 번호")
+        if key not in {"purpose", "background"} and _ROUND_COUNT.search(text) and ROUND_BASIS not in text:
+            # Lane N, decision 8: a round counted with no basis.
+            problems.append(f"회차를 ‘{ROUND_BASIS}’ 없이 씀")
         if key in {"results_summary", "methods_summary"}:
             for word in _SPECULATION:
                 if word in text:
@@ -2150,6 +2228,11 @@ def check_report_sections(
                     break
         if problems:
             reasons[key] = problems
+    general = sections.get("background_general")
+    if general:
+        problems = general_background_problems(_as_text(general))
+        if problems:
+            reasons["background_general"] = problems
     return reasons
 
 
@@ -2260,6 +2343,9 @@ class ReportNarrative:
     #: (decision 4), by the item's name; and each use left blank, with why.
     item_uses: Mapping[str, str] = field(default_factory=dict)
     item_uses_rejected: tuple[tuple[str, str], ...] = ()
+    #: Lane N, decision 7: the background is the model's general knowledge,
+    #: the source having none -- labelled "AI 일반 지식 — 출처 없음, 확인 필요".
+    background_general: bool = False
 
     # Earlier names, kept for callers written before lane RP.
     @property
@@ -2407,6 +2493,21 @@ def narrative_from_sections(
             else:
                 # The model left it empty: not a refusal, but not its words.
                 origin[key] = "모델이 비움 — 서버 문장"
+    # Lane N, decision 7: with no background in the source the model may give
+    # a short one from general knowledge; used only when it passes its check
+    # and the source background was not used (or only said there is none).
+    general = " ".join(str((model or {}).get("background_general") or "").split())
+    said = " ".join(str((model or {}).get("background") or "").split())
+    background_general = False
+    if (
+        general
+        and "background_general" not in rejected
+        # Only where the model found no background in the source: a source
+        # background refused by its check is not replaced by general knowledge.
+        and (not said or _SOURCE_SAYS_NONE.search(said))
+    ):
+        chosen["background"], origin["background"] = general, "모델 (AI 일반 지식)"
+        background_general = True
     # Discussion (가) and (나) are lists the server builds from the record
     # (decision 2); the model does not write them.
     for key in ("discussion_confirmed", "discussion_to_check"):
@@ -2422,6 +2523,7 @@ def narrative_from_sections(
         facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
         rejected=rejected, writer=writer, written_at=written_at or _now(),
         item_uses=item_uses, item_uses_rejected=item_uses_rejected,
+        background_general=background_general,
     )
 
 
@@ -2481,7 +2583,8 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산해서 새 숫자를 만들지 않는다.
 - 목적·배경 칸에는 온도·시간·농도·부피·회전수 같은 실험 조건 숫자를 쓰지 않는다.
 - 목적 칸의 모든 문장 끝에 출처 번호 [1](프로토콜 원문)을 단다.
-- 'background' 는 프로토콜 원문에 있는 내용만 쓴다. 원문 밖의 지식(교과서·웹 지식)은 쓰지 않는다. 원문에 원리 설명이 없으면 없다고 쓴다.
+- 'background' 는 프로토콜 원문에 원리·배경 설명이 있을 때만 원문 내용으로 쓰고 문장 끝에 [1] 을 단다. 원문에 그런 설명이 없으면 'background' 는 빈 문자열 "" 로 두고, 'background_general' 에 이 실험의 원리를 일반 지식으로 3–4문장 쓴다. 'background_general' 에는 숫자·단위·절차·지시("~하세요", "~해야 한다")·안전 지시·출처 번호·식별자를 쓰지 않는다. 서버가 'AI 일반 지식 — 출처 없음, 확인 필요' 표시를 붙인다. 원문에 설명이 있으면 'background_general' 은 쓰지 않는다.
+- 회차나 반복 횟수("2회 반복", "2회차")를 쓸 때는 반드시 '말로 확인한 돌아가기 기준' 이라는 말을 같은 문장에 쓴다. 기록에 있는 회차만 쓴다.
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
 - 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
 - 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
@@ -2489,7 +2592,7 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 'item_uses' 는 '재료·장비' 의 항목마다 그 항목이 이 실험에서 하는 일을 짧은 한국어 명사구로 쓴다(예: "세균 배양 배지", "휘발성 물질 흡착"). '재료·장비가 나오는 원문 단계' 에서 알 수 있는 것만 쓰고, 알 수 없으면 그 항목은 뺀다. 25자 안, 숫자·단위 없이, 안전 지시나 절차 지시("~하세요", "~한 뒤") 없이 쓴다. 목록에 없는 항목은 쓰지 않는다.
 
 JSON 객체 하나만 돌려준다. 키:
-purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
+purpose (1–3문장), background, background_general (원문에 배경이 없을 때만), methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
 results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
 discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록),
 item_uses (목록, 각 항목 {"번호": '재료·장비' 의 번호, "용도": 명사구})."""
@@ -2519,7 +2622,11 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
         "수행한 단계": [
             {
                 "단계": step.label, "묶음": step.section,
-                "원문": step.text, "완료": step.completed,
+                # Lane N, decision 6: a stored machine translation as the
+                # Korean, marked, with the source beside it.
+                **({"원문": step.source_text, "한국어(자동 번역)": step.text}
+                   if step.translation == "machine" else {"원문": step.text}),
+                "완료": step.completed,
                 **({"완료 시각": step.completed_at} if step.completed_at else {}),
                 **({"타이머": step.timer_note} if step.timer_note else {}),
                 **({"원문 기대 결과": list(step.expected)} if step.expected else {}),
@@ -2881,7 +2988,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
 
     blocks += [("h1", "2. 배경·원리"), ("p", narrative.background),
-               ("note", "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
+               ("note", GENERAL_BACKGROUND_LABEL if narrative.background_general
+                else "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
 
     blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비")]
     if facts.items:
@@ -2907,9 +3015,16 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h2", "3-2. 수행한 단계"))
     rows: list[tuple[str, ...]] = []
     for step in facts.steps:
+        if step.translation == "machine" and step.text and step.source_text:
+            # Lane N, decision 6: the stored Korean, marked as a machine
+            # translation, with the source under it in small type.
+            shown: Any = StackedCell(f"{step.text} (자동 번역)", step.source_text)
+        elif step.text:
+            shown = step.text + ("" if step.translated else " (원문 영어)")
+        else:
+            shown = "(원문을 불러오지 못함)"
         rows.append((
-            step.label,
-            (step.text + ("" if step.translated else " (원문 영어)")) if step.text else "(원문을 불러오지 못함)",
+            step.label, shown,
             step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—"))
         # Decision 6: a confirmed return, under the step it was made at.
         for back in facts.returns:
@@ -2980,6 +3095,10 @@ def authorship_line(narrative: ReportNarrative) -> str:
     facts = narrative.facts
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
+    if narrative.background_general:
+        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
+                f"작성했다. 배경·원리 문단은 원문에 설명이 없어 AI 가 일반 지식으로 썼으며 출처가 없다. "
+                f"외부 자료는 쓰지 않았다. 작성 {when}.")
     if narrative.item_uses or any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
         return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
                 f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
@@ -3008,6 +3127,8 @@ def _table(header: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> tuple[
 
 def render_markdown(narrative: ReportNarrative) -> str:
     def cell(value: Any) -> str:
+        if isinstance(value, StackedCell):
+            return (f"{cell(value.main)}<br><small>원문: {cell(value.below)}</small>")
         return " ".join(str(value).split()).replace("|", "\\|") or " "
 
     lines: list[str] = []
@@ -3126,6 +3247,16 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             for row in rows:
                 cells = table.add_row().cells
                 for index, value in enumerate(row):
+                    if isinstance(value, StackedCell):
+                        # Lane N, decision 6: the source under its Korean,
+                        # in the same cell, in small grey type.
+                        cells[index].text = value.main
+                        below = cells[index].add_paragraph().add_run(f"원문: {value.below}")
+                        below.font.size = Pt(7.5)
+                        below.font.color.rgb = RGBColor(110, 110, 110)
+                        for run in cells[index].paragraphs[0].runs:
+                            run.font.size = Pt(9)
+                        continue
                     cells[index].text = str(value)
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:

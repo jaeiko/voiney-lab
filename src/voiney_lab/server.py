@@ -1445,12 +1445,16 @@ def _start_revision_translation(fixture:CuratedProtocolFixture)->None:
 
 def _with_revision_translations(
     fixture:CuratedProtocolFixture,
+    *,
+    start_missing:bool=True,
 )->CuratedProtocolFixture:
     """The fixture carrying its revision's stored translations, if any.
 
     A revision with nothing stored that is not being translated -- one made
     executable before translations existed -- starts its generation here,
-    once; the session picks up each batch as it is stored.
+    once; the session picks up each batch as it is stored. A report reading
+    the translations (lane N, decision 6) passes ``start_missing=False``: it
+    only reads what is stored.
     """
 
     try:
@@ -1470,7 +1474,7 @@ def _with_revision_translations(
         return fixture
     finally:
         store.close()
-    if not rows:
+    if not rows and start_missing:
         with _REVISION_TRANSLATIONS_LOCK:
             running=key in _REVISION_TRANSLATIONS_RUNNING
         runner=None if running else _revision_translation_runner()
