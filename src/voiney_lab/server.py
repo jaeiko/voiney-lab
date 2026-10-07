@@ -48,8 +48,10 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
     ProtocolVisualKind,
+    josa_ro,
     load_curated_protocol_fixture,
     reader_translation_issue,
+    spoken_korean,
 )
 from voiney_lab.experiment_protocol_analysis import (
     OpenAICompatibleProtocolAnalysisModel,
@@ -78,6 +80,7 @@ from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
     REPORT_PROSE,
+    record_amendments,
     ReportNarrative,
     ReportWriterBrain,
     ReportWriterSettings,
@@ -1001,7 +1004,7 @@ def _record_workspace_observation(
         "note","appearance","measurement","deviation","other",
     }:
         category=plan.observation_predicate
-    elif plan.observation_predicate in {"positive","negative"}:
+    elif plan.observation_predicate in {"positive","negative","observation"}:
         category="appearance"
     else:
         category="other"
@@ -1025,6 +1028,94 @@ def _record_workspace_observation(
         return state
     finally:
         store.close()
+
+def _record_workspace_record_fix(
+    session:ListenerSession,
+    plan,
+    *,
+    turn_id:int,
+    generation:int,
+)->dict[str,object]|None:
+    """Append a correction of a voice note beside it (lane N, decision 2)."""
+
+    settings=_workspace_settings()
+    fix=getattr(plan,"record_fix",None)
+    if not settings.enabled or session.experiment_state_version is None or not fix:
+        return None
+    target=fix.get("target") or {}
+    principal,store=_commercial_workspace()
+    try:
+        store.record_observation_fix(
+            principal,
+            session.session_id,
+            event_key=f"voice-{generation}-{turn_id}-record-fix",
+            target_event_key=(
+                f"voice-{target.get('generation')}-{target.get('turn_id')}-"
+                f"observation-{target.get('action')}"
+            ),
+            content=fix.get("after") if fix.get("mode")=="correct" else None,
+            capture_source="voice",
+        )
+        state=store.get_experiment(principal,session.session_id)
+        session.experiment_state_version=int(state["version"])
+        return state
+    finally:
+        store.close()
+
+
+def _note_readback(plan:Any,language:str)->Any:
+    """A stored note read back, never asked about (lane N, decision 1).
+
+    A measurement is said value by value ("피에이치 칠 점 이로 기록했어요");
+    any other note says where it went ("2단계에 기록했어요").
+    """
+
+    note=getattr(plan,"note_record",None) or {}
+    if not note:
+        return plan
+    values=[value for value in note.get("measurements") or () if value]
+    if language!="ko":
+        display=speech=f"Recorded at step {note.get('step_label')}."
+    elif note.get("category")=="measurement" and values:
+        shown=", ".join(values)
+        spoken=", ".join(spoken_korean(value) for value in values)
+        display=f"{josa_ro(shown)} 기록했어요."
+        speech=f"{spoken}{josa_ro(shown)[len(shown):]} 기록했어요."
+    else:
+        display=speech=f"{note.get('step_label')}단계에 기록했어요."
+    return replace(
+        plan,display_text=display,speech_text=speech,primary_text=display,
+        speech_mode=CuratedProtocolSpeechMode.CONTROL,
+    )
+
+
+def _record_fix_readback(plan:Any,language:str)->Any:
+    """What is said once a correction was appended (lane N, decision 2)."""
+
+    fix=getattr(plan,"record_fix",None) or {}
+    after=str(fix.get("after") or "")
+    if fix.get("mode")=="retract":
+        display=speech=(
+            "방금 기록을 취소로 표시했어요. 처음 기록은 지우지 않고 남겨 두었어요."
+            if language=="ko" else
+            "The last note is marked withdrawn; the original stays in the record."
+        )
+    elif language=="ko":
+        particle=josa_ro(after)[len(after):]
+        display=f"방금 기록을 '{after}'{particle} 고쳤어요."
+        # A measurement is heard value by value, as it was read back.
+        heard=(
+            spoken_korean(after)
+            if (fix.get("target") or {}).get("category")=="measurement" else after
+        )
+        speech=f"방금 기록을 {heard}{particle} 고쳤어요."
+    else:
+        display=speech=f"The last note now reads '{after}'."
+    return replace(
+        plan,display_text=display,speech_text=speech,primary_text=display,
+        speech_mode=CuratedProtocolSpeechMode.CONTROL,
+    )
+
 
 def normalize_session_language(value:str)->str:
     normalized=value.strip().casefold().replace("_","-")
@@ -7775,6 +7866,35 @@ def _record_experiment_report_plan(
         event_type="observation"
     elif plan.action is CuratedProtocolAction.REPORT_ANOMALY:
         event_type="anomaly"
+    elif (
+        plan.action is CuratedProtocolAction.RECORD_CORRECTION
+        and getattr(plan,"record_fix",None)
+    ):
+        # Lane N, decision 2: a correction is appended beside the record it
+        # amends, which stays as it was said.
+        fix=plan.record_fix
+        target=fix.get("target") or {}
+        target_key=(
+            f"turn-{target.get('turn_id')}-generation-{target.get('generation')}-"
+            f"{target.get('action')}"
+        )
+        amended=next(
+            (item for item in report.get("events") or () if item.get("event_key")==target_key),
+            None,
+        )
+        if amended is None:
+            raise LookupError("the record to correct is not in the experiment report")
+        event_type=(
+            "record_retracted" if fix.get("mode")=="retract" else "record_corrected"
+        )
+        step_id=amended.get("step_id")
+        step_label=amended.get("step_label")
+        payload["record_fix"]={
+            "target_event_key":target_key,
+            "text_before":fix.get("before"),
+            "text_after":fix.get("after"),
+            "source":"voice",
+        }
     elif plan.action is CuratedProtocolAction.STOP and plan.state_changed:
         event_type="session_stopped"
         payload["stop_reason"]="stopped_by_user"
@@ -7814,6 +7934,18 @@ def _record_experiment_report_plan(
             skipped_after_start=True
         else:
             event_type="steps_skipped"
+    wording=plan.anomaly_text or plan.observation_outcome
+    category=plan.anomaly_category or plan.observation_predicate
+    if event_type in {"record_corrected","record_retracted"}:
+        fix=plan.record_fix
+        wording=fix.get("after") if event_type=="record_corrected" else fix.get("before")
+        category=amended.get("category")
+    elif event_type=="observation" and getattr(plan,"note_record",None):
+        # Where the same note sits on the experiment timeline, so a fix made
+        # on the screen later amends both (lane N, decision 2).
+        payload["workspace_event_key"]=(
+            f"voice-{generation}-{turn_id}-observation-{plan.action.value}"
+        )
     if event_type is not None:
         report=store.append_event(
             session.experiment_report_id,
@@ -7821,8 +7953,8 @@ def _record_experiment_report_plan(
             event_type=event_type,
             step_id=step_id,
             step_label=step_label,
-            user_wording=(plan.anomaly_text or plan.observation_outcome),
-            category=(plan.anomaly_category or plan.observation_predicate),
+            user_wording=wording,
+            category=category,
             severity=("unknown" if plan.reported_anomaly else None),
             confirmation_state=(
                 "user_reported"
@@ -8060,6 +8192,14 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
 
 def _public_experiment_report_state(report:dict)->dict:
     events=list(report.get("events") or ())
+    # Lane N, decision 2: a note shows its latest words and that it was
+    # amended; the event itself keeps the words as first said.
+    amended=record_amendments(events)
+    events=[
+        {**event,"amended":amended[event["event_key"]]}
+        if event.get("event_key") in amended else event
+        for event in events
+    ]
     return {
         key:report.get(key) for key in (
             "report_id","status","started_at","ended_at","anomaly_count",
@@ -9369,6 +9509,61 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 session.set_turn_terminal_outcome(
                     turn_id,generation,"blocked")
             if (
+                plan.action is CuratedProtocolAction.RECORD_CORRECTION
+                and plan.record_fix is not None
+            ):
+                # Lane N, decision 2: a confirmed correction is appended to
+                # every record that holds the note -- the experiment report
+                # and the experiment timeline -- and said done only after
+                # both took it. Neither record is changed in place.
+                fix_report=None
+                fix_state=None
+                try:
+                    if (
+                        session.experiment_report_store is None
+                        and session.experiment_state_version is None
+                    ):
+                        raise LookupError("no experiment record is open")
+                    if session.experiment_report_store is not None:
+                        _open_experiment_report(session,curated)
+                    fix_state=await asyncio.to_thread(
+                        _record_workspace_record_fix,
+                        session,plan,turn_id=turn_id,generation=generation,
+                    )
+                    if session.experiment_report_store is not None:
+                        fix_report=await asyncio.to_thread(
+                            _record_experiment_report_plan,
+                            session,curated,plan,
+                            turn_id=turn_id,generation=generation,
+                            pre_transition_index=pre_transition_index,
+                        )
+                except Exception as exc:
+                    log.warning(
+                        "record correction failed turn_id=%s error=%s",
+                        turn_id,type(exc).__name__,
+                    )
+                    curated._restore(checkpoint)
+                    failed=(
+                        "방금 기록을 고치지 못했어요. 기록은 그대로예요."
+                        if turn_language=="ko" else
+                        "The last note could not be corrected; the record is unchanged."
+                    )
+                    plan=replace(
+                        plan,display_text=failed,speech_text=failed,
+                        speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                        record_fix=None,
+                    )
+                    session.set_turn_terminal_outcome(turn_id,generation,"blocked")
+                else:
+                    report_prepared=fix_report is not None
+                    if fix_report is not None:
+                        await report_state(fix_report)
+                    if fix_state is not None:
+                        await current_text(
+                            "experiment.session.state",turn_id=turn_id,
+                            state=fix_state)
+                    plan=_record_fix_readback(plan,turn_language)
+            if (
                 session.experiment_report_store is not None
                 and not report_prepared
                 and plan.action in _EXPERIMENT_REPORT_ACTIONS
@@ -9537,7 +9732,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             await current_text(
                                 "experiment.session.state",turn_id=turn_id,
                                 state=observation_state)
-                        if plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
+                        if (
+                            plan.action is CuratedProtocolAction.RECORD_OBSERVATION
+                            and plan.note_record
+                            and turn_language=="ko"
+                        ):
+                            # Lane N, decision 1: read back, not asked about.
+                            plan=_note_readback(plan,turn_language)
+                        elif plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
                             acknowledgment=(
                                 f"말씀한 관찰 내용을 현재 {plan.step_label}단계 실험 타임라인에 기록했습니다. 프로토콜 상태는 변경하지 않았습니다."
                                 if turn_language=="ko" else
@@ -9801,6 +10003,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.STEP_RANGE:"step_range_read",
             CuratedProtocolAction.LAB_DOMAIN_QA:"lab_domain_qa_read",
             CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
+            CuratedProtocolAction.RECORD_CORRECTION:"experiment_record_corrected",
         }
         operation=(
             "completion_and_next_transition"

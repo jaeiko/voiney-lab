@@ -369,7 +369,9 @@ class AllowListTests(unittest.TestCase):
             ("change_state", "stop", "오늘은 이쯤에서 종료하는 게 좋겠어", 3, CuratedProtocolAction.STOP),
             ("change_state", "pause", "잠깐 쉬었다 할게", 3, CuratedProtocolAction.PAUSE),
             ("change_state", "start", "자 이제 실험 시작해 볼까", None, CuratedProtocolAction.START),
-            ("record_log", "observation", "관찰 기록해줘 침전이 생겼어", 3, CuratedProtocolAction.RECORD_OBSERVATION),
+            # Lane N, decision 1: "관찰 기록해줘 …" is now the note rule's; the
+            # router is asked in words the front rules leave to it.
+            ("record_log", "observation", "침전이 생겼어 남겨 줘", 3, CuratedProtocolAction.RECORD_OBSERVATION),
             ("record_log", "anomaly", "튜브가 터졌어", 3, CuratedProtocolAction.REPORT_ANOMALY),
         )
         for tool, value, said, step, expected in cases:

@@ -997,9 +997,71 @@ class ReportRecord:
 
     number: int
     step_label: str
-    kind: str  # "관찰" | "이상" | "사진"
-    text: str
+    kind: str  # "측정" | "편차" | "관찰" | "메모" | "이상" | "사진"
+    text: str  # the latest words: a correction's, when one was made
     at: str  # local HH:MM
+    #: Lane N, decision 2: "정정됨" or "취소됨" once amended, and the words
+    #: first recorded; the record's event key, which a correction names.
+    status: str = ""
+    original: str = ""
+    key: str = ""
+
+    @property
+    def shown(self) -> str:
+        """The record as the report's table writes it."""
+
+        if self.status == "정정됨":
+            return f"{self.text} (정정됨 — 처음 기록 “{self.original}”)"
+        if self.status == "취소됨":
+            return f"{self.text} (취소됨)"
+        return self.text
+
+
+#: A note's category -> its kind in the report (lane N, decision 1). Any other
+#: observation -- an endpoint answer, an appearance -- is an observation.
+RECORD_KINDS = {"measurement": "측정", "deviation": "편차", "note": "메모"}
+#: The kinds counted in the report, in the order they are listed. 측정, 편차
+#: and 메모 are listed only when there is one, so a record without notes reads
+#: as it did before lane N.
+_COUNTED_KINDS = ("측정", "편차", "관찰", "메모", "이상", "사진")
+_ALWAYS_COUNTED = frozenset({"관찰", "이상", "사진"})
+
+
+def record_amendments(events: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, str]]:
+    """{event key of a record: {"status": "정정됨"|"취소됨", "text": latest words}}.
+
+    Lane N, decision 2: a correction or a withdrawal is its own event naming
+    the record it amends; the record itself is never changed. A withdrawal
+    keeps the latest words ("" when it was never corrected).
+    """
+
+    amended: dict[str, dict[str, str]] = {}
+    for event in events:
+        kind = str(event.get("event_type") or "")
+        if kind not in {"record_corrected", "record_retracted"}:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        fix = payload.get("record_fix") if isinstance(payload.get("record_fix"), dict) else {}
+        target = str(fix.get("target_event_key") or "")
+        if not target:
+            continue
+        if kind == "record_retracted":
+            amended[target] = {"status": "취소됨", "text": amended.get(target, {}).get("text", "")}
+        else:
+            amended[target] = {"status": "정정됨", "text": " ".join(str(fix.get("text_after") or "").split())}
+    return amended
+
+
+def record_counts(records: Sequence["ReportRecord"], *, separator: str = " · ") -> str:
+    """"관찰 2건 · 이상 0건 · 사진 0건", with 측정·편차·메모 when there are any."""
+
+    live = [record for record in records if record.status != "취소됨"]
+    parts = []
+    for kind in _COUNTED_KINDS:
+        count = sum(1 for record in live if record.kind == kind)
+        if count or kind in _ALWAYS_COUNTED:
+            parts.append(f"{kind} {count}건")
+    return separator.join(parts)
 
 
 @dataclass(frozen=True)
@@ -1443,10 +1505,18 @@ def build_report_facts(
         except (TypeError, ValueError):
             return None
 
-    def add_record(label: str, kind: str, text: str, at: datetime | None) -> None:
+    # Lane N, decision 2: corrections and withdrawals, by the record they amend.
+    amendments = {
+        key: (value["status"], value["text"]) for key, value in record_amendments(events).items()
+    }
+
+    def add_record(label: str, kind: str, text: str, at: datetime | None, key: str = "") -> None:
+        first = _readable_record_text(text)
+        status, latest = amendments.get(key, ("", "")) if key else ("", "")
         records.append(ReportRecord(
             number=len(records) + 1, step_label=label, kind=kind,
-            text=_readable_record_text(text), at=at.strftime("%H:%M") if at else "",
+            text=latest or first, at=at.strftime("%H:%M") if at else "",
+            status=status, original=first if status else "", key=key,
         ))
 
     for event in events:
@@ -1477,9 +1547,12 @@ def build_report_facts(
         elif kind == "step_advanced" and label:
             advanced.append(label)
         elif kind == "observation" and label:
-            add_record(label, "관찰", wording or str(payload.get("text") or "관찰 기록"), at)
+            add_record(label, RECORD_KINDS.get(str(event.get("category") or ""), "관찰"),
+                       wording or str(payload.get("text") or "관찰 기록"), at,
+                       str(event.get("event_key") or ""))
         elif kind == "anomaly" and label:
-            add_record(label, "이상", wording or str(payload.get("text") or "이상 보고"), at)
+            add_record(label, "이상", wording or str(payload.get("text") or "이상 보고"), at,
+                       str(event.get("event_key") or ""))
         elif kind == "photo_attached" and label:
             add_record(label, "사진", f"사진 첨부 — {wording}" if wording else "사진 첨부", at)
         elif kind == "timer_started" and label:
@@ -1615,7 +1688,9 @@ def build_report_facts(
                 f"{label}단계: 원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냈다(타이머를 일찍 끝냄)."
             )
     for record in records:
-        if record.kind == "관찰" and "반복" in record.text:
+        if record.status == "취소됨":
+            continue
+        if record.kind == "편차" or (record.kind == "관찰" and "반복" in record.text):
             deviations.append(f"{record.step_label}단계: 연구자 기록 — “{record.text}”.")
     for label, paused_at, resumed_at in pauses:
         if paused_at and resumed_at:
@@ -1635,17 +1710,20 @@ def build_report_facts(
             where = f"{stop_label}단계에서 " if stop_label else ""
             deviations.append(f"{where}실험을 끝내 {_ranges(after)}는 수행하지 않았다.")
 
-    observations = [r for r in records if r.kind == "관찰"]
-    anomalies = [r for r in records if r.kind == "이상"]
-    photos = [r for r in records if r.kind == "사진"]
+    live = [r for r in records if r.status != "취소됨"]
+    observations = [r for r in live if r.kind == "관찰"]
+    anomalies = [r for r in live if r.kind == "이상"]
+    photos = [r for r in live if r.kind == "사진"]
     confirmed: list[str] = []
     if completed_labels:
         confirmed.append(f"완료로 기록된 단계는 {_ranges(completed_labels)}이다.")
-    for record in observations:
-        if record.text.startswith("원문의 끝 조건"):
+    for record in live:
+        if record.kind == "관찰" and record.text.startswith("원문의 끝 조건"):
             confirmed.append(f"{record.step_label}단계: 연구자가 {record.text}.")
-        else:
+        elif record.kind == "관찰":
             confirmed.append(f"{record.step_label}단계에서 연구자가 “{record.text}”라고 기록했다.")
+        elif record.kind in {"측정", "메모"}:
+            confirmed.append(f"{record.step_label}단계에서 연구자가 “{record.text}”라고 기록했다({record.kind}).")
     waited = [label for label in completed_labels if label in timer_started and label not in early]
     if waited:
         confirmed.append(f"타이머를 켠 {_ranges(waited)}는 타이머를 켠 뒤 완료했다(실제 걸린 시간은 3-2의 표).")
@@ -1692,7 +1770,7 @@ def build_report_facts(
         ("걸린 시간", _duration_words((ended - started).total_seconds()) if started and ended else "진행 중"),
         ("완료 단계", f"{len(completed_labels)} / {total}" if total else str(len(completed_labels))),
         ("결과", outcome_words),
-        ("기록", f"관찰 {len(observations)}건 · 이상 {len(anomalies)}건 · 사진 {len(photos)}건"),
+        ("기록", record_counts(records)),
         ("프로토콜 승인 상태", _approval_words(report_data)),
     ) + ((("준비 검사", "시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀"),) if gates_skipped else ())
 
@@ -2093,9 +2171,11 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
         ) + " 단계별 절차와 원문 조건은 3-2의 표에 원문 그대로 적었다."
     else:
         methods = "완료로 기록된 단계가 없다."
-    counts = {kind: sum(1 for r in facts.records if r.kind == kind) for kind in ("관찰", "이상", "사진")}
+    live = [r for r in facts.records if r.status != "취소됨"]
+    counts = {kind: sum(1 for r in live if r.kind == kind) for kind in ("관찰", "이상", "사진")}
+    counted = record_counts(facts.records, separator=", ")
     if facts.records:
-        results = (f"관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다. "
+        results = (f"{counted}이 기록되었다. "
                    "내용은 위 표에 연구자가 말한 그대로 적었다.")
     else:
         results = "기록된 관찰이 없습니다."
@@ -2107,7 +2187,7 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
         conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고{where} 실험을 중단했다."
     else:
         conclusion = f"{facts.total_steps}단계 중 {done}단계가 완료로 기록되었고 실험이 진행 중이다."
-    conclusion += f" 관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다."
+    conclusion += f" {counted}이 기록되었다."
     next_steps: list[str] = []
     if facts.outcome == "stopped" and facts.stop_label:
         next_steps.append(f"{facts.stop_label}단계부터 이어서 진행한다.")
@@ -2302,8 +2382,9 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
             for step in facts.steps
         ],
         "기록": [
-            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at}
-            for r in facts.records
+            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at,
+             **({"상태": r.status} if r.status else {})}
+            for r in facts.records if r.status != "취소됨"
         ],
         "원문과 다르게 한 점": list(facts.deviations),
         "서버가 찾은 확인이 필요한 점": list(facts.to_check),
@@ -2667,7 +2748,7 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h1", "4. 결과"))
     if facts.records:
         blocks.append(_table(("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
-            (r.step_label, r.kind, r.text, r.at) for r in facts.records)))
+            (r.step_label, r.kind, r.shown, r.at) for r in facts.records)))
     else:
         blocks.append(("p", "기록된 관찰이 없습니다."))
     if facts.records:

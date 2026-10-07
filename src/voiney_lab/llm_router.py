@@ -146,6 +146,11 @@ CHANGE_STATE_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
 })
 RECORD_LOG_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
     "observation": ToolValueRule(None, None, True, "running", "record_observation"),
+    # Lane N, decision 1: the kinds of a note, each recorded as an observation
+    # is (the rules' note rule reads the same kinds).
+    "measurement": ToolValueRule(None, None, True, "running", "record_observation"),
+    "deviation": ToolValueRule(None, None, True, "running", "record_observation"),
+    "memo": ToolValueRule(None, None, True, "running", "record_observation"),
     "anomaly": ToolValueRule(None, None, True, "running", "report_anomaly"),
 })
 CHANGE_STATE_ACTIONS = tuple(CHANGE_STATE_RULES)
@@ -212,8 +217,10 @@ RECORD_LOG_TOOL: dict[str, Any] = {
     "function": {
         "name": RECORD_LOG,
         "description": (
-            "Propose recording what the researcher reported in this turn: an "
-            "observation or an anomaly. The value must be words the "
+            "Propose recording what the researcher reported in this turn: a "
+            "note -- a measurement (a number with a unit), a deviation (done "
+            "differently from the source), an observation, or a memo -- or an "
+            "anomaly. The value must be words the "
             "researcher actually said; never translate, shorten, correct or "
             "add units. Recording never completes a step. Do not say it is "
             "recorded; the server confirms after the record is stored."
@@ -633,7 +640,7 @@ def validate_tool_proposal(
             return refuse("workflow_paused")
         if not _observation_matches_transcript(proposal.value, utterance):
             return refuse("value_not_in_utterance")
-        if proposal.log_type == "observation":
+        if rule.runs_as == "record_observation":
             # While the observation question is open the front rules own
             # the turn (F5) and the fence above refuses any proposal, so
             # here only the word of recording admits one.
@@ -826,7 +833,7 @@ Most turns are questions or remarks: answer them. A question -- anything asking 
 Reply with exactly one function call: answer, change_state or record_log.
 
 1. Call change_state when, in THIS turn, the researcher asks to start the experiment, says the current step is done or asks to go to the next step, asks to end the experiment (only with 종료), to pause, to resume, or to start the step timer. evidence = the exact words from this turn that ask for it. The server asks the researcher to confirm "next" and "stop"; never call next when they say the step is not done.
-2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: sending is not supported, and reports are downloaded from the screen.
+2. Call record_log when the researcher asks you to write something down ("기록해 줘", "적어 줘", "메모해", "남겨 줘", "note this", "record this") or reports a problem or anomaly. value = their own words, unchanged. type: measurement for a number with a unit, deviation for something done differently from the source, observation for what they saw, memo for anything else, anomaly for a problem. Asking to see or open the record ("실험 기록 보여줘") is not asking to write. A request to send or hand something to someone ("~에게 전달해줘 / 보내줘 / 알려줘") is never recorded: sending is not supported, and reports are downloaded from the screen.
 3. Otherwise call answer: spoken, display, source_kind ("pdf" | "outside_pdf" | "server_state" | "none"), evidence_ids, and outside_pdf_term only for an outside_pdf answer.
 
 Never call a tool for a question, a hypothetical, a plan or wish, a step other than the current one, or to skip steps. At most one tool call.
