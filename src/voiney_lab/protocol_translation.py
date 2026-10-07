@@ -245,18 +245,21 @@ def source_sha256(text: str) -> str:
 
 _HANGUL = re.compile(r"[가-힣]")
 _LATIN = re.compile(r"[A-Za-z]")
-_ENDS_IN_HANGUL = re.compile(r"[가-힣][\s.!?)\]…]*$")
+_LETTER = re.compile(r"[가-힣A-Za-z]")
 
 
 def is_korean(text: str) -> bool:
     """Whether a source sentence is already written in Korean.
 
-    Korean with more Hangul than Latin letters, or a sentence that ends in
-    Hangul and keeps at least a quarter as many Hangul letters as Latin
-    ones: a Korean protocol names its instruments in English ("안정화를
-    위해서 Seahorse XFe/XF Analyzer 를 켜서 예열합니다"), and such a sentence
-    is Korean already -- translating it added a step label the check then
-    refused (measured 2026-10-06, glycolysis).
+    Korean with more Hangul than Latin letters, or a sentence with at least
+    four Hangul letters that ends in Hangul -- its last letter, Hangul or
+    Latin, is Hangul, so a trailing note number ("… 준비합니다 [노트 2].")
+    does not hide the ending (lane AN, human decision 2 of 2026-10-07). A
+    Korean protocol names its instruments in English ("9. Seahorse XF
+    glycolysis stress test 를 실행합니다", Hangul 6 : Latin 30), and such a
+    sentence is Korean already: measured 2026-10-06 (lane PX), the earlier
+    rule, which also wanted a quarter as many Hangul as Latin letters, sent
+    it for translation and the check refused what came back.
     """
 
     stripped = text.strip()
@@ -266,7 +269,8 @@ def is_korean(text: str) -> bool:
         return False
     if hangul >= latin:
         return True
-    return hangul >= 4 and 4 * hangul >= latin and _ENDS_IN_HANGUL.search(stripped) is not None
+    letters = _LETTER.findall(stripped)
+    return hangul >= 4 and _HANGUL.fullmatch(letters[-1]) is not None
 
 
 def protocol_context(fixture: CuratedProtocolFixture) -> ProtocolContext:

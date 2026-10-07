@@ -880,7 +880,11 @@ annotation; provenance is retained.
 
 Translations are linked to the original revision, labeled machine-generated or
 reviewed, and rejected if protected scientific numeric tokens differ from the
-source. Lightweight reagent/equipment cards store tenant-scoped location,
+source. A Protocol revision's sentences are machine-translated once its analysis
+passes (lane PX); a source sentence already in Korean is not sent -- more
+Hangul than Latin letters, or at least four Hangul letters with Hangul as the
+sentence's last letter, so "9. Seahorse XF glycolysis stress test 를
+실행합니다" is Korean (lane AN, 2026-10-07). Lightweight reagent/equipment cards store tenant-scoped location,
 optional photo/QR/barcode metadata, and an HTTPS SDS/source link. Location changes
 produce a reviewable history rather than a hidden overwrite.
 
