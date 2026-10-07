@@ -2236,6 +2236,14 @@ class WorkspaceStore:
 
         if session.get("status") != "stopped":
             return ()
+        # Lane N, decision 9: a run opened with a later start carries the
+        # steps it skipped to every place it can be continued from.
+        skipped: list[str] = []
+        for event in session.get("events", ()):
+            record = (event.get("payload") or {}).get("step_record")
+            if isinstance(record, Mapping) and record.get("kind") == "start_at_step":
+                skipped = [str(item) for item in record.get("skipped_step_ids") or ()]
+                break
         completions = {
             item["event_id"]: item for item in session.get("completed_steps", ())
         }
@@ -2255,6 +2263,7 @@ class WorkspaceStore:
                 "last_carried_step_label": carried[-1]["step_label"],
                 "last_carried_completed_at": carried[-1]["completed_at"],
                 "stopped_here": stopped_here,
+                "skipped_step_ids": list(skipped),
             })
 
         waiting = False
@@ -2394,6 +2403,37 @@ class WorkspaceStore:
                 },
                 created_at=now,
             )
+            start = next(
+                (
+                    (event.get("payload") or {}).get("step_record")
+                    for event in source["events"]
+                    if isinstance((event.get("payload") or {}).get("step_record"), Mapping)
+                    and (event.get("payload") or {})["step_record"].get("kind") == "start_at_step"
+                ),
+                None,
+            )
+            if start is not None:
+                # Lane N, decision 9: the later start the run was opened with
+                # holds for the new session too, so its recovery accepts the
+                # skipped steps as it does the carried completions.
+                self._append_experiment_event(
+                    principal,
+                    session_id=new_id,
+                    event_key="skipped-steps-carried",
+                    event_type="steps_skipped_carried_over",
+                    step_id=checkpoint_step_id,
+                    step_label=step_label,
+                    payload={
+                        "source_session_id": session_id,
+                        "step_record": {
+                            "kind": "start_at_step",
+                            "start_step": start.get("start_step"),
+                            "skipped_step_labels": list(start.get("skipped_step_labels") or ()),
+                            "skipped_step_ids": list(start.get("skipped_step_ids") or ()),
+                        },
+                    },
+                    created_at=now,
+                )
             for index, item in enumerate(carried, 1):
                 event_id, _ = self._append_experiment_event(
                     principal,

@@ -262,3 +262,14 @@ def shown(socket) -> dict[int, str]:
         if item.get("type") == "reply.complete" and isinstance(item.get("turn_id"), int):
             out[item["turn_id"]] = item.get("text")
     return out
+
+
+def ready_event(socket) -> dict:
+    """The session.ready the server sent, or {} when it refused the session."""
+
+    return next((item for item in socket.sent if item["type"] == "session.ready"), {})
+
+
+def error_message(socket) -> str | None:
+    return next(
+        (item.get("message") for item in socket.sent if item["type"] == "error"), None)

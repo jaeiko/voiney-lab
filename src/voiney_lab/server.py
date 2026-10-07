@@ -842,6 +842,22 @@ def _start_or_resume_workspace_experiment(
         store.close()
 
 
+def _workspace_skipped_step_ids(state:Any)->tuple[str,...]:
+    """The steps a confirmed later start skipped, as the durable record holds them.
+
+    Lane N, decision 9: the start's own event (steps_skipped or
+    protocol_started with the start_at_step record), or the copy a
+    checkpoint restart carries into the new session.
+    """
+
+    for event in (state or {}).get("events") or ():
+        payload=event.get("payload") if isinstance(event.get("payload"),dict) else {}
+        record=payload.get("step_record")
+        if isinstance(record,dict) and record.get("kind")=="start_at_step":
+            return tuple(str(item) for item in record.get("skipped_step_ids") or ())
+    return ()
+
+
 def _transition_workspace_experiment(
     session:ListenerSession,
     *,
@@ -11652,6 +11668,9 @@ async def voice_socket(websocket:WebSocket):
                                 str(item["step_id"])
                                 for item in experiment_state["completed_steps"]
                             ),
+                            # Lane N, decision 9: a run opened with a later
+                            # start, or continued from such a run's checkpoint.
+                            skipped_step_ids=_workspace_skipped_step_ids(experiment_state),
                         )
                     pipeline="cascade"
                     session.accept_configuration(

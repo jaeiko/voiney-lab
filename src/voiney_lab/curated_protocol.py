@@ -9950,6 +9950,7 @@ class CuratedProtocolSession:
         *,
         current_step_id: str,
         completed_step_ids: tuple[str, ...],
+        skipped_step_ids: tuple[str, ...] = (),
     ) -> None:
         """Restore only a server-persisted exact-revision progress checkpoint.
 
@@ -9957,6 +9958,11 @@ class CuratedProtocolSession:
         are intentionally not restored.  The durable session may select the
         current authoritative step, but it cannot bypass an incomplete earlier
         step or alter any protocol instruction.
+
+        ``skipped_step_ids`` are the steps a confirmed later start skipped
+        ("10단계부터 시작해줘", lane R7 decision 3), as the durable record
+        holds them (lane N, decision 9): exactly the steps before the start,
+        which then need no completion. Anything else is refused as before.
         """
 
         indexes = {
@@ -9972,8 +9978,17 @@ class CuratedProtocolSession:
             raise CuratedProtocolFixtureError(
                 "Experiment recovery contains an unknown completed step."
             )
+        skipped = tuple(dict.fromkeys(skipped_step_ids))
+        if skipped and (
+            skipped != tuple(step.step_id for step in self.fixture.steps[:len(skipped)])
+            or len(skipped) > current_index
+            or set(skipped) & set(completed)
+        ):
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery names skipped steps that are not the steps before its start."
+            )
         expected = tuple(
-            step.step_id for step in self.fixture.steps[:current_index]
+            step.step_id for step in self.fixture.steps[len(skipped):current_index]
         )
         if completed != expected and not self._completed_in_an_earlier_round(
             current_index, completed, expected
