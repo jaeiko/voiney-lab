@@ -18,7 +18,7 @@ import secrets
 import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _replace_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1140,6 +1140,24 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
                 f"{record.get('from_step') or ''}단계에서 {record.get('to_step') or event.get('step_label') or ''}"
                 f"단계로 돌아감"
                 + (f" — {round_}회차(말로 확인한 돌아가기 기준)" if round_ else ""))
+        # Lane CB, decision 5: a condition's answer, a count given, rounds
+        # not done -- each confirmed before the report states it.
+        elif kind == "branch_answered" and record.get("condition_source_text"):
+            answer = "예" if record.get("answer") == "yes" else "아니요"
+            add("c", event, "조건", f"조건: “{record.get('condition_source_text')}” → {answer}")
+        elif kind == "repeat_registered" and record.get("count"):
+            first, last = _range_pair(record)
+            add("n", event, "반복",
+                f"{first}~{last}단계 반복 횟수 {record.get('count')}회({value_source_words(record.get('value_source'))})")
+        elif kind == "repeat_closed" and record.get("count"):
+            first, last = _range_pair(record)
+            add("n", event, "반복",
+                f"{first}~{last}단계 반복 횟수 {record.get('count')}회"
+                f"({value_source_words(record.get('value_source'))}, 회차마다 물음)")
+        elif kind == "repeat_rounds_declined":
+            first, last = _range_pair(record)
+            add("d", event, "반복",
+                f"{first}~{last}단계를 {record.get('rounds_required')}회 중 {record.get('rounds_done')}회차까지만 함")
         elif kind == "step_completed":
             timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
             if timer.get("step_exited_before_timer_elapsed") or (
@@ -1153,6 +1171,15 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
                 add("t", event, "타이머",
                     f"원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냄")
     return items
+
+
+def _range_pair(record: Mapping[str, Any]) -> tuple[str, str]:
+    """The first and last labels of a repeat's range, as its record names them."""
+
+    labels = [str(item) for item in record.get("repeated_step_labels") or ()]
+    if not labels:
+        return "", ""
+    return labels[0], labels[-1]
 
 
 def record_counts(records: Sequence["ReportRecord"], *, separator: str = " · ") -> str:
@@ -1174,6 +1201,41 @@ class ReportReturn:
     from_label: str
     to_label: str
     round: int | None  # counted from returns confirmed in words, not rounds done
+    at: str  # local HH:MM
+    key: str = ""
+
+
+#: Lane CB: where a value the run acted on came from, in the report's words.
+VALUE_SOURCE_WORDS = {"source": "원문", "operator": "사람이 답함", "lab_default": "연구실 기본값"}
+
+
+def value_source_words(value: Any) -> str:
+    return VALUE_SOURCE_WORDS.get(str(value or ""), str(value or ""))
+
+
+@dataclass(frozen=True)
+class ReportBranchAnswer:
+    """A source condition answered on the run (lane CB's branch_answered event)."""
+
+    step_label: str
+    condition: str
+    answer: str  # "예" | "아니요"
+    value_source: str  # in the report's words
+    at: str  # local HH:MM
+    skipped_labels: tuple[str, ...] = ()
+    key: str = ""
+
+
+@dataclass(frozen=True)
+class ReportRepetition:
+    """A repeat's count given by a person (lane CB's repeat_registered / repeat_closed)."""
+
+    first: str
+    last: str
+    asked_at: str  # the step the count was asked at
+    count: int | None
+    value_source: str  # in the report's words
+    per_round: bool  # asked after each round ("아직 몰라")
     at: str  # local HH:MM
     key: str = ""
 
@@ -1250,6 +1312,10 @@ class ReportFacts:
     #: not state.
     review: tuple[dict[str, Any], ...] = ()
     unconfirmed_texts: tuple[str, ...] = ()
+    #: Lane CB, decision 5: the source conditions answered and the counts a
+    #: person gave, each with where its value came from.
+    branch_answers: tuple[ReportBranchAnswer, ...] = ()
+    repetitions: tuple[ReportRepetition, ...] = ()
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1629,6 +1695,11 @@ def build_report_facts(
     skip: tuple[str, list[str], str] | None = None
     early_keys: dict[str, str] = {}
     returns: list[ReportReturn] = []
+    # Lane CB, decision 5.
+    branch_answers: list[ReportBranchAnswer] = []
+    repetitions: list[ReportRepetition] = []
+    declined_rounds: list[tuple[str, Mapping[str, Any], str, str]] = []
+    step_label_by_id = {step["step_id"]: step["label"] for step in source_steps if step.get("step_id")}
 
     def step_record(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         record = payload.get("step_record")
@@ -1739,6 +1810,49 @@ def build_report_facts(
                 round=whole_number(record.get("round")), at=at.strftime("%H:%M") if at else "",
                 key=str(event.get("event_key") or ""),
             ))
+        elif kind == "branch_answered":
+            record = step_record(payload)
+            branch_answers.append(ReportBranchAnswer(
+                step_label=str(record.get("step_label") or label),
+                condition=" ".join(str(record.get("condition_source_text") or "").split()),
+                answer="예" if record.get("answer") == "yes" else "아니요",
+                value_source=value_source_words(record.get("value_source")),
+                at=at.strftime("%H:%M") if at else "",
+                skipped_labels=tuple(str(item) for item in record.get("skipped_step_labels") or ()),
+                key=str(event.get("event_key") or ""),
+            ))
+        elif kind == "repeat_registered":
+            record = step_record(payload)
+            first, last = _range_pair(record)
+            repetitions.append(ReportRepetition(
+                first=first, last=last, asked_at=label, count=whole_number(record.get("count")),
+                value_source=value_source_words(record.get("value_source")),
+                per_round=record.get("decided") == "per_round",
+                at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
+            ))
+        elif kind == "repeat_closed":
+            record = step_record(payload)
+            first, last = _range_pair(record)
+            closed = ReportRepetition(
+                first=first, last=last, asked_at=label, count=whole_number(record.get("count")),
+                value_source=value_source_words(record.get("value_source")), per_round=True,
+                at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
+            )
+            earlier = next(
+                (index for index, item in enumerate(repetitions)
+                 if (item.first, item.last) == (first, last) and item.count is None), None,
+            )
+            if earlier is None:
+                repetitions.append(closed)
+            else:
+                repetitions[earlier] = _replace_dataclass(
+                    closed, asked_at=repetitions[earlier].asked_at, at=repetitions[earlier].at)
+        elif kind == "repeat_rounds_declined":
+            record = step_record(payload)
+            declined_rounds.append((
+                label, record, str(event.get("event_key") or ""),
+                step_label_by_id.get(str(payload.get("post_transition_step_id") or ""), ""),
+            ))
         elif kind == "workflow_paused":
             pauses.append((label, at, None))
         elif kind == "workflow_resumed" and pauses and pauses[-1][2] is None:
@@ -1804,6 +1918,9 @@ def build_report_facts(
     for back in returns:
         if back.from_label and back.from_label not in shown:
             shown.append(back.from_label)
+    for answer in branch_answers:
+        if answer.step_label and answer.step_label not in shown:
+            shown.append(answer.step_label)
     shown.sort(key=lambda item: order.get(item, 10_000))
     for label in shown:
         source = by_label.get(label, {})
@@ -1845,6 +1962,22 @@ def build_report_facts(
         round_words = f"{back.round}회차(말로 확인한 돌아가기 기준)" if back.round else "회차 기록 없음"
         deviations.append(point(f"{back.from_label}단계에서 {back.to_label}단계로 돌아갔다 — {round_words}"
                                 + (f", {back.at}." if back.at else "."), back.key))
+    for label, record, key, next_label in declined_rounds:
+        # Lane CB, decision 3: the rounds the source (or the person) asked
+        # for and the person stopped short of; the round by confirmed returns.
+        first, last = _range_pair(record)
+        required = record.get("rounds_required")
+        done = record.get("rounds_done")
+        asked = (
+            f"원문은 {first}~{last}단계를 {required}회 하라고 했으나"
+            if record.get("count_source") == "source"
+            else f"{first}~{last}단계를 {required}회 하기로 했으나({value_source_words(record.get('count_source'))})"
+        )
+        where = f" {next_label}단계로" if next_label else " 다음 단계로"
+        deviations.append(point(
+            f"{label}단계: {asked} {done}회차까지만 하고{where} 넘어갔다(회차는 말로 확인한 돌아가기 기준).",
+            key,
+        ))
     for label in completed_labels:
         if label in early:
             elapsed, duration = early[label]
@@ -1976,6 +2109,7 @@ def build_report_facts(
         zone=zone, items=items, returns=tuple(returns),
         review=tuple(review) if review_offered else (),
         unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
+        branch_answers=tuple(branch_answers), repetitions=tuple(repetitions),
         item_step_texts=tuple(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
@@ -2676,6 +2810,18 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
             for item in facts.review if not item["confirmed"]
         ],
         "원문과 다르게 한 점": list(facts.deviations),
+        # Lane CB, decision 5: the conditions answered and the counts given,
+        # each with where its value came from.
+        "조건 답": [
+            {"단계": item.step_label, "조건": item.condition, "답": item.answer,
+             "값의 출처": item.value_source, "건너뛴 단계": list(item.skipped_labels)}
+            for item in facts.branch_answers
+        ],
+        "반복 횟수": [
+            {"범위": f"{item.first}~{item.last}단계", "횟수": item.count, "값의 출처": item.value_source,
+             "회차마다 물음": item.per_round}
+            for item in facts.repetitions
+        ],
         "서버가 찾은 확인이 필요한 점": list(facts.to_check),
         "검토할 수 있는 항목": reviewable,
     }
@@ -3064,6 +3210,23 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
                                else "회차 기록 없음")
                 rows.append((f"{back.from_label}→{back.to_label}",
                              f"{back.to_label}단계로 돌아감 — {round_words}", back.at or "—", "—"))
+        # Lane CB, decision 5: the condition's answer under its step, and the
+        # count a person gave under the step it was asked at, each with where
+        # the value came from.
+        for answer in facts.branch_answers:
+            if answer.step_label == step.label:
+                skipped = (f" · {_ranges(list(answer.skipped_labels))} 건너뜀"
+                           if answer.skipped_labels else "")
+                rows.append((step.label,
+                             f"조건: “{answer.condition}” → {answer.answer} ({answer.value_source}){skipped}",
+                             answer.at or "—", "—"))
+        for repetition in facts.repetitions:
+            if repetition.asked_at == step.label:
+                count = f"{repetition.count}회" if repetition.count else "미정"
+                asked = "(회차마다 물음)" if repetition.per_round else ""
+                rows.append((f"{repetition.first}~{repetition.last}",
+                             f"반복 횟수 {count} — {repetition.value_source}{asked}",
+                             repetition.at or "—", "—"))
     if rows:
         blocks.append(_table(("단계", "원문 단계", "완료 시각", "타이머 (원문 / 실제)"), tuple(rows)))
     else:

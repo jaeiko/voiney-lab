@@ -12,6 +12,9 @@
        PX decision 1). Named with the card so the card's paragraph rule in
        app.css (.procedure-card p, 0.88rem) does not shrink it. */
     .procedure-card p.step-body{margin:.35rem 0 0;font-size:1.12rem;font-weight:600;line-height:1.55;color:var(--ink);white-space:pre-wrap}
+    /* Lane CB decision 4: the server question open at this step (the source
+       condition, the repeat's count, the next round), under the step's text. */
+    .procedure-card .open-question{margin:.45rem 0 0;padding:.5rem .7rem;border-left:3px solid var(--magenta);font-size:.95rem;line-height:1.5;color:var(--ink);white-space:pre-wrap}
     .report-review-checklist{display:grid;gap:.35rem;margin:.5rem 0}
     .report-review-row{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
     .report-review-row span{flex:1 1 12rem}
@@ -195,6 +198,7 @@
         <div id="procedure-progress"></div>
         <p id="procedure-step-title"></p>
         <p id="procedure-primary" class="step-body"></p>
+        <div id="procedure-open-question" class="open-question" role="status" hidden></div>
         <details id="procedure-source-toggle" class="source-toggle" hidden><summary>원문</summary><p id="procedure-instruction"></p></details>
         <div id="procedure-warning" class="step-warning" role="alert" hidden></div>
 
@@ -1257,6 +1261,15 @@ function renderTranslationNote(){
  note.textContent=text;note.hidden=!text;
 }
 function nonemptyText(v){return typeof v==="string"&&v.trim().length>0;}
+// Lane CB decision 4: the server question open at the current step -- the
+// source condition, the repeat's count, the next round -- as the server
+// words it; nothing when none is open.
+function renderOpenQuestion(){
+ const box=$("procedure-open-question");if(!box)return;
+ const open=curatedScreenFields?.open_question,shown=curatedProtocolState?.attached===true&&curatedProtocolState.active===true;
+ const text=shown&&open&&typeof open==="object"&&nonemptyText(open.text)?normalizePresentationText(open.text):"";
+ box.textContent=text?`서버 질문 · ${text}`:"";box.hidden=!text;
+}
 // The server's list when it sent one: each line with its Korean already
 // checked (numbers with units, negation kept). Otherwise every line the
 // state names, as its source: unchecked Korean is never shown.
@@ -1314,7 +1327,10 @@ function renderCuratedProtocolState(message){
  $("procedure-status").textContent=status;$("procedure-status").className=blocked?"blocked":"";
  // Lane U2 decision 5: the step is named once, in Korean ("4단계 · 전체 25단계");
  // the English "Step N" line beside it is gone.
- $("procedure-progress").textContent=(value.active||previewValid)?`${value.current_step_label}단계 · 전체 ${value.total_steps}단계`:`비활성 · 총 ${value.total_steps}단계`;
+ // Lane CB decision 4: the round beside the step ("12단계 · 전체 62단계 · 2/3회차"), the server's words.
+ const roundWords=curatedScreenFields?.repeat_round&&typeof curatedScreenFields.repeat_round==="object"?curatedScreenFields.repeat_round.words:null;
+ $("procedure-progress").textContent=(value.active||previewValid)?`${value.current_step_label}단계 · 전체 ${value.total_steps}단계${nonempty(roundWords)?` · ${roundWords}`:""}`:`비활성 · 총 ${value.total_steps}단계`;
+ renderOpenQuestion();
  if($("rail-step-badge"))$("rail-step-badge").textContent=(value.active||previewValid)?`${value.current_step_label}단계 / ${value.total_steps}`:"대기";
  $("procedure-step-title").textContent="";
  // Korean body with the source folded under it; with no Korean, or for an
@@ -1361,6 +1377,7 @@ function renderProcedureState(value){
   setText("procedure-primary","");$("procedure-instruction").textContent="";
   if($("procedure-source-toggle"))$("procedure-source-toggle").hidden=true;
   if($("procedure-translation-note")){$("procedure-translation-note").textContent="";$("procedure-translation-note").hidden=true;}
+  if($("procedure-open-question")){$("procedure-open-question").textContent="";$("procedure-open-question").hidden=true;}
   $("procedure-warning").textContent="";$("procedure-warning").hidden=true;
   $("procedure-spoken-summary").textContent="현재 단계가 시작되면 표시됩니다.";
   $("procedure-source").textContent="—";$("procedure-timer").textContent="—";

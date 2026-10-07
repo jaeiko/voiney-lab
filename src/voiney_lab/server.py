@@ -7224,7 +7224,7 @@ def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
 
 
 def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
-    """What the page draws beside a fixture state: the one safety list.
+    """What the page draws beside a fixture state: the safety list, the round, the open question.
 
     Sent next to ``state``, not in it, so the state stays the session's own.
     ``translation_source`` says where the Korean on the step card comes from
@@ -7257,9 +7257,14 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # Lane PX decision 1: while the revision's Korean is still being made the
     # card says so ("번역 준비 중") instead of "no translation"; from the next
     # redraw after a batch lands, the Korean is simply there.
+    # Lane CB, decision 4: the round the step is in ("2/3회차") and the server
+    # question open at this step (the condition, the count, the next round),
+    # both the session's own words.
     return {
         "safety_items":items,"translation_source":source,
         "translation_pending":_translation_pending(fixture),
+        "repeat_round":curated.repeat_round_status(),
+        "open_question":curated.open_server_question(),
     }
 
 
