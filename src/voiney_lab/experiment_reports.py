@@ -1140,24 +1140,6 @@ def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, A
                 f"{record.get('from_step') or ''}단계에서 {record.get('to_step') or event.get('step_label') or ''}"
                 f"단계로 돌아감"
                 + (f" — {round_}회차(말로 확인한 돌아가기 기준)" if round_ else ""))
-        # Lane CB, decision 5: a condition's answer, a count given, rounds
-        # not done -- each confirmed before the report states it.
-        elif kind == "branch_answered" and record.get("condition_source_text"):
-            answer = "예" if record.get("answer") == "yes" else "아니요"
-            add("c", event, "조건", f"조건: “{record.get('condition_source_text')}” → {answer}")
-        elif kind == "repeat_registered" and record.get("count"):
-            first, last = _range_pair(record)
-            add("n", event, "반복",
-                f"{first}~{last}단계 반복 횟수 {record.get('count')}회({value_source_words(record.get('value_source'))})")
-        elif kind == "repeat_closed" and record.get("count"):
-            first, last = _range_pair(record)
-            add("n", event, "반복",
-                f"{first}~{last}단계 반복 횟수 {record.get('count')}회"
-                f"({value_source_words(record.get('value_source'))}, 회차마다 물음)")
-        elif kind == "repeat_rounds_declined":
-            first, last = _range_pair(record)
-            add("d", event, "반복",
-                f"{first}~{last}단계를 {record.get('rounds_required')}회 중 {record.get('rounds_done')}회차까지만 함")
         elif kind == "step_completed":
             timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
             if timer.get("step_exited_before_timer_elapsed") or (
@@ -2810,18 +2792,6 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
             for item in facts.review if not item["confirmed"]
         ],
         "원문과 다르게 한 점": list(facts.deviations),
-        # Lane CB, decision 5: the conditions answered and the counts given,
-        # each with where its value came from.
-        "조건 답": [
-            {"단계": item.step_label, "조건": item.condition, "답": item.answer,
-             "값의 출처": item.value_source, "건너뛴 단계": list(item.skipped_labels)}
-            for item in facts.branch_answers
-        ],
-        "반복 횟수": [
-            {"범위": f"{item.first}~{item.last}단계", "횟수": item.count, "값의 출처": item.value_source,
-             "회차마다 물음": item.per_round}
-            for item in facts.repetitions
-        ],
         "서버가 찾은 확인이 필요한 점": list(facts.to_check),
         "검토할 수 있는 항목": reviewable,
     }

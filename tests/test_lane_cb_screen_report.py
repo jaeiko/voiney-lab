@@ -94,8 +94,6 @@ class ReportTests(Recorded, unittest.TestCase):
         answer = facts.branch_answers[0]
         self.assertEqual((answer.step_label, answer.answer, answer.value_source), ("42", "예", "사람이 답함"))
         self.assertIn(f"| 42 | 조건: “{CONDITION_42}” → 예 (사람이 답함) |", self.markdown())
-        self.assertIn("조건: “If using newly made Porapak tubes” → 예", [
-            item["text"] for item in er.report_review_items(self.report()["events"])])
 
     def test_a_no_names_the_skipped_step(self) -> None:
         self.open(None)
@@ -129,9 +127,10 @@ class ReportTests(Recorded, unittest.TestCase):
         self.assertIn(
             "21단계: 19~20단계를 3회 하기로 했으나(사람이 답함) 2회차까지만 하고 22단계로 넘어갔다"
             "(회차는 말로 확인한 돌아가기 기준).", facts.deviations)
-        items = er.report_review_items(self.report()["events"])
-        self.assertIn("19~20단계 반복 횟수 3회(사람이 답함)", [item["text"] for item in items])
-        self.assertIn("19~20단계를 3회 중 2회차까지만 함", [item["text"] for item in items])
+        # Lane N's value review is left as it was: the answers and the counts
+        # are not asked about before the report (outside this lane's scope).
+        kinds = {item["kind"] for item in er.report_review_items(self.report()["events"])}
+        self.assertEqual(kinds & {"조건", "반복"}, set())
 
     def test_an_open_count_closed_by_rounds_is_in_the_table(self) -> None:
         self.open(None)
@@ -147,13 +146,12 @@ class ReportTests(Recorded, unittest.TestCase):
         self.assertIn("| 19~20 | 반복 횟수 1회 — 사람이 답함(회차마다 물음) |", markdown)
         self.assertNotIn("넘어갔다", "\n".join(self.facts().deviations))
 
-    def test_the_method_facts_carry_the_answers_for_the_writer(self) -> None:
+    def test_the_writer_facts_are_as_lane_n_left_them(self) -> None:
         self.open(None)
         self.record("프로토콜 시작해줘")
         self.session.current_index = index_of("41")
         self.record("41단계 완료했어")
         self.record("네")
         payload = er._writer_facts(self.facts())
-        self.assertEqual(payload["조건 답"], [
-            {"단계": "42", "조건": CONDITION_42, "답": "예", "값의 출처": "사람이 답함", "건너뛴 단계": []},
-        ])
+        self.assertNotIn("조건 답", payload)
+        self.assertIn("원문과 다르게 한 점", payload)
