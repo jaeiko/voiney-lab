@@ -2817,6 +2817,11 @@ FRONT_RULES: dict[str, str] = {
                         "open at that step: '네' takes the branch, '아니요' skips "
                         "its steps, '모르겠어' reads the condition again; moving "
                         "on before the answer asks it again (lane CB, decision 1)",
+    "repeat_count": "on first entering a range whose count the source leaves to "
+                    "the person ('for the required number of replicates'), "
+                    "'몇 번(몇 개) 하시나요?': a number is read back and the "
+                    "repeat registered with it, '아직 몰라' leaves the count to be "
+                    "asked round by round (lane CB, decision 2)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -8290,8 +8295,6 @@ class CuratedProtocolSession:
     def _open_count_interval(self) -> dict[str, object] | None:
         """The repeat whose count is asked at the current step and not yet given."""
 
-        # Decision 2 fills this in: until then no count is asked by voice.
-        return None
         if not self._at_a_step():
             return None
         interval = self.repeat_interval_starting_at(self.current_index)
@@ -8649,6 +8652,75 @@ class CuratedProtocolSession:
         return self._words_plan(
             words, intent_kind="branch_condition_recorded", step_record=record,
         )
+
+    def _answer_count_question(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        transcript: str,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Register the count a person gave for the repeat asked here, and read it back.
+
+        Lane N's form: read back, never asked about. "아직 몰라" registers
+        the repeat with no count, to be asked after each round (decision 3).
+        Nothing defaults the count, and who gave it is kept with it.
+        """
+
+        interval = self._open_count_interval()
+        if interval is None:
+            return self._words_plan(
+                "지금 열린 반복 횟수 질문이 없어요.", intent_kind="repeat_count_none",
+            )
+        reply = intent.count_reply
+        count = reply if isinstance(reply, int) and not isinstance(reply, bool) else None
+        repetition_id = str(interval["repetition_id"])
+        first, last = self._range_labels(interval)
+        labels = {step.step_id: step.source_label for step in self.fixture.steps}
+        anchor = labels.get(str(interval.get("anchor_step_id") or ""), "")
+        registration = {
+            "count": count,
+            "value_source": VALUE_SOURCE_OPERATOR,
+            "decided": "at_entry" if count is not None else "per_round",
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "actor_principal_id": actor_principal_id or None,
+            "actor_role": actor_role,
+            "utterance": " ".join(transcript.split()),
+        }
+        self._registered_repetitions[repetition_id] = registration
+        record = {
+            "kind": "repeat_registered",
+            "repetition_id": repetition_id,
+            "repeated_step_labels": [first, last],
+            "stated_at_step": anchor,
+            "count": count,
+            "value_source": VALUE_SOURCE_OPERATOR,
+            "decided": registration["decided"],
+            "source_text": " ".join(str(interval.get("source_text") or "").split()),
+        }
+        if count is None:
+            words = (
+                f"알겠어요. 횟수는 정하지 않았어요. {first}~{last}단계를 한 번 할 때마다 "
+                "한 번 더 하실지 여쭤볼게요."
+            )
+            return self._words_plan(
+                words, intent_kind="repeat_count_recorded", step_record=record,
+            )
+        round_number = self._repeat_returns.get(repetition_id, 0) + 1
+        spoken_count = count_words(count, spoken=True)
+        display = (
+            f"{count}회로 기록했어요(사람이 답함). {first}~{last}단계를 {count}회 하고, "
+            f"지금은 {round_words(round_number, count, spoken=False)}예요."
+        )
+        speech = (
+            f"{spoken_count}으로 기록했어요. {first}~{last}단계를 {spoken_count} 하고, "
+            f"지금은 {round_words(round_number, count, spoken=True)}예요."
+        )
+        plan = self._words_plan(
+            display, intent_kind="repeat_count_recorded", step_record=record,
+        )
+        return replace(plan, speech_text=speech)
 
     def _words_plan(
         self,
@@ -9734,6 +9806,7 @@ class CuratedProtocolSession:
                 repetition_id
                 for repetition_id in self._operator_determined_repetitions()
                 if repetition_id not in self._operator_repetition_counts
+                and repetition_id not in self._registered_repetitions
             )
         )
 
@@ -9780,8 +9853,14 @@ class CuratedProtocolSession:
         ):
             if step_id not in bounds:
                 continue
-            if repetition_id not in self._operator_repetition_counts:
-                return False
+            if repetition_id in self._operator_repetition_counts:
+                continue
+            # Lane CB, decision 2: a count given by voice, or left open to be
+            # asked round by round, is a count; and the range's first step may
+            # begin, because that is where the count is asked.
+            if repetition_id in self._registered_repetitions or step_id == bounds[0]:
+                continue
+            return False
         return True
 
     def reader_translation_target(
@@ -13242,6 +13321,33 @@ class CuratedProtocolSession:
                 actor_role=actor_role,
                 open_question=None,
             )
+        elif (
+            language == "ko" and transcript_quality is None
+            and self._count_question_open()
+            and (count_reply := repetition_count_reply(transcript)) is not None
+        ):
+            # Lane CB, decision 2: a number, or "아직 몰라", to "몇 번(몇 개)
+            # 하시나요?" open at this step.
+            self._last_front_rule = "repeat_count"
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="repeat_count_answer",
+                    action=CuratedProtocolAction.DECLINE_COMPLETION,
+                    confidence_source="server_open_count_question",
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    count_reply=count_reply,
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
         elif pending_language_mismatch:
             front_rule = "stt_unreliable"
             if pending_valid and pending is not None:
@@ -13861,6 +13967,12 @@ class CuratedProtocolSession:
             # Lane CB, decision 1: the answer to the open source condition.
             plan = self._answer_branch_question(
                 intent, transcript=transcript, language=language,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+            )
+        elif intent.count_reply is not None:
+            # Lane CB, decision 2: the count given for the repeat asked here.
+            plan = self._answer_count_question(
+                intent, transcript=transcript,
                 actor_principal_id=actor_principal_id, actor_role=actor_role,
             )
         elif intent.intent_kind == "untargeted_quantity_question":
