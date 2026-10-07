@@ -146,6 +146,11 @@ CHANGE_STATE_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
 })
 RECORD_LOG_RULES: Mapping[str, ToolValueRule] = MappingProxyType({
     "observation": ToolValueRule(None, None, True, "running", "record_observation"),
+    # Lane N, decision 1: the kinds of a note, each recorded as an observation
+    # is (the rules' note rule reads the same kinds).
+    "measurement": ToolValueRule(None, None, True, "running", "record_observation"),
+    "deviation": ToolValueRule(None, None, True, "running", "record_observation"),
+    "memo": ToolValueRule(None, None, True, "running", "record_observation"),
     "anomaly": ToolValueRule(None, None, True, "running", "report_anomaly"),
 })
 CHANGE_STATE_ACTIONS = tuple(CHANGE_STATE_RULES)
@@ -633,7 +638,7 @@ def validate_tool_proposal(
             return refuse("workflow_paused")
         if not _observation_matches_transcript(proposal.value, utterance):
             return refuse("value_not_in_utterance")
-        if proposal.log_type == "observation":
+        if rule.runs_as == "record_observation":
             # While the observation question is open the front rules own
             # the turn (F5) and the fence above refuses any proposal, so
             # here only the word of recording admits one.

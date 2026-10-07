@@ -40,6 +40,16 @@ from voiney_lab.workspace_store import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _report_event_types(listener) -> list[str]:
+    """The experiment report's events beyond its opening (lane N, decision 4)."""
+
+    reports = listener.experiment_report_store.list_reports()
+    if not reports:
+        return []
+    events = listener.experiment_report_store.get_report(reports[0]["report_id"])["events"]
+    return [e["event_type"] for e in events if e["event_type"] != "experimenter_recorded"]
+
+
 class _ScriptedSocket:
     """Minimal WebSocket double that replays a fixed message sequence."""
 
@@ -1335,7 +1345,9 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             ]
             self.assertIn("다시 시작하거나 초기화하지 않습니다", replies[-1])
             self.assertIn("남은 시간은 약", replies[-1])
-            self.assertEqual(listener.experiment_report_store.list_reports(), [])
+            # Lane N, decision 4: the timer start reached the experiment
+            # report; the read-only turn after it added nothing.
+            self.assertEqual(_report_event_types(listener), ["timer_started"])
 
     def test_timer_start_new_turn_is_non_mutating_and_keeps_original_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1429,7 +1441,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 item for item in socket.sent if item["type"] == "reply.complete"
             )
             self.assertIn("타이머를 시작했습니다", reply["text"])
-            self.assertEqual(listener.experiment_report_store.list_reports(), [])
+            # Lane N, decision 4: the timer start reaches the experiment report.
+            self.assertEqual(_report_event_types(listener), ["timer_started"])
 
             listener.playback_ended(turn_id)
             token = server_module._REQUEST_PRINCIPAL.set(principal)
@@ -1489,7 +1502,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 if item["type"] == "reply.complete"
             ]
             self.assertIn("이미 진행 중입니다", replies[-1])
-            self.assertEqual(listener.experiment_report_store.list_reports(), [])
+            # Lane N, decision 4: a second start that changed nothing adds nothing.
+            self.assertEqual(_report_event_types(listener), ["timer_started"])
 
     def test_timer_start_from_stale_recovered_voice_rolls_back(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

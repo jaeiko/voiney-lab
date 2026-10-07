@@ -997,9 +997,174 @@ class ReportRecord:
 
     number: int
     step_label: str
-    kind: str  # "관찰" | "이상" | "사진"
-    text: str
+    kind: str  # "측정" | "편차" | "관찰" | "메모" | "이상" | "사진"
+    text: str  # the latest words: a correction's, when one was made
     at: str  # local HH:MM
+    #: Lane N, decision 2: "정정됨" or "취소됨" once amended, and the words
+    #: first recorded; the record's event key, which a correction names.
+    status: str = ""
+    original: str = ""
+    key: str = ""
+    #: Lane N, decision 3: the researcher confirmed this value for the report.
+    confirmed: bool = False
+
+    @property
+    def shown(self) -> str:
+        """The record as the report's table writes it."""
+
+        if self.status == "정정됨":
+            shown = f"{self.text} (정정됨 — 처음 기록 “{self.original}”)"
+        elif self.status == "취소됨":
+            return f"{self.text} (취소됨)"
+        else:
+            shown = self.text
+        return f"{shown} (실험자 확인)" if self.confirmed else shown
+
+
+#: A note's category -> its kind in the report (lane N, decision 1). Any other
+#: observation -- an endpoint answer, an appearance -- is an observation.
+RECORD_KINDS = {"measurement": "측정", "deviation": "편차", "note": "메모"}
+#: The kinds counted in the report, in the order they are listed. 측정, 편차
+#: and 메모 are listed only when there is one, so a record without notes reads
+#: as it did before lane N.
+_COUNTED_KINDS = ("측정", "편차", "관찰", "메모", "이상", "사진")
+_ALWAYS_COUNTED = frozenset({"관찰", "이상", "사진"})
+
+
+def record_amendments(events: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, str]]:
+    """{event key of a record: {"status": "정정됨"|"취소됨", "text": latest words}}.
+
+    Lane N, decision 2: a correction or a withdrawal is its own event naming
+    the record it amends; the record itself is never changed. A withdrawal
+    keeps the latest words ("" when it was never corrected).
+    """
+
+    amended: dict[str, dict[str, str]] = {}
+    for event in events:
+        kind = str(event.get("event_type") or "")
+        if kind not in {"record_corrected", "record_retracted"}:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        fix = payload.get("record_fix") if isinstance(payload.get("record_fix"), dict) else {}
+        target = str(fix.get("target_event_key") or "")
+        if not target:
+            continue
+        if kind == "record_retracted":
+            amended[target] = {"status": "취소됨", "text": amended.get(target, {}).get("text", "")}
+        else:
+            amended[target] = {"status": "정정됨", "text": " ".join(str(fix.get("text_after") or "").split())}
+    return amended
+
+
+# --- The values the report holds, confirmed before they go in (lane N, decision 3)
+#
+# When the experiment ends the server lists the record's important values:
+# each measurement, each observation with a number in it, each point done
+# differently from the source (a deviation note, a later start, a confirmed
+# return within a repeat, a timer ended early) and each anomaly. The
+# researcher confirms them one by one by voice ("네"), corrects one (a
+# correction appended as in decision 2) or leaves the rest for the screen's
+# checklist. Each confirmation is its own event. A value confirmed carries
+# "실험자 확인" in the report; one left unconfirmed is listed apart under
+# "확인되지 않은 값", and model prose may not state it.
+
+REVIEW_CONFIRMED = "report_value_confirmed"
+REVIEW_DEFERRED = "report_review_deferred"
+#: Events about the record rather than new things recorded: they do not count
+#: as records added after the prose was written.
+REVIEW_EVENT_TYPES = frozenset({REVIEW_CONFIRMED, REVIEW_DEFERRED})
+_NUMBER_IN_TEXT = re.compile(r"\d")
+
+
+def report_review_items(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The values the report holds, each with whether the researcher confirmed it.
+
+    Read from the record alone, in the order recorded. ``item_id`` is stable:
+    it names the event the value came from, so a correction or a
+    confirmation made later still finds it. A withdrawn record is not listed.
+    """
+
+    amended = record_amendments(events)
+    confirmed: dict[str, str] = {}
+    for event in events:
+        if event.get("event_type") == REVIEW_CONFIRMED:
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            confirmed[str(payload.get("item_id") or "")] = " ".join(str(payload.get("text") or "").split())
+    items: list[dict[str, Any]] = []
+
+    def add(prefix: str, event: Mapping[str, Any], kind: str, text: str, **extra: Any) -> None:
+        key = str(event.get("event_key") or "")
+        change = amended.get(key, {})
+        if change.get("status") == "취소됨":
+            return
+        latest = change.get("text") or " ".join(text.split())
+        item_id = f"{prefix}.{key}"
+        items.append({
+            "item_id": item_id,
+            "kind": kind,
+            "step_label": str(event.get("step_label") or ""),
+            "text": latest,
+            "source_key": key,
+            "corrected": change.get("status") == "정정됨",
+            "original": " ".join(text.split()) if change.get("status") == "정정됨" else "",
+            "confirmed": confirmed.get(item_id) == latest,
+            **extra,
+        })
+
+    for event in events:
+        kind = str(event.get("event_type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        wording = str(event.get("user_wording") or "").strip()
+        record = payload.get("step_record") if isinstance(payload.get("step_record"), Mapping) else {}
+        if kind == "observation" and wording:
+            category = str(event.get("category") or "")
+            extra = {"workspace_event_key": payload.get("workspace_event_key")}
+            if category == "measurement":
+                add("r", event, "측정", wording, **extra)
+            elif category == "deviation":
+                add("r", event, "편차", wording, **extra)
+            elif category != "note" and _NUMBER_IN_TEXT.search(
+                amended.get(str(event.get("event_key") or ""), {}).get("text") or wording
+            ):
+                add("r", event, "관찰", _readable_record_text(wording), **extra)
+        elif kind == "anomaly" and wording:
+            add("r", event, "이상", wording)
+        elif kind == "steps_skipped":
+            skipped = [str(item) for item in record.get("skipped_step_labels") or ()]
+            if skipped:
+                start = str(record.get("start_step") or event.get("step_label") or "")
+                add("s", event, "건너뜀", f"{start}단계부터 시작({_ranges(skipped)} 건너뜀)")
+        elif kind == "repeat_returned":
+            round_ = record.get("round")
+            add("b", event, "돌아감",
+                f"{record.get('from_step') or ''}단계에서 {record.get('to_step') or event.get('step_label') or ''}"
+                f"단계로 돌아감"
+                + (f" — {round_}회차(말로 확인한 돌아가기 기준)" if round_ else ""))
+        elif kind == "step_completed":
+            timer = payload.get("timer") if isinstance(payload.get("timer"), dict) else {}
+            if timer.get("step_exited_before_timer_elapsed") or (
+                timer.get("completion_state") == "step_exited_before_timer_elapsed"
+            ):
+                try:
+                    elapsed = int(timer.get("elapsed_seconds") or 0)
+                    duration = int(timer.get("source_duration_seconds") or timer.get("duration_seconds") or 0)
+                except (TypeError, ValueError):
+                    continue
+                add("t", event, "타이머",
+                    f"원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냄")
+    return items
+
+
+def record_counts(records: Sequence["ReportRecord"], *, separator: str = " · ") -> str:
+    """"관찰 2건 · 이상 0건 · 사진 0건", with 측정·편차·메모 when there are any."""
+
+    live = [record for record in records if record.status != "취소됨"]
+    parts = []
+    for kind in _COUNTED_KINDS:
+        count = sum(1 for record in live if record.kind == kind)
+        if count or kind in _ALWAYS_COUNTED:
+            parts.append(f"{kind} {count}건")
+    return separator.join(parts)
 
 
 @dataclass(frozen=True)
@@ -1010,6 +1175,7 @@ class ReportReturn:
     to_label: str
     round: int | None  # counted from returns confirmed in words, not rounds done
     at: str  # local HH:MM
+    key: str = ""
 
 
 @dataclass(frozen=True)
@@ -1035,6 +1201,20 @@ class ReportStepFacts:
     completed_at: str
     timer_note: str
     records: tuple[ReportRecord, ...]
+    #: "machine" for a stored automatic translation, "reviewed" for a
+    #: reviewed one, "" for the source (lane N, decision 6).
+    translation: str = ""
+
+
+@dataclass(frozen=True)
+class StackedCell:
+    """A table cell with a line below in small type: the source under its Korean."""
+
+    main: str
+    below: str
+
+    def __str__(self) -> str:
+        return f"{self.main} — 원문: {self.below}"
 
 
 @dataclass(frozen=True)
@@ -1065,6 +1245,11 @@ class ReportFacts:
     #: uses (decision 4).
     item_step_texts: tuple[tuple[str, str], ...] = ()
     returns: tuple[ReportReturn, ...] = ()
+    #: Lane N, decision 3: the values the report holds and whether each was
+    #: confirmed; and the texts of those not confirmed, which model prose may
+    #: not state.
+    review: tuple[dict[str, Any], ...] = ()
+    unconfirmed_texts: tuple[str, ...] = ()
 
     @property
     def record_texts(self) -> tuple[str, ...]:
@@ -1084,6 +1269,9 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 korean = localized(step.step_id, "current_step")
             if korean:
                 korean = re.sub(r"^\s*\d+\s*단계\s*[:：]\s*", "", " ".join(korean.split()))
+            origin = getattr(fixture, "localization_source", None)
+            # Lane N, decision 6: a stored machine translation is shown as one.
+            translation = (origin(step.step_id, "current_step") or "") if korean and callable(origin) else ""
             expected = [" ".join(str(item.source_text).split()) for item in step.expected_results]
             whole = [source]
             for action in getattr(step, "sub_actions", ()) or ():
@@ -1096,6 +1284,7 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 "label": str(step.source_label), "step_id": str(step.step_id),
                 "section": title, "source_text": source,
                 "text": korean or source, "translated": bool(korean),
+                "translation": translation,
                 "expected": tuple(expected),
                 "timer": timers.get(step.step_id),
                 # The step's whole source text, its sub-actions too: where a
@@ -1133,6 +1322,7 @@ def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
         from voiney_lab.server import (
             _configured_candidate_fixture,
             _open_protocol_catalog,
+            _with_revision_translations,
             server_config,
         )
 
@@ -1150,6 +1340,12 @@ def report_protocol_fixture(report_data: Mapping[str, Any]) -> tuple[Any, str]:
         return None, "프로토콜 원문을 불러오지 못했다"
     if revision and getattr(fixture, "revision_id", revision) != revision:
         return None, "기록의 프로토콜 버전과 지금 프로토콜 버전이 달라 원문을 싣지 않았다"
+    # Lane N, decision 6: the Korean a session shows for the steps -- stored
+    # translations that pass their check again -- read, never started here.
+    try:
+        fixture = _with_revision_translations(fixture, start_missing=False)
+    except Exception as exc:  # noqa: BLE001 -- the source is used instead
+        log.warning("report translations not read error=%s", type(exc).__name__)
     return fixture, ""
 
 
@@ -1430,7 +1626,8 @@ def build_report_facts(
     # timer start, a later start's skipped steps, and returns within a repeat.
     completions: dict[str, list[tuple[datetime | None, int | None]]] = {}
     timer_starts: dict[str, list[tuple[datetime | None, int]]] = {}
-    skip: tuple[str, list[str]] | None = None
+    skip: tuple[str, list[str], str] | None = None
+    early_keys: dict[str, str] = {}
     returns: list[ReportReturn] = []
 
     def step_record(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1443,11 +1640,45 @@ def build_report_facts(
         except (TypeError, ValueError):
             return None
 
-    def add_record(label: str, kind: str, text: str, at: datetime | None) -> None:
+    # Lane N, decision 2: corrections and withdrawals, by the record they amend.
+    amendments = {
+        key: (value["status"], value["text"]) for key, value in record_amendments(events).items()
+    }
+    # Lane N, decision 3: the values the report holds, and which were confirmed.
+    review = report_review_items(events)
+    # A value is "not confirmed" once the researcher was asked about it (by
+    # voice, or on the screen) and has not confirmed it; before any review a
+    # record makes no claim either way.
+    review_offered = any(str(event.get("event_type") or "") in REVIEW_EVENT_TYPES for event in events)
+    confirmed_keys = {item["source_key"] for item in review if item["confirmed"]}
+    unconfirmed_keys = (
+        {item["source_key"] for item in review if not item["confirmed"]} if review_offered else set()
+    )
+    unconfirmed_texts: list[str] = []
+
+    def add_record(label: str, kind: str, text: str, at: datetime | None, key: str = "") -> None:
+        first = _readable_record_text(text)
+        status, latest = amendments.get(key, ("", "")) if key else ("", "")
         records.append(ReportRecord(
             number=len(records) + 1, step_label=label, kind=kind,
-            text=_readable_record_text(text), at=at.strftime("%H:%M") if at else "",
+            text=latest or first, at=at.strftime("%H:%M") if at else "",
+            status=status, original=first if status else "", key=key,
+            confirmed=bool(key) and key in confirmed_keys,
         ))
+        if key and key in unconfirmed_keys:
+            unconfirmed_texts.append(latest or first)
+
+    def point(line: str, key: str) -> str:
+        """A point done differently, as corrected and confirmed (decisions 2-3)."""
+
+        status, latest = amendments.get(key, ("", "")) if key else ("", "")
+        if status == "정정됨" and latest:
+            line = f"{latest} (정정됨 — 처음 기록 “{line.rstrip('.')}”)."
+        if key and key in unconfirmed_keys:
+            unconfirmed_texts.append(line)
+        if key and key in confirmed_keys:
+            line = (line[:-1] if line.endswith(".") else line) + " (실험자 확인)."
+        return line
 
     for event in events:
         kind = str(event.get("event_type") or "")
@@ -1472,14 +1703,18 @@ def build_report_facts(
                         int(timer.get("elapsed_seconds") or 0),
                         int(timer.get("source_duration_seconds") or timer.get("duration_seconds") or 0),
                     )
+                    early_keys[label] = str(event.get("event_key") or "")
                 except (TypeError, ValueError):
                     pass
         elif kind == "step_advanced" and label:
             advanced.append(label)
         elif kind == "observation" and label:
-            add_record(label, "관찰", wording or str(payload.get("text") or "관찰 기록"), at)
+            add_record(label, RECORD_KINDS.get(str(event.get("category") or ""), "관찰"),
+                       wording or str(payload.get("text") or "관찰 기록"), at,
+                       str(event.get("event_key") or ""))
         elif kind == "anomaly" and label:
-            add_record(label, "이상", wording or str(payload.get("text") or "이상 보고"), at)
+            add_record(label, "이상", wording or str(payload.get("text") or "이상 보고"), at,
+                       str(event.get("event_key") or ""))
         elif kind == "photo_attached" and label:
             add_record(label, "사진", f"사진 첨부 — {wording}" if wording else "사진 첨부", at)
         elif kind == "timer_started" and label:
@@ -1496,12 +1731,13 @@ def build_report_facts(
             record = step_record(payload)
             skipped = [str(item) for item in record.get("skipped_step_labels") or ()]
             if skipped:
-                skip = (str(record.get("start_step") or label), skipped)
+                skip = (str(record.get("start_step") or label), skipped, str(event.get("event_key") or ""))
         elif kind == "repeat_returned":
             record = step_record(payload)
             returns.append(ReportReturn(
                 from_label=str(record.get("from_step") or ""), to_label=str(record.get("to_step") or label),
                 round=whole_number(record.get("round")), at=at.strftime("%H:%M") if at else "",
+                key=str(event.get("event_key") or ""),
             ))
         elif kind == "workflow_paused":
             pauses.append((label, at, None))
@@ -1590,13 +1826,14 @@ def build_report_facts(
             source_timer_seconds=defined, completed=label in completed_at,
             completed_at=completion_words(label),
             timer_note=note, records=tuple(r for r in records if r.step_label == label),
+            translation=str(source.get("translation") or ""),
         ))
 
     # What was done differently from the source, from the record only.
     deviations: list[str] = []
     if skip is not None:
         # Decision 6: a confirmed later start, as its event records it.
-        deviations.append(f"{skip[0]}단계부터 시작({_ranges(skip[1])} 건너뜀).")
+        deviations.append(point(f"{skip[0]}단계부터 시작({_ranges(skip[1])} 건너뜀).", skip[2]))
     elif source_steps and completed_labels:
         # No event says so: inferred from the first step recorded.
         first = min(order.get(label, 0) for label in completed_labels)
@@ -1606,17 +1843,24 @@ def build_report_facts(
     for back in returns:
         # The round counts returns confirmed in words, not rounds done at the bench.
         round_words = f"{back.round}회차(말로 확인한 돌아가기 기준)" if back.round else "회차 기록 없음"
-        deviations.append(f"{back.from_label}단계에서 {back.to_label}단계로 돌아갔다 — {round_words}"
-                          + (f", {back.at}." if back.at else "."))
+        deviations.append(point(f"{back.from_label}단계에서 {back.to_label}단계로 돌아갔다 — {round_words}"
+                                + (f", {back.at}." if back.at else "."), back.key))
     for label in completed_labels:
         if label in early:
             elapsed, duration = early[label]
-            deviations.append(
-                f"{label}단계: 원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냈다(타이머를 일찍 끝냄)."
-            )
+            deviations.append(point(
+                f"{label}단계: 원문 시간 {_duration_words(duration)} 중 {_duration_words(elapsed)}에 단계를 끝냈다(타이머를 일찍 끝냄).",
+                early_keys.get(label, ""),
+            ))
     for record in records:
-        if record.kind == "관찰" and "반복" in record.text:
-            deviations.append(f"{record.step_label}단계: 연구자 기록 — “{record.text}”.")
+        if record.status == "취소됨":
+            continue
+        if record.kind == "편차" or (record.kind == "관찰" and "반복" in record.text):
+            line = f"{record.step_label}단계: 연구자 기록 — “{record.text}”."
+            if record.key and record.key in unconfirmed_keys:
+                unconfirmed_texts.append(line)
+            deviations.append(
+                (line[:-1] + " (실험자 확인).") if record.confirmed and record.kind == "편차" else line)
     for label, paused_at, resumed_at in pauses:
         if paused_at and resumed_at:
             deviations.append(
@@ -1635,17 +1879,23 @@ def build_report_facts(
             where = f"{stop_label}단계에서 " if stop_label else ""
             deviations.append(f"{where}실험을 끝내 {_ranges(after)}는 수행하지 않았다.")
 
-    observations = [r for r in records if r.kind == "관찰"]
-    anomalies = [r for r in records if r.kind == "이상"]
-    photos = [r for r in records if r.kind == "사진"]
+    live = [r for r in records if r.status != "취소됨"]
+    observations = [r for r in live if r.kind == "관찰"]
+    anomalies = [r for r in live if r.kind == "이상"]
+    photos = [r for r in live if r.kind == "사진"]
     confirmed: list[str] = []
     if completed_labels:
         confirmed.append(f"완료로 기록된 단계는 {_ranges(completed_labels)}이다.")
-    for record in observations:
-        if record.text.startswith("원문의 끝 조건"):
+    for record in live:
+        if record.key and record.key in unconfirmed_keys:
+            # Lane N, decision 3: listed apart, under "확인되지 않은 값".
+            continue
+        if record.kind == "관찰" and record.text.startswith("원문의 끝 조건"):
             confirmed.append(f"{record.step_label}단계: 연구자가 {record.text}.")
-        else:
+        elif record.kind == "관찰":
             confirmed.append(f"{record.step_label}단계에서 연구자가 “{record.text}”라고 기록했다.")
+        elif record.kind in {"측정", "메모"}:
+            confirmed.append(f"{record.step_label}단계에서 연구자가 “{record.text}”라고 기록했다({record.kind}).")
     waited = [label for label in completed_labels if label in timer_started and label not in early]
     if waited:
         confirmed.append(f"타이머를 켠 {_ranges(waited)}는 타이머를 켠 뒤 완료했다(실제 걸린 시간은 3-2의 표).")
@@ -1692,7 +1942,7 @@ def build_report_facts(
         ("걸린 시간", _duration_words((ended - started).total_seconds()) if started and ended else "진행 중"),
         ("완료 단계", f"{len(completed_labels)} / {total}" if total else str(len(completed_labels))),
         ("결과", outcome_words),
-        ("기록", f"관찰 {len(observations)}건 · 이상 {len(anomalies)}건 · 사진 {len(photos)}건"),
+        ("기록", record_counts(records)),
         ("프로토콜 승인 상태", _approval_words(report_data)),
     ) + ((("준비 검사", "시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀"),) if gates_skipped else ())
 
@@ -1724,6 +1974,8 @@ def build_report_facts(
         materials=materials, equipment=equipment, deviations=tuple(deviations),
         confirmed=tuple(confirmed), to_check=tuple(to_check), protocol_reference=reference,
         zone=zone, items=items, returns=tuple(returns),
+        review=tuple(review) if review_offered else (),
+        unconfirmed_texts=tuple(dict.fromkeys(unconfirmed_texts)),
         item_step_texts=tuple(
             (step["label"], str(step.get("whole_source_text") or step["source_text"])[:400])
             for step in source_steps if any(step["label"] in item.steps for item in items)
@@ -1824,9 +2076,13 @@ def _measures(text: str) -> list[tuple[str, str, str]]:
 def _record_texts(facts: ReportFacts) -> list[str]:
     """Every text a number in a model section may come from."""
 
+    # Lane N, decision 3: a value the researcher did not confirm is listed
+    # apart, and model prose may not state it; nor a withdrawn record.
+    unconfirmed = set(facts.unconfirmed_texts)
     texts: list[str] = [facts.protocol_title, facts.keywords, facts.purpose_from_pdf]
     texts += [value for _, value in facts.run_rows]
-    texts += list(facts.deviations) + list(facts.confirmed) + list(facts.to_check)
+    texts += [line for line in facts.deviations if line not in unconfirmed]
+    texts += list(facts.confirmed) + list(facts.to_check)
     texts += list(facts.materials) + list(facts.equipment) + list(facts.sections)
     for step in facts.steps:
         texts += [step.label, step.text, step.source_text, step.completed_at, step.timer_note, *step.expected]
@@ -1835,7 +2091,8 @@ def _record_texts(facts: ReportFacts) -> list[str]:
     # The source steps the model reads for the items' uses (decision 4) are
     # the source too, performed or not.
     texts += [text for _, text in facts.item_step_texts]
-    texts += [f"{record.number} {record.text} {record.at}" for record in facts.records]
+    texts += [f"{record.number} {record.text} {record.at}" for record in facts.records
+              if record.text not in unconfirmed and record.status != "취소됨"]
     texts.append(str(facts.total_steps))
     texts.append(" ".join(str(n) for n in range(1, facts.total_steps + 1)))
     texts.append(" ".join(str(n) for n in range(0, len(facts.records) + 1)))
@@ -1866,6 +2123,55 @@ def _as_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+#: Lane N, decision 8: a number of rounds or repetitions in a model sentence
+#: ("총 2회 반복", "2회차", "두 번 반복"). Rounds are counted from returns
+#: confirmed in words, and a sentence giving one must say so.
+_ROUND_COUNT = re.compile(
+    r"\d+\s*(?:회|번)\s*(?:째\s*)?(?:반복|차)|회차|반복\s*\d+\s*(?:회|번)"
+    r"|(?:한|두|세|네|다섯)\s*(?:번|차례)\s*(?:째\s*)?(?:반복|돌|수행)"
+    r"|\d+\s*회\s*(?:수행|실시|진행)"
+)
+ROUND_BASIS = "말로 확인한 돌아가기 기준"
+
+#: Lane N, decision 7: the words a general-knowledge background may not hold
+#: -- an instruction, a safety direction -- beyond numbers, units, citations
+#: and identifiers.
+_GENERAL_INSTRUCTION = re.compile(
+    r"하세요|하십시오|해라|하라|할 것|해야|하지 마|마세요|마십시오|반드시|금지"
+)
+GENERAL_BACKGROUND_LABEL = "AI 일반 지식 — 출처 없음, 확인 필요"
+#: A background that says the source has none ("원문에는 원리가 기재되어 있지 않다").
+_SOURCE_SAYS_NONE = re.compile(
+    r"(?:원문|프로토콜|문서|자료)[^.。]{0,40}(?:없[다으음었]|않[다는았으음]|찾지\s*못)"
+)
+
+
+def general_background_problems(text: str) -> list[str]:
+    """Why a general-knowledge background may not be used (decision 7)."""
+
+    problems: list[str] = []
+    plain = " ".join(text.split())
+    if not plain:
+        return ["빈 문단"]
+    if re.search(r"\d", plain):
+        problems.append("숫자")
+    if _USE_UNIT.search(plain):
+        problems.append("단위")
+    if _CITATION.search(plain):
+        problems.append("출처 번호")
+    if _GENERAL_INSTRUCTION.search(plain):
+        problems.append("절차·지시")
+    if any(word in plain for word in _USE_SAFETY):
+        problems.append("안전 지시")
+    for name, shape in _IDENTIFIER_SHAPES:
+        if shape.search(plain):
+            problems.append(f"본문에 {name}")
+    sentences = [part for part in _SENTENCE.split(plain) if part.strip()]
+    if not 2 <= len(sentences) <= 5 or len(plain) > 500:
+        problems.append("길이(3–4문장)")
+    return problems
+
+
 def check_report_sections(
     sections: Mapping[str, Any],
     facts: ReportFacts,
@@ -1875,7 +2181,14 @@ def check_report_sections(
     allowed = _allowed_numbers(facts)
     allowed_measures = _allowed_measures(facts)
     record_texts = [" ".join(text.split()) for text in facts.record_texts]
-    reviewable = set(range(1, len(facts.records) + len(facts.deviations) + 1))
+    # Lane N: an item the researcher did not confirm is not one to build on.
+    unconfirmed = set(facts.unconfirmed_texts)
+    reviewable = {
+        number for number in range(1, len(facts.records) + len(facts.deviations) + 1)
+        if not (number <= len(facts.records) and facts.records[number - 1].text in unconfirmed)
+        and not (number > len(facts.records)
+                 and facts.deviations[number - len(facts.records) - 1] in unconfirmed)
+    }
     reasons: dict[str, list[str]] = {}
     for key in MODEL_SECTIONS:
         value = sections.get(key)
@@ -1905,6 +2218,9 @@ def check_report_sections(
                 problems.append("기록·원문에 없는 숫자 " + ", ".join(sorted(extra, key=lambda x: (len(x), x))[:6]))
             if cited:
                 problems.append("방법·결과·고찰 칸의 출처 번호")
+        if key not in {"purpose", "background"} and _ROUND_COUNT.search(text) and ROUND_BASIS not in text:
+            # Lane N, decision 8: a round counted with no basis.
+            problems.append(f"회차를 ‘{ROUND_BASIS}’ 없이 씀")
         if key in {"results_summary", "methods_summary"}:
             for word in _SPECULATION:
                 if word in text:
@@ -1928,6 +2244,11 @@ def check_report_sections(
                     break
         if problems:
             reasons[key] = problems
+    general = sections.get("background_general")
+    if general:
+        problems = general_background_problems(_as_text(general))
+        if problems:
+            reasons["background_general"] = problems
     return reasons
 
 
@@ -2038,6 +2359,9 @@ class ReportNarrative:
     #: (decision 4), by the item's name; and each use left blank, with why.
     item_uses: Mapping[str, str] = field(default_factory=dict)
     item_uses_rejected: tuple[tuple[str, str], ...] = ()
+    #: Lane N, decision 7: the background is the model's general knowledge,
+    #: the source having none -- labelled "AI 일반 지식 — 출처 없음, 확인 필요".
+    background_general: bool = False
 
     # Earlier names, kept for callers written before lane RP.
     @property
@@ -2093,9 +2417,11 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
         ) + " 단계별 절차와 원문 조건은 3-2의 표에 원문 그대로 적었다."
     else:
         methods = "완료로 기록된 단계가 없다."
-    counts = {kind: sum(1 for r in facts.records if r.kind == kind) for kind in ("관찰", "이상", "사진")}
+    live = [r for r in facts.records if r.status != "취소됨"]
+    counts = {kind: sum(1 for r in live if r.kind == kind) for kind in ("관찰", "이상", "사진")}
+    counted = record_counts(facts.records, separator=", ")
     if facts.records:
-        results = (f"관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다. "
+        results = (f"{counted}이 기록되었다. "
                    "내용은 위 표에 연구자가 말한 그대로 적었다.")
     else:
         results = "기록된 관찰이 없습니다."
@@ -2107,7 +2433,7 @@ def deterministic_sections(facts: ReportFacts) -> dict[str, Any]:
         conclusion = f"{facts.total_steps}단계 중 {done}단계를 완료로 기록하고{where} 실험을 중단했다."
     else:
         conclusion = f"{facts.total_steps}단계 중 {done}단계가 완료로 기록되었고 실험이 진행 중이다."
-    conclusion += f" 관찰 {counts['관찰']}건, 이상 {counts['이상']}건, 사진 {counts['사진']}건이 기록되었다."
+    conclusion += f" {counted}이 기록되었다."
     next_steps: list[str] = []
     if facts.outcome == "stopped" and facts.stop_label:
         next_steps.append(f"{facts.stop_label}단계부터 이어서 진행한다.")
@@ -2183,6 +2509,21 @@ def narrative_from_sections(
             else:
                 # The model left it empty: not a refusal, but not its words.
                 origin[key] = "모델이 비움 — 서버 문장"
+    # Lane N, decision 7: with no background in the source the model may give
+    # a short one from general knowledge; used only when it passes its check
+    # and the source background was not used (or only said there is none).
+    general = " ".join(str((model or {}).get("background_general") or "").split())
+    said = " ".join(str((model or {}).get("background") or "").split())
+    background_general = False
+    if (
+        general
+        and "background_general" not in rejected
+        # Only where the model found no background in the source: a source
+        # background refused by its check is not replaced by general knowledge.
+        and (not said or _SOURCE_SAYS_NONE.search(said))
+    ):
+        chosen["background"], origin["background"] = general, "모델 (AI 일반 지식)"
+        background_general = True
     # Discussion (가) and (나) are lists the server builds from the record
     # (decision 2); the model does not write them.
     for key in ("discussion_confirmed", "discussion_to_check"):
@@ -2198,6 +2539,7 @@ def narrative_from_sections(
         facts=facts, sources=(facts.protocol_reference,), section_origin=origin,
         rejected=rejected, writer=writer, written_at=written_at or _now(),
         item_uses=item_uses, item_uses_rejected=item_uses_rejected,
+        background_general=background_general,
     )
 
 
@@ -2257,28 +2599,45 @@ _WRITER_INSTRUCTIONS = """너는 실험 보고서를 쓰는 연구자를 돕는�
 - 숫자와 단위는 사실 JSON 에 있는 그대로 쓴다. 바꾸거나 계산해서 새 숫자를 만들지 않는다.
 - 목적·배경 칸에는 온도·시간·농도·부피·회전수 같은 실험 조건 숫자를 쓰지 않는다.
 - 목적 칸의 모든 문장 끝에 출처 번호 [1](프로토콜 원문)을 단다.
-- 'background' 는 프로토콜 원문에 있는 내용만 쓴다. 원문 밖의 지식(교과서·웹 지식)은 쓰지 않는다. 원문에 원리 설명이 없으면 없다고 쓴다.
+- 'background' 는 프로토콜 원문에 원리·배경 설명이 있을 때만 원문 내용으로 쓰고 문장 끝에 [1] 을 단다. 원문에 그런 설명이 없으면 'background' 는 빈 문자열 "" 로 두고, 'background_general' 에 이 실험의 원리를 일반 지식으로 3–4문장 쓴다. 'background_general' 에는 숫자·단위·절차·지시("~하세요", "~해야 한다")·안전 지시·출처 번호·식별자를 쓰지 않는다. 서버가 'AI 일반 지식 — 출처 없음, 확인 필요' 표시를 붙인다. 원문에 설명이 있으면 'background_general' 은 쓰지 않는다.
+- 회차나 반복 횟수("2회 반복", "2회차")를 쓸 때는 반드시 '말로 확인한 돌아가기 기준' 이라는 말을 같은 문장에 쓴다. 기록에 있는 회차만 쓴다.
 - 기록 ID, 버전, 해시, 영어 상태값, 명령 이름, 밀리초 시각은 쓰지 않는다.
 - 원인 추정은 'discussion_review' 에만, '검토할 수 있는 항목' 의 번호에 붙여서 쓴다. 그런 항목이 없으면 빈 목록이다.
 - 고찰의 '기록에서 확인되는 점'과 '확인이 필요한 점'은 서버가 기록에서 목록으로 만든다. 다시 쓰지 않는다.
+- '확인되지 않은 값' 은 실험자가 아직 확인하지 않은 값이다. 서버가 보고서에 따로 적으므로, 어느 칸에도 그 값(숫자·문구)을 쓰지 않는다.
 - 'item_uses' 는 '재료·장비' 의 항목마다 그 항목이 이 실험에서 하는 일을 짧은 한국어 명사구로 쓴다(예: "세균 배양 배지", "휘발성 물질 흡착"). '재료·장비가 나오는 원문 단계' 에서 알 수 있는 것만 쓰고, 알 수 없으면 그 항목은 뺀다. 25자 안, 숫자·단위 없이, 안전 지시나 절차 지시("~하세요", "~한 뒤") 없이 쓴다. 목록에 없는 항목은 쓰지 않는다.
 
 JSON 객체 하나만 돌려준다. 키:
-purpose (1–3문장), background, methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
+purpose (1–3문장), background, background_general (원문에 배경이 없을 때만), methods_summary (수행한 단계를 묶어 요약, 주요 조건은 원문 값 그대로),
 results_summary (기록된 관찰·이상·사진을 1–3문장으로, 관찰은 기록 문구를 따옴표로 그대로),
 discussion_review (목록, 각 항목 {"항목 번호": 숫자, "제안": 문장}), conclusion (어디까지 했고 무엇이 기록됐는지), next_steps (문장 목록),
 item_uses (목록, 각 항목 {"번호": '재료·장비' 의 번호, "용도": 명사구})."""
 
 
+def _reviewable_numbers(facts: ReportFacts) -> dict[int, str]:
+    """The items a cause suggestion may name: anomalies and deviations, less
+    what the researcher was asked about and did not confirm (lane N)."""
+
+    unconfirmed = set(facts.unconfirmed_texts)
+    items = {
+        record.number: f"이상: {record.text}"
+        for record in facts.records
+        if record.kind == "이상" and record.status != "취소됨" and record.text not in unconfirmed
+    }
+    items.update({
+        len(facts.records) + index: f"원문과 다르게 한 점: {text}"
+        for index, text in enumerate(facts.deviations, 1) if text not in unconfirmed
+    })
+    return items
+
+
 def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
     """What the model reads: experiment content only, no identifiers (decision 3)."""
 
+    labels = {record.number: record.step_label for record in facts.records}
     reviewable = [
-        {"항목 번호": record.number, "단계": record.step_label, "내용": f"이상: {record.text}"}
-        for record in facts.records if record.kind == "이상"
-    ] + [
-        {"항목 번호": len(facts.records) + index, "내용": f"원문과 다르게 한 점: {text}"}
-        for index, text in enumerate(facts.deviations, 1)
+        {"항목 번호": number, **({"단계": labels[number]} if number in labels else {}), "내용": text}
+        for number, text in sorted(_reviewable_numbers(facts).items())
     ]
     return {
         "프로토콜": facts.protocol_title,
@@ -2294,7 +2653,11 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
         "수행한 단계": [
             {
                 "단계": step.label, "묶음": step.section,
-                "원문": step.text, "완료": step.completed,
+                # Lane N, decision 6: a stored machine translation as the
+                # Korean, marked, with the source beside it.
+                **({"원문": step.source_text, "한국어(자동 번역)": step.text}
+                   if step.translation == "machine" else {"원문": step.text}),
+                "완료": step.completed,
                 **({"완료 시각": step.completed_at} if step.completed_at else {}),
                 **({"타이머": step.timer_note} if step.timer_note else {}),
                 **({"원문 기대 결과": list(step.expected)} if step.expected else {}),
@@ -2302,8 +2665,15 @@ def _writer_facts(facts: ReportFacts) -> dict[str, Any]:
             for step in facts.steps
         ],
         "기록": [
-            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at}
+            {"번호": r.number, "단계": r.step_label, "종류": r.kind, "내용": r.text, "시각": r.at,
+             **({"상태": r.status} if r.status else {}),
+             **({"실험자 확인": True} if r.confirmed else {})}
             for r in facts.records
+            if r.status != "취소됨" and r.text not in set(facts.unconfirmed_texts)
+        ],
+        "확인되지 않은 값": [
+            f"{item['step_label']}단계 {item['kind']}: {item['text']}"
+            for item in facts.review if not item["confirmed"]
         ],
         "원문과 다르게 한 점": list(facts.deviations),
         "서버가 찾은 확인이 필요한 점": list(facts.to_check),
@@ -2509,6 +2879,28 @@ class ReportProsePreparer:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running: dict[tuple[str, str], threading.Event] = {}
+        #: Reports whose values are being confirmed by voice (lane N,
+        #: decision 3): their prose waits until the review ends.
+        self._held: set[tuple[str, str]] = set()
+
+    def hold(self, store: ExperimentReportStore, report_id: str) -> None:
+        """Keep the prose back while the report's values are confirmed by voice."""
+
+        with self._lock:
+            self._held.add(self._key(store, report_id))
+
+    def release(self, store: ExperimentReportStore, report_id: str) -> bool:
+        """End a hold; True when there was one."""
+
+        with self._lock:
+            key = self._key(store, report_id)
+            held = key in self._held
+            self._held.discard(key)
+            return held
+
+    def held(self, store: ExperimentReportStore, report_id: str) -> bool:
+        with self._lock:
+            return self._key(store, report_id) in self._held
 
     @staticmethod
     def _key(store: ExperimentReportStore, report_id: str) -> tuple[str, str]:
@@ -2523,6 +2915,8 @@ class ReportProsePreparer:
         with self._lock:
             if key in self._running:
                 return "preparing"
+            if key in self._held:
+                return "awaiting_review"
             report = store.get_report(report_id)
             if report["status"] == "in_progress":
                 return "not_finished"
@@ -2532,7 +2926,8 @@ class ReportProsePreparer:
             if brain is None or not brain.client:
                 store.save_prose(report_id, writer=SERVER_WRITER, reply=None,
                                  failure="보고서 모델이 설정되지 않음",
-                                 event_count=len(report["events"]))
+                                 event_count=len([e for e in report["events"]
+                                                  if e.get("event_type") not in REVIEW_EVENT_TYPES]))
                 return "ready"
             done = threading.Event()
             self._running[key] = done
@@ -2550,7 +2945,7 @@ class ReportProsePreparer:
         try:
             report = store.get_report(report_id)
             events = list(report["events"])
-            count = len(events)
+            count = len([e for e in events if e.get("event_type") not in REVIEW_EVENT_TYPES])
             reply, failure = asyncio.run(brain.write_reply(brain.facts_for(report, events)))
             store.save_prose(report_id, writer=brain.model, reply=reply, failure=failure,
                              event_count=count)
@@ -2576,15 +2971,20 @@ class ReportProsePreparer:
 
         with self._lock:
             preparing = self._key(store, report_id) in self._running
+            held = self._key(store, report_id) in self._held
         report = store.get_report(report_id)
         prose = None if preparing else store.get_prose(report_id)
         status: dict[str, Any] = {"report_id": report_id, "ai_written": False, "new_records": 0}
+        recorded = [e for e in report["events"] if e.get("event_type") not in REVIEW_EVENT_TYPES]
         if preparing:
             status.update(state="preparing", label="보고서 준비 중 — 실험 기록으로 보고서 문장을 쓰고 있습니다.")
+        elif held and prose is None:
+            status.update(state="awaiting_review",
+                          label="보고서에 넣을 값을 확인하는 중입니다. 확인이 끝나면 보고서 문장을 준비합니다.")
         elif prose is not None:
             ai = prose["reply"] is not None
             status.update(state="ready", ai_written=ai, prepared_at=prose["prepared_at"],
-                          new_records=max(0, len(report["events"]) - int(prose["event_count"])))
+                          new_records=max(0, len(recorded) - int(prose["event_count"])))
             if ai:
                 label = f"보고서 준비됨 — AI({prose['writer']}) 문장 중 서버 검사를 통과한 것만 씁니다."
             elif prose["writer"] == SERVER_WRITER:
@@ -2619,7 +3019,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks += [("h1", "1. 실험 목적"), ("p", narrative.purpose)]
 
     blocks += [("h1", "2. 배경·원리"), ("p", narrative.background),
-               ("note", "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
+               ("note", GENERAL_BACKGROUND_LABEL if narrative.background_general
+                else "외부 자료는 쓰지 않았다. 이 칸은 프로토콜 원문만으로 썼다.")]
 
     blocks += [("h1", "3. 재료 및 방법"), ("h2", "3-1. 재료와 장비")]
     if facts.items:
@@ -2645,9 +3046,16 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h2", "3-2. 수행한 단계"))
     rows: list[tuple[str, ...]] = []
     for step in facts.steps:
+        if step.translation == "machine" and step.text and step.source_text:
+            # Lane N, decision 6: the stored Korean, marked as a machine
+            # translation, with the source under it in small type.
+            shown: Any = StackedCell(f"{step.text} (자동 번역)", step.source_text)
+        elif step.text:
+            shown = step.text + ("" if step.translated else " (원문 영어)")
+        else:
+            shown = "(원문을 불러오지 못함)"
         rows.append((
-            step.label,
-            (step.text + ("" if step.translated else " (원문 영어)")) if step.text else "(원문을 불러오지 못함)",
+            step.label, shown,
             step.completed_at or ("완료 기록 없음" if not step.completed else ""), step.timer_note or "—"))
         # Decision 6: a confirmed return, under the step it was made at.
         for back in facts.returns:
@@ -2667,9 +3075,22 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h1", "4. 결과"))
     if facts.records:
         blocks.append(_table(("단계", "종류", "기록 내용 (연구자가 말한 그대로)", "시각"), tuple(
-            (r.step_label, r.kind, r.text, r.at) for r in facts.records)))
+            (r.step_label, r.kind, r.shown, r.at) for r in facts.records)))
     else:
         blocks.append(("p", "기록된 관찰이 없습니다."))
+    # Lane N, decision 3: what the researcher confirmed, and what not, apart.
+    unconfirmed = [item for item in facts.review if not item["confirmed"]]
+    if unconfirmed:
+        blocks += [
+            ("h2", "확인되지 않은 값"),
+            ("note", "실험이 끝난 뒤 실험자가 아직 확인하지 않은 값이다. 화면의 확인 목록에서 확인하면 이 칸에서 빠진다."),
+            ("list", tuple(
+                f"{item['step_label']}단계 {item['kind']}: {item['text']}" if item["step_label"]
+                else f"{item['kind']}: {item['text']}"
+                for item in unconfirmed)),
+        ]
+    elif facts.review:
+        blocks.append(("note", f"보고서에 넣은 중요 값 {len(facts.review)}개를 실험자가 모두 확인했다(표의 ‘실험자 확인’)."))
     if facts.records:
         blocks += [("h2", "요약"), ("p", narrative.results_summary)]
 
@@ -2705,6 +3126,10 @@ def authorship_line(narrative: ReportNarrative) -> str:
     facts = narrative.facts
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
+    if narrative.background_general:
+        return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
+                f"작성했다. 배경·원리 문단은 원문에 설명이 없어 AI 가 일반 지식으로 썼으며 출처가 없다. "
+                f"외부 자료는 쓰지 않았다. 작성 {when}.")
     if narrative.item_uses or any(narrative.section_origin.get(key) == "모델" for key in MODEL_SECTIONS):
         return (f"이 보고서의 문장 일부는 AI({narrative.writer})가 실험 기록과 프로토콜 원문을 바탕으로 "
                 f"작성했으며, 외부 자료는 쓰지 않았다. 작성 {when}.")
@@ -2733,6 +3158,8 @@ def _table(header: tuple[str, ...], rows: tuple[tuple[Any, ...], ...]) -> tuple[
 
 def render_markdown(narrative: ReportNarrative) -> str:
     def cell(value: Any) -> str:
+        if isinstance(value, StackedCell):
+            return (f"{cell(value.main)}<br><small>원문: {cell(value.below)}</small>")
         return " ".join(str(value).split()).replace("|", "\\|") or " "
 
     lines: list[str] = []
@@ -2851,6 +3278,16 @@ def render_docx(narrative: ReportNarrative) -> bytes:
             for row in rows:
                 cells = table.add_row().cells
                 for index, value in enumerate(row):
+                    if isinstance(value, StackedCell):
+                        # Lane N, decision 6: the source under its Korean,
+                        # in the same cell, in small grey type.
+                        cells[index].text = value.main
+                        below = cells[index].add_paragraph().add_run(f"원문: {value.below}")
+                        below.font.size = Pt(7.5)
+                        below.font.color.rgb = RGBColor(110, 110, 110)
+                        for run in cells[index].paragraphs[0].runs:
+                            run.font.size = Pt(9)
+                        continue
                     cells[index].text = str(value)
                     for paragraph in cells[index].paragraphs:
                         for run in paragraph.runs:

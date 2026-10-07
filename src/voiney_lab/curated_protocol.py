@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -64,6 +64,7 @@ from voiney_lab.semantic_intent import (
     SemanticIntentProposal,
     SemanticIntentSettings,
     evaluate_semantic_proposal,
+    has_completion_evidence,
     normalize_semantic_utterance,
     semantic_fallback_reason,
 )
@@ -134,6 +135,8 @@ class CuratedProtocolAction(str, Enum):
     STEP_RANGE = "step_range"
     LAB_DOMAIN_QA = "lab_domain_qa"
     REPORT_HANDOFF = "report_handoff"
+    RECORD_CORRECTION = "record_correction"
+    REPORT_REVIEW = "report_review"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -520,6 +523,17 @@ class CuratedProtocolTurnPlan:
     #: a later start skipped, a completion of a step already completed in an
     #: earlier round. None for every other turn.
     step_record: dict[str, Any] | None = None
+    #: A note said aloud (lane N, decision 1): its kind, its words as the STT
+    #: gave them, the step and the values read back once it is stored.
+    note_record: dict[str, Any] | None = None
+    #: A correction or withdrawal of a stored note (lane N, decision 2): the
+    #: record it amends, the words before and after. Applied by the server,
+    #: appended beside the record, which itself is never changed.
+    record_fix: dict[str, Any] | None = None
+    #: The report's values confirmed by voice after the experiment ended
+    #: (lane N, decision 3): what this turn confirmed, corrected or left for
+    #: the screen, and whether the review is over.
+    report_review: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -1321,6 +1335,8 @@ class CuratedControlIntent:
     #: A spill, a knock-over or an overflow said as having happened (lane
     #: R7's reading): the front rules record it (lane RT, decision 6).
     spill_reported: bool = False
+    #: A correction of the last note asked for and confirmed (lane N, decision 2).
+    record_fix: dict[str, Any] | None = None
 
 
 class DiscourseFocusKind(str, Enum):
@@ -2781,6 +2797,17 @@ FRONT_RULES: dict[str, str] = {
                      "step: asked once, '1~(N-1)단계는 건너뛰고 N단계부터 "
                      "시작할까요?'; a yes starts at N and the skipped steps are "
                      "recorded (lane R7, decision 3)",
+    "note_record": "'실험노트에 적어 줘 / 기록해 줘 / 메모해 줘 / 메모 추가해' with "
+                   "words: the words are recorded at the current step as the STT "
+                   "gave them, as a measurement, a deviation, an observation or "
+                   "a memo by rule, and read back once stored (lane N, decision 1)",
+    "record_fix": "'방금 기록 고쳐 줘, X가 아니라 Y' or '방금 기록 지워 줘': asked "
+                  "once, '방금 기록 …을 …로 고칠까요?'; a yes appends the "
+                  "correction beside the record, which is kept (lane N, decision 2)",
+    "report_review": "once the experiment ended, every reply while the report's "
+                     "values are read one by one: '네' confirms, '고쳐 줘, X가 "
+                     "아니라 Y' corrects (asked once), '나중에 할게' or anything "
+                     "else leaves the rest for the screen (lane N, decision 3)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2816,6 +2843,8 @@ class _OpenQuestions:
     timer: bool
     anomaly: bool = False
     step_move: bool = False
+    record_fix: bool = False
+    report_review: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -2823,7 +2852,7 @@ class _OpenQuestions:
 
         for name in (
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
-            "step_move",
+            "step_move", "record_fix", "report_review",
         ):
             if getattr(self, name):
                 return name
@@ -3038,9 +3067,391 @@ def _observation_capture(transcript: str) -> tuple[str, str | None] | None:
     for pattern in _OBSERVATION_COMMAND_PATTERNS:
         if match := pattern.fullmatch(key):
             content = (match.groupdict().get("content") or "").strip(" .,:;：")
+            # Lane N, decision 5: the key is for reading the command; what is
+            # stored is the researcher's words as the STT gave them -- read
+            # from the transcript itself, case and spelling kept.
+            said = " ".join(transcript.split())
+            raw = pattern.fullmatch(said)
+            if raw is not None:
+                content = (raw.groupdict().get("content") or "").strip(" .,:;：")
+            elif content:
+                content = verbatim_span(content, said)
             return "note", content or None
     if _APPEARANCE_OBSERVATION.search(key):
         return "appearance", transcript.strip()[:4000]
+    return None
+
+
+# --- Lane N, decisions 1-2: notes said aloud, and their corrections ----------
+#
+# "실험노트에 적어 줘, pH 7.2", "pH 7.2라고 기록해 줘", "메모 추가해: …": the
+# words after (or before) the command are recorded at the current step as the
+# STT gave them -- case and spelling kept -- and read back, never asked about.
+# What kind of note it is the rules decide from those words: a measurement (a
+# number with a unit, or a named quantity with a number), a deviation from the
+# source ("원문과 다르게", "대신", "더/덜 넣었어"), an observation, and
+# otherwise -- or when it is unclear -- a memo. The kinds are the router's
+# record_log allow-list (llm_router.RECORD_LOG_RULES); a memo is stored under
+# the record's existing "note" category.
+
+#: A note kind (a record_log type) -> the category the record keeps.
+NOTE_KIND_CATEGORIES: dict[str, str] = {
+    "measurement": "measurement",
+    "deviation": "deviation",
+    "observation": "observation",
+    "memo": "note",
+}
+#: The record's category -> the word the researcher hears and reads.
+NOTE_CATEGORY_LABELS: dict[str, str] = {
+    "measurement": "측정",
+    "deviation": "편차",
+    "observation": "관찰",
+    "note": "메모",
+}
+_NOTE_POLITE = r"(?:\s*(?:줘요|줘|줄래요|줄래|주세요|주라|둬요|둬|두세요|놔줘|놔요|놔|놓아\s*줘|놓을래))?"
+_NOTE_PLACE = r"(?:(?:실험\s*)?노트에(?:다가?)?|(?:실험\s*)?기록에(?:다가?)?|메모(?:장)?에(?:다가?)?)"
+#: Verbs that ask for a note on their own; "남겨"/"써" need a place or a noun.
+_NOTE_VERB = r"(?:적어|기록\s*해|메모\s*해)"
+_NOTE_VERB_PLACED = r"(?:적어|기록\s*해|메모\s*해|남겨|써)"
+_NOTE_COMMAND_FIRST = re.compile(
+    rf"^(?:{_NOTE_PLACE}\s*{_NOTE_VERB_PLACED}|{_NOTE_VERB}){_NOTE_POLITE}"
+    r"\s*[,:：.]?\s+(?P<content>\S.*)$"
+)
+_NOTE_NOUN_FIRST = re.compile(
+    r"^(?P<noun>관찰(?:\s*(?:사항|결과|내용))?|메모|노트|기록)(?:를|을)?\s*"
+    r"(?:추가|기록|남겨|적어)(?:\s*해)?" + _NOTE_POLITE +
+    r"(?:\s*[,:：.]\s*|\s+|$)(?P<content>.*)$"
+)
+_NOTE_CONTENT_FIRST = re.compile(
+    rf"^(?P<content>\S.*?)\s*(?:{_NOTE_PLACE}\s*{_NOTE_VERB_PLACED}|{_NOTE_VERB}){_NOTE_POLITE}"
+    r"\s*[.!。]?$"
+)
+_NOTE_BARE = re.compile(
+    rf"^(?:{_NOTE_PLACE}\s*{_NOTE_VERB_PLACED}|{_NOTE_VERB}){_NOTE_POLITE}\s*[.!。]?$"
+)
+#: A quotative ending of content said before the command ("…라고 적어 줘").
+_NOTE_QUOTATIVE = re.compile(r"(?:\s*(?:이)?라고|(?<=다)고)$")
+#: "pH 7.2로 기록해 줘": the "(으)로" after a value is the command's, not the note's.
+_NOTE_VALUE_PARTICLE = re.compile(
+    r"(?<=[0-9A-Za-z%°℃µμ])\s*(?:으로|로)$|(?<=\d도|\d분|\d초|\d배)(?:으로|로)$"
+)
+
+_MEASURE_UNIT = (
+    r"(?:°\s*C|℃|[µμu][Ll]|m[Ll]|[µμu]g|mg|ng|kg|mM|[µμu]M|nM|rpm|RPM|[x×]\s*g|"
+    r"mins?|hrs?|sec|nm|mm|cm|[µμ]m|kDa|v/v|w/v|L|g|M|h|s|%|°)"
+    r"(?:\s*/\s*(?:m[Ll]|[µμu][Ll]|L|mg|g))?(?![A-Za-z])"
+    r"|(?:도|분|초|시간|배)"
+)
+_MEASURE_NAME = (
+    r"(?:pH|PH|ph|OD\s*\d{3}|OD|A\s*\d{3}|흡광도|농도|온도|부피|질량|무게|수율|회전수|속도)"
+)
+_MEASURE_NUMBER = r"-?\d[\d,]*(?:\.\d+)?"
+#: A number as it is read aloud; "A-170" is a label, not minus 170.
+_SPOKEN_NUMBER = r"(?:(?<![\w.-])-)?\d[\d,]*(?:\.\d+)?"
+_KOREAN_DECIMAL = r"[영공일이삼사오육칠팔구십백천]+\s*점\s*[영공일이삼사오육칠팔구]+(?:\s+[영공일이삼사오육칠팔구])*"
+_MEASURE = re.compile(
+    rf"(?:{_MEASURE_NAME})\s*(?:은|는|이|가|값은|값이|:)?\s*(?:{_MEASURE_NUMBER}|{_KOREAN_DECIMAL})"
+    rf"(?:\s*(?:{_MEASURE_UNIT}))?"
+    rf"|(?<![\w.]){_MEASURE_NUMBER}\s*(?:{_MEASURE_UNIT})"
+)
+_DEVIATION_WORDS = re.compile(
+    r"(?:원문|프로토콜)(?:과|이랑|하고|이란|보다)?\s*(?:다르게|달리|다른\s*(?:방법|조건))"
+    r"|대신|더\s*(?:넣|많이|오래|길게|했|돌렸|추가|기다렸)|덜\s*(?:넣|했|돌렸|기다렸)"
+    r"|적게\s*넣|많이\s*넣|바꿔서|바꿨|변경했|빼고|생략|건너뛰|안\s*넣었|못\s*넣었"
+)
+_OBSERVATION_WORDS = re.compile(
+    r"색|투명|맑|탁해|탁하|흐려|흐릿|뿌옇|침전|녹았|녹아|안\s*녹|덩어리|보여|보인|보이|"
+    r"변했|바뀌었|거품|냄새|층이|분리됐|굳었|굳어|응고|탈색|염색|밴드|형광|끓|증발|"
+    r"줄었|늘었|부풀|갈라|노랗|파랗|빨갛|하얗|노란|파란|빨간|하얀|점성|끈적|결정이|가루|입자"
+)
+
+
+def note_kind(content: str, *, noun: str | None = None) -> str:
+    """A note's kind by rule (lane N, decision 1); unclear is a memo."""
+
+    if _DEVIATION_WORDS.search(content):
+        return "deviation"
+    if _MEASURE.search(content):
+        return "measurement"
+    if (noun or "").startswith("관찰") or _OBSERVATION_WORDS.search(content):
+        return "observation"
+    return "memo"
+
+
+def measurement_spans(content: str) -> tuple[str, ...]:
+    """The measured values in a note, as they were said ("pH 7.2", "37도")."""
+
+    return tuple(
+        " ".join(match.group(0).split()).rstrip(",")
+        for match in _MEASURE.finditer(content)
+    )
+
+
+#: Words that belong to the command, not the note ("일단 메모해 줘").
+_NOTE_COMMAND_FILLER = re.compile(r"(?:\s+|^)(?:일단|그냥|좀|이것도|이거|이것|그거|그것)$")
+#: Content that is only a pointer ("이거 적어 줘") names nothing to write.
+_NOTE_POINTER_ONLY = re.compile(r"^(?:이거|이것|그거|그것|이것도|이거도|저거)$")
+
+
+def _note_content(raw: str) -> str:
+    content = raw.strip().strip(" ,:：")
+    content = _NOTE_QUOTATIVE.sub("", content).strip()
+    content = _NOTE_VALUE_PARTICLE.sub("", content).strip()
+    while True:
+        trimmed = _NOTE_COMMAND_FILLER.sub("", content).strip()
+        if trimmed == content or not trimmed:
+            break
+        content = trimmed
+    content = content.strip(" ,.:：")
+    return "" if _NOTE_POINTER_ONLY.fullmatch(content) else content
+
+
+def note_request(transcript: str) -> tuple[str | None, str | None] | None:
+    """(content or None, noun) when the words ask for a note, else None.
+
+    The content is the researcher's own words, sliced from the transcript as
+    the STT wrote it. A question about notes ("기록해야 돼?") is not one.
+    """
+
+    said = " ".join(transcript.split()).strip()
+    if not said or _CONTROL_QUESTION.search(said):
+        return None
+    if _NOTE_BARE.fullmatch(said):
+        return None, None
+    match = _NOTE_NOUN_FIRST.fullmatch(said)
+    if match is not None:
+        noun = match.group("noun")
+        if noun == "기록" and not match.group("content"):
+            return None
+        content = _note_content(match.group("content") or "")
+        return (content or None), noun
+    match = _NOTE_COMMAND_FIRST.fullmatch(said)
+    if match is None:
+        match = _NOTE_CONTENT_FIRST.fullmatch(said)
+    if match is None:
+        return None
+    content = _note_content(match.group("content"))
+    return (content or None), None
+
+
+# Korean readings for numbers and units, so a value read back is heard the way
+# it was said ("pH 7.2" -> "피에이치 칠 점 이").
+_SINO_DIGITS = "영일이삼사오육칠팔구"
+_SPOKEN_UNITS: tuple[tuple[str, str], ...] = (
+    (r"°\s*C|℃|°", "도"), (r"m[Ll]", "밀리리터"), (r"[µμu][Ll]", "마이크로리터"),
+    (r"L", "리터"), (r"mg", "밀리그램"), (r"[µμu]g", "마이크로그램"), (r"ng", "나노그램"),
+    (r"kg", "킬로그램"), (r"g", "그램"), (r"mM", "밀리몰"), (r"[µμu]M", "마이크로몰"),
+    (r"nM", "나노몰"), (r"M", "몰"), (r"%", "퍼센트"), (r"rpm|RPM", "알피엠"),
+    (r"[x×]\s*g", "엑스 지"), (r"mins?", "분"), (r"hrs?|h", "시간"), (r"sec|s", "초"),
+    (r"nm", "나노미터"), (r"mm", "밀리미터"), (r"cm", "센티미터"), (r"[µμ]m", "마이크로미터"),
+    (r"kDa", "킬로달톤"), (r"v/v", "브이 퍼 브이"), (r"w/v", "더블유 퍼 브이"),
+)
+_SPOKEN_NAMES: tuple[tuple[str, str], ...] = (
+    (r"pH|PH|ph", "피에이치"), (r"OD", "오디"),
+)
+_LETTER_READINGS = {
+    "a": "에이", "b": "비", "c": "씨", "d": "디", "e": "이", "f": "에프", "g": "지",
+    "h": "에이치", "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠", "n": "엔",
+    "o": "오", "p": "피", "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유",
+    "v": "브이", "w": "더블유", "x": "엑스", "y": "와이", "z": "지",
+}
+
+
+def _sino_below_ten_thousand(number: int) -> str:
+    out = ""
+    for value, name in ((1000, "천"), (100, "백"), (10, "십")):
+        digit, number = divmod(number, value)
+        if digit:
+            out += ("" if digit == 1 else _SINO_DIGITS[digit]) + name
+    return out + (_SINO_DIGITS[number] if number else "")
+
+
+def sino_korean_number(token: str) -> str:
+    """"7.25" -> "칠 점 이 오", "13,000" -> "만 삼천", "-20" -> "마이너스 이십"."""
+
+    text = token.replace(",", "")
+    sign = ""
+    if text.startswith("-"):
+        sign, text = "마이너스 ", text[1:]
+    whole, _, fraction = text.partition(".")
+    number = int(whole or "0")
+    if number == 0:
+        words = "영"
+    else:
+        parts = []
+        for value, name in ((10**8, "억"), (10**4, "만")):
+            count, number = divmod(number, value)
+            if count:
+                parts.append(("" if count == 1 and name == "만" else _sino_below_ten_thousand(count)) + name)
+        if number:
+            parts.append(_sino_below_ten_thousand(number))
+        words = " ".join(parts)
+    if fraction:
+        words += " 점 " + " ".join(_SINO_DIGITS[int(digit)] for digit in fraction)
+    return sign + words
+
+
+def spoken_korean(text: str) -> str:
+    """Numbers, units and value names read the way Korean speech says them."""
+
+    def unit_words(written: str) -> str:
+        written = written.strip()
+        main, _, per = written.partition("/")
+        reading = next(
+            (spoken for pattern, spoken in _SPOKEN_UNITS if re.fullmatch(pattern, main.strip())),
+            main.strip(),
+        )
+        if per.strip():
+            reading += " 퍼 " + next(
+                (spoken for pattern, spoken in _SPOKEN_UNITS if re.fullmatch(pattern, per.strip())),
+                per.strip(),
+            )
+        return reading
+
+    def number_and_unit(match: re.Match[str]) -> str:
+        reading = sino_korean_number(match.group("number"))
+        unit = match.group("unit")
+        return f"{reading} {unit_words(unit)}" if unit else reading
+
+    spoken = re.sub(
+        rf"(?P<number>{_SPOKEN_NUMBER})(?:\s*(?P<unit>(?:{_MEASURE_UNIT})))?",
+        number_and_unit,
+        text,
+    )
+    for pattern, reading in _SPOKEN_NAMES:
+        spoken = re.sub(rf"(?<![A-Za-z]){pattern}(?![A-Za-z])", reading + " ", spoken)
+    return " ".join(spoken.split())
+
+
+def _final_syllable_batchim(text: str) -> int | None:
+    """The final consonant index of the last syllable as it is read, or None."""
+
+    for character in reversed(spoken_korean(text)):
+        if "가" <= character <= "힣":
+            return (ord(character) - 0xAC00) % 28
+        if character.isascii() and character.isalpha():
+            reading = _LETTER_READINGS[character.casefold()]
+            return (ord(reading[-1]) - 0xAC00) % 28
+        if character.isdigit():
+            reading = _SINO_DIGITS[int(character)]
+            return (ord(reading[-1]) - 0xAC00) % 28
+    return None
+
+
+def josa(text: str, with_batchim: str, without: str) -> str:
+    """``text`` with the particle its last spoken syllable takes (을/를, 이/가)."""
+
+    final = _final_syllable_batchim(text)
+    return text + (with_batchim if final else without)
+
+
+def josa_ro(text: str) -> str:
+    """``text`` + 으로/로: 로 after a vowel or ㄹ (final consonant index 8)."""
+
+    final = _final_syllable_batchim(text)
+    return text + ("으로" if final and final != 8 else "로")
+
+
+#: Lane N, decision 3: leaving the report's values for the screen.
+_REVIEW_LATER = re.compile(
+    r"^(?:그건\s*|나머지는\s*|남은\s*건\s*)?(?:나중에|이따가?|다음에|화면에서)\s*(?:다시\s*)?"
+    r"(?:할게요|할게|할께|해|하자|볼게|확인할게요|확인할게|확인하자|확인|봐)?$"
+    r"|^그만(?:\s*(?:할게|할게요|하자|확인할게))?$"
+)
+_REVIEW_ORDINALS = ("첫째", "둘째", "셋째", "넷째", "다섯째", "여섯째", "일곱째", "여덟째", "아홉째", "열째")
+
+
+#: "방금 기록 고쳐 줘, 7.2가 아니라 7.4" / "방금 기록 지워 줘" (decision 2).
+_RECORD_FIX_VERB = r"(?:고쳐|수정해|정정해|바꿔)"
+_RECORD_DROP_VERB = r"(?:지워|삭제해|취소해|빼)"
+_RECORD_FIX = re.compile(
+    r"^(?:(?:방금|마지막|아까)\s*)?(?:(?:그|이)\s*)?(?:기록|메모|노트)(?:을|를)?\s*"
+    rf"(?P<verb>{_RECORD_FIX_VERB}|{_RECORD_DROP_VERB}){_NOTE_POLITE}"
+    r"\s*[,:：.]?\s*(?P<content>.*)$"
+)
+#: In the report-value review a fix may name no record: "고쳐 줘, 7.2가 아니라 7.4".
+_REVIEW_FIX = re.compile(
+    rf"^(?P<verb>{_RECORD_FIX_VERB}|{_RECORD_DROP_VERB}){_NOTE_POLITE}"
+    r"\s*[,:：.]?\s*(?P<content>.*)$"
+)
+_FIX_NOT_BUT = re.compile(
+    r"^(?P<x>.+?)\s*(?:이|가)?\s*아니(?:라|고)\s*,?\s*(?P<y>.+)$"
+)
+_FIX_INSTEAD = re.compile(r"^(?P<x>.+?)\s*말고\s*(?P<y>.+)$")
+_FIX_INTO = re.compile(r"^(?P<x>.+?)(?:을|를)\s+(?P<y>.+?)(?:으로|로)$")
+_FIX_TAIL = re.compile(r"\s*(?:이야|야|예요|이에요|에요|입니다|이다|요|(?:으)?로\s*(?:해\s*줘|고쳐\s*줘|바꿔\s*줘)?)\s*[.!。]?$")
+_FIX_PARTICLE = re.compile(r"(?:이|가|을|를|은|는)$")
+
+
+def record_fix_request(transcript: str, *, review: bool = False) -> dict[str, str] | None:
+    """What a correction asks for: {"mode": "correct"|"retract", "x", "y"}, or None.
+
+    "correct" with neither x nor y asks what to change; y alone replaces the
+    whole record. Read only from the words; nothing is applied here.
+    """
+
+    said = " ".join(transcript.split()).strip(" .!。")
+    if not said or "?" in said or "？" in said:
+        return None
+    match = _RECORD_FIX.fullmatch(said) or (_REVIEW_FIX.fullmatch(said) if review else None)
+    if match is None:
+        return None
+    if re.fullmatch(_RECORD_DROP_VERB, match.group("verb")):
+        return {"mode": "retract", "x": "", "y": ""}
+    content = match.group("content").strip(" ,:：")
+    return {"mode": "correct", **fix_change(content)}
+
+
+def fix_change(content: str) -> dict[str, str]:
+    """{"x": what to replace, "y": with what} from "7.2가 아니라 7.4" and the like."""
+
+    content = content.strip(" ,:：.")
+    if not content:
+        return {"x": "", "y": ""}
+    for pattern in (_FIX_NOT_BUT, _FIX_INSTEAD, _FIX_INTO):
+        match = pattern.fullmatch(content)
+        if match is not None:
+            x = match.group("x").strip(" ,")
+            y = _FIX_TAIL.sub("", match.group("y")).strip(" ,")
+            if x and y:
+                return {"x": x, "y": y}
+    return {"x": "", "y": _FIX_TAIL.sub("", content).strip(" ,")}
+
+
+def verbatim_span(value: str, transcript: str) -> str:
+    """``value`` as the transcript spells it (case kept), or ``value`` itself.
+
+    Lane N, decision 5: a model's copy of the researcher's words may differ in
+    case or spacing ("lb 배지"); what is stored is the transcript's own span.
+    """
+
+    said = " ".join(transcript.split())
+    wanted = " ".join(str(value).split())
+    if not wanted:
+        return wanted
+    index = said.find(wanted)
+    if index < 0:
+        index = said.casefold().find(wanted.casefold())
+        if index < 0 or len(said.casefold()) != len(said):
+            return wanted
+    return said[index:index + len(wanted)]
+
+
+def apply_record_fix(text: str, x: str, y: str) -> str | None:
+    """``text`` with ``x`` replaced by ``y`` once, or None when ``x`` is not in it."""
+
+    if not x:
+        return y or None
+    candidates = [x]
+    stripped = _FIX_PARTICLE.sub("", x).strip()
+    if stripped and stripped != x:
+        candidates.append(stripped)
+    for candidate in candidates:
+        index = text.find(candidate)
+        if index < 0:
+            index = text.casefold().find(candidate.casefold())
+        if index >= 0:
+            return text[:index] + y + text[index + len(candidate):]
     return None
 
 
@@ -6564,6 +6975,18 @@ class CuratedProtocolSession:
         #: Steps a person reported complete on this run, so a step done again
         #: in a later round of a repeat is known to be done again.
         self._completed_step_ids: set[str] = set()
+        #: The last note recorded on this run (lane N, decision 2): what "방금
+        #: 기록" names. Its turn and generation give the server the record's
+        #: keys; its words are the latest, after any correction.
+        self._last_record: dict[str, Any] | None = None
+        #: The one-turn "방금 기록 '…'을 '…'로 고칠까요?" or "…을 지울까요?"
+        #: question (decision 2): only a yes to it amends the record.
+        self._pending_record_fix: dict[str, Any] | None = None
+        #: The report's values being confirmed by voice once the experiment
+        #: ended (lane N, decision 3): the list, where it stands, and a
+        #: correction asked about. Open until every value is answered or the
+        #: researcher leaves the rest for the screen.
+        self._report_review: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
@@ -6599,6 +7022,8 @@ class CuratedProtocolSession:
             self._pending_timer_confirmation is not None,
             self._pending_anomaly_confirmation is not None,
             self._pending_step_move is not None,
+            self._pending_record_fix is not None,
+            self._report_review is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
         ))
@@ -7622,6 +8047,368 @@ class CuratedProtocolSession:
                     "completed_before": again,
                 }
         return {"kind": "completed_again", "completed_before": True} if again else None
+
+    def open_report_review(
+        self, items: Sequence[Mapping[str, Any]], *, report_id: str,
+    ) -> tuple[str, str]:
+        """Begin confirming the report's values by voice; the words that open it.
+
+        Lane N, decision 3. Called by the server once the experiment ended and
+        its report was saved, with the values the record holds that are not
+        confirmed yet. Returns (display, speech): "보고서에 넣을 중요 값 N개를
+        확인할게요." and the first value, ending "맞으면 '네'라고 해 주세요."
+        """
+
+        self._report_review = {
+            "report_id": report_id,
+            "items": [dict(item) for item in items],
+            "index": 0,
+            "fix": None,
+        }
+        opening = f"보고서에 넣을 중요 값 {len(items)}개를 확인할게요."
+        display, speech = self._review_question()
+        return f"{opening} {display}", f"{opening} {speech}"
+
+    @property
+    def report_review_report_id(self) -> str | None:
+        """The report whose values are being confirmed by voice, or None."""
+
+        return str(self._report_review["report_id"]) if self._report_review else None
+
+    def report_review_remaining(self) -> list[dict[str, Any]]:
+        """The values not yet answered, in order (lane N, decision 3)."""
+
+        if not self._report_review:
+            return []
+        return [dict(item) for item in self._report_review["items"][self._report_review["index"]:]]
+
+    @staticmethod
+    def _review_item_words(item: Mapping[str, Any], *, spoken: bool) -> str:
+        text = str(item.get("text") or "")
+        if spoken and item.get("kind") == "측정":
+            text = spoken_korean(text)
+        label = str(item.get("step_label") or "")
+        return f"{label}단계 {item.get('kind')}, {text}" if label else f"{item.get('kind')}, {text}"
+
+    def _review_question(self) -> tuple[str, str]:
+        state = self._report_review or {}
+        index = int(state.get("index") or 0)
+        item = state["items"][index]
+        ordinal = _REVIEW_ORDINALS[index] if index < len(_REVIEW_ORDINALS) else f"{index + 1}번째"
+        ask = "맞으면 '네'라고 해 주세요."
+        return (
+            f"{ordinal}, {self._review_item_words(item, spoken=False)}. {ask}",
+            f"{ordinal}, {self._review_item_words(item, spoken=True)}. {ask}",
+        )
+
+    def _plan_report_review(
+        self, transcript: str, *, turn_id: int, language: str, transcript_quality: str | None,
+    ) -> CuratedProtocolTurnPlan:
+        """One reply while the report's values are confirmed (lane N, decision 3).
+
+        "네" confirms the value read; "고쳐 줘, X가 아니라 Y" asks once,
+        "'…'을 '…'로 고칠까요?", and a yes corrects (appended, as in decision
+        2) and confirms; "아니" asks how to correct it; "나중에 할게" -- or
+        anything else -- leaves the rest for the screen's checklist. Only the
+        server stores what was answered; nothing here changes the workflow.
+        """
+
+        state = self._report_review
+        assert state is not None
+        items = state["items"]
+        item = dict(items[state["index"]])
+        key = _semantic_utterance_key(transcript)
+        withheld = _reply_withholds_assent(transcript)
+        binary = _binary_frame_reply(transcript)
+        affirmative = binary == "affirmative" or (
+            not withheld and bool(_AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(key)))
+        negative = binary == "negative" or (
+            not withheld and bool(_NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key)))
+        ops: list[dict[str, Any]] = []
+        lead = ""
+
+        def plan(display: str, speech: str, kind: str, *, closed: bool = False,
+                 remaining: Sequence[Mapping[str, Any]] = ()) -> CuratedProtocolTurnPlan:
+            planned = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.REPORT_REVIEW,
+                display_text=display,
+                speech_text=speech,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=None,
+                final_step=False,
+                state_changed=False,
+                primary_text=display,
+                intent_kind=kind,
+                report_review={
+                    "report_id": state["report_id"],
+                    "ops": ops,
+                    "closed": closed,
+                    "remaining": [dict(entry) for entry in remaining],
+                } if ops or closed else None,
+            )
+            self._last_front_rule = "report_review"
+            self._replay[turn_id] = planned
+            return planned
+
+        def advance(kind: str) -> CuratedProtocolTurnPlan:
+            state["index"] += 1
+            state["fix"] = None
+            if state["index"] >= len(items):
+                self._report_review = None
+                done = "모두 확인했어요. 보고서 문장을 준비할게요."
+                return plan(f"{lead}{done}", f"{lead}{done}", kind, closed=True)
+            display, speech = self._review_question()
+            return plan(f"{lead}{display}", f"{lead}{speech}", kind)
+
+        def leave(kind: str) -> CuratedProtocolTurnPlan:
+            remaining = items[state["index"]:]
+            ops.append({"op": "defer", "item_ids": [entry["item_id"] for entry in remaining]})
+            self._report_review = None
+            said = (
+                f"알겠어요. 남은 {len(remaining)}개는 화면의 확인 목록에서 확인할 수 있어요. "
+                "확인하지 않은 값은 보고서에 따로 적어 둘게요."
+            )
+            return plan(said, said, kind, closed=True, remaining=remaining)
+
+        if transcript_quality is not None:
+            display, speech = self._review_question()
+            again = "잘 듣지 못했어요. "
+            return plan(f"{again}{display}", f"{again}{speech}", "report_review_unheard")
+        fix = state.get("fix")
+        if fix is not None:
+            state["fix"] = None
+            if affirmative:
+                if fix["mode"] == "retract":
+                    ops.append({"op": "retract", "item": item, "before": item["text"]})
+                    lead = "지웠어요. 처음 기록은 취소됨으로 남겨 두었어요. "
+                else:
+                    ops.append({"op": "correct", "item": item, "before": item["text"],
+                                "after": fix["after"]})
+                    lead = f"'{fix['after']}'{josa_ro(fix['after'])[len(fix['after']):]} 고치고 확인했어요. "
+                return advance("report_review_fixed")
+            if negative:
+                display, speech = self._review_question()
+                lead = "그대로 두었어요. "
+                return plan(f"{lead}{display}", f"{lead}{speech}", "report_review_fix_declined")
+        if affirmative:
+            ops.append({"op": "confirm", "item_id": item["item_id"], "text": item["text"],
+                        "step_label": item.get("step_label")})
+            return advance("report_review_confirmed")
+        if _REVIEW_LATER.fullmatch(key):
+            return leave("report_review_deferred")
+        request = record_fix_request(transcript, review=True)
+        if request is None and _FIX_NOT_BUT.fullmatch(key):
+            request = {"mode": "correct", **fix_change(" ".join(transcript.split()))}
+        if request is not None:
+            before = str(item["text"])
+            if request["mode"] == "retract":
+                if not str(item.get("item_id", "")).startswith("r."):
+                    said = ("이 값은 지울 수 없어요. 고치려면 '고쳐 줘, 무엇이 아니라 무엇'이라고 말해 주세요.")
+                    return plan(said, said, "report_review_retract_refused")
+                state["fix"] = {"mode": "retract"}
+                said = f"'{before}'" + josa(before, "을", "를")[len(before):] + " 지울까요?"
+                return plan(said, said, "report_review_fix_confirmation_required")
+            after = (
+                apply_record_fix(before, str(request.get("x") or ""), str(request.get("y") or ""))
+                if request.get("y") else None
+            )
+            if after is None or after == before:
+                display, speech = self._review_question()
+                lead = (
+                    "어떻게 고칠지 알아듣지 못했어요. '고쳐 줘, 7.2가 아니라 7.4'처럼 말해 주세요. "
+                )
+                return plan(f"{lead}{display}", f"{lead}{speech}", "report_review_fix_unclear")
+            state["fix"] = {"mode": "correct", "after": after}
+            said = (
+                f"'{before}'" + josa(before, "을", "를")[len(before):]
+                + f" '{after}'" + josa_ro(after)[len(after):] + " 고칠까요?"
+            )
+            return plan(said, said, "report_review_fix_confirmation_required")
+        if negative:
+            said = (
+                "어떻게 고칠까요? '고쳐 줘, 7.2가 아니라 7.4'처럼 말해 주세요. "
+                "나중에 하려면 '나중에 할게'라고 해 주세요."
+            )
+            return plan(said, said, "report_review_fix_requested")
+        return leave("report_review_left")
+
+    def _plan_record_request(
+        self,
+        transcript: str,
+        *,
+        command_key: str,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+        actor_principal_id: str | None,
+        actor_role: str,
+        observation_hold: PendingObservationConfirmation | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A note or a correction asked for in words (lane N, decisions 1-2).
+
+        "실험노트에 적어 줘, pH 7.2" records the words after (or before) the
+        command at the current step, as the STT gave them, under the kind the
+        rules read in them; the server reads the note back once it is
+        stored. "방금 기록 고쳐 줘, X가 아니라 Y" and "방금 기록 지워 줘" are
+        asked about once. Left to the other rules: a pause (it answers
+        first), no running experiment for a note, a completion said as a note
+        ("완료했다고 기록해 줘") and a spill (its own front rule).
+        """
+
+        if self._pause_state == "paused":
+            return None
+        fix = record_fix_request(transcript)
+        if fix is not None:
+            self._last_front_rule = "record_fix"
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="record_fix_requested",
+                    action=CuratedProtocolAction.RECORD_CORRECTION,
+                    language=language,
+                    normalized_transcript=command_key,
+                    record_fix={**fix, "asked": True},
+                ),
+                transcript=transcript, command_key=command_key, turn_id=turn_id,
+                language=language, configuration_id=configuration_id,
+                generation=generation, actor_principal_id=actor_principal_id,
+                actor_role=actor_role, open_question=None,
+            )
+        if not self.active:
+            return None
+        request = note_request(transcript)
+        if request is None:
+            return None
+        content, noun = request
+        if content is not None and (
+            has_completion_evidence(content)
+            or _spill_reading(_semantic_utterance_key(content), content) == "reported"
+        ):
+            return None
+        if observation_hold is not None:
+            # A note is not an answer to the endpoint question: it stays open,
+            # without taking a bare yes, as under a problem recorded.
+            self._pending_observation_confirmation = replace(
+                observation_hold, requested_turn_id=turn_id,
+                requested_generation=generation, accepts_yes_no=False,
+            )
+        self._last_front_rule = "note_record"
+        kind = note_kind(content, noun=noun) if content else None
+        return self._execute_turn_intent(
+            CuratedControlIntent(
+                intent_kind="record_note" if content else "note_content_required",
+                action=CuratedProtocolAction.RECORD_OBSERVATION,
+                target_step="authoritative_current_step",
+                reported_observation=content is not None,
+                observation_predicate=NOTE_KIND_CATEGORIES[kind] if kind else None,
+                observation_outcome=content,
+                language=language,
+                normalized_transcript=command_key,
+            ),
+            transcript=transcript, command_key=command_key, turn_id=turn_id,
+            language=language, configuration_id=configuration_id,
+            generation=generation, actor_principal_id=actor_principal_id,
+            actor_role=actor_role, open_question=None,
+        )
+
+    def _record_fix_plan(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        turn_id: int,
+        language: str,
+        configuration_id: int | None,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan:
+        """Ask about a correction of the last note, or carry out its answer.
+
+        Lane N, decision 2. The record itself is never changed: a yes gives
+        the server a correction (or a withdrawal) to append beside it, and the
+        screen and the report show the latest words marked 정정됨.
+        """
+
+        fix = dict(intent.record_fix or {})
+        steps = self.fixture.steps
+        step_label = steps[self.current_index].source_label if self.active else None
+
+        def reply(display: str, kind: str, *, speech: str | None = None,
+                  record_fix: dict[str, Any] | None = None) -> CuratedProtocolTurnPlan:
+            return CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.RECORD_CORRECTION,
+                display_text=display,
+                speech_text=speech or display,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=step_label,
+                final_step=self.active and self.current_index == len(steps) - 1,
+                state_changed=False,
+                primary_text=display,
+                intent_kind=kind,
+                record_fix=record_fix,
+            )
+
+        def quoted(text: str, with_batchim: str, without: str) -> str:
+            return f"'{text}'" + josa(text, with_batchim, without)[len(text):]
+
+        if fix.get("asked"):
+            last = self._last_record
+            if last is None:
+                return reply("방금 고칠 기록이 없어요. 고치지 않았어요.", "record_fix_no_record")
+            before = str(last["text"])
+            if fix.get("mode") == "retract":
+                after = None
+                question = f"방금 기록 {quoted(before, '을', '를')} 지울까요?"
+            else:
+                if not fix.get("y"):
+                    return reply(
+                        "무엇을 무엇으로 고칠지 말씀해 주세요. 예를 들면 "
+                        "'방금 기록 고쳐 줘, 7.2가 아니라 7.4'라고 해 주세요.",
+                        "record_fix_content_required",
+                    )
+                after = apply_record_fix(before, str(fix.get("x") or ""), str(fix["y"]))
+                if after is None:
+                    return reply(
+                        f"방금 기록 '{before}'에는 {quoted(str(fix.get('x')), '이', '가')} "
+                        "없어요. 고치지 않았어요.",
+                        "record_fix_not_found",
+                    )
+                if after == before:
+                    return reply("방금 기록과 같아요. 고치지 않았어요.", "record_fix_unchanged")
+                question = (
+                    f"방금 기록 {quoted(before, '을', '를')} '{after}'"
+                    + josa_ro(after)[len(after):] + " 고칠까요?"
+                )
+            self._pending_record_fix = {
+                "mode": fix.get("mode"),
+                "before": before,
+                "after": after,
+                "target": dict(last),
+                "requested_turn_id": turn_id,
+                "configuration_id": configuration_id,
+                "requested_generation": generation,
+                "workflow_revision": self._revision,
+            }
+            return reply(question, "record_fix_confirmation_required")
+        retract = fix.get("mode") == "retract"
+        if not fix.get("confirmed"):
+            return reply(
+                "알겠습니다. 기록을 지우지 않았어요." if retract
+                else "알겠습니다. 기록을 고치지 않았어요.",
+                "record_fix_declined",
+            )
+        target = dict(fix.get("target") or {})
+        self._last_record = None if retract else {**target, "text": fix.get("after")}
+        return reply(
+            "기록 정정을 확인했습니다. 실험 기록 저장이 성공한 뒤에만 완료를 확인합니다.",
+            "record_fix_confirmed",
+            record_fix={
+                "mode": "retract" if retract else "correct",
+                "target": target,
+                "before": fix.get("before"),
+                "after": fix.get("after"),
+            },
+        )
 
     def _plan_step_move_request(
         self,
@@ -9150,6 +9937,9 @@ class CuratedProtocolSession:
         self._pending_step_move = None
         self._repeat_returns.clear()
         self._completed_step_ids.clear()
+        self._last_record = None
+        self._pending_record_fix = None
+        self._report_review = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -9160,6 +9950,7 @@ class CuratedProtocolSession:
         *,
         current_step_id: str,
         completed_step_ids: tuple[str, ...],
+        skipped_step_ids: tuple[str, ...] = (),
     ) -> None:
         """Restore only a server-persisted exact-revision progress checkpoint.
 
@@ -9167,6 +9958,11 @@ class CuratedProtocolSession:
         are intentionally not restored.  The durable session may select the
         current authoritative step, but it cannot bypass an incomplete earlier
         step or alter any protocol instruction.
+
+        ``skipped_step_ids`` are the steps a confirmed later start skipped
+        ("10단계부터 시작해줘", lane R7 decision 3), as the durable record
+        holds them (lane N, decision 9): exactly the steps before the start,
+        which then need no completion. Anything else is refused as before.
         """
 
         indexes = {
@@ -9182,8 +9978,17 @@ class CuratedProtocolSession:
             raise CuratedProtocolFixtureError(
                 "Experiment recovery contains an unknown completed step."
             )
+        skipped = tuple(dict.fromkeys(skipped_step_ids))
+        if skipped and (
+            skipped != tuple(step.step_id for step in self.fixture.steps[:len(skipped)])
+            or len(skipped) > current_index
+            or set(skipped) & set(completed)
+        ):
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery names skipped steps that are not the steps before its start."
+            )
         expected = tuple(
-            step.step_id for step in self.fixture.steps[:current_index]
+            step.step_id for step in self.fixture.steps[len(skipped):current_index]
         )
         if completed != expected and not self._completed_in_an_earlier_round(
             current_index, completed, expected
@@ -9275,6 +10080,10 @@ class CuratedProtocolSession:
         # A new run counts its own returns and its own completions.
         self._repeat_returns.clear()
         self._completed_step_ids.clear()
+        # And its own notes, and its own report to confirm.
+        self._last_record = None
+        self._pending_record_fix = None
+        self._report_review = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -9517,6 +10326,7 @@ class CuratedProtocolSession:
         tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
         tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None],
         tuple[dict[str, Any] | None, dict[str, int], frozenset[str]],
+        tuple[dict[str, Any] | None, dict[str, Any] | None, str | None],
     ]:
         return (
             self.active,
@@ -9567,6 +10377,15 @@ class CuratedProtocolSession:
                 if self._pending_step_move is not None else None,
                 dict(self._repeat_returns),
                 frozenset(self._completed_step_ids),
+            ),
+            # Lane N: the last note and a correction question roll back with
+            # the turn that changed them, so a correction that could not be
+            # stored leaves "방금 기록" as it was.
+            (
+                dict(self._last_record) if self._last_record is not None else None,
+                dict(self._pending_record_fix)
+                if self._pending_record_fix is not None else None,
+                json.dumps(self._report_review) if self._report_review is not None else None,
             ),
         )
 
@@ -9640,6 +10459,11 @@ class CuratedProtocolSession:
             self._pending_step_move = dict(moves[0]) if moves[0] is not None else None
             self._repeat_returns = dict(moves[1])
             self._completed_step_ids = set(moves[2])
+            notes = checkpoint[24] if len(checkpoint) >= 25 else (None, None, None)
+            self._last_record = dict(notes[0]) if notes[0] is not None else None
+            self._pending_record_fix = dict(notes[1]) if notes[1] is not None else None
+            review = notes[2] if len(notes) >= 3 else None
+            self._report_review = json.loads(review) if review is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -9652,6 +10476,9 @@ class CuratedProtocolSession:
             self._pending_step_move = None
             self._repeat_returns = {}
             self._completed_step_ids = set()
+            self._last_record = None
+            self._pending_record_fix = None
+            self._report_review = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -10771,6 +11598,21 @@ class CuratedProtocolSession:
                 or generation >= move.get("requested_generation")
             )
         )
+        fix = self._pending_record_fix
+        record_fix_valid = bool(
+            fix is not None
+            and self._revision == fix.get("workflow_revision")
+            and turn_id == fix.get("requested_turn_id", -2) + 1
+            and (
+                fix.get("configuration_id") is None
+                or configuration_id == fix.get("configuration_id")
+            )
+            and (
+                fix.get("requested_generation") is None
+                or generation is None
+                or generation >= fix.get("requested_generation")
+            )
+        )
         return _OpenQuestions(
             completion=pending_valid,
             observation=observation_pending_valid,
@@ -10780,6 +11622,9 @@ class CuratedProtocolSession:
             timer=timer_pending_valid,
             anomaly=anomaly_pending_valid,
             step_move=step_move_valid,
+            record_fix=record_fix_valid,
+            # Open until every value is answered or left for the screen.
+            report_review=self._report_review is not None and not self.active,
         )
 
     def _front_rule_for(
@@ -11029,6 +11874,12 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        if self._report_review is not None and not self.active:
+            # Lane N, decision 3: the report's values, read one by one.
+            return self._plan_report_review(
+                transcript, turn_id=turn_id, language=language,
+                transcript_quality=transcript_quality,
+            )
         homophone = language == "ko" and self._step_homophone(
             transcript, transcript_quality=transcript_quality,
             turn_id=turn_id, configuration_id=configuration_id, generation=generation,
@@ -11058,6 +11909,7 @@ class CuratedProtocolSession:
             self._pending_timer_confirmation,
             self._pending_anomaly_confirmation,
             self._pending_step_move,
+            self._pending_record_fix,
         ) if front_only else None
         self._last_semantic_decision = None
         # The front rule that owns this turn, once one does (FRONT_RULES).
@@ -11096,6 +11948,9 @@ class CuratedProtocolSession:
         step_move_valid = open_questions.step_move
         if self._pending_step_move is not None and not step_move_valid:
             self._pending_step_move = None
+        record_fix_valid = open_questions.record_fix
+        if self._pending_record_fix is not None and not record_fix_valid:
+            self._pending_record_fix = None
         # The question this turn could answer, kept aside in case the turn is
         # a pause: the pause holds it, and the voice resume asks it again.
         open_question: dict[str, Any] | None = None
@@ -11221,6 +12076,49 @@ class CuratedProtocolSession:
                     language=language,
                     normalized_transcript=normalized_confirmation,
                     step_move=move,
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
+        fix_reply = (
+            "affirmative"
+            if (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "affirmative"
+            else "negative"
+            if (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "negative"
+            else None
+        ) if record_fix_valid and transcript_quality is None else None
+        if fix_reply is not None and self._pending_record_fix is not None:
+            # A yes or no to "방금 기록 '…'을 '…'로 고칠까요?" (lane N,
+            # decision 2). Only a yes amends, and only by an appended record.
+            fix = dict(self._pending_record_fix)
+            self._pending_record_fix = None
+            self._last_front_rule = "yes_no_open_question"
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind=(
+                        "record_fix_confirmed" if fix_reply == "affirmative"
+                        else "record_fix_declined"
+                    ),
+                    action=CuratedProtocolAction.RECORD_CORRECTION,
+                    confidence_source="server_pending_record_fix_confirmation",
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    record_fix={**fix, "confirmed": fix_reply == "affirmative"},
                 ),
                 transcript=transcript,
                 command_key=command_key,
@@ -11387,7 +12285,12 @@ class CuratedProtocolSession:
                 action=CuratedProtocolAction.RECORD_OBSERVATION,
                 target_step="authoritative_current_step",
                 reported_observation=True,
-                observation_predicate=str(note_pending.get("category") or "note"),
+                # Asked by the note rule (lane N), the reply's kind is the
+                # rules' reading of it; asked otherwise, the kind asked for.
+                observation_predicate=str(
+                    note_pending.get("category")
+                    or NOTE_KIND_CATEGORIES[note_kind(transcript.strip())]
+                ),
                 observation_outcome=transcript.strip()[:4000],
                 confidence_source="server_pending_observation_note",
                 language=language,
@@ -11520,7 +12423,8 @@ class CuratedProtocolSession:
                 reported_completion=observed == "positive",
                 reported_observation=True,
                 observation_predicate=observed,
-                observation_outcome=normalized_confirmation,
+                # Lane N, decision 5: stored as said; the key read it.
+                observation_outcome=" ".join(transcript.split())[:4000],
                 requested_transition=("next" if observed == "positive" else None),
                 requested_followup="describe_new_current_step",
                 target_step="authoritative_current_step",
@@ -11593,6 +12497,9 @@ class CuratedProtocolSession:
             if step_move_valid:
                 # And "N단계로 돌아갈까요?" (lane R7).
                 self._pending_step_move = None
+            if record_fix_valid:
+                # And "방금 기록 '…'을 '…'로 고칠까요?" (lane N).
+                self._pending_record_fix = None
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
                 self._pending_note_capture = None
@@ -11613,6 +12520,25 @@ class CuratedProtocolSession:
             )
             if observation_pending is not None:
                 self._pending_observation_confirmation = None
+            recorded = (
+                self._plan_record_request(
+                    transcript,
+                    command_key=command_key,
+                    turn_id=turn_id,
+                    language=language,
+                    configuration_id=configuration_id,
+                    generation=generation,
+                    actor_principal_id=actor_principal_id,
+                    actor_role=actor_role,
+                    observation_hold=observation_hold,
+                )
+                if language == "ko" and transcript_quality is None else None
+            )
+            if recorded is not None:
+                # A note or a correction asked for in words owns the turn
+                # (lane N, decisions 1-2); an endpoint question open beside it
+                # is kept open, as under a problem recorded.
+                return recorded
             pending_anomaly = self._pending_anomaly
             if (
                 pending_anomaly
@@ -11893,7 +12819,8 @@ class CuratedProtocolSession:
                     reported_completion=observed == "positive",
                     reported_observation=True,
                     observation_predicate=observed,
-                    observation_outcome=normalized_confirmation,
+                    # Lane N, decision 5: stored as said; the key read it.
+                    observation_outcome=" ".join(transcript.split())[:4000],
                     allows_state_mutation=observed == "positive",
                     requested_transition=("next" if observed == "positive" else None),
                     target_step="authoritative_current_step",
@@ -12034,6 +12961,7 @@ class CuratedProtocolSession:
                 self._pending_timer_confirmation,
                 self._pending_anomaly_confirmation,
                 self._pending_step_move,
+                self._pending_record_fix,
             ) = untouched
             return None
         return self._execute_turn_intent(
@@ -12791,6 +13719,7 @@ class CuratedProtocolSession:
             step = steps[self.current_index]
             category = intent.observation_predicate or "note"
             content = (intent.observation_outcome or "").strip()[:4000]
+            note_record = None
             if content:
                 self._pending_note_capture = None
                 response = (
@@ -12801,6 +13730,28 @@ class CuratedProtocolSession:
                     "실험 기록 저장이 성공한 뒤에만 기록 완료를 확인합니다."
                 )
                 reported = True
+                # Lane N, decision 1: what the server reads back once it is
+                # stored, and what "방금 기록" names from now on (decision 2).
+                note_record = {
+                    "category": category,
+                    "label": NOTE_CATEGORY_LABELS.get(category, "관찰"),
+                    "content": content,
+                    "step_label": step.source_label,
+                    "step_id": step.step_id,
+                    "measurements": (
+                        list(measurement_spans(content))
+                        if category == "measurement" else []
+                    ),
+                }
+                self._last_record = {
+                    "turn_id": turn_id,
+                    "generation": generation,
+                    "action": CuratedProtocolAction.RECORD_OBSERVATION.value,
+                    "text": content,
+                    "category": category,
+                    "step_label": step.source_label,
+                    "step_id": step.step_id,
+                }
             else:
                 self._pending_note_capture = {
                     "configuration_id": configuration_id,
@@ -12809,11 +13760,14 @@ class CuratedProtocolSession:
                     "step_index": self.current_index,
                     "step_id": step.step_id,
                     "requested_turn_id": turn_id,
-                    "category": category,
+                    # None: the reply's kind is read by rule (lane N).
+                    "category": intent.observation_predicate,
                 }
                 response = (
                     "What should I record as the observation? No protocol state has changed."
                     if language == "en" else
+                    "어떤 내용을 기록할까요?"
+                    if intent.intent_kind == "note_content_required" else
                     "어떤 관찰 내용을 기록할까요? 프로토콜 상태는 변경하지 않았습니다."
                 )
                 reported = False
@@ -12832,6 +13786,12 @@ class CuratedProtocolSession:
                 reported_observation=reported,
                 observation_predicate=category,
                 observation_outcome=content or None,
+                note_record=note_record,
+            )
+        elif command is CuratedProtocolAction.RECORD_CORRECTION:
+            plan = self._record_fix_plan(
+                intent, turn_id=turn_id, language=language,
+                configuration_id=configuration_id, generation=generation,
             )
         elif command is CuratedProtocolAction.REPORT_ANOMALY:
             step = steps[self.current_index]
@@ -15171,6 +16131,7 @@ class CuratedProtocolSession:
         self._pending_stop_confirmation = None
         self._pending_timer_confirmation = None
         self._pending_anomaly_confirmation = None
+        self._pending_record_fix = None
         execute = dict(
             transcript=transcript,
             command_key=_utterance_key(transcript),
@@ -15228,11 +16189,11 @@ class CuratedProtocolSession:
                 configuration_id=configuration_id, language=language,
             )
             return AppliedToolProposal(verdict, plan)
-        intent = self._intent_for_proposal(verdict, common)
+        intent = self._intent_for_proposal(verdict, common, transcript=transcript)
         return AppliedToolProposal(verdict, self._execute_turn_intent(intent, **execute))
 
     def _intent_for_proposal(
-        self, verdict: ProposalVerdict, common: dict[str, Any]
+        self, verdict: ProposalVerdict, common: dict[str, Any], *, transcript: str = "",
     ) -> CuratedControlIntent:
         """The intent an accepted proposal is carried out as -- the rules' own.
 
@@ -15248,16 +16209,20 @@ class CuratedProtocolSession:
             raise ValueError(f"no allow-listed branch for {proposal.tool}:{proposal.action or proposal.log_type}")
         action = CuratedProtocolAction(rule.runs_as)
         if proposal.tool == RECORD_LOG:
-            if proposal.log_type == "observation":
-                # Recorded as a note: a model's reading never reports an
-                # endpoint, so it can never release a repeat-until step.
+            if action is CuratedProtocolAction.RECORD_OBSERVATION:
+                # Recorded as a note of the kind proposed (lane N, decision
+                # 1): a model's reading never reports an endpoint, so it can
+                # never release a repeat-until step. The words stored are the
+                # researcher's, as the STT gave them: the span of the
+                # utterance the value matched, never the model's spelling.
                 return CuratedControlIntent(
                     intent_kind="record_observation",
                     action=action,
                     target_step="authoritative_current_step",
                     reported_observation=True,
-                    observation_predicate="note",
-                    observation_outcome=proposal.value,
+                    observation_predicate=NOTE_KIND_CATEGORIES.get(
+                        str(proposal.log_type), "note"),
+                    observation_outcome=verbatim_span(proposal.value, transcript),
                     **common,
                 )
             return CuratedControlIntent(

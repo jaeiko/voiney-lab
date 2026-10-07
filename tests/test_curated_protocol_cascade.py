@@ -4676,7 +4676,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(plan.action, CuratedProtocolAction.RECORD_OBSERVATION)
         self.assertTrue(plan.reported_observation)
-        self.assertEqual(plan.observation_predicate, "note")
+        # Lane N, decision 1: what was seen is an observation, by rule.
+        self.assertEqual(plan.observation_predicate, "observation")
         self.assertIn("탁해", plan.observation_outcome)
         self.assertFalse(plan.state_changed)
         self.assertEqual(curated_session.current_index, original_step)

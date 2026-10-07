@@ -188,10 +188,12 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "다 했어", "완료했어", "다음 단계", "다음 단계로 넘어가자", "넘어가",
             "5단계 완료", "자 이제 다음 거 하자",
             "자세히 알려줘", "타이머 시작해줘", "버퍼 1은 뭐야?", "어디까지 했지?",
-            "오늘 점심 뭐 먹지", "메모해줘 튜브 라벨 A-17",
+            "오늘 점심 뭐 먹지",
         ):
             with self.subTest(said=said):
                 self.assert_handed_on((said,), step_index=3)
+        # Lane N, decision 1: a note asked for in words is the front rules'.
+        self.assert_front(("메모해줘 튜브 라벨 A-17",), "note_record", step_index=3)
         # Decision 3 (lane R3): the current step is a server value.
         self.assert_front(("지금 몇 단계야",), "server_value_query", step_index=3)
         # Lane R6, decision 7: away from step 2, "이 단계" is said like "2단계",
@@ -258,6 +260,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "repeat_return", "start_at_step",
             # lane RT, decision 6
             "anomaly_report",
+            # lane N, decisions 1, 2 and 3
+            "note_record", "record_fix", "report_review",
         })
 
 

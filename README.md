@@ -616,6 +616,62 @@ tool each, and the front rules keep only what needs them.
   (`answer_checks.ungrounded_safety_instructions`,
   `llm_router.without_ungrounded_safety`).
 
+## Notes said aloud, the report's values confirmed, and a later start continued (lane N)
+
+Decisions of 2026-10-07. With gloves on, the experiment notebook is written
+by voice too, and a report's important values are confirmed by the
+researcher before they go in.
+
+- **Notes** (decision 1, front rule `note_record`). "실험노트에 적어 줘 / 노트에
+  적어 줘 / 기록해 줘 / 메모해 줘 / 메모 추가해" with words -- after the command
+  ("실험노트에 적어 줘, pH 7.2") or before it ("pH 7.2라고 적어 줘") -- records
+  the words at the current step exactly as the STT gave them, case and
+  spelling kept. Their kind is read by rule (`curated_protocol.note_kind`):
+  a measurement (a number with a unit, or a named quantity such as pH with a
+  number), a deviation ("원문과 다르게", "대신", "더/덜 넣었어"), an
+  observation, and otherwise -- or when unclear -- a memo. The kinds are the
+  router's `record_log` allow-list (`RECORD_LOG_RULES`: observation,
+  measurement, deviation, memo, anomaly); a memo keeps the record's `note`
+  category, and a router note stores the utterance's own span, never the
+  model's spelling. Once stored the note is read back, never asked about: a
+  measurement value by value ("피에이치 칠 점 이로 기록했어요"), anything else
+  "N단계에 기록했어요". The command alone asks "어떤 내용을 기록할까요?". A
+  completion said as a note ("완료했다고 기록해 줘") and a spill keep their
+  own rules; an open endpoint question stays open under a note.
+- **Corrections** (decision 2, front rule `record_fix`). "방금 기록 고쳐 줘, 7.2가
+  아니라 7.4" asks "방금 기록 'pH 7.2'를 'pH 7.4'로 고칠까요?"; "방금 기록 지워
+  줘" asks "방금 기록 '…'을 지울까요?". A yes appends `record_corrected` or
+  `record_retracted` to the experiment report and `observation_corrected` or
+  `observation_retracted` to the experiment timeline; the record itself is
+  never changed. The screen (the timeline and the report's event list) and
+  the report show the latest words marked 정정됨 (or 취소됨), the first
+  words beside them.
+- **The report's values** (decision 3, front rule `report_review`). When the
+  experiment ends the server lists the record's important values
+  (`experiment_reports.report_review_items`): measurements, observations
+  with a number, points done differently from the source (a deviation note,
+  a later start, a confirmed return, a timer ended early) and anomalies.
+  With any listed it says "보고서에 넣을 중요 값 N개를 확인할게요." and reads
+  them one by one, each ending "맞으면 '네'라고 해 주세요". "네" confirms;
+  "고쳐 줘, X가 아니라 Y" is asked once and a yes corrects (as above) and
+  confirms; "아니" asks how to correct it; "나중에 할게" -- or anything else,
+  or the session closing -- leaves the rest to the screen's checklist (✓ 확인,
+  고치기). Each answer is an event (`report_value_confirmed`,
+  `report_review_deferred`). With nothing listed nothing is asked.
+- **Timers, pauses and resumes in the report** (decision 4). On the served
+  path a timer start, a pause and a resume that took effect reach the
+  experiment report's ledger, so its timer column reads "원문 10분 / 실제 12분"
+  and a pause "3분 동안 멈췄다가 다시 진행했다"; a second "타이머 시작해줘"
+  adds nothing.
+- **Words as said** (decision 5). Every path stores the researcher's words as
+  the STT gave them; reading them uses the normalized key, storing does not.
+- **A later start continued** (decision 9). A run opened with "N단계부터
+  시작해줘" can be continued after the connection dropped, and from a
+  checkpoint: the recovery is handed the steps the start skipped, from the
+  record (`server._workspace_skipped_step_ids`), and accepts exactly the steps
+  before the start in place of completions; a checkpoint restart carries
+  them (`steps_skipped_carried_over`).
+
 ## Semantic intent fallback
 
 Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
@@ -731,8 +787,8 @@ On, a turn goes:
   router history (the last turns, those the front rules, the emergency gate
   and the screen handled included; lane RT, above), and the model replies
   with exactly one call: `answer`, `change_state` (start, next, stop, pause,
-  resume, start_timer) or `record_log` (observation, anomaly), the values of
-  one allow-list.
+  resume, start_timer) or `record_log` (observation, measurement, deviation,
+  memo, anomaly; lane N), the values of one allow-list.
 - **Server ruling** — a proposal is validated and carried out through the same
   branches `plan()` uses. `next` never moves on: it opens the completion
   question (or the endpoint question) and only the researcher's answer moves
@@ -1195,18 +1251,25 @@ system. Both have one structure (`experiment_reports.report_blocks`):
   completed n/N; completed, or stopped at which step; the protocol's
   approval state in words; and, for a test-mode run, that the readiness
   gates were skipped;
-- 1 purpose and 2 background and principle, from the protocol's PDF only;
+- 1 purpose and 2 background and principle, from the protocol's PDF -- or,
+  when the PDF has no background, a short one from the report model's general
+  knowledge, labelled "AI 일반 지식 — 출처 없음, 확인 필요" (lane N);
 - 3 materials and methods: the materials and the equipment as two tables
   (the name as the protocol lists it, its use, and the source steps that
   name it), the steps done (in Korean where a translation exists, source
-  values unchanged; a step done in more than one round shows each round's
-  time), and what was done differently from the source, from the record
+  values unchanged -- a stored automatic translation marked "(자동 번역)"
+  with the source under it in the same cell; a step done in more than one
+  round shows each round's time), and what was done differently from the
+  source, from the record
   only -- among it a later start as its event records it ("10단계부터
   시작(1–9단계 건너뜀)") and each return within a repeat with its round,
   which the report says is counted from returns confirmed in words, not
   rounds done at the bench;
-- 4 results: the researcher's observations, anomalies and photos as a table,
-  or "기록된 관찰이 없습니다.";
+- 4 results: the researcher's measurements, deviations, observations,
+  memos, anomalies and photos as a table, or "기록된 관찰이 없습니다."; a
+  value the researcher confirmed carries "(실험자 확인)", a corrected one
+  "(정정됨 — 처음 기록 “…”)", and the values not confirmed are listed apart
+  under "확인되지 않은 값" (lane N);
 - 5 discussion: (가) what the record shows and (나) what needs checking are
   lists the server builds from the record, (다) review suggestions only on a
   recorded anomaly or deviation, marked as suggestions, (라) a blank
@@ -1243,7 +1306,12 @@ same unit in the record or the source (`15분` = `15 min`, `µL` = `uL`), a
 bare number must appear in them, the purpose and background carry no
 experiment-condition numbers and cite the PDF, nothing identifier-shaped,
 quoted observations must be recorded ones, and cause suggestions must name a
-recorded item. A section that fails gets the server's own sentence.
+recorded item. A value the researcher did not confirm may not be stated, and
+a number of rounds or repetitions must come with "말로 확인한 돌아가기 기준"
+(lane N). A general-knowledge background is used only when the model found
+none in the source, and only with no numbers, units, citations, identifiers,
+procedures or safety directions. A section that fails gets the server's own
+sentence.
 
 The report uses no outside sources. Google Search grounding was tried and
 taken out, because Google's service terms for grounded results forbid caching
@@ -1251,7 +1319,9 @@ or storing them and modifying them or mixing them with other content, and a
 report is a stored file other people read.
 
 The prose is written once per experiment. When an experiment stops or
-completes the server calls the report model on a background thread (bounded
+completes -- after the researcher has confirmed its values by voice or left
+them for the screen (lane N) -- the server calls the report model on a
+background thread (bounded
 by `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`, 25) and keeps the reply with
 the report (`experiment_report_prose`, derived output beside the ledger);
 with no model configured, or when the call fails, the server's own sentences
@@ -1260,6 +1330,12 @@ is then, so a photo added later still appears in the tables.
 `GET /api/experiment-reports/{id}/prose` says whether it is being prepared or
 ready, and the record card shows that; `POST` to the same path writes it
 again, only when a person presses "보고서 문장 다시 만들기".
+`GET /api/experiment-reports/{id}/review` lists the report's values and
+which were confirmed; `POST /api/experiment-reports/{id}/review/{item_id}`
+with `{"action": "confirm"}` or `{"action": "correct", "text": "…"}`
+confirms one after the experiment ended (a correction is appended first).
+When the last one is confirmed on the screen the prose is written again --
+its one model call then (lane N).
 
 An image uploaded as evidence (`POST /api/workspace/experiments/{id}/evidence`)
 puts a photo on the report at its step, captioned with the optional `caption`
@@ -1418,7 +1494,8 @@ The browser consumes these main groups:
 - `/api/workspace/webhooks/github/{connector_id}`: signed, replay-protected source
   updates;
 - `/api/workspace/eln/elabftw/writeback`: confirmed experiment export; and
-- `/api/experiment-reports/*`: tenant-scoped report reads/exports.
+- `/api/experiment-reports/*`: tenant-scoped report reads/exports, and the
+  report's values to confirm (`/review`, lane N).
 
 For deployment probes, `GET /healthz` is a pure liveness check (the process
 can serve a request); `GET /readyz` validates identity, workspace,

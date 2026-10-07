@@ -1876,6 +1876,90 @@ class WorkspaceStore:
         assert stored is not None
         return dict(stored)
 
+    def record_observation_fix(
+        self,
+        principal: Principal,
+        session_id: str,
+        *,
+        event_key: str,
+        target_event_key: str,
+        content: str | None,
+        capture_source: str,
+    ) -> dict[str, object]:
+        """Append a correction (``content``) or a withdrawal (None) of an observation.
+
+        Lane N, decision 2. The observation and the event that recorded it are
+        never changed: the correction is its own event, and the timeline shows
+        the latest words with the first ones kept. Allowed in any status of
+        the experiment, since a correction is part of the record rather than
+        new work at the bench (the report's values are confirmed after the
+        experiment ends).
+        """
+
+        row = self._experiment_row(principal, session_id, write=True)
+        event_key = _identifier(event_key, "Observation correction idempotency key")
+        target_event_key = _identifier(target_event_key, "Observation event key")
+        if capture_source not in {"voice", "manual"}:
+            raise WorkspaceError("Observation capture source is invalid.")
+        if content is not None:
+            content = _text(content, "Observation content", maximum=4000)
+        target = self._connection.execute(
+            """SELECT event_type,step_id,step_label,payload_json
+            FROM experiment_session_events WHERE session_id=? AND event_key=?""",
+            (row["session_id"], target_event_key),
+        ).fetchone()
+        observation_id = (
+            json.loads(target["payload_json"]).get("observation_id")
+            if target is not None and target["event_type"] == "observation_recorded"
+            else None
+        )
+        if not isinstance(observation_id, str):
+            raise WorkspaceNotFoundError("The observation to correct is not available.")
+        event_type = "observation_retracted" if content is None else "observation_corrected"
+        payload = {
+            "observation_id": observation_id,
+            "content": content,
+            "capture_source": capture_source,
+            "knowledge_effect": "observation_only",
+        }
+        now = _now()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._connection.execute(
+                """SELECT event_type,payload_json FROM experiment_session_events
+                WHERE session_id=? AND event_key=?""",
+                (row["session_id"], event_key),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["event_type"] != event_type
+                    or json.loads(existing["payload_json"]) != payload
+                ):
+                    raise WorkspaceConflictError(
+                        "Observation correction key was reused with different content."
+                    )
+            else:
+                self._append_experiment_event(
+                    principal,
+                    session_id=row["session_id"],
+                    event_key=event_key,
+                    event_type=event_type,
+                    step_id=target["step_id"],
+                    step_label=target["step_label"],
+                    payload=payload,
+                    created_at=now,
+                )
+                self._connection.execute(
+                    """UPDATE experiment_sessions SET updated_at=?,version=version+1
+                    WHERE session_id=? AND organization_id=?""",
+                    (now, row["session_id"], principal.organization_id),
+                )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return {"event_key": event_key, "event_type": event_type, **payload}
+
     def record_evidence(
         self,
         principal: Principal,
@@ -2152,6 +2236,14 @@ class WorkspaceStore:
 
         if session.get("status") != "stopped":
             return ()
+        # Lane N, decision 9: a run opened with a later start carries the
+        # steps it skipped to every place it can be continued from.
+        skipped: list[str] = []
+        for event in session.get("events", ()):
+            record = (event.get("payload") or {}).get("step_record")
+            if isinstance(record, Mapping) and record.get("kind") == "start_at_step":
+                skipped = [str(item) for item in record.get("skipped_step_ids") or ()]
+                break
         completions = {
             item["event_id"]: item for item in session.get("completed_steps", ())
         }
@@ -2171,6 +2263,7 @@ class WorkspaceStore:
                 "last_carried_step_label": carried[-1]["step_label"],
                 "last_carried_completed_at": carried[-1]["completed_at"],
                 "stopped_here": stopped_here,
+                "skipped_step_ids": list(skipped),
             })
 
         waiting = False
@@ -2310,6 +2403,37 @@ class WorkspaceStore:
                 },
                 created_at=now,
             )
+            start = next(
+                (
+                    (event.get("payload") or {}).get("step_record")
+                    for event in source["events"]
+                    if isinstance((event.get("payload") or {}).get("step_record"), Mapping)
+                    and (event.get("payload") or {})["step_record"].get("kind") == "start_at_step"
+                ),
+                None,
+            )
+            if start is not None:
+                # Lane N, decision 9: the later start the run was opened with
+                # holds for the new session too, so its recovery accepts the
+                # skipped steps as it does the carried completions.
+                self._append_experiment_event(
+                    principal,
+                    session_id=new_id,
+                    event_key="skipped-steps-carried",
+                    event_type="steps_skipped_carried_over",
+                    step_id=checkpoint_step_id,
+                    step_label=step_label,
+                    payload={
+                        "source_session_id": session_id,
+                        "step_record": {
+                            "kind": "start_at_step",
+                            "start_step": start.get("start_step"),
+                            "skipped_step_labels": list(start.get("skipped_step_labels") or ()),
+                            "skipped_step_ids": list(start.get("skipped_step_ids") or ()),
+                        },
+                    },
+                    created_at=now,
+                )
             for index, item in enumerate(carried, 1):
                 event_id, _ = self._append_experiment_event(
                     principal,
@@ -2398,6 +2522,23 @@ class WorkspaceStore:
                 (session_id,),
             ).fetchall()
         }
+        # Lane N, decision 2: an observation shows its latest words, and
+        # whether they were corrected or withdrawn; the first words stay.
+        for event in session["events"]:
+            if event.get("event_type") not in {
+                "observation_corrected", "observation_retracted",
+            }:
+                continue
+            payload = event.get("payload") or {}
+            observation = observations.get(str(payload.get("observation_id")))
+            if observation is None:
+                continue
+            if event["event_type"] == "observation_retracted":
+                observation["retracted"] = True
+            else:
+                observation["current_content"] = payload.get("content")
+                observation["corrected"] = True
+                observation["retracted"] = False
         timeline = []
         for event in session["events"]:
             payload = event.get("payload") or {}

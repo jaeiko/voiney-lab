@@ -75,7 +75,11 @@ class SchemaTests(unittest.TestCase):
         record = RECORD_LOG_TOOL["function"]["parameters"]
         self.assertFalse(record["additionalProperties"])
         self.assertEqual(record["required"], ["type", "value", "evidence"])
-        self.assertEqual(record["properties"]["type"]["enum"], ["observation", "anomaly"])
+        # Lane N, decision 1: the kinds of a note joined the allow-list.
+        self.assertEqual(
+            record["properties"]["type"]["enum"],
+            ["observation", "measurement", "deviation", "memo", "anomaly"],
+        )
         # The duration of a timer is the source's: the tool has no such argument.
         self.assertNotIn("duration", json.dumps(change))
 
@@ -423,9 +427,11 @@ class ApplyToolProposalTests(unittest.TestCase):
     def test_record_log_takes_only_the_researchers_own_words(self) -> None:
         session = _session(self.fixture)
         verdict, plan = _propose(
-            # A request to record (decision 1 as narrowed by lane R3).
-            session, 2, "메모해 줘 튜브 라벨 A-170",
-            _record("observation", "튜브 라벨 A-170", "메모해 줘 튜브 라벨 A-170"),
+            # A request to record (decision 1 as narrowed by lane R3). Lane N:
+            # "메모해 줘 …" is now the note rule's, so the router is asked in
+            # words the front rules leave to it.
+            session, 2, "튜브 라벨 A-170 남겨 줘",
+            _record("observation", "튜브 라벨 A-170", "튜브 라벨 A-170 남겨 줘"),
         )
         self.assertEqual(verdict.effect, "execute")
         self.assertIs(plan.action, CuratedProtocolAction.RECORD_OBSERVATION)
@@ -576,7 +582,8 @@ class InGelEndpointProposalTests(unittest.TestCase):
             # Decision 1: the evidence carries the word of recording.
             _record("observation", "탈색이 됐는지 모르겠어", "탈색이 됐는지 모르겠어 일단 메모해 줘"),
         )
-        self.assertEqual(plan.observation_predicate, "note")
+        # Lane N, decision 1: the note rule reads this as an observation.
+        self.assertEqual(plan.observation_predicate, "observation")
         self.assertEqual(session.endpoint_observations(), {})
         _say(session, 3, "다음 단계")
         _say(session, 4, "네")

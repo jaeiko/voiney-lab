@@ -419,7 +419,9 @@ class _ProviderContract:
         session.activate_configured()
         session.plan("시작", turn_id=1, language="ko", configuration_id=1, generation=1)
         session.current_index = 3
-        said = "기록해 줘 젤이 살짝 부풀었어"
+        # Lane N, decision 1: "기록해 줘 …" is now the note rule's; the
+        # router is asked in words the front rules leave to it.
+        said = "젤이 살짝 부풀었어 남겨 줘"
         fake = self.fake_tool_call("record_log", {
             "type": "observation", "value": "젤이 살짝 부풀었어", "evidence": said,
         })
