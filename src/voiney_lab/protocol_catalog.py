@@ -353,22 +353,27 @@ class ProtocolAnalysisRunStatus:
         }
 
 
-def _failures_not_retried(events: Sequence[Any]) -> tuple[Any, ...]:
-    """The events without the analysis failures an automatic retry followed.
+def _failures_not_superseded(events: Sequence[Any]) -> tuple[Any, ...]:
+    """The events without the analysis failures a later attempt replaced.
 
-    The failure a retry was sent for is not the run's result (lane AN,
-    decision 1): while the retry runs the run is analysing, and when it
-    passes nothing failed. The failure stays in the ledger.
+    The failure an automatic retry was sent for is not the run's result
+    (lane AN, decision 1): while the retry runs the run is analysing, and
+    when it passes nothing failed. Nor is a failure an analysis that passed
+    afterwards replaced -- a person's "분석 다시 시도" that passed used to
+    read as failed, because the run status still carried the earlier code.
+    A failure stays in the ledger either way.
     """
 
-    last_retry = max(
+    last_superseding = max(
         (index for index, event in enumerate(events)
-         if event.event_type == _ANALYSIS_RETRY_EVENT),
+         if event.event_type in {
+             _ANALYSIS_RETRY_EVENT, _ANALYSIS_READY_EVENT, _SINGLE_REVIEW_REQUIRED_EVENT,
+         }),
         default=-1,
     )
     return tuple(
         event for index, event in enumerate(events)
-        if not (index < last_retry and event.event_type == _ANALYSIS_FAILED_EVENT)
+        if not (index < last_superseding and event.event_type == _ANALYSIS_FAILED_EVENT)
     )
 
 
@@ -1434,11 +1439,11 @@ class ProtocolCatalog:
                     _SINGLE_REVIEW_REQUIRED_EVENT,
                 }
             )
-            not_retried = _failures_not_retried(lifecycle_events)
+            current_events = _failures_not_superseded(lifecycle_events)
             latest_failure = next(
                 (
                     event.payload.get("failure_code")
-                    for event in reversed(not_retried)
+                    for event in reversed(current_events)
                     if event.event_type == _ANALYSIS_FAILED_EVENT
                     and isinstance(event.payload, dict)
                     and isinstance(event.payload.get("failure_code"), str)
@@ -1448,7 +1453,7 @@ class ProtocolCatalog:
             latest_failure_detail = next(
                 (
                     event.payload.get("evidence_failure")
-                    for event in reversed(not_retried)
+                    for event in reversed(current_events)
                     if event.event_type == _ANALYSIS_FAILED_EVENT
                     and isinstance(event.payload, dict)
                     and isinstance(
@@ -1672,7 +1677,7 @@ class ProtocolCatalog:
             failed = next(
                 (
                     event
-                    for event in reversed(_failures_not_retried(tuple(
+                    for event in reversed(_failures_not_superseded(tuple(
                         event for event in self.store.list_events(revision.experiment_id)
                         if event.protocol_revision_number == revision.revision_number
                     )))
@@ -1953,11 +1958,11 @@ class ProtocolCatalog:
             for event in self.store.list_events(revision.experiment_id)
             if event.protocol_revision_number == revision.revision_number
         )
-        not_retried = _failures_not_retried(revision_events)
+        current_events = _failures_not_superseded(revision_events)
         latest_failure = next(
             (
                 event.payload.get("failure_code")
-                for event in reversed(not_retried)
+                for event in reversed(current_events)
                 if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
                 and isinstance(event.payload.get("failure_code"), str)
@@ -1967,7 +1972,7 @@ class ProtocolCatalog:
         latest_failure_detail = next(
             (
                 event.payload.get("evidence_failure")
-                for event in reversed(not_retried)
+                for event in reversed(current_events)
                 if event.event_type
                 in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
@@ -2223,7 +2228,7 @@ class ProtocolCatalog:
         failure = next(
             (
                 event.payload.get("failure_code")
-                for event in reversed(_failures_not_retried(revision_events))
+                for event in reversed(_failures_not_superseded(revision_events))
                 if event.event_type in {_ANALYSIS_FAILED_EVENT, _CHUNK_FAILED_EVENT}
                 and isinstance(event.payload, dict)
                 and isinstance(event.payload.get("failure_code"), str)

@@ -201,6 +201,37 @@ class NotRetriedTests(_Case):
         self.assertEqual(self.status()["failure_code"], "provider_configuration_missing")
 
 
+class PassedAfterAFailureTests(_Case):
+    """Found while making decision 1: after a person's "분석 다시 시도" passed,
+    the run status still carried the earlier failure code, and the page,
+    which reads any failure code as a failed run, said "분석 실패" over a
+    passed analysis (the review kept its "분석 실패와 복구" group too). A
+    failure that a later passed analysis replaced is not the run's result."""
+
+    def test_a_person_s_retry_that_passes_reads_as_passed(self) -> None:
+        self.request_and_analyze([ProtocolAnalysisTimeoutError("timed out")])
+        self.assertEqual(self.status()["failure_code"], "protocol_analysis_timeout")
+        _, error = self.request_and_analyze([self.draft], analysis_id="analysis-" + "e" * 32)
+        self.assertIsNone(error)
+        status = self.status()
+        self.assertEqual(status["state"], "review_required")
+        self.assertIsNone(status["failure_code"])
+        self.assertIsNone(status["failure_detail"])
+        self.assertIsNone(self.catalog.review(self.protocol_id)["analysis_failure"])
+        # The failure stays in the ledger.
+        self.assertIn("protocol_analysis_failed", self.event_types())
+
+    def test_a_person_s_retry_that_fails_again_reports_the_new_failure(self) -> None:
+        self.request_and_analyze([ProtocolAnalysisTimeoutError("timed out")])
+        self.request_and_analyze(
+            [ProtocolAnalysisEvidenceError("Evidence quote was invalid.")],
+            analysis_id="analysis-" + "f" * 32)
+        self.assertEqual(self.status()["failure_code"], "protocol_analysis_invalid_evidence")
+        self.assertEqual(
+            self.catalog.review(self.protocol_id)["analysis_failure"]["code"],
+            "protocol_analysis_invalid_evidence")
+
+
 class WhileRetryingTests(_Case):
     def test_the_run_reads_as_running_with_the_retry_count(self) -> None:
         seen: dict = {}
