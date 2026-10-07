@@ -327,7 +327,11 @@ class DurableSessionTests(Turns, unittest.TestCase):
         )
         self.mirror("프로토콜 시작해줘")
         for label in range(1, 42):
-            self.mirror(f"{label}단계 완료했어")
+            plan = self.mirror(f"{label}단계 완료했어")
+            if plan.intent_kind == "repeat_round_confirmation_required":
+                # Decision 3 asks about the next round at 16 and 21; declined
+                # here, the run moves on and the decline is mirrored too.
+                self.mirror("아니")
         self.mirror("아니요")
         state = self.state()
         self.assertEqual(state["current_step_label"], "43")

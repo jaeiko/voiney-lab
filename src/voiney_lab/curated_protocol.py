@@ -2822,6 +2822,12 @@ FRONT_RULES: dict[str, str] = {
                     "'몇 번(몇 개) 하시나요?': a number is read back and the "
                     "repeat registered with it, '아직 몰라' leaves the count to be "
                     "asked round by round (lane CB, decision 2)",
+    "repeat_round": "a completion at the last step of a fixed or registered "
+                    "repeat with rounds left: '12~15단계를 한 번 더 해야 해요"
+                    "(2/3회차). 12단계로 돌아갈까요?'; a yes goes back as lane R7's "
+                    "return does, a no moves on and is recorded as done "
+                    "differently; with no count, '한 번 더 하시나요?' after each "
+                    "round (lane CB, decision 3)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -4240,6 +4246,9 @@ _ROUND_NO = re.compile(
     r"|더\s*안\s*해요?|더\s*안\s*할게요?|안\s*할게요?|안\s*해요?|충분해요?"
     r"|넘어갈게요?|넘어가자|넘어가요|다음으로\s*(?:갈게요?|가자)|no)"
 )
+#: Read by round_reply; kept in the table too so the generic lookup never
+#: misses the kind.
+_STEP_MOVE_AFFIRMATIVE["repeat_round"] = _ROUND_YES
 
 
 def branch_condition_reply(transcript: str) -> str | None:
@@ -8219,13 +8228,19 @@ class CuratedProtocolSession:
         for repetition_id, returns in self._repeat_returns.items():
             interval = intervals.get(repetition_id)
             if interval is not None and step_id in self._repeat_span(interval):
-                return {
+                record = {
                     "kind": "repeat_round_completion",
                     "repetition_id": repetition_id,
                     "round": returns + 1,
                     "round_counted_from": "confirmed_returns",
                     "completed_before": again,
                 }
+                led = self._repetition_guidance(interval)
+                if led is not None:
+                    # Lane CB, decision 3: the count the round counts towards.
+                    record["rounds_required"] = led["count"]
+                    record["count_source"] = led["value_source"]
+                return record
         return {"kind": "completed_again", "completed_before": True} if again else None
 
     # --- a source condition, a count and a round answered in words (lane CB) --
@@ -8552,6 +8567,9 @@ class CuratedProtocolSession:
         language: str,
         actor_principal_id: str | None,
         actor_role: str,
+        turn_id: int,
+        configuration_id: int | None,
+        generation: int | None,
     ) -> CuratedProtocolTurnPlan:
         """Record the answer to the open condition and do what the source says for it.
 
@@ -8621,8 +8639,33 @@ class CuratedProtocolSession:
                 })
             lead = "조건에 해당한다고 기록했어요."
             follow = self._enter_step_notice(language)
+            at_end = self._guided_interval_at(self.current_index)
             if follow:
                 words = f"{lead} {follow}"
+            elif (
+                record["registered"]
+                and at_end is not None
+                and self._repeat_span(at_end[0])
+                and self._repeat_span(at_end[0])[-1] == step.step_id
+                and (
+                    at_end[1]["count"] is None
+                    or self._repeat_returns.get(str(at_end[0]["repetition_id"]), 0) + 1
+                    < at_end[1]["count"]
+                )
+            ):
+                # Lane CB, decision 3: the repeat the yes registered ends at
+                # this very step, so the next round is asked about at once;
+                # a no to it stays here.
+                display, speech = self._open_round_question(
+                    at_end[0], at_end[1], turn_id=turn_id,
+                    configuration_id=configuration_id, generation=generation,
+                    after_decline="stay", declined_intent=None,
+                )
+                plan = self._words_plan(
+                    f"{lead} {display}", intent_kind="branch_condition_recorded",
+                    action=CuratedProtocolAction.CLARIFY_COMPLETION, step_record=record,
+                )
+                return replace(plan, speech_text=f"{lead} {speech}")
             elif record["registered"]:
                 first, last = record["registered"][0]["repeated_step_labels"]
                 count = record["registered"][0]["count"]
@@ -8721,6 +8764,207 @@ class CuratedProtocolSession:
             display, intent_kind="repeat_count_recorded", step_record=record,
         )
         return replace(plan, speech_text=speech)
+
+    def _open_round_question(
+        self,
+        interval: dict[str, object],
+        guidance: dict[str, Any],
+        *,
+        turn_id: int,
+        configuration_id: int | None,
+        generation: int | None,
+        after_decline: str,
+        declined_intent: dict[str, Any] | None,
+    ) -> tuple[str, str]:
+        """Open the next-round question for the led repeat the run stands at the end of.
+
+        Returns (display, speech). "12~15단계를 한 번 더 해야 해요(2/3회차).
+        12단계로 돌아갈까요?" with a count; "19~20단계를 1회 했어요. 한 번 더
+        하시나요?" with none. The yes goes the way lane R7's return goes; what
+        a no does is ``after_decline``: carry out the completion (or advance)
+        that was asked, or stay (asked right after a condition's yes).
+        """
+
+        steps = self.fixture.steps
+        step = steps[self.current_index]
+        repetition_id = str(interval["repetition_id"])
+        first, last = self._range_labels(interval)
+        order = [item.step_id for item in steps]
+        target_index = order.index(interval["repeated_step_ids"][0])  # type: ignore[index]
+        target = steps[target_index]
+        rounds_done = self._repeat_returns.get(repetition_id, 0) + 1
+        required = guidance["count"]
+        if required is None:
+            display = (
+                f"{first}~{last}단계를 {rounds_done}회 했어요. 한 번 더 하시나요? "
+                f"하시면 {first}단계로 돌아갈게요."
+            )
+            speech = (
+                f"{first}~{last}단계를 {count_words(rounds_done, spoken=True)} 했어요. "
+                f"한 번 더 하시나요? 하시면 {first}단계로 돌아갈게요."
+            )
+        else:
+            display = (
+                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"({round_words(rounds_done + 1, required, spoken=False)}). {first}단계로 돌아갈까요?"
+            )
+            speech = (
+                f"{first}~{last}단계를 한 번 더 해야 해요"
+                f"({round_words(rounds_done + 1, required, spoken=True)}). {first}단계로 돌아갈까요?"
+            )
+        labels = {item.step_id: item.source_label for item in steps}
+        self._pending_step_move = {
+            "kind": "repeat_round",
+            "said_number": int(first) if first.isdigit() else None,
+            "was_active": True,
+            "from_index": self.current_index,
+            "from_label": step.source_label,
+            "workflow_revision": self._revision,
+            "requested_turn_id": turn_id,
+            "configuration_id": configuration_id,
+            "requested_generation": generation,
+            "target_index": target_index,
+            "target_step_id": target.step_id,
+            "target_label": target.source_label,
+            "repetition_id": repetition_id,
+            "repeated_step_labels": [first, last],
+            "stated_at_step": labels.get(str(interval.get("anchor_step_id") or ""), step.source_label),
+            "source_text": " ".join(str(interval.get("source_text") or "").split()),
+            "source_page_number": interval.get("source_page_number"),
+            "rounds_required": required,
+            "rounds_done": rounds_done,
+            "count_source": guidance["value_source"],
+            "guided": True,
+            "question": display,
+            "after_decline": after_decline,
+            "declined_intent": dict(declined_intent or {}),
+        }
+        return display, speech
+
+    def _round_question_plan(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        turn_id: int,
+        configuration_id: int | None,
+        generation: int | None,
+        language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """At the last step of a led repeat with rounds left, ask about the next round instead of moving on.
+
+        Lane CB, decision 3. With every round done the completion goes on as
+        it would (said so where it moves). Nothing here says whether a round
+        was enough: the count is the source's or the person's.
+        """
+
+        if language != "ko" or intent.intent_kind == "repeat_round_declined":
+            return None
+        if not self.active or not 0 <= self.current_index < len(self.fixture.steps):
+            return None
+        found = self._guided_interval_at(self.current_index)
+        if found is None:
+            return None
+        interval, guidance = found
+        span = self._repeat_span(interval)
+        step = self.fixture.steps[self.current_index]
+        if not span or span[-1] != step.step_id:
+            return None
+        rounds_done = self._repeat_returns.get(str(interval["repetition_id"]), 0) + 1
+        required = guidance["count"]
+        if required is not None and rounds_done >= required:
+            return None
+        display, speech = self._open_round_question(
+            interval, guidance, turn_id=turn_id, configuration_id=configuration_id,
+            generation=generation,
+            after_decline="complete" if intent.reported_completion else "advance",
+            declined_intent={
+                "reported_completion": intent.reported_completion,
+                "requested_followup": intent.requested_followup,
+                "reported_observation": intent.reported_observation,
+                "observation_predicate": intent.observation_predicate,
+                "observation_outcome": intent.observation_outcome,
+            },
+        )
+        self._last_front_rule = "repeat_round"
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            display_text=display,
+            speech_text=speech,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=(),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=display,
+            intent_kind="repeat_round_confirmation_required",
+            target_step=str(self._pending_step_move["target_label"]),
+            requested_transition="repeat_round",
+        )
+
+    def _rounds_notice(self, index: int) -> tuple[str, dict[str, Any] | None]:
+        """What the move off a led repeat's last step says, and the record it carries.
+
+        A round declined is kept as a point done differently from the source
+        ("repeat_declined"); an open count closed by a no is the person's
+        count ("repeat_closed", value_source operator); every round done is
+        said so. Empty for any other step.
+        """
+
+        declined = self._declined_round
+        self._declined_round = None
+        if declined is not None:
+            first, last = declined.get("repeated_step_labels") or ("", "")
+            rounds_done = int(declined.get("rounds_done") or 1)
+            required = declined.get("rounds_required")
+            if required is None:
+                repetition_id = str(declined.get("repetition_id") or "")
+                registered = self._registered_repetitions.get(repetition_id)
+                if registered is not None:
+                    registered["count"] = rounds_done
+                    registered["decided"] = "per_round"
+                    registered["closed_at"] = datetime.now(timezone.utc).isoformat()
+                notice = (
+                    f"알겠어요. {first}~{last}단계는 {rounds_done}회 한 것으로 기록했어요"
+                    f"({VALUE_SOURCE_WORDS[VALUE_SOURCE_OPERATOR]}). "
+                )
+                record = {
+                    "kind": "repeat_closed",
+                    **declined,
+                    "count": rounds_done,
+                    "value_source": VALUE_SOURCE_OPERATOR,
+                    "decided": "per_round",
+                    "round": rounds_done,
+                    "round_counted_from": "confirmed_returns",
+                }
+            else:
+                stated = (
+                    f"원문은 {required}회" if declined.get("count_source") == VALUE_SOURCE_SOURCE
+                    else f"말씀하신 횟수는 {required}회"
+                )
+                notice = (
+                    f"알겠어요. {first}~{last}단계는 {rounds_done}회차까지만 한 것으로 "
+                    f"기록했어요({stated}). "
+                )
+                record = {
+                    "kind": "repeat_declined",
+                    **declined,
+                    "round": rounds_done,
+                    "round_counted_from": "confirmed_returns",
+                }
+            return notice, record
+        found = self._guided_interval_at(index)
+        if found is None:
+            return "", None
+        interval, guidance = found
+        span = self._repeat_span(interval)
+        if not span or span[-1] != self.fixture.steps[index].step_id:
+            return "", None
+        required = guidance["count"]
+        rounds_done = self._repeat_returns.get(str(interval["repetition_id"]), 0) + 1
+        if required is None or rounds_done != required:
+            return "", None
+        first, last = self._range_labels(interval)
+        return f"{first}~{last}단계 {required}회를 모두 마쳤어요. ", None
 
     def _words_plan(
         self,
@@ -9435,7 +9679,7 @@ class CuratedProtocolSession:
             }
         if intent.intent_kind.endswith("_declined"):
             target = move.get("target_label")
-            if move["kind"] == "repeat_return":
+            if move["kind"] in {"repeat_return", "repeat_round"}:
                 response = (
                     f"알겠습니다. {target}단계로 돌아가지 않았습니다. "
                     f"지금 {current_label}단계입니다."
@@ -9493,6 +9737,19 @@ class CuratedProtocolSession:
                 return "state_changed"
             if not self.active and self._experiment_started_at is not None:
                 return "state_changed"
+        elif move["kind"] == "repeat_round":
+            # Lane CB, decision 3: the run must still stand at the last step
+            # of the led repeat the question was asked for.
+            if not self.active or self.current_index != move.get("from_index"):
+                return "state_changed"
+            found = self._guided_interval_at(self.current_index)
+            if (
+                found is None
+                or str(found[0]["repetition_id"]) != move.get("repetition_id")
+                or target >= self.current_index
+                or steps[target].step_id not in found[0]["repeated_step_ids"]  # type: ignore[operator]
+            ):
+                return "state_changed"
         else:
             if not self.active or self.current_index != move.get("from_index"):
                 return "state_changed"
@@ -9533,7 +9790,7 @@ class CuratedProtocolSession:
         step = steps[target]
         label = step.source_label
         timer_seconds = self.timer_seconds_for_step(target)
-        if move["kind"] == "repeat_return":
+        if move["kind"] in {"repeat_return", "repeat_round"}:
             repetition_id = str(move["repetition_id"])
             returns = self._repeat_returns.get(repetition_id, 0) + 1
             self._repeat_returns[repetition_id] = returns
@@ -9559,6 +9816,21 @@ class CuratedProtocolSession:
                 step_index=target, timer_active=False,
                 step_timer_seconds=timer_seconds,
             ).replace(f"{label}단계로 이동했습니다.", f"{label}단계로 돌아왔습니다.", 1)
+            # Lane CB, decision 3: within a led repeat the round opened is
+            # said with the count it counts towards, and kept with its source.
+            led = self._repetition_guidance(
+                self._repeat_intervals_by_id().get(repetition_id) or {"kind": None, "repetition_id": repetition_id}
+            ) if repetition_id in self._repeat_intervals_by_id() else None
+            if led is not None:
+                record["rounds_required"] = led["count"]
+                record["count_source"] = led["value_source"]
+                if move["kind"] == "repeat_round":
+                    record["guided"] = True
+                if language == "ko":
+                    control_text = (
+                        f"{round_words(returns + 1, led['count'], spoken=True)}를 시작해요. "
+                        f"{control_text}"
+                    )
             action = CuratedProtocolAction.NEXT
         else:
             skipped = list(move["skipped_labels"])
@@ -12857,30 +13129,88 @@ class CuratedProtocolSession:
             )
             if stop_pending_valid else None
         )
-        move_reply = (
-            "affirmative"
-            if (
-                not reply_withheld
-                and (
-                    _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
-                    or _STEP_MOVE_AFFIRMATIVE[
-                        str((self._pending_step_move or {}).get("kind"))
-                    ].fullmatch(normalized_confirmation)
+        pending_move_kind = str((self._pending_step_move or {}).get("kind"))
+        if pending_move_kind == "repeat_round":
+            # Lane CB, decision 3: the round question's own replies. "아직"
+            # is neither, because a no here moves on.
+            move_reply = (
+                round_reply(transcript)
+                if step_move_valid and transcript_quality is None else None
+            )
+        else:
+            move_reply = (
+                "affirmative"
+                if (
+                    not reply_withheld
+                    and (
+                        _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+                        or _STEP_MOVE_AFFIRMATIVE[pending_move_kind].fullmatch(
+                            normalized_confirmation
+                        )
+                    )
                 )
+                or binary_reply == "affirmative"
+                else "negative"
+                if (
+                    not reply_withheld
+                    and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+                )
+                or binary_reply == "negative"
+                else None
+            ) if step_move_valid and transcript_quality is None else None
+        if (
+            move_reply == "negative"
+            and self._pending_step_move is not None
+            and pending_move_kind == "repeat_round"
+            and self._pending_step_move.get("after_decline") in {"complete", "advance"}
+        ):
+            # Lane CB, decision 3: a no to the next round moves on, carrying
+            # out the completion (or advance) that was asked, and the rounds
+            # not done are recorded as a point done differently.
+            move = dict(self._pending_step_move)
+            self._pending_step_move = None
+            self._last_front_rule = "yes_no_open_question"
+            asked = dict(move.get("declined_intent") or {})
+            self._declined_round = {
+                key: move.get(key) for key in (
+                    "repetition_id", "repeated_step_labels", "stated_at_step",
+                    "rounds_done", "rounds_required", "count_source",
+                    "source_text", "source_page_number",
+                )
+            }
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="repeat_round_declined",
+                    action=CuratedProtocolAction.NEXT,
+                    reported_completion=bool(asked.get("reported_completion")),
+                    requested_transition="next",
+                    requested_followup=str(
+                        asked.get("requested_followup") or "describe_new_current_step"
+                    ),
+                    target_step="authoritative_current_step",
+                    confidence_source="server_pending_step_move_confirmation",
+                    allows_state_mutation=True,
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    reported_observation=bool(asked.get("reported_observation")),
+                    observation_predicate=asked.get("observation_predicate"),
+                    observation_outcome=asked.get("observation_outcome"),
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
             )
-            or binary_reply == "affirmative"
-            else "negative"
-            if (
-                not reply_withheld
-                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
-            )
-            or binary_reply == "negative"
-            else None
-        ) if step_move_valid and transcript_quality is None else None
         if move_reply is not None and self._pending_step_move is not None:
             # A yes or no to "N단계로 돌아갈까요?" or "…N단계부터 시작할까요?"
-            # (lane R7, decisions 2-3). Only a yes moves, and it is checked
-            # again before it does.
+            # (lane R7, decisions 2-3), and to the round question (lane CB,
+            # decision 3). Only a yes moves, and it is checked again before
+            # it does.
             move = dict(self._pending_step_move)
             self._pending_step_move = None
             self._last_front_rule = "yes_no_open_question"
@@ -13968,6 +14298,8 @@ class CuratedProtocolSession:
             plan = self._answer_branch_question(
                 intent, transcript=transcript, language=language,
                 actor_principal_id=actor_principal_id, actor_role=actor_role,
+                turn_id=turn_id, configuration_id=configuration_id,
+                generation=generation,
             )
         elif intent.count_reply is not None:
             # Lane CB, decision 2: the count given for the repeat asked here.
@@ -15263,6 +15595,15 @@ class CuratedProtocolSession:
                 # again.
                 plan = held
             elif (
+                asked_round := self._round_question_plan(
+                    intent, turn_id=turn_id, configuration_id=configuration_id,
+                    generation=generation, language=language,
+                )
+            ) is not None:
+                # Lane CB, decision 3: the last step of a led repeat with
+                # rounds left asks about the next round before anything moves.
+                plan = asked_round
+            elif (
                 intent.reported_observation
                 and intent.observation_predicate == "negative"
             ):
@@ -15467,6 +15808,17 @@ class CuratedProtocolSession:
                 completion_record = self._completion_record(
                     self.current_index, intent.reported_completion
                 )
+                # Lane CB, decision 3: a round declined or an open count
+                # closed is said and kept; every round done is said.
+                rounds_notice, rounds_record = self._rounds_notice(self.current_index)
+                if rounds_record is not None:
+                    completion_record = {
+                        **(completion_record or {}),
+                        **rounds_record,
+                        "completed_before": bool(
+                            (completion_record or {}).get("completed_before")
+                        ),
+                    }
                 if self.advance_one_step() is not None:
                     raise CuratedProtocolFixtureError(
                         "Step advance was refused after its gates had passed."
@@ -15510,6 +15862,8 @@ class CuratedProtocolSession:
                         "안내를 화면에 표시했습니다."
                         + control_text.partition("표시했습니다.")[2]
                     )
+                if rounds_notice and language == "ko":
+                    control_text = f"{rounds_notice}{control_text}"
                 plan = self._arrival_plan(
                     control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,
