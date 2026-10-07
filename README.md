@@ -884,7 +884,13 @@ source. A Protocol revision's sentences are machine-translated once its analysis
 passes (lane PX); a source sentence already in Korean is not sent -- more
 Hangul than Latin letters, or at least four Hangul letters with Hangul as the
 sentence's last letter, so "9. Seahorse XF glycolysis stress test 를
-실행합니다" is Korean (lane AN, 2026-10-07). Lightweight reagent/equipment cards store tenant-scoped location,
+실행합니다" is Korean (lane AN, 2026-10-07). A machine translation is refused
+when its numbers, units, kept names or negation differ from the source; where
+the source and the Korean each hold a negation or avoidance word ("without any
+inoculum" ↔ "넣지 않은", "eliminate clumping" ↔ "뭉치지 않도록") the negation
+is kept, and a negation on one side only is still refused. The words are one
+table, `NEGATION_VOCABULARY` in `src/voiney_lab/protocol_translation.py`
+(lane AN, 2026-10-07). Lightweight reagent/equipment cards store tenant-scoped location,
 optional photo/QR/barcode metadata, and an HTTPS SDS/source link. Location changes
 produce a reviewable history rather than a hidden overwrite.
 

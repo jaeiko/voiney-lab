@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from voiney_lab.curated_protocol import (
+    _TRANSLATABLE_TERMS,
     PURPOSE_FACT_KEY,
     CuratedProtocolFixture,
     ProtocolKnowledgeView,
@@ -460,17 +461,79 @@ def required_terms_for(
     return tuple(required)
 
 
+#: Negation and avoidance, one table for both languages (lane AN, human
+#: decision 3 of 2026-10-07). ``reader_translation_issue`` compares the two
+#: sides' negation by narrower word lists; when it says the negation
+#: changed but the source and the Korean each hold a word of this table, the
+#: negation is kept -- measured 2026-10-06 (lane PX), "without any inoculum"
+#: ↔ "접종원을 전혀 넣지 않은" and "eliminate clumping" ↔ "뭉치지 않도록"
+#: were refused. A negation on one side only is refused as before. Each entry
+#: is a regular expression; English ones match whole words, any case.
+#: ``ko_not_negation`` holds words that carry 없 or 못 without negating the
+#: action ("관계없이" is "regardless", "잘못" is "wrongly"); they are taken out
+#: before the Korean side is read.
+NEGATION_VOCABULARY: dict[str, tuple[str, ...]] = {
+    "en": (
+        r"not", r"no", r"never", r"none", r"nor", r"neither", r"without",
+        r"cannot", r"[a-z]+n['’]t",
+        r"avoid(?:s|ing|ed|ance)?", r"eliminat(?:e|es|ing|ed|ion)",
+        r"prevent(?:s|ing|ed|ion)?", r"refrain(?:s|ing|ed)?",
+        r"prohibit(?:s|ing|ed)?",
+    ),
+    "ko": (
+        r"않", r"없", r"지\s*말", r"지\s*마", r"말고", r"말아", r"못", r"금지",
+        r"피(?:하|합|해|했|할|함)", r"방지", r"삼가",
+    ),
+    "ko_not_negation": (
+        r"관계\s*없", r"상관\s*없", r"끊임\s*없", r"틀림\s*없", r"잘못",
+    ),
+}
+_NEGATION_PATTERNS = {
+    "en": re.compile(
+        r"\b(?:" + "|".join(NEGATION_VOCABULARY["en"]) + r")\b", re.IGNORECASE),
+    "ko": re.compile("|".join(NEGATION_VOCABULARY["ko"])),
+}
+_NOT_NEGATION_KO = re.compile("|".join(NEGATION_VOCABULARY["ko_not_negation"]))
+
+
+def negation_or_avoidance(language: str, text: str) -> bool:
+    """Whether ``text`` holds a negation or avoidance word of the table."""
+
+    if language == "ko":
+        text = _NOT_NEGATION_KO.sub(" ", text)
+    return _NEGATION_PATTERNS[language].search(text) is not None
+
+
+def _name_issue(korean: str, required_terms: Sequence[str]) -> str | None:
+    """The check ``reader_translation_issue`` makes after the negation one:
+    every name the reading must keep, in its original spelling."""
+
+    folded = " ".join(korean.split()).casefold()
+    for term in required_terms:
+        if term.casefold() in _TRANSLATABLE_TERMS:
+            continue
+        if term.casefold() not in folded:
+            return "term_missing"
+    return None
+
+
 def check_translation(
     unit: TranslationUnit, korean: str | None,
     glossary: Sequence[GlossaryEntry] = (),
 ) -> str:
     if not isinstance(korean, str) or not korean.strip():
         return "missing"
+    required = required_terms_for(unit, glossary)
     issue = reader_translation_issue(
         unit.source_text, korean,
-        required_terms=required_terms_for(unit, glossary),
+        required_terms=required,
         step_label=_label_only_in_the_korean(unit, korean),
     )
+    # A negation_changed answer means the length and the quantities passed
+    # and the names were not looked at yet (the check's order).
+    if issue == "negation_changed" and negation_or_avoidance(
+            "en", unit.source_text) and negation_or_avoidance("ko", korean):
+        issue = _name_issue(korean, required)
     return issue or "passed"
 
 
