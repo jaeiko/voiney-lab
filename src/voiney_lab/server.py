@@ -7260,11 +7260,13 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     # Lane CB, decision 4: the round the step is in ("2/3회차") and the server
     # question open at this step (the condition, the count, the next round),
     # both the session's own words.
+    round_status=getattr(curated,"repeat_round_status",None)
+    open_question=getattr(curated,"open_server_question",None)
     return {
         "safety_items":items,"translation_source":source,
         "translation_pending":_translation_pending(fixture),
-        "repeat_round":curated.repeat_round_status(),
-        "open_question":curated.open_server_question(),
+        "repeat_round":round_status() if callable(round_status) else None,
+        "open_question":open_question() if callable(open_question) else None,
     }
 
 
