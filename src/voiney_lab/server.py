@@ -8008,11 +8008,14 @@ def _record_experiment_report_plan(
     elif plan.action is CuratedProtocolAction.STOP and plan.state_changed:
         event_type="session_stopped"
         payload["stop_reason"]="stopped_by_user"
-    elif plan.action is CuratedProtocolAction.START_TIMER:
+    # Lane N, decision 4: a timer start, a pause and a resume are kept when
+    # they took effect -- asked again ("타이머가 이미 진행 중입니다") or
+    # refused, nothing started or stopped, so nothing is kept.
+    elif plan.action is CuratedProtocolAction.START_TIMER and plan.state_changed:
         event_type="timer_started"
-    elif plan.action is CuratedProtocolAction.PAUSE:
+    elif plan.action is CuratedProtocolAction.PAUSE and plan.state_changed:
         event_type="workflow_paused"
-    elif plan.action is CuratedProtocolAction.RESUME:
+    elif plan.action is CuratedProtocolAction.RESUME and plan.state_changed:
         event_type="workflow_resumed"
     elif plan.action in {
         CuratedProtocolAction.CURRENT,CuratedProtocolAction.REPEAT,
@@ -8287,7 +8290,24 @@ _EXPERIMENT_REPORT_ACTIONS=frozenset({
     CuratedProtocolAction.RECORD_OBSERVATION,
     CuratedProtocolAction.PROTOCOL_QUERY,CuratedProtocolAction.STEP_RANGE,
     CuratedProtocolAction.LAB_DOMAIN_QA,
+    # Lane N, decision 4: the report's timer column and its "(나)" read
+    # these; on the served path they never reached the report before.
+    CuratedProtocolAction.START_TIMER,CuratedProtocolAction.PAUSE,
+    CuratedProtocolAction.RESUME,
 })
+#: Kept only when they took effect (lane N, decision 4): a timer asked for
+#: again while it runs, or a pause or resume refused, leaves the report alone.
+_REPORTED_WHEN_CHANGED=frozenset({
+    CuratedProtocolAction.START_TIMER,CuratedProtocolAction.PAUSE,
+    CuratedProtocolAction.RESUME,
+})
+
+
+def _reportable(plan:Any)->bool:
+    """Whether a turn's plan goes to the experiment report."""
+
+    return plan.action in _EXPERIMENT_REPORT_ACTIONS and (
+        plan.state_changed or plan.action not in _REPORTED_WHEN_CHANGED)
 
 
 def _experiment_end_kind(plan:Any)->str|None:
@@ -9881,7 +9901,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             if (
                 session.experiment_report_store is not None
                 and not report_prepared
-                and plan.action in _EXPERIMENT_REPORT_ACTIONS
+                and _reportable(plan)
                 and not (
                     session.experiment_state_version is not None
                     and plan.state_changed
@@ -10150,7 +10170,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 session.experiment_report_store is not None
                 and session.experiment_state_version is not None
                 and plan.state_changed
-                and plan.action in _EXPERIMENT_REPORT_ACTIONS
+                and _reportable(plan)
                 and workflow_mutation_committed
                 and not report_prepared
             ):

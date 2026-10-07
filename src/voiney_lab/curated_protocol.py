@@ -3067,6 +3067,15 @@ def _observation_capture(transcript: str) -> tuple[str, str | None] | None:
     for pattern in _OBSERVATION_COMMAND_PATTERNS:
         if match := pattern.fullmatch(key):
             content = (match.groupdict().get("content") or "").strip(" .,:;：")
+            # Lane N, decision 5: the key is for reading the command; what is
+            # stored is the researcher's words as the STT gave them -- read
+            # from the transcript itself, case and spelling kept.
+            said = " ".join(transcript.split())
+            raw = pattern.fullmatch(said)
+            if raw is not None:
+                content = (raw.groupdict().get("content") or "").strip(" .,:;：")
+            elif content:
+                content = verbatim_span(content, said)
             return "note", content or None
     if _APPEARANCE_OBSERVATION.search(key):
         return "appearance", transcript.strip()[:4000]
@@ -12399,7 +12408,8 @@ class CuratedProtocolSession:
                 reported_completion=observed == "positive",
                 reported_observation=True,
                 observation_predicate=observed,
-                observation_outcome=normalized_confirmation,
+                # Lane N, decision 5: stored as said; the key read it.
+                observation_outcome=" ".join(transcript.split())[:4000],
                 requested_transition=("next" if observed == "positive" else None),
                 requested_followup="describe_new_current_step",
                 target_step="authoritative_current_step",
@@ -12794,7 +12804,8 @@ class CuratedProtocolSession:
                     reported_completion=observed == "positive",
                     reported_observation=True,
                     observation_predicate=observed,
-                    observation_outcome=normalized_confirmation,
+                    # Lane N, decision 5: stored as said; the key read it.
+                    observation_outcome=" ".join(transcript.split())[:4000],
                     allows_state_mutation=observed == "positive",
                     requested_transition=("next" if observed == "positive" else None),
                     target_step="authoritative_current_step",
