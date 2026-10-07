@@ -1337,6 +1337,10 @@ class CuratedControlIntent:
     spill_reported: bool = False
     #: A correction of the last note asked for and confirmed (lane N, decision 2).
     record_fix: dict[str, Any] | None = None
+    #: Lane CB: the reply to an open source-condition question ("yes", "no",
+    #: "unknown"), and to an open count question (a number, or "unknown").
+    branch_reply: str | None = None
+    count_reply: int | str | None = None
 
 
 class DiscourseFocusKind(str, Enum):
@@ -2808,6 +2812,11 @@ FRONT_RULES: dict[str, str] = {
                      "values are read one by one: '네' confirms, '고쳐 줘, X가 "
                      "아니라 Y' corrects (asked once), '나중에 할게' or anything "
                      "else leaves the rest for the screen (lane N, decision 3)",
+    "branch_condition": "on entering a step whose source states a condition, "
+                        "the condition is asked in the source's words and stays "
+                        "open at that step: '네' takes the branch, '아니요' skips "
+                        "its steps, '모르겠어' reads the condition again; moving "
+                        "on before the answer asks it again (lane CB, decision 1)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2845,6 +2854,10 @@ class _OpenQuestions:
     step_move: bool = False
     record_fix: bool = False
     report_review: bool = False
+    #: Lane CB: a source condition or a repeat's count asked at the current
+    #: step, open until answered (not for one turn only).
+    branch: bool = False
+    repeat_count: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -2852,7 +2865,7 @@ class _OpenQuestions:
 
         for name in (
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
-            "step_move", "record_fix", "report_review",
+            "step_move", "record_fix", "report_review", "branch", "repeat_count",
         ):
             if getattr(self, name):
                 return name
@@ -4153,6 +4166,144 @@ def step_move_request(transcript: str) -> StepMoveRequest | None:
     return None
 
 
+# --- A source condition, a count and a round answered in words (lane CB) -----
+#: Where a value the run acts on came from (lane CB, decisions of 2026-10-07):
+#: the source's own number, the person's answer, or -- the place lane LA will
+#: fill with a lab-adapted protocol's default -- a lab default. Recorded with
+#: every answer so the record says who decided, not just what.
+VALUE_SOURCE_SOURCE = "source"
+VALUE_SOURCE_OPERATOR = "operator"
+VALUE_SOURCE_LAB_DEFAULT = "lab_default"
+VALUE_SOURCE_WORDS: dict[str, str] = {
+    VALUE_SOURCE_SOURCE: "원문",
+    VALUE_SOURCE_OPERATOR: "사람이 답함",
+    VALUE_SOURCE_LAB_DEFAULT: "연구실 기본값",
+}
+
+#: The replies to "이 조건에 해당하나요?" (decision 1). A bare yes, a bare no,
+#: or not knowing; "완료했어" and the other work reports say nothing about a
+#: condition and are left to their own rules.
+_BRANCH_YES = re.compile(
+    r"(?:네|예|응응|응|그래|그래요|맞아|맞아요|물론|물론이죠|해당\s*(?:돼|돼요|됩니다|해|해요|합니다)"
+    r"|yes|correct)"
+)
+_BRANCH_NO = re.compile(
+    r"(?:아니|아니요|아니오|아뇨|아니에요|아닙니다|아니야|해당\s*안\s*(?:돼|돼요|됩니다|해|해요)"
+    r"|해당\s*(?:되지|하지)\s*않(?:아|아요|습니다)|no)"
+)
+_BRANCH_UNKNOWN = re.compile(
+    r"(?:아직\s*)?(?:잘\s*)?(?:모르겠어|모르겠어요|모르겠습니다|모르겠는데요?|몰라|몰라요|모름"
+    r"|글쎄|글쎄요|확실하지\s*않아요?|확실하지\s*않습니다)"
+)
+#: The replies to "몇 번(몇 개) 하시나요?" (decision 2): a number with or
+#: without its counter word, or not knowing yet. "네" alone is no count, and
+#: nothing below one is.
+_COUNT_UNITS = r"번|회|개|세트|명|판|장|개체|플레이트"
+_NATIVE_COUNTS: dict[str, int] = {
+    "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8,
+    "아홉": 9, "열": 10, "열한": 11, "열두": 12, "열세": 13, "열네": 14, "열다섯": 15,
+    "열여섯": 16, "열일곱": 17, "열여덟": 18, "열아홉": 19, "스무": 20,
+}
+_SINO_COUNTS: dict[str, int] = {
+    "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9, "십": 10,
+}
+_COUNT_REPLY = re.compile(
+    r"(?:(?:그럼|그러면|음|어|아|일단|우선)\s+)*"
+    r"(?:(?P<digits>[1-9][0-9]{0,2})\s*(?P<unit>" + _COUNT_UNITS + r")?"
+    r"|(?P<native>" + "|".join(sorted(_NATIVE_COUNTS, key=len, reverse=True)) + r")\s*"
+    r"(?P<native_unit>" + _COUNT_UNITS + r")"
+    r"|(?P<sino>" + "|".join(_SINO_COUNTS) + r")\s*(?P<sino_unit>회|번|개))"
+    r"(?:\s*(?:만|정도|쯤|씩))?"
+    r"(?:\s*(?:이야|야|요|이요|예요|이에요|입니다|할게요?|할\s*거야|할\s*거예요|하려고요?"
+    r"|하면\s*돼요?|할래요?|하자|합니다|해요|해|하겠습니다|(?:으)?로\s*(?:할게요?|하자|해줘|해요)))?"
+)
+_COUNT_UNKNOWN = re.compile(
+    r"(?:아직\s*)?(?:잘\s*)?(?:몰라요?|모르겠어요?|모르겠습니다|모름|모르겠는데요?"
+    r"|미정(?:이야|이에요|입니다)?|정하지\s*않았어요?|안\s*정했어요?"
+    r"|나중에\s*(?:정할게요?|말할게요?|알려줄게요?))"
+)
+#: The replies to "N단계로 돌아갈까요?" asked by the round guidance and to
+#: "한 번 더 하시나요?" (decision 3). "아직" is neither: it would otherwise be
+#: read as a no, and a no here moves on.
+_ROUND_YES = re.compile(
+    r"(?:네|예|응응|응|그래|그래요|맞아|맞아요|물론|물론이죠"
+    r"|한\s*번\s*더(?:\s*(?:할게요?|하자|해야지|할래요?|해|해요))?|더\s*(?:할게요?|하자|할래요?)"
+    r"|되?돌아\s*(?:가(?:자|요|\s*줘)?|갈게요?)|그렇게\s*해(?:줘|요)?|yes)"
+)
+_ROUND_NO = re.compile(
+    r"(?:아니|아니요|아니오|아뇨|아니에요|아닙니다|아니야|그만|그만할게요?|그만하자|이제\s*그만"
+    r"|더\s*안\s*해요?|더\s*안\s*할게요?|안\s*할게요?|안\s*해요?|충분해요?"
+    r"|넘어갈게요?|넘어가자|넘어가요|다음으로\s*(?:갈게요?|가자)|no)"
+)
+
+
+def branch_condition_reply(transcript: str) -> str | None:
+    """"yes", "no" or "unknown" to an open source-condition question, else None."""
+
+    key = _semantic_utterance_key(transcript)
+    if not key:
+        return None
+    if _BRANCH_UNKNOWN.fullmatch(key):
+        return "unknown"
+    if _reply_withholds_assent(transcript):
+        return None
+    if _BRANCH_YES.fullmatch(key):
+        return "yes"
+    if _BRANCH_NO.fullmatch(key):
+        return "no"
+    return None
+
+
+def repetition_count_reply(transcript: str) -> int | str | None:
+    """A count said to "몇 번(몇 개) 하시나요?", "unknown" for not yet, else None."""
+
+    key = _utterance_key(transcript)
+    if not key:
+        return None
+    if _COUNT_UNKNOWN.fullmatch(key):
+        return "unknown"
+    match = _COUNT_REPLY.fullmatch(key)
+    if match is None:
+        return None
+    if match.group("digits"):
+        return int(match.group("digits"))
+    if match.group("native"):
+        return _NATIVE_COUNTS[match.group("native")]
+    return _SINO_COUNTS[match.group("sino")]
+
+
+def round_reply(transcript: str) -> str | None:
+    """"affirmative" or "negative" to the round guidance's question, else None."""
+
+    key = _semantic_utterance_key(transcript)
+    if not key or _reply_withholds_assent(transcript):
+        return None
+    if _ROUND_YES.fullmatch(key):
+        return "affirmative"
+    if _ROUND_NO.fullmatch(key):
+        return "negative"
+    return None
+
+
+_NATIVE_COUNT_WORDS = {value: f"{word} 번" for word, value in _NATIVE_COUNTS.items()}
+
+
+def count_words(count: int, *, spoken: bool) -> str:
+    """A count as written ("3회") or as said ("세 번"; past twenty, "21회")."""
+
+    if spoken and count in _NATIVE_COUNT_WORDS:
+        return _NATIVE_COUNT_WORDS[count]
+    return f"{count}회"
+
+
+def round_words(round_number: int, required: int | None, *, spoken: bool) -> str:
+    """"2/3회차" on the screen, "3회 중 2회차" aloud; "2회차" with no count."""
+
+    if required is None:
+        return f"{round_number}회차"
+    return f"{required}회 중 {round_number}회차" if spoken else f"{round_number}/{required}회차"
+
+
 def targeted_quantity_kind(rest: str) -> str | None:
     """"amount"/"concentration" when what follows a named step asks a quantity."""
 
@@ -4585,6 +4736,12 @@ def steps_anchoring_a_repetition(
     document whose analysis carries no repetition yields an empty set, which
     is the fail-closed answer: no step gets an endpoint predicate, so no
     utterance is read as an endpoint observation.
+
+    A bounded repetition -- "twice more", "for the required number of
+    replicates" -- is not one either (lane CB, 2026-10-07): its end is a
+    count the source states or the person gives, not an endpoint anyone
+    observes, so its step gets no endpoint question. The round guidance leads
+    it instead. Only a repeat-until anchors an observation.
     """
 
     found = set()
@@ -4593,6 +4750,10 @@ def steps_anchoring_a_repetition(
             getattr(construct, "repeated_step_ids", None) is None
             and getattr(construct, "start_step_id", None) is None
         ):
+            continue
+        if type(construct).__name__ in {
+            "FixedRangeRepetition", "OperatorDeterminedRepetition",
+        }:
             continue
         anchor = getattr(construct, "step_id", None)
         if isinstance(anchor, str) and anchor:
@@ -6972,6 +7133,18 @@ class CuratedProtocolSession:
         #: without saying so is not in it, so it is never read as one. Kept
         #: apart from _repeat_intervals, which records no count at all.
         self._repeat_returns: dict[str, int] = {}
+        #: Lane CB (2026-10-07). The source conditions answered on this run,
+        #: by branch id, each with where its value came from; the repetitions
+        #: a person registered by voice -- a count, or none yet -- by
+        #: repetition id; and the round a person declined, read once by the
+        #: completion that carries it out. A fixed repetition needs no
+        #: registration: its count is the source's. Whether a condition or a
+        #: count question is open is read off this state and the current step
+        #: (open until answered, unlike the one-turn questions), so it holds
+        #: through a rollback and a recovery alike.
+        self._branch_answers: dict[str, dict[str, Any]] = {}
+        self._registered_repetitions: dict[str, dict[str, Any]] = {}
+        self._declined_round: dict[str, Any] | None = None
         #: Steps a person reported complete on this run, so a step done again
         #: in a later round of a repeat is known to be done again.
         self._completed_step_ids: set[str] = set()
@@ -7026,6 +7199,8 @@ class CuratedProtocolSession:
             self._report_review is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
+            self._branch_question_open(),
+            self._count_question_open(),
         ))
 
     def timer_seconds_for_step(self, index: int) -> int:
@@ -8048,6 +8223,564 @@ class CuratedProtocolSession:
                 }
         return {"kind": "completed_again", "completed_before": True} if again else None
 
+    # --- a source condition, a count and a round answered in words (lane CB) --
+
+    def branch_answers(self) -> dict[str, dict[str, Any]]:
+        """The source conditions answered on this run, by branch id."""
+
+        return {key: dict(value) for key, value in self._branch_answers.items()}
+
+    def registered_repetitions(self) -> dict[str, dict[str, Any]]:
+        """The repetitions a person registered by voice, by repetition id."""
+
+        return {key: dict(value) for key, value in self._registered_repetitions.items()}
+
+    def _branches(self) -> tuple[Any, ...]:
+        return tuple(
+            construct for construct in self.fixture.draft.protocol.constructs
+            if type(construct).__name__ == "ConditionalBranch"
+        )
+
+    def _branch_by_id(self, branch_id: str) -> Any | None:
+        return next(
+            (branch for branch in self._branches() if branch.branch_id == branch_id), None,
+        )
+
+    def _branch_at(self, step_id: str) -> Any | None:
+        """The condition the source states at this step: written here, or opening here."""
+
+        for branch in self._branches():
+            anchor = getattr(branch, "step_id", None) or (
+                branch.branch_step_ids[0] if branch.branch_step_ids else None
+            )
+            if anchor == step_id:
+                return branch
+        return None
+
+    def _branch_answer(self, branch: Any) -> str | None:
+        return (self._branch_answers.get(branch.branch_id) or {}).get("answer")
+
+    def _branch_declining(self, step_id: str) -> Any | None:
+        """The condition answered "no" on this run whose branch holds this step."""
+
+        for branch in self._branches():
+            if step_id in branch.branch_step_ids and self._branch_answer(branch) == "no":
+                return branch
+        return None
+
+    def _at_a_step(self) -> bool:
+        return (
+            self.active and self._pause_state != "paused" and not self._experiment_ended()
+            and 0 <= self.current_index < len(self.fixture.steps)
+        )
+
+    def _open_branch(self) -> Any | None:
+        """The condition stated at the current step that nobody answered yet."""
+
+        if not self._at_a_step():
+            return None
+        branch = self._branch_at(self.fixture.steps[self.current_index].step_id)
+        if branch is None or branch.branch_id in self._branch_answers:
+            return None
+        return branch
+
+    def _branch_question_open(self) -> bool:
+        return self._open_branch() is not None
+
+    def _open_count_interval(self) -> dict[str, object] | None:
+        """The repeat whose count is asked at the current step and not yet given."""
+
+        # Decision 2 fills this in: until then no count is asked by voice.
+        return None
+        if not self._at_a_step():
+            return None
+        interval = self.repeat_interval_starting_at(self.current_index)
+        if interval is None or interval.get("kind") != "OperatorDeterminedRepetition":
+            return None
+        repetition_id = str(interval["repetition_id"])
+        if (
+            repetition_id in self._registered_repetitions
+            or repetition_id in self._operator_repetition_counts
+        ):
+            return None
+        gate = self._branch_gating(interval)
+        if gate is not None and self._branch_answer(gate) != "yes":
+            return None
+        return interval
+
+    def _count_question_open(self) -> bool:
+        return self._open_count_interval() is not None
+
+    def open_server_question(self) -> dict[str, Any] | None:
+        """The server question open at the current step, for the card (decision 4)."""
+
+        branch = self._open_branch()
+        if branch is not None:
+            return {"kind": "branch", "text": self._branch_question_words(branch)}
+        interval = self._open_count_interval()
+        if interval is not None:
+            return {"kind": "repeat_count", "text": self._count_question_words(interval)}
+        move = self._pending_step_move
+        if (
+            move is not None and move.get("kind") == "repeat_round"
+            and self.active and self.current_index == move.get("from_index")
+        ):
+            return {"kind": "repeat_round", "text": str(move.get("question") or "")}
+        return None
+
+    def _condition_words(self, branch: Any) -> str:
+        """The condition as the source writes it; its Korean when one is stored."""
+
+        condition = " ".join(str(branch.condition_source_text).split())
+        anchor = str(getattr(branch, "step_id", None) or "")
+        translated = (
+            self._localized_fact(anchor, f"condition_{branch.branch_id}") if anchor else None
+        )
+        return translated or condition
+
+    def _branch_question_words(self, branch: Any, *, again: bool = False) -> str:
+        shown = self._condition_words(branch)
+        if again:
+            return (
+                f"원문 조건을 다시 읽어 드릴게요: “{shown}”. 이 조건에 해당하나요? "
+                "맞으면 '네', 아니면 '아니요'라고 해 주세요."
+            )
+        return (
+            f"이 단계에는 원문 조건이 있어요: “{shown}”. 이 조건에 해당하나요? "
+            "맞으면 '네', 아니면 '아니요', 모르면 '모르겠어'라고 해 주세요."
+        )
+
+    def _branch_hold_words(self, branch: Any) -> str:
+        shown = self._condition_words(branch)
+        return (
+            f"먼저 원문 조건에 답해 주세요: “{shown}”. 이 조건에 해당하나요? "
+            "맞으면 '네', 아니면 '아니요', 모르면 '모르겠어'라고 해 주세요. 단계를 넘기지 않았어요."
+        )
+
+    def _count_question_words(self, interval: dict[str, object]) -> str:
+        first, last = self._range_labels(interval)
+        source = " ".join(str(interval.get("source_text") or "").split())
+        return (
+            f"{first}~{last}단계는 원문이 횟수를 정하지 않아요: “{source}”. 몇 번(몇 개) 하시나요? "
+            "아직 모르면 '아직 몰라'라고 해 주세요."
+        )
+
+    def _count_hold_words(self, interval: dict[str, object]) -> str:
+        first, last = self._range_labels(interval)
+        return (
+            f"먼저 {first}~{last}단계를 몇 번(몇 개) 하실지 말씀해 주세요. "
+            "아직 모르면 '아직 몰라'라고 해 주세요. 단계를 넘기지 않았어요."
+        )
+
+    def _branch_gating(self, interval: dict[str, object]) -> Any | None:
+        """The condition written at the same step as this repeat, which decides whether it applies."""
+
+        anchor = interval.get("anchor_step_id")
+        return self._branch_at(str(anchor)) if anchor else None
+
+    def _repetition_guidance(self, interval: dict[str, object]) -> dict[str, Any] | None:
+        """How this repeat is led -- its count and where it came from -- or None.
+
+        A fixed repetition is led by the count the source states (a reviewer
+        confirms it before an approved run; a development run takes the
+        analysis's reading); one whose count the person gave or left open
+        ("아직 몰라"), by that; a repeat-until by nobody here (the person's
+        observation, lane R7). A repeat written under a condition is led only
+        once the condition was answered yes. Nothing here invents a count.
+        """
+
+        kind = interval.get("kind")
+        repetition_id = str(interval["repetition_id"])
+        gate = self._branch_gating(interval)
+        if gate is not None and self._branch_answer(gate) != "yes":
+            return None
+        if kind == "FixedRangeRepetition":
+            construct = next(
+                (
+                    item for item in self.fixture.draft.protocol.constructs
+                    if getattr(item, "repetition_id", None) == repetition_id
+                ),
+                None,
+            )
+            count = getattr(construct, "repeat_count", None)
+            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                return None
+            return {"count": count, "value_source": VALUE_SOURCE_SOURCE, "decided": "source"}
+        if kind == "OperatorDeterminedRepetition":
+            registered = self._registered_repetitions.get(repetition_id)
+            if registered is not None:
+                return {
+                    "count": registered.get("count"),
+                    "value_source": str(registered.get("value_source") or VALUE_SOURCE_OPERATOR),
+                    "decided": str(registered.get("decided") or "at_entry"),
+                }
+            supplied = self._operator_repetition_counts.get(repetition_id)
+            if supplied is not None:
+                return {
+                    "count": int(supplied["count"]),
+                    "value_source": VALUE_SOURCE_OPERATOR,
+                    "decided": "screen",
+                }
+        return None
+
+    def _guided_interval_at(self, index: int) -> tuple[dict[str, object], dict[str, Any]] | None:
+        """The led repeat whose span holds this step, with how it is led."""
+
+        if not 0 <= index < len(self.fixture.steps):
+            return None
+        step_id = self.fixture.steps[index].step_id
+        for interval in self._repeat_intervals_by_id().values():
+            guidance = self._repetition_guidance(interval)
+            if guidance is None:
+                continue
+            if step_id in self._repeat_span(interval):
+                return interval, guidance
+        return None
+
+    def repeat_round_status(self) -> dict[str, Any] | None:
+        """The round the current step is in, for the card (decision 4)."""
+
+        if not self.active:
+            return None
+        found = self._guided_interval_at(self.current_index)
+        if found is None:
+            return None
+        interval, guidance = found
+        repetition_id = str(interval["repetition_id"])
+        first, last = self._range_labels(interval)
+        round_number = self._repeat_returns.get(repetition_id, 0) + 1
+        return {
+            "repetition_id": repetition_id,
+            "range": f"{first}~{last}",
+            "round": round_number,
+            "required": guidance["count"],
+            "words": round_words(round_number, guidance["count"], spoken=False),
+            "value_source": guidance["value_source"],
+        }
+
+    def _enter_step_notice(self, language: str) -> str:
+        """What is asked on coming to stand on the current step: the condition, else the count.
+
+        Both questions are open until answered at that step; this only says
+        them. Called where the run arrives on a step -- the start, an advance,
+        a return, a later start, a skip -- and by a condition's yes, which may
+        uncover the count question behind it.
+        """
+
+        if language != "ko":
+            return ""
+        branch = self._open_branch()
+        if branch is not None:
+            return self._branch_question_words(branch)
+        interval = self._open_count_interval()
+        if interval is not None:
+            return self._count_question_words(interval)
+        return ""
+
+    def _step_question_hold(
+        self, intent: CuratedControlIntent, language: str,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A move on asked while the condition or the count is unanswered: asked again, nothing moves."""
+
+        if language != "ko":
+            return None
+        branch = self._open_branch()
+        if branch is not None:
+            words, kind = self._branch_hold_words(branch), "branch_condition"
+        else:
+            interval = self._open_count_interval()
+            if interval is None:
+                return None
+            words, kind = self._count_hold_words(interval), "repeat_count"
+        step = self.fixture.steps[self.current_index]
+        return CuratedProtocolTurnPlan(
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            display_text=words,
+            speech_text=words,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=(),
+            step_label=step.source_label,
+            final_step=self.current_index == len(self.fixture.steps) - 1,
+            state_changed=False,
+            primary_text=words,
+            intent_kind=f"{kind}_required",
+            target_step=step.source_label,
+        )
+
+    def _skip_declined_branch_steps(self) -> dict[str, Any] | None:
+        """Pass over the steps a condition answered "no" governs, through the one forward move.
+
+        Read after an advance landed: while the step the run stands on is in
+        such a branch, the run moves on once more. The steps passed are
+        recorded, not completed.
+        """
+
+        steps = self.fixture.steps
+        skipped: list[str] = []
+        branch_id: str | None = None
+        while 0 <= self.current_index < len(steps) - 1:
+            branch = self._branch_declining(steps[self.current_index].step_id)
+            if branch is None:
+                break
+            step_id = steps[self.current_index].step_id
+            if self.advance_one_step() is not None:
+                break
+            skipped.append(step_id)
+            branch_id = branch.branch_id
+        if not skipped:
+            return None
+        labels = {step.step_id: step.source_label for step in steps}
+        return {
+            "kind": "branch_steps_skipped",
+            "branch_id": branch_id,
+            "skipped_step_labels": [labels.get(item, item) for item in skipped],
+            "skipped_step_ids": skipped,
+        }
+
+    @staticmethod
+    def _label_span(labels: Sequence[str]) -> str:
+        return labels[0] if len(labels) == 1 else f"{labels[0]}~{labels[-1]}"
+
+    def _answer_branch_question(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        transcript: str,
+        language: str,
+        actor_principal_id: str | None,
+        actor_role: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Record the answer to the open condition and do what the source says for it.
+
+        A yes takes the branch: a repeat written under the condition now
+        applies with the count the source states, and the branch's own steps
+        are walked; a no skips the branch's steps -- now, when the run stands
+        on one, otherwise when it arrives; not knowing reads the condition
+        again. The answer carries where its value came from.
+        """
+
+        steps = self.fixture.steps
+        branch = self._open_branch()
+        step = steps[self.current_index]
+        reply = str(intent.branch_reply)
+        if branch is None:
+            words = "지금 열린 원문 조건 질문이 없어요."
+            return self._words_plan(words, intent_kind="branch_condition_none")
+        if reply == "unknown":
+            return self._words_plan(
+                self._branch_question_words(branch, again=True),
+                intent_kind="branch_condition_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+        condition = " ".join(str(branch.condition_source_text).split())
+        answer = {
+            "branch_id": branch.branch_id,
+            "step_id": step.step_id,
+            "step_label": step.source_label,
+            "condition_source_text": condition,
+            "answer": reply,
+            "value_source": VALUE_SOURCE_OPERATOR,
+            "answered_at": datetime.now(timezone.utc).isoformat(),
+            "actor_principal_id": actor_principal_id or None,
+            "actor_role": actor_role,
+            "utterance": " ".join(transcript.split()),
+        }
+        self._branch_answers[branch.branch_id] = answer
+        record: dict[str, Any] = {
+            "kind": "branch_answer",
+            **{
+                key: answer[key] for key in (
+                    "branch_id", "step_id", "step_label", "condition_source_text",
+                    "answer", "value_source",
+                )
+            },
+            "skipped_step_labels": [],
+            "skipped_step_ids": [],
+            "registered": [],
+        }
+        labels = {item.step_id: item.source_label for item in steps}
+        order = [item.step_id for item in steps]
+        branch_labels = [labels.get(item, item) for item in branch.branch_step_ids]
+        if reply == "yes":
+            for interval in self._repeat_intervals_by_id().values():
+                gate = self._branch_gating(interval)
+                if gate is None or gate.branch_id != branch.branch_id:
+                    continue
+                guidance = self._repetition_guidance(interval)
+                if guidance is None:
+                    continue
+                first, last = self._range_labels(interval)
+                record["registered"].append({
+                    "repetition_id": str(interval["repetition_id"]),
+                    "repeated_step_labels": [first, last],
+                    "count": guidance["count"],
+                    "value_source": guidance["value_source"],
+                })
+            lead = "조건에 해당한다고 기록했어요."
+            follow = self._enter_step_notice(language)
+            if follow:
+                words = f"{lead} {follow}"
+            elif record["registered"]:
+                first, last = record["registered"][0]["repeated_step_labels"]
+                count = record["registered"][0]["count"]
+                words = (
+                    f"{lead} {first}~{last}단계를 {count}회 해요." if count
+                    else f"{lead} {first}~{last}단계를 반복해요."
+                )
+            elif step.step_id in branch.branch_step_ids:
+                words = f"{lead} 이 단계를 이어서 진행해 주세요."
+            elif branch_labels:
+                words = f"{lead} {self._label_span(branch_labels)}단계도 진행해요."
+            else:
+                words = lead
+            return self._words_plan(
+                words, intent_kind="branch_condition_recorded", step_record=record,
+            )
+        # "no": the branch's steps are skipped.
+        if step.step_id in branch.branch_step_ids:
+            return self._skip_branch_now(branch, record, language=language)
+        later = [
+            labels.get(item, item) for item in branch.branch_step_ids
+            if item in order and order.index(item) > self.current_index
+        ]
+        words = "조건에 해당하지 않는다고 기록했어요."
+        if later:
+            words = f"{words} {self._label_span(later)}단계는 건너뛰어요."
+        return self._words_plan(
+            words, intent_kind="branch_condition_recorded", step_record=record,
+        )
+
+    def _words_plan(
+        self,
+        words: str,
+        *,
+        intent_kind: str,
+        action: CuratedProtocolAction = CuratedProtocolAction.DECLINE_COMPLETION,
+        step_record: dict[str, Any] | None = None,
+    ) -> CuratedProtocolTurnPlan:
+        """One sentence said, nothing moved."""
+
+        steps = self.fixture.steps
+        label = steps[self.current_index].source_label if self.active else None
+        return CuratedProtocolTurnPlan(
+            action=action,
+            display_text=words,
+            speech_text=words,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=(),
+            step_label=label,
+            final_step=self.active and self.current_index == len(steps) - 1,
+            state_changed=False,
+            primary_text=words,
+            intent_kind=intent_kind,
+            target_step=label,
+            step_record=step_record,
+        )
+
+    def _skip_branch_now(
+        self, branch: Any, record: dict[str, Any], *, language: str,
+    ) -> CuratedProtocolTurnPlan:
+        """Move past the branch's steps the run stands on, through the one forward move."""
+
+        steps = self.fixture.steps
+        skipped: list[str] = []
+        while (
+            self.current_index < len(steps) - 1
+            and steps[self.current_index].step_id in branch.branch_step_ids
+        ):
+            step_id = steps[self.current_index].step_id
+            if self.advance_one_step() is not None:
+                break
+            skipped.append(step_id)
+        if not skipped:
+            words = (
+                "조건에 해당하지 않는다고 기록했어요. 다음 단계는 아직 시작할 수 없어 "
+                "단계를 넘기지 않았어요."
+            )
+            return self._words_plan(
+                words, intent_kind="branch_condition_recorded", step_record=record,
+            )
+        self._block_reason = None
+        self._clear_step_timer()
+        self._pending_anomaly = None
+        self._frozen_question = None
+        labels = {item.step_id: item.source_label for item in steps}
+        record["skipped_step_labels"] = [labels.get(item, item) for item in skipped]
+        record["skipped_step_ids"] = list(skipped)
+        landed = steps[self.current_index]
+        control_text = _control_speech(
+            CuratedProtocolAction.NEXT, language, landed.source_label,
+            development_only=self.fixture.development_only,
+            step_index=self.current_index, timer_active=False,
+            step_timer_seconds=self.timer_seconds_for_step(self.current_index),
+        )
+        control_text = (
+            f"조건에 해당하지 않는다고 기록했어요. {self._label_span(record['skipped_step_labels'])}"
+            f"단계는 건너뛰고 {landed.source_label}단계로 이동했습니다. 안내를 화면에 표시했습니다."
+            + control_text.partition("표시했습니다.")[2]
+        )
+        return self._arrival_plan(
+            control_text, language=language, intent_kind="branch_condition_recorded",
+            requested_transition="branch_skip", step_record=record,
+        )
+
+    def _arrival_plan(
+        self,
+        control_text: str,
+        *,
+        language: str,
+        intent_kind: str,
+        requested_transition: str | None,
+        step_record: dict[str, Any] | None,
+        action: CuratedProtocolAction = CuratedProtocolAction.NEXT,
+        reported_completion: bool = False,
+        timer_payload: dict[str, Any] | None = None,
+        intent: CuratedControlIntent | None = None,
+    ) -> CuratedProtocolTurnPlan:
+        """The plan that presents the step the run arrived on, with what it asks there."""
+
+        steps = self.fixture.steps
+        index = self.current_index
+        step = steps[index]
+        notice = self._enter_step_notice(language)
+        if notice:
+            control_text = f"{control_text} {notice}"
+        response, primary, sources, pages, evidence_ids, translation_status = (
+            _step_presentation(self.fixture, index, language, control_text)
+        )
+        if notice:
+            response = f"{response}\n\n{notice}"
+        return CuratedProtocolTurnPlan(
+            action=action,
+            display_text=response,
+            speech_text=control_text,
+            speech_mode=CuratedProtocolSpeechMode.CONTROL,
+            facts=self.fixture.facts_for_step(index),
+            step_label=step.source_label,
+            final_step=index == len(steps) - 1,
+            state_changed=True,
+            primary_text=primary,
+            source_texts=sources,
+            source_pages=pages,
+            evidence_ids=evidence_ids,
+            translation_status=translation_status,
+            intent_kind=intent_kind,
+            reported_completion=reported_completion,
+            requested_transition=requested_transition,
+            requested_followup=intent.requested_followup if intent else None,
+            target_step=step.source_label,
+            reported_observation=intent.reported_observation if intent else False,
+            observation_predicate=intent.observation_predicate if intent else None,
+            observation_outcome=intent.observation_outcome if intent else None,
+            timer_payload=timer_payload,
+            display_document=_display_document(
+                title=f"{step.source_label}단계",
+                primary=primary,
+                source=sources[0] if sources else None,
+            ),
+            step_record=step_record,
+        )
+
     def open_report_review(
         self, items: Sequence[Mapping[str, Any]], *, report_id: str,
     ) -> tuple[str, str]:
@@ -8780,32 +9513,9 @@ class CuratedProtocolSession:
                 + control_text.partition("표시했습니다.")[2]
             )
             action = CuratedProtocolAction.START
-        response, primary, sources, pages, evidence_ids, translation_status = (
-            _step_presentation(self.fixture, target, language, control_text)
-        )
-        return CuratedProtocolTurnPlan(
-            action=action,
-            display_text=response,
-            speech_text=control_text,
-            speech_mode=CuratedProtocolSpeechMode.CONTROL,
-            facts=self.fixture.facts_for_step(target),
-            step_label=label,
-            final_step=target == len(steps) - 1,
-            state_changed=True,
-            primary_text=primary,
-            source_texts=sources,
-            source_pages=pages,
-            evidence_ids=evidence_ids,
-            translation_status=translation_status,
-            intent_kind=intent.intent_kind,
-            requested_transition=move["kind"],
-            target_step=label,
-            display_document=_display_document(
-                title=f"{label}단계",
-                primary=primary,
-                source=sources[0] if sources else None,
-            ),
-            step_record=record,
+        return self._arrival_plan(
+            control_text, language=language, intent_kind=intent.intent_kind,
+            requested_transition=move["kind"], step_record=record, action=action,
         )
 
     # --- pages the machine did not finish reading ------------------------
@@ -9940,6 +10650,9 @@ class CuratedProtocolSession:
         self._last_record = None
         self._pending_record_fix = None
         self._report_review = None
+        self._branch_answers.clear()
+        self._registered_repetitions.clear()
+        self._declined_round = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -9951,6 +10664,7 @@ class CuratedProtocolSession:
         current_step_id: str,
         completed_step_ids: tuple[str, ...],
         skipped_step_ids: tuple[str, ...] = (),
+        branch_skipped_step_ids: tuple[str, ...] = (),
     ) -> None:
         """Restore only a server-persisted exact-revision progress checkpoint.
 
@@ -9962,7 +10676,11 @@ class CuratedProtocolSession:
         ``skipped_step_ids`` are the steps a confirmed later start skipped
         ("10단계부터 시작해줘", lane R7 decision 3), as the durable record
         holds them (lane N, decision 9): exactly the steps before the start,
-        which then need no completion. Anything else is refused as before.
+        which then need no completion. ``branch_skipped_step_ids`` are the
+        steps a source condition answered "no" passed over (lane CB, decision
+        1), as the durable record holds them: steps before the current one
+        that then need no completion either. Anything else is refused as
+        before.
         """
 
         indexes = {
@@ -9987,8 +10705,18 @@ class CuratedProtocolSession:
             raise CuratedProtocolFixtureError(
                 "Experiment recovery names skipped steps that are not the steps before its start."
             )
+        passed = tuple(dict.fromkeys(branch_skipped_step_ids))
+        if any(
+            step_id not in indexes or indexes[step_id] >= current_index
+            or step_id in completed or step_id in skipped
+            for step_id in passed
+        ):
+            raise CuratedProtocolFixtureError(
+                "Experiment recovery names skipped branch steps that are not earlier steps."
+            )
         expected = tuple(
             step.step_id for step in self.fixture.steps[len(skipped):current_index]
+            if step.step_id not in passed
         )
         if completed != expected and not self._completed_in_an_earlier_round(
             current_index, completed, expected
@@ -10084,6 +10812,10 @@ class CuratedProtocolSession:
         self._last_record = None
         self._pending_record_fix = None
         self._report_review = None
+        # And its own answers to the source's conditions and counts (lane CB).
+        self._branch_answers.clear()
+        self._registered_repetitions.clear()
+        self._declined_round = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -10387,6 +11119,13 @@ class CuratedProtocolSession:
                 if self._pending_record_fix is not None else None,
                 json.dumps(self._report_review) if self._report_review is not None else None,
             ),
+            # Lane CB: the conditions answered, the repeats registered and a
+            # declined round roll back with the turn that changed them.
+            (
+                {key: dict(value) for key, value in self._branch_answers.items()},
+                {key: dict(value) for key, value in self._registered_repetitions.items()},
+                dict(self._declined_round) if self._declined_round is not None else None,
+            ),
         )
 
     def _restore(
@@ -10464,6 +11203,12 @@ class CuratedProtocolSession:
             self._pending_record_fix = dict(notes[1]) if notes[1] is not None else None
             review = notes[2] if len(notes) >= 3 else None
             self._report_review = json.loads(review) if review is not None else None
+            answered = checkpoint[25] if len(checkpoint) >= 26 else ({}, {}, None)
+            self._branch_answers = {key: dict(value) for key, value in answered[0].items()}
+            self._registered_repetitions = {
+                key: dict(value) for key, value in answered[1].items()
+            }
+            self._declined_round = dict(answered[2]) if answered[2] is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -10478,6 +11223,9 @@ class CuratedProtocolSession:
             self._completed_step_ids = set()
             self._last_record = None
             self._pending_record_fix = None
+            self._branch_answers = {}
+            self._registered_repetitions = {}
+            self._declined_round = None
             self._report_review = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
@@ -12462,6 +13210,38 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
+        elif (
+            language == "ko" and transcript_quality is None
+            and self._branch_question_open()
+            and (branch_reply := branch_condition_reply(transcript)) is not None
+        ):
+            # Lane CB, decision 1: "네", "아니요" or "모르겠어" to the source
+            # condition open at this step. The one-turn questions above own
+            # a yes first; this one is open until answered.
+            self._last_front_rule = "branch_condition"
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind="branch_condition_answer",
+                    action=(
+                        CuratedProtocolAction.NEXT if branch_reply == "no"
+                        else CuratedProtocolAction.DECLINE_COMPLETION
+                    ),
+                    confidence_source="server_open_branch_question",
+                    allows_state_mutation=branch_reply == "no",
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    branch_reply=branch_reply,
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
         elif pending_language_mismatch:
             front_rule = "stt_unreliable"
             if pending_valid and pending is not None:
@@ -13077,6 +13857,12 @@ class CuratedProtocolSession:
         if intent.step_move is not None:
             # Lane R7, decisions 2-3: a move asked for in words, and its yes.
             plan = self._step_move_plan(intent, language=language)
+        elif intent.branch_reply is not None:
+            # Lane CB, decision 1: the answer to the open source condition.
+            plan = self._answer_branch_question(
+                intent, transcript=transcript, language=language,
+                actor_principal_id=actor_principal_id, actor_role=actor_role,
+            )
         elif intent.intent_kind == "untargeted_quantity_question":
             plan = self._quantity_target_plan(intent, language=language)
         elif intent.intent_kind == "targeted_quantity_question":
@@ -13196,6 +13982,11 @@ class CuratedProtocolSession:
                     + (first or "안내를 화면에 표시했습니다.")
                     + control_text.partition("표시했습니다.")[2]
                 )
+            # Lane CB: the first step's own condition or count is asked at the
+            # start, as at any other step the run arrives on.
+            notice = self._enter_step_notice(language) if changed and not resumed else ""
+            if notice:
+                control_text = f"{control_text} {notice}"
             response, primary, sources, pages, evidence_ids, translation_status = (
                 _step_presentation(
                     self.fixture,
@@ -13204,6 +13995,8 @@ class CuratedProtocolSession:
                     control_text,
                 )
             )
+            if notice:
+                response = f"{response}\n\n{notice}"
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.START,
                 display_text=response,
@@ -14352,7 +15145,12 @@ class CuratedProtocolSession:
             blocker = self._current_step_readiness_blocker(
                 intent.observation_predicate
             )
-            if (
+            if (held := self._step_question_hold(intent, language)) is not None:
+                # Lane CB, decisions 1-2: the condition or the count asked at
+                # this step is unanswered, so nothing moves on; it is asked
+                # again.
+                plan = held
+            elif (
                 intent.reported_observation
                 and intent.observation_predicate == "negative"
             ):
@@ -14572,6 +15370,15 @@ class CuratedProtocolSession:
                 self._pending_anomaly = None
                 changed = True
                 prefix = "Advanced once."
+                # Lane CB, decision 1: steps a condition answered "no" governs
+                # are passed over on arrival, recorded and not completed.
+                skipped = self._skip_declined_branch_steps()
+                if skipped is not None:
+                    completion_record = {
+                        **(completion_record or {}),
+                        "completion_kind": (completion_record or {}).get("kind"),
+                        **skipped,
+                    }
                 step = steps[self.current_index]
                 control_text = _control_speech(
                     CuratedProtocolAction.NEXT,
@@ -14584,44 +15391,21 @@ class CuratedProtocolSession:
                         self.current_index
                     ),
                 )
-                response, primary, sources, pages, evidence_ids, translation_status = (
-                    _step_presentation(
-                        self.fixture,
-                        self.current_index,
-                        language,
-                        control_text,
+                if skipped is not None and language == "ko":
+                    control_text = (
+                        f"{self._label_span(skipped['skipped_step_labels'])}단계는 조건에 "
+                        f"해당하지 않아 건너뛰고 {step.source_label}단계로 이동했습니다. "
+                        "안내를 화면에 표시했습니다."
+                        + control_text.partition("표시했습니다.")[2]
                     )
-                )
-                plan = CuratedProtocolTurnPlan(
-                    action=CuratedProtocolAction.NEXT,
-                    display_text=response,
-                    speech_text=control_text,
-                    speech_mode=CuratedProtocolSpeechMode.CONTROL,
-                    facts=self.fixture.facts_for_step(self.current_index),
-                    step_label=step.source_label,
-                    final_step=self.current_index == len(steps) - 1,
-                    state_changed=changed,
-                    primary_text=primary,
-                    source_texts=sources,
-                    source_pages=pages,
-                    evidence_ids=evidence_ids,
-                    translation_status=translation_status,
-                    intent_kind=intent.intent_kind,
-                    reported_completion=intent.reported_completion,
+                plan = self._arrival_plan(
+                    control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,
-                    requested_followup=intent.requested_followup,
-                    target_step=intent.target_step,
-                    reported_observation=intent.reported_observation,
-                    observation_predicate=intent.observation_predicate,
-                    observation_outcome=intent.observation_outcome,
-                    timer_payload=early_exit,
-                    display_document=_display_document(
-                        title=f"{step.source_label}단계",
-                        primary=primary,
-                        source=sources[0] if sources else None,
-                    ),
                     step_record=completion_record,
+                    reported_completion=intent.reported_completion,
+                    timer_payload=early_exit, intent=intent,
                 )
+                plan = replace(plan, target_step=intent.target_step)
             else:
                 self._record_release_if_reported(
                     intent, transcript, actor_principal_id, actor_role
@@ -14979,6 +15763,15 @@ class CuratedProtocolSession:
                     unresolved_claim_ids=(
                         envelope.source_plan.unresolved_claim_ids),
                 )
+        elif (
+            command is CuratedProtocolAction.CLARIFY_COMPLETION
+            and intent.intent_kind == "next_step_confirmation_required"
+            and (held := self._step_question_hold(intent, language)) is not None
+        ):
+            # Lane CB, decisions 1-2: "다음 단계", "완료했어" while the
+            # condition or the count at this step is unanswered are not asked
+            # about as a completion; the open question is asked again.
+            plan = held
         elif command is CuratedProtocolAction.CLARIFY_COMPLETION:
             step = steps[self.current_index]
             reask_speech: str | None = None
