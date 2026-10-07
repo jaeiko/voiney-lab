@@ -1227,8 +1227,11 @@ class ReportItem:
     """A material or a piece of equipment, as the protocol lists it."""
 
     kind: str  # "재료" | "장비"
-    name: str  # as listed, with its whitespace made single
+    #: As listed, with its whitespace made single and without the
+    #: protocols.io list labels (lane FX, decision 4: ``item_display_name``).
+    name: str
     steps: tuple[str, ...]  # source steps whose text names it (decision 3)
+    listed: str = ""  # as listed, with its whitespace made single
 
 
 @dataclass(frozen=True)
@@ -1497,6 +1500,44 @@ def _name_pattern(words: Sequence[str]) -> re.Pattern[str]:
     return re.compile(rf"(?<![{_ASCII_WORD}]){body}(?![{_ASCII_WORD}])", re.I)
 
 
+#: What a protocols.io materials or equipment list writes after an item's
+#: name, and the analysis copies into it (lane FX, decision 4): the labels
+#: NAME, TYPE, BRAND and SKU, each after its value, and a long number code
+#: at the end. Labels are upper case: "B&J Brand" is a company's name.
+_LIST_LABEL = re.compile(r"(?<![A-Za-z0-9])(?:NAME|TYPE|BRAND|SKU)(?![A-Za-z0-9])")
+_TRAILING_NUMBER_CODE = re.compile(r"\s+\d{6,}$")
+
+
+def item_display_name(name: str) -> str:
+    """A listed name as the report shows it, without the list's labels.
+
+    "Eppendorf Thermomixer C Model 5382 NAME Thermomixer C TYPE Eppendorf
+    BRAND 5382000023 SKU" -> "Eppendorf Thermomixer C Model 5382": the name
+    ends before the first label after its first word, and a number code of
+    six or more digits at its end is left out ("Falcon 50 mL conical tube
+    352070" -> "Falcon 50 mL conical tube"). Display only: the item keeps
+    the name as listed (``ReportItem.listed``).
+    """
+
+    text = " ".join(str(name).split())
+    label = next((match for match in _LIST_LABEL.finditer(text) if match.start() > 0), None)
+    if label is not None:
+        text = text[:label.start()].rstrip()
+    shorter = _TRAILING_NUMBER_CODE.sub("", text)
+    return shorter if shorter.strip() else text
+
+
+def _looked_for(name: str) -> str:
+    """What an item's steps are looked for by: the name as shown when the
+    list's labels or number code were left out of it, otherwise its first
+    line, as before (lane FX, decision 4)."""
+
+    shown = item_display_name(name)
+    if shown != " ".join(str(name).split()):
+        return shown
+    return next((line for line in str(name).splitlines() if line.strip()), "")
+
+
 def _listed_words(name: str) -> list[str]:
     """The name's words without parentheses, a catalog number, or what follows a comma."""
 
@@ -1527,7 +1568,8 @@ def item_step_labels(
 
     texts = [(str(step["label"]), str(step.get("whole_source_text") or step.get("source_text") or "")
               .replace("’", "'")) for step in source_steps]
-    words_of = [_listed_words(name) for _, name in names]
+    looked_for = [_looked_for(name) for _, name in names]
+    words_of = [_listed_words(name) for name in looked_for]
     other_words = [
         {form for j, words in enumerate(words_of) if j != i for word in words for form in _word_forms(word)}
         for i in range(len(names))
@@ -1549,7 +1591,7 @@ def item_step_labels(
         if pattern is not None:
             found[index] |= {label for label, text in texts if pattern.search(text)}
 
-    for index, (_, name) in enumerate(names):
+    for index, name in enumerate(looked_for):
         first_line = next((line for line in str(name).splitlines() if line.strip()), "")
         short = {match.group(1) for match in re.finditer(r"\(\s*([^()]*?)\s*\)", first_line)
                  if _SHORT_NAME.fullmatch(match.group(1))}
@@ -1573,8 +1615,9 @@ def item_step_labels(
                     found[owner].add(label)
     order = {label: position for position, (label, _) in enumerate(texts)}
     return tuple(
-        ReportItem(kind=kind, name=" ".join(str(name).split()),
-                   steps=tuple(sorted(found[index], key=lambda label: order.get(label, 0))))
+        ReportItem(kind=kind, name=item_display_name(name),
+                   steps=tuple(sorted(found[index], key=lambda label: order.get(label, 0))),
+                   listed=" ".join(str(name).split()))
         for index, (kind, name) in enumerate(names)
     )
 
@@ -3157,6 +3200,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             blocks.append(("note", "용도는 AI 가 원문 단계를 바탕으로 정리했다."))
         blocks.append(("note", "사용 단계는 서버가 원문 단계 글에서 그 이름(또는 원문이 쓰는 줄임말)을 찾아 적었다. "
                                "찾지 못하면 —."))
+        if any(item.name != item.listed for item in facts.items if item.listed):
+            blocks.append(("note", ITEM_LABELS_NOTE))
     else:
         blocks.append(("note", "원문에서 재료 목록을 불러오지 못했다."))
     blocks.append(("h2", "3-2. 수행한 단계"))
@@ -3274,6 +3319,9 @@ def authorship_line(narrative: ReportNarrative) -> str:
 #: short values (step, kind, time, timer, item) narrow, content wide.
 #: The materials and equipment tables (decisions 2-4), with and without uses.
 ITEM_HEADER = ("이름 (원문 그대로)", "사용 단계")
+#: Said under the tables when a name was shown without what the protocols.io
+#: list writes after it (lane FX, decision 4).
+ITEM_LABELS_NOTE = "이름 뒤에 붙은 protocols.io 목록 꼬리표(NAME·TYPE·BRAND·SKU)와 끝의 긴 숫자 코드는 표에서 뺐다."
 ITEM_USE_HEADER = ("이름 (원문 그대로)", "용도", "사용 단계")
 
 TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {

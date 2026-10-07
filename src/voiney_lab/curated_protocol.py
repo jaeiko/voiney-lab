@@ -6898,8 +6898,14 @@ _SOURCE_NEGATION = re.compile(
     r"cannot|can't)\b",
     re.IGNORECASE,
 )
+#: Lane FX, human decision 1 of 2026-10-07: the 없이 of "관계없이" and
+#: "상관없이" ("regardless") is not a negation, so a reading that drops the
+#: source's "not" behind one is refused ("Do not vortex the tube, regardless
+#: of the volume." ↔ "부피와 관계없이 튜브를 볼텍스합니다." passed before).
+#: "무관하게" holds no word of this list.
 _KOREAN_NEGATION = re.compile(
-    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|없이|말고|피(?:하|합|해|했|할)|못\s|않)"
+    r"(?:지\s*(?:마|말|않)|안\s*(?:되|돼|됩)|금지|(?<!관계)(?<!상관)(?<!관계\s)(?<!상관\s)없이|"
+    r"말고|피(?:하|합|해|했|할)|못\s|않)"
 )
 #: A source word negated by its "un-" prefix ("uninoculated", "unlabelled",
 #: "unopened"), not a word that merely begins with "un" ("until", "uniform",
@@ -11892,6 +11898,16 @@ class CuratedProtocolSession:
             if current_step is not None
             else None
         )
+        # Lane FX, decision 3: the current step's source language. A step
+        # written in Korean is never translated, and the page leaves out its
+        # "no translation" line for it.
+        from voiney_lab.protocol_translation import is_korean  # imports this module
+
+        source_language = (
+            "ko"
+            if current_step is not None and is_korean(current_step.instruction_source_text)
+            else "en"
+        )
         warning_presentations = []
         if current_step is not None:
             for index, item in enumerate(current_step.warnings, 1):
@@ -11927,7 +11943,7 @@ class CuratedProtocolSession:
                 else None
             ),
             "primary_summary": current_primary,
-            "source_language": "en",
+            "source_language": source_language,
             "spoken_summary": spoken_summary,
             "source_filename": (
                 getattr(self.fixture, "source_filename", None)

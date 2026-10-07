@@ -246,6 +246,7 @@ from voiney_lab.protocol_translation import (
     is_korean,
     openai_batch_translator,
     openai_glossary_maker,
+    stored_checks,
     translation_revision_key,
     translation_units,
     with_stored_translations,
@@ -5047,7 +5048,11 @@ def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obj
     reviewed=getattr(attached,"localizations",None) or {}
     passed={key_ for key_ in (*machine,*reviewed)}
     steps_korean=sum(1 for k in step_keys if k in passed or k in korean_source)
-    refused=sum(1 for row in rows if row.check_result!="passed")
+    # Lane FX, decision 2: refused by today's check, not by the verdict
+    # stored with the row (each judged once; the rows themselves unchanged).
+    refused=sum(
+        1 for _,result in stored_checks(fixture,rows,glossary,units=units)
+        if result!="passed")
     with _REVISION_TRANSLATIONS_LOCK:
         running=key in _REVISION_TRANSLATIONS_RUNNING
     runner=_revision_translation_runner()
