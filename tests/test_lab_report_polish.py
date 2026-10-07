@@ -145,7 +145,8 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
             # Not "pipette" alone: other listed items are pipettes too.
             "Glass pipettes (10 mL)": "—",
             "Glass Pasteur pipette (150 mm)": "8",
-            "Thermomixer C Model 5382 NAME Thermomixer C": "—",
+            # Shown without the list's NAME label (lane FX, decision 4).
+            "Thermomixer C Model 5382": "—",
             "modified heating oven": "9",
             "modified heating block": "9",
             "Ferrules": "8",
@@ -159,7 +160,7 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
                          ["#### 재료", "#### 장비"])
         self.assertEqual(block.count("| 이름 (원문 그대로) | 사용 단계 |"), 2)
         self.assertIn("| Promega trypsin Promega Catalog #V5113 | 3 |", block)
-        self.assertIn("| Thermomixer C Model 5382 NAME Thermomixer C | — |", block)
+        self.assertIn("| Thermomixer C Model 5382 | — |", block)
         self.assertIn("사용 단계는 서버가 원문 단계 글에서 그 이름(또는 원문이 쓰는 줄임말)을 찾아 적었다.", block)
 
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
@@ -168,7 +169,7 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
         self.assertEqual(len(item_tables), 2)
         self.assertEqual(len(item_tables[0]) - 1, 8)
         self.assertEqual(item_tables[1][1:], [
-            ["Thermomixer C Model 5382 NAME Thermomixer C", "—"], ["modified heating oven", "9"],
+            ["Thermomixer C Model 5382", "—"], ["modified heating oven", "9"],
             ["modified heating block", "9"], ["Ferrules", "8"]])
         # Markdown carries the same rows.
         for row in item_tables[0][1:] + item_tables[1][1:]:
