@@ -260,8 +260,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "repeat_return", "start_at_step",
             # lane RT, decision 6
             "anomaly_report",
-            # lane N, decisions 1 and 2
-            "note_record", "record_fix",
+            # lane N, decisions 1, 2 and 3
+            "note_record", "record_fix", "report_review",
         })
 
 

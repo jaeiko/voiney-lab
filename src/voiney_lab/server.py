@@ -80,7 +80,10 @@ from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
     REPORT_PROSE,
+    REVIEW_CONFIRMED,
+    REVIEW_DEFERRED,
     record_amendments,
+    report_review_items,
     ReportNarrative,
     ReportWriterBrain,
     ReportWriterSettings,
@@ -5680,6 +5683,106 @@ def regenerate_experiment_report_prose(report_id:str):
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
 
 
+@app.get("/api/experiment-reports/{report_id}/review")
+def get_experiment_report_review(report_id:str):
+    """The report's values and which the researcher confirmed (lane N, decision 3)."""
+
+    store=_report_prose_store(report_id)
+    try:
+        report=store.get_report(report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    items=report_review_items(report["events"])
+    return {
+        "report_id":report_id,"items":items,
+        "unconfirmed":sum(1 for item in items if not item["confirmed"]),
+        "voice_review_open":REPORT_PROSE.held(store,report_id),
+    }
+
+
+@app.post("/api/experiment-reports/{report_id}/review/{item_id}")
+async def answer_experiment_report_review(report_id:str,item_id:str,request:Request):
+    """Confirm one value on the screen, or correct it and confirm (lane N, decision 3).
+
+    A correction is appended beside the record (decision 2) and mirrored on the
+    experiment timeline when the note is there. Once every value is confirmed
+    the report's prose is written again -- its one model call then.
+    """
+
+    payload=await _json_object(request)
+    action=str(payload.get("action") or "")
+    store=_report_prose_store(report_id)
+    try:
+        report=store.get_report(report_id)
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    if report["status"]=="in_progress":
+        raise HTTPException(status_code=409,detail="values are confirmed once the experiment ends")
+    item=next(
+        (entry for entry in report_review_items(report["events"]) if entry["item_id"]==item_id),
+        None,
+    )
+    if item is None or action not in {"confirm","correct"}:
+        raise HTTPException(status_code=404,detail="report value unavailable")
+    text=" ".join(str(payload.get("text") or "").split())
+    key=f"screen-review-{secrets.token_hex(8)}"
+    try:
+        if action=="correct" and text and text!=item["text"]:
+            if len(text)>800:
+                raise HTTPException(status_code=422,detail="correction is too long")
+            store.append_event(
+                report_id,event_key=f"{key}-fix",event_type="record_corrected",
+                step_label=item.get("step_label") or None,user_wording=text,
+                payload={"record_fix":{
+                    "target_event_key":item["source_key"],
+                    "text_before":item["text"],"text_after":text,"source":"screen",
+                }},
+            )
+            _mirror_screen_fix(report,item,text,event_key=key)
+        else:
+            text=item["text"]
+        store.append_event(
+            report_id,event_key=key,event_type=REVIEW_CONFIRMED,
+            step_label=item.get("step_label") or None,user_wording=text,
+            payload={"item_id":item_id,"text":text,"source":"screen"},
+        )
+        items=report_review_items(store.get_report(report_id)["events"])
+        if items and all(entry["confirmed"] for entry in items):
+            _prepare_report_prose(
+                store,report_id,again=store.get_prose(report_id) is not None)
+        return {
+            "report_id":report_id,"items":items,
+            "unconfirmed":sum(1 for entry in items if not entry["confirmed"]),
+            "prose":REPORT_PROSE.status(store,report_id),
+        }
+    except HTTPException:
+        raise
+    except (ValueError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+
+
+def _mirror_screen_fix(report:dict,item:dict,text:str,*,event_key:str)->None:
+    """A screen correction on the experiment timeline too, when the note is there."""
+
+    target=item.get("workspace_event_key")
+    if not target or not _workspace_settings().enabled:
+        return
+    try:
+        principal,store=_commercial_workspace()
+    except Exception as exc:  # noqa: BLE001 - the report keeps the correction
+        log.warning("timeline correction skipped error=%s",type(exc).__name__)
+        return
+    try:
+        store.record_observation_fix(
+            principal,str(report.get("session_id") or ""),event_key=event_key,
+            target_event_key=str(target),content=text,capture_source="manual",
+        )
+    except Exception as exc:  # noqa: BLE001 - the report keeps the correction
+        log.warning("timeline correction not recorded error=%s",type(exc).__name__)
+    finally:
+        store.close()
+
+
 def _prepared_report_prose(store:ExperimentReportStore,report_id:str)->None:
     """Let a download use the prepared prose, waiting for one being written.
 
@@ -5908,6 +6011,9 @@ class ListenerSession:
         #: goes to the model, and to the rules when the model cannot be used.
         self.llm_router_settings=llm_router_settings or LlmRouterSettings()
         self.experiment_report_id:str|None=None
+        #: The words that open the report's value review (lane N, decision 3),
+        #: said once after the end of the experiment.
+        self.report_review_intro:tuple[str,str]|None=None
         self.test_mode_readiness_gates_skipped=False
         self.session_id=new_session_id()
         self.voice_connection_id="voice-"+secrets.token_hex(16)
@@ -6076,6 +6182,10 @@ class ListenerSession:
         self.client_audio_constraints={}
         self._reset_turn_identity()
         if self.curated_protocol_session is not None:
+            # A review the researcher did not finish goes to the screen, and
+            # the report's prose is prepared (lane N, decision 3).
+            _close_report_review(self,source="session_closed")
+            self.report_review_intro=None
             self.curated_protocol_session.reset()
     def accept_configuration(
         self,configuration_id:int,mode:str,language:str,
@@ -7985,7 +8095,7 @@ def _record_experiment_report_plan(
             status="stopped",
             event_key=f"{event_key}-finalize",
         )
-        _prepare_report_prose(store,session.experiment_report_id)
+        _review_or_prepare_report(session,curated,store,session.experiment_report_id)
     elif (
         plan.action is CuratedProtocolAction.NEXT
         and plan.state_changed
@@ -8006,7 +8116,7 @@ def _record_experiment_report_plan(
             status="completed",
             event_key=f"{event_key}-finalize",
         )
-        _prepare_report_prose(store,session.experiment_report_id)
+        _review_or_prepare_report(session,curated,store,session.experiment_report_id)
         _record_workspace_metric(
             category="workflow",metric_name="completion",
             dimensions={"event_kind":"workflow_completed","status":"completed"},
@@ -8021,6 +8131,150 @@ def _record_experiment_report_plan(
             },
         )
     return report
+
+
+def _review_or_prepare_report(
+    session:ListenerSession,
+    curated:CuratedProtocolSession,
+    store:ExperimentReportStore,
+    report_id:str,
+)->None:
+    """The ended experiment's values to confirm by voice, or its prose now.
+
+    Lane N, decision 3: when the record holds values the report would state
+    -- measurements, observations with a number, points done differently,
+    anomalies -- the report's prose waits while the researcher confirms them
+    one by one; the words that open the review are said after the end of the
+    experiment. With none, the prose is prepared at once, as before.
+    """
+
+    items=[
+        item for item in report_review_items(store.get_report(report_id)["events"])
+        if not item["confirmed"]
+    ]
+    if items and callable(getattr(curated,"open_report_review",None)):
+        REPORT_PROSE.hold(store,report_id)
+        session.report_review_intro=curated.open_report_review(items,report_id=report_id)
+        return
+    _prepare_report_prose(store,report_id)
+
+
+def _close_report_review(session:Any,*,source:str)->None:
+    """A voice review left unanswered (the session closed): the rest goes to the screen."""
+
+    curated=getattr(session,"curated_protocol_session",None)
+    store=getattr(session,"experiment_report_store",None)
+    report_id=getattr(curated,"report_review_report_id",None) if curated is not None else None
+    if store is None or not report_id:
+        return
+    try:
+        remaining=curated.report_review_remaining()
+        store.append_event(
+            report_id,
+            event_key=f"review-closed-{session.generation}-{len(remaining)}",
+            event_type=REVIEW_DEFERRED,
+            payload={"item_ids":[item["item_id"] for item in remaining],"source":source},
+        )
+    except Exception as exc:  # noqa: BLE001 - the prose is prepared all the same
+        log.warning("report review close not recorded error=%s",type(exc).__name__)
+    REPORT_PROSE.release(store,report_id)
+    _prepare_report_prose(store,report_id)
+
+
+def _record_report_review(
+    session:ListenerSession,
+    plan:Any,
+    *,
+    turn_id:int,
+    generation:int,
+)->dict:
+    """Store what one review turn answered (lane N, decision 3).
+
+    A confirmation is its own event; a correction is appended beside the
+    record it amends (decision 2), on the timeline too when the note is
+    there, and then confirmed; a value left for later is listed. When the
+    review is over the report's prose is prepared -- its one model call.
+    """
+
+    store=session.experiment_report_store
+    review=plan.report_review or {}
+    report_id=str(review.get("report_id") or "")
+    if store is None or not report_id:
+        raise LookupError("no experiment report to confirm")
+    report=None
+    for index,op in enumerate(review.get("ops") or ()):
+        key=f"turn-{turn_id}-generation-{generation}-review-{index}"
+        kind=op.get("op")
+        if kind=="confirm":
+            report=store.append_event(
+                report_id,event_key=key,event_type=REVIEW_CONFIRMED,
+                step_label=op.get("step_label") or None,
+                user_wording=op.get("text") or None,
+                payload={"item_id":op.get("item_id"),"text":op.get("text"),"source":"voice"},
+            )
+        elif kind in {"correct","retract"}:
+            item=op.get("item") or {}
+            after=op.get("after") if kind=="correct" else None
+            report=store.append_event(
+                report_id,event_key=f"{key}-fix",
+                event_type="record_corrected" if kind=="correct" else "record_retracted",
+                step_label=item.get("step_label") or None,
+                user_wording=after or op.get("before") or None,
+                payload={"record_fix":{
+                    "target_event_key":item.get("source_key"),
+                    "text_before":op.get("before"),
+                    "text_after":after,
+                    "source":"voice_review",
+                }},
+            )
+            _mirror_timeline_fix(
+                session,item.get("workspace_event_key"),after,
+                event_key=f"voice-{generation}-{turn_id}-review-{index}",
+            )
+            if kind=="correct":
+                report=store.append_event(
+                    report_id,event_key=key,event_type=REVIEW_CONFIRMED,
+                    step_label=item.get("step_label") or None,user_wording=after,
+                    payload={"item_id":item.get("item_id"),"text":after,"source":"voice"},
+                )
+        elif kind=="defer":
+            report=store.append_event(
+                report_id,event_key=key,event_type=REVIEW_DEFERRED,
+                payload={"item_ids":list(op.get("item_ids") or ()),"source":"voice"},
+            )
+    if review.get("closed"):
+        REPORT_PROSE.release(store,report_id)
+        _prepare_report_prose(store,report_id)
+    return report or store.get_report(report_id)
+
+
+def _mirror_timeline_fix(
+    session:Any,workspace_event_key:Any,content:str|None,*,event_key:str,
+)->None:
+    """The same correction on the experiment timeline, when the note is there."""
+
+    if not workspace_event_key or getattr(session,"experiment_state_version",None) is None:
+        return
+    settings=_workspace_settings()
+    if not settings.enabled:
+        return
+    try:
+        principal,store=_commercial_workspace()
+    except Exception as exc:  # noqa: BLE001 - the report keeps the correction
+        log.warning("timeline correction skipped error=%s",type(exc).__name__)
+        return
+    try:
+        store.record_observation_fix(
+            principal,session.session_id,event_key=event_key,
+            target_event_key=str(workspace_event_key),content=content,
+            capture_source="voice",
+        )
+        session.experiment_state_version=int(
+            store.get_experiment(principal,session.session_id)["version"])
+    except Exception as exc:  # noqa: BLE001 - the report keeps the correction
+        log.warning("timeline correction not recorded error=%s",type(exc).__name__)
+    finally:
+        store.close()
 
 
 _EXPERIMENT_REPORT_ACTIONS=frozenset({
@@ -8111,7 +8365,7 @@ def _report_download_sentence(language:str)->str:
     )
 
 
-def _with_experiment_end_sentence(plan:Any,sentence:str)->Any:
+def _with_experiment_end_sentence(plan:Any,sentence:str,*,spoken:str|None=None)->Any:
     """The end-of-experiment reply with ``sentence`` said right after it."""
 
     speech=plan.speech_text or ""
@@ -8121,10 +8375,13 @@ def _with_experiment_end_sentence(plan:Any,sentence:str)->Any:
     else:
         display=f"{display}\n\n{sentence}" if display else sentence
     return replace(
-        plan,display_text=display,speech_text=f"{speech} {sentence}".strip())
+        plan,display_text=display,
+        speech_text=f"{speech} {spoken if spoken is not None else sentence}".strip())
 
 
-def _acknowledge_report_persistence(plan:Any,language:str)->Any:
+def _acknowledge_report_persistence(
+    plan:Any,language:str,*,review:tuple[str,str]|None=None,
+)->Any:
     end=_experiment_end_kind(plan)
     if end is not None:
         # Decision 2 (2026-10-03): said only once the report store has taken
@@ -8141,14 +8398,22 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
                 if end=="completed" else
                 "The record so far was saved as a report."
             )
-        sentence=f"{saved} {_report_download_sentence(language)}"
+        if review is not None:
+            # Lane N, decision 3: the values are confirmed first; where to
+            # download it is said when the review is over.
+            sentence,spoken=f"{saved} {review[0]}",f"{saved} {review[1]}"
+        else:
+            sentence=f"{saved} {_report_download_sentence(language)}"
+            spoken=None
         if end=="completed" and plan.reported_observation:
-            sentence=(
+            observed=(
                 "말씀한 관찰 결과도 실험 기록에 반영했습니다. "
                 if language=="ko" else
                 "The reported observation was added to the experiment record. "
-            )+sentence
-        return _with_experiment_end_sentence(plan,sentence)
+            )
+            sentence=observed+sentence
+            spoken=observed+spoken if spoken is not None else None
+        return _with_experiment_end_sentence(plan,sentence,spoken=spoken)
     if (
         plan.action is CuratedProtocolAction.NEXT
         and plan.state_changed
@@ -8190,6 +8455,14 @@ def _acknowledge_report_persistence(plan:Any,language:str)->Any:
     return plan
 
 
+def _take_review_intro(session:Any)->tuple[str,str]|None:
+    """The review's opening words, once, after the end of the experiment."""
+
+    intro=getattr(session,"report_review_intro",None)
+    session.report_review_intro=None
+    return intro
+
+
 def _public_experiment_report_state(report:dict)->dict:
     events=list(report.get("events") or ())
     # Lane N, decision 2: a note shows its latest words and that it was
@@ -8208,7 +8481,11 @@ def _public_experiment_report_state(report:dict)->dict:
             # Lane R6, decision 5: what the screen names the record by.
             "protocol_title","day_sequence","day_sequence_date","timezone",
         )
-    } | {"event_count":len(events),"events":events}
+    } | {
+        "event_count":len(events),"events":events,
+        # Lane N, decision 3: the screen's checklist of the report's values.
+        "review":report_review_items(events),
+    }
 
 
 def _research_terminal_status(status:str)->str:
@@ -9509,6 +9786,44 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 session.set_turn_terminal_outcome(
                     turn_id,generation,"blocked")
             if (
+                plan.action is CuratedProtocolAction.REPORT_REVIEW
+                and plan.report_review is not None
+            ):
+                # Lane N, decision 3: what this reply confirmed, corrected or
+                # left for the screen is stored before it is said.
+                try:
+                    review_report=await asyncio.to_thread(
+                        _record_report_review,session,plan,
+                        turn_id=turn_id,generation=generation,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "report review not recorded turn_id=%s error=%s",
+                        turn_id,type(exc).__name__,
+                    )
+                    curated._restore(checkpoint)
+                    failed=(
+                        "확인한 내용을 기록하지 못했어요. 다시 말씀해 주세요."
+                        if turn_language=="ko" else
+                        "The answer could not be recorded. Please say it again."
+                    )
+                    plan=replace(
+                        plan,display_text=failed,speech_text=failed,
+                        speech_mode=CuratedProtocolSpeechMode.BLOCKED,
+                        report_review=None,
+                    )
+                    session.set_turn_terminal_outcome(turn_id,generation,"blocked")
+                else:
+                    report_prepared=True
+                    await report_state(review_report)
+                    if plan.report_review.get("closed"):
+                        download=_report_download_sentence(turn_language)
+                        plan=replace(
+                            plan,
+                            display_text=f"{plan.display_text} {download}",
+                            speech_text=f"{plan.speech_text} {download}",
+                        )
+            if (
                 plan.action is CuratedProtocolAction.RECORD_CORRECTION
                 and plan.record_fix is not None
             ):
@@ -9640,7 +9955,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         "experiment.report.error",turn_id=turn_id,
                         code="report_persistence_failed")
                 else:
-                    plan=_acknowledge_report_persistence(plan,turn_language)
+                    plan=_acknowledge_report_persistence(
+                        plan,turn_language,review=_take_review_intro(session))
                     await report_state(report)
             workspace_observation_requested=bool(
                 plan.reported_observation or plan.reported_anomaly
@@ -9876,7 +10192,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         code="report_persistence_failed")
                 else:
                     report_prepared=True
-                    plan=_acknowledge_report_persistence(plan,turn_language)
+                    plan=_acknowledge_report_persistence(
+                        plan,turn_language,review=_take_review_intro(session))
                     await report_state(report)
             # Durable workspace persistence is the mutation gate; report
             # persistence is the reporting-acknowledgement gate. Re-read the
@@ -10004,6 +10321,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.LAB_DOMAIN_QA:"lab_domain_qa_read",
             CuratedProtocolAction.REPORT_HANDOFF:"report_handoff_requested",
             CuratedProtocolAction.RECORD_CORRECTION:"experiment_record_corrected",
+            CuratedProtocolAction.REPORT_REVIEW:"report_value_review",
         }
         operation=(
             "completion_and_next_transition"

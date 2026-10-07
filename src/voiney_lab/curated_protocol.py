@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -136,6 +136,7 @@ class CuratedProtocolAction(str, Enum):
     LAB_DOMAIN_QA = "lab_domain_qa"
     REPORT_HANDOFF = "report_handoff"
     RECORD_CORRECTION = "record_correction"
+    REPORT_REVIEW = "report_review"
 
 
 class CuratedProtocolSpeechMode(str, Enum):
@@ -529,6 +530,10 @@ class CuratedProtocolTurnPlan:
     #: record it amends, the words before and after. Applied by the server,
     #: appended beside the record, which itself is never changed.
     record_fix: dict[str, Any] | None = None
+    #: The report's values confirmed by voice after the experiment ended
+    #: (lane N, decision 3): what this turn confirmed, corrected or left for
+    #: the screen, and whether the review is over.
+    report_review: dict[str, Any] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -2799,6 +2804,10 @@ FRONT_RULES: dict[str, str] = {
     "record_fix": "'방금 기록 고쳐 줘, X가 아니라 Y' or '방금 기록 지워 줘': asked "
                   "once, '방금 기록 …을 …로 고칠까요?'; a yes appends the "
                   "correction beside the record, which is kept (lane N, decision 2)",
+    "report_review": "once the experiment ended, every reply while the report's "
+                     "values are read one by one: '네' confirms, '고쳐 줘, X가 "
+                     "아니라 Y' corrects (asked once), '나중에 할게' or anything "
+                     "else leaves the rest for the screen (lane N, decision 3)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2835,6 +2844,7 @@ class _OpenQuestions:
     anomaly: bool = False
     step_move: bool = False
     record_fix: bool = False
+    report_review: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -2842,7 +2852,7 @@ class _OpenQuestions:
 
         for name in (
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
-            "step_move", "record_fix",
+            "step_move", "record_fix", "report_review",
         ):
             if getattr(self, name):
                 return name
@@ -3331,6 +3341,15 @@ def josa_ro(text: str) -> str:
 
     final = _final_syllable_batchim(text)
     return text + ("으로" if final and final != 8 else "로")
+
+
+#: Lane N, decision 3: leaving the report's values for the screen.
+_REVIEW_LATER = re.compile(
+    r"^(?:그건\s*|나머지는\s*|남은\s*건\s*)?(?:나중에|이따가?|다음에|화면에서)\s*(?:다시\s*)?"
+    r"(?:할게요|할게|할께|해|하자|볼게|확인할게요|확인할게|확인하자|확인|봐)?$"
+    r"|^그만(?:\s*(?:할게|할게요|하자|확인할게))?$"
+)
+_REVIEW_ORDINALS = ("첫째", "둘째", "셋째", "넷째", "다섯째", "여섯째", "일곱째", "여덟째", "아홉째", "열째")
 
 
 #: "방금 기록 고쳐 줘, 7.2가 아니라 7.4" / "방금 기록 지워 줘" (decision 2).
@@ -6954,6 +6973,11 @@ class CuratedProtocolSession:
         #: The one-turn "방금 기록 '…'을 '…'로 고칠까요?" or "…을 지울까요?"
         #: question (decision 2): only a yes to it amends the record.
         self._pending_record_fix: dict[str, Any] | None = None
+        #: The report's values being confirmed by voice once the experiment
+        #: ended (lane N, decision 3): the list, where it stands, and a
+        #: correction asked about. Open until every value is answered or the
+        #: researcher leaves the rest for the screen.
+        self._report_review: dict[str, Any] | None = None
         self.safety_pack: Any = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
@@ -6990,6 +7014,7 @@ class CuratedProtocolSession:
             self._pending_anomaly_confirmation is not None,
             self._pending_step_move is not None,
             self._pending_record_fix is not None,
+            self._report_review is not None,
             bool(self._pending_note_capture),
             bool(self._pending_anomaly),
         ))
@@ -8013,6 +8038,191 @@ class CuratedProtocolSession:
                     "completed_before": again,
                 }
         return {"kind": "completed_again", "completed_before": True} if again else None
+
+    def open_report_review(
+        self, items: Sequence[Mapping[str, Any]], *, report_id: str,
+    ) -> tuple[str, str]:
+        """Begin confirming the report's values by voice; the words that open it.
+
+        Lane N, decision 3. Called by the server once the experiment ended and
+        its report was saved, with the values the record holds that are not
+        confirmed yet. Returns (display, speech): "보고서에 넣을 중요 값 N개를
+        확인할게요." and the first value, ending "맞으면 '네'라고 해 주세요."
+        """
+
+        self._report_review = {
+            "report_id": report_id,
+            "items": [dict(item) for item in items],
+            "index": 0,
+            "fix": None,
+        }
+        opening = f"보고서에 넣을 중요 값 {len(items)}개를 확인할게요."
+        display, speech = self._review_question()
+        return f"{opening} {display}", f"{opening} {speech}"
+
+    @property
+    def report_review_report_id(self) -> str | None:
+        """The report whose values are being confirmed by voice, or None."""
+
+        return str(self._report_review["report_id"]) if self._report_review else None
+
+    def report_review_remaining(self) -> list[dict[str, Any]]:
+        """The values not yet answered, in order (lane N, decision 3)."""
+
+        if not self._report_review:
+            return []
+        return [dict(item) for item in self._report_review["items"][self._report_review["index"]:]]
+
+    @staticmethod
+    def _review_item_words(item: Mapping[str, Any], *, spoken: bool) -> str:
+        text = str(item.get("text") or "")
+        if spoken and item.get("kind") == "측정":
+            text = spoken_korean(text)
+        label = str(item.get("step_label") or "")
+        return f"{label}단계 {item.get('kind')}, {text}" if label else f"{item.get('kind')}, {text}"
+
+    def _review_question(self) -> tuple[str, str]:
+        state = self._report_review or {}
+        index = int(state.get("index") or 0)
+        item = state["items"][index]
+        ordinal = _REVIEW_ORDINALS[index] if index < len(_REVIEW_ORDINALS) else f"{index + 1}번째"
+        ask = "맞으면 '네'라고 해 주세요."
+        return (
+            f"{ordinal}, {self._review_item_words(item, spoken=False)}. {ask}",
+            f"{ordinal}, {self._review_item_words(item, spoken=True)}. {ask}",
+        )
+
+    def _plan_report_review(
+        self, transcript: str, *, turn_id: int, language: str, transcript_quality: str | None,
+    ) -> CuratedProtocolTurnPlan:
+        """One reply while the report's values are confirmed (lane N, decision 3).
+
+        "네" confirms the value read; "고쳐 줘, X가 아니라 Y" asks once,
+        "'…'을 '…'로 고칠까요?", and a yes corrects (appended, as in decision
+        2) and confirms; "아니" asks how to correct it; "나중에 할게" -- or
+        anything else -- leaves the rest for the screen's checklist. Only the
+        server stores what was answered; nothing here changes the workflow.
+        """
+
+        state = self._report_review
+        assert state is not None
+        items = state["items"]
+        item = dict(items[state["index"]])
+        key = _semantic_utterance_key(transcript)
+        withheld = _reply_withholds_assent(transcript)
+        binary = _binary_frame_reply(transcript)
+        affirmative = binary == "affirmative" or (
+            not withheld and bool(_AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(key)))
+        negative = binary == "negative" or (
+            not withheld and bool(_NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key)))
+        ops: list[dict[str, Any]] = []
+        lead = ""
+
+        def plan(display: str, speech: str, kind: str, *, closed: bool = False,
+                 remaining: Sequence[Mapping[str, Any]] = ()) -> CuratedProtocolTurnPlan:
+            planned = CuratedProtocolTurnPlan(
+                action=CuratedProtocolAction.REPORT_REVIEW,
+                display_text=display,
+                speech_text=speech,
+                speech_mode=CuratedProtocolSpeechMode.CONTROL,
+                facts=(),
+                step_label=None,
+                final_step=False,
+                state_changed=False,
+                primary_text=display,
+                intent_kind=kind,
+                report_review={
+                    "report_id": state["report_id"],
+                    "ops": ops,
+                    "closed": closed,
+                    "remaining": [dict(entry) for entry in remaining],
+                } if ops or closed else None,
+            )
+            self._last_front_rule = "report_review"
+            self._replay[turn_id] = planned
+            return planned
+
+        def advance(kind: str) -> CuratedProtocolTurnPlan:
+            state["index"] += 1
+            state["fix"] = None
+            if state["index"] >= len(items):
+                self._report_review = None
+                done = "모두 확인했어요. 보고서 문장을 준비할게요."
+                return plan(f"{lead}{done}", f"{lead}{done}", kind, closed=True)
+            display, speech = self._review_question()
+            return plan(f"{lead}{display}", f"{lead}{speech}", kind)
+
+        def leave(kind: str) -> CuratedProtocolTurnPlan:
+            remaining = items[state["index"]:]
+            ops.append({"op": "defer", "item_ids": [entry["item_id"] for entry in remaining]})
+            self._report_review = None
+            said = (
+                f"알겠어요. 남은 {len(remaining)}개는 화면의 확인 목록에서 확인할 수 있어요. "
+                "확인하지 않은 값은 보고서에 따로 적어 둘게요."
+            )
+            return plan(said, said, kind, closed=True, remaining=remaining)
+
+        if transcript_quality is not None:
+            display, speech = self._review_question()
+            again = "잘 듣지 못했어요. "
+            return plan(f"{again}{display}", f"{again}{speech}", "report_review_unheard")
+        fix = state.get("fix")
+        if fix is not None:
+            state["fix"] = None
+            if affirmative:
+                if fix["mode"] == "retract":
+                    ops.append({"op": "retract", "item": item, "before": item["text"]})
+                    lead = "지웠어요. 처음 기록은 취소됨으로 남겨 두었어요. "
+                else:
+                    ops.append({"op": "correct", "item": item, "before": item["text"],
+                                "after": fix["after"]})
+                    lead = f"'{fix['after']}'{josa_ro(fix['after'])[len(fix['after']):]} 고치고 확인했어요. "
+                return advance("report_review_fixed")
+            if negative:
+                display, speech = self._review_question()
+                lead = "그대로 두었어요. "
+                return plan(f"{lead}{display}", f"{lead}{speech}", "report_review_fix_declined")
+        if affirmative:
+            ops.append({"op": "confirm", "item_id": item["item_id"], "text": item["text"],
+                        "step_label": item.get("step_label")})
+            return advance("report_review_confirmed")
+        if _REVIEW_LATER.fullmatch(key):
+            return leave("report_review_deferred")
+        request = record_fix_request(transcript, review=True)
+        if request is None and _FIX_NOT_BUT.fullmatch(key):
+            request = {"mode": "correct", **fix_change(" ".join(transcript.split()))}
+        if request is not None:
+            before = str(item["text"])
+            if request["mode"] == "retract":
+                if not str(item.get("item_id", "")).startswith("r."):
+                    said = ("이 값은 지울 수 없어요. 고치려면 '고쳐 줘, 무엇이 아니라 무엇'이라고 말해 주세요.")
+                    return plan(said, said, "report_review_retract_refused")
+                state["fix"] = {"mode": "retract"}
+                said = f"'{before}'" + josa(before, "을", "를")[len(before):] + " 지울까요?"
+                return plan(said, said, "report_review_fix_confirmation_required")
+            after = (
+                apply_record_fix(before, str(request.get("x") or ""), str(request.get("y") or ""))
+                if request.get("y") else None
+            )
+            if after is None or after == before:
+                display, speech = self._review_question()
+                lead = (
+                    "어떻게 고칠지 알아듣지 못했어요. '고쳐 줘, 7.2가 아니라 7.4'처럼 말해 주세요. "
+                )
+                return plan(f"{lead}{display}", f"{lead}{speech}", "report_review_fix_unclear")
+            state["fix"] = {"mode": "correct", "after": after}
+            said = (
+                f"'{before}'" + josa(before, "을", "를")[len(before):]
+                + f" '{after}'" + josa_ro(after)[len(after):] + " 고칠까요?"
+            )
+            return plan(said, said, "report_review_fix_confirmation_required")
+        if negative:
+            said = (
+                "어떻게 고칠까요? '고쳐 줘, 7.2가 아니라 7.4'처럼 말해 주세요. "
+                "나중에 하려면 '나중에 할게'라고 해 주세요."
+            )
+            return plan(said, said, "report_review_fix_requested")
+        return leave("report_review_left")
 
     def _plan_record_request(
         self,
@@ -9720,6 +9930,7 @@ class CuratedProtocolSession:
         self._completed_step_ids.clear()
         self._last_record = None
         self._pending_record_fix = None
+        self._report_review = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -9845,9 +10056,10 @@ class CuratedProtocolSession:
         # A new run counts its own returns and its own completions.
         self._repeat_returns.clear()
         self._completed_step_ids.clear()
-        # And its own notes.
+        # And its own notes, and its own report to confirm.
         self._last_record = None
         self._pending_record_fix = None
+        self._report_review = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -10090,7 +10302,7 @@ class CuratedProtocolSession:
         tuple[str, float | None, float, tuple[dict[str, Any], ...], bool],
         tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None],
         tuple[dict[str, Any] | None, dict[str, int], frozenset[str]],
-        tuple[dict[str, Any] | None, dict[str, Any] | None],
+        tuple[dict[str, Any] | None, dict[str, Any] | None, str | None],
     ]:
         return (
             self.active,
@@ -10149,6 +10361,7 @@ class CuratedProtocolSession:
                 dict(self._last_record) if self._last_record is not None else None,
                 dict(self._pending_record_fix)
                 if self._pending_record_fix is not None else None,
+                json.dumps(self._report_review) if self._report_review is not None else None,
             ),
         )
 
@@ -10222,9 +10435,11 @@ class CuratedProtocolSession:
             self._pending_step_move = dict(moves[0]) if moves[0] is not None else None
             self._repeat_returns = dict(moves[1])
             self._completed_step_ids = set(moves[2])
-            notes = checkpoint[24] if len(checkpoint) >= 25 else (None, None)
+            notes = checkpoint[24] if len(checkpoint) >= 25 else (None, None, None)
             self._last_record = dict(notes[0]) if notes[0] is not None else None
             self._pending_record_fix = dict(notes[1]) if notes[1] is not None else None
+            review = notes[2] if len(notes) >= 3 else None
+            self._report_review = json.loads(review) if review is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -10239,6 +10454,7 @@ class CuratedProtocolSession:
             self._completed_step_ids = set()
             self._last_record = None
             self._pending_record_fix = None
+            self._report_review = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -11383,6 +11599,8 @@ class CuratedProtocolSession:
             anomaly=anomaly_pending_valid,
             step_move=step_move_valid,
             record_fix=record_fix_valid,
+            # Open until every value is answered or left for the screen.
+            report_review=self._report_review is not None and not self.active,
         )
 
     def _front_rule_for(
@@ -11632,6 +11850,12 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        if self._report_review is not None and not self.active:
+            # Lane N, decision 3: the report's values, read one by one.
+            return self._plan_report_review(
+                transcript, turn_id=turn_id, language=language,
+                transcript_quality=transcript_quality,
+            )
         homophone = language == "ko" and self._step_homophone(
             transcript, transcript_quality=transcript_quality,
             turn_id=turn_id, configuration_id=configuration_id, generation=generation,
