@@ -1252,7 +1252,8 @@ function renderTranslationNote(){
  let text="";
  if(shown&&koreanIsBody()){
   if(curatedScreenFields?.translation_source==="machine"||autoTranslationShown)text=AUTO_TRANSLATION_NOTE;
-  else if(!nonemptyText(value.primary_summary))text=curatedScreenFields?.translation_pending===true?PENDING_TRANSLATION_NOTE:NO_TRANSLATION_NOTE;
+  // Lane FX decision 3: a step whose source is Korean has nothing to translate.
+  else if(!nonemptyText(value.primary_summary)&&value.source_language!=="ko")text=curatedScreenFields?.translation_pending===true?PENDING_TRANSLATION_NOTE:NO_TRANSLATION_NOTE;
  }
  note.textContent=text;note.hidden=!text;
 }

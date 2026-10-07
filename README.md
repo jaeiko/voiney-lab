@@ -946,7 +946,17 @@ the source and the Korean each hold a negation or avoidance word ("without any
 inoculum" ↔ "넣지 않은", "eliminate clumping" ↔ "뭉치지 않도록") the negation
 is kept, and a negation on one side only is still refused. The words are one
 table, `NEGATION_VOCABULARY` in `src/voiney_lab/protocol_translation.py`
-(lane AN, 2026-10-07). Lightweight reagent/equipment cards store tenant-scoped location,
+(lane AN, 2026-10-07). "관계없이", "상관없이" and "무관하게" ("regardless") are
+not negation words in either check, so a Korean that drops the source's
+"not" behind one ("Do not vortex the tube, regardless of the volume." ↔
+"부피와 관계없이 튜브를 볼텍스합니다.") is refused (lane FX, 2026-10-07). A
+stored translation is judged when it is read, by today's check, not by the
+verdict stored with it: it is shown when today's check passes it and the
+source is shown when it refuses it, so a check fixed later reaches a revision
+already translated; the stored row, its text and its source hash do not
+change, and each sentence's judgement is computed once (lane FX). A step
+whose source is Korean shows no "한국어 번역이 없어 원문으로 보여 드립니다."
+line on its card (lane FX). Lightweight reagent/equipment cards store tenant-scoped location,
 optional photo/QR/barcode metadata, and an HTTPS SDS/source link. Location changes
 produce a reviewable history rather than a hidden overwrite.
 
@@ -1285,9 +1295,16 @@ with 4 pt after, list items 1 pt apart, table text single-spaced with none,
 and headings keep 12 pt (sections) or 8 pt (subsections) above them
 (`experiment_reports.DOCX_SPACING`).
 
-A material's or a piece of equipment's steps are the server's
+A name is shown without what a protocols.io list writes after it and the
+analysis copied into it -- the labels NAME, TYPE, BRAND and SKU with what
+follows them, and a number code of six or more digits at its end
+("Eppendorf Thermomixer C Model 5382 NAME Thermomixer C TYPE Eppendorf BRAND
+5382000023 SKU" is shown as "Eppendorf Thermomixer C Model 5382"), and a note
+under the tables says so; the name as listed is kept with the item (lane FX,
+2026-10-07). A material's or a piece of equipment's steps are the server's
 (`experiment_reports.item_step_labels`): it looks for the item in each source
-step's text, by the name as listed without parentheses, a catalog number or
+step's text, by the name as shown (its first line when nothing was left
+out) without parentheses, a catalog number or
 what follows a comma; failing that, by the name without its company and grade
 words; and by a short name the source gives it ("Lysogeny Broth (LB)",
 "ammonium bicarbonate (AMBIC)"). A step that names none of these is not
