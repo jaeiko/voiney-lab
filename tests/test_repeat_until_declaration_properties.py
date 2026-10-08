@@ -254,7 +254,7 @@ class TheOperatorIsStillToldTests(unittest.TestCase):
                     plan.action, CuratedProtocolAction.NEXT_INFORMATION
                 )
                 self.assertFalse(plan.state_changed)
-                self.assertIn("진입 승인이 아닙니다", plan.display_text)
+                self.assertIn("이 미리보기로 다음 단계에 들어가지 않습니다", plan.display_text)
 
     def test_the_completion_criteria_answer_still_refuses_completion(self) -> None:
         for label in ("7", "9"):

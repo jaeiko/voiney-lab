@@ -6681,7 +6681,7 @@ def _unsupported_fact_reply(
         ),
         "ko": (
             "현재 단계에서 확인되는 활성 프로토콜 내용은 화면에 그대로 유지했습니다. "
-            "질문하신 추가 내용은 현재 승인된 근거에서 확인되지 않았습니다. "
+            "질문하신 추가 내용은 현재 프로토콜 원문에서 확인되지 않았습니다. "
             "필요한 재료나 조건을 한 가지 지정해 주시면 그 항목을 확인하겠습니다."
         ),
     }.get(
@@ -15533,7 +15533,7 @@ class CuratedProtocolSession:
             )
         elif command is CuratedProtocolAction.AGENT_META:
             response = (
-                "저는 승인된 실험 프로토콜의 단계별 음성 안내, 배양 타이머 관리, 이상 사항 및 관찰 기록, 실험 보고서 생성, 그리고 프로토콜 및 승인된 참고자료 기반 질의응답을 지원하는 실험실 보이스 워크플로 에이전트입니다. 프로토콜을 시작하시려면 '실험 시작'이라고 말씀해 주세요."
+                "저는 실험 프로토콜 원문에 따른 단계별 음성 안내, 배양 타이머 관리, 이상 사항 및 관찰 기록, 실험 보고서 생성, 그리고 프로토콜 원문 및 승인된 참고자료 기반 질의응답을 지원하는 실험실 보이스 워크플로 에이전트입니다. 프로토콜을 시작하시려면 '실험 시작'이라고 말씀해 주세요."
                 if language == "ko" else
                 "I am a laboratory voice workflow assistant that provides step-by-step voice guidance for approved protocols, timer management, observation and anomaly recording, experiment report generation, and grounded QA over protocols and approved reference sources. To begin the workflow, please say 'start protocol'."
             )
@@ -16326,7 +16326,7 @@ class CuratedProtocolSession:
                 blocker_text = (
                     " The current step has an unresolved execution gate, so this preview does not authorize entry."
                     if held and language == "en" else
-                    " 현재 단계의 실행 제어가 미해결이므로 이 미리보기는 진입 승인이 아닙니다."
+                    " 현재 단계의 실행 제어가 미해결이므로 이 미리보기로 다음 단계에 들어가지 않습니다."
                     if held else ""
                 )
                 response = (
@@ -16514,10 +16514,10 @@ class CuratedProtocolSession:
                     "The current step does not contain the stated approved value, and I cannot authorize the requested change. "
                     "Please identify the intended step; the protocol state is unchanged."
                 ) if language == "en" else (
-                    f"활성 프로토콜의 승인된 요구사항은 다음과 같습니다: {approved_text} "
-                    "요청한 변경은 승인할 수 없습니다. 일반적인 배경 설명은 별도로 제공할 수 있지만 프로토콜은 변경되지 않습니다."
+                    f"활성 프로토콜 원문의 요구사항은 다음과 같습니다: {approved_text} "
+                    "요청한 변경은 프로토콜 원문에 없어 반영할 수 없습니다. 일반적인 배경 설명은 별도로 제공할 수 있지만 프로토콜은 변경되지 않습니다."
                 ) if approved_text else (
-                    "현재 단계에는 말씀하신 승인 값이 없으며 요청한 변경은 승인할 수 없습니다. "
+                    "현재 단계 원문에는 말씀하신 값이 없으며 요청한 변경은 프로토콜 원문에 없어 반영할 수 없습니다. "
                     "대상 단계를 알려 주세요. 프로토콜 상태는 변경되지 않았습니다."
                 )
             )
@@ -17680,7 +17680,7 @@ class CuratedProtocolSession:
                 "hypothetical_completion", "quoted_completion"
             }:
                 response = (
-                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 승인된 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
+                    "현재 단계를 실제로 완료했다고 명확히 말하면 서버가 현재 단계의 원문 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다. 필요한 조건이 충족된 경우에만 완료를 기록하고 다음 단계로 이동합니다. 지금 질문은 상태를 변경하지 않았습니다."
                     if language == "ko" else
                     "If you explicitly report the current step complete, the server first checks its approved completion and observation gates. It records completion and advances only when those gates pass. This question did not change state."
                 )

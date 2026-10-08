@@ -41,7 +41,7 @@ class StudentFacingWordingTests(unittest.TestCase):
 
     def test_the_hypothetical_completion_answer_says_confirmation_conditions(self) -> None:
         plan = _plan("끝났다고 하면 어떻게 돼?")
-        self.assertIn("승인된 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다.", plan.speech_text)
+        self.assertIn("원문 완료 확인 조건과 관찰 확인 조건을 먼저 검사합니다.", plan.speech_text)
         self.assertNotIn("게이트", plan.speech_text)
         self.assertFalse(plan.state_changed)
 
