@@ -236,6 +236,33 @@ class TheServerVerificationTests(_Catalog):
         )
         self.assertNotIn("step-7", table.manifest())
 
+    def test_a_duration_line_printed_under_a_step_is_that_steps_only(self) -> None:
+        """protocols.io prints "00:10:00" on its own line under the step it times."""
+
+        pdf = Path(self.temp.name) / "widget.pdf"
+        page = "Widget Protocol\nSection drying\n1. Dry the bags.\n00:10:00\n2. Weigh the bags."
+        write_text_pdf(pdf, page, title="Widget Protocol")
+        extraction = extract_protocol_pdf(pdf)
+        steps = tuple(
+            domain.ProtocolSourceStep(
+                f"w{n}", str(n), text, _evidence(text),
+                sub_actions=(_action(f"wa{n}", text.split(". ", 1)[1], "00:10:00"),),
+            )
+            for n, text in ((1, "1. Dry the bags."), (2, "2. Weigh the bags."))
+        )
+        protocol = domain.ExperimentProtocol(
+            "widget",
+            domain.ProtocolMetadata(extraction, "Widget Protocol", "en",
+                                    evidence=_evidence("Widget Protocol")),
+            sections=(domain.ProtocolSection(
+                "drying", "Section drying", _evidence("Section drying"), steps,
+            ),),
+        )
+        domain.validate_protocol(protocol)
+        table = verify_step_timers(protocol, extraction)
+        self.assertEqual(table.manifest(), {"w1": 600})
+        self.assertIn(("w2", "not_in_step_text"), {(r.step_id, r.reason) for r in table.refused})
+
     def test_seconds_the_analysis_wrote_must_be_a_source_value(self) -> None:
         table = self.table(step3_parsed=50400)  # 14 h: not printed
         self.assertNotIn("step-3", table.choices())

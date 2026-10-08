@@ -2141,6 +2141,44 @@ def _step_source_texts(step: domain.ProtocolSourceStep) -> tuple[str, ...]:
     return tuple(text for text in texts if text)
 
 
+def _step_region_texts(
+    steps: tuple[domain.ProtocolSourceStep, ...],
+    extraction: ProtocolPdfExtraction,
+) -> tuple[str, ...]:
+    """Each step's stretch of the source: from its text to the next step's.
+
+    A duration printed beside a step rather than inside its sentence -- the
+    protocols.io duration line "03:00:00" under "Dry the bags ... for 3 h" --
+    is the step's own only between where the step's text starts and where the
+    next step's starts. Where a step's excerpt cannot be found on its page
+    (an OCR page, a reflowed line), its stretch starts at the top of that page.
+    """
+
+    def position(step: domain.ProtocolSourceStep) -> tuple[int, int | None]:
+        page = step.evidence.source_page_number
+        text = extraction.pages[page - 1].text
+        found = text.find(step.evidence.source_excerpt[:80])
+        return page, (found if found >= 0 else None)
+
+    marks = [position(step) for step in steps]
+    regions: list[str] = []
+    for index, (page, start) in enumerate(marks):
+        if index + 1 < len(marks):
+            end_page, end = marks[index + 1]
+        else:
+            end_page, end = extraction.page_count, None
+        parts: list[str] = []
+        for number in range(page, end_page + 1):
+            text = extraction.pages[number - 1].text
+            lo = (start or 0) if number == page else 0
+            hi = end if number == end_page and end is not None else len(text)
+            if number == end_page and end is not None and number == page and hi < lo:
+                hi = len(text)
+            parts.append(text[lo:hi])
+        regions.append("\n".join(parts))
+    return tuple(regions)
+
+
 def _action_durations(
     action: domain.ProtocolSubAction,
 ) -> tuple[tuple[str, domain.SourceEvidence, int | None], ...]:
@@ -2174,8 +2212,10 @@ def verify_step_timers(
     Each duration the analysis attached to a step's sub-action is kept only
     when all of these hold, and is otherwise listed with its reason:
 
-    * its excerpt lies within that step's own source text (the step's and its
-      sub-actions' instructions and evidence excerpts);
+    * its excerpt lies within that step's own source: its and its
+      sub-actions' instructions and excerpts, or the stretch of the page from
+      where the step's text starts to where the next step's starts (a
+      protocols.io duration line printed under the step);
     * the excerpt is printed on a page between the step's anchor page and the
       next step's, found there as the analysis's own claim check finds text;
     * the server reads a number and a unit in the excerpt itself
@@ -2205,6 +2245,7 @@ def verify_step_timers(
             or reading.refused
         )
     }
+    regions = _step_region_texts(steps, extraction)
     for position, step in enumerate(steps):
         anchor = step.evidence.source_page_number
         last = (
@@ -2230,6 +2271,8 @@ def verify_step_timers(
                 reading = domain.read_source_durations(excerpt)
                 if not _claim_occurs_in_text(
                     excerpt, step_text, ocr_derived=page.ocr_derived
+                ) and not _claim_occurs_in_text(
+                    excerpt, regions[position], ocr_derived=page.ocr_derived
                 ):
                     refuse(action.action_id, excerpt, excerpt, "not_in_step_text", page_number)
                     continue
