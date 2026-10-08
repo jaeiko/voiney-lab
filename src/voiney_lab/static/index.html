@@ -118,6 +118,12 @@
                 <option value="auto">자동 감지</option>
                 <option value="en">English</option>
               </select></label>
+              <!-- Lane CF decision 1: the experimenter's own setting, kept by the server; the same as saying "확인 질문 켜 줘" or "조용히 모드". -->
+              <label class="control-field"><span>수치 확인 방식</span><select id="confirm-mode" aria-label="수치 확인 방식" aria-describedby="experimenter-settings-status">
+                <option value="readback" selected>되읽기 · 기록한 수치를 되읽고 묻지 않음</option>
+                <option value="confirm">바로 확인 · 수치마다 맞는지 물음</option>
+                <option value="quiet">조용히 · 실험 끝에 한 번에 확인</option>
+              </select><small id="experimenter-settings-status" class="mic-device-status" role="status"></small></label>
               <label class="control-field"><span>마이크</span><select id="mic-device" aria-label="마이크" aria-describedby="mic-device-status">
                 <option value="">기본 마이크 (시스템 설정)</option>
               </select><small id="mic-device-status" class="mic-device-status" role="status"></small></label>
@@ -1742,6 +1748,24 @@ function executionReasonRows(host,title,items,hint){
 function renderExecutionReasons(review){
  executionReasonRows($("protocol-blockers"),"실행을 막는 사유",review?.execution_blockers,null);
 }
+// Lane CF decision 1: the setting is the server's; the screen shows it and asks the server to change it.
+function renderExperimenterSettings(settings){
+ if(!settings||typeof settings!=="object")return;
+ const mode=$("confirm-mode");
+ if(mode&&["readback","confirm","quiet"].includes(settings.confirm_mode))mode.value=settings.confirm_mode;
+}
+async function loadExperimenterSettings(){
+ try{const response=await fetch("/api/experimenter/settings");if(response.ok){const payload=await response.json();renderExperimenterSettings(payload?.settings);}}catch(_){}
+}
+async function saveExperimenterSetting(name,value){
+ const status=$("experimenter-settings-status");
+ try{
+  const response=await fetch("/api/experimenter/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({[name]:value})});
+  if(!response.ok)throw new Error("refused");
+  const payload=await response.json();renderExperimenterSettings(payload?.settings);
+  if(status)status.textContent="저장했습니다 · 다음 실험부터 적용됩니다.";
+ }catch(_){if(status)status.textContent="설정을 저장하지 못했습니다.";void loadExperimenterSettings();}
+}
 // Lane DI (2026-10-08): what the experimenter reads before pressing start --
 // how many steps, the source's safety statements beside their Korean (never
 // folded), what keeps the protocol from running and what to do, the notices
@@ -2063,6 +2087,7 @@ async function onMessage(e,generation,current){
  if(m.type==="session.turn_language_resolved"){renderLanguageState(acknowledgedLanguageMode,m.language);}
  if(m.type==="session.language_confirmation_required"){$("language-status").textContent="Language confirmation required";}
  if(m.type==="session.safety_pack")renderSafetyPack(m.safety_pack);
+ if(m.type==="experimenter.settings")renderExperimenterSettings(m.settings);
  if(m.type==="session.reset"){resetSessionUI();}
  if(m.type==="protocol.fixture.state")renderCuratedProtocolState(m);
  if(m.type==="experiment.ended"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showExperimentEnded(m);
@@ -2142,7 +2167,8 @@ $("experiment-evidence-upload")?.addEventListener("click",()=>{void uploadExperi
 $("new-chat-update")?.addEventListener("click",()=>{const log=$("log");if(log){log.scrollTo({top:0,behavior:"smooth"});$("new-chat-update").hidden=true;}});
 $("log")?.addEventListener("scroll",()=>{if(isChatNearTop()){if($("new-chat-update"))$("new-chat-update").hidden=true;}},{passive:true});
 $("protocol-pdf")?.addEventListener("change",e=>{const file=e.target?.files?.[0];setText("selected-file-name",file?file.name:"선택된 파일 없음");if(file)void registerSelectedProtocol();});
-globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();},{once:true});
+$("confirm-mode")?.addEventListener("change",event=>{void saveExperimenterSetting("confirm_mode",event.target.value);});
+globalThis.addEventListener?.("load",()=>{void loadProtocolCatalog();void loadWorkspaceSession();void loadExperimenterSettings();},{once:true});
 </script>
 </body>
 </html>

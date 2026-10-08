@@ -22,7 +22,7 @@ from voiney_lab.identity import (
 
 
 WORKSPACE_DATABASE_FILENAME = "commercial_workspace.sqlite"
-WORKSPACE_SCHEMA_VERSION = 7
+WORKSPACE_SCHEMA_VERSION = 8
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCIENTIFIC_TOKEN = re.compile(
@@ -742,6 +742,42 @@ INSERT INTO schema_metadata_next(schema_version) VALUES(7);
 DROP TABLE schema_metadata;
 ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
 """
+
+
+#: Lane CF (2026-10-08): the experimenter's settings, one row per change,
+#: never updated or deleted; the latest row of a name is its value. Written
+#: to run on a store that already has the table (a fresh v8 store rebuilt as
+#: an older one keeps it).
+MIGRATION_7_TO_8 = """
+CREATE TABLE IF NOT EXISTS experimenter_settings(
+ sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ organization_id TEXT NOT NULL REFERENCES organizations(organization_id),
+ principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+ name TEXT NOT NULL CHECK(name IN ('confirm_mode','question_timing')),
+ value TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(source IN ('voice','screen')),
+ created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS experimenter_settings_principal
+ ON experimenter_settings(organization_id,principal_id,name,sequence_id);
+CREATE TRIGGER IF NOT EXISTS experimenter_settings_no_update BEFORE UPDATE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+CREATE TRIGGER IF NOT EXISTS experimenter_settings_no_delete BEFORE DELETE ON experimenter_settings
+ BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+CREATE TABLE schema_metadata_next(
+ schema_version INTEGER PRIMARY KEY CHECK(schema_version=8)
+);
+INSERT INTO schema_metadata_next(schema_version) VALUES(8);
+DROP TABLE schema_metadata;
+ALTER TABLE schema_metadata_next RENAME TO schema_metadata;
+"""
+
+#: The values each setting may take (lane CF, decisions 1 and 4).
+EXPERIMENTER_SETTING_VALUES: dict[str, tuple[str, ...]] = {
+    "confirm_mode": ("readback", "confirm", "quiet"),
+    "question_timing": ("before_start", "during"),
+}
 
 
 def _now() -> str:
@@ -2619,6 +2655,40 @@ class WorkspaceStore:
             "changes": changes,
         }
 
+    def record_experimenter_setting(
+        self,
+        principal: Principal,
+        *,
+        name: str,
+        value: str,
+        source: str,
+    ) -> dict[str, str]:
+        """Append one setting change of this experimenter; the settings after it."""
+
+        if value not in EXPERIMENTER_SETTING_VALUES.get(name, ()):
+            raise WorkspaceError("Experimenter setting is invalid.")
+        if source not in {"voice", "screen"}:
+            raise WorkspaceError("Experimenter setting source is invalid.")
+        self._connection.execute(
+            """INSERT INTO experimenter_settings(
+            organization_id,principal_id,name,value,source,created_at
+            ) VALUES(?,?,?,?,?,?)""",
+            (principal.organization_id, principal.principal_id, name, value, source, _now()),
+        )
+        self._connection.commit()
+        return self.experimenter_settings(principal)
+
+    def experimenter_settings(self, principal: Principal) -> dict[str, str]:
+        """The latest value of each setting this experimenter changed; unset ones are absent."""
+
+        rows = self._connection.execute(
+            """SELECT name,value FROM experimenter_settings
+            WHERE organization_id=? AND principal_id=?
+            ORDER BY sequence_id""",
+            (principal.organization_id, principal.principal_id),
+        ).fetchall()
+        return {str(row["name"]): str(row["value"]) for row in rows}
+
     def record_analytics(
         self,
         principal: Principal,
@@ -2766,6 +2836,18 @@ def initialize_workspace_store(settings: WorkspaceSettings) -> WorkspaceStore:
                 "Commercial workspace migration failed."
             ) from exc
         version = 7
+    if version == 7:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + MIGRATION_7_TO_8 + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            connection.rollback()
+            connection.close()
+            raise WorkspaceError(
+                "Commercial workspace migration failed."
+            ) from exc
+        version = 8
     if version != WORKSPACE_SCHEMA_VERSION:
         connection.close()
         raise WorkspaceError("Commercial workspace schema is unsupported.")

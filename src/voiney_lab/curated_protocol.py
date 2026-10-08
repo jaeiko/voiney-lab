@@ -524,6 +524,9 @@ class CuratedProtocolTurnPlan:
     #: (lane N, decision 3): what this turn confirmed, corrected or left for
     #: the screen, and whether the review is over.
     report_review: dict[str, Any] | None = None
+    #: A setting the experimenter changed by voice (lane CF, decision 1):
+    #: {"confirm_mode": "quiet"}; the server keeps it for the next session.
+    setting_change: dict[str, str] | None = None
 
     @property
     def response_text(self) -> str | None:
@@ -1331,6 +1334,8 @@ class CuratedControlIntent:
     #: "unknown"), and to an open count question (a number, or "unknown").
     branch_reply: str | None = None
     count_reply: int | str | None = None
+    #: Lane CF, decision 1: a value note the experimenter confirmed ("네").
+    note_confirmed: bool = False
 
 
 class DiscourseFocusKind(str, Enum):
@@ -2818,6 +2823,9 @@ FRONT_RULES: dict[str, str] = {
                     "return does, a no moves on and is recorded as done "
                     "differently; with no count, '한 번 더 하시나요?' after each "
                     "round (lane CB, decision 3)",
+    "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘': "
+                            "the experimenter's way of confirming values changes; "
+                            "no workflow state does (lane CF, decision 1)",
 }
 
 #: The front rule an action the rules read belongs to, whatever its wording.
@@ -2859,6 +2867,8 @@ class _OpenQuestions:
     #: step, open until answered (not for one turn only).
     branch: bool = False
     repeat_count: bool = False
+    #: Lane CF: "0.5 mL로 기록할까요?" in the 바로 확인 way (one turn).
+    note_confirm: bool = False
 
     @property
     def first_open(self) -> str | None:
@@ -2866,7 +2876,8 @@ class _OpenQuestions:
 
         for name in (
             "completion", "observation", "transcript", "note", "stop", "timer", "anomaly",
-            "step_move", "record_fix", "report_review", "branch", "repeat_count",
+            "step_move", "record_fix", "note_confirm", "report_review", "branch",
+            "repeat_count",
         ):
             if getattr(self, name):
                 return name
@@ -3185,7 +3196,7 @@ def note_kind(content: str, *, noun: str | None = None) -> str:
 
     if _DEVIATION_WORDS.search(content):
         return "deviation"
-    if _MEASURE.search(content):
+    if _MEASURE.search(content) or measured_values(content):
         return "measurement"
     if (noun or "").startswith("관찰") or _OBSERVATION_WORDS.search(content):
         return "observation"
@@ -3467,6 +3478,221 @@ def apply_record_fix(text: str, x: str, y: str) -> str | None:
         if index >= 0:
             return text[:index] + y + text[index + len(candidate):]
     return None
+
+
+# --- Lane CF (field interviews, 2026-10-07/08) ----------------------------
+#
+# Decision 1: how a recorded value is confirmed, per experimenter. 되읽기
+# (readback, the default) reads it back and asks nothing; 바로 확인 (confirm)
+# asks "맞으면 '네'라고 해 주세요" before it is stored; 조용히 (quiet) reads
+# nothing back and leaves the values to lane N's end-of-run review. The
+# question timing is kept with the settings; decision 4 gives it its effect.
+CONFIRM_MODES = ("readback", "confirm", "quiet")
+QUESTION_TIMINGS = ("before_start", "during")
+CONFIRM_MODE_WORDS = {"readback": "되읽기", "confirm": "바로 확인", "quiet": "조용히"}
+_SETTING_POLITE = r"(?:\s*(?:줘요|줘|주세요|줄래))?"
+_SETTING_DO = rf"(?:\s*(?:로|으로))?(?:\s*(?:해|바꿔|켜|변경해|전환해){_SETTING_POLITE})?"
+_SETTING_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+    (re.compile(rf"^확인\s*질문(?:을|은)?\s*켜{_SETTING_POLITE}$"), {"confirm_mode": "confirm"}),
+    (re.compile(rf"^(?:바로\s*확인|확인)\s*모드{_SETTING_DO}$"), {"confirm_mode": "confirm"}),
+    (re.compile(rf"^확인\s*질문(?:을|은)?\s*(?:꺼|그만\s*해){_SETTING_POLITE}$"),
+     {"confirm_mode": "readback"}),
+    (re.compile(rf"^되읽기(?:\s*모드)?{_SETTING_DO}$"), {"confirm_mode": "readback"}),
+    (re.compile(rf"^(?:조용히|조용한)\s*모드{_SETTING_DO}$"), {"confirm_mode": "quiet"}),
+)
+
+
+def experimenter_setting_request(transcript: str) -> dict[str, str] | None:
+    """The setting a turn asks to change -- {"confirm_mode": "quiet"} -- or None.
+
+    Only whole commands are read; a question about a setting ("확인 질문 켜도
+    돼?") asks for nothing to be done.
+    """
+
+    said = " ".join(transcript.split()).strip(" .!。")
+    if not said or "?" in said or "？" in said:
+        return None
+    for pattern, setting in _SETTING_PATTERNS:
+        if pattern.fullmatch(said):
+            return dict(setting)
+    return None
+
+
+# Decision 2: a value said the Korean way and the digits the STT wrote are
+# one value ("영 점 오", "0점5", "점 오" and "0.5" are all 0.5), and the
+# decimal point is never dropped when it is read back.
+_KOREAN_DIGIT_VALUES = {
+    "영": 0, "공": 0, "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5,
+    "육": 6, "륙": 6, "칠": 7, "팔": 8, "구": 9,
+}
+_KD = "영공일이삼사오육륙칠팔구"
+_KN = "일이삼사오육륙칠팔구"
+_KOREAN_INT = (
+    rf"(?=[{_KD}십백천])(?:[{_KN}]?천)?(?:[{_KN}]?백)?(?:[{_KN}]?십)?[{_KD}]?"
+)
+_KOREAN_FRACTION = rf"[{_KD}](?:\s*[{_KD}])*"
+#: Korean unit words -> the unit as the record writes it.
+_KOREAN_UNIT_WORDS = {
+    "마이크로리터": "µL", "밀리리터": "mL", "리터": "L",
+    "마이크로그램": "µg", "밀리그램": "mg", "나노그램": "ng", "킬로그램": "kg", "그램": "g",
+    "마이크로몰": "µM", "밀리몰": "mM", "나노몰": "nM", "몰": "M",
+    "퍼센트": "%", "알피엠": "rpm", "나노미터": "nm",
+}
+_KOREAN_UNIT = "|".join(sorted(_KOREAN_UNIT_WORDS, key=len, reverse=True))
+#: Units read with no space before them ("37도", "10분").
+_ATTACHED_UNITS = frozenset({"도", "분", "초", "시간", "배", "%", "°C", "℃", "°"})
+_ASCII_UNIT = (
+    r"(?:°\s*C|℃|[µμu][Ll]|m[Ll]|[µμu]g|mg|ng|kg|mM|[µμu]M|nM|rpm|RPM|[x×]\s*g|"
+    r"mins?|hrs?|sec|nm|mm|cm|[µμ]m|kDa|v/v|w/v|L|g|M|h|s|%|°)"
+    r"(?:\s*/\s*(?:m[Ll]|[µμu][Ll]|L|mg|g))?(?![A-Za-z])"
+)
+_TIME_UNIT = r"(?:도|분|초|시간|배)"
+_VALUE_NAME = r"(?P<name>pH|PH|ph|OD\s*\d{3}|OD|A\s*\d{3})"
+_NUMBER_FORMS = (
+    rf"\d[\d,]*\.\d+"                                   # 0.5
+    rf"|\d+\s*점\s*(?:\d+|{_KOREAN_FRACTION})"          # 0점5, 0 점 5, 0점 오
+    rf"|{_KOREAN_INT}\s*점\s*(?:{_KOREAN_FRACTION}|\d+)"  # 영 점 오, 영점오
+    rf"|(?<![가-힣])점\s*(?:{_KOREAN_FRACTION}|\d+)"   # 점 오: 0.5, the 0 not said
+    rf"|\d[\d,]*"                                       # 5
+)
+_SPOKEN_VALUE = re.compile(
+    rf"(?:{_VALUE_NAME}\s*(?:은|는|이|가|값은|값이|:)?\s*)?"
+    rf"(?<![가-힣A-Za-z0-9.])(?P<number>{_NUMBER_FORMS}|{_KOREAN_INT})"
+    rf"(?:\s*(?P<unit>{_KOREAN_UNIT}|{_ASCII_UNIT}|{_TIME_UNIT}))?"
+)
+
+
+@dataclass(frozen=True)
+class MeasuredValue:
+    """One value in a note: as said, as digits, its unit, and as the record writes it."""
+
+    said: str
+    number: str
+    unit: str
+    name: str
+    text: str
+
+    def public_dict(self) -> dict[str, str]:
+        return {"said": self.said, "number": self.number, "unit": self.unit,
+                "name": self.name, "text": self.text}
+
+
+def _korean_integer(words: str) -> int | None:
+    words = re.sub(r"\s+", "", words)
+    if not words:
+        return None
+    total, current = 0, None
+    for character in words:
+        if character in _KOREAN_DIGIT_VALUES:
+            current = _KOREAN_DIGIT_VALUES[character]
+        elif character in "십백천":
+            total += (1 if current is None else current) * {"십": 10, "백": 100, "천": 1000}[character]
+            current = None
+        else:
+            return None
+    return total + (current or 0)
+
+
+def _digits_of(words: str) -> str | None:
+    """A fraction's digits, each said alone ("이 오" -> "25") or written ("25")."""
+
+    words = re.sub(r"\s+", "", words)
+    if words.isdigit():
+        return words
+    if words and all(character in _KOREAN_DIGIT_VALUES for character in words):
+        return "".join(str(_KOREAN_DIGIT_VALUES[character]) for character in words)
+    return None
+
+
+def _number_digits(said: str) -> str | None:
+    """The number as digits: "영 점 오" -> "0.5", "0점5" -> "0.5", "오 점 영" -> "5.0"."""
+
+    said = said.strip()
+    if "점" in said:
+        whole, _, fraction = said.partition("점")
+        whole = whole.strip()
+        digits = _digits_of(fraction)
+        if digits is None:
+            return None
+        if not whole:
+            return f"0.{digits}"
+        integer = whole.replace(",", "") if whole.replace(",", "").isdigit() else _korean_integer(whole)
+        return None if integer is None else f"{integer}.{digits}"
+    if re.fullmatch(r"\d[\d,]*(?:\.\d+)?", said):
+        return said
+    integer = _korean_integer(said)
+    return None if integer is None else str(integer)
+
+
+def _unit_text(unit: str) -> str:
+    unit = " ".join(unit.split())
+    if unit in _KOREAN_UNIT_WORDS:
+        return _KOREAN_UNIT_WORDS[unit]
+    folded = unit.casefold().replace("μ", "µ")
+    if folded in {"ml"}:
+        return "mL"
+    if folded in {"ul", "µl"}:
+        return "µL"
+    return unit.replace("μ", "µ")
+
+
+def measured_values(content: str) -> tuple[MeasuredValue, ...]:
+    """The values in a note, each with a unit or a value name, read as one value.
+
+    A Korean number with no unit or name is not a value ("이 점이 이상해"),
+    and one Korean digit before 분, 초, 시간, 도 or 배 is read as a word ("이
+    분"), not as a time.
+    """
+
+    found: list[MeasuredValue] = []
+    for match in _SPOKEN_VALUE.finditer(content):
+        said_number = match.group("number")
+        unit = match.group("unit") or ""
+        name = " ".join((match.group("name") or "").split())
+        if not unit and not name:
+            continue
+        korean = not re.search(r"\d", said_number)
+        if korean and unit and re.fullmatch(_TIME_UNIT, unit) and not re.search(r"[십백천점]", said_number):
+            continue
+        if korean and not unit and re.match(r"[가-힣]", content[match.end():match.end() + 1]):
+            continue
+        digits = _number_digits(said_number)
+        if digits is None:
+            continue
+        unit_text = _unit_text(unit) if unit else ""
+        if unit_text and unit_text in _ATTACHED_UNITS:
+            text = f"{digits}{unit_text}"
+        elif unit_text:
+            text = f"{digits} {unit_text}"
+        else:
+            text = digits
+        if name:
+            text = f"{name} {text}"
+        found.append(MeasuredValue(
+            said=" ".join(match.group(0).split()), number=digits, unit=unit_text,
+            name=name, text=text,
+        ))
+    return tuple(found)
+
+
+_POINT_WITHOUT_DIGITS = re.compile(
+    rf"(?:\d|(?<![가-힣])[{_KD}십백천]+)\s*점\s*(?:{_KOREAN_UNIT}|{_ASCII_UNIT})"
+)
+_TWO_POINTS = re.compile(r"\d\.\d+\s*점|점\s*\d+\.\d")
+_ANY_UNIT = re.compile(rf"(?:{_KOREAN_UNIT})|\d\s*{_ASCII_UNIT}|{_ASCII_UNIT}")
+
+
+def decimal_problem(content: str) -> bool:
+    """Whether a value's decimal point cannot be read for sure.
+
+    A "점" with no digits after it ("5점 mL", "오 점 밀리리터"), or a written
+    point beside a spoken one ("0.5점 mL", "점 0.5 mL"): the value is not
+    stored and is asked for again.
+    """
+
+    if _POINT_WITHOUT_DIGITS.search(content):
+        return True
+    return bool(_TWO_POINTS.search(content) and _ANY_UNIT.search(content))
 
 
 # Lane R7, decision 1: something spilled, was knocked over or overflowed --
@@ -7079,9 +7305,38 @@ class CuratedProtocolSession:
         #: researcher leaves the rest for the screen.
         self._report_review: dict[str, Any] | None = None
         self.safety_pack: Any = None
+        #: Lane CF (2026-10-08). The experimenter's settings, as the server
+        #: applies them when a session opens (decision 1). The session's own
+        #: default is lane N's readback. The question timing is kept with
+        #: them; decision 4 gives it its effect.
+        self.confirm_mode: str = "readback"
+        self.question_timing: str = "during"
+        #: The one-turn "0.5 mL로 기록할까요?" of the 바로 확인 way.
+        self._pending_note_confirmation: dict[str, Any] | None = None
 
     def set_safety_pack(self, safety_pack: Any) -> None:
         self.safety_pack = safety_pack
+
+    # --- lane CF: the experimenter's settings ---------------------------------
+
+    def apply_experimenter_settings(self, settings: Mapping[str, Any]) -> None:
+        """Take the experimenter's settings; an unknown value keeps the session's own."""
+
+        mode = settings.get("confirm_mode")
+        if mode in CONFIRM_MODES:
+            self.confirm_mode = str(mode)
+        elif mode is not None:
+            self.confirm_mode = "readback"
+        timing = settings.get("question_timing")
+        if timing in QUESTION_TIMINGS:
+            self.question_timing = str(timing)
+
+    def experimenter_settings(self) -> dict[str, str]:
+        return {"confirm_mode": self.confirm_mode, "question_timing": self.question_timing}
+
+    @property
+    def pending_note_confirmation(self) -> dict[str, Any] | None:
+        return self._pending_note_confirmation
 
     @property
     def pending_completion_confirmation(self) -> PendingCompletionConfirmation | None:
@@ -9054,6 +9309,93 @@ class CuratedProtocolSession:
             step_record=step_record,
         )
 
+    # --- lane CF, decisions 1-2: a value recorded, its point and its question --
+
+    #: The note turns a value check applies to: a note said aloud (lane N), the
+    #: router's record_log observation, and the reply to "어떤 내용을 기록할까요?".
+    _VALUE_NOTE_KINDS = frozenset({
+        "record_note", "record_observation", "pending_observation_note_received",
+    })
+
+    def _note_gate(
+        self,
+        intent: CuratedControlIntent,
+        *,
+        turn_id: int,
+        configuration_id: int | None,
+        generation: int | None,
+    ) -> CuratedProtocolTurnPlan | None:
+        """The note is not stored now: its point is unclear, or it is asked about first."""
+
+        content = (intent.observation_outcome or "").strip()[:4000]
+        if not content or intent.intent_kind not in self._VALUE_NOTE_KINDS or not self.active:
+            return None
+        if decimal_problem(content):
+            return self._words_plan(
+                "소수점이 분명하지 않아 기록하지 않았어요. 값을 다시 말씀해 주세요. "
+                "예: '영 점 오 밀리리터'.",
+                intent_kind="note_decimal_unclear",
+                action=CuratedProtocolAction.DECLINE_COMPLETION,
+            )
+        if self.confirm_mode != "confirm" or intent.note_confirmed:
+            return None
+        values = measured_values(content)
+        if not values:
+            return None
+        step = self.fixture.steps[self.current_index]
+        self._pending_note_confirmation = {
+            "content": content,
+            "category": intent.observation_predicate,
+            "intent_kind": intent.intent_kind,
+            "step_index": self.current_index,
+            "step_id": step.step_id,
+            "workflow_revision": self._revision,
+            "requested_turn_id": turn_id,
+            "configuration_id": configuration_id,
+            "requested_generation": generation,
+        }
+        shown = ", ".join(value.text for value in values)
+        heard = ", ".join(spoken_korean(value.text) for value in values)
+        ending = josa_ro(shown)[len(shown):]
+        plan = self._words_plan(
+            f"{shown}{ending} 기록할까요? 맞으면 '네'라고 해 주세요.",
+            intent_kind="note_confirmation_required",
+            action=CuratedProtocolAction.CLARIFY_COMPLETION,
+        )
+        return replace(plan, speech_text=f"{heard}{ending} 기록할까요? 맞으면 '네'라고 해 주세요.")
+
+    # --- lane CF: words about the experimenter's own settings ---------------
+
+    def _plan_experimenter_words(
+        self, transcript: str, *, turn_id: int,
+    ) -> CuratedProtocolTurnPlan | None:
+        """A setting said aloud (decision 1)."""
+
+        setting = experimenter_setting_request(transcript)
+        if setting is not None:
+            ((_, value),) = setting.items()
+            self._last_front_rule = "experimenter_setting"
+            shown = CONFIRM_MODE_WORDS[value]
+            if self.confirm_mode == value:
+                plan = self._words_plan(f"이미 '{shown}' 방식이에요.", intent_kind="experimenter_setting_unchanged")
+            else:
+                self.confirm_mode = value
+                words = {
+                    "confirm": "수치를 기록할 때마다 맞는지 여쭤볼게요.",
+                    "readback": "수치를 기록하면 되읽어 드리고 묻지 않아요. 틀리면 '고쳐 줘'라고 해 주세요.",
+                    "quiet": "기록은 되읽지 않고, 실험이 끝날 때 수치를 한 번에 확인해요.",
+                }[value]
+                plan = replace(
+                    self._words_plan(
+                        f"확인 방식을 '{shown}'{josa_ro(shown)[len(shown):]} 바꿨어요. {words}",
+                        intent_kind="experimenter_setting_changed",
+                    ),
+                    setting_change=dict(setting),
+                )
+            self._replay[turn_id] = plan
+            return plan
+        return None
+
     def open_report_review(
         self, items: Sequence[Mapping[str, Any]], *, report_id: str,
     ) -> tuple[str, str]:
@@ -9371,6 +9713,13 @@ class CuratedProtocolSession:
                         "무엇을 무엇으로 고칠지 말씀해 주세요. 예를 들면 "
                         "'방금 기록 고쳐 줘, 7.2가 아니라 7.4'라고 해 주세요.",
                         "record_fix_content_required",
+                    )
+                if decimal_problem(str(fix["y"])):
+                    # Lane CF, decision 2: the new value's point is unclear.
+                    return reply(
+                        "소수점이 분명하지 않아 고치지 않았어요. 값을 다시 말씀해 주세요. "
+                        "예: '영 점 오 밀리리터'.",
+                        "record_fix_decimal_unclear",
                     )
                 after = apply_record_fix(before, str(fix.get("x") or ""), str(fix["y"]))
                 if after is None:
@@ -10961,6 +11310,8 @@ class CuratedProtocolSession:
         self._branch_answers.clear()
         self._registered_repetitions.clear()
         self._declined_round = None
+        # Lane CF: a value question.
+        self._pending_note_confirmation = None
         if opening != (
             self.active, self.current_index, self._block_reason, self._workflow_status,
         ):
@@ -11126,6 +11477,8 @@ class CuratedProtocolSession:
         self._branch_answers.clear()
         self._registered_repetitions.clear()
         self._declined_round = None
+        # Lane CF: a value question.
+        self._pending_note_confirmation = None
         if opening != (self.active, self.current_index, self._block_reason):
             self._revision += 1
 
@@ -11271,6 +11624,7 @@ class CuratedProtocolSession:
         tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None],
         tuple[dict[str, Any] | None, dict[str, int], frozenset[str]],
         tuple[dict[str, Any] | None, dict[str, Any] | None, str | None],
+        tuple[dict[str, Any] | None],
     ]:
         return (
             self.active,
@@ -11337,6 +11691,11 @@ class CuratedProtocolSession:
                 {key: dict(value) for key, value in self._branch_answers.items()},
                 {key: dict(value) for key, value in self._registered_repetitions.items()},
                 dict(self._declined_round) if self._declined_round is not None else None,
+            ),
+            # Lane CF: a value question rolls back with the turn that asked it.
+            (
+                dict(self._pending_note_confirmation)
+                if self._pending_note_confirmation is not None else None,
             ),
         )
 
@@ -11421,6 +11780,8 @@ class CuratedProtocolSession:
                 key: dict(value) for key, value in answered[1].items()
             }
             self._declined_round = dict(answered[2]) if answered[2] is not None else None
+            asked = checkpoint[26] if len(checkpoint) >= 27 else (None,)
+            self._pending_note_confirmation = dict(asked[0]) if asked[0] is not None else None
         else:
             self._experiment_started_at = None
             self._experiment_ended_at = None
@@ -11439,6 +11800,7 @@ class CuratedProtocolSession:
             self._registered_repetitions = {}
             self._declined_round = None
             self._report_review = None
+            self._pending_note_confirmation = None
         self._replay = dict(replay)
         self._recent_verified_entities = list(recent_entities)
 
@@ -12599,6 +12961,32 @@ class CuratedProtocolSession:
             # semantic fallback leave such a turn to the rules.
             branch=self._branch_question_open(),
             repeat_count=self._count_question_open(),
+            # Lane CF: the 바로 확인 value question (one turn).
+            note_confirm=self._note_confirmation_valid(
+                turn_id=turn_id, configuration_id=configuration_id, generation=generation,
+            ),
+        )
+
+    def _note_confirmation_valid(
+        self, *, turn_id: int, configuration_id: int | None, generation: int | None,
+    ) -> bool:
+        asked = self._pending_note_confirmation
+        return bool(
+            asked is not None
+            and self.active
+            and self._pause_state != "paused"
+            and self.current_index == asked.get("step_index")
+            and self._revision == asked.get("workflow_revision")
+            and turn_id == asked.get("requested_turn_id", -2) + 1
+            and (
+                asked.get("configuration_id") is None
+                or configuration_id == asked.get("configuration_id")
+            )
+            and (
+                asked.get("requested_generation") is None
+                or generation is None
+                or generation >= asked.get("requested_generation")
+            )
         )
 
     def _front_rule_for(
@@ -12874,6 +13262,7 @@ class CuratedProtocolSession:
             self._pending_anomaly_confirmation,
             self._pending_step_move,
             self._pending_record_fix,
+            self._pending_note_confirmation,
         ) if front_only else None
         # The front rule that owns this turn, once one does (FRONT_RULES).
         front_rule: str | None = None
@@ -12914,6 +13303,9 @@ class CuratedProtocolSession:
         record_fix_valid = open_questions.record_fix
         if self._pending_record_fix is not None and not record_fix_valid:
             self._pending_record_fix = None
+        note_confirm_valid = open_questions.note_confirm
+        if self._pending_note_confirmation is not None and not note_confirm_valid:
+            self._pending_note_confirmation = None
         # The question this turn could answer, kept aside in case the turn is
         # a pause: the pause holds it, and the voice resume asks it again.
         open_question: dict[str, Any] | None = None
@@ -13140,6 +13532,58 @@ class CuratedProtocolSession:
                     language=language,
                     normalized_transcript=normalized_confirmation,
                     record_fix={**fix, "confirmed": fix_reply == "affirmative"},
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
+        note_reply = (
+            "affirmative"
+            if (
+                not reply_withheld
+                and _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "affirmative"
+            else "negative"
+            if (
+                not reply_withheld
+                and _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(normalized_confirmation)
+            )
+            or binary_reply == "negative"
+            else None
+        ) if note_confirm_valid and transcript_quality is None else None
+        if note_reply is not None and self._pending_note_confirmation is not None:
+            # Lane CF, decision 1: a yes or no to "0.5 mL로 기록할까요?". Only
+            # a yes stores the note, as the words were said when it was asked.
+            asked = dict(self._pending_note_confirmation)
+            self._pending_note_confirmation = None
+            self._last_front_rule = "yes_no_open_question"
+            if note_reply == "negative":
+                plan = self._words_plan(
+                    "기록하지 않았어요. 값을 다시 말씀해 주세요.",
+                    intent_kind="note_confirmation_declined",
+                    action=CuratedProtocolAction.DECLINE_COMPLETION,
+                )
+                self._replay[turn_id] = plan
+                return plan
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind=str(asked.get("intent_kind") or "record_note"),
+                    action=CuratedProtocolAction.RECORD_OBSERVATION,
+                    target_step="authoritative_current_step",
+                    reported_observation=True,
+                    observation_predicate=asked.get("category"),
+                    observation_outcome=asked.get("content"),
+                    confidence_source="server_pending_note_confirmation",
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    note_confirmed=True,
                 ),
                 transcript=transcript,
                 command_key=command_key,
@@ -13580,6 +14024,17 @@ class CuratedProtocolSession:
             if record_fix_valid:
                 # And "방금 기록 '…'을 '…'로 고칠까요?" (lane N).
                 self._pending_record_fix = None
+            if note_confirm_valid:
+                # And "0.5 mL로 기록할까요?" (lane CF).
+                self._pending_note_confirmation = None
+            said_here = (
+                self._plan_experimenter_words(transcript, turn_id=turn_id)
+                if language == "ko" and transcript_quality is None else None
+            )
+            if said_here is not None:
+                # Lane CF, decision 1: a setting said aloud. It changes no
+                # workflow state.
+                return said_here
             if note_pending_valid:
                 # A new command cancels the one-turn note prompt before routing.
                 self._pending_note_capture = None
@@ -14044,6 +14499,7 @@ class CuratedProtocolSession:
                 self._pending_anomaly_confirmation,
                 self._pending_step_move,
                 self._pending_record_fix,
+                self._pending_note_confirmation,
             ) = untouched
             return None
         return self._execute_turn_intent(
@@ -14818,6 +15274,17 @@ class CuratedProtocolSession:
                 state_changed=False,
                 intent_kind=intent.intent_kind,
             )
+        elif (
+            command is CuratedProtocolAction.RECORD_OBSERVATION
+            and language == "ko"
+            and (gated := self._note_gate(
+                intent, turn_id=turn_id, configuration_id=configuration_id,
+                generation=generation,
+            )) is not None
+        ):
+            # Lane CF, decisions 1-2: a value whose decimal point is unclear
+            # is not stored; in the 바로 확인 way a value is asked about first.
+            plan = gated
         elif command is CuratedProtocolAction.RECORD_OBSERVATION:
             step = steps[self.current_index]
             category = intent.observation_predicate or "note"
@@ -14845,6 +15312,9 @@ class CuratedProtocolSession:
                         list(measurement_spans(content))
                         if category == "measurement" else []
                     ),
+                    # Lane CF, decision 2: each value read as one value
+                    # ("영 점 오 밀리리터" is 0.5 mL), for the readback.
+                    "values": [value.public_dict() for value in measured_values(content)],
                 }
                 self._last_record = {
                     "turn_id": turn_id,

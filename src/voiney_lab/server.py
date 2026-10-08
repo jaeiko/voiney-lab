@@ -1,7 +1,7 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -11,7 +11,7 @@ from urllib.parse import unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -187,6 +187,7 @@ from voiney_lab.protocol_translation import (
     with_stored_translations,
 )
 from voiney_lab.workspace_store import (
+    EXPERIMENTER_SETTING_VALUES,
     ApprovalReplayError,
     WorkspaceConflictError,
     WorkspaceError,
@@ -914,20 +915,102 @@ def _record_workspace_record_fix(
         store.close()
 
 
-def _note_readback(plan:Any,language:str)->Any:
+# --- Lane CF (2026-10-08): the experimenter's settings and the file followed --
+
+#: The setting defaults (decisions 1 and 4): values read back and not asked
+#: about, the source's conditions and counts asked before the start.
+EXPERIMENTER_SETTING_DEFAULTS:dict[str,str]={
+    "confirm_mode":"readback","question_timing":"before_start",
+}
+#: Where the settings are kept while the server runs when there is no
+#: workspace to keep them in, by the experimenter (one, "local", without one).
+_EXPERIMENTER_SETTINGS_MEMORY:dict[str,dict[str,str]]={}
+
+
+def _experimenter_settings_key()->str:
+    principal=_REQUEST_PRINCIPAL.get()
+    return principal.principal_id if principal is not None else "local"
+
+
+def _load_experimenter_settings()->dict[str,str]:
+    """This experimenter's settings: the workspace's record, else the server's memory."""
+
+    settings=dict(EXPERIMENTER_SETTING_DEFAULTS)
+    if _workspace_settings().enabled:
+        try:
+            principal,store=_commercial_workspace()
+            try:
+                settings.update(store.experimenter_settings(principal))
+                return settings
+            finally:
+                store.close()
+        except Exception as exc:  # noqa: BLE001 - the defaults still run the session
+            log.warning("experimenter settings unavailable error=%s",type(exc).__name__)
+    settings.update(_EXPERIMENTER_SETTINGS_MEMORY.get(_experimenter_settings_key(),{}))
+    return settings
+
+
+def _save_experimenter_settings(changes:Mapping[str,Any],source:str)->dict[str,str]:
+    """Keep a change (voice or screen) and return the settings after it.
+
+    Appended to the workspace's record (never updated in place); without a
+    workspace, kept in the server's memory while it runs.
+    """
+
+    if not isinstance(changes,Mapping) or not changes:
+        raise WorkspaceError("Experimenter setting is invalid.")
+    for name,value in changes.items():
+        if value not in EXPERIMENTER_SETTING_VALUES.get(str(name),()):
+            raise WorkspaceError("Experimenter setting is invalid.")
+    if _workspace_settings().enabled:
+        principal,store=_commercial_workspace()
+        try:
+            for name,value in changes.items():
+                store.record_experimenter_setting(
+                    principal,name=str(name),value=str(value),source=source)
+            return {**EXPERIMENTER_SETTING_DEFAULTS,**store.experimenter_settings(principal)}
+        finally:
+            store.close()
+    kept=_EXPERIMENTER_SETTINGS_MEMORY.setdefault(_experimenter_settings_key(),{})
+    kept.update({str(name):str(value) for name,value in changes.items()})
+    return {**EXPERIMENTER_SETTING_DEFAULTS,**kept}
+
+
+@app.get("/api/experimenter/settings")
+def get_experimenter_settings()->dict[str,object]:
+    return {"settings":_load_experimenter_settings()}
+
+
+@app.put("/api/experimenter/settings")
+def put_experimenter_settings(body:dict[str,Any]=Body(...))->dict[str,object]:
+    try:
+        return {"settings":_save_experimenter_settings(body,"screen")}
+    except Exception as exc:
+        raise _workspace_http_error(exc) from exc
+
+
+def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
     """A stored note read back, never asked about (lane N, decision 1).
 
-    A measurement is said value by value ("피에이치 칠 점 이로 기록했어요");
-    any other note says where it went ("2단계에 기록했어요").
+    A value is said value by value, decimal point included ("영 점 오
+    밀리리터로 기록했어요"), however it was said -- "0점5", "영 점 오" and
+    "0.5" read alike (lane CF, decision 2); any other note says where it went
+    ("2단계에 기록했어요"). In the 조용히 way nothing is read back: the values
+    are confirmed in the end-of-run review (lane CF, decision 1).
     """
 
     note=getattr(plan,"note_record",None) or {}
     if not note:
         return plan
-    values=[value for value in note.get("measurements") or () if value]
+    read=[str(value.get("text")) for value in note.get("values") or () if value.get("text")]
+    values=read or (
+        [value for value in note.get("measurements") or () if value]
+        if note.get("category")=="measurement" else [])
     if language!="ko":
         display=speech=f"Recorded at step {note.get('step_label')}."
-    elif note.get("category")=="measurement" and values:
+    elif confirm_mode=="quiet":
+        display=speech="기록했어요."
+    elif values:
         shown=", ".join(values)
         spoken=", ".join(spoken_korean(value) for value in values)
         display=f"{josa_ro(shown)} 기록했어요."
@@ -7182,6 +7265,21 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             display_text=f"{plan.display_text} {download}",
                             speech_text=f"{plan.speech_text} {download}",
                         )
+            if getattr(plan,"setting_change",None):
+                # Lane CF, decision 1: a setting said aloud is kept for the
+                # experimenter's next session and shown on the screen.
+                try:
+                    saved=await asyncio.to_thread(
+                        _save_experimenter_settings,dict(plan.setting_change),"voice")
+                except Exception as exc:  # noqa: BLE001 - this session keeps it
+                    log.warning("experimenter setting not kept error=%s",type(exc).__name__)
+                    saved={**EXPERIMENTER_SETTING_DEFAULTS,**curated.experimenter_settings()}
+                    unsaved=" 설정을 저장하지 못해 이번 실험에만 적용돼요."
+                    plan=replace(
+                        plan,display_text=f"{plan.display_text}{unsaved}",
+                        speech_text=f"{plan.speech_text}{unsaved}",
+                    )
+                await current_text("experimenter.settings",turn_id=turn_id,settings=saved)
             if (
                 plan.action is CuratedProtocolAction.RECORD_CORRECTION
                 and plan.record_fix is not None
@@ -7413,7 +7511,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                             and turn_language=="ko"
                         ):
                             # Lane N, decision 1: read back, not asked about.
-                            plan=_note_readback(plan,turn_language)
+                            plan=_note_readback(
+                                plan,turn_language,curated.confirm_mode)
                         elif plan.action is CuratedProtocolAction.RECORD_OBSERVATION:
                             acknowledgment=(
                                 f"말씀한 관찰 내용을 현재 {plan.step_label}단계 실험 타임라인에 기록했습니다. 프로토콜 상태는 변경하지 않았습니다."
@@ -8662,6 +8761,16 @@ async def voice_socket(websocket:WebSocket):
 
                         session.curated_protocol_session.set_safety_pack(safety_pack)
                         session.curated_protocol_session.activate_configured()
+                        # Lane CF, decision 1: the experimenter's settings.
+                        experimenter_settings=await asyncio.to_thread(
+                            _load_experimenter_settings)
+                        session.curated_protocol_session.apply_experimenter_settings(
+                            experimenter_settings)
+                        await websocket.send_text(event(
+                            "experimenter.settings",
+                            configuration_id=configuration_id,
+                            settings=experimenter_settings,
+                        ))
                         pack_dict = safety_pack.public_dict()
                         if session.curated_protocol_session and hasattr(session.curated_protocol_session, "fixture") and session.curated_protocol_session.fixture:
                             pack_dict["step_guidance"] = [
