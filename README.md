@@ -1116,9 +1116,8 @@ once more by itself, recorded as `protocol_analysis_retry_started` with
 authority `automatic_invalid_response_retry`, and the progress line says
 "다시 시도 중(1/1)". A failed source-evidence check, a time-out or a missing
 provider is never sent again by itself, nor is a person's own retry; if the
-second answer fails too, a person presses "분석 다시 시도". The three features only xAI provides --
-external reference search, web image search and generated images -- default
-to off. There is no test mode any more (lane DI,
+second answer fails too, a person presses "분석 다시 시도". The one feature only xAI provides -- external reference search -- defaults to
+off. There is no test mode any more (lane DI,
 2026-10-08): an analysed protocol runs under the one execution rule in every
 scope. `scripts/run_candidate_a.sh` is the former name and now forwards to
 it.
@@ -1126,8 +1125,7 @@ it.
 `scripts/run_pilot.sh` loads no fixture, keeps its state under
 `data/runtime/pilot/`, and turns every feature that reaches outside the
 approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
-`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED`,
-`VOINEY_LAB_GENERATED_VISUALS_ENABLED` —
+`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED` —
 along with `VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator set in
 the shell (and, but for MOSS, wrote in the `.env`), so enabling one is a
 deliberate act taken before startup. Dry-lab workflows and the

@@ -151,7 +151,7 @@ test.describe('Server values on the screen (lane U3)', () => {
   test('model knowledge is named "AI 일반 지식" in the turn card too', async ({ page }) => {
     await openPage(page);
     await send(page, { type: 'ready', research_capabilities: {
-      external_text: { status: 'disabled' }, supplemental_model: { status: 'enabled' }, web_image: { status: 'disabled' }, generated_visual: { status: 'disabled' } } });
+      external_text: { status: 'disabled' }, supplemental_model: { status: 'enabled' } } });
     await send(page, { type: 'speech.start', turn_id: 1, generation: 0 });
     await send(page, { type: 'transcript', turn_id: 1, generation: 0, text: '완충액은 왜 써?' });
     await send(page, { type: 'reply.complete', turn_id: 1, generation: 0, text: 'pH 를 일정하게 유지합니다.', answer_origin: 'supplemental_model_knowledge' });

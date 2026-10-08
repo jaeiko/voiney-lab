@@ -1,6 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, collections, contextvars, copy, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
+import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -47,7 +47,6 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
-    ProtocolVisualKind,
     josa_ro,
     load_curated_protocol_fixture,
     reader_translation_issue,
@@ -97,19 +96,6 @@ from voiney_lab.external_references import (
     plan_research_query,
     supplemental_explanation_query,
     supplemental_knowledge_allowed,
-)
-from voiney_lab.generated_visuals import (
-    GENERATED_VISUALS,
-    GeneratedVisualSettings,
-    VisualSpecification,
-    XaiImageGenerator,
-)
-from voiney_lab.web_visuals import (
-    PubChemChemistryAdapter,
-    WEB_VISUAL_REGISTRY,
-    WebVisualSettings,
-    WikimediaVisualAdapter,
-    XaiAuthoritativeImageSearch,
 )
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
@@ -3305,49 +3291,6 @@ def get_protocol_visual_asset(
         raise _catalog_http_error(exc) from exc
 
 
-@app.get("/api/generated-visuals/{asset_id}")
-def get_generated_visual_asset(asset_id:str):
-    """Serve one validated generated image through an opaque same-origin ID."""
-
-    _scope_tenant_resource("generated_visual",asset_id)
-    asset=GENERATED_VISUALS.get(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404,detail="Generated visual is unknown.")
-    return Response(
-        content=asset.content,media_type=asset.mime_type,
-        headers={
-            "Cache-Control":"private, max-age=3600, immutable",
-            "X-Content-Type-Options":"nosniff",
-            "Content-Security-Policy":"default-src 'none'; sandbox",
-            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
-            "X-Generated-Visual-SHA256":asset.content_sha256,
-            "X-Protocol-Source-SHA256":asset.source_document_hash,
-            "X-Protocol-Visual-Kind":"generated_instructional",
-        },
-    )
-
-
-@app.get("/api/web-visuals/{asset_id}")
-def get_web_visual_asset(asset_id:str):
-    """Serve one validated proxied web image through an opaque same-origin ID."""
-
-    _scope_tenant_resource("web_visual",asset_id)
-    asset=WEB_VISUAL_REGISTRY.get(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404,detail="Web visual is unknown.")
-    return Response(
-        content=asset.content,media_type=asset.mime_type,
-        headers={
-            "Cache-Control":"private, max-age=3600, immutable",
-            "X-Content-Type-Options":"nosniff",
-            "Content-Security-Policy":"default-src 'none'; sandbox",
-            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
-            "X-Web-Visual-SHA256":asset.content_sha256,
-            "X-Protocol-Visual-Kind":"web_reference_image",
-        },
-    )
-
-
 def _require_admin_access(presented_token:str|None)->None:
     """Fail closed without retaining or logging the presented credential."""
 
@@ -3782,8 +3725,6 @@ class ListenerSession:
                  experiment_report_store:ExperimentReportStore|None=None,
                  external_reference_settings:ExternalReferenceSettings|None=None,
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
-                 web_visual_settings:WebVisualSettings|None=None,
-                 generated_visual_settings:GeneratedVisualSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
@@ -3802,9 +3743,6 @@ class ListenerSession:
             external_reference_settings or ExternalReferenceSettings(False))
         self.supplemental_knowledge_settings=(
             supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
-        self.web_visual_settings=web_visual_settings or WebVisualSettings(False)
-        self.generated_visual_settings=(
-            generated_visual_settings or GeneratedVisualSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
@@ -4450,433 +4388,6 @@ class LockedSender:
                 frame_count=len(frames)))
 
 
-def _curated_visual_specification(
-    curated:CuratedProtocolSession,
-) -> VisualSpecification|None:
-    fixture=curated.fixture
-    if not curated.active or fixture.source_pdf_sha256 is None:
-        return None
-    index=curated.current_index
-    existing=fixture.visual_for_step(index)
-    if existing is not None and existing.kind==ProtocolVisualKind.SOURCE_CROP.value:
-        return None
-    step=fixture.steps[index]
-    facts=fixture.facts_for_step(index)
-    return VisualSpecification(
-        document_sha256=fixture.source_pdf_sha256,
-        protocol_id=fixture.protocol_id,
-        revision_id=fixture.revision_id,
-        step_id=step.step_id,
-        step_label=step.source_label,
-        source_page=step.evidence.source_page_number,
-        source_evidence_ids=tuple(fact.fact_id for fact in facts),
-        action_summary=step.instruction_source_text,
-        verified_materials=tuple(
-            fact.text for fact in facts if fact.kind=="material"),
-        verified_tools=tuple(
-            fact.text for fact in facts if fact.kind=="equipment"),
-        verified_relations=(step.instruction_source_text,),
-        forbidden_inferences=(
-            "unverified colors","unverified equipment","unverified PPE",
-            "unverified quantities","unverified results","completion status",
-        ),
-    )
-
-
-async def _queue_curated_generated_visual(
-    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
-    endpoint:float,clock:Callable[[],float],
-    specification:VisualSpecification,
-    settings:GeneratedVisualSettings,
-) -> None:
-    configuration_id=session.accepted_configuration_id
-    job_id=specification.cache_key(settings.model)
-    identity={
-        "configuration_id":configuration_id,"turn_id":turn_id,
-        "generation":generation,"protocol_id":specification.protocol_id,
-        "step_id":specification.step_id,
-        "source_document_hash":specification.document_sha256,
-        "visual_job_id":job_id,
-    }
-    if not session.owns_visual_result(
-        turn_id,generation,configuration_id,specification.protocol_id):
-        return
-    await sender.text(
-        "protocol.visual.state",**identity,status="visual_pending",
-        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
-
-    async def worker() -> None:
-        provider_called=False
-        provider_started=0.0
-
-        async def generate(spec:VisualSpecification)->bytes:
-            nonlocal provider_called,provider_started
-            provider_called=True
-            provider_started=clock()
-            if session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                await sender.text(
-                    "tool.call",**identity,tool="generate_instructional_visual",
-                    round=2)
-            client=AsyncOpenAI(
-                base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                max_retries=0)
-            return await XaiImageGenerator(client,settings).generate(spec)
-
-        try:
-            asset,cache_hit=await GENERATED_VISUALS.obtain(
-                specification,settings,generate)
-            _scope_tenant_resource("generated_visual",asset.asset_id,bind=True)
-            if not session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                return
-            elapsed=max(0,round((clock()-endpoint)*1000))
-            if provider_called:
-                await sender.text(
-                    "tool.result",**identity,
-                    tool="generate_instructional_visual",round=2,
-                    status="success",
-                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
-            await sender.text(
-                "protocol.visual.state",**identity,
-                status="visual_cache_hit" if cache_hit else "visual_ready",
-                visual_ready_ms=elapsed,asset=asset.public_dict())
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "generated visual failed closed turn_id=%s error=%s",
-                turn_id,type(exc).__name__)
-            if not session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                return
-            if provider_called:
-                await sender.text(
-                    "tool.result",**identity,
-                    tool="generate_instructional_visual",round=2,
-                    status="error",
-                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
-            await sender.text(
-                "protocol.visual.state",**identity,status="visual_failed",
-                visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                fallback="none")
-
-    task=asyncio.create_task(worker())
-    session.track_visual_task(task)
-
-
-async def _prepare_external_visual_candidate(
-    candidate:dict[str,Any],
-)->dict[str,Any]|None:
-    """Proxy displayable bytes or reduce the result to a cited source link."""
-
-    prepared=dict(candidate)
-    source_url=prepared.get("source_page_url")
-    image_url=prepared.get("image_url")
-    publisher=prepared.get("publisher_domain")
-    if (
-        not isinstance(source_url,str) or not source_url.startswith("https://")
-        or not isinstance(publisher,str) or not publisher.strip()
-    ):
-        return None
-    rights=prepared.get("rights")
-    if not isinstance(rights,str) or not rights.strip():
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        prepared["verification_label"]=(
-            "출처 링크만 제공 · 이미지 표시 권한 미확인")
-        return prepared
-    if not isinstance(image_url,str) or not image_url.startswith("https://"):
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        return prepared
-    asset=await WEB_VISUAL_REGISTRY.obtain_or_register(
-        image_url=image_url,
-        source_url=source_url,
-        publisher_domain=publisher,
-        title=str(prepared.get("title") or "Web reference image"),
-    )
-    if asset is None:
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        prepared["verification_label"]=(
-            "출처 링크만 제공 · 이미지 바이트 검증 실패")
-        return prepared
-    _scope_tenant_resource("web_visual",asset.asset_id,bind=True)
-    prepared["image_url"]=f"/api/web-visuals/{asset.asset_id}"
-    prepared["display_mode"]="web_image"
-    prepared["rights"]=rights.strip()[:300]
-    return prepared
-
-
-async def _queue_curated_web_visual(
-    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
-    endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
-    settings:WebVisualSettings,requested_entities:tuple[str,...]=(),
-    visual_intent:str|None=None,
-) -> None:
-    fixture=curated.fixture
-    step=fixture.steps[curated.current_index]
-    configuration_id=session.accepted_configuration_id
-    job_id=hashlib.sha256(
-        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-    ).hexdigest()
-    identity={
-        "configuration_id":configuration_id,"turn_id":turn_id,
-        "generation":generation,"protocol_id":fixture.protocol_id,
-        "step_id":step.step_id,"source_document_hash":fixture.source_pdf_sha256,
-        "visual_job_id":job_id,
-    }
-    if not session.owns_visual_result(
-        turn_id,generation,configuration_id,fixture.protocol_id):
-        return
-    await sender.text(
-        "protocol.visual.state",**identity,status="web_visual_pending",
-        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
-
-    async def worker() -> None:
-        started = clock()
-        try:
-            await sender.text(
-                "tool.call", **identity, tool="search_authoritative_web", round=2,
-                image_search_enabled=False,
-                intent_triggered=True,
-                max_results=1,
-            )
-
-            # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests or known compounds)
-            pubchem_match = None
-            detected_entities = list(requested_entities)
-            if not detected_entities:
-                step_text_lower = f"{step.instruction_source_text} {fixture.title}".casefold()
-                for comp in _KNOWN_PUBCHEM_COMPOUNDS:
-                    if comp in step_text_lower:
-                        detected_entities.append(comp)
-                        break
-
-            if visual_intent == "chemical_structure" or (
-                visual_intent != "lab_equipment_image"
-                and any(ent.casefold() in _KNOWN_PUBCHEM_COMPOUNDS for ent in detected_entities)
-            ):
-                pubchem_adapter = PubChemChemistryAdapter()
-                for ent in detected_entities:
-                    pubchem_match = await pubchem_adapter.lookup(ent)
-                    if pubchem_match:
-                        break
-
-            if pubchem_match is not None:
-                if not session.owns_visual_result(
-                    turn_id, generation, configuration_id, fixture.protocol_id
-                ):
-                    return
-                pubchem_match=await _prepare_external_visual_candidate(
-                    pubchem_match)
-                if pubchem_match is None:
-                    raise RuntimeError("PubChem candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="pubchem_pug_rest", match_count=1,
-                    image_search_enabled=False,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=pubchem_match
-                )
-                return
-
-            # 2. Try a bounded public catalog first.  Only contact the paid
-            # provider if that local policy path cannot produce a candidate.
-            search_terms = [*detected_entities, step.instruction_source_text[:50]] if detected_entities else [step.instruction_source_text[:50]]
-            wiki_adapter = WikimediaVisualAdapter(timeout_seconds=3.5)
-
-            async def _fast_public_search():
-                for term in search_terms:
-                    cand = await wiki_adapter.lookup(term)
-                    if cand and cand.get("image_url"):
-                        return cand
-                return None
-
-            web_visual_timeout = float(os.environ.get("VOINEY_LAB_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
-
-            async def _grok_image_search() -> dict[str, Any]:
-                try:
-                    client = AsyncOpenAI(
-                        base_url=api_url(""),
-                        api_key=require_env("XAI_API_KEY"),
-                        max_retries=0,
-                    )
-                    query = "\n".join((
-                        "Find a real, authoritative laboratory image for this request. Include Markdown link ![alt](image_url).",
-                        f"Protocol: {fixture.title}",
-                        f"Step {step.source_label}: {step.instruction_source_text}",
-                        "Requested entities: " + (", ".join(detected_entities) or "current step"),
-                    ))
-                    search_settings = settings
-                    if search_settings.references:
-                        ref_copy = copy.deepcopy(search_settings.references)
-                        object.__setattr__(ref_copy, "timeout_seconds", web_visual_timeout)
-                        search_settings = WebVisualSettings(True, ref_copy)
-                    await sender.text(
-                        "tool.call", **identity,
-                        tool="search_authoritative_web", round=3,
-                        image_search_enabled=True,
-                        intent_triggered=True,
-                        max_results=1,
-                    )
-                    log.info(
-                        "web_visual.provider_request turn_id=%s generation=%s "
-                        "image_search_enabled=true max_results=1",
-                        turn_id, generation,
-                    )
-                    res = await XaiAuthoritativeImageSearch(client, search_settings).search(query)
-                    return res
-                except Exception as exc:
-                    log.info("grok image search failed turn_id=%s class=%s", turn_id, type(exc).__name__)
-                return {
-                    "status": "error",
-                    "matches": [],
-                    "image_search_enabled": True,
-                    "image_search_count": 0,
-                    "web_search_count": 0,
-                    "max_results": 1,
-                }
-
-            fast_task = asyncio.create_task(_fast_public_search())
-
-            # Wait for fast public search with up to 3.5s budget
-            fast_candidate = None
-            try:
-                fast_candidate = await asyncio.wait_for(asyncio.shield(fast_task), timeout=3.5)
-            except (asyncio.TimeoutError, Exception):
-                fast_candidate = None
-
-            if fast_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                fast_candidate=await _prepare_external_visual_candidate(
-                    fast_candidate)
-                if fast_candidate is None:
-                    raise RuntimeError("Wikimedia candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="wikimedia_rest", match_count=1,
-                    image_search_enabled=False,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=fast_candidate
-                )
-                return
-
-            # No public-catalog match: run exactly one intent-triggered xAI
-            # image-search request under the global deadline.
-            grok_result: dict[str, Any]
-            try:
-                grok_result = await asyncio.wait_for(
-                    _grok_image_search(), timeout=web_visual_timeout
-                )
-            except (asyncio.TimeoutError, Exception):
-                grok_result = {
-                    "status": "timeout",
-                    "matches": [],
-                    "image_search_enabled": True,
-                    "image_search_count": 0,
-                    "web_search_count": 0,
-                    "max_results": 1,
-                }
-            grok_candidate = (
-                grok_result["matches"][0]
-                if grok_result.get("status") == "success"
-                and grok_result.get("matches")
-                else None
-            )
-
-            if grok_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                grok_candidate=await _prepare_external_visual_candidate(
-                    grok_candidate)
-                if grok_candidate is None:
-                    raise RuntimeError("xAI image candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=3, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="xai_responses_web_image_search", match_count=1,
-                    image_search_enabled=True,
-                    web_search_count=grok_result.get("web_search_count", 0),
-                    image_search_count=grok_result.get("image_search_count", 0),
-                    max_results=1,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=grok_candidate
-                )
-                return
-
-            if session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=3, status="not_found", elapsed_ms=elapsed, match_count=0,
-                    image_search_enabled=bool(
-                        grok_result.get("image_search_enabled", False)
-                    ),
-                    web_search_count=grok_result.get("web_search_count", 0),
-                    image_search_count=grok_result.get("image_search_count", 0),
-                    max_results=1,
-                )
-                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
-                    visual_spec = _curated_visual_specification(curated)
-                    if visual_spec is not None:
-                        await _queue_curated_generated_visual(
-                            session=session, sender=sender, turn_id=turn_id,
-                            generation=generation, endpoint=endpoint, clock=clock,
-                            specification=visual_spec, settings=session.generated_visual_settings,
-                        )
-                        return
-                await sender.text(
-                    "protocol.visual.state", **identity, status="visual_failed",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    fallback="none"
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "web visual search failed closed turn_id=%s error=%s",
-                turn_id, type(exc).__name__
-            )
-            if session.owns_visual_result(
-                turn_id, generation, configuration_id, fixture.protocol_id
-            ):
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="error",
-                    elapsed_ms=max(0, round((clock() - started) * 1000))
-                )
-                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
-                    visual_spec = _curated_visual_specification(curated)
-                    if visual_spec is not None:
-                        await _queue_curated_generated_visual(
-                            session=session, sender=sender, turn_id=turn_id,
-                            generation=generation, endpoint=endpoint, clock=clock,
-                            specification=visual_spec, settings=session.generated_visual_settings,
-                        )
-                        return
-                await sender.text(
-                    "protocol.visual.state", **identity, status="visual_failed",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    fallback="none"
-                )
-
-    task=asyncio.create_task(worker())
-    session.track_visual_task(task)
-
-
 READER_TRANSLATION_PROMPT=(
     "You translate one laboratory protocol step for a researcher who is new to the lab "
     "and reads Korean. Write plain, concrete Korean that says exactly what the step "
@@ -5506,21 +5017,6 @@ async def _queue_curated_research(
                         "External guidance cannot modify the active protocol.",
                     ),
                 )
-                if result.get("images") and getattr(plan, "visual_requested", False):
-                    img_match = result["images"][0]
-                    fixture = curated.fixture
-                    step = fixture.steps[curated.current_index]
-                    job_id = hashlib.sha256(
-                        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                    ).hexdigest()
-                    await sender.text(
-                        "protocol.visual.state",
-                        configuration_id=configuration_id,turn_id=turn_id,
-                        generation=generation,protocol_id=fixture.protocol_id,
-                        step_id=step.step_id,source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=job_id,status="web_visual_ready",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        candidate=img_match)
 
         # 3a. A short outside-PDF explanation, said after the rules' answer
         # (lane R6, decision 6, restoring D4).
@@ -8387,58 +7883,22 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "approved_visual":"original_source",
                     "no_visual":"no_visual",
                 }[visual_output.preferred_class]
-            if visual_kind=="web_photo" and existing_visual is None:
-                web_visual_settings=session.web_visual_settings
-                if web_visual_settings.enabled:
-                    await _queue_curated_web_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        curated=curated,settings=web_visual_settings,
-                        requested_entities=plan.requested_entities,
-                        visual_intent=plan.visual_intent)
-                else:
-                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
-                    await current_text(
-                        "protocol.visual.state",turn_id=turn_id,
-                        protocol_id=fixture.protocol_id,step_id=step.step_id,
-                        source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=hashlib.sha256(
-                            f"web-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                        ).hexdigest(),status="visual_failed",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        fallback="feature_disabled")
-            elif existing_visual is None and visual_kind!="no_visual":
-                visual_settings=session.generated_visual_settings
-                visual_spec=(
-                    _curated_visual_specification(curated)
-                    if visual_settings.enabled else None)
-                if visual_spec is not None:
-                    await _queue_curated_generated_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        specification=visual_spec,settings=visual_settings)
-                else:
-                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
-                    await current_text(
-                        "protocol.visual.state",turn_id=turn_id,
-                        protocol_id=fixture.protocol_id,step_id=step.step_id,
-                        source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=hashlib.sha256(
-                            f"generated-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                        ).hexdigest(),status="visual_failed",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        fallback="feature_disabled")
-            elif existing_visual is None and visual_kind=="no_visual":
+            if existing_visual is None:
+                # Lane DI (2026-10-08): the xAI web-image search and image
+                # generation are gone (lane WV builds their successor). The
+                # PDF's own visual is the only one shown, so a request for
+                # any other kind is answered once as unavailable.
                 fixture=curated.fixture;step=fixture.steps[curated.current_index]
+                unavailable_kind="no-visual" if visual_kind=="no_visual" else "visual-unavailable"
                 await current_text(
                     "protocol.visual.state",turn_id=turn_id,
                     protocol_id=fixture.protocol_id,step_id=step.step_id,
                     source_document_hash=fixture.source_pdf_sha256,
                     visual_job_id=hashlib.sha256(
-                        f"no-visual\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                        f"{unavailable_kind}\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
                     ).hexdigest(),status="visual_failed",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    fallback="planner_no_visual")
+                    fallback="planner_no_visual" if visual_kind=="no_visual" else "feature_disabled")
         if research_context is not None:
             await _queue_curated_research(
                 session=session,
@@ -8847,8 +8307,6 @@ async def voice_socket(websocket:WebSocket):
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
-        web_visual_settings=WebVisualSettings.from_environment(external_settings)
-        generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
             "error",message=f"invalid non-secret configuration: {exc}"))
@@ -8857,16 +8315,6 @@ async def voice_socket(websocket:WebSocket):
     research_capabilities={
         "external_text":external_settings.public_capability(),
         "supplemental_model":supplemental_settings.public_capability(),
-        "web_image":{
-            "status":"enabled" if web_visual_settings.enabled else "disabled",
-        },
-        "generated_visual":{
-            "status":(
-                "enabled" if generated_visual_settings.enabled else "disabled"),
-            "model":(
-                generated_visual_settings.model
-                if generated_visual_settings.enabled else None),
-        },
         "multi_brain":multi_brain_settings.public_capability(),
     }
     if llm_router_settings.enabled:
@@ -8881,8 +8329,6 @@ async def voice_socket(websocket:WebSocket):
         experiment_report_store=report_store,
         external_reference_settings=external_settings,
         supplemental_knowledge_settings=supplemental_settings,
-        web_visual_settings=web_visual_settings,
-        generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,
     ); task=None; trusted_config=None

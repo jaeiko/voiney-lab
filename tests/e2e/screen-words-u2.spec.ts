@@ -50,7 +50,7 @@ const send = (page: Page, message: object) => page.evaluate(m => onMessage({ dat
 
 async function capabilities(page: Page, web: 'enabled' | 'disabled') {
   await send(page, { type: 'ready', research_capabilities: {
-    external_text: { status: web }, supplemental_model: { status: 'enabled' }, web_image: { status: 'disabled' }, generated_visual: { status: 'disabled' } } });
+    external_text: { status: web }, supplemental_model: { status: 'enabled' } } });
 }
 
 const visibleText = (page: Page, selector: string) => page.locator(selector).evaluate(node => (node as HTMLElement).innerText);

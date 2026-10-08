@@ -156,8 +156,6 @@
                 <span class="context-chip"><b>외부 검색</b><span id="research-text-capability">확인 중</span></span>
                 <span class="context-chip"><b>일반 모델 설명</b><span id="supplemental-knowledge-capability">확인 중</span></span>
                 <span class="context-chip"><b>읽기 전용 역할</b><span id="multi-brain-capability">확인 중</span></span>
-                <span class="context-chip"><b>웹 이미지</b><span id="research-image-capability">확인 중</span></span>
-                <span class="context-chip"><b>생성 이미지</b><span id="generated-visual-capability">확인 중</span></span>
                 <span class="context-chip"><b>데모 안내</b><span class="safety-note">FICTIONAL NON-OPERATIONAL 데모 · 실제 작업 지침이 아닙니다.</span></span>
               </div>
             </details>
@@ -235,13 +233,6 @@
                 <span hidden><b>SHA-256</b> <span id="source-short-hash">—</span></span>
               </div>
               <div id="procedure-visual" class="step-visual" hidden></div>
-            </section>
-            <section id="task-requested-visual-panel" class="panel source-card" aria-labelledby="req-visual-title" hidden>
-              <h2 id="req-visual-title">요청한 참고 시각 자료</h2>
-              <div class="source-meta" aria-live="polite">
-                <span><b>상태</b> <span id="req-visual-state">대기</span></span>
-              </div>
-              <div id="task-requested-visual-content" class="step-visual"></div>
             </section>
             <section id="task-web-reference-panel" class="panel web-reference-panel" aria-labelledby="web-ref-title" hidden>
               <h2 id="web-ref-title">참고 자료</h2>
@@ -361,7 +352,7 @@ const UI={
 };
 const VOICE_STATE_LABELS=Object.freeze({IDLE:"준비",CONNECTING:"연결 중",LISTENING:"듣는 중",THINKING:"요청 이해 중",SPEAKING:"안내 중",ERROR:"확인 필요",INTERRUPTING:"안내 중단 중",RECONNECTING:"다시 연결 중"});
 const RECOVERY_NOT_RESTORED_LABELS=Object.freeze({pending_confirmations:"완료 확인 대기",conversation_history:"이전 대화",active_timers:"진행 중이던 단계 타이머"});
-const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"웹 참고 자료 검색",generate_instructional_visual:"설명용 이미지 생성",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인"};
+const TOOL_LABELS={search_approved_safety_manual:"승인 안전자료 검색",search_approved_lab_references:"승인 실험실 참고자료 검색",search_authoritative_web:"웹 참고 자료 검색",create_safety_report:"안전 보고 접수",check_safety_report_status:"인계 상태 확인"};
 const SERVER_OPERATION_LABELS={protocol_start:"프로토콜 시작",current_step_read:"현재 단계 조회",current_step_repeat:"현재 단계 음성 반복",current_step_full_detail:"현재 단계 원문 상세",current_step_elaboration:"검증된 단계 설명",step_learning_read:"현재 단계 학습·주의 근거 조회",protocol_audit_read:"프로토콜 버전·해시 조회",experiment_history_read:"이전 실험 세션 조회",bounded_uncertainty_response:"실험 결과 불확실성 안내",learning_next_preview_confirmation:"단계 이유·다음 단계 미리보기·완료 확인",protocol_structure_read:"보호된 프로토콜 구조 조회",next_step_transition:"다음 단계 전이 검증",completion_and_next_transition:"완료 보고 확인 및 다음 단계 전이",grounded_qa:"현재 단계 근거 질의",verified_fact_read:"검증된 사실 조회",approved_reference_qa:"추가 참고 자료 질의",external_reference_qa:"웹 참고 자료 확인",related_question_unresolved:"관련 자료 근거 확인",instructional_visual_request:"요청한 설명용 이미지 준비",audio_replay_request:"마지막 답변 1회 재생",transcript_retry_required:"음성 인식 재시도 요청",reference_clarification_required:"참조 대상 확인",completion_confirmation_required:"완료 및 이동 확인 필요",completion_confirmation_declined:"완료 및 이동 취소",experiment_observation_recorded:"실험 관찰 기록",experiment_anomaly_recorded:"실험 이상 사항 기록",experiment_report_view:"실험 기록 보기",scope_reminder:"지원 범위 안내 · 절차 상태 유지",unsupported_question:"지원 근거 확인 실패",protocol_stop:"프로토콜 중지",inactive_session_guard:"비활성 세션 차단",agent_meta_information:"에이전트 역할 및 목적 안내",workflow_paused:"실험 일시 중지",workflow_resumed:"실험 재개",step_timer_started:"단계 타이머 시작",step_timer_status_read:"단계 타이머 상태 조회",step_preview_read:"단계 미리보기",expected_result_explanation:"예상 결과 설명",completion_criteria_read:"완료 조건 조회",operational_deviation_refused:"임의 절차 변경 거절",parameter_clarification_required:"파라미터 확인 필요",readonly_operation_cancelled:"조회 작업 취소",experiment_record_corrected:"실험 기록 정정",report_value_review:"보고서 값 확인"};
 const TURN_STATE_LABELS={listening:"듣는 중…",transcribing:"음성 인식 중…",routing:"요청 확인 중…",checking_protocol:"절차 확인 중…",checking_approved_information:"승인된 정보 확인 중…",composing:"답변 작성 중…",synthesizing:"음성 생성 중…",playing:"재생 중…",complete:"완료",blocked:"차단됨",cancelled:"중단됨",error:"오류"};
 const TURN_TERMINAL_STATES=new Set(["complete","blocked","cancelled","error"]);
@@ -773,126 +764,24 @@ function renderCatalogAnalysisProgress(entries){const target=Array.isArray(entri
 function safeVisualAsset(value,state){if(!value||typeof value!=="object"||!["source_crop","full_source_page_preview"].includes(value.kind)||value.protocol_id!==state?.protocol_id||value.revision_id!==state?.revision_id||value.source_document_id!==state?.source_sha256||!Number.isInteger(value.source_page)||value.source_page<=0||!Array.isArray(state?.source_page_refs)||!state.source_page_refs.includes(value.source_page)||typeof value.sha256!=="string"||!/^[0-9a-f]{64}$/.test(value.sha256)||typeof value.asset_id!=="string"||!/^(?:source-crop-[1-9][0-9]*-[1-9][0-9]*|source-page-[1-9][0-9]*)$/.test(value.asset_id)||typeof value.alt_text!=="string"||!value.alt_text||typeof value.url!=="string"||value.url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/assets/${encodeURIComponent(value.asset_id)}`||!["image/png","image/jpeg"].includes(value.mime_type))return null;if(value.kind!=="full_source_page_preview"&&(typeof value.label!=="string"||typeof value.caption_primary!=="string"||typeof value.caption_source!=="string"||value.source_page_url!==`/api/protocols/${encodeURIComponent(value.protocol_id)}/revisions/${encodeURIComponent(value.revision_id)}/source-pages/${value.source_page}`))return null;return value;}
 function renderStepVisual(container,state){if(!container)return;container.replaceChildren();const assets=Array.isArray(state?.visual_assets)?state.visual_assets:[],asset=assets.length===1?safeVisualAsset(assets[0],state):null,current=container.id==="procedure-visual";if(!asset){container.hidden=false;const text=document.createElement("div");text.className="visual-status";text.textContent=state?.visual_status==="unavailable"?"검증된 원본 시각 자료가 없습니다.":"시각 자료를 검증할 수 없습니다. 원문 텍스트는 유지됩니다.";container.appendChild(text);if(current)$("source-visual-state").textContent=state?.visual_status==="unavailable"?"사용 가능한 시각 자료 없음":"시각 자료 검증 실패";return;}container.hidden=false;const legacy=asset.kind==="full_source_page_preview",status=document.createElement("div");status.className="visual-status";status.textContent=legacy?`원문 ${asset.source_page}페이지 · 불러오는 중`:`${normalizePresentationText(asset.label)} · 불러오는 중`;if(current)$("source-visual-state").textContent=status.textContent;const image=document.createElement("img");image.alt=normalizePresentationText(asset.alt_text);image.loading="lazy";image.src=asset.url;image.addEventListener?.("load",()=>{status.textContent=legacy?`원문 ${asset.source_page}페이지`:normalizePresentationText(asset.label);if(current)$("source-visual-state").textContent=status.textContent;});image.addEventListener?.("error",()=>{status.textContent="시각 자료를 불러오지 못했습니다. 원문 텍스트는 유지됩니다.";if(current)$("source-visual-state").textContent="시각 자료 불러오기 실패";image.remove();});container.appendChild(status);container.appendChild(image);if(!legacy){const primary=document.createElement("p");primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;const source=document.createElement("p");source.textContent=`원문 캡션 · ${normalizePresentationText(asset.caption_source)}`;container.appendChild(primary);container.appendChild(source);}const link=document.createElement("a");link.href=legacy?asset.url:asset.source_page_url;link.target="_blank";link.rel="noopener";link.textContent="원문 페이지 크게 보기";container.appendChild(link);}
 
-function safeGeneratedVisualAsset(value,message){const accepted=acceptedSessionConfiguration;if(!accepted||!value||typeof value!=="object"||value.kind!=="generated_instructional"||value.protocol_id!==accepted.protocol_id||value.protocol_id!==message.protocol_id||value.revision_id!==accepted.revision_id||value.step_id!==message.step_id||value.source_document_id!==message.source_document_hash||typeof value.asset_id!=="string"||!/^[0-9a-f]{64}$/.test(value.asset_id)||value.sha256!==value.asset_id||typeof value.url!=="string"||value.url!==`/api/generated-visuals/${value.asset_id}`||!["image/png","image/jpeg","image/webp"].includes(value.mime_type)||!Number.isInteger(value.source_page)||value.source_page<=0||!Number.isInteger(value.width)||value.width<64||!Number.isInteger(value.height)||value.height<64||!Array.isArray(value.source_evidence_ids)||!value.source_evidence_ids.length||value.source_evidence_ids.some(id=>typeof id!=="string"||!id)||typeof value.label!=="string"||!value.label.includes("not an original source image"))return null;return value;}
 
+// Lane DI (2026-10-08): the xAI web-image search and image generation are
+// gone (lane WV builds their successor). The server still says, once per
+// request, that no visual beyond the PDF's own could be shown.
 function applyGeneratedVisualState(message,browserGeneration=sessionGeneration){
  const accepted=acceptedSessionConfiguration,browserKey=turnBrowserKey(message?.turn_id,browserGeneration),known=turnServerGenerations.get(browserKey);
- const statuses={visual_pending:1,web_visual_pending:1,visual_cache_hit:2,visual_ready:2,web_visual_ready:2,visual_failed:2};
- if(!accepted||accepted.mode!=="cascade"||message.configuration_id!==accepted.configuration_id||message.protocol_id!==accepted.protocol_id||message.source_document_hash!==curatedProtocolState.source_sha256||!Number.isInteger(message.turn_id)||!Number.isInteger(message.generation)||known!==message.generation||typeof message.visual_job_id!=="string"||!/^[0-9a-f]{64}$/.test(message.visual_job_id)||!Object.prototype.hasOwnProperty.call(statuses,message.status))return false;
- const key=`${message.generation}:${message.turn_id}:${message.visual_job_id}`,previous=visualEvents.get(key);
- if(previous&&statuses[message.status]<=previous.rank)return false;
+ if(!accepted||accepted.mode!=="cascade"||message.configuration_id!==accepted.configuration_id||message.protocol_id!==accepted.protocol_id||message.source_document_hash!==curatedProtocolState.source_sha256||!Number.isInteger(message.turn_id)||!Number.isInteger(message.generation)||known!==message.generation||typeof message.visual_job_id!=="string"||!/^[0-9a-f]{64}$/.test(message.visual_job_id)||!Object.prototype.hasOwnProperty.call(statuses,message.status)||message.status!=="visual_failed")return false;
+ const key=`${message.generation}:${message.turn_id}:${message.visual_job_id}`;
+ if(visualEvents.has(key))return false;
  const node=turnNode(message.turn_id,browserGeneration),container=node.querySelector(".turn-visual"),snapshot=beginChatPatch(node);
  clearResearchProgressTimer(key);
- if(["visual_pending","web_visual_pending"].includes(message.status)){
-  let status=container.querySelector?.(".generated-visual-status");
-  if(!status){status=document.createElement("div");status.className="visual-status generated-visual-status";container.appendChild(status);}
-  status.textContent=message.status==="web_visual_pending"?"웹 참고 이미지를 검색하고 있습니다… 🔍":"AI 설명용 그림을 준비하고 있습니다… ✨";
-  container.hidden=false;
-  const phrases=message.status==="web_visual_pending"?IMAGE_SEARCH_PHRASES:IMAGE_GEN_PHRASES;
-  startProgressRotation(key,status,phrases);
- }else if(message.status==="visual_failed"){
-  let status=container.querySelector?.(".generated-visual-status");
-  if(!status){status=document.createElement("div");status.className="visual-status generated-visual-status";container.appendChild(status);}
-  status.textContent="요청한 시각 자료를 사용할 수 없습니다. 텍스트 안내와 원문은 그대로 유지됩니다.";
-  container.hidden=false;
-  announceMilestone("시각 자료를 찾지 못했습니다.");
- }else if(message.status==="web_visual_ready"){
- const candidate=message.candidate;
-  let page,imgUrl=null;
-  try{page=new URL(candidate?.source_page_url||candidate?.image_url,window.location.origin);}catch(_){return false;}
-  if(page.protocol!=="https:"||typeof candidate?.publisher_domain!=="string"||page.hostname!==candidate.publisher_domain)return false;
-  if(typeof candidate?.image_url==="string"&&/^\/api\/web-visuals\/[0-9a-f]{64}$/.test(candidate.image_url))imgUrl=candidate.image_url;
-  if(!["web_image_reference","chemical_structure_visual"].includes(candidate?.kind))return false;
-  container.replaceChildren();
-  container.hidden=false;
-  const status=document.createElement("div");
-  status.className="visual-status";
-  status.textContent=candidate.verification_label||(candidate.kind==="chemical_structure_visual"?"공인 화학 구조식 (PubChem) · 참고용":"웹 참고 이미지 · 실험 PDF 원문 이미지는 아니에요");
-  if(imgUrl){
-   const img=document.createElement("img");
-   img.alt=candidate.title||"웹 참고 이미지";
-   img.loading="lazy";
-   img.src=imgUrl;
-   img.style.maxWidth="100%";
-   img.style.borderRadius="12px";
-   img.style.marginTop="8px";
-   img.style.marginBottom="8px";
-   container.appendChild(img);
-  }
-  const title=document.createElement("p");
-  title.textContent=normalizePresentationText(candidate.title||"");
-  container.appendChild(status);
-  container.appendChild(title);
-  if(candidate.caption){
-   const cap=document.createElement("p");
-   cap.textContent=normalizePresentationText(candidate.caption);
-   container.appendChild(cap);
-  }
-  if(candidate.rights){const rights=document.createElement("p");rights.textContent=`표시 권한 · ${normalizePresentationText(candidate.rights)}`;container.appendChild(rights);}
-  const link=document.createElement("a");
-  link.href=candidate.source_page_url||candidate.image_url;
-  link.target="_blank";
-  link.rel="noopener noreferrer";
-  link.textContent=`출처 페이지 열기 · ${candidate.publisher_domain||page.hostname}`;
-  container.appendChild(link);
-  announceMilestone("참고 이미지를 불러왔습니다.");
- }else{
-  const asset=safeGeneratedVisualAsset(message.asset,message);
-  if(!asset)return false;
-  container.replaceChildren();
-  container.hidden=false;
-  const status=document.createElement("div");
-  status.className="visual-status generated-visual-status";
-  status.textContent=asset.label;
-  const image=document.createElement("img");
-  image.alt=`${asset.step_label}단계 AI 생성 설명 이미지`;
-  image.loading="lazy";
-  image.width=asset.width;
-  image.height=asset.height;
-  image.src=asset.url;
-  const primary=document.createElement("p");
-  primary.textContent=`참고 설명 · ${normalizePresentationText(asset.caption_primary)}`;
-  const source=document.createElement("p");
-  source.textContent=`텍스트 통제 · ${normalizePresentationText(asset.caption_source)}`;
-  const facts=document.createElement("p");
-  facts.textContent=`검증된 텍스트 근거 · ${asset.source_evidence_ids.join(", ")}`;
-  const link=document.createElement("a");
-  link.href=`/api/protocols/${encodeURIComponent(asset.protocol_id)}/revisions/${encodeURIComponent(asset.revision_id)}/source-pages/${asset.source_page}`;
-  link.target="_blank";
-  link.rel="noopener";
-  link.textContent="원문 페이지 크게 보기";
-  container.appendChild(status);
-  container.appendChild(image);
-  container.appendChild(primary);
-  container.appendChild(source);
-  container.appendChild(facts);
-  container.appendChild(link);
-  const stats=node.querySelector(".stats");
-  if(Number.isFinite(message.visual_ready_ms))stats.textContent+=`${stats.textContent?" · ":""}시각 자료 ${message.visual_ready_ms} ms`;
-  announceMilestone("설명용 이미지를 준비했습니다.");
- }
- visualEvents.set(key,{rank:statuses[message.status],status:message.status});
+ let status=container.querySelector?.(".generated-visual-status");
+ if(!status){status=document.createElement("div");status.className="visual-status generated-visual-status";container.appendChild(status);}
+ status.textContent="요청한 시각 자료를 사용할 수 없습니다. 텍스트 안내와 원문은 그대로 유지됩니다.";
+ container.hidden=false;
+ announceMilestone("시각 자료를 찾지 못했습니다.");
+ visualEvents.set(key,{rank:2,status:message.status});
  finishChatPatch(snapshot,"visual");
- return true;
-}
-
-function promoteTurnVisualToPanel(message,browserGeneration=sessionGeneration){
- const node=turnNode(message.turn_id,browserGeneration),compact=node.querySelector?.(".turn-visual");
- const reqPanel=$("task-requested-visual-panel"),reqContent=$("task-requested-visual-content");
- if(!compact||!reqPanel||!reqContent)return false;
- const panelSnapshot=beginChatPatch(node);
- reqContent.replaceChildren(...[...compact.childNodes].map(item=>item.cloneNode(true)));
- reqPanel.hidden=false;
- const link=compact.querySelector?.("a")?.cloneNode(true);
- compact.replaceChildren();
- const badge=document.createElement("span");
- badge.className="visual-status";
- badge.textContent=["visual_pending","web_visual_pending"].includes(message.status)?"시각 자료 준비 중 · 오른쪽 Visual 패널":message.status==="visual_failed"?"시각 자료 사용 불가 · 텍스트 안내 유지":"시각 자료 준비 완료 · 오른쪽 Visual 패널";
- compact.appendChild(badge);
- if(link)compact.appendChild(link);
- compact.hidden=false;
- $("req-visual-state").textContent=badge.textContent;
- finishChatPatch(panelSnapshot,"visual");
  return true;
 }
 
@@ -1301,22 +1190,6 @@ const SEARCH_PHRASES = [
   "검색은 계속되고 있어요. 다른 질문도 괜찮아요.",
   "참고 자료를 보기 좋게 정리하고 있어요.",
   "거의 다 됐다고 약속할 순 없지만, 계속 찾고 있어요 🙂"
-];
-const IMAGE_SEARCH_PHRASES = [
-  "관련 이미지를 찾고 있어요 🖼️",
-  "보여드릴 만한 이미지를 살펴보고 있어요.",
-  "현재 요청과 맞는 이미지를 고르고 있어요.",
-  "이미지 출처도 함께 확인하고 있어요.",
-  "조금 더 잘 맞는 사진을 찾아볼게요.",
-  "실험과 관련 없는 이미지는 걸러내고 있어요.",
-  "찾은 이미지를 확인하고 있어요."
-];
-const IMAGE_GEN_PHRASES = [
-  "설명용 이미지를 만들고 있어요 ✨",
-  "실험 단계에 맞게 그림을 구성하고 있어요.",
-  "불필요한 내용이 들어가지 않도록 확인하고 있어요.",
-  "조금만 더 다듬고 있어요.",
-  "이미지를 준비하는 동안 다른 질문도 괜찮아요."
 ];
 
 function startProgressRotation(key, targetNode, phrases){
@@ -2098,7 +1971,7 @@ async function registerSelectedProtocol(){
  }finally{isRegisteringProtocol=false;if(input)input.removeAttribute?.("aria-busy");const start=$("protocol-start");if(start&&!start.hidden)start.disabled=false;}
 }
 function renderLanguageState(mode="manual",language="ko"){acknowledgedLanguageMode=mode;acknowledgedLanguage=language;const names={auto:"자동 감지",ko:"한국어",en:"English",vi:"Vietnamese"};setText("language-status","입력 · "+(names[language]||"한국어"));}
-function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,image=value.web_image,generated=value.generated_visual,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||!valid(image)||!valid(generated)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;researchCapabilityState=value;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);setText("research-image-capability",label(image));setText("generated-visual-capability",label(generated));return true;}
+function renderResearchCapabilities(value){if(!value||typeof value!=="object")return false;const text=value.external_text,supplemental=value.supplemental_model,multi=value.multi_brain,valid=item=>item&&["enabled","disabled","error"].includes(item.status);if(!valid(text)||supplemental!==undefined&&!valid(supplemental)||multi!==undefined&&!valid(multi)||text.allowed_domain_count!==undefined&&(!Number.isInteger(text.allowed_domain_count)||text.allowed_domain_count<0||text.allowed_domain_count>5))return false;researchCapabilityState=value;const label=item=>item.status==="enabled"?"사용 가능":item.status==="error"?"설정 오류":"사용 안 함";setText("research-text-capability",`${label(text)}${text.authority_profile?` · ${text.authority_profile}`:""}${Number.isInteger(text.allowed_domain_count)?` · ${text.allowed_domain_count}개 도메인`:""}`);if(supplemental)setText("supplemental-knowledge-capability",`${label(supplemental)} · 권위 근거 아님`);if(multi)setText("multi-brain-capability",`${label(multi)} · 상태 변경 권한 없음`);return true;}
 function confirmNewSession(){
  if(sessionActive){
   const modal=$("new-session-modal");
@@ -2196,7 +2069,7 @@ async function onMessage(e,generation,current){
  if(m.type==="workflow.control.refused"&&acceptedSessionConfiguration&&m.configuration_id===acceptedSessionConfiguration.configuration_id)showWorkflowControlRefused(m);
  if(m.type==="experiment.session.state"&&m.state&&typeof m.state.session_id==="string"&&(!acceptedSessionConfiguration?.experiment_session_id||m.state.session_id===acceptedSessionConfiguration.experiment_session_id)){currentExperimentSessionId=m.state.session_id;currentExperimentSessionVersion=Number.isInteger(m.state.version)?m.state.version:null;void loadExperimentSessions(currentExperimentSessionId);}
  if(m.type==="experiment.session.error"){if(Number.isInteger(m.turn_id)&&Number.isInteger(m.generation))turnHold(turnProgressKey(m.turn_id,m.generation)).failed=true;const message=researcherErrorMessage(m.code);setText("experiment-capture-status",message);if(Number.isInteger(m.turn_id))turnNode(m.turn_id,generation).querySelector(".error").textContent=message;}
- if(m.type==="protocol.visual.state"&&applyGeneratedVisualState(m,generation))promoteTurnVisualToPanel(m,generation);
+ if(m.type==="protocol.visual.state")applyGeneratedVisualState(m,generation);
  if(m.type==="research.state")applyResearchState(m,generation);
  if(m.type==="research.result")applyResearchResult(m,generation);
  if(m.type==="brain.state")applyBrainState(m,generation);

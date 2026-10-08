@@ -65,9 +65,7 @@ export VOINEY_LAB_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
 # XAI_API_KEY is refused below, by name.
 eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
-  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false \
-  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \
-  VOINEY_LAB_GENERATED_VISUALS_ENABLED=false)"
+  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false)"
 
 # --- Outside the pilot's scope -----------------------------------------------
 # MOSS (the org-governed approved-safety-document corpus) has its own flag.
@@ -158,8 +156,6 @@ report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
 report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
-report_feature "web_visual_search:" "$VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED"
-report_feature "generated_visuals:" "$VOINEY_LAB_GENERATED_VISUALS_ENABLED"
 report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
 
 XAI_REFUSAL=""

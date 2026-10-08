@@ -91,8 +91,6 @@ eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED=true \
   VOINEY_LAB_WORKSPACE_ENABLED=true \
   VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
-  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \
-  VOINEY_LAB_GENERATED_VISUALS_ENABLED=false \
   VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \
   VOINEY_LAB_EXTERNAL_REFERENCE_TIMEOUT_SECONDS=90 \
   VOINEY_LAB_EXTERNAL_REFERENCE_CONNECT_TIMEOUT_SECONDS=5 \
@@ -124,15 +122,11 @@ from voiney_lab.external_references import (
     ExternalReferenceSettings,
     SupplementalKnowledgeSettings,
 )
-from voiney_lab.generated_visuals import GeneratedVisualSettings
 from voiney_lab.model_providers import ROLES, RoleModel
 from voiney_lab.multi_brain import MultiBrainSettings
-from voiney_lab.web_visuals import WebVisualSettings
 
 load_dotenv(Path.cwd() / ".env", override=False)
 references = ExternalReferenceSettings.from_environment()
-web_images = WebVisualSettings.from_environment(references)
-generated = GeneratedVisualSettings.from_environment()
 supplemental = SupplementalKnowledgeSettings.from_environment()
 multi_brain = MultiBrainSettings.from_environment()
 print("authoritative_web_search:", "enabled" if references.enabled else "disabled")
@@ -151,8 +145,6 @@ print("step_translation:", "enabled" if multi_brain.translation_enabled else "di
 print("primary_answer_budget_seconds:", multi_brain.primary_answer_budget_seconds)
 print("authority_profile:", references.domain_profile or "custom")
 print("allowed_domain_count:", len(references.allowed_domains))
-print("web_image_search:", "enabled" if web_images.enabled else "disabled")
-print("generated_visuals:", "enabled" if generated.enabled else "disabled")
 print("experiment_reports:", os.environ.get("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", "false"))
 print("barge_in_prefix_ms:", os.environ.get("VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS", "800"))
 for role in ROLES:

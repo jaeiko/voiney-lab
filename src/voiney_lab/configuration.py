@@ -22,8 +22,6 @@ class ConfigurationError(ValueError):
 #: each on, with the name a refusal gives it.
 XAI_ONLY_FEATURES: Mapping[str, str] = {
     "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED": "외부 근거 웹 검색",
-    "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED": "웹 이미지 검색",
-    "VOINEY_LAB_GENERATED_VISUALS_ENABLED": "그림 생성",
 }
 _ON = frozenset({"1", "true", "yes", "on"})
 

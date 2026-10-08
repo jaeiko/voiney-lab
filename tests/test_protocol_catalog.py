@@ -907,7 +907,6 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertIn(
             '  VOINEY_LAB_EXTERNAL_REFERENCE_DOMAIN_PROFILE=open \\', launcher
         )
-        self.assertIn('  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \\', launcher)
         self.assertIn('  VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800)"', launcher)
         self.assertIn("Non-secret capability check", launcher)
         self.assertIn("bootstrap_development_fixture(fixture)", launcher)
@@ -922,7 +921,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
     def test_pilot_launcher_is_isolated_and_off_outside_the_source_document(self):
         """The pilot launcher owns its data root and opts out, not in.
 
-        The four out-of-source features and MOSS must each keep a value the
+        The two out-of-source features and MOSS must each keep a value the
         operator exported themselves, so turning one on is deliberate.
         """
 
@@ -932,13 +931,11 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         self.assertNotIn("candidate-a-live-acceptance", launcher)
         self.assertIn('HOST="${HOST:-127.0.0.1}"', launcher)
         self.assertIn('PORT="${PORT:-8080}"', launcher)
-        # The four keep a value set in the shell or the .env (lane XO,
+        # The two keep a value set in the shell or the .env (lane XO,
         # decision 1); MOSS keeps the shell's.
         for name in (
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
             "VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED",
-            "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED",
-            "VOINEY_LAB_GENERATED_VISUALS_ENABLED",
         ):
             self.assertRegex(
                 launcher,

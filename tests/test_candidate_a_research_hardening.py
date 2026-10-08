@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,10 +18,6 @@ from voiney_lab.curated_protocol import (
 from voiney_lab.experiment_reports import (
     ExperimentReportSettings,
     ExperimentReportStore,
-)
-from voiney_lab.web_visuals import (
-    PubChemChemistryAdapter,
-    _KNOWN_PUBCHEM_COMPOUNDS,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,19 +48,6 @@ class CandidateAResearchHardeningTests(unittest.TestCase):
         ambic = canonical_research_plan("ambic")
         self.assertEqual(ambic["canonical_name"], "ammonium bicarbonate")
         self.assertEqual(ambic["cid"], 14013)
-
-    def test_pubchem_chemistry_adapter_fast_path(self) -> None:
-        """Verify PubChem chemistry adapter resolves known reagents with 2D structures."""
-        adapter = PubChemChemistryAdapter()
-        for name in ("ambic", "ammonium bicarbonate", "dtt", "dithiothreitol", "iodoacetamide", "acetonitrile", "formic acid"):
-            res = asyncio.run(adapter.lookup(name))
-            self.assertIsNotNone(res)
-            self.assertEqual(res["kind"], "chemical_structure_visual")
-            self.assertEqual(res["visual_class"], "external_structure_visual")
-            self.assertEqual(res["publisher_domain"], "pubchem.ncbi.nlm.nih.gov")
-            self.assertIn("pubchem.ncbi.nlm.nih.gov/rest/pug/compound/CID/", res["image_url"])
-            self.assertIn("PNG", res["image_url"])
-            self.assertEqual(res["display_mode"], "structure_image")
 
     def test_read_only_visual_query_preserves_active_state_fingerprint(self) -> None:
         """Ensure read-only queries never corrupt or reset active workflow state."""

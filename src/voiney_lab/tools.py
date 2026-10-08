@@ -222,7 +222,6 @@ PROVIDER_TOOL_DECISIONS = {
 INTERNAL_SERVICE_OPERATIONS = frozenset({
     APPROVED_LAB_REFERENCE_TOOL_NAME,
     "search_authoritative_web",
-    "generate_instructional_visual",
 })
 
 

@@ -82,8 +82,6 @@ class XaiOnlyFeatureRefusalTests(unittest.TestCase):
     def test_each_feature_on_without_the_key_is_refused_by_name(self) -> None:
         self.assertEqual(set(XAI_ONLY_FEATURES), {
             "VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED",
-            "VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED",
-            "VOINEY_LAB_GENERATED_VISUALS_ENABLED",
         })
         for name, label in XAI_ONLY_FEATURES.items():
             with self.subTest(name=name):
@@ -109,10 +107,10 @@ class XaiOnlyFeatureRefusalTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
     def test_the_server_refuses_an_xai_only_feature_without_the_key(self) -> None:
-        result = self._import_server(VOINEY_LAB_GENERATED_VISUALS_ENABLED="true")
+        result = self._import_server(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="true")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("XaiKeyRequiredError", result.stderr)
-        self.assertIn("그림 생성(VOINEY_LAB_GENERATED_VISUALS_ENABLED)", result.stderr)
+        self.assertIn("외부 근거 웹 검색(VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED)", result.stderr)
 
 
 class _LauncherCopy(unittest.TestCase):
@@ -164,8 +162,7 @@ class DevLauncherTests(_LauncherCopy):
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for line in (
-            "authoritative_web_search: disabled", "web_image_search: disabled",
-            "generated_visuals: disabled",
+            "authoritative_web_search: disabled",
             "[OK] --check-only",
         ):
             self.assertIn(line, result.stdout)
@@ -229,7 +226,7 @@ class PilotLauncherSettingsTests(_LauncherCopy):
     def test_with_nothing_set_it_starts_without_an_xai_key(self) -> None:
         result = self._run("--check-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r"generated_visuals:\s+disabled")
+        self.assertRegex(result.stdout, r"external_references:\s+disabled")
 
 
 if __name__ == "__main__":
