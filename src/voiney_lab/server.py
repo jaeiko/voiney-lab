@@ -157,25 +157,9 @@ from voiney_lab.multi_brain import (
 )
 from voiney_lab.tools import (
     APPROVED_LAB_REFERENCE_TOOL_NAME,
-    COMPLETE_CURRENT_STEP_TOOL_NAME,
-    CREATE_REPORT_TOOL_NAME,
-    GET_CURRENT_STEP_TOOL_NAME,
-    PROCEDURE_TOOL_NAMES,
-    RECORD_STEP_OBSERVATION_TOOL_NAME,
-    START_STEP_TIMER_TOOL_NAME,
     ToolContext,
     check_safety_report_status,
-    execute_tool,
     search_approved_lab_references,
-)
-from voiney_lab.procedure_definitions import load_procedure_definitions
-from voiney_lab.procedure_store import ProcedureStore
-from voiney_lab.procedures import (
-    ProcedureController, authorized_completion_step_id,
-    authorized_observation_arguments,
-    authorized_timer_start_step_id,
-    deterministic_procedure_text, korean_timer_status_question,
-    unattached_procedure_state,
 )
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
@@ -1016,8 +1000,6 @@ class ServerConfig:
     usage_scope:str
     allowed_languages:frozenset[str]
     default_language:str
-    procedure_catalog_path:Path|None=None
-    procedure_store_path:Path|None=None
     curated_protocol_fixture_path:Path|None=None
     curated_protocol_provenance_path:Path|None=None
     curated_protocol_source_pdf_path:Path|None=None
@@ -1429,18 +1411,6 @@ def server_config()->ServerConfig:
             "VOINEY_LAB_ALLOWED_LANGUAGES",
             "VOINEY_LAB_SESSION_LANGUAGE",
         )
-    procedure_catalog=os.environ.get("VOINEY_LAB_PROCEDURE_CATALOG","").strip()
-    procedure_store=os.environ.get("VOINEY_LAB_PROCEDURE_STORE","").strip()
-    procedure_catalog_path=Path(procedure_catalog) if procedure_catalog else None
-    procedure_store_path=Path(procedure_store) if procedure_store else None
-    if ((procedure_catalog_path is None)!=(procedure_store_path is None) or
-        procedure_catalog_path is not None and
-        (not procedure_catalog_path.is_absolute() or not procedure_store_path.is_absolute())):
-        raise ServerConfigurationError(
-            "procedure configuration is invalid",
-            "VOINEY_LAB_PROCEDURE_CATALOG",
-            "VOINEY_LAB_PROCEDURE_STORE",
-        )
     curated_fixture=os.environ.get(
         "VOINEY_LAB_CURATED_PROTOCOL_FIXTURE","").strip()
     curated_provenance=os.environ.get(
@@ -1460,7 +1430,6 @@ def server_config()->ServerConfig:
             "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF",
         )
     return ServerConfig(catalog_path,facility,scope,allowed,default,
-                        procedure_catalog_path,procedure_store_path,
                         curated_paths[0],curated_paths[1],curated_paths[2])
 
 def server_tool_context(
@@ -3771,7 +3740,7 @@ TURN_PROGRESS_TERMINAL_STATES=frozenset({
 })
 TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "approved_information","brain","curated_protocol",
-    "deterministic_emergency","deterministic_procedure",
+    "deterministic_emergency",
     "language_clarification",
 })
 TURN_PROGRESS_TRANSITIONS={
@@ -8492,162 +8461,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             ])
         return
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
-    authorized_step_id=None
-    authorized_timer_step_id=None
-    if pending is None:
-        authorized_step_id=authorized_completion_step_id(
-            transcript,turn_language,session.tool_context.procedure_controller)
-        authorized_timer_step_id=authorized_timer_start_step_id(
-            transcript,turn_language,session.tool_context.procedure_controller)
-        observation_arguments=authorized_observation_arguments(
-            transcript,turn_language,session.tool_context.procedure_controller)
-    else:
-        observation_arguments=None
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language,
-                             session.tool_context.procedure_controller,
-                             authorized_step_id,
-                             transcript)
-    deterministic_tool=None
-    deterministic_arguments=None
-    if authorized_step_id is not None:
-        deterministic_tool=COMPLETE_CURRENT_STEP_TOOL_NAME
-        deterministic_arguments={"expected_step_id":authorized_step_id}
-    elif authorized_timer_step_id is not None:
-        deterministic_tool=START_STEP_TIMER_TOOL_NAME
-        deterministic_arguments={"expected_step_id":authorized_timer_step_id}
-    elif observation_arguments is not None:
-        deterministic_tool=RECORD_STEP_OBSERVATION_TOOL_NAME
-        deterministic_arguments=observation_arguments
-    elif pending is None and korean_timer_status_question(
-            transcript,turn_language):
-        deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
-        deterministic_arguments={}
-    if deterministic_tool is not None:
-        await current_text(
-            "turn.route_decision",turn_id=turn_id,
-            normalized_text=request_arbitration.normalized_text,
-            intent=request_arbitration.intent.value,
-            confidence=request_arbitration.confidence,
-            reason_code=request_arbitration.reason_code,
-            dimensions=list(request_arbitration.dimensions),
-            runtime_router="deterministic_procedure",
-            action=deterministic_tool,
-            state_mutation=True,
-            answer_origin="server_workflow_state",
-            fallback_reason=None,
-        )
-        await progress("checking_protocol",route="deterministic_procedure")
-        await current_text(
-            "tool.call",turn_id=turn_id,tool=deterministic_tool,round=0)
-        started_tool=clock()
-        try:
-            deterministic_result=execute_tool(
-                deterministic_tool,deterministic_arguments,turn_context)
-        except Exception:
-            deterministic_result={
-                "status":"error","code":"procedure_store_unavailable"}
-        tool_elapsed_ms=round((clock()-started_tool)*1000)
-        timings["tool_ms"]=tool_elapsed_ms
-        fields={
-            "tool":deterministic_tool,
-            "status":deterministic_result.get("status","error"),
-            "elapsed_ms":tool_elapsed_ms,
-            "round":0,
-        }
-        if deterministic_result.get("code"):
-            fields["code"]=deterministic_result["code"]
-        if isinstance(deterministic_result.get("state"),dict):
-            fields["procedure_state"]=deterministic_result["state"]
-        for key in (
-            "operation","idempotent","completed_step_id","recorded_step_id",
-            "timer_step_id","observation","timer","audit_summary",
-            "remaining_seconds",
-        ):
-            if deterministic_result.get(key) is not None:
-                fields[key]=deterministic_result[key]
-        fields["procedure_completed"]=bool(
-            deterministic_result.get("completed"))
-        await current_text("tool.result",turn_id=turn_id,**fields)
-        if deterministic_result.get("code"):
-            await current_text(
-                "procedure.error",turn_id=turn_id,
-                code=deterministic_result["code"])
-        state=deterministic_result.get("state")
-        if isinstance(state,dict):
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="complete" and
-                    not deterministic_result.get("idempotent")):
-                await current_text(
-                    "procedure.step_completed",turn_id=turn_id,
-                    step_id=deterministic_result.get("completed_step_id"))
-                if deterministic_result.get("completed"):
-                    await current_text(
-                        "procedure.completed",turn_id=turn_id,state=state)
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="record_observation"):
-                await current_text(
-                    "procedure.observation_recorded",turn_id=turn_id,
-                    step_id=deterministic_result.get("recorded_step_id"))
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="start_timer" and
-                    not deterministic_result.get("idempotent")):
-                await current_text(
-                    "procedure.timer_started",turn_id=turn_id,
-                    step_id=deterministic_result.get("timer_step_id"),
-                    timer=state.get("timer"))
-            await current_text(
-                "procedure.state",turn_id=turn_id,state=state)
-        text=deterministic_procedure_text(
-            deterministic_result,turn_language)
-        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
-        if deterministic_result.get("code"):
-            session.set_turn_terminal_outcome(turn_id,generation,"blocked")
-        await current_text(
-            "reply.delta",turn_id=turn_id,segment_index=0,text=text)
-        try:
-            timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-            await progress("synthesizing",route="deterministic_procedure")
-            pcm=await asyncio.to_thread(synthesize,said(text),turn_language)
-            frames=frame_complete_audio(pcm)
-            if filler is not None:await filler.primary_ready()
-        except Exception:
-            log.exception("deterministic procedure TTS failed")
-            await progress("error",route="deterministic_procedure")
-            frames=[]
-        segment_count=0
-        output_frames=0
-        playback_started=bool(frames and session.start_playback(turn_id))
-        if playback_started:
-            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-            await progress(
-                "playing",route="deterministic_procedure",
-                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-            await current_text(
-                "state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames,generation)
-            segment_count=1
-            output_frames=len(frames)
-        await current_text("reply.complete",turn_id=turn_id,text=text)
-        await current_text(
-            "audio.complete",turn_id=turn_id,segment_count=segment_count)
-        timings["total_ms"]=round((clock()-endpoint)*1000)
-        await current_text(
-            "turn.done",turn_id=turn_id,timings_ms=timings,
-            segment_count=segment_count,input_frames=input_frames,
-            output_frames=output_frames,tools_used=[deterministic_tool],
-            route="deterministic_procedure")
-        if session.is_current(turn_id,generation):
-            session.history.commit([
-                {"role":"user","content":transcript},
-                {"role":"assistant","content":text},
-            ])
-        if not playback_started and session.complete_without_playback(turn_id):
-            await sender.text(
-                "state.changed",state=session.state.value,turn_id=turn_id,
-                cooldown_ms=session.detector.config.cooldown_ms)
-        return
+                             session.tool_context.report_language)
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token
@@ -8666,43 +8482,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await progress(
                 "checking_approved_information",route="approved_information")
         if not await current_text(kind,turn_id=turn_id,**fields): return
-        if kind=="tool.result" and fields.get("tool") in PROCEDURE_TOOL_NAMES:
-            state=fields.get("procedure_state")
-            if fields.get("code"):
-                await current_text("procedure.error",turn_id=turn_id,code=fields["code"])
-            elif isinstance(state,dict):
-                operation=fields.get("operation")
-                if operation=="start" and not fields.get("idempotent"):
-                    await current_text("procedure.started",turn_id=turn_id,state=state)
-                if operation=="complete" and not fields.get("idempotent"):
-                    await current_text("procedure.step_completed",turn_id=turn_id,
-                                       step_id=fields.get("completed_step_id"))
-                    if fields.get("procedure_completed"):
-                        await current_text("procedure.completed",turn_id=turn_id,state=state)
-                if operation=="record_observation":
-                    await current_text(
-                        "procedure.observation_recorded",turn_id=turn_id,
-                        step_id=fields.get("recorded_step_id"))
-                if operation=="start_timer" and not fields.get("idempotent"):
-                    await current_text(
-                        "procedure.timer_started",turn_id=turn_id,
-                        step_id=fields.get("timer_step_id"),
-                        timer=state.get("timer"))
-                if operation=="summary":
-                    await current_text(
-                        "procedure.audit_summary",turn_id=turn_id,
-                        audit_summary=fields.get("audit_summary"))
-                await current_text("procedure.state",turn_id=turn_id,state=state)
-        if (kind=="tool.result" and fields.get("tool")==CREATE_REPORT_TOOL_NAME
-                and fields.get("status")=="confirmed"
-                and isinstance(fields.get("procedure_state"),dict)):
-            await current_text(
-                "procedure.blocked_for_handoff",turn_id=turn_id,
-                report_id=fields.get("report_id"),
-                state=fields["procedure_state"])
-            await current_text(
-                "procedure.state",turn_id=turn_id,
-                state=fields["procedure_state"])
         log.info("%s turn_id=%s tool=%s status=%s elapsed_ms=%s",kind,turn_id,fields.get("tool"),fields.get("status"),fields.get("elapsed_ms"))
     async def consume():
         nonlocal output_frames,segment_count,first_audio
@@ -9106,7 +8885,7 @@ async def voice_socket(websocket:WebSocket):
         generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
         llm_router_settings=llm_router_settings,
-    ); task=None; trusted_config=None; procedure_store=None
+    ); task=None; trusted_config=None
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.
     _SPEAKING_SESSION.set(session)
@@ -9307,7 +9086,6 @@ async def voice_socket(websocket:WebSocket):
                     configuration_stage="session_language"
                     context=server_tool_context(trusted_config,control["language"])
                     selected_curated_fixture=None
-                    selected_procedure_definitions=None
                     selected_revision_id=None
                     selection_failure=None
                     if requested_mode=="cascade":
@@ -9365,44 +9143,17 @@ async def voice_socket(websocket:WebSocket):
                                                     "protocol_selection_unavailable")
                                     finally:
                                         protocol_store.close()
-                            if (selected_curated_fixture is None and
-                                    trusted_config.procedure_catalog_path and
-                                    trusted_config.procedure_store_path):
-                                configuration_stage="procedure_configuration"
-                                definitions=load_procedure_definitions(
-                                    trusted_config.procedure_catalog_path,
-                                    trusted_config.catalog_path,
-                                    facility_id=trusted_config.facility_id,
-                                    language=context.language,
-                                    usage_scope=trusted_config.usage_scope)
-                                if requested_protocol_id in definitions:
-                                    selected_procedure_definitions=definitions
-                                    selection_failure=None
-                                    selected_revision_id=(
-                                        f"approved-procedure-"
-                                        f"{definitions[requested_protocol_id].version}")
-                            if (selected_curated_fixture is None and
-                                    selected_procedure_definitions is None):
+                            if selected_curated_fixture is None:
                                 # A refusal already recorded upstream is the
                                 # true one.  Overwriting it made a protocol the
                                 # server knows about, and is declining to run,
                                 # report itself as unknown.
                                 selection_failure=selection_failure or (
                                     "protocol_selection_unknown"
-                                    if (trusted_config.curated_protocol_fixture_path or
-                                        trusted_config.procedure_catalog_path)
+                                    if trusted_config.curated_protocol_fixture_path
                                     else "protocol_selection_unavailable")
                     elif requested_protocol_id is not None:
                         selection_failure="protocol_selection_not_supported_for_mode"
-                    elif (trusted_config.procedure_catalog_path and
-                            trusted_config.procedure_store_path):
-                        configuration_stage="procedure_configuration"
-                        selected_procedure_definitions=load_procedure_definitions(
-                            trusted_config.procedure_catalog_path,
-                            trusted_config.catalog_path,
-                            facility_id=trusted_config.facility_id,
-                            language=context.language,
-                            usage_scope=trusted_config.usage_scope)
                     if selection_failure is not None:
                         await websocket.send_text(event(
                             "session.configuration_required",
@@ -9413,15 +9164,6 @@ async def voice_socket(websocket:WebSocket):
                             reason=selection_failure,
                         ))
                         continue
-                    if selected_procedure_definitions is not None:
-                        configuration_stage="procedure_configuration"
-                        procedure_store=procedure_store or ProcedureStore(trusted_config.procedure_store_path)
-                        context=ToolContext(
-                            context.catalog_path,context.facility_id,
-                            context.language,context.usage_scope,
-                            context.report_language,
-                            ProcedureController(
-                                selected_procedure_definitions,procedure_store))
                     configuration_stage="session_state"
                     session.set_tool_context(context)
                     if selected_curated_fixture is not None:
@@ -9620,10 +9362,6 @@ async def voice_socket(websocket:WebSocket):
                 try:
                     trusted_config=trusted_config or server_config()
                     context=server_tool_context(trusted_config,control["language"])
-                    if session.tool_context and session.tool_context.procedure_controller:
-                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
-                                            context.usage_scope,context.report_language,
-                                            session.tool_context.procedure_controller)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid session language"))
                     continue
@@ -9643,10 +9381,6 @@ async def voice_socket(websocket:WebSocket):
                     trusted_config=trusted_config or server_config()
                     context=(server_tool_context(trusted_config,control["language"])
                              if control["mode"]=="manual" else None)
-                    if context and session.tool_context and session.tool_context.procedure_controller:
-                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
-                                            context.usage_scope,context.report_language,
-                                            session.tool_context.procedure_controller)
                     session.set_language_mode(control["mode"],context)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid language mode"))
@@ -9666,16 +9400,12 @@ async def voice_socket(websocket:WebSocket):
                         sender,session,"cancelled")
                     task.cancel()
                 session.reset_sensitive_state()
-                if session.tool_context and session.tool_context.procedure_controller:
-                    session.tool_context.procedure_controller.detach()
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
                     fixture_state = session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state", state=fixture_state,
                         screen=curated_screen_fields(session.curated_protocol_session)))
-                else:
-                    await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
@@ -9945,7 +9675,6 @@ async def voice_socket(websocket:WebSocket):
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         _unsubscribe_translations(session)
         session.stop()
-        if procedure_store is not None: procedure_store.close()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
 

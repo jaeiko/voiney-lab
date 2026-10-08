@@ -29,16 +29,6 @@ SEARCH_TOOL_NAME = "search_approved_safety_manual"
 APPROVED_LAB_REFERENCE_TOOL_NAME = "search_approved_lab_references"
 CREATE_REPORT_TOOL_NAME = "create_safety_report"
 CHECK_REPORT_TOOL_NAME = "check_safety_report_status"
-START_PROCEDURE_TOOL_NAME = "start_procedure"
-GET_CURRENT_STEP_TOOL_NAME = "get_current_step"
-COMPLETE_CURRENT_STEP_TOOL_NAME = "complete_current_step"
-RECORD_STEP_OBSERVATION_TOOL_NAME = "record_step_observation"
-START_STEP_TIMER_TOOL_NAME = "start_step_timer"
-GET_WORKFLOW_SUMMARY_TOOL_NAME = "get_workflow_summary"
-GET_STEP_LEARNING_CONTEXT_TOOL_NAME = "get_step_learning_context"
-GET_PROTOCOL_VERSION_INFO_TOOL_NAME = "get_protocol_version_info"
-GET_EXPERIMENT_HISTORY_TOOL_NAME = "get_experiment_history"
-CONTINUE_EXPERIMENT_TOOL_NAME = "continue_experiment"
 REPORT_ID_PATTERN = re.compile(r"^SR-[0-9]{8}-[0-9A-F]{6}$")
 REPORT_WRITE_LOCK = threading.Lock()
 DEDUPLICATION_WINDOW_SECONDS = 60
@@ -215,318 +205,7 @@ CHECK_REPORT_TOOL = {
     },
 }
 
-START_PROCEDURE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": START_PROCEDURE_TOOL_NAME,
-        "description": (
-            "Call this only after the worker explicitly asks to begin one of the "
-            "validated procedures listed for the current session. Use its exact "
-            "stable procedure_id; do not invent an id, choose an unlisted "
-            "procedure, or start a workflow merely because the worker asks a "
-            "general safety question. The server revalidates the procedure against "
-            "trusted facility, session language, and usage scope, and permits only "
-            "one attached workflow. Repeating the same active procedure is "
-            "idempotent; trying a different procedure while one is attached is a "
-            "conflict. Facility, language, scope, session id, database path, and "
-            "workflow state are server-owned and must never appear in arguments. "
-            "Do not claim that the workflow started until the Tool returns success."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "procedure_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "The exact stable id of a procedure listed as available in "
-                        "the current session context, not its title, step id, or a "
-                        "model-created label."
-                    ),
-                },
-            },
-            "required": ["procedure_id"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-GET_CURRENT_STEP_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GET_CURRENT_STEP_TOOL_NAME,
-        "description": (
-            "Call this to read the current server-attached workflow state when the "
-            "worker asks what to do now, asks to repeat the current instruction, or "
-            "when a state-changing Tool needs a fresh current step id. This is "
-            "read-only and returns the approved instruction, source, step id and "
-            "number, required observation state, fixed timer state, completion "
-            "counts, and any human-handoff block. Read the approved instruction "
-            "without rewriting or improvising operational details. No session id "
-            "is accepted because attachment is trusted server state. This Tool "
-            "does not start, complete, skip, record, time, unblock, or restart a "
-            "workflow."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        },
-    },
-}
-
-COMPLETE_CURRENT_STEP_TOOL = {
-    "type": "function",
-    "function": {
-        "name": COMPLETE_CURRENT_STEP_TOOL_NAME,
-        "description": (
-            "Call this only for the current step after the worker explicitly "
-            "confirms completion in the current turn. Pass the exact current "
-            "step_id returned by server-owned workflow state, never a step number, "
-            "title, previous step, or guessed next step. Do not infer completion "
-            "from an observation, a timer request, silence, or conversational "
-            "agreement, and never use this Tool to skip steps. The server "
-            "independently checks turn-scoped confirmation, step identity, required "
-            "observations, fixed-timer start and elapsed state, completion status, "
-            "and any manager-handoff block. If any gate fails, keep the workflow at "
-            "the current step, explain the returned requirement, and do not claim "
-            "success. A blocked_for_handoff workflow cannot advance or restart "
-            "until handled outside this Tool."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expected_step_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "The exact current_step_id from the latest trusted procedure "
-                        "state. It is an optimistic concurrency check, not a request "
-                        "to choose or jump to that step."
-                    ),
-                },
-            },
-            "required": ["expected_step_id"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-RECORD_STEP_OBSERVATION_TOOL = {
-    "type": "function",
-    "function": {
-        "name": RECORD_STEP_OBSERVATION_TOOL_NAME,
-        "description": (
-            "Call this when the worker explicitly states an observation requested "
-            "by the current server-approved step. Record only the value present in "
-            "the current finalized user transcript. Preserve every letter, digit, "
-            "decimal point, sign, separator, and boolean meaning exactly; do not "
-            "shorten identifiers, correct or translate the value, infer a value "
-            "from context, or add a unit the worker did not say. Pass the exact "
-            "current step_id from trusted workflow state. The server rejects stale "
-            "steps, steps without an observation schema, wrong value types, "
-            "blocked or completed workflows, and values unsupported by the final "
-            "transcript. This Tool records an auditable observation only; it does "
-            "not complete the step or make a safety judgment."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expected_step_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "The exact current_step_id from the latest trusted procedure "
-                        "state. Do not use a step number, title, or earlier step id."
-                    ),
-                },
-                "value": {
-                    "anyOf": [
-                        {"type": "string", "minLength": 1},
-                        {"type": "number"},
-                        {"type": "boolean"},
-                    ],
-                    "description": (
-                        "The exact user-observed value in the type required by the "
-                        "current step. Preserve identifiers such as A-170 verbatim "
-                        "and never substitute a shorter or normalized value."
-                    ),
-                },
-            },
-            "required": ["expected_step_id", "value"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-START_STEP_TIMER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": START_STEP_TIMER_TOOL_NAME,
-        "description": (
-            "Call this only when the worker explicitly asks to start the timer for "
-            "the current step and trusted workflow state shows that the step has a "
-            "configured timer. Pass the exact current step_id. Never choose, "
-            "estimate, mention as started, or override a duration: the approved "
-            "ProcedureDefinition on the server owns the fixed duration and this "
-            "Tool accepts no duration argument. Repeating the call for the same "
-            "active step is idempotent and does not reset the deadline. The server "
-            "rejects stale steps, steps without a timer, completed workflows, and "
-            "workflows blocked for manager handoff. Starting a timer does not "
-            "complete the step; completion remains gated until the fixed deadline "
-            "has elapsed and the worker separately confirms completion."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expected_step_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "The exact current_step_id from the latest trusted procedure "
-                        "state. No duration, deadline, session id, or reset flag is "
-                        "allowed."
-                    ),
-                },
-            },
-            "required": ["expected_step_id"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-GET_WORKFLOW_SUMMARY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GET_WORKFLOW_SUMMARY_TOOL_NAME,
-        "description": (
-            "Call this when the worker asks for a workflow recap, completed-step "
-            "history, recorded observations, timer records, current progress, or "
-            "the report linked to manager handoff. It returns a read-only, "
-            "server-owned audit summary together with current workflow state. Use "
-            "the returned records exactly and distinguish the current step from "
-            "completed steps. This Tool is for audit and recap, not for retrieving "
-            "new SOP or SDS facts, generating missing observations, deciding that "
-            "work is safe, or mutating, completing, unblocking, or restarting the "
-            "workflow. It accepts no model-supplied session or database identifier."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        },
-    },
-}
-
-GET_STEP_LEARNING_CONTEXT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
-        "description": (
-            "Call this when a researcher asks why a step is necessary, the purpose "
-            "or scientific rationale of a procedure, or common execution mistakes to avoid. "
-            "Returns approved educational step metadata."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "step_id": {
-                    "type": "string",
-                    "description": "Optional step ID. Omit to query the current active step.",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-}
-
-GET_PROTOCOL_VERSION_INFO_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
-        "description": (
-            "Call this when a researcher asks for the active protocol version, "
-            "document approval status, or cryptographic SHA256 protocol hash."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-}
-
-GET_EXPERIMENT_HISTORY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GET_EXPERIMENT_HISTORY_TOOL_NAME,
-        "description": (
-            "Call this when a researcher asks to view recent experiment sessions, "
-            "multi-day experiment logs, or previous workflow history."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20,
-                    "description": "Maximum number of recent sessions to list (default: 5).",
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-}
-
-CONTINUE_EXPERIMENT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": CONTINUE_EXPERIMENT_TOOL_NAME,
-        "description": (
-            "Call this when a researcher asks to resume or continue a previous or "
-            "yesterday's experiment session by session ID."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "The exact session ID of the experiment to resume.",
-                },
-            },
-            "required": ["session_id"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-EXTENDED_PROCEDURE_TOOLS = [
-    GET_STEP_LEARNING_CONTEXT_TOOL,
-    GET_PROTOCOL_VERSION_INFO_TOOL,
-    GET_EXPERIMENT_HISTORY_TOOL,
-    CONTINUE_EXPERIMENT_TOOL,
-]
-
-PROCEDURE_TOOL_NAMES = frozenset({
-    START_PROCEDURE_TOOL_NAME,
-    GET_CURRENT_STEP_TOOL_NAME,
-    COMPLETE_CURRENT_STEP_TOOL_NAME,
-    RECORD_STEP_OBSERVATION_TOOL_NAME,
-    START_STEP_TIMER_TOOL_NAME,
-    GET_WORKFLOW_SUMMARY_TOOL_NAME,
-    GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
-    GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
-    GET_EXPERIMENT_HISTORY_TOOL_NAME,
-    CONTINUE_EXPERIMENT_TOOL_NAME,
-})
-TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL,
-         START_PROCEDURE_TOOL,GET_CURRENT_STEP_TOOL,COMPLETE_CURRENT_STEP_TOOL,
-         RECORD_STEP_OBSERVATION_TOOL,START_STEP_TIMER_TOOL,
-         GET_WORKFLOW_SUMMARY_TOOL]
+TOOLS = [SEARCH_TOOL, CREATE_REPORT_TOOL, CHECK_REPORT_TOOL]
 PROVIDER_TOOL_NAMES = tuple(
     tool["function"]["name"] for tool in TOOLS
 )
@@ -539,12 +218,6 @@ PROVIDER_TOOL_DECISIONS = {
     SEARCH_TOOL_NAME: "retained: legacy approved safety lookup used by generic sessions",
     CREATE_REPORT_TOOL_NAME: "retained: explicit confirmed safety-report write",
     CHECK_REPORT_TOOL_NAME: "retained: read-only report status",
-    START_PROCEDURE_TOOL_NAME: "retained: approved ProcedureStore start",
-    GET_CURRENT_STEP_TOOL_NAME: "retained: approved ProcedureStore current-step read",
-    COMPLETE_CURRENT_STEP_TOOL_NAME: "retained: approved ProcedureStore transition",
-    RECORD_STEP_OBSERVATION_TOOL_NAME: "retained: transcript-bound observation write",
-    START_STEP_TIMER_TOOL_NAME: "retained: server-authorized timer start",
-    GET_WORKFLOW_SUMMARY_TOOL_NAME: "retained: read-only workflow audit",
 }
 INTERNAL_SERVICE_OPERATIONS = frozenset({
     APPROVED_LAB_REFERENCE_TOOL_NAME,
@@ -563,12 +236,6 @@ class ToolContext:
     usage_scope: str
     # Manager handoff language is trusted facility policy and never a Tool arg.
     report_language: str = "ko"
-    procedure_controller: Any = None
-    procedure_completion_authorized_step_id: str | None = None
-    # Final server-owned transcript for the current turn. Procedure observations
-    # are checked against this evidence so a model cannot shorten or alter a
-    # spoken identifier before it is durably recorded.
-    current_transcript: str | None = None
 
 
 def _result(status: str, **fields: Any) -> dict[str, Any]:
@@ -959,12 +626,10 @@ REGISTERED_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
 
 def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) -> dict[str, Any]:
     """Dispatch only registered functions with exact, schema-compatible keys."""
-    if name not in REGISTERED_TOOLS and name not in PROCEDURE_TOOL_NAMES:
+    if name not in REGISTERED_TOOLS:
         return _result("invalid_arguments", message="unknown tool")
     if not isinstance(arguments, dict):
-        return (_result("invalid_arguments", code="invalid_arguments")
-                if name in PROCEDURE_TOOL_NAMES else
-                _result("invalid_arguments", message="arguments must be an object"))
+        return _result("invalid_arguments", message="arguments must be an object")
 
     required_and_allowed = {
         SEARCH_TOOL_NAME: ({"query", "topic"}, {"query", "topic"}),
@@ -980,98 +645,13 @@ def execute_tool(name: str, arguments: Any, context: ToolContext | None = None) 
             },
         ),
         CHECK_REPORT_TOOL_NAME: ({"report_id"}, {"report_id"}),
-        START_PROCEDURE_TOOL_NAME: ({"procedure_id"}, {"procedure_id"}),
-        GET_CURRENT_STEP_TOOL_NAME: (set(), set()),
-        COMPLETE_CURRENT_STEP_TOOL_NAME: ({"expected_step_id"}, {"expected_step_id"}),
-        RECORD_STEP_OBSERVATION_TOOL_NAME: (
-            {"expected_step_id","value"},{"expected_step_id","value"}),
-        START_STEP_TIMER_TOOL_NAME: ({"expected_step_id"},{"expected_step_id"}),
-        GET_WORKFLOW_SUMMARY_TOOL_NAME: (set(),set()),
-        GET_STEP_LEARNING_CONTEXT_TOOL_NAME: (set(), {"step_id"}),
-        GET_PROTOCOL_VERSION_INFO_TOOL_NAME: (set(), set()),
-        GET_EXPERIMENT_HISTORY_TOOL_NAME: (set(), {"limit"}),
-        CONTINUE_EXPERIMENT_TOOL_NAME: ({"session_id"}, {"session_id"}),
     }
     required, allowed = required_and_allowed[name]
     keys = set(arguments)
     if not required.issubset(keys) or not keys.issubset(allowed):
         if name == SEARCH_TOOL_NAME:
             return _search_failure("invalid_arguments")
-        return (_result("invalid_arguments",code="invalid_arguments")
-                if name in PROCEDURE_TOOL_NAMES else
-                _result("invalid_arguments", message="unexpected or missing arguments"))
+        return _result("invalid_arguments", message="unexpected or missing arguments")
     if name == SEARCH_TOOL_NAME:
         return search_approved_safety_manual(**arguments, context=context)
-    if name in PROCEDURE_TOOL_NAMES:
-        controller=context.procedure_controller if context else None
-        if controller is None:
-            return _result("error",code="procedure_not_available")
-        if name==START_PROCEDURE_TOOL_NAME:
-            return controller.start(arguments["procedure_id"],facility_id=context.facility_id,
-                                    language=context.language,usage_scope=context.usage_scope)
-        if name==GET_CURRENT_STEP_TOOL_NAME:
-            return controller.current()
-        if name==GET_STEP_LEARNING_CONTEXT_TOOL_NAME:
-            return controller.get_learning_context(arguments.get("step_id"))
-        if name==GET_PROTOCOL_VERSION_INFO_TOOL_NAME:
-            return controller.get_version_info()
-        if name==GET_EXPERIMENT_HISTORY_TOOL_NAME:
-            return controller.list_history(limit=arguments.get("limit", 5))
-        if name==CONTINUE_EXPERIMENT_TOOL_NAME:
-            return controller.resume(arguments["session_id"])
-        if name==RECORD_STEP_OBSERVATION_TOOL_NAME:
-            if (
-                context.current_transcript is not None
-                and not _observation_matches_transcript(
-                    arguments["value"], context.current_transcript
-                )
-            ):
-                current = controller.current()
-                return _result(
-                    "error",
-                    code="observation_evidence_mismatch",
-                    **(
-                        {"state": current["state"]}
-                        if isinstance(current.get("state"), dict)
-                        else {}
-                    ),
-                )
-            return controller.record_observation(
-                arguments["expected_step_id"],arguments["value"])
-        if name==START_STEP_TIMER_TOOL_NAME:
-            return controller.start_timer(arguments["expected_step_id"])
-        if name==GET_WORKFLOW_SUMMARY_TOOL_NAME:
-            return controller.summary()
-        if context.procedure_completion_authorized_step_id != arguments["expected_step_id"]:
-            return _result("error",code="explicit_confirmation_required")
-        return controller.complete(arguments["expected_step_id"])
-    if name==CREATE_REPORT_TOOL_NAME:
-        controller=context.procedure_controller if context else None
-        report_context=getattr(controller,"report_context",None)
-        workflow=report_context() if callable(report_context) else None
-        result=create_safety_report(
-            **arguments,workflow_context=workflow)
-        if result.get("status")=="success" and workflow is not None:
-            block_for_handoff=getattr(controller,"block_for_handoff",None)
-            if not callable(block_for_handoff):
-                return {
-                    **result,"status":"error","code":"workflow_block_failed",
-                    "report_queued":True,
-                }
-            blocked=block_for_handoff(
-                result.get("report_id"),arguments.get("summary"))
-            if blocked.get("status")!="success":
-                return {
-                    **result,"status":"error","code":"workflow_block_failed",
-                    "report_queued":True,
-                    **({"procedure_state":blocked["state"]}
-                       if isinstance(blocked.get("state"),dict) else {}),
-                }
-            result["procedure_state"]=blocked["state"]
-            result["workflow_operation"]=blocked["operation"]
-            result["workflow_idempotent"]=blocked["idempotent"]
-            result["procedure_blocked"]=bool(
-                blocked["state"].get("attached") and
-                blocked["state"].get("status")=="blocked_for_handoff")
-        return result
     return REGISTERED_TOOLS[name](**arguments)

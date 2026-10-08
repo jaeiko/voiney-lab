@@ -686,8 +686,6 @@ class ProtocolCatalogTests(unittest.TestCase):
             "voiney_lab.server._open_protocol_catalog",
             return_value=(self.catalog, store_handle),
         ), patch(
-            "voiney_lab.server.ProcedureStore"
-        ) as procedure_store, patch(
             "voiney_lab.server.OpenAICompatibleProtocolAnalysisModel"
         ) as analysis_model:
             asyncio.run(voice_socket(socket))
@@ -702,7 +700,6 @@ class ProtocolCatalogTests(unittest.TestCase):
         self.assertFalse(projected["state"]["development_only"])
         self.assertEqual(projected["state"]["source_filename"], "alpha.pdf")
         self.assertEqual(projected["state"]["source_sha256"], approved.source_sha256)
-        procedure_store.assert_not_called()
         analysis_model.assert_not_called()
         store_handle.close.assert_called_once()
 
@@ -799,9 +796,7 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             server_module, "_open_protocol_catalog", side_effect=open_catalog
         ), patch.object(
             server_module, "_protocol_analysis_model"
-        ) as provider_factory, patch.object(
-            server_module, "ProcedureStore"
-        ) as procedure_store:
+        ) as provider_factory:
             payload = list_protocol_catalog()
             with self.assertLogs("voiney_lab", level="INFO") as logs:
                 log_protocol_catalog_runtime_configuration()
@@ -832,7 +827,6 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
         )
         self.assertIn("visible_protocols=1", rendered)
         provider_factory.assert_not_called()
-        procedure_store.assert_not_called()
 
         # tearDown owns a live handle; reopen it after the endpoint closed its own.
         self.store = initialize_protocol_store(self.settings)
@@ -875,8 +869,6 @@ class CandidateDevelopmentBootstrapTests(unittest.TestCase):
             return_value=frozenset(),
         ), patch.object(
             server_module, "_protocol_analysis_model"
-        ), patch.object(
-            server_module, "ProcedureStore"
         ):
             payload = list_protocol_catalog()
 

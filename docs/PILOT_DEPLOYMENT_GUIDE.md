@@ -79,9 +79,6 @@ each one before the session:
   `VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE` and
   `VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF` are empty; otherwise the
   Candidate A development fixture loads.
-- `VOINEY_LAB_PROCEDURE_CATALOG` and
-  `VOINEY_LAB_PROCEDURE_STORE` are empty (the older procedure stack
-  described in `CLAUDE.md`).
 - `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
   transcripts and audio are written to disk.
 - `VOINEY_LAB_DEV_AUTH_PROFILES` lists the participants' profiles.

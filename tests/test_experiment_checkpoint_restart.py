@@ -431,7 +431,7 @@ class CheckpointVoiceRecoveryTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
         socket = _ScriptedSocket([{
             "type": "session.start", "configuration_id": 1, "mode": "cascade",

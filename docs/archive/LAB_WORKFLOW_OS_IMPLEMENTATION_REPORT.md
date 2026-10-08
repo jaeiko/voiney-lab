@@ -439,8 +439,8 @@ is reachable in production code (`PROVIDER_TOOL_DECISIONS` marks its tools
 Phase 15's evidence-driven audit found:
 
 - It only activates when an operator explicitly sets **both**
-  `VOINEY_LAB_PROCEDURE_CATALOG` and
-  `VOINEY_LAB_PROCEDURE_STORE`. Neither is set by
+  `PROCEDURE_CATALOG` (옛 설정; 줄 DI, 2026-10-08 에 스택과 함께 삭제) and
+  `PROCEDURE_STORE` (옛 설정; 삭제됨). Neither is set by
   `scripts/run_candidate_a.sh` or documented as a normal deployment default -
   the commercial/demo path never activates it.
 - `server.py`'s protocol-selection logic gates the legacy lookup on

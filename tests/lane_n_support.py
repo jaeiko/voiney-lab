@@ -130,7 +130,7 @@ class VoiceNotesHarness:
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
         captured: list[ListenerSession] = []
 

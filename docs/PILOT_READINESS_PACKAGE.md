@@ -13,8 +13,7 @@ disconnect/recovery → Timeline → completion → report → optional ELN
 boundary) is exercised end to end by:
 
 - 790 pytest cases + 691 subtests (current full local suite), including
-  `test_curated_protocol_cascade.py`'s multi-turn scenario tests and
-  `test_server_procedure_integration.py`.
+  `test_curated_protocol_cascade.py`'s multi-turn scenario tests.
 - 38 Playwright browser tests (`tests/e2e/`) across desktop and mobile,
   covering the researcher/reviewer/admin workspaces.
 - `python scripts/replay_turns.py` and both
@@ -131,8 +130,6 @@ for the complete, code-enforced list.
   `docs/LAB_WORKFLOW_OS_IMPLEMENTATION_REPORT.md`'s classification table.
   xAI STT/TTS and the LLM structured-analysis endpoint **were** live-tested
   this pass (Section 4 below).
-- The legacy `procedures.py` tutorial lane exists but is off by default and
-  should not be enabled for a pilot unless specifically intended.
 
 ### Abort / stop criteria
 Stop the pilot session immediately if:

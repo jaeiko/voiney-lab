@@ -84,7 +84,6 @@ export VOINEY_LAB_FACILITY_ID="MOSS-DEMO-FACILITY"
 export VOINEY_LAB_USAGE_SCOPE="demo"
 export VOINEY_LAB_SESSION_LANGUAGE="ko"
 export VOINEY_LAB_ALLOWED_LANGUAGES="ko"
-unset VOINEY_LAB_PROCEDURE_CATALOG VOINEY_LAB_PROCEDURE_STORE
 ```
 
 These exports are for a development run (`scripts/run_dev.sh` or Uvicorn

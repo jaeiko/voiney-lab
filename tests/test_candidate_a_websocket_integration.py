@@ -148,7 +148,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
 
             config = ServerConfig(
                 placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-                None, None, placeholder, placeholder, placeholder,
+                placeholder, placeholder, placeholder,
             )
 
             class Socket:
@@ -207,10 +207,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ), patch(
-                "voiney_lab.server.ProcedureStore",
-            ), patch(
-                "voiney_lab.server.load_procedure_definitions",
-            ), patch(
                 "voiney_lab.server.synthesize",
                 return_value=b"\x00\x00" * 320,
             ), patch(
@@ -250,7 +246,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
         class Socket:
@@ -371,7 +367,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
         class Socket:
@@ -788,7 +784,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         return ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
     def test_reload_reselect_recovers_same_experiment_session_id(self) -> None:

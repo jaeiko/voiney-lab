@@ -90,61 +90,6 @@ class ServerTests(unittest.TestCase):
             asyncio.run(run_turn(socket,session,b"\0\0",1,1))
         return session,socket,tts,brain,retrieval,execute,llm
 
-    def test_server_maps_procedure_results_to_canonical_event_sequences(self):
-        class Socket:
-            def __init__(self): self.text=[]; self.binary=[]
-            async def send_text(self,value): self.text.append(json.loads(value))
-            async def send_bytes(self,value): self.binary.append(value)
-        state={"attached":True,"procedure_id":"fictional-color-card-demo-ko",
-               "title":"FICTIONAL NON-OPERATIONAL 색상 카드 확인 데모","version":"1.0",
-               "status":"active","total_step_count":3,"completed_step_count":0,
-               "current_step_number":1,"current_step_id":"blue-card",
-               "current_step_title":"파란색 가상 카드",
-               "approved_current_instruction":"검토된 가상 지시문"}
-        cases=(
-            ({"status":"success","operation":"start","idempotent":False,
-              "procedure_state":state},["procedure.started","procedure.state"]),
-            ({"status":"success","operation":"read","idempotent":False,
-              "procedure_state":state},["procedure.state"]),
-            ({"status":"success","operation":"complete","idempotent":False,
-              "completed_step_id":"blue-card","procedure_completed":False,
-              "procedure_state":state},["procedure.step_completed","procedure.state"]),
-            ({"status":"success","operation":"complete","idempotent":False,
-              "completed_step_id":"green-card","procedure_completed":True,
-              "procedure_state":{**state,"status":"completed","completed_step_count":3,
-                  "current_step_number":None,"current_step_id":None,
-                  "current_step_title":None,"approved_current_instruction":None}},
-             ["procedure.step_completed","procedure.completed","procedure.state"]),
-            ({"status":"invalid_arguments","code":"invalid_arguments"},
-             ["procedure.error"]),
-        )
-        for fields,expected in cases:
-            with self.subTest(expected=expected):
-                socket=Socket()
-                session=ListenerSession(tool_context=ToolContext(
-                    Path("/trusted/catalog.sqlite"),None,"ko","test_only"))
-                session.active=True;session.active_turn_id=1
-                session.detector.state=TurnState.PROCESSING
-                async def fake_brain(client,history,transcript,on_sentence,on_first_token,
-                                     on_tool_event,tool_context,arbitration=None):
-                    await on_tool_event("tool.result",{"tool":"start_procedure",**fields})
-                    await on_sentence(SentenceSegment(0,"가상 응답입니다."))
-                    return BrainResult([],"가상 응답입니다.",0,["start_procedure"])
-                with patch("voiney_lab.server.transcribe",
-                           return_value=Transcription("가상 데모를 시작해 주세요","ko")), \
-                     patch("voiney_lab.server.synthesize",return_value=b"\0\0"), \
-                     patch("voiney_lab.server.stream_brain_turn",
-                           side_effect=fake_brain), \
-                     patch("voiney_lab.server.AsyncOpenAI"), \
-                     patch("voiney_lab.server.require_env",return_value="test"):
-                    asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-                procedure_events=[
-                    item["type"] for item in socket.text
-                    if item["type"].startswith("procedure.")]
-                self.assertEqual(procedure_events,expected)
-                done=[item for item in socket.text if item["type"]=="turn.done"][0]
-                self.assertEqual(done["route"],"brain")
-
     def test_emergency_precedes_language_resolution_and_uses_fixed_language(self):
         cases=(
             (Transcription("불이 났어요. 어떻게 해야 돼요?",None),"ko",KOREAN_EMERGENCY_RESPONSE),
@@ -619,8 +564,6 @@ class ServerTests(unittest.TestCase):
                 "VOINEY_LAB_SAFETY_CATALOG":str(catalog),
                 "VOINEY_LAB_USAGE_SCOPE":"demo",
                 "VOINEY_LAB_FACILITY_ID":"",
-                "VOINEY_LAB_PROCEDURE_CATALOG":"",
-                "VOINEY_LAB_PROCEDURE_STORE":"",
             }
             socket=Socket()
             with patch.dict("os.environ",environment,clear=True):
@@ -647,7 +590,7 @@ class ServerTests(unittest.TestCase):
         placeholder=Path("/tmp/offline-session-contract")
         config=ServerConfig(
             placeholder,None,"test_only",frozenset({"ko"}),"ko",
-            None,None,placeholder,placeholder,placeholder,
+            placeholder,placeholder,placeholder,
         )
 
         class Fixture:
@@ -689,11 +632,7 @@ class ServerTests(unittest.TestCase):
         ), patch(
             "voiney_lab.server.load_curated_protocol_fixture",
             return_value=Fixture(),
-        ) as fixture_loader, patch(
-            "voiney_lab.server.ProcedureStore",
-        ) as procedure_store, patch(
-            "voiney_lab.server.load_procedure_definitions",
-        ) as procedure_loader, runnable_fixture_assumed():
+        ) as fixture_loader, runnable_fixture_assumed():
             # "Without persistence" is about the *session* not being written
             # down, not about the protocol's rule.  Since STEP 23 a
             # configured fixture is selectable only when its catalog entry may
@@ -729,15 +668,13 @@ class ServerTests(unittest.TestCase):
         started=next(item for item in socket.sent if item["type"]=="session.started")
         self.assertEqual(started["pipeline"],"cascade")
         fixture_loader.assert_called_once_with(placeholder,placeholder,placeholder)
-        procedure_store.assert_not_called()
-        procedure_loader.assert_not_called()
 
     def test_curated_loading_failure_is_sanitized_and_never_becomes_ready(self):
         protocol_id="candidate-a-curated-development-v1"
         placeholder=Path("/tmp/offline-session-contract")
         config=ServerConfig(
             placeholder,None,"test_only",frozenset({"ko"}),"ko",
-            None,None,placeholder,placeholder,placeholder,
+            placeholder,placeholder,placeholder,
         )
 
         class Socket:
@@ -762,8 +699,6 @@ class ServerTests(unittest.TestCase):
             "voiney_lab.server.load_curated_protocol_fixture",
             side_effect=ValueError("private malformed-fixture detail"),
         ), patch(
-            "voiney_lab.server.ProcedureStore",
-        ) as procedure_store, patch(
             "voiney_lab.server.AsyncOpenAI",
             side_effect=AssertionError("LLM must not run"),
         ):
@@ -777,14 +712,13 @@ class ServerTests(unittest.TestCase):
             item["type"] in ("session.ready","session.started")
             for item in socket.sent
         ))
-        procedure_store.assert_not_called()
 
     def test_cascade_null_or_unknown_protocol_never_becomes_ready(self):
         protocol_id="candidate-a-curated-development-v1"
         placeholder=Path("/tmp/offline-session-contract")
         config=ServerConfig(
             placeholder,None,"test_only",frozenset({"ko"}),"ko",
-            None,None,placeholder,placeholder,placeholder,
+            placeholder,placeholder,placeholder,
         )
 
         class Fixture:
@@ -817,9 +751,7 @@ class ServerTests(unittest.TestCase):
                 ), patch(
                     "voiney_lab.server.load_curated_protocol_fixture",
                     return_value=Fixture(),
-                ), patch(
-                    "voiney_lab.server.ProcedureStore",
-                ) as procedure_store:
+                ):
                     asyncio.run(voice_socket(socket))
                 required=next(
                     item for item in socket.sent
@@ -830,7 +762,6 @@ class ServerTests(unittest.TestCase):
                     item["type"] in ("session.ready","session.started")
                     for item in socket.sent
                 ))
-                procedure_store.assert_not_called()
 
 
     def test_legacy_renamed_keys_report_safe_session_configuration_stage(self):

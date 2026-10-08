@@ -11,21 +11,14 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from voiney_lab.tools import (
     CREATE_REPORT_TOOL_NAME,
     REPORT_ID_PATTERN,
-    PROCEDURE_TOOL_NAMES,
     SEARCH_TOOL_NAME,
     TOOLS,
-    EXTENDED_PROCEDURE_TOOLS,
-    GET_STEP_LEARNING_CONTEXT_TOOL_NAME,
-    GET_PROTOCOL_VERSION_INFO_TOOL_NAME,
-    GET_EXPERIMENT_HISTORY_TOOL_NAME,
-    CONTINUE_EXPERIMENT_TOOL_NAME,
     ToolContext,
     execute_tool,
     normalize_report_arguments,
 )
 from voiney_lab.intent_arbitration import (
     RequestArbitration,
-    RequestIntent,
     arbitrate_request,
 )
 
@@ -914,33 +907,6 @@ def grounding_instruction(context: ToolContext) -> str:
     )
 
 
-def procedure_availability_instruction(context: ToolContext) -> str|None:
-    controller=context.procedure_controller
-    definitions=getattr(controller,"definitions",None)
-    if not isinstance(definitions,dict) or not definitions:
-        return None
-    entries="; ".join(
-        f"procedure_id={item.procedure_id}, title={item.title}, version={item.version}, "
-        f"scope={item.usage_scope} (non-operational)"
-        for item in sorted(definitions.values(),key=lambda value:value.procedure_id)
-    )
-    return (
-        f"Validated procedures available for this session: {entries}. Start only a "
-        "validated listed procedure and only after an explicit user request. Never "
-        "describe a test_only procedure as operational or officially approved guidance. "
-        "Never generate, rewrite, or improvise a step instruction. Read current state "
-        "through get_current_step. Record only user-stated values through "
-        "record_step_observation, and start only the fixed server-configured current-step "
-        "timer through start_step_timer. Call complete_current_step only when the "
-        "server-authorized completion condition can succeed and its required observation "
-        "and timer gates are satisfied. Use get_workflow_summary for the audit trail. "
-        "For step rationale, purpose, and common mistakes, use get_step_learning_context. "
-        "For protocol version, document origins, and SHA256 protocol hash, use get_protocol_version_info. "
-        "For past experiment logs, use get_experiment_history, and to resume previous experiments, use continue_experiment. "
-        "If the state is blocked_for_handoff, do not advance or restart it."
-    )
-
-
 async def stream_brain_turn(
     client: Any,
     history: ConversationHistory,
@@ -956,10 +922,6 @@ async def stream_brain_turn(
     language = tool_context.language if tool_context else "ko"
     messages = history.messages()
     messages.append({"role": "system", "content": trusted_language_instruction(language)})
-    if tool_context is not None:
-        availability=procedure_availability_instruction(tool_context)
-        if availability:
-            messages.append({"role":"system","content":availability})
     messages.append(user)
     group = [user]
     tool_ms = 0
@@ -1018,11 +980,6 @@ async def stream_brain_turn(
                 event_fields["report_id"] = report_id
                 if result.get("report_status"):
                     event_fields["report_status"] = result["report_status"]
-                if isinstance(result.get("procedure_state"), dict):
-                    event_fields["procedure_state"] = result["procedure_state"]
-                event_fields["procedure_blocked"] = bool(
-                    result.get("procedure_blocked")
-                )
             if on_tool_event:
                 await on_tool_event("tool.result", event_fields)
             if not succeeded:
@@ -1038,12 +995,6 @@ async def stream_brain_turn(
                 text = f"Báo cáo đã được gửi. Mã báo cáo là {result['report_id']}. Tôi nhắc lại: {result['report_id']}."
             else:
                 text = f"The report was submitted. The report ID is {result['report_id']}. Repeating: {result['report_id']}."
-            if succeeded and result.get("procedure_blocked"):
-                text += {
-                    "ko": " 현재 워크플로는 관리자 인계를 위해 이 단계에서 차단되었습니다.",
-                    "en": " The current workflow is blocked at this step for manager handoff.",
-                    "vi": " Quy trình hiện tại đã bị chặn tại bước này để bàn giao cho quản lý.",
-                }[pending["language"]]
             await on_sentence(SentenceSegment(0, text))
             final = {"role": "assistant", "content": text}
             return BrainResult([user, final], text, elapsed_ms, [CREATE_REPORT_TOOL_NAME])
@@ -1061,198 +1012,9 @@ async def stream_brain_turn(
             + json.dumps(pending, ensure_ascii=False)
         )})
 
-    request = arbitration or arbitrate_request(transcript)
+    arbitration or arbitrate_request(transcript)
 
-    if tool_context is not None and getattr(tool_context, "procedure_controller", None) is not None:
-        controller = tool_context.procedure_controller
-
-        # Fast-Path 1: Speculative Outcome & Scientific Uncertainty Question
-        if request.intent is RequestIntent.UNCERTAINTY:
-            text = (
-                "현재 정보만으로 실험 성공 여부를 판단할 수 없습니다. 관찰 결과와 측정 데이터를 기록하면 함께 확인할 수 있습니다."
-                if language == "ko" else
-                "We cannot determine whether the experiment will succeed based on current information alone. If you record your observations and measurement data, we can verify it together."
-            )
-            await on_sentence(SentenceSegment(0, text))
-            final_message = {"role": "assistant", "content": text}
-            group.append(final_message)
-            return BrainResult(group, text, None, [])
-
-        # Fast-Path 2: Combined Question (Learning Context + Next Step Preview + Confirmation)
-        if request.intent is RequestIntent.COMBINED_LEARNING_NEXT:
-            import time
-            started = time.perf_counter()
-            learning = controller.get_learning_context()
-            elapsed_ms = round((time.perf_counter() - started) * 1000)
-            if on_tool_event:
-                await on_tool_event("tool.call", {"tool": GET_STEP_LEARNING_CONTEXT_TOOL_NAME, "status": "calling", "round": 1})
-                await on_tool_event("tool.result", {"tool": GET_STEP_LEARNING_CONTEXT_TOOL_NAME, "status": "success", "elapsed_ms": elapsed_ms, "learning": learning})
-
-            status_res = controller.current()
-            curr_state = status_res.get("state", {})
-            proc_id = curr_state.get("procedure_id")
-            def_steps = controller.definitions.get(proc_id).steps if proc_id in controller.definitions else ()
-            curr_step_num = curr_state.get("current_step_number") or 1
-            next_step = def_steps[curr_step_num] if curr_step_num < len(def_steps) else None
-
-            purpose = learning.get("purpose") or "정확한 실험 표준 절차 수행"
-            rationale = learning.get("rationale") or "신뢰성 있는 반응 유도"
-
-            if language == "ko":
-                parts = [f"이 단계의 목적은 {purpose}이며, {rationale} 때문입니다."]
-                if next_step:
-                    next_title = getattr(next_step, "title", f"{next_step.order}단계")
-                    next_inst = getattr(next_step, "instruction", "")
-                    parts.append(f"다음 단계는 {next_step.order}단계인 '{next_title}'({next_inst})입니다.")
-                parts.append("현재 단계를 완료하셨으면 다음 단계로 진행할까요?")
-                text = " ".join(parts)
-            else:
-                parts = [f"The purpose of this step is {purpose}, because {rationale}."]
-                if next_step:
-                    next_title = getattr(next_step, "title", f"Step {next_step.order}")
-                    parts.append(f"The next step is Step {next_step.order}: '{next_title}'.")
-                parts.append("If you have completed the current step, shall we proceed to the next step?")
-                text = " ".join(parts)
-
-            await on_sentence(SentenceSegment(0, text))
-            final_message = {"role": "assistant", "content": text}
-            group.append(final_message)
-            return BrainResult(group, text, elapsed_ms, [GET_STEP_LEARNING_CONTEXT_TOOL_NAME])
-
-        # Fast-Path 3: Learning Question
-        if request.intent is RequestIntent.LEARNING:
-            import time
-            started = time.perf_counter()
-            learning = controller.get_learning_context()
-            elapsed_ms = round((time.perf_counter() - started) * 1000)
-            if on_tool_event:
-                await on_tool_event("tool.call", {"tool": GET_STEP_LEARNING_CONTEXT_TOOL_NAME, "status": "calling", "round": 1})
-                await on_tool_event("tool.result", {"tool": GET_STEP_LEARNING_CONTEXT_TOOL_NAME, "status": "success", "elapsed_ms": elapsed_ms, "learning": learning})
-
-            if learning.get("status") == "success":
-                purpose = learning.get("purpose")
-                rationale = learning.get("rationale")
-                mistakes = learning.get("common_mistakes")
-                step_title = learning.get("title", f"{learning.get('step_number')}단계")
-
-                if language == "ko":
-                    parts = []
-                    if purpose:
-                        parts.append(f"이 단계의 목적은 {purpose}입니다.")
-                    if rationale:
-                        parts.append(f"{rationale} 때문입니다.")
-                    if mistakes:
-                        parts.append(f"주의할 점으로는 {mistakes}에 유의해야 합니다.")
-                    if not parts:
-                        parts.append(f"현재 {step_title}에 대한 승인된 표준 지침에 따라 정확히 진행해 주세요.")
-                    text = " ".join(parts)
-                else:
-                    parts = []
-                    if purpose:
-                        parts.append(f"The purpose of this step is {purpose}.")
-                    if rationale:
-                        parts.append(f"This is required because {rationale}.")
-                    if mistakes:
-                        parts.append(f"Please be careful to avoid: {mistakes}.")
-                    if not parts:
-                        parts.append(f"Please follow the approved standard procedure for {step_title}.")
-                    text = " ".join(parts)
-            else:
-                text = "현재 활성화된 실험 세션이 없습니다. 먼저 프로토콜을 시작해 주세요." if language == "ko" else "There is no active experiment session. Please start a protocol first."
-
-            await on_sentence(SentenceSegment(0, text))
-            final_message = {"role": "assistant", "content": text}
-            group.append(final_message)
-            return BrainResult(group, text, elapsed_ms, [GET_STEP_LEARNING_CONTEXT_TOOL_NAME])
-
-        # Fast-Path 4: Protocol Version & Audit Inquiry
-        if request.intent is RequestIntent.PROTOCOL_AUDIT:
-            import time
-            started = time.perf_counter()
-            info = controller.get_version_info()
-            elapsed_ms = round((time.perf_counter() - started) * 1000)
-            if on_tool_event:
-                await on_tool_event("tool.call", {"tool": GET_PROTOCOL_VERSION_INFO_TOOL_NAME, "status": "calling", "round": 1})
-                await on_tool_event("tool.result", {"tool": GET_PROTOCOL_VERSION_INFO_TOOL_NAME, "status": "success", "elapsed_ms": elapsed_ms, "version_info": info})
-
-            if info.get("status") == "success":
-                title = info.get("title", info.get("procedure_id"))
-                version = info.get("version")
-                doc_version = info.get("document_version")
-                sha_prefix = (info.get("protocol_sha256") or "")[:8]
-                if language == "ko":
-                    text = f"현재 활성화된 프로토콜은 {title} 버전 {version}이며, 문서 버전은 {doc_version}, 프로토콜 해시는 {sha_prefix}입니다."
-                else:
-                    text = f"The active protocol is {title} version {version}, document version {doc_version}, with protocol hash {sha_prefix}."
-            else:
-                text = "현재 활성화된 프로토콜 정보가 없습니다." if language == "ko" else "No active protocol information is available."
-
-            await on_sentence(SentenceSegment(0, text))
-            final_message = {"role": "assistant", "content": text}
-            group.append(final_message)
-            return BrainResult(group, text, elapsed_ms, [GET_PROTOCOL_VERSION_INFO_TOOL_NAME])
-
-        # Fast-Path 5: Multi-Session Continuation & History
-        if request.intent is RequestIntent.HISTORY_RESUME:
-            kind = "continue" if request.history_action == "resume" else "history"
-            import time
-            started = time.perf_counter()
-            if kind == "continue":
-                hist = controller.list_history(limit=5)
-                sessions = hist.get("sessions", [])
-                target_session = sessions[0] if sessions else None
-                if target_session:
-                    resume_res = controller.resume(target_session["session_id"])
-                    elapsed_ms = round((time.perf_counter() - started) * 1000)
-                    if on_tool_event:
-                        await on_tool_event("tool.call", {"tool": CONTINUE_EXPERIMENT_TOOL_NAME, "status": "calling", "round": 1})
-                        await on_tool_event("tool.result", {"tool": CONTINUE_EXPERIMENT_TOOL_NAME, "status": "success", "elapsed_ms": elapsed_ms, "resume": resume_res})
-
-                    st = resume_res.get("state", {})
-                    completed_count = st.get("completed_step_count", 0)
-                    curr_num = st.get("current_step_number", 1)
-                    curr_title = st.get("current_step_title", "")
-                    proc_title = st.get("title", target_session.get("procedure_id"))
-
-                    if language == "ko":
-                        text = f"이전 실험 상태를 확인했습니다. {proc_title}의 {completed_count}단계까지 완료된 세션을 불러왔습니다. 현재 {curr_num}단계인 '{curr_title}'부터 계속 진행할까요?"
-                    else:
-                        text = f"Previous experiment state verified. Loaded session for {proc_title} with {completed_count} steps completed. Shall we continue from step {curr_num}: '{curr_title}'?"
-
-                    await on_sentence(SentenceSegment(0, text))
-                    final_message = {"role": "assistant", "content": text}
-                    group.append(final_message)
-                    return BrainResult(group, text, elapsed_ms, [CONTINUE_EXPERIMENT_TOOL_NAME])
-                else:
-                    elapsed_ms = round((time.perf_counter() - started) * 1000)
-                    text = "저장된 진행 중인 실험 세션을 찾지 못했습니다." if language == "ko" else "Could not find any saved in-progress experiment sessions."
-                    await on_sentence(SentenceSegment(0, text))
-                    final_message = {"role": "assistant", "content": text}
-                    group.append(final_message)
-                    return BrainResult(group, text, elapsed_ms, [GET_EXPERIMENT_HISTORY_TOOL_NAME])
-            else:
-                hist = controller.list_history(limit=5)
-                elapsed_ms = round((time.perf_counter() - started) * 1000)
-                sessions = hist.get("sessions", [])
-                if on_tool_event:
-                    await on_tool_event("tool.call", {"tool": GET_EXPERIMENT_HISTORY_TOOL_NAME, "status": "calling", "round": 1})
-                    await on_tool_event("tool.result", {"tool": GET_EXPERIMENT_HISTORY_TOOL_NAME, "status": "success", "elapsed_ms": elapsed_ms, "history": hist})
-
-                if sessions:
-                    latest = sessions[0]
-                    if language == "ko":
-                        text = f"최근 실험 기록 {len(sessions)}건이 있습니다. 가장 최근 세션은 {latest['procedure_id']}이며, 상태는 {latest['status']}, 진행 단계는 {latest['current_step_index']}단계입니다."
-                    else:
-                        text = f"Found {len(sessions)} recent experiment sessions. The latest is {latest['procedure_id']} with status {latest['status']} at step {latest['current_step_index']}."
-                else:
-                    text = "이전 실험 기록이 없습니다." if language == "ko" else "No previous experiment history found."
-
-                await on_sentence(SentenceSegment(0, text))
-                final_message = {"role": "assistant", "content": text}
-                group.append(final_message)
-                return BrainResult(group, text, elapsed_ms, [GET_EXPERIMENT_HISTORY_TOOL_NAME])
-
-    available_tools = TOOLS + EXTENDED_PROCEDURE_TOOLS if tool_context and getattr(tool_context, "procedure_controller", None) else TOOLS
+    available_tools = TOOLS
 
     # A tool call can arrive after content deltas, so every selection-pass text
     # is withheld until the complete stream proves that it is the final answer.
@@ -1349,32 +1111,6 @@ async def stream_brain_turn(
                     event_fields["report_status"] = result["report_status"]
                 if result.get("report"):
                     event_fields["report"] = result["report"]
-                if isinstance(result.get("procedure_state"), dict):
-                    event_fields["procedure_state"] = result["procedure_state"]
-                if result.get("procedure_blocked") is not None:
-                    event_fields["procedure_blocked"] = bool(
-                        result.get("procedure_blocked")
-                    )
-                if name in PROCEDURE_TOOL_NAMES:
-                    if result.get("code"):
-                        event_fields["code"] = result["code"]
-                    if result.get("state"):
-                        event_fields["procedure_state"] = result["state"]
-                    event_fields["operation"] = result.get("operation")
-                    event_fields["idempotent"] = bool(result.get("idempotent"))
-                    if result.get("completed_step_id"):
-                        event_fields["completed_step_id"] = result["completed_step_id"]
-                    if result.get("recorded_step_id"):
-                        event_fields["recorded_step_id"] = result["recorded_step_id"]
-                    if result.get("timer_step_id"):
-                        event_fields["timer_step_id"] = result["timer_step_id"]
-                    if result.get("observation"):
-                        event_fields["observation"] = result["observation"]
-                    if result.get("timer"):
-                        event_fields["timer"] = result["timer"]
-                    if result.get("audit_summary"):
-                        event_fields["audit_summary"] = result["audit_summary"]
-                    event_fields["procedure_completed"] = bool(result.get("completed"))
                 await on_tool_event("tool.result", event_fields)
             tool_message = {
                 "role": "tool",
