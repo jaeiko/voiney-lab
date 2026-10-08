@@ -46,7 +46,6 @@ from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.protocol_catalog import (
     ProtocolCatalog,
     ProtocolCatalogUnavailableError,
-    SharedSecretApprovalPolicy,
 )
 from voiney_lab.protocol_translation import (
     GlossaryEntry,
@@ -82,11 +81,9 @@ class _AnalysedCatalog(unittest.TestCase):
         self.store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, self.root / "catalog"))
         self.ready: list[str] = []
-        self.authorized: list[str] = []
         self.catalog = ProtocolCatalog(
             self.store,
-            on_analysis_ready=lambda catalog, pid: self.ready.append(pid),
-            on_execution_authorized=lambda catalog, pid: self.authorized.append(pid))
+            on_analysis_ready=lambda catalog, pid: self.ready.append(pid))
         self.pdf = self.root / "sample.pdf"
         write_text_pdf(
             self.pdf,
@@ -111,27 +108,22 @@ class _AnalysedCatalog(unittest.TestCase):
 class AnalysisPassStartsTranslationTests(_AnalysedCatalog):
     """(가) The catalog hands a passed analysis over the moment it passes."""
 
-    def test_a_passed_analysis_is_handed_over_once_and_before_any_authority(self) -> None:
+    def test_a_passed_analysis_is_handed_over_once_as_it_passes(self) -> None:
         self.assertEqual(self.ready, [])
         self.analyse()
         self.assertEqual(self.ready, [self.protocol_id])
-        self.assertEqual(self.authorized, [])
         entry = self.catalog.get_entry(self.protocol_id)
         self.assertEqual(entry.analysis_status, "review_required")
-        self.assertFalse(entry.available_for_execution)
+        # Lane DI (2026-10-08): a passed analysis with no execution blocker
+        # may run; the translation started at the same moment.
+        self.assertTrue(entry.available_for_execution)
 
     def test_the_translation_fixture_is_the_one_the_session_will_run(self) -> None:
         self.analyse()
         draft_fixture = self.catalog.load_analysis_fixture(self.protocol_id)
-        self.assertEqual(draft_fixture.status, "analysis_draft")
-        self.catalog.acknowledge_readiness_gate(
-            self.protocol_id, draft_fixture.revision_id,
-            reason_code=domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-            actor_principal_id="reviewer@example.org", actor_role="reviewer",
-            comment="Warnings reviewed against the source.")
-        self.catalog.activate_development(self.protocol_id)
+        self.assertEqual(draft_fixture.status, "analysis_passed")
         executable = self.catalog.load_executable_fixture(self.protocol_id)
-        self.assertEqual(executable.status, "approved_revision")
+        self.assertEqual(executable.status, "analysis_passed")
         self.assertEqual(draft_fixture.revision_id, executable.revision_id)
         self.assertEqual(draft_fixture.fixture_sha256, executable.fixture_sha256)
         self.assertEqual(
@@ -140,9 +132,10 @@ class AnalysisPassStartsTranslationTests(_AnalysedCatalog):
         self.assertEqual(
             [unit.fact_key for unit in translation_units(draft_fixture)],
             [unit.fact_key for unit in translation_units(executable)])
-        # Activation still hands the revision over; the second pass makes no
-        # call because every row is already stored (tested below).
-        self.assertEqual(self.authorized, [self.protocol_id])
+        # Lane DI (2026-10-08): there is no activation hand-over any more;
+        # the analysis pass is the only hand-over (asserted above) and the
+        # second pass makes no call because every row is already stored
+        # (tested below).
 
     def test_no_fixture_for_translation_before_an_analysis_passed(self) -> None:
         with self.assertRaises(ProtocolCatalogUnavailableError):
@@ -168,7 +161,7 @@ class AnalysisPassStartsTranslationTests(_AnalysedCatalog):
         finally:
             server_module.app.state.revision_translation_runner = saved
         self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0].status, "analysis_draft")
+        self.assertEqual(seen[0].status, "analysis_passed")
         self.assertEqual(
             seen[0].revision_id, self.catalog.get_entry(self.protocol_id).revision_id)
 
@@ -180,8 +173,6 @@ class AnalysisPassStartsTranslationTests(_AnalysedCatalog):
             catalog, store = server_module._open_protocol_catalog()
         try:
             self.assertIs(catalog.on_analysis_ready, server_module._translate_analyzed_revision)
-            self.assertIs(
-                catalog.on_execution_authorized, server_module._translate_authorized_revision)
         finally:
             store.close()
 

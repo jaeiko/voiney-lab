@@ -232,10 +232,6 @@ CONTRACT_EVIDENCE: dict[str, ContractEvidence] = {
         "Set required_for_execution true when the claim states something an"
         " operator must have or do to run the step"
     ),
-    # --- not about a provider response at all --------------------------------
-    "semantic_running_timer_read_only": _server(
-        "a runtime intent guard in the voice path, not a claim contract"
-    ),
 }
 
 

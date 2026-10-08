@@ -1639,14 +1639,19 @@ def _readable_record_text(text: str) -> str:
     return f"원문의 끝 조건(“{quote}”)을 {verdict}"
 
 
-def _approval_words(report_data: Mapping[str, Any]) -> str:
-    readiness = {
-        "guidance_ready": "안내 준비 완료",
-        "analysis_required": "분석 검토가 끝나지 않음",
-    }.get(str(report_data.get("readiness_status") or ""), "준비 상태 확인 필요")
+def _protocol_state_words(report_data: Mapping[str, Any]) -> str:
+    """The run row "프로토콜 상태" (decision 7 of 2026-10-08, lane DI).
+
+    Under the MVP rule a protocol runs when its analysis passed and the
+    experimenter pressed start; that is what the row says. The curated
+    development fixture is named as such: its analysis was hand-built over
+    the source PDF, not produced by the analysis model.
+    """
+
+    words = "분석 통과 · 실험자가 시작함"
     if report_data.get("development_only"):
-        return f"개발용 시험 프로토콜 — 승인된 개정본이 아님 ({readiness})"
-    return f"실행이 허가된 프로토콜 개정본 ({readiness})"
+        words += " · 개발용 큐레이션 분석(원문 PDF 기준)"
+    return words
 
 
 def _pdf_front_matter(fixture: Any) -> tuple[str, str, str, str]:
@@ -1712,7 +1717,9 @@ def build_report_facts(
     workflow_completed = False
     blocked: list[str] = []
     experimenter = ""
-    gates_skipped = False
+    #: The source's safety statements the experimenter saw before pressing
+    #: start (decision of 2026-10-08): how many, from the server's record.
+    safety_notices_acknowledged: int | None = None
     # Lane R7's events (decision 6): every completion with its round, every
     # timer start, a later start's skipped steps, and returns within a repeat.
     completions: dict[str, list[tuple[datetime | None, int | None]]] = {}
@@ -1893,8 +1900,9 @@ def build_report_facts(
             # (decision 5): a development account's name today, the signed-in
             # person's once sign-in is attached.
             experimenter = " ".join(str(payload.get("display_name") or "").split())[:120]
-        elif kind == "test_mode_readiness_gates_skipped":
-            gates_skipped = True
+        elif kind == "safety_notices_acknowledged":
+            count = payload.get("notice_count")
+            safety_notices_acknowledged = count if isinstance(count, int) else 0
         for text in legacy:
             add_record(label or "—", "관찰", text, at)
 
@@ -2101,8 +2109,14 @@ def build_report_facts(
         ("완료 단계", f"{len(completed_labels)} / {total}" if total else str(len(completed_labels))),
         ("결과", outcome_words),
         ("기록", record_counts(records)),
-        ("프로토콜 승인 상태", _approval_words(report_data)),
-    ) + ((("준비 검사", "시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀"),) if gates_skipped else ())
+        ("프로토콜 상태", _protocol_state_words(report_data)),
+    ) + (
+        (("안전 주의 확인", (
+            f"시작 전 화면에서 원문 안전 주의 {safety_notices_acknowledged}건을 보고 시작함"
+            if safety_notices_acknowledged
+            else "원문에 안전 주의가 없음 · 시작 전 화면을 보고 시작함")),)
+        if safety_notices_acknowledged is not None else ()
+    )
 
     purpose, keywords, doi, author = _pdf_front_matter(fixture) if fixture is not None else ("", "", "", "")
     protocol = getattr(getattr(fixture, "draft", None), "protocol", None)

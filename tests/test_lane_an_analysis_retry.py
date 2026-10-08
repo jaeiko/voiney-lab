@@ -383,7 +383,7 @@ assert(status.includes("분석 실패")&&status.includes("자동으로 한 번 �
     def test_a_retry_that_passed_reads_as_passed(self) -> None:
         self.run_page(r"""
 await upload({analysis_status:"structured_analysis_ready",available_for_execution:false},false);
-reviewExtra={analysis_status:"review_required",analysis_failure:null,development_activation_allowed:true};
+reviewExtra={analysis_status:"review_required",analysis_failure:null,available_for_execution:true};
 currentProtocolReviewId="p-ankom";
 statusQueue=[{state:"review_required",failure_code:null,requested_at:new Date(Date.now()-200000).toISOString(),
  automatic_retry:{attempt:1,limit:1,state:"passed",reason_code:"protocol_analysis_invalid_response"}}];

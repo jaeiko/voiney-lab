@@ -33,10 +33,7 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolSession,
     load_curated_protocol_fixture,
 )
-from voiney_lab.runtime_routing import (
-    probe_curated_semantic_fallback,
-    route_curated_runtime_turn,
-)
+from voiney_lab.runtime_routing import route_curated_runtime_turn
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/fixtures/development_protocols/candidate_a_curated_analysis.json"
@@ -109,12 +106,6 @@ class ObservationPromptHoldTests(unittest.TestCase):
         for reply in (REPORT_B, REPORT_C):
             with self.subTest(reply=reply):
                 session = self._prompted_at("7")
-                self.assertEqual(
-                    probe_curated_semantic_fallback(
-                        session, reply, language="ko"
-                    ).reason_code,
-                    "pending_gate_owns_turn",
-                )
                 plan = self._turn(session, reply, 2)
                 self.assertEqual(plan.intent_kind, "pending_observation_confirmed")
                 self.assertEqual(plan.observation_predicate, "positive")
@@ -127,13 +118,6 @@ class ObservationPromptHoldTests(unittest.TestCase):
         session = self._prompted_at("7")
         for turn_id, reply in enumerate(UNREAD_REPLIES, start=2):
             with self.subTest(reply=reply):
-                # The model is not consulted while the prompt owns the turn.
-                self.assertEqual(
-                    probe_curated_semantic_fallback(
-                        session, reply, language="ko"
-                    ).reason_code,
-                    "pending_gate_owns_turn",
-                )
                 plan = self._turn(session, reply, turn_id)
                 self.assertEqual(plan.intent_kind, "observation_confirmation_reasked")
                 self.assertNotIn(plan.action, QUESTION_ROUTES)
@@ -143,12 +127,6 @@ class ObservationPromptHoldTests(unittest.TestCase):
                 self.assertEqual(session.endpoint_observations(), {})
 
         # D says the endpoint in words the reader knows, after two re-asks.
-        self.assertEqual(
-            probe_curated_semantic_fallback(
-                session, REPORT_D, language="ko"
-            ).reason_code,
-            "pending_gate_owns_turn",
-        )
         d = self._turn(session, REPORT_D, 4)
         self.assertEqual(d.intent_kind, "pending_observation_confirmed")
         self.assertEqual(d.observation_predicate, "positive")

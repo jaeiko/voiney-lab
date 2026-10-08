@@ -59,9 +59,12 @@ changes and running dev servers don't collide.
 ## Server-owned workflow authority
 
 The server is the only workflow authority. Model/voice output never advances
-a protocol step, marks completion, approves a protocol revision, converts an
-observation into an instruction, resumes a blocked experiment, or writes to
-an ELN without explicit user confirmation.
+a protocol step, marks completion, starts a protocol, converts an
+observation into an instruction, or resumes a blocked experiment without
+explicit user confirmation. A protocol becomes executable by its analysis
+passing (including the source-evidence check) and the experimenter pressing
+"이 프로토콜로 시작"; there is no approval step (decision of 2026-10-08,
+lane DI).
 
 A turn is routed along one line: deterministic front rules → the LLM router
 (which chooses the tool, and may choose the model, for the situation) →
@@ -70,29 +73,23 @@ choosing models and tools per situation. On routing, the one thing forbidden
 is two different paths each deciding the same turn's state change on their
 own — so no parallel router, classifier or prompt that decides state apart
 from that line. Separately, do not add a duplicate workflow state machine,
-another `ExperimentSession` authority, a parallel approval subsystem, or a
-parallel protocol store — see `AGENTS.md` rules 2–3 for the full boundary.
-(Decision of 2026-10-03.) (A pre-existing, older `procedures.py` /
-`procedure_store.py` workflow stack runs alongside the production
-`ExperimentSession` / `CuratedProtocolSession` stack. It is explicitly
-config-gated off by default — the module docstring at the top of
-`src/voiney_lab/procedures.py` states the two environment variables
-that must both be set and why the commercial launcher sets neither. Mutual
-exclusivity is regression-tested by
-`test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists`
-in `tests/test_curated_protocol_cascade.py`, which configures *both*
-authorities and proves the legacy one is never constructed. Treat it as an
-isolated, documented lane, not something to silently extend, merge with the
-production authority, or duplicate further.)
+another `ExperimentSession` authority, a parallel execution-verdict
+subsystem, or a parallel protocol store — see `AGENTS.md` rules 2–3 for the
+full boundary. (Decision of 2026-10-03.) The older config-gated
+`procedures.py` / `procedure_store.py` workflow stack that used to run beside
+the production `CuratedProtocolSession` stack was deleted on 2026-10-08
+(lane DI); it lives in the git history only. Do not reintroduce a second
+workflow stack.
 
 ## Terminology: Protocol vs. SOP
 
-Default to "Source Protocol", "Protocol", "Protocol Revision", "Lab-adapted
-Protocol", or "Approved Protocol Revision". Only use "SOP" / "Standard
-Operating Procedure" for the distinct, org-governed facility-safety-document
-corpus (`safety_pack.py`, the MOSS/approved-document retrieval path) — never
-as a casual synonym for a protocol or protocol revision. Approving a protocol
-revision does not make it an SOP.
+Default to "Source Protocol", "Protocol", "Protocol Revision", or
+"Analysed Protocol" ("분석 통과한 프로토콜"). Lab-adapted and approved
+protocol revisions no longer exist (lane DI, 2026-10-08). Only use "SOP" /
+"Standard Operating Procedure" for the distinct, org-governed
+facility-safety-document corpus (`safety_pack.py`, the MOSS/approved-document
+retrieval path) — never as a casual synonym for a protocol or protocol
+revision. A protocol's analysis passing does not make it an SOP.
 
 ## Testing expectations
 
@@ -120,9 +117,9 @@ fake-backed in tests; do not add tests that require live credentials.
 
 ## No fake external validation
 
-Never describe protocols.io, Google Drive, GitHub, OIDC, eLabFTW, the OCR
-provider, or similar integrations as "live-tested" unless a real external
-request actually succeeded in this environment during this work. Contract
+Never describe OIDC, the OCR provider, the translation or STT/TTS providers,
+or similar integrations as "live-tested" unless a real external request
+actually succeeded in this environment during this work. Contract
 tests against a fake transport are "contract-tested," not "live-tested" —
 keep that distinction explicit in code comments, docs, and reports.
 

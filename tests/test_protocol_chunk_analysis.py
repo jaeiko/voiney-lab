@@ -30,7 +30,6 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalog,
     ProtocolChunkAnalysisFailedError,
     ProtocolChunkMergeConflictError,
-    ProtocolCatalogUnavailableError,
 )
 from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
@@ -610,9 +609,12 @@ class ProtocolChunkAnalysisTests(unittest.TestCase):
             self.assertEqual(result.analysis_status, "review_required")
             self.assertEqual(replay.revision_id, result.revision_id)
             self.assertEqual(model.calls, calls)
-            self.assertFalse(result.available_for_execution)
-            with self.assertRaises(ProtocolCatalogUnavailableError):
-                catalog.load_executable_fixture(entry.protocol_id)
+            # Lane DI (2026-10-08): a passed analysis with no execution
+            # blocker may run; the experimenter's start is the confirmation,
+            # so the executable fixture is loadable as soon as it passes.
+            self.assertTrue(result.available_for_execution)
+            executable = catalog.load_executable_fixture(entry.protocol_id)
+            self.assertEqual(executable.revision_id, result.revision_id)
             status = catalog.analysis_run_status(entry.protocol_id)
             self.assertEqual(status.state, "review_required")
             self.assertEqual(status.completed_chunks, len(self.plan.chunks))

@@ -8,7 +8,6 @@ All writes use the separate immutable Protocol store, never ProcedureStore.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import os
 import re
@@ -18,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Sequence
 
 from voiney_lab import experiment_protocol as domain
 from voiney_lab.curated_protocol import CuratedProtocolFixture
@@ -56,9 +55,6 @@ from voiney_lab.protocol_chunk_analysis import (
 )
 from voiney_lab.protocol_claim_analysis import (
     ProtocolChunkClaimAnalysis,
-    _numbered_step_labels,
-    generate_page_evidence_segments,
-    reopen_evidence_span,
     serialize_chunk_claim_analysis,
     unaccounted_segments_by_page,
 )
@@ -74,81 +70,8 @@ from voiney_lab.protocol_ocr import (
 _SAFE_FILENAME = re.compile(r"^[^/\\\x00]{1,255}\.pdf$", re.IGNORECASE)
 _STABLE_PROTOCOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REVISION_ID = re.compile(r"^pdf-(\d+)(?:-analysis-(\d+))?$")
-_ACTOR_PRINCIPAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}")
-_ACTOR_ROLES = frozenset({"reviewer", "lab_admin", "organization_admin"})
 
 
-def _display_name(value: object) -> str | None:
-    """A readable name as recorded: text of 1-200 characters, else None."""
-
-    if not isinstance(value, str):
-        return None
-    name = " ".join(value.split())
-    return name[:200] if name else None
-
-
-def _checked_actor(
-    actor_principal_id: str,
-    actor_role: str | None,
-    error: type[Exception],
-) -> None:
-    """Reject an unidentified or unauthorized human actor."""
-
-    if not _ACTOR_PRINCIPAL.fullmatch(actor_principal_id):
-        raise error("Protocol approval actor is invalid.")
-    if actor_role not in _ACTOR_ROLES:
-        raise error("Protocol approval role is invalid.")
-
-
-_APPROVAL_EVENT = "protocol_revision_approved"
-_GATE_ACKNOWLEDGEMENT_EVENT = "protocol_readiness_gate_acknowledged"
-# Gates a person may clear.  A gate is listed here only when "we could not
-# determine this" is the honest state and a human genuinely can resolve it.
-# source_text_cross_check_failed is deliberately absent: a proven
-# disagreement between extraction engines is not a judgement call.
-_ACKNOWLEDGEABLE_GATES = frozenset(
-    {
-        domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-        domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value,
-        # "We did not account for a value on this page" is precisely a case of
-        # the machine reporting its own limit, and a person reading the page
-        # can settle it. What they cannot do is make the value accounted for,
-        # so the acknowledgement is audited and the segments stay addressable.
-        domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value,
-        # A declined value is a judgement the reviewer may agree with -- the
-        # heading really does instruct nobody -- or may not. Either way it is
-        # theirs to make, and the acknowledgement is audited.
-        domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value,
-        # Deliberately clearable too. A skimmed page is not made read by a
-        # signature, but refusing to let anyone say "I checked these" would
-        # leave the Protocol permanently unrunnable with no route back, which
-        # is how a gate stops being a gate and becomes a dead end. The
-        # separate reason code is what tells a reviewer this is the serious
-        # one.
-        domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value,
-        # A reviewer reads the passage and decides. They cannot make the
-        # analysis contain the repeat, which is why this is an acknowledgement
-        # rather than a resolution: it records that a person looked at a repeat
-        # the machine did not carry.
-        domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value,
-    }
-)
-_DISPOSITION_CONFIRMATION_EVENT = "protocol_label_disposition_confirmed"
-_DISPOSITION_REVOCATION_EVENT = (
-    "protocol_label_disposition_confirmation_revoked"
-)
-_REPETITION_CONFIRMATION_EVENT = "protocol_fixed_repetition_confirmed"
-_REPETITION_REVOCATION_EVENT = "protocol_fixed_repetition_confirmation_revoked"
-_AMBIGUITY_RESOLUTION_EVENT = "protocol_ambiguity_resolved"
-_AMBIGUITY_REVOCATION_EVENT = "protocol_ambiguity_resolution_revoked"
-# A reviewer's two possible findings about one ambiguity. Only the first can
-# clear anything: deciding that two statements really are different is a
-# finding, not a resolution, and it leaves the Protocol blocked.
-AMBIGUITY_SINGLE_AUTHORITATIVE = "single_statement_is_authoritative"
-AMBIGUITY_STATEMENTS_DISTINCT = "statements_are_distinct"
-_AMBIGUITY_DECISIONS = frozenset(
-    {AMBIGUITY_SINGLE_AUTHORITATIVE, AMBIGUITY_STATEMENTS_DISTINCT}
-)
 _ANALYSIS_REQUESTED_EVENT = "protocol_analysis_requested"
 _ANALYSIS_STARTED_EVENT = "protocol_analysis_started"
 _ANALYSIS_READY_EVENT = "protocol_analysis_ready"
@@ -174,8 +97,6 @@ _REVIEW_REQUIRED_EVENT = "protocol_chunk_review_required"
 _SINGLE_REVIEW_REQUIRED_EVENT = "protocol_review_required"
 _RUN_CANCELLED_EVENT = "protocol_chunk_run_cancelled"
 _DEVELOPMENT_FIXTURE_EVENT = "development_fixture_materialized"
-_DEVELOPMENT_ACTIVATION_EVENT = "protocol_development_activated"
-_DEVELOPMENT_DEACTIVATION_EVENT = "protocol_development_deactivated"
 #: The authority an upload-time OCR acceptance is recorded under (lane PX,
 #: decision 3). A person's review carries ``human_review``.
 AUTOMATIC_OCR_AUTHORITY = "automatic_upload_ocr"
@@ -211,15 +132,13 @@ class ProtocolAnalysisUnavailableError(ProtocolCatalogError):
     code = "protocol_analysis_not_configured"
 
 
-class ProtocolApprovalError(ProtocolCatalogError):
-    code = "protocol_approval_denied"
-
-
 class ProtocolOcrRequiredError(ProtocolCatalogError):
     code = "ocr_required"
 
 
 class ProtocolOcrReviewError(ProtocolCatalogError):
+    """An OCR result that does not hold against the source (evidence, not a person's review)."""
+
     code = "protocol_ocr_review_invalid"
 
 
@@ -235,23 +154,6 @@ class ProtocolChunkMergeConflictError(ProtocolCatalogError):
     code = "merge_conflict"
 
 
-class ApprovalPolicy(Protocol):
-    def permits(self, presented_secret: str | None) -> bool: ...
-
-
-@dataclass(frozen=True)
-class SharedSecretApprovalPolicy:
-    configured_secret: str | None
-
-    def permits(self, presented_secret: str | None) -> bool:
-        if not self.configured_secret or not presented_secret:
-            return False
-        return hmac.compare_digest(
-            hashlib.sha256(presented_secret.encode("utf-8")).digest(),
-            hashlib.sha256(self.configured_secret.encode("utf-8")).digest(),
-        )
-
-
 @dataclass(frozen=True)
 class ProtocolCatalogEntry:
     protocol_id: str
@@ -260,12 +162,18 @@ class ProtocolCatalogEntry:
     source_sha256: str
     revision_id: str
     readiness_status: str
-    approval_status: str
     analysis_status: str
     step_count: int
     created_at: str
     available_for_execution: bool
     lifecycle_state: str = "uploaded"
+    #: The readiness reasons that keep this revision out of execution under
+    #: the MVP rule (decision of 2026-10-08): nothing runnable came out of the
+    #: analysis, or a page could not be read. Empty when it may run.
+    execution_blocker_codes: tuple[str, ...] = ()
+    #: The curated development fixture, as against an uploaded PDF's own
+    #: analysis. Said on screen and in the report; it grants nothing.
+    development_only: bool = False
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -275,12 +183,12 @@ class ProtocolCatalogEntry:
             "source_sha256": self.source_sha256,
             "revision_id": self.revision_id,
             "readiness_status": self.readiness_status,
-            "approval_status": self.approval_status,
             "analysis_status": self.analysis_status,
             "step_count": self.step_count,
             "created_at": self.created_at,
             "available_for_execution": self.available_for_execution,
-            "development_only": self.approval_status == "development_only",
+            "execution_blocker_codes": list(self.execution_blocker_codes),
+            "development_only": self.development_only,
             "lifecycle_state": self.lifecycle_state,
         }
 
@@ -465,64 +373,75 @@ READINESS_REASON_KO: dict[str, str] = {
     "no_executable_steps": (
         "실행할 단계를 원문에서 찾지 못했습니다. 원문을 확인하고 '분석 다시 시도'를 누르세요."),
     "unsupported_conditional_branch": (
-        "조건·선택 분기(예: '새로 만든 튜브면 36~41단계를 두 번 더 반복')가 있어 아직 실행 "
-        "기능이 없습니다. 테스트 모드에서는 시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+        "조건·선택 분기(예: '새로 만든 튜브면 36~41단계를 두 번 더 반복')가 있습니다. "
+        "그 단계에 이르면 조건에 해당하는지 묻고 답대로 안내합니다."),
     "unsupported_fixed_range_repetition": (
-        "정해진 범위의 단계 반복은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 수 "
-        "있고, 운영에서는 검토자가 판단합니다."),
+        "정해진 범위의 단계 반복이 있습니다. 범위의 끝에서 회차를 세어 안내합니다."),
     "unsupported_operator_determined_repetition": (
-        "작업자가 횟수를 정하는 반복은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 "
-        "수 있고, 운영에서는 검토자가 판단합니다."),
+        "작업자가 횟수를 정하는 반복이 있습니다. 범위의 첫 단계에서 몇 번 하실지 묻습니다."),
     "unsupported_repeat_until": (
-        "조건이 될 때까지 반복하는 지시는 아직 실행 기능이 없습니다. 테스트 모드에서는 "
-        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+        "조건이 될 때까지 반복하는 지시가 있습니다. 그 단계에서 관찰 결과를 묻습니다."),
     "unsupported_parallel_background_work": (
-        "동시에 또는 백그라운드로 진행하는 작업은 아직 실행 기능이 없습니다. 테스트 "
-        "모드에서는 시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+        "동시에 또는 백그라운드로 진행하는 작업은 아직 안내 기능이 없습니다. 그 단계에 이르면 "
+        "한 번 알리고 원문을 읽어 드립니다."),
     "unsupported_recurring_reminder": (
-        "반복 알림은 아직 실행 기능이 없습니다. 테스트 모드에서는 시작할 수 있고, 운영에서는 "
-        "검토자가 판단합니다."),
+        "반복 알림은 아직 안내 기능이 없습니다. 그 단계에 이르면 한 번 알리고 원문을 읽어 "
+        "드립니다."),
     "unsupported_recurring_action": (
-        "일정 간격으로 되풀이하는 동작은 아직 실행 기능이 없습니다. 테스트 모드에서는 "
-        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+        "일정 간격으로 되풀이하는 동작은 아직 안내 기능이 없습니다. 그 단계에 이르면 한 번 "
+        "알리고 원문을 읽어 드립니다."),
     "unsupported_reusable_subprocedure": (
-        "다른 곳에서 다시 쓰는 하위 절차는 아직 실행 기능이 없습니다. 테스트 모드에서는 "
-        "시작할 수 있고, 운영에서는 검토자가 판단합니다."),
+        "다른 곳에서 다시 쓰는 하위 절차는 아직 안내 기능이 없습니다. 그 단계에 이르면 한 번 "
+        "알리고 원문을 읽어 드립니다."),
     "unresolved_ambiguity": (
-        "원문에 서로 다른 두 서술이 있어 어느 쪽이 맞는지 정해지지 않았습니다. 검토자가 "
-        "검토 화면에서 기준이 되는 서술 하나와 그 원문 근거를 고릅니다."),
+        "원문에 서로 다른 두 서술이 있어 어느 쪽이 맞는지 정해지지 않았습니다. 그 단계에서는 "
+        "원문을 그대로 읽어 드리니 실험자가 원문을 보고 판단하세요."),
     "unresolved_execution_value_conflict": (
-        "실행에 쓰는 값이 서로 충돌합니다. 연구자가 어느 값을 쓸지 정해야 합니다."),
+        "실행에 쓰는 값이 원문 안에서 서로 다릅니다. 그 단계에서 원문을 그대로 읽어 드리니 "
+        "실험자가 어느 값을 쓸지 정하세요."),
     "safety_critical_conflict": (
-        "안전에 중요한 충돌이 있어 실행할 수 없습니다. 검토자 확인이 필요합니다."),
+        "안전에 중요한 값이 원문 안에서 서로 달라 실행할 수 없습니다. 원문을 확인하고 고친 "
+        "PDF 를 올리세요."),
     "no_declared_safety_warnings": (
-        "이 프로토콜의 안전 경고를 검토자가 실행 전에 확인해야 합니다. 분석이 뽑은 경고는 "
-        "모델 판단이라 그 자체로 확인을 대신하지 못합니다."),
+        "원문의 안전 주의는 시작 전 화면에 모아 보이고, 각 단계에서 원문 그대로 읽어 드립니다. "
+        "시작을 누르면 안전 주의를 확인한 것으로 기록합니다."),
     "source_page_requires_ocr": (
         "원문 {pages}쪽은 글자 층이 없어 OCR 글이 필요합니다. 업로드 때 OCR 이 돌고 나면 "
         "다음 분석부터 이 사유는 사라집니다."),
     "source_page_not_fully_read": (
-        "분석이 원문 {pages}쪽에 적힌 값을 다 다루지 못했습니다. 검토자가 그 쪽을 읽고 "
-        "확인합니다."),
+        "분석이 원문 {pages}쪽에 적힌 값을 다 다루지 못했습니다. 그 쪽의 단계에 이르면 쪽 "
+        "원문을 그대로 보여 드리니 직접 확인하세요."),
     "declined_value_not_resolved": (
-        "분석이 지시가 아니라고 본 원문 값이 있습니다. 검토자가 그 판단이 맞는지 확인합니다."),
+        "분석이 지시가 아니라고 본 원문 값이 있습니다. 원문 단계를 그대로 읽어 드리니 "
+        "실험자가 확인하세요."),
     "excessive_declined_values": (
-        "지시가 아니라고 본 원문 값이 너무 많습니다. 쪽을 제대로 읽지 않았을 수 있어 "
-        "검토자가 확인합니다."),
+        "지시가 아니라고 본 원문 값이 너무 많습니다. 쪽을 제대로 읽지 않았을 수 있으니 "
+        "원문을 함께 보며 진행하세요."),
     "source_states_an_uncaptured_repetition": (
-        "원문에 적힌 반복 지시를 분석이 놓쳤습니다. 검토자가 그 구절을 읽고 확인합니다."),
+        "원문에 적힌 반복 지시를 분석이 놓쳤습니다. 그 단계의 원문을 그대로 읽어 드리니 "
+        "실험자가 반복을 확인하세요."),
     "unconfirmed_fixed_repetition": (
-        "정해진 반복 횟수를 검토자가 실행 전에 확인해야 합니다. 분석이 적은 횟수는 모델 "
-        "판단입니다."),
+        "정해진 반복 횟수는 분석이 원문에서 읽은 값입니다. 범위의 끝에서 그 횟수로 회차를 "
+        "세어 안내합니다."),
     "missing_execution_critical_value": (
-        "실행에 꼭 필요한 값이 원문에 없습니다. 검토자가 원문을 확인합니다."),
+        "실행에 꼭 필요한 값이 원문에 없습니다. 그 단계에서 원문을 그대로 읽어 드리니 "
+        "실험자가 값을 정하세요."),
+}
+#: What a person does about each execution blocker, for the pipeline line.
+_BLOCKER_ACTIONS: dict[str, str] = {
+    "no_executable_steps": "원문을 확인하고 '분석 다시 시도'를 누르세요.",
+    "invalid_protocol": "'분석 다시 시도'를 누르세요.",
+    "source_page_requires_ocr": (
+        "OCR 공급자가 설정돼 있으면 'OCR 텍스트 추출'을 누르세요. 없으면 글자 층이 있는 "
+        "PDF 를 올리세요."),
+    "safety_critical_conflict": "원문을 확인하고 고친 PDF 를 올리세요.",
 }
 _READINESS_LABEL_KO = {
     "guidance_ready": "실행 안내 준비 완료",
-    "analysis_required": "실행 전 확인할 사유가 남아 있음",
+    "analysis_required": "시작 전에 읽을 알림이 있음",
 }
 _ANALYSIS_REQUIRED_LABEL_KO = "구조 분석이 아직 끝나지 않았습니다."
-_ANALYSIS_REQUIRED_MESSAGE_KO = "검토와 실행에 앞서 구조 분석이 통과해야 합니다. 업로드 직후 자동으로 시작됩니다."
+_ANALYSIS_REQUIRED_MESSAGE_KO = "실행에 앞서 구조 분석이 통과해야 합니다. 업로드 직후 자동으로 시작됩니다."
 _PAGE_NUMBERS = re.compile(r"(?<![\w.])\d+(?![\w.])")
 
 #: Where a document stands on its way to a start, in Korean (decision 4).
@@ -532,7 +451,6 @@ PIPELINE_STAGE_KO: dict[str, str] = {
     "analysis": "분석",
     "evidence": "근거 대조",
     "readiness": "실행 준비",
-    "activation": "사람 확인",
     "translation": "번역",
     "ready": "실행 가능",
 }
@@ -550,6 +468,42 @@ _ANALYSIS_FAILURE_KO: dict[str, str] = {
     "chunk_analysis_failed": "큰 문서의 일부 분석이 실패했습니다.",
     "merge_conflict": "큰 문서의 분석 결과를 합치다 충돌이 났습니다.",
 }
+
+
+def _safety_notice_sources(protocol: Any) -> list[dict[str, object]]:
+    """Every safety statement the source declares, step by step, verbatim.
+
+    The screen the experimenter reads before pressing start (decision of
+    2026-10-08): the step's warnings and its sub-actions' warnings in source
+    order, each with the page it stands on. The words are the document's own
+    (``evidence.source_excerpt`` where the server reconstructed one, else the
+    statement text); nothing is summarised.
+    """
+
+    items: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for section in protocol.sections:
+        for step in section.steps:
+            statements = list(step.warnings)
+            for action in step.sub_actions:
+                statements.extend(action.warnings)
+            for index, statement in enumerate(statements, 1):
+                source = " ".join(
+                    str(statement.evidence.source_excerpt
+                        or statement.source_text or "").split()
+                )
+                if not source or (step.step_id, source) in seen:
+                    continue
+                seen.add((step.step_id, source))
+                items.append({
+                    "step_id": step.step_id,
+                    "step_label": step.source_label,
+                    "statement_id": statement.statement_id,
+                    "warning_index": index,
+                    "source_page_number": statement.evidence.source_page_number,
+                    "source_text": source,
+                })
+    return items
 
 
 def readiness_reason_korean(code: str, message: str | None = None) -> str | None:
@@ -796,43 +750,33 @@ def _worker_analyze_chunk(
 
 
 class ProtocolCatalog:
-    """Catalog facade over immutable source, analysis, and approval records."""
+    """Catalog facade over immutable source and analysis records.
+
+    The execution rule (decision of 2026-10-08, lane DI): a revision may run
+    when its latest analysis passed -- which includes the source-evidence
+    check every analysis goes through -- and none of its readiness reasons
+    is an execution blocker (``experiment_protocol.execution_blocking_reasons``:
+    nothing runnable, or a page that could not be read). The one human
+    confirmation is the experimenter pressing start, recorded by the server
+    on the session. There is no approval, no reviewer finding and no
+    development activation here any more; the rows those paths wrote stay in
+    the ledger and are no longer read.
+    """
 
     def __init__(
         self,
         store: ProtocolStore,
         *,
-        skip_readiness_gates: bool = False,
-        on_execution_authorized: (
-            Callable[["ProtocolCatalog", str], None] | None
-        ) = None,
         on_analysis_ready: (
             Callable[["ProtocolCatalog", str], None] | None
         ) = None,
     ) -> None:
-        """``skip_readiness_gates`` is the development test-mode switch.
-
-        It does not change a readiness verdict. It lets an analysed protocol
-        with outstanding readiness gates be activated for development and then
-        executed; the gates are still computed, listed and reported exactly as
-        before. No analysis still means no execution, and service approval
-        still requires cleared gates. The server decides when to pass it (see
-        ``_test_mode_skips_readiness_gates``); every other caller gets False.
-        """
-
         self.store = store
-        self.skip_readiness_gates = skip_readiness_gates
-        #: Told the protocol id after an activation or approval leaves the
-        #: latest revision executable -- the moment its sentences are
-        #: translated once (``protocol_translation``). It adds no authority
-        #: and its failure never undoes the decision already recorded.
-        self.on_execution_authorized = on_execution_authorized
-        #: Told the protocol id as soon as an analysis has passed and is
-        #: waiting for review -- the moment its sentences start being
-        #: translated (lane PX, human decision 1 of 2026-10-06), so the
-        #: Korean is ready by the time a person makes it executable. Like
-        #: the hook above it adds no authority and its failure changes
-        #: nothing the catalog recorded.
+        #: Told the protocol id as soon as an analysis has passed -- the
+        #: moment its sentences start being translated (lane PX, human
+        #: decision 1 of 2026-10-06), so the Korean is ready by the time the
+        #: experimenter presses start. It adds no authority and its failure
+        #: changes nothing the catalog recorded.
         self.on_analysis_ready = on_analysis_ready
 
     def _analysis_ready(self, entry: ProtocolCatalogEntry) -> None:
@@ -843,17 +787,6 @@ class ProtocolCatalog:
         except Exception as exc:  # noqa: BLE001 - see on_analysis_ready
             logging.getLogger(__name__).warning(
                 "protocol.analysis_ready.hook_failed protocol_id=%s error=%s",
-                entry.protocol_id, type(exc).__name__,
-            )
-
-    def _execution_authorized(self, entry: ProtocolCatalogEntry) -> None:
-        if self.on_execution_authorized is None or not entry.available_for_execution:
-            return
-        try:
-            self.on_execution_authorized(self, entry.protocol_id)
-        except Exception as exc:  # noqa: BLE001 - see on_execution_authorized
-            logging.getLogger(__name__).warning(
-                "protocol.execution_authorized.hook_failed protocol_id=%s error=%s",
                 entry.protocol_id, type(exc).__name__,
             )
 
@@ -1093,7 +1026,7 @@ class ProtocolCatalog:
                 dict.fromkeys(
                     (
                         *extraction.warnings,
-                        "OCR-derived text is review evidence, not an approved protocol.",
+                        "OCR-derived text is read as source text; it is not an analysed protocol.",
                     )
                 )
             ),
@@ -1105,7 +1038,7 @@ class ProtocolCatalog:
         provider: ProtocolOcrProvider,
         *,
         ocr_id: str,
-        accepted_automatically: bool = False,
+        accepted_automatically: bool = True,
     ) -> dict[str, object]:
         """Read the pages without a usable text layer with the OCR provider.
 
@@ -1114,9 +1047,9 @@ class ProtocolCatalog:
         missing or unreadable) the validated result is accepted for analysis
         at once, under the authority ``automatic_upload_ocr`` written into
         the ledger, and the one confirmation a person gives before execution
-        (test-mode start, or review and approval) covers it; there is no
-        separate OCR approval step. Each OCR page keeps its provider and its
-        numeric-review mark, so the review still shows which pages came from
+        (the experimenter pressing start) covers it; there is no separate
+        OCR approval step. Each OCR page keeps its provider and its
+        numeric-review mark, so the screen still shows which pages came from
         OCR and where the two engines read different numbers.
         """
 
@@ -1222,174 +1155,6 @@ class ProtocolCatalog:
             )
             raise
         return self.ocr_status(protocol_id)
-
-    def review_ocr(
-        self,
-        protocol_id: str,
-        *,
-        decision: str,
-        policy: ApprovalPolicy,
-        presented_secret: str | None,
-        actor_principal_id: str | None = None,
-        actor_role: str | None = None,
-        comment: str = "OCR page text reviewed against the source PDF.",
-    ) -> dict[str, object]:
-        if not policy.permits(presented_secret):
-            raise ProtocolApprovalError("OCR review authorization failed.")
-        if decision not in {"accepted", "rejected"}:
-            raise ProtocolOcrReviewError("OCR review decision is invalid.")
-        revision = self._latest_protocol_revision(protocol_id)
-        current = self.ocr_status(protocol_id)
-        if current.get("state") != "review_required":
-            raise ProtocolOcrReviewError("OCR output is not awaiting review.")
-        ocr_id = current.get("ocr_id")
-        if not isinstance(ocr_id, str):
-            raise ProtocolOcrReviewError("OCR review identity is invalid.")
-        payload: dict[str, object] = {
-            "ocr_id": ocr_id,
-            "decision": decision,
-            "comment": comment[:4000],
-            "authority": "human_review",
-            "executable": False,
-        }
-        if actor_principal_id is not None:
-            if not re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}", actor_principal_id
-            ):
-                raise ProtocolOcrReviewError("OCR reviewer identity is invalid.")
-            if actor_role not in {
-                "reviewer",
-                "lab_admin",
-                "organization_admin",
-            }:
-                raise ProtocolOcrReviewError("OCR reviewer role is invalid.")
-            payload.update(
-                {
-                    "actor_principal_id": actor_principal_id,
-                    "actor_role": actor_role,
-                }
-            )
-        self.store.append_event(
-            f"ocr-reviewed-{ocr_id}-{decision}",
-            protocol_id,
-            revision.revision_number,
-            _OCR_REVIEWED_EVENT,
-            payload,
-        )
-        return self.ocr_status(protocol_id)
-
-    def _is_approved(
-        self,
-        revision: ProtocolRevisionRecord,
-        analysis: AnalysisRevisionRecord | None,
-    ) -> bool:
-        """Whether a recorded authority stands for this exact analysis.
-
-        A development activation can be withdrawn, and a withdrawn one must
-        stop granting execution the moment it is withdrawn -- otherwise
-        "activate" would be a one-way door and the ledger would record a
-        decision nobody could take back.  So development events are read in
-        order and only the last one counts.  A service approval is not
-        withdrawable here and keeps its existing meaning.
-        """
-
-        if analysis is None:
-            return False
-        development_decision: str | None = None
-        for event in self.store.list_events(revision.experiment_id):
-            if event.protocol_revision_number != revision.revision_number:
-                continue
-            if not isinstance(event.payload, dict):
-                continue
-            if not (
-                event.analysis_revision_number is None
-                or event.analysis_revision_number
-                == analysis.analysis_revision_number
-            ):
-                continue
-            decision = event.payload.get("decision")
-            if (
-                event.event_type == _APPROVAL_EVENT
-                and decision == "approved"
-            ):
-                return True
-            if event.event_type == _DEVELOPMENT_ACTIVATION_EVENT and (
-                decision == "development_activated"
-            ):
-                development_decision = "activated"
-            elif event.event_type == _DEVELOPMENT_DEACTIVATION_EVENT and (
-                decision == "development_deactivated"
-            ):
-                development_decision = "withdrawn"
-        return development_decision == "activated"
-
-    def approval_context(self, protocol_id: str) -> dict[str, object]:
-        """Return the recorded approval actor and time without adding authority.
-
-        This is a read-only researcher-facing projection of the same append-only
-        event that already determines execution availability.  Missing actor
-        metadata remains explicit instead of being inferred from an approval
-        state or service policy.
-        """
-
-        entry = self.get_entry(protocol_id)
-        final_approval = entry.approval_status == "approved"
-        if entry.approval_status not in {"approved", "development_only"}:
-            return {
-                "status": "review_required",
-                "final_approval": False,
-                "actor_principal_id": None,
-                "actor_role": None,
-                "actor_display_name": None,
-                "recorded_at": None,
-                "authority": None,
-            }
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            entry.revision_id
-        )
-        matching = tuple(
-            event
-            for event in self.store.list_events(protocol_id)
-            if event.event_type
-            in {
-                _APPROVAL_EVENT,
-                _DEVELOPMENT_FIXTURE_EVENT,
-                _DEVELOPMENT_ACTIVATION_EVENT,
-            }
-            and event.protocol_revision_number == protocol_revision_number
-            and (
-                event.analysis_revision_number is None
-                or event.analysis_revision_number == analysis_revision_number
-            )
-            and isinstance(event.payload, dict)
-            and event.payload.get("decision")
-            in {"approved", "development_activated", "development_only"}
-        )
-        event = matching[-1] if matching else None
-        payload = event.payload if event is not None else {}
-        actor_principal_id = payload.get("actor_principal_id")
-        actor_role = payload.get("actor_role")
-        actor_display_name = payload.get("actor_display_name")
-        authority = payload.get("authority")
-        return {
-            "status": "approved" if final_approval else "development_only",
-            "final_approval": final_approval,
-            "actor_principal_id": (
-                actor_principal_id
-                if isinstance(actor_principal_id, str) and actor_principal_id
-                else None
-            ),
-            "actor_role": (
-                actor_role if isinstance(actor_role, str) and actor_role else None
-            ),
-            # Lane R6, decision 5: the approver's readable name, where the
-            # approval recorded one; None otherwise, never guessed.
-            "actor_display_name": _display_name(actor_display_name),
-            "recorded_at": event.recorded_at if event is not None else None,
-            "authority": (
-                authority if isinstance(authority, str) and authority else None
-            ),
-        }
 
     def _latest_chunk_events(
         self,
@@ -1707,35 +1472,27 @@ class ProtocolCatalog:
                 }[lifecycle_events[-1].event_type]
             elif analysis_status == "ocr_required":
                 lifecycle_state = "blocked"
-        approved = self._is_approved(revision, analysis)
-        if approved:
-            is_dev_only = any(
-                event.event_type in (_DEVELOPMENT_FIXTURE_EVENT, _DEVELOPMENT_ACTIVATION_EVENT)
-                and event.protocol_revision_number == revision.revision_number
-                for event in self.store.list_events(revision.experiment_id)
-            )
-            analysis_status = "active_development" if is_dev_only else "approved"
-            approval_status = "development_only" if is_dev_only else "approved"
-            lifecycle_state = "executable_draft" if is_dev_only else "approved"
-        else:
-            approval_status = "unapproved"
+        development_only = any(
+            event.event_type == _DEVELOPMENT_FIXTURE_EVENT
+            and event.protocol_revision_number == revision.revision_number
+            for event in self.store.list_events(revision.experiment_id)
+        )
         readiness = (
             analysis.readiness_status if analysis else "analysis_required"
         )
-        execution_ready = analysis is not None and (
-            readiness == domain.ReadinessStatus.GUIDANCE_READY.value
-            or self._readiness_gates_cleared(
-                revision.experiment_id, revision.revision_number, analysis
+        # The execution rule (decision of 2026-10-08): a passed analysis whose
+        # readiness carries no execution blocker may run. A missing or failed
+        # analysis stays out; so does one that found no step to run or a
+        # page it could not read. Every other readiness reason is a notice
+        # the experimenter sees before pressing start.
+        blocker_codes: tuple[str, ...] = ()
+        if analysis is not None:
+            blocker_codes = tuple(
+                reason.code.value
+                for reason in domain.execution_blocking_reasons(analysis.readiness)
             )
-        )
-        if analysis is not None and not approved:
-            lifecycle_state = "review_required" if execution_ready else "blocked"
-        # Test mode applies here and not to execution_ready, so the verdict and
-        # the lifecycle label above still say what the gates say. ``approved``
-        # already requires an analysis, so a missing or failed one stays out.
-        available = bool(
-            approved and (execution_ready or self.skip_readiness_gates)
-        )
+            lifecycle_state = "blocked" if blocker_codes else "ready"
+        available = analysis is not None and not blocker_codes
         title = (
             analysis.protocol.metadata.title
             if analysis is not None
@@ -1751,7 +1508,6 @@ class ProtocolCatalog:
                 analysis.analysis_revision_number if analysis else None,
             ),
             readiness_status=readiness,
-            approval_status=approval_status,
             analysis_status=analysis_status,
             step_count=(
                 sum(len(section.steps) for section in analysis.protocol.sections)
@@ -1761,6 +1517,8 @@ class ProtocolCatalog:
             created_at=revision.created_at,
             available_for_execution=available,
             lifecycle_state=lifecycle_state,
+            execution_blocker_codes=blocker_codes,
+            development_only=development_only,
         )
 
     def list_entries(self) -> tuple[ProtocolCatalogEntry, ...]:
@@ -1784,7 +1542,6 @@ class ProtocolCatalog:
             "source_sha256": fixture.source_pdf_sha256,
             "status": fixture.status,
             "development_only": True,
-            "final_approval": False,
         }
 
     @staticmethod
@@ -2030,14 +1787,12 @@ class ProtocolCatalog:
                 ],
             },
             "capability_policy_id": domain.P1_CAPABILITY_POLICY.profile_id,
-            "gates": {
-                "parsing": "passed",
-                "structural_readiness": "pending",
-                "hazard_review": "pending",
-                "human_approval": "pending",
-                "operational_authorization": "blocked",
-            },
-            "reviewer_actions": ["retry_analysis"],
+            # The execution rule's two lists (decision of 2026-10-08): what
+            # still keeps this revision from running, and what the
+            # experimenter is told before starting. Empty before an analysis.
+            "execution_blockers": [],
+            "execution_notices": [],
+            "safety_notice_sources": [],
         }
         ocr_projection = base["ocr"]
         base["pipeline"] = self._pipeline(
@@ -2050,27 +1805,7 @@ class ProtocolCatalog:
             return base
 
         protocol = analysis.protocol
-        # A reviewer reads the declared hazards whenever the Protocol declares
-        # any.  There is no hazard word list: deciding which wording is
-        # dangerous is the reviewer's judgement, and a fixed list quietly
-        # reported "passed" for every hazard it did not happen to contain --
-        # including, worst of all, for a Protocol where extraction had produced
-        # no warning at all.  The zero case is now a blocking readiness reason
-        # (``no_declared_safety_warnings``), so it is never reported as passed
-        # here either.
         declared_warning_count = domain.declared_safety_warning_count(protocol)
-        # Hazard review follows the readiness gate, not the count.  It used to
-        # be required only when the count was non-zero, which meant a single
-        # provider-produced warning both cleared the gate and, here, was the
-        # reason a reviewer was asked to look -- while a Protocol with no
-        # warning at all asked for no hazard review.  The count is reported
-        # beside this as information; the gate decides.
-        hazard_review_required = (
-            domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
-            in analysis.readiness.reason_codes
-            or (protocol.metadata.source_status or "").casefold()
-            in {"in development", "development", "draft"}
-        )
         metadata = {
             field.name: _review_value(getattr(protocol.metadata, field.name))
             for field in fields(protocol.metadata)
@@ -2100,111 +1835,65 @@ class ProtocolCatalog:
                     len(item.get("declined_segment_ids") or ())
                     for item in analysis.page_coverage
                 ),
-                "hazard_review_required": hazard_review_required,
                 "declared_safety_warning_count": declared_warning_count,
-                # Whether every remaining blocking reason is an acknowledged
-                # gate. The catalog owns the acknowledgement ledger, so it
-                # answers this; callers must not re-derive it from the
-                # readiness status, which does not know about acknowledgements.
-                "readiness_gates_cleared": self._readiness_gates_cleared(
-                    revision.experiment_id,
-                    revision.revision_number,
-                    analysis,
+                "execution_blockers": self._execution_reasons(
+                    analysis, blocking=True
                 ),
-                "gates": {
-                    "parsing": "passed",
-                    "structural_readiness": (
-                        "passed"
-                        if analysis.readiness_status
-                        == domain.ReadinessStatus.GUIDANCE_READY.value
-                        else "blocked"
-                    ),
-                    # "not_declared" used to be reported whenever the count
-                    # was zero, which read as a cleared gate for the case that
-                    # most needs a reviewer. The gate decides here too.
-                    "hazard_review": (
-                        "review_required"
-                        if hazard_review_required
-                        else "passed"
-                    ),
-                    "human_approval": (
-                        "passed" if entry.approval_status == "approved" else "pending"
-                    ),
-                    "operational_authorization": (
-                        "passed"
-                        if entry.approval_status == "approved"
-                        and entry.available_for_execution
-                        else "simulation_only"
-                        if entry.approval_status == "development_only"
-                        and entry.available_for_execution
-                        else "blocked"
-                    ),
-                },
-                # Every reason still blocking, each said to be a person's to
-                # clear or not. The panel used to show whichever single label
-                # its own status mapping happened to reach, so in-gel -- held
-                # by four reasons, two of which nobody can clear -- read as
-                # "no development activation recorded", which invites a
-                # reviewer to press activate and wonder why nothing happens.
-                "outstanding_blockers": self._outstanding_blockers(
-                    revision, analysis
+                "execution_notices": self._execution_reasons(
+                    analysis, blocking=False
                 ),
-                # What a person can actually do here, not what the domain has
-                # names for. STEP 25 measured the old list: of
-                # review_hazards / approve / reject, the UI could reach none.
-                "reviewer_actions": self._available_reviewer_actions(
-                    revision, analysis
-                ),
-                "reviewer_findings": self._recorded_findings(
-                    revision, analysis
-                ),
+                # The source's own safety statements, step by step, for the
+                # screen the experimenter reads before pressing start. The
+                # server adds the Korean beside each (it holds the
+                # translation store); the words here are the document's.
+                "safety_notice_sources": _safety_notice_sources(protocol),
             }
         )
         return base
 
-    #: Which blocking reasons a person can clear, and with what.
-    #: ``kind`` is the split a reviewer needs: is this mine to settle, or is
-    #: the system simply unable to run this protocol?
-    _BLOCKER_RESOLUTION: dict[str, dict[str, str]] = {
-        domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        domain.ReadinessReasonCode.SOURCE_TEXT_CROSS_CHECK_UNAVAILABLE.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        domain.ReadinessReasonCode.SOURCE_PAGE_NOT_FULLY_READ.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        # Not an acknowledgement: a reviewer clears it by accepting the
-        # page's OCR text, after which a new analysis no longer carries it.
-        domain.ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR.value: {
-            "kind": "reviewer_can_clear",
-            "action": "run_ocr",
-        },
-        domain.ReadinessReasonCode.DECLINED_VALUE_NOT_RESOLVED.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        domain.ReadinessReasonCode.EXCESSIVE_DECLINED_VALUES.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        domain.ReadinessReasonCode.SOURCE_STATES_AN_UNCAPTURED_REPETITION.value: {
-            "kind": "reviewer_can_clear",
-            "action": "acknowledge_gate",
-        },
-        domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value: {
-            "kind": "reviewer_can_clear",
-            "action": "resolve_ambiguity",
-        },
-        domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value: {
-            "kind": "reviewer_can_clear",
-            "action": "confirm_repetition",
-        },
-    }
+    @staticmethod
+    def _execution_reasons(
+        analysis: Any, *, blocking: bool
+    ) -> list[dict[str, object]]:
+        """The readiness reasons of one kind, each with its Korean line.
+
+        ``blocking`` selects the reasons that keep the revision out of
+        execution; otherwise the notices the experimenter reads before
+        starting. ``kind`` says what sort of notice it is:
+        ``no_guidance_yet`` for a construct this version cannot guide (said
+        once more at the step, with the source read out) and
+        ``source_note`` for a finding about the source itself.
+        """
+
+        reasons = (
+            domain.execution_blocking_reasons(analysis.readiness)
+            if blocking else domain.execution_notice_reasons(analysis.readiness)
+        )
+        return [
+            {
+                "code": reason.code.value,
+                "message": reason.message,
+                "message_ko": readiness_reason_korean(
+                    reason.code.value, reason.message
+                ),
+                "kind": (
+                    "blocking" if blocking
+                    else "no_guidance_yet"
+                    if reason.code in domain.NO_GUIDANCE_YET_REASON_CODES
+                    else "source_note"
+                ),
+                "source_page_number": (
+                    reason.evidence.source_page_number
+                    if reason.evidence else None
+                ),
+                "source_excerpt": (
+                    reason.evidence.source_excerpt
+                    if reason.evidence else None
+                ),
+                "step_id": reason.step_id,
+            }
+            for reason in reasons
+        ]
 
     def pipeline_status(self, protocol_id: str) -> dict[str, object]:
         """Where this document stands on the way to a start (lane PX, 4)."""
@@ -2281,7 +1970,8 @@ class ProtocolCatalog:
         if entry.available_for_execution:
             return result(
                 "ready", blocked=False,
-                message="실행할 수 있습니다. '실행할 프로토콜'에서 골라 실험을 시작하세요.",
+                message="분석을 통과했습니다. 실행할 수 있습니다.",
+                action="시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요.",
                 ocr_page_numbers=ocr_pages)
         if analysis is None:
             if ocr_state in {"queued", "in_progress"}:
@@ -2342,238 +2032,25 @@ class ProtocolCatalog:
                 message="분석 대기 중입니다. 업로드 직후 자동으로 시작되며, 시작되지 않았다면 "
                         "'분석 다시 시도'를 누르세요.",
                 ocr_page_numbers=ocr_pages)
-        reasons = list(analysis.readiness.reasons)
-        cleared = self._readiness_gates_cleared(
-            revision.experiment_id, revision.revision_number, analysis)
-        if analysis.readiness.status is domain.ReadinessStatus.GUIDANCE_READY or cleared:
+        blockers = list(domain.execution_blocking_reasons(analysis.readiness))
+        if not blockers:
+            # Cannot happen while available_for_execution reads the same
+            # list, but a pipeline line must still say something true.
             return result(
-                "activation", blocked=False,
-                message="분석을 통과했고 남은 준비 사유가 없습니다. 실행 전 사람 확인 한 번이 남았습니다.",
-                action="'이 프로토콜로 시작'을 누르거나, 운영에서는 검토자가 승인합니다.",
-                ocr_page_numbers=ocr_pages)
-        if self.skip_readiness_gates:
-            return result(
-                "activation", blocked=False,
-                message=(f"분석을 통과했습니다. 남은 준비 사유 {len(reasons)}건은 테스트 모드에서 "
-                         "건너뛰고 시작할 수 있습니다."),
-                action="'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다.",
-                remaining_reason_codes=[reason.code.value for reason in reasons],
+                "ready", blocked=False,
+                message="분석을 통과했습니다. 실행할 수 있습니다.",
+                action="시작 전 화면의 안전 주의를 읽고 '이 프로토콜로 시작'을 누르세요.",
                 ocr_page_numbers=ocr_pages)
         first = readiness_reason_korean(
-            reasons[0].code.value, reasons[0].message) if reasons else "실행 준비 사유가 남아 있습니다."
-        capability = [
-            reason.code.value for reason in reasons
-            if reason.code.value not in self._BLOCKER_RESOLUTION
-        ]
+            blockers[0].code.value, blockers[0].message) or "실행을 막는 사유가 있습니다."
         return result(
             "readiness", blocked=True,
-            message=f"{first}" + (f" (외 {len(reasons) - 1}건)" if len(reasons) > 1 else ""),
-            action=("실행 기능이 없는 사유가 있어 사람이 해제할 수 없습니다. 테스트 모드에서만 시작할 "
-                    "수 있습니다." if capability
-                    else "검토자가 검토 화면에서 사유를 하나씩 확인·해제한 뒤 승인합니다."),
-            remaining_reason_codes=[reason.code.value for reason in reasons],
+            message=f"{first}" + (f" (외 {len(blockers) - 1}건)" if len(blockers) > 1 else ""),
+            action=_BLOCKER_ACTIONS.get(
+                blockers[0].code.value,
+                "원문을 확인하고 고친 PDF 를 올리거나 '분석 다시 시도'를 누르세요."),
+            remaining_reason_codes=[reason.code.value for reason in blockers],
             ocr_page_numbers=ocr_pages)
-
-    def _outstanding_blockers(
-        self, revision: ProtocolRevisionRecord, analysis: Any
-    ) -> list[dict[str, object]]:
-        """Every blocking reason, with who can clear it and how."""
-
-        if analysis is None:
-            return []
-        cleared = self._acknowledged_gates(
-            revision.experiment_id,
-            revision.revision_number,
-            analysis.analysis_revision_number,
-        )
-        blockers: list[dict[str, object]] = []
-        for reason in analysis.readiness.reasons:
-            code = reason.code.value
-            resolution = self._BLOCKER_RESOLUTION.get(code)
-            blockers.append(
-                {
-                    "code": code,
-                    "message": reason.message,
-                    "message_ko": readiness_reason_korean(code, reason.message),
-                    # A capability this profile does not have is not a
-                    # judgement anyone is withholding. Saying so is the
-                    # difference between "fetch a reviewer" and "wait for a
-                    # release".
-                    "kind": (
-                        resolution["kind"] if resolution
-                        else "capability_required"
-                    ),
-                    "reviewer_action": (
-                        resolution["action"] if resolution else None
-                    ),
-                    # "Has a person already settled this one?" -- asked of
-                    # the same check that clears the reason, not only of the
-                    # acknowledgement ledger. Reading acknowledgements alone
-                    # left a resolved ambiguity showing as untouched, which is
-                    # the misleading-display defect this field exists to fix.
-                    "already_acknowledged": self._reason_is_settled(
-                        revision, analysis, code, cleared
-                    ),
-                    "source_page_number": (
-                        reason.evidence.source_page_number
-                        if reason.evidence else None
-                    ),
-                    "source_excerpt": (
-                        reason.evidence.source_excerpt
-                        if reason.evidence else None
-                    ),
-                    "step_id": reason.step_id,
-                    # A finding that must cite evidence needs something to
-                    # cite. Measured on the curated fixture: its constructs
-                    # carry no segment ids at all, so a reviewer had nothing
-                    # to select and resolve-ambiguity refused every attempt.
-                    # The segments of the page the reason points at are
-                    # computed here from the server's own source bytes, which
-                    # is where a citation has to come from anyway.
-                    # The decision is a choice from a fixed vocabulary, not
-                    # prose: only one of these two sentences is sayable, and
-                    # only the first clears the reason. A UI that offers a
-                    # text box offers a refusal.
-                    "decision_options": (
-                        sorted(_AMBIGUITY_DECISIONS)
-                        if resolution
-                        and resolution["action"] == "resolve_ambiguity"
-                        else []
-                    ),
-                    "clearing_decision": (
-                        AMBIGUITY_SINGLE_AUTHORITATIVE
-                        if resolution
-                        and resolution["action"] == "resolve_ambiguity"
-                        else None
-                    ),
-                    "citable_segments": (
-                        self._citable_segments(revision, reason)
-                        if resolution
-                        and resolution["action"]
-                        in {"resolve_ambiguity", "confirm_repetition"}
-                        else []
-                    ),
-                }
-            )
-        return blockers
-
-    def _reason_is_settled(
-        self,
-        revision: ProtocolRevisionRecord,
-        analysis: Any,
-        code: str,
-        acknowledged: frozenset[str] | set[str],
-    ) -> bool:
-        """Whether a person's standing decision already covers this reason."""
-
-        if code in _ACKNOWLEDGEABLE_GATES:
-            return code in acknowledged
-        if code == domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value:
-            return self._every_ambiguity_resolved(
-                revision.experiment_id, revision.revision_number, analysis
-            )
-        if (
-            code
-            == domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value
-        ):
-            return self._every_fixed_repetition_confirmed(
-                revision.experiment_id, revision.revision_number, analysis
-            )
-        return False
-
-    def _citable_segments(
-        self, revision: ProtocolRevisionRecord, reason: Any
-    ) -> list[dict[str, object]]:
-        """Every segment on the page this reason cites, as choosable evidence."""
-
-        page_number = (
-            reason.evidence.source_page_number if reason.evidence else None
-        )
-        if not page_number:
-            return []
-        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
-        if pdf_object is None:
-            return []
-        try:
-            extraction = extract_protocol_pdf(
-                self.store.file_store.object_path(
-                    revision.pdf_checksum, expected_size=pdf_object.byte_size
-                )
-            )
-            segments = generate_page_evidence_segments(
-                extraction,
-                source_revision=_revision_id(revision.revision_number),
-                page_number=page_number,
-            )
-        except Exception:  # noqa: BLE001 - no citations rather than a guess
-            return []
-        return [
-            {
-                "segment_id": segment.segment_id,
-                "segment_index": segment.segment_index,
-                "source_page_number": segment.source_page_number,
-                "excerpt": segment.text[:400],
-            }
-            for segment in segments
-            if segment.text.strip()
-        ]
-
-    def _available_reviewer_actions(
-        self, revision: ProtocolRevisionRecord, analysis: Any
-    ) -> list[str]:
-        """Only operations this build can actually perform from a request."""
-
-        if analysis is None:
-            return []
-        actions = {
-            item["reviewer_action"]
-            for item in self._outstanding_blockers(revision, analysis)
-            if item["reviewer_action"] and not item["already_acknowledged"]
-        }
-        if self._recorded_findings(revision, analysis):
-            actions.add("revoke_finding")
-        return sorted(actions)
-
-    def _recorded_findings(
-        self, revision: ProtocolRevisionRecord, analysis: Any
-    ) -> list[dict[str, object]]:
-        """Who decided what, and when, for this exact analysis revision."""
-
-        if analysis is None:
-            return []
-        kinds = {
-            _GATE_ACKNOWLEDGEMENT_EVENT: "gate_acknowledged",
-            _REPETITION_CONFIRMATION_EVENT: "repetition_confirmed",
-            _REPETITION_REVOCATION_EVENT: "repetition_confirmation_revoked",
-            _AMBIGUITY_RESOLUTION_EVENT: "ambiguity_resolved",
-        }
-        findings = []
-        for event in self.store.list_events(revision.experiment_id):
-            if event.event_type not in kinds:
-                continue
-            if event.protocol_revision_number != revision.revision_number:
-                continue
-            if (
-                event.analysis_revision_number
-                != analysis.analysis_revision_number
-            ):
-                continue
-            payload = event.payload if isinstance(event.payload, dict) else {}
-            findings.append(
-                {
-                    "kind": kinds[event.event_type],
-                    "decision": payload.get("decision"),
-                    "reason_code": payload.get("reason_code"),
-                    "repetition_id": payload.get("repetition_id"),
-                    "ambiguity_id": payload.get("ambiguity_id"),
-                    "repeat_count": payload.get("repeat_count"),
-                    "actor_principal_id": payload.get("actor_principal_id"),
-                    "actor_role": payload.get("actor_role"),
-                    "recorded_at": event.recorded_at,
-                    "comment": payload.get("comment"),
-                }
-            )
-        return findings
 
     def register(
         self,
@@ -3183,1149 +2660,6 @@ class ProtocolCatalog:
         )
         return self.get_entry(protocol_id)
 
-    def _acknowledged_gates(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-    ) -> frozenset[str]:
-        """Gate reason codes a human has cleared for this analysis revision."""
-
-        return frozenset(
-            str(event.payload.get("reason_code"))
-            for event in self.store.list_events(protocol_id)
-            if event.event_type == _GATE_ACKNOWLEDGEMENT_EVENT
-            and event.protocol_revision_number == protocol_revision_number
-            and event.analysis_revision_number == analysis_revision_number
-            and isinstance(event.payload, dict)
-        )
-
-    def _readiness_gates_cleared(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis: Any,
-    ) -> bool:
-        """True when a person has cleared every blocking reason.
-
-        There are two ways a reason clears, and both need a person. A gate in
-        ``_ACKNOWLEDGEABLE_GATES`` clears when that exact gate is acknowledged.
-        ``unresolved_ambiguity`` clears only when *every* ambiguity the
-        analysis carries has a standing finding that one statement is
-        authoritative -- one settled ambiguity does not clear the reason, and a
-        finding that two statements are genuinely distinct does not clear it at
-        all, because that is a finding rather than a resolution.
-        ``unconfirmed_fixed_repetition`` clears only when every bounded
-        repetition has a standing confirmation whose count matches the analysed
-        one. A reviewer's label-disposition finding clears nothing: extraction
-        no longer proposes one, and a numbered line missing from the claims is
-        refused at the chunk long before readiness.
-
-        Anything else still blocks, and with nothing recorded the answer is
-        False. Nothing here inspects the ambiguous text.
-        """
-
-        blocking = set(analysis.readiness.reason_codes)
-        if not blocking:
-            return False
-        acknowledged = self._acknowledged_gates(
-            protocol_id,
-            protocol_revision_number,
-            analysis.analysis_revision_number,
-        )
-        for reason_code in blocking:
-            if reason_code in _ACKNOWLEDGEABLE_GATES:
-                if reason_code not in acknowledged:
-                    return False
-            elif (
-                reason_code
-                == domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value
-            ):
-                if not self._every_ambiguity_resolved(
-                    protocol_id, protocol_revision_number, analysis
-                ):
-                    return False
-            elif (
-                reason_code
-                == domain.ReadinessReasonCode.UNCONFIRMED_FIXED_REPETITION.value
-            ):
-                if not self._every_fixed_repetition_confirmed(
-                    protocol_id, protocol_revision_number, analysis
-                ):
-                    return False
-            else:
-                return False
-        return True
-
-    def _every_ambiguity_resolved(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis: Any,
-    ) -> bool:
-        """Every ambiguity in this analysis has a standing authoritative finding."""
-
-        outstanding = {
-            construct.ambiguity_id
-            for construct in analysis.protocol.constructs
-            if isinstance(construct, domain.SourceAmbiguity)
-            and not construct.resolved
-        }
-        if not outstanding:
-            return False
-        findings = self._ambiguity_findings(
-            protocol_id,
-            protocol_revision_number,
-            analysis.analysis_revision_number,
-        )
-        return all(
-            findings.get(ambiguity_id) == AMBIGUITY_SINGLE_AUTHORITATIVE
-            for ambiguity_id in outstanding
-        )
-
-    def acknowledge_readiness_gate(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        reason_code: str,
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Record a human clearing one readiness gate on one analysis revision.
-
-        These gates are deliberately not self-clearing: some protocols
-        genuinely carry no safety warning, and some environments genuinely
-        cannot run a second extraction engine.  Only a person can tell either
-        apart from a failure.  The decision is written to the append-only
-        ledger with the actor, role, comment and the store's ``recorded_at``
-        timestamp, so who cleared what, and when, stays auditable.
-        """
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            raise ProtocolApprovalError(
-                "A validated analysis revision is required for acknowledgement."
-            )
-        if reason_code not in _ACKNOWLEDGEABLE_GATES:
-            raise ProtocolApprovalError(
-                "This readiness reason cannot be cleared by acknowledgement."
-            )
-        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
-        revision = self.store.get_protocol_revision(
-            protocol_id, protocol_revision_number
-        )
-        if revision is None:
-            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
-        analysis = self.store.get_analysis_revision(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-        if reason_code not in analysis.readiness.reason_codes:
-            raise ProtocolApprovalError(
-                "This analysis revision does not carry that readiness gate."
-            )
-        self.store.append_event(
-            (
-                f"gate-ack-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}-{reason_code}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _GATE_ACKNOWLEDGEMENT_EVENT,
-            {
-                "decision": "acknowledged",
-                "reason_code": reason_code,
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer cleared the readiness gate.")[
-                    :4000
-                ],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def resolve_ambiguity(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        ambiguity_id: str,
-        decision: str,
-        evidence_segment_ids: tuple[str, ...],
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Record one reviewer's finding about one source ambiguity.
-
-        The pipeline stops on an ambiguity a person can settle in seconds --
-        typically a source that states one interval twice, once in prose and
-        once as a timer literal -- and until now there was no way to say so.
-        Acknowledging a readiness gate is too coarse: it would clear every
-        ambiguity in the document at once, including ones nobody had looked at.
-
-        What this does *not* do matters as much. It never edits the source, it
-        never deletes or rewrites a claim, and it never sets ``resolved`` on the
-        stored analysis: the analysis stays exactly as validated, and the
-        finding is appended beside it. Nothing infers whether two statements
-        agree -- no string or numeric comparison decides it, because that would
-        be repairing the document on a guess. Only a person decides, and the
-        default with no decision recorded is still blocked.
-
-        The reviewer must cite the segments they read. Those handles are
-        resolved against the source before the finding is accepted, so a
-        decision cannot rest on a span that does not exist.
-        """
-
-        if decision not in _AMBIGUITY_DECISIONS:
-            raise ProtocolApprovalError("Ambiguity decision is unsupported.")
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            raise ProtocolApprovalError(
-                "A validated analysis revision is required to resolve an "
-                "ambiguity."
-            )
-        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
-        revision = self.store.get_protocol_revision(
-            protocol_id, protocol_revision_number
-        )
-        if revision is None:
-            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
-        analysis = self.store.get_analysis_revision(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-        ambiguity = next(
-            (
-                construct
-                for construct in analysis.protocol.constructs
-                if isinstance(construct, domain.SourceAmbiguity)
-                and construct.ambiguity_id == ambiguity_id
-            ),
-            None,
-        )
-        if ambiguity is None:
-            raise ProtocolApprovalError(
-                "This analysis revision has no such ambiguity."
-            )
-        if not evidence_segment_ids:
-            raise ProtocolApprovalError(
-                "An ambiguity decision must cite the segments it rests on."
-            )
-        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
-        if pdf_object is None:
-            raise ProtocolCatalogUnavailableError(
-                "Protocol source object is unavailable."
-            )
-        extraction = extract_protocol_pdf(
-            self.store.file_store.object_path(
-                revision.pdf_checksum, expected_size=pdf_object.byte_size
-            )
-        )
-        try:
-            reopen_evidence_span(
-                extraction,
-                replace(
-                    ambiguity.evidence,
-                    evidence_segment_ids=tuple(evidence_segment_ids),
-                ),
-                source_revision="pdf-1",
-            )
-        except Exception as exc:  # noqa: BLE001 - a citation that will not open
-            raise ProtocolApprovalError(
-                "The cited evidence segments do not resolve on that page."
-            ) from exc
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            ambiguity_id,
-            (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT),
-            "ambiguity_id",
-        )
-        self.store.append_event(
-            (
-                f"ambiguity-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}-{ambiguity_id[:40]}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _AMBIGUITY_RESOLUTION_EVENT,
-            {
-                "decision": decision,
-                "ambiguity_id": ambiguity_id,
-                "step_id": ambiguity.step_id,
-                "action_id": ambiguity.action_id,
-                "source_page_number": ambiguity.evidence.source_page_number,
-                "evidence_segment_ids": list(evidence_segment_ids),
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer recorded a finding.")[:4000],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def _finding_context(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        actor_principal_id: str,
-        actor_role: str,
-    ) -> tuple[int, int, Any, Any]:
-        """Shared preamble for every reviewer finding on one analysis."""
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            raise ProtocolApprovalError(
-                "A validated analysis revision is required to record a "
-                "finding."
-            )
-        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
-        revision = self.store.get_protocol_revision(
-            protocol_id, protocol_revision_number
-        )
-        if revision is None:
-            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
-        analysis = self.store.get_analysis_revision(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-        return (
-            protocol_revision_number,
-            analysis_revision_number,
-            revision,
-            analysis,
-        )
-
-    def _check_cited_segments(
-        self,
-        revision: Any,
-        evidence: domain.SourceEvidence,
-        evidence_segment_ids: tuple[str, ...],
-    ) -> None:
-        """A finding must cite segments that actually open on that page."""
-
-        if not evidence_segment_ids:
-            raise ProtocolApprovalError(
-                "A reviewer finding must cite the segments it rests on."
-            )
-        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
-        if pdf_object is None:
-            raise ProtocolCatalogUnavailableError(
-                "Protocol source object is unavailable."
-            )
-        extraction = extract_protocol_pdf(
-            self.store.file_store.object_path(
-                revision.pdf_checksum, expected_size=pdf_object.byte_size
-            )
-        )
-        try:
-            reopen_evidence_span(
-                extraction,
-                replace(
-                    evidence,
-                    evidence_segment_ids=tuple(evidence_segment_ids),
-                ),
-                source_revision="pdf-1",
-            )
-        except Exception as exc:  # noqa: BLE001 - a citation that will not open
-            raise ProtocolApprovalError(
-                "The cited evidence segments do not resolve on that page."
-            ) from exc
-
-    def _finding_ordinal(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-        construct_id: str,
-        event_types: tuple[str, ...],
-        key: str,
-    ) -> int:
-        """How many findings this construct already has, plus one.
-
-        The ledger is append-only and refuses to reuse an identifier for
-        different content, so a reviewer who withdraws a finding and records a
-        different one needs a fresh identifier rather than a collision.
-        """
-
-        return 1 + sum(
-            1
-            for event in self.store.list_events(protocol_id)
-            if event.event_type in event_types
-            and event.protocol_revision_number == protocol_revision_number
-            and event.analysis_revision_number == analysis_revision_number
-            and isinstance(event.payload, dict)
-            and event.payload.get(key) == construct_id
-        )
-
-    def confirm_label_disposition(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        source_page_number: int,
-        source_label: str,
-        evidence_segment_ids: tuple[str, ...],
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Record a reviewer's own finding that a numbered label is not a step.
-
-        This is the human half of a judgement a provider is no longer allowed
-        to make. On its first real use in the provider contract a model
-        disposed of six numbered lines that were plainly instructions, so the
-        field is gone and every numbered line is an execution step as far as
-        extraction is concerned.
-
-        A reviewer may still record the finding, with the same provenance as
-        any other: actor, role, the store's timestamp, the label, its page, and
-        the segments they read, checked against the source before the finding
-        is accepted. It is an annotation on the record and revocable. It
-        deliberately does **not** unblock anything -- a numbered line missing
-        from the claims is still a refused chunk, which happens long before a
-        reviewer sees it -- so this cannot become a route around the
-        obligation.
-        """
-
-        (
-            protocol_revision_number,
-            analysis_revision_number,
-            revision,
-            analysis,
-        ) = self._finding_context(
-            protocol_id, revision_id, actor_principal_id, actor_role
-        )
-        # There is no model-proposed disposition to look up any more, so the
-        # label is checked against the source itself: it must be a numbered
-        # label the document actually prints on that page.
-        pdf_object = self.store.get_pdf_object(revision.pdf_checksum)
-        if pdf_object is None:
-            raise ProtocolCatalogUnavailableError(
-                "Protocol source object is unavailable."
-            )
-        extraction = extract_protocol_pdf(
-            self.store.file_store.object_path(
-                revision.pdf_checksum, expected_size=pdf_object.byte_size
-            )
-        )
-        if not 1 <= source_page_number <= extraction.page_count:
-            raise ProtocolApprovalError("That page is not in this source.")
-        if source_label not in _numbered_step_labels(
-            extraction.pages[source_page_number - 1].text
-        ):
-            raise ProtocolApprovalError(
-                "That label is not a numbered line on that page."
-            )
-        self._check_cited_segments(
-            revision,
-            domain.SourceEvidence(
-                source_page_number=source_page_number,
-                source_excerpt="",
-                evidence_segment_ids=tuple(evidence_segment_ids),
-            ),
-            evidence_segment_ids,
-        )
-        key = f"{source_page_number}:{source_label}"
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            key,
-            (_DISPOSITION_CONFIRMATION_EVENT, _DISPOSITION_REVOCATION_EVENT),
-            "label_key",
-        )
-        self.store.append_event(
-            (
-                f"disposition-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}-{key}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _DISPOSITION_CONFIRMATION_EVENT,
-            {
-                "decision": "not_an_execution_step",
-                "label_key": key,
-                "source_page_number": source_page_number,
-                "source_label": source_label,
-                "evidence_segment_ids": list(evidence_segment_ids),
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer confirmed a disposition.")[
-                    :4000
-                ],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def revoke_label_disposition_confirmation(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        source_page_number: int,
-        source_label: str,
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Withdraw a disposition confirmation, which blocks again."""
-
-        (
-            protocol_revision_number,
-            analysis_revision_number,
-            _revision,
-            _analysis,
-        ) = self._finding_context(
-            protocol_id, revision_id, actor_principal_id, actor_role
-        )
-        key = f"{source_page_number}:{source_label}"
-        if key not in self._disposition_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        ):
-            raise ProtocolApprovalError(
-                "This analysis revision carries no confirmation to revoke."
-            )
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            key,
-            (_DISPOSITION_CONFIRMATION_EVENT, _DISPOSITION_REVOCATION_EVENT),
-            "label_key",
-        )
-        self.store.append_event(
-            (
-                f"disposition-revoke-{protocol_id[-16:]}-"
-                f"{protocol_revision_number}-{analysis_revision_number}-"
-                f"{key}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _DISPOSITION_REVOCATION_EVENT,
-            {
-                "decision": "revoked",
-                "label_key": key,
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer withdrew a confirmation.")[
-                    :4000
-                ],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def _disposition_findings(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-    ) -> frozenset[str]:
-        """Standing disposition confirmations; the last event per label wins."""
-
-        standing: set[str] = set()
-        for event in self.store.list_events(protocol_id):
-            if event.protocol_revision_number != protocol_revision_number:
-                continue
-            if event.analysis_revision_number != analysis_revision_number:
-                continue
-            if not isinstance(event.payload, dict):
-                continue
-            key = event.payload.get("label_key")
-            if not isinstance(key, str):
-                continue
-            if event.event_type == _DISPOSITION_CONFIRMATION_EVENT:
-                standing.add(key)
-            elif event.event_type == _DISPOSITION_REVOCATION_EVENT:
-                standing.discard(key)
-        return frozenset(standing)
-
-    def label_disposition_findings(
-        self,
-        protocol_id: str,
-        revision_id: str,
-    ) -> frozenset[str]:
-        """Read the standing confirmations, for a reviewer or a projection."""
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            return frozenset()
-        return self._disposition_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-
-    def confirm_fixed_repetition(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        repetition_id: str,
-        repeat_count: int,
-        evidence_segment_ids: tuple[str, ...],
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Record a reviewer confirming a bounded repetition and its count.
-
-        The two ways of getting a repetition's kind wrong are not symmetric.
-        Calling a conditional repetition fixed makes the agent stop early and
-        announce completion while the source's own condition is unmet -- a
-        false completion notice, the worst outcome this system can produce.
-        Calling a fixed repetition conditional only makes it ask a person. So
-        a declared count does not execute on the model's word: a reviewer
-        confirms both that the repetition really is bounded and what the bound
-        is, citing the source they read.
-
-        The confirmed count must match the count the analysis carries. A
-        reviewer who believes the number is different is not confirming this
-        repetition, and re-analysis rather than an override is the route.
-        """
-
-        if not isinstance(repeat_count, int) or isinstance(repeat_count, bool):
-            raise ProtocolApprovalError("A confirmed count must be a number.")
-        if repeat_count < 1:
-            raise ProtocolApprovalError("A confirmed count must be positive.")
-        (
-            protocol_revision_number,
-            analysis_revision_number,
-            revision,
-            analysis,
-        ) = self._finding_context(protocol_id, revision_id, actor_principal_id, actor_role)
-        repetition = next(
-            (
-                construct
-                for construct in analysis.protocol.constructs
-                if isinstance(construct, domain.FixedRangeRepetition)
-                and construct.repetition_id == repetition_id
-            ),
-            None,
-        )
-        if repetition is None:
-            raise ProtocolApprovalError(
-                "This analysis revision has no such fixed repetition."
-            )
-        if repetition.repeat_count != repeat_count:
-            raise ProtocolApprovalError(
-                "The confirmed count does not match the analysed count."
-            )
-        self._check_cited_segments(
-            revision, repetition.evidence, evidence_segment_ids
-        )
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            repetition_id,
-            (_REPETITION_CONFIRMATION_EVENT, _REPETITION_REVOCATION_EVENT),
-            "repetition_id",
-        )
-        self.store.append_event(
-            (
-                f"repetition-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}-{repetition_id[:38]}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _REPETITION_CONFIRMATION_EVENT,
-            {
-                "decision": "fixed_count_confirmed",
-                "repetition_id": repetition_id,
-                "repeat_count": repeat_count,
-                "start_step_id": repetition.start_step_id,
-                "end_step_id": repetition.end_step_id,
-                "source_page_number": repetition.evidence.source_page_number,
-                "evidence_segment_ids": list(evidence_segment_ids),
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer confirmed a fixed count.")[
-                    :4000
-                ],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def revoke_fixed_repetition_confirmation(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        repetition_id: str,
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Withdraw a confirmation, which blocks the Protocol again."""
-
-        (
-            protocol_revision_number,
-            analysis_revision_number,
-            _revision,
-            _analysis,
-        ) = self._finding_context(protocol_id, revision_id, actor_principal_id, actor_role)
-        if repetition_id not in self._repetition_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        ):
-            raise ProtocolApprovalError(
-                "This analysis revision carries no confirmation to revoke."
-            )
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            repetition_id,
-            (_REPETITION_CONFIRMATION_EVENT, _REPETITION_REVOCATION_EVENT),
-            "repetition_id",
-        )
-        self.store.append_event(
-            (
-                f"repetition-revoke-{protocol_id[-16:]}-"
-                f"{protocol_revision_number}-{analysis_revision_number}-"
-                f"{repetition_id[:32]}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _REPETITION_REVOCATION_EVENT,
-            {
-                "decision": "revoked",
-                "repetition_id": repetition_id,
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer withdrew a confirmation.")[
-                    :4000
-                ],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def _repetition_findings(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-    ) -> dict[str, int]:
-        """The standing confirmed count per repetition; the last event wins."""
-
-        findings: dict[str, int] = {}
-        for event in self.store.list_events(protocol_id):
-            if event.protocol_revision_number != protocol_revision_number:
-                continue
-            if event.analysis_revision_number != analysis_revision_number:
-                continue
-            if not isinstance(event.payload, dict):
-                continue
-            repetition_id = event.payload.get("repetition_id")
-            if not isinstance(repetition_id, str):
-                continue
-            if event.event_type == _REPETITION_CONFIRMATION_EVENT:
-                count = event.payload.get("repeat_count")
-                if isinstance(count, int) and not isinstance(count, bool):
-                    findings[repetition_id] = count
-            elif event.event_type == _REPETITION_REVOCATION_EVENT:
-                findings.pop(repetition_id, None)
-        return findings
-
-    def repetition_findings(
-        self,
-        protocol_id: str,
-        revision_id: str,
-    ) -> dict[str, int]:
-        """Read the standing confirmations, for a reviewer or a projection."""
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            return {}
-        return self._repetition_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-
-    def _every_fixed_repetition_confirmed(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis: Any,
-    ) -> bool:
-        """Every bounded repetition has a standing confirmation of its count."""
-
-        outstanding = {
-            construct.repetition_id: construct.repeat_count
-            for construct in analysis.protocol.constructs
-            if isinstance(construct, domain.FixedRangeRepetition)
-        }
-        if not outstanding:
-            return False
-        findings = self._repetition_findings(
-            protocol_id,
-            protocol_revision_number,
-            analysis.analysis_revision_number,
-        )
-        return all(
-            findings.get(repetition_id) == count
-            for repetition_id, count in outstanding.items()
-        )
-
-    def revoke_ambiguity_resolution(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        ambiguity_id: str,
-        actor_principal_id: str,
-        actor_role: str,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Withdraw a finding, which blocks the Protocol again.
-
-        A wrong decision has to be undoable, and undoing it must restore the
-        block rather than leave the Protocol open on a withdrawn finding. The
-        earlier decision is not erased -- the ledger is append-only -- so who
-        decided what, and who later withdrew it, both stay readable.
-        """
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            raise ProtocolApprovalError(
-                "A validated analysis revision is required to revoke a "
-                "finding."
-            )
-        _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
-        if ambiguity_id not in self._ambiguity_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        ):
-            raise ProtocolApprovalError(
-                "This analysis revision carries no finding to revoke."
-            )
-        ordinal = self._finding_ordinal(
-            protocol_id,
-            protocol_revision_number,
-            analysis_revision_number,
-            ambiguity_id,
-            (_AMBIGUITY_RESOLUTION_EVENT, _AMBIGUITY_REVOCATION_EVENT),
-            "ambiguity_id",
-        )
-        self.store.append_event(
-            (
-                f"ambiguity-revoke-{protocol_id[-16:]}-"
-                f"{protocol_revision_number}-{analysis_revision_number}-"
-                f"{ambiguity_id[:34]}-{ordinal}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _AMBIGUITY_REVOCATION_EVENT,
-            {
-                "decision": "revoked",
-                "ambiguity_id": ambiguity_id,
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Reviewer withdrew a finding.")[:4000],
-            },
-            analysis_revision_number=analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def _ambiguity_findings(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-    ) -> dict[str, str]:
-        """The standing finding per ambiguity: the last event for each wins."""
-
-        findings: dict[str, str] = {}
-        for event in self.store.list_events(protocol_id):
-            if event.protocol_revision_number != protocol_revision_number:
-                continue
-            if event.analysis_revision_number != analysis_revision_number:
-                continue
-            if not isinstance(event.payload, dict):
-                continue
-            ambiguity_id = event.payload.get("ambiguity_id")
-            if not isinstance(ambiguity_id, str):
-                continue
-            if event.event_type == _AMBIGUITY_RESOLUTION_EVENT:
-                findings[ambiguity_id] = str(event.payload.get("decision"))
-            elif event.event_type == _AMBIGUITY_REVOCATION_EVENT:
-                findings.pop(ambiguity_id, None)
-        return findings
-
-    def ambiguity_findings(
-        self,
-        protocol_id: str,
-        revision_id: str,
-    ) -> dict[str, str]:
-        """Read the standing findings, for a reviewer or a projection."""
-
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            return {}
-        return self._ambiguity_findings(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-
-    def approve(
-        self,
-        protocol_id: str,
-        revision_id: str,
-        *,
-        policy: ApprovalPolicy,
-        presented_secret: str | None,
-        actor_principal_id: str | None = None,
-        actor_role: str | None = None,
-        comment: str | None = None,
-        actor_display_name: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        if not policy.permits(presented_secret):
-            raise ProtocolApprovalError("Protocol approval authorization failed.")
-        protocol_revision_number, analysis_revision_number = _parse_revision_id(
-            revision_id
-        )
-        if analysis_revision_number is None:
-            raise ProtocolApprovalError(
-                "A validated analysis revision is required for approval."
-            )
-        revision = self.store.get_protocol_revision(
-            protocol_id, protocol_revision_number
-        )
-        if revision is None:
-            raise ProtocolCatalogNotFoundError("Protocol revision is unknown.")
-        analysis = self.store.get_analysis_revision(
-            protocol_id, protocol_revision_number, analysis_revision_number
-        )
-        if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            if not self._readiness_gates_cleared(
-                protocol_id, protocol_revision_number, analysis
-            ):
-                raise ProtocolApprovalError(
-                    "Protocol analysis is not ready for execution approval."
-                )
-        payload = {"decision": "approved", "authority": "service_policy"}
-        if actor_principal_id is not None:
-            _checked_actor(actor_principal_id, actor_role, ProtocolApprovalError)
-            payload.update({
-                "actor_principal_id":actor_principal_id,
-                "actor_role":actor_role,
-                "comment":(comment or "Tenant RBAC approval.")[:4000],
-            })
-            name = _display_name(actor_display_name)
-            if name is not None:
-                # What a person reads the approver as (lane R6, decision 5);
-                # the principal id stays the identity.
-                payload["actor_display_name"] = name
-        self.store.append_event(
-            (
-                f"approved-{protocol_id[-16:]}-{protocol_revision_number}-"
-                f"{analysis_revision_number}"
-            ),
-            protocol_id,
-            protocol_revision_number,
-            _APPROVAL_EVENT,
-            payload,
-            analysis_revision_number=analysis_revision_number,
-        )
-        entry = self.get_entry(protocol_id)
-        self._execution_authorized(entry)
-        return entry
-
-    def _development_activation_ordinal(
-        self,
-        protocol_id: str,
-        protocol_revision_number: int,
-        analysis_revision_number: int,
-    ) -> int:
-        """How many activation decisions this analysis already has, plus one.
-
-        The ledger refuses to reuse an identifier for different content, so an
-        activation that follows a withdrawal needs a fresh one.
-        """
-
-        return 1 + sum(
-            1
-            for event in self.store.list_events(protocol_id)
-            if event.event_type
-            in (_DEVELOPMENT_ACTIVATION_EVENT, _DEVELOPMENT_DEACTIVATION_EVENT)
-            and event.protocol_revision_number == protocol_revision_number
-            and event.analysis_revision_number == analysis_revision_number
-        )
-
-    def activate_development(
-        self,
-        protocol_id: str,
-        *,
-        revision_id: str | None = None,
-        actor_principal_id: str | None = None,
-        actor_role: str | None = None,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Record a person putting one analysed draft into development execution.
-
-        This is the only way a Protocol becomes executable without a service
-        approval, and it is deliberately not a shortcut around readiness: the
-        analysis must already be guidance-ready, or every blocking reason must
-        already carry a person's recorded clearance.  What activation supplies
-        is the missing authority, not a missing judgement.  The one exception
-        is ``skip_readiness_gates`` (development test mode), and an activation
-        made through it is marked as such in the ledger.
-        """
-
-        revision = self._latest_protocol_revision(protocol_id)
-        analysis = self._latest_analysis(revision)
-        if analysis is None:
-            raise ProtocolCatalogUnavailableError(
-                "Protocol analysis is required before development activation."
-            )
-        gates_skipped = False
-        if analysis.readiness.status is not domain.ReadinessStatus.GUIDANCE_READY:
-            if not self._readiness_gates_cleared(
-                protocol_id, revision.revision_number, analysis
-            ):
-                if not self.skip_readiness_gates:
-                    raise ProtocolCatalogUnavailableError(
-                        f"Protocol readiness ({analysis.readiness.status.value}) is not ready for development execution."
-                    )
-                gates_skipped = True
-        ordinal = self._development_activation_ordinal(
-            protocol_id, revision.revision_number, analysis.analysis_revision_number
-        )
-        payload: dict[str, object] = {
-            "decision": "development_activated",
-            "authority": "development_policy",
-            "readiness": analysis.readiness.status.value,
-            "actor_principal_id": actor_principal_id,
-            "actor_role": actor_role,
-            "comment": (comment or "Development activation.")[:4000],
-        }
-        if gates_skipped:
-            # The ledger says this activation did not pass the readiness gates.
-            payload["test_mode_readiness_gates_skipped"] = True
-        self.store.append_event(
-            (
-                f"dev-active-{protocol_id[-16:]}-{revision.revision_number}-"
-                f"{analysis.analysis_revision_number}-{ordinal}"
-            ),
-            protocol_id,
-            revision.revision_number,
-            _DEVELOPMENT_ACTIVATION_EVENT,
-            payload,
-            analysis_revision_number=analysis.analysis_revision_number,
-        )
-        entry = self.get_entry(protocol_id)
-        self._execution_authorized(entry)
-        return entry
-
-    def deactivate_development(
-        self,
-        protocol_id: str,
-        *,
-        actor_principal_id: str | None = None,
-        actor_role: str | None = None,
-        comment: str | None = None,
-    ) -> ProtocolCatalogEntry:
-        """Withdraw a development activation, which blocks execution again."""
-
-        revision = self._latest_protocol_revision(protocol_id)
-        analysis = self._latest_analysis(revision)
-        if analysis is None:
-            raise ProtocolCatalogUnavailableError(
-                "Protocol analysis is required before development activation."
-            )
-        if not self._is_approved(revision, analysis):
-            raise ProtocolApprovalError(
-                "This analysis revision carries no development activation to withdraw."
-            )
-        ordinal = self._development_activation_ordinal(
-            protocol_id, revision.revision_number, analysis.analysis_revision_number
-        )
-        self.store.append_event(
-            (
-                f"dev-inactive-{protocol_id[-16:]}-{revision.revision_number}-"
-                f"{analysis.analysis_revision_number}-{ordinal}"
-            ),
-            protocol_id,
-            revision.revision_number,
-            _DEVELOPMENT_DEACTIVATION_EVENT,
-            {
-                "decision": "development_deactivated",
-                "authority": "development_policy",
-                "actor_principal_id": actor_principal_id,
-                "actor_role": actor_role,
-                "comment": (comment or "Development activation withdrawn.")[:4000],
-            },
-            analysis_revision_number=analysis.analysis_revision_number,
-        )
-        return self.get_entry(protocol_id)
-
-    def development_activation_context(
-        self, protocol_id: str
-    ) -> dict[str, object]:
-        """Project who activated this protocol for development, and when.
-
-        Read-only. It adds no authority; it reports the standing decision in
-        the append-only ledger so a reader can see that an executable draft is
-        executable because a named person said so, and when.
-        """
-
-        revision = self._latest_protocol_revision(protocol_id)
-        analysis = self._latest_analysis(revision)
-        standing = None
-        if analysis is not None:
-            for event in self.store.list_events(protocol_id):
-                if event.protocol_revision_number != revision.revision_number:
-                    continue
-                if (
-                    event.analysis_revision_number
-                    != analysis.analysis_revision_number
-                ):
-                    continue
-                if event.event_type in (
-                    _DEVELOPMENT_ACTIVATION_EVENT,
-                    _DEVELOPMENT_DEACTIVATION_EVENT,
-                ):
-                    standing = event
-        activated = (
-            standing is not None
-            and standing.event_type == _DEVELOPMENT_ACTIVATION_EVENT
-        )
-        payload = (
-            standing.payload
-            if standing is not None and isinstance(standing.payload, dict)
-            else {}
-        )
-        actor_principal_id = payload.get("actor_principal_id")
-        actor_role = payload.get("actor_role")
-        return {
-            "activated": activated,
-            "actor_principal_id": (
-                actor_principal_id
-                if isinstance(actor_principal_id, str) and actor_principal_id
-                else None
-            ),
-            "actor_role": (
-                actor_role if isinstance(actor_role, str) and actor_role else None
-            ),
-            "recorded_at": standing.recorded_at if standing is not None else None,
-            "authority": "development_policy" if activated else None,
-        }
-
     def load_executable_fixture(
         self, protocol_id: str
     ) -> CuratedProtocolFixture:
@@ -4334,10 +2668,10 @@ class ProtocolCatalog:
         entry = self._entry_for_revision(revision)
         if analysis is None or not entry.available_for_execution:
             raise ProtocolCatalogUnavailableError(
-                "Protocol revision is not approved and ready for execution."
+                "Protocol analysis has not passed, or a page could not be read."
             )
         return self._fixture_for_analysis(
-            revision, analysis, entry, status="approved_revision"
+            revision, analysis, entry, status="analysis_passed"
         )
 
     def load_analysis_fixture(self, protocol_id: str) -> CuratedProtocolFixture:
@@ -4360,7 +2694,7 @@ class ProtocolCatalog:
         entry = self._entry_for_revision(revision)
         return self._fixture_for_analysis(
             revision, analysis, entry,
-            status="approved_revision" if entry.available_for_execution
+            status="analysis_passed" if entry.available_for_execution
             else "analysis_draft",
         )
 
@@ -4412,7 +2746,7 @@ class ProtocolCatalog:
             ordered_step_labels=labels,
             fixture_sha256=analysis.payload_sha256,
             revision_id=entry.revision_id,
-            development_only=entry.approval_status == "development_only",
+            development_only=entry.development_only,
             source_pdf_path=source,
             source_pdf_sha256=revision.pdf_checksum,
             source_filename=revision.original_filename,

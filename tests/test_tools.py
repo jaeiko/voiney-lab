@@ -24,7 +24,7 @@ from tests.test_retrieval import operational_document
 
 class ToolTests(unittest.TestCase):
     def test_all_schemas_are_strict_and_registered(self):
-        self.assertEqual(len(TOOLS), 9)
+        self.assertEqual(len(TOOLS), 3)
         by_name = {tool["function"]["name"]: tool["function"] for tool in TOOLS}
         self.assertEqual(
             set(by_name),
@@ -32,12 +32,6 @@ class ToolTests(unittest.TestCase):
                 "search_approved_safety_manual",
                 "create_safety_report",
                 "check_safety_report_status",
-                "start_procedure",
-                "get_current_step",
-                "complete_current_step",
-                "record_step_observation",
-                "start_step_timer",
-                "get_workflow_summary",
             },
         )
         for function in by_name.values():
@@ -76,36 +70,6 @@ class ToolTests(unittest.TestCase):
                 "previously submitted Voiney Lab report",
                 "read-only status check",
                 "draft that has not been confirmed",
-            ),
-            "start_procedure": (
-                "explicitly asks to begin",
-                "trusted facility",
-                "Do not claim that the workflow started",
-            ),
-            "get_current_step": (
-                "read-only",
-                "approved instruction",
-                "does not start, complete, skip",
-            ),
-            "complete_current_step": (
-                "explicitly confirms completion",
-                "required observations",
-                "blocked_for_handoff",
-            ),
-            "record_step_observation": (
-                "current finalized user transcript",
-                "Preserve every letter, digit",
-                "does not complete the step",
-            ),
-            "start_step_timer": (
-                "accepts no duration argument",
-                "does not reset the deadline",
-                "does not complete the step",
-            ),
-            "get_workflow_summary": (
-                "server-owned audit summary",
-                "not for retrieving new SOP or SDS facts",
-                "accepts no model-supplied session",
             ),
         }
         for name, fragments in required_guidance.items():
@@ -213,50 +177,6 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(result["status"],"success")
             queued=json.loads(inbox.read_text(encoding="utf-8"))
             self.assertEqual(queued["workflow"],workflow)
-
-    def test_report_dispatch_links_and_blocks_attached_workflow(self):
-        class Controller:
-            def __init__(self): self.blocked=None
-            def report_context(self):
-                return {
-                    "workflow_session_id":"workflow-1",
-                    "procedure_id":"fictional-demo",
-                    "step_id":"observe",
-                }
-            def block_for_handoff(self,report_id,reason):
-                self.blocked=(report_id,reason)
-                return {
-                    "status":"success","operation":"block_for_handoff",
-                    "idempotent":False,
-                    "state":{
-                        "attached":True,"status":"blocked_for_handoff",
-                        "handoff":{"report_id":report_id},
-                    },
-                }
-        controller=Controller()
-        context=ToolContext(
-            Path("catalog.sqlite"),"TEST","ko","test_only",
-            procedure_controller=controller)
-        arguments={
-            "location":"Lab A","summary":"reported anomaly",
-            "urgency":"urgent","exposure_status":"unknown","language":"ko",
-        }
-        with patch(
-            "voiney_lab.tools.create_safety_report",
-            return_value={
-                "status":"success","report_id":"SR-20260722-A1B2C3",
-                "report_status":"queued_for_handoff",
-            },
-        ) as create:
-            result=execute_tool("create_safety_report",arguments,context)
-        self.assertEqual(
-            create.call_args.kwargs["workflow_context"]["step_id"],"observe")
-        self.assertEqual(
-            controller.blocked,
-            ("SR-20260722-A1B2C3","reported anomaly"))
-        self.assertTrue(result["procedure_blocked"])
-        self.assertEqual(
-            result["procedure_state"]["status"],"blocked_for_handoff")
 
     def test_report_validation_and_exact_dispatch_arguments(self):
         base = {

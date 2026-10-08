@@ -27,10 +27,9 @@ from voiney_lab.server import (
     run_turn,
     voice_socket,
 )
-from voiney_lab.semantic_intent import SemanticIntentSettings
 import voiney_lab.server as server_module
-from tests.development_activation import development_activation_recorded
-from voiney_lab.identity import Principal, Role
+from tests.runnable_fixture import runnable_fixture_assumed
+from tests.identity_support import development_principal
 from voiney_lab.workspace_store import (
     WorkspaceConflictError,
     WorkspaceSettings,
@@ -116,8 +115,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
     fit to run, and its readiness carries two unsupported repeat-untils that
     no reviewer action can clear.  These tests are about durability, recovery
     and turn handling *behind* that wall, so they step around exactly one gate
-    and nothing else -- see ``tests/development_activation``.  The gate itself
-    is pinned in ``tests/test_development_activation_gate.py``.
+    and nothing else -- see ``tests/runnable_fixture``.  The rule itself
+    is pinned in ``tests/test_lane_di_execution_rule.py``.
     """
 
     @classmethod
@@ -132,7 +131,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         )
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
 
@@ -149,7 +148,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
 
             config = ServerConfig(
                 placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-                None, None, placeholder, placeholder, placeholder,
+                placeholder, placeholder, placeholder,
             )
 
             class Socket:
@@ -208,10 +207,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "voiney_lab.server.load_curated_protocol_fixture",
                 return_value=self.fixture,
             ), patch(
-                "voiney_lab.server.ProcedureStore",
-            ), patch(
-                "voiney_lab.server.load_procedure_definitions",
-            ), patch(
                 "voiney_lab.server.synthesize",
                 return_value=b"\x00\x00" * 320,
             ), patch(
@@ -251,7 +246,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
         class Socket:
@@ -276,21 +271,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             async def receive(self):
                 return next(self.messages)
 
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir) / "workspace"
             store = initialize_workspace_store(
@@ -303,7 +284,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "VOINEY_LAB_WORKSPACE_ENABLED": "true",
                 "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
                 "VOINEY_LAB_USAGE_SCOPE": "demo",
-                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             initial = {
                 "type": "session.start",
@@ -372,7 +352,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
         class Socket:
@@ -397,21 +377,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             async def receive(self):
                 return next(self.messages)
 
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir) / "workspace"
             store = initialize_workspace_store(
@@ -425,7 +391,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 "VOINEY_LAB_WORKSPACE_ENABLED": "true",
                 "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
                 "VOINEY_LAB_USAGE_SCOPE": "demo",
-                "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
             }
             patches = (
                 patch(
@@ -665,21 +630,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
     # only when the user picked an open experiment) -----------------------
 
     def _bootstrap_tenant(self, workspace_dir):
-        profile = {
-            "profile_id": "researcher-a",
-            "principal_id": "principal-researcher-a",
-            "organization_id": "tenant-a",
-            "display_name": "Researcher A",
-            "roles": ["researcher"],
-        }
-        principal = Principal(
-            principal_id=profile["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=profile["organization_id"],
-            display_name=profile["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        principal = development_principal()
         store = initialize_workspace_store(WorkspaceSettings(True, workspace_dir))
         store.bootstrap_principal(principal)
         store.close()
@@ -687,7 +638,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             "VOINEY_LAB_WORKSPACE_ENABLED": "true",
             "VOINEY_LAB_WORKSPACE_DATA_DIR": str(workspace_dir),
             "VOINEY_LAB_USAGE_SCOPE": "demo",
-            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([profile]),
         }
         return environment, principal
 
@@ -716,51 +666,14 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         return socket
 
     @staticmethod
-    def _run_curated_turn(
-        listener, socket, transcript, *, turn_id, semantic_payload=None
-    ):
+    def _run_curated_turn(listener, socket, transcript, *, turn_id):
         async def immediate(function, *args, **kwargs):
             return function(*args, **kwargs)
 
-        if semantic_payload is None:
-            client_factory = AssertionError(
-                "LLM must not run for deterministic workflow control"
-            )
-            key_context = nullcontext()
-        else:
-            listener.semantic_intent_settings = SemanticIntentSettings(enabled=True)
-            # The resolver reads XAI_API_KEY before it builds the client
-            # faked below, so without a key in the environment the turn
-            # failed closed before the fake was ever reached. Stand in for
-            # the key as the other provider-faking tests do; nothing is sent.
-            key_context = patch(
-                "voiney_lab.server.require_env", return_value="offline"
-            )
-
-            def client_factory(*_args, **_kwargs):
-                class Client:
-                    model = "fake-semantic-model"
-
-                    class chat:
-                        class completions:
-                            @staticmethod
-                            async def create(**_create_kwargs):
-                                message = type(
-                                    "Message",
-                                    (),
-                                    {"content": json.dumps(
-                                        semantic_payload, ensure_ascii=False
-                                    )},
-                                )
-                                choice = type(
-                                    "Choice", (), {"message": message()}
-                                )
-                                return type(
-                                    "Response", (), {"choices": [choice()]}
-                                )()
-
-                return Client()
-
+        client_factory = AssertionError(
+            "LLM must not run for deterministic workflow control"
+        )
+        key_context = nullcontext()
         listener.active_turn_id = turn_id
         listener.detector.state = TurnState.PROCESSING
         with patch(
@@ -826,7 +739,7 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         placeholder = Path("/tmp/offline-session-contract")
         return ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
 
     def test_reload_reselect_recovers_same_experiment_session_id(self) -> None:
@@ -1159,195 +1072,6 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
                 and item["code"] == "workspace_conflict"
                 for item in socket.sent
             ))
-
-    def test_semantic_current_timer_target_persists_one_timer_start(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace_dir = Path(tmpdir) / "workspace"
-            environment, principal = self._bootstrap_tenant(workspace_dir)
-            curated, listener, before = self._timed_workspace_listener(
-                workspace_dir, principal
-            )
-            listener.experiment_report_store = ExperimentReportStore(
-                Path(tmpdir) / "reports.sqlite"
-            )
-            socket = _ScriptedSocket([])
-            turn_id = 6
-            current_time = 2_000_000_000.0
-
-            token = server_module._REQUEST_PRINCIPAL.set(principal)
-            try:
-                with patch.dict("os.environ", environment, clear=False), patch(
-                    "voiney_lab.curated_protocol.time.time",
-                    return_value=current_time,
-                ):
-                    self._run_curated_turn(
-                        listener,
-                        socket,
-                        "Time을 시작해줘.",
-                        turn_id=turn_id,
-                        semantic_payload={
-                            "intent": "start_timer",
-                            "target": "timer",
-                            "mutation_requested": True,
-                            "confidence": 0.96,
-                            "explicit_action_evidence": "시작해줘",
-                            "reason": "starts the current step timer",
-                        },
-                    )
-            finally:
-                server_module._REQUEST_PRINCIPAL.reset(token)
-
-            store = initialize_workspace_store(
-                WorkspaceSettings(True, workspace_dir)
-            )
-            persisted = store.get_experiment(principal, listener.session_id)
-            store.close()
-            timer_events = [
-                event for event in persisted["events"]
-                if event["event_type"] == "timer_started"
-            ]
-            self.assertEqual(len(timer_events), 1)
-            self.assertEqual(persisted["version"], before["version"] + 1)
-            self.assertEqual(listener.experiment_state_version, persisted["version"])
-            self.assertEqual(timer_events[0]["step_label"], "3")
-            self.assertEqual(
-                timer_events[0]["payload"]["timer"]["duration_seconds"], 900
-            )
-            decision = next(
-                item for item in socket.sent
-                if item["type"] == "turn.route_decision"
-            )
-            self.assertEqual(decision["action"], "start_timer")
-            self.assertTrue(decision["state_mutation"])
-            self.assertEqual(
-                decision["semantic_fallback"]["reason_code"],
-                "semantic_start_timer",
-            )
-            reply = next(
-                item for item in socket.sent if item["type"] == "reply.complete"
-            )
-            self.assertIn("15분 타이머를 시작했습니다", reply["text"])
-
-    def test_low_confidence_semantic_start_on_running_timer_is_not_persisted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace_dir = Path(tmpdir) / "workspace"
-            environment, principal = self._bootstrap_tenant(workspace_dir)
-            curated, listener, _ = self._timed_workspace_listener(
-                workspace_dir, principal
-            )
-            listener.experiment_report_store = ExperimentReportStore(
-                Path(tmpdir) / "reports.sqlite"
-            )
-            socket = _ScriptedSocket([])
-            first_turn_id = 6
-            second_turn_id = 7
-            current_time = 2_000_000_000.0
-
-            token = server_module._REQUEST_PRINCIPAL.set(principal)
-            try:
-                with patch.dict("os.environ", environment, clear=False), patch(
-                    "voiney_lab.curated_protocol.time.time",
-                    return_value=current_time,
-                ):
-                    self._run_curated_turn(
-                        listener,
-                        socket,
-                        "타이머를 시작해줘",
-                        turn_id=first_turn_id,
-                    )
-            finally:
-                server_module._REQUEST_PRINCIPAL.reset(token)
-
-            store = initialize_workspace_store(
-                WorkspaceSettings(True, workspace_dir)
-            )
-            persisted = store.get_experiment(principal, listener.session_id)
-            store.close()
-            first_timer_event = next(
-                event for event in persisted["events"]
-                if event["event_type"] == "timer_started"
-            )
-            original_timer = first_timer_event["payload"]["timer"]
-            original_version = persisted["version"]
-            original_started_at = curated._timer_started_at
-            original_duration = curated._timer_duration_seconds
-            original_deadline = original_started_at + original_duration
-            listener.playback_ended(first_turn_id)
-
-            token = server_module._REQUEST_PRINCIPAL.set(principal)
-            try:
-                with patch.dict("os.environ", environment, clear=False), patch(
-                    "voiney_lab.curated_protocol.time.time",
-                    return_value=current_time + 120,
-                ):
-                    self._run_curated_turn(
-                        listener,
-                        socket,
-                        "이제 이제 시간 좀 재줄래?",
-                        turn_id=second_turn_id,
-                        semantic_payload={
-                            "intent": "start_timer",
-                            "target": "timer",
-                            "mutation_requested": True,
-                            "confidence": 0.8,
-                            "explicit_action_evidence": "시간 좀 재줄래",
-                            "reason": "polite timer start request",
-                        },
-                    )
-            finally:
-                server_module._REQUEST_PRINCIPAL.reset(token)
-
-            store = initialize_workspace_store(
-                WorkspaceSettings(True, workspace_dir)
-            )
-            replayed = store.get_experiment(principal, listener.session_id)
-            store.close()
-            self.assertEqual(replayed["version"], original_version)
-            self.assertEqual(listener.experiment_state_version, original_version)
-            self.assertEqual(
-                sum(
-                    event["event_type"] == "timer_started"
-                    for event in replayed["events"]
-                ),
-                1,
-            )
-            replayed_timer_event = next(
-                event for event in replayed["events"]
-                if event["event_type"] == "timer_started"
-            )
-            self.assertEqual(replayed_timer_event["payload"]["timer"], original_timer)
-            self.assertFalse(any(
-                event["event_key"]
-                == f"voice-{listener.generation}-{second_turn_id}-timer_status"
-                for event in replayed["events"]
-            ))
-            self.assertEqual(curated._timer_started_at, original_started_at)
-            self.assertEqual(
-                curated._timer_started_at + curated._timer_duration_seconds,
-                original_deadline,
-            )
-            second_plan = curated._replay[second_turn_id]
-            self.assertEqual(second_plan.action, CuratedProtocolAction.TIMER_STATUS)
-            self.assertFalse(second_plan.state_changed)
-            decisions = [
-                item for item in socket.sent
-                if item["type"] == "turn.route_decision"
-            ]
-            self.assertEqual(decisions[-1]["action"], "timer_status")
-            self.assertFalse(decisions[-1]["state_mutation"])
-            self.assertEqual(
-                decisions[-1]["semantic_fallback"]["reason_code"],
-                "semantic_running_timer_read_only",
-            )
-            replies = [
-                item["text"] for item in socket.sent
-                if item["type"] == "reply.complete"
-            ]
-            self.assertIn("다시 시작하거나 초기화하지 않습니다", replies[-1])
-            self.assertIn("남은 시간은 약", replies[-1])
-            # Lane N, decision 4: the timer start reached the experiment
-            # report; the read-only turn after it added nothing.
-            self.assertEqual(_report_event_types(listener), ["timer_started"])
 
     def test_timer_start_new_turn_is_non_mutating_and_keeps_original_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

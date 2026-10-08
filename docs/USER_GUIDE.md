@@ -1,27 +1,39 @@
 # User Guide — Controlled Pilot
 
-Date: 2026-08-24
+Date: 2026-08-24, revised 2026-10-08 (lane DI: one experimenter screen)
 
-This guide covers the researcher, reviewer, and laboratory administrator
-workspaces. It does not replace a laboratory SOP, safety training, or emergency
-procedure. Stop and follow facility policy whenever the approved protocol and
-the physical situation differ.
+This guide covers the experimenter's screen, the only one since 2026-10-08.
+It does not replace a laboratory SOP, safety training, or emergency
+procedure. Stop and follow facility policy whenever the protocol and the
+physical situation differ.
 
-## Researcher
+## Experimenter
+
+### Upload a protocol
+
+1. Upload the protocol PDF. The server reads it, runs OCR by itself for pages
+   without a text layer, and analyses it. Nothing is asked of you until the
+   analysis is done.
+2. When the analysis is in, the start screen ("시작 전 확인 · 분석 결과
+   요약") shows the step count, every safety statement the source declares
+   beside its Korean, "실행을 막는 사유" with what to do, and "시작 전 알림"
+   for things the guidance cannot handle yet (parallel work, a recurring
+   step, a reusable subprocedure -- those are said once at their step and
+   the source is read).
+3. A blocked analysis (an unreadable page, a failed source-evidence check, no
+   executable step, a safety-critical conflict) has to be fixed at the
+   source. Do not work around the block.
 
 ### Start an experiment
 
-1. Open the Researcher workspace and wait for the protocol list to finish
-   loading.
-2. Select the approved protocol. Before starting, verify the context card shows
-   the expected experiment, exact version, approval state/reviewer, current step,
-   and available actions.
-3. If the selected revision is not approved or is no longer available for new
-   sessions, do not work around the block; contact a reviewer.
-4. Select **Start new experiment**. If an open experiment is explicitly selected,
-   the action changes to **Resume experiment** and shows what will and will not be
-   restored.
-5. Start the voice session. The visible voice states mean Ready, Listening,
+1. Read the safety statements. Pressing **이 프로토콜로 시작** is the one
+   human confirmation; it is written to the experiment record as "안전 주의
+   확인".
+2. Before starting, verify the context card shows the expected protocol,
+   "분석 통과 · 실행 가능", the current step and the available actions.
+3. If an open experiment is explicitly selected, the action changes to
+   **Resume experiment** and shows what will and will not be restored.
+4. Start the voice session. The visible voice states mean Ready, Listening,
    Understanding request, and Providing guidance.
 
 ### Work hands-free
@@ -47,11 +59,13 @@ step before retrying any state-changing command.
 ### Record observations and evidence
 
 - Add a voice or manual observation to the current step. It is labeled
-  observation-only and cannot modify the approved instructions.
+  observation-only and cannot modify the protocol's instructions.
+- A value the protocol needs ("몇 번 반복하셨나요?") is asked and the answer
+  recorded; the report lists the values to confirm.
 - Attach a JPEG, PNG, WebP, PDF, or DOCX up to 32 MiB. It is stored as
   not-interpreted evidence.
-- Use **Download original evidence** in the timeline when authorized. A missing,
-  changed, or invalid stored object is refused rather than returned unchecked.
+- Use **Download original evidence** in the timeline. A missing, changed, or
+  invalid stored object is refused rather than returned unchecked.
 
 ### Pause, refresh, and resume
 
@@ -64,83 +78,14 @@ step before retrying any state-changing command.
 5. If the UI reports stale state, refresh the timeline and reselect the session;
    do not assume the last command succeeded.
 
-## Reviewer
-
-### Review a request
-
-1. Open the Reviewer workspace and select a pending request.
-2. Confirm the protocol name/version, requester, request reason, and immutable
-   source identity.
-3. Read **What changed**, **Why**, **Experimental impact**, and **Risk** before the
-   technical diff.
-4. Treat unknown or missing risk evidence as unknown. Do not infer that absence
-   of a warning means low risk.
-5. For OCR material, remember that accepting extracted page text is not protocol
-   approval. Structured review and approval remain separate.
-
-### Decide
-
-- **Approve** makes the exact revision available according to its operational
-  gates.
-- **Request revision** rejects this immutable revision and requires a new one.
-- **Disable future use** revokes the revision for new sessions while preserving
-  existing experiment history.
-
-Select only an action offered by the server, enter a meaningful comment, review
-the consequence panel, and confirm once. If another reviewer acted first, the
-stale decision is rejected; reload the packet instead of overwriting it.
-
-### Audit
-
-The history shows actor, timestamp, decision, comment, and affected version. It
-is append-only. Do not rely on an exported screenshot as a replacement for the
-canonical server record.
-
-## Laboratory administrator
-
-### Manage users and permissions
-
-1. Open the Administrator workspace.
-2. Review Account Identifier, User Identity, Permission Level, and effective
-   allowed actions.
-3. Assign only the fixed role needed for the pilot. The system supports
-   researcher, reviewer, lab administrator, and organization administrator—not
-   custom roles.
-4. Recheck the security activity view after changes. An administrator cannot
-   deactivate their own administrative access through the protected path.
-
-### Configure an external connection
-
-Follow the enforced sequence:
-
-1. Select the integration.
-2. Select its server-provisioned secure credential handle.
-3. Enter the narrowest allowed scope.
-4. Run **Check configuration**.
-5. Enable only after the status is ready.
-
-The check verifies server credential availability and scope syntax. It does not
-contact the provider and must not be described as a successful login or live
-connection. A newly created or migrated connection stays disabled/untested until
-checked.
-
-### Monitor a pilot
-
-- Review completed workflows, failed commands, recovery events, state-change
-  failures, user actions, and completion rate.
-- Record the analytics-retention duration with every metric snapshot. Durable
-  session counts and retention-bounded action/failure counts have different
-  windows.
-- Review connection posture, access activity, and failures without looking for
-  secrets—the browser never receives credential values or references.
-
 ## End a pilot session
 
 1. Confirm the final experiment status and timeline.
 2. Export the required report format. CSV is available for structured transfer;
-   JSON/Markdown/DOCX are also supported.
-3. If eLabFTW write-back is part of the approved pilot, verify the session and
-   report are completed/matching, review the payload boundary, and explicitly
-   confirm the idempotent transfer.
-4. Ask the operator to create and verify the post-session backup.
-5. Record issues using the incident template in `PILOT_READINESS_PACKAGE.md`.
+   JSON/Markdown/DOCX are also supported. The report's "프로토콜 상태" reads
+   "분석 통과 · 실험자가 시작함".
+3. Ask the operator to create and verify the post-session backup.
+4. Record issues using the incident template in `PILOT_READINESS_PACKAGE.md`.
+
+The reviewer and laboratory-administrator screens, protocol approval, lab
+adaptations and the eLabFTW export were removed on 2026-10-08 (lane DI).

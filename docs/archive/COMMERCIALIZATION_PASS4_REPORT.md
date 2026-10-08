@@ -78,8 +78,8 @@ between `procedures.py`/`procedure_store.py` (legacy) and
 
 - Only `server.py` imports the legacy stack in production code.
 - It only activates when an operator sets **both**
-  `VOINEY_LAB_PROCEDURE_CATALOG` and
-  `VOINEY_LAB_PROCEDURE_STORE` - neither is set by
+  `PROCEDURE_CATALOG` (옛 설정; 줄 DI, 2026-10-08 에 스택과 함께 삭제) and
+  `PROCEDURE_STORE` (옛 설정; 삭제됨) - neither is set by
   `scripts/run_candidate_a.sh` or any documented deployment default.
 - `server.py`'s protocol-selection logic gates the legacy lookup on
   `selected_curated_fixture is None`, so a session can never be bound to both

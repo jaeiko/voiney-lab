@@ -1,17 +1,17 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
-import asyncio, collections, contextvars, copy, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
+import asyncio, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAI
@@ -47,7 +47,6 @@ from voiney_lab.curated_protocol import (
     CuratedProtocolFixture,
     CuratedProtocolSession,
     CuratedProtocolSpeechMode,
-    ProtocolVisualKind,
     josa_ro,
     load_curated_protocol_fixture,
     reader_translation_issue,
@@ -98,22 +97,8 @@ from voiney_lab.external_references import (
     supplemental_explanation_query,
     supplemental_knowledge_allowed,
 )
-from voiney_lab.generated_visuals import (
-    GENERATED_VISUALS,
-    GeneratedVisualSettings,
-    VisualSpecification,
-    XaiImageGenerator,
-)
-from voiney_lab.web_visuals import (
-    PubChemChemistryAdapter,
-    WEB_VISUAL_REGISTRY,
-    WebVisualSettings,
-    WikimediaVisualAdapter,
-    XaiAuthoritativeImageSearch,
-)
 from voiney_lab.safety_pack import SafetyPack, resolve_safety_pack, unavailable_safety_pack
 from voiney_lab.protocol_catalog import (
-    ProtocolApprovalError,
     ProtocolAnalysisUnavailableError,
     ProtocolCatalog,
     ProtocolCatalogEntry,
@@ -121,7 +106,6 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
-    SharedSecretApprovalPolicy,
 )
 from voiney_lab.protocol_ocr_providers import TEXT_LAYER as OCR_TEXT_LAYER_PROVIDER
 from voiney_lab.protocol_ocr import (
@@ -159,25 +143,9 @@ from voiney_lab.multi_brain import (
 )
 from voiney_lab.tools import (
     APPROVED_LAB_REFERENCE_TOOL_NAME,
-    COMPLETE_CURRENT_STEP_TOOL_NAME,
-    CREATE_REPORT_TOOL_NAME,
-    GET_CURRENT_STEP_TOOL_NAME,
-    PROCEDURE_TOOL_NAMES,
-    RECORD_STEP_OBSERVATION_TOOL_NAME,
-    START_STEP_TIMER_TOOL_NAME,
     ToolContext,
     check_safety_report_status,
-    execute_tool,
     search_approved_lab_references,
-)
-from voiney_lab.procedure_definitions import load_procedure_definitions
-from voiney_lab.procedure_store import ProcedureStore
-from voiney_lab.procedures import (
-    ProcedureController, authorized_completion_step_id,
-    authorized_observation_arguments,
-    authorized_timer_start_step_id,
-    deterministic_procedure_text, korean_timer_status_question,
-    unattached_procedure_state,
 )
 from voiney_lab.protocol import ProtocolError, audio_segment_start, event, parse_control
 from voiney_lab.llm_router import (
@@ -186,20 +154,13 @@ from voiney_lab.llm_router import (
     front_history_turn,
     history_before,
     history_turn,
-    refuse_two_turn_deciders,
     route_turn_with_llm_router,
     screen_history_turn,
 )
 from voiney_lab.model_providers import RoleModel, chat_client
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
-    route_curated_runtime_turn_with_semantics,
-)
-from voiney_lab.semantic_intent import (
-    SemanticIntentContext,
-    SemanticIntentProposal,
-    SemanticIntentSettings,
-    propose_semantic_intent,
+    route_curated_runtime_turn,
 )
 from voiney_lab.setting_names import refuse_old_setting_names
 from voiney_lab.vad import EndpointDetector, EndpointResult, TurnState, VadConfig
@@ -212,33 +173,7 @@ from voiney_lab.identity import (
     IdentityConfigurationError,
     IdentityResolver,
     OidcSettings,
-    Permission,
     Principal,
-    Role,
-    permissions_for_roles,
-    require_permission,
-)
-from voiney_lab.protocol_sources import (
-    GitHubConnector,
-    GoogleDriveConnector,
-    ProtocolSourceHub,
-    ProtocolsIoConnector,
-    SourceSnapshot,
-    SourceConnectorError,
-    normalize_protocols_io_identifier,
-    verify_github_webhook_signature,
-)
-from voiney_lab.drylab_workflows import (
-    DryLabWorkflowRegistry,
-    inspect_nextflow_snapshot,
-    inspect_snakemake_snapshot,
-)
-from voiney_lab.eln_connectors import (
-    CompletedStep,
-    ELabFtwConnector,
-    ElnConnectorError,
-    ExperimentWriteback,
-    Observation as ElnObservation,
 )
 from voiney_lab.protocol_translation import (
     generate_revision_translations,
@@ -253,7 +188,6 @@ from voiney_lab.protocol_translation import (
 )
 from voiney_lab.workspace_store import (
     ApprovalReplayError,
-    TranslationIntegrityError,
     WorkspaceConflictError,
     WorkspaceError,
     WorkspaceNotFoundError,
@@ -282,9 +216,6 @@ _load_project_environment()
 # Refuse to start while an old setting name is set, in the process environment
 # or the .env just loaded, so an unmigrated .env cannot fall back to defaults.
 refuse_old_setting_names()
-# One turn, one deciding path (lane M1, decision 4): the LLM router and the
-# semantic-intent fallback are never both on.
-refuse_two_turn_deciders()
 # xAI is no longer a default (lane XO, decision 2): a feature only xAI provides
 # is refused at start-up, by name, when it is on without XAI_API_KEY.
 refuse_xai_only_features_without_key()
@@ -320,9 +251,8 @@ class UvicornQueryStringFilter(logging.Filter):
     """Keep uvicorn's request lines, but only the length of each query value.
 
     uvicorn writes the full URL into its access line and its WebSocket line,
-    which would put a typed library search (``?search=``), an uploaded file
-    name (``?filename=``) or a development profile id (``?dev_profile=``) in
-    the log. A record in the shape uvicorn 0.52 emits keeps its path with each
+    which would put a typed search (``?search=``) or an uploaded file name
+    (``?filename=``) in the log. A record in the shape uvicorn 0.52 emits keeps its path with each
     value replaced by its length; any other record on these loggers loses
     every query string it carries, so a format change errs toward removal.
     """
@@ -411,7 +341,6 @@ async def lifespan(_: FastAPI):
     """Warm optional in-memory retrieval without making it a startup dependency."""
     log_effective_vad_configuration(VoiceVadSettings.from_environment())
     log_cascade_filler_configuration()
-    log_readiness_gate_test_mode()
     await asyncio.to_thread(log_protocol_catalog_runtime_configuration)
     _install_protocol_ocr_provider()
     await asyncio.to_thread(start_moss_runtime_from_environment)
@@ -500,8 +429,6 @@ def _workspace_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=404,detail=exc.code)
     if isinstance(exc,(ApprovalReplayError,WorkspaceConflictError)):
         return HTTPException(status_code=409,detail=exc.code)
-    if isinstance(exc,(TranslationIntegrityError,SourceConnectorError,ElnConnectorError)):
-        return HTTPException(status_code=422,detail=getattr(exc,"code","invalid_request"))
     if isinstance(exc,(IdentityConfigurationError,ConfigurationError)):
         return HTTPException(status_code=503,detail=getattr(exc,"code","configuration_invalid"))
     return HTTPException(
@@ -515,10 +442,6 @@ async def commercial_identity_boundary(request:Request,call_next):
     """Authenticate every API request when the commercial workspace is enabled."""
 
     if not request.url.path.startswith("/api/"):
-        return await call_next(request)
-    if request.url.path.startswith("/api/workspace/webhooks/github/"):
-        # GitHub authenticates this machine-to-machine boundary with the raw-body
-        # HMAC and delivery identifier; it does not carry a user bearer token.
         return await call_next(request)
     try:
         settings=_workspace_settings()
@@ -535,10 +458,7 @@ async def commercial_identity_boundary(request:Request,call_next):
             raise IdentityConfigurationError(
                 "Operational scope requires the tenant workspace."
             )
-        principal=_identity_resolver().resolve(
-            request.headers.get("authorization"),
-            dev_profile_id=request.headers.get("x-voice-dev-profile"),
-        )
+        principal=_identity_resolver().resolve(request.headers.get("authorization"))
         store=initialize_workspace_store(settings)
         try:
             store.bootstrap_principal(principal)
@@ -646,121 +566,6 @@ def _visible_catalog_resource_ids()->frozenset[str]|None:
         return store.resource_ids(principal,"protocol_catalog")
     finally:
         store.close()
-
-
-def _resolve_server_secret(reference:str)->str:
-    """Resolve an opaque credential reference through a server-owned env mapping."""
-
-    raw=os.environ.get("VOINEY_LAB_SECRET_REFERENCES","").strip()
-    try:
-        mapping=json.loads(raw) if raw else {}
-    except json.JSONDecodeError as exc:
-        raise WorkspaceError("Server secret reference mapping is invalid.") from exc
-    variable=mapping.get(reference) if isinstance(mapping,dict) else None
-    if not isinstance(variable,str) or re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}",variable) is None:
-        raise WorkspaceError("Connector credential is not configured.")
-    value=os.environ.get(variable,"")
-    if not value:
-        raise WorkspaceError("Connector credential is not configured.")
-    return value
-
-
-def _server_credential_options(principal:Principal)->tuple[dict[str,object], ...]:
-    """Expose tenant-scoped credential handles, never references or values."""
-
-    raw=os.environ.get("VOINEY_LAB_SECRET_REFERENCES","").strip()
-    try:
-        mapping=json.loads(raw) if raw else {}
-    except json.JSONDecodeError as exc:
-        raise WorkspaceError("Server secret reference mapping is invalid.") from exc
-    if not isinstance(mapping,dict):
-        raise WorkspaceError("Server secret reference mapping is invalid.")
-    prefix=f"secret://{principal.organization_id}/"
-    options=[]
-    for reference,variable in sorted(mapping.items()):
-        if (
-            not isinstance(reference,str)
-            or not reference.startswith(prefix)
-            or not isinstance(variable,str)
-            or re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}",variable) is None
-        ):
-            continue
-        suffix=reference.removeprefix(prefix)
-        if not suffix or len(suffix)>120:
-            continue
-        options.append({
-            "credential_handle":(
-                "credential-"+hashlib.sha256(reference.encode("utf-8")).hexdigest()[:24]
-            ),
-            "display_name":suffix.replace("-"," ").replace("_"," ").strip().title(),
-            "available":bool(os.environ.get(variable,"")),
-        })
-    return tuple(options)
-
-
-def _credential_reference_from_handle(principal:Principal,handle:str)->str:
-    for option in _server_credential_options(principal):
-        if hmac.compare_digest(str(option["credential_handle"]),handle):
-            raw=json.loads(os.environ.get("VOINEY_LAB_SECRET_REFERENCES","{}"))
-            prefix=f"secret://{principal.organization_id}/"
-            for reference in raw:
-                candidate=("credential-"+hashlib.sha256(
-                    reference.encode("utf-8")).hexdigest()[:24]
-                    if isinstance(reference,str) and reference.startswith(prefix)
-                    else "")
-                if candidate and hmac.compare_digest(candidate,handle):
-                    return reference
-    raise WorkspaceError("Secure connector credential is not available.")
-
-
-def _connector_configuration_failure(connector:object)->str|None:
-    """Validate server-owned credential availability and allowlisted scope syntax."""
-
-    try:
-        _resolve_server_secret(str(connector.credential_reference))
-        if connector.webhook_secret_reference:
-            _resolve_server_secret(str(connector.webhook_secret_reference))
-    except WorkspaceError:
-        return "credential_unavailable"
-    roots=tuple(connector.allowed_roots)
-    kind=str(connector.connector_kind)
-    if kind=="google_drive":
-        folders=[root.removeprefix("folder:") for root in roots if root.startswith("folder:")]
-        shared=[root.removeprefix("shared-drive:") for root in roots if root.startswith("shared-drive:")]
-        valid=(
-            bool(folders)
-            and len(shared)<=1
-            and len(folders)+len(shared)==len(roots)
-            and all(re.fullmatch(r"[A-Za-z0-9_-]{3,200}",value) for value in (*folders,*shared))
-        )
-    elif kind=="github":
-        valid=all(
-            re.fullmatch(r"[^/@\s]+/[^/@\s]+@[^:\s]+:[^\s]+",root)
-            and ".." not in root
-            and "\\" not in root
-            for root in roots
-        )
-    elif kind=="elabftw":
-        parsed=urlparse(roots[0]) if len(roots)==1 else None
-        valid=bool(
-            parsed
-            and parsed.scheme=="https"
-            and parsed.netloc
-            and parsed.username is None
-            and parsed.password is None
-            and not parsed.query
-            and not parsed.fragment
-        )
-    elif kind=="protocols_io":
-        valid=all(
-            root.startswith("protocol:")
-            and len(root)>len("protocol:")
-            and len(root)<=300
-            for root in roots
-        )
-    else:
-        valid=False
-    return None if valid else "scope_invalid"
 
 
 def _record_workspace_metric(
@@ -1177,8 +982,6 @@ class ServerConfig:
     usage_scope:str
     allowed_languages:frozenset[str]
     default_language:str
-    procedure_catalog_path:Path|None=None
-    procedure_store_path:Path|None=None
     curated_protocol_fixture_path:Path|None=None
     curated_protocol_provenance_path:Path|None=None
     curated_protocol_source_pdf_path:Path|None=None
@@ -1224,10 +1027,7 @@ def _open_protocol_catalog()->tuple[ProtocolCatalog,object]:
     if not settings.enabled:
         raise ProtocolCatalogUnavailableError("Protocol catalog is disabled.")
     store=initialize_protocol_store(settings)
-    return ProtocolCatalog(
-        store,skip_readiness_gates=_test_mode_skips_readiness_gates(),
-        on_execution_authorized=_translate_authorized_revision,
-        on_analysis_ready=_translate_analyzed_revision),store
+    return ProtocolCatalog(store,on_analysis_ready=_translate_analyzed_revision),store
 
 
 def _revision_translation_store():
@@ -1237,18 +1037,6 @@ def _revision_translation_store():
     if not settings.enabled:
         return None
     return initialize_workspace_store(settings)
-
-
-def _revision_translation_fixture(
-    catalog:ProtocolCatalog,protocol_id:str,
-)->CuratedProtocolFixture:
-    """The fixture a session will run for this protocol, as sessions load it."""
-
-    config=server_config()
-    candidate=_configured_candidate_fixture(config)
-    if candidate is not None and candidate.protocol_id==protocol_id:
-        return candidate
-    return catalog.load_executable_fixture(protocol_id)
 
 
 def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None:
@@ -1270,20 +1058,6 @@ def _revision_translation_runner()->Callable[[CuratedProtocolFixture],None]|None
             or not RoleModel.from_environment("translation").has_key()):
         return None
     return _start_revision_translation
-
-
-def _translate_authorized_revision(
-    catalog:ProtocolCatalog,protocol_id:str,
-)->None:
-    """Translate an executable revision's sentences once, off the request.
-
-    The same revision translated when its analysis passed makes no model
-    call here: every stored sentence is skipped.
-    """
-
-    runner=_revision_translation_runner()
-    if runner is not None:
-        runner(_revision_translation_fixture(catalog,protocol_id))
 
 
 def _translate_analyzed_revision(
@@ -1619,18 +1393,6 @@ def server_config()->ServerConfig:
             "VOINEY_LAB_ALLOWED_LANGUAGES",
             "VOINEY_LAB_SESSION_LANGUAGE",
         )
-    procedure_catalog=os.environ.get("VOINEY_LAB_PROCEDURE_CATALOG","").strip()
-    procedure_store=os.environ.get("VOINEY_LAB_PROCEDURE_STORE","").strip()
-    procedure_catalog_path=Path(procedure_catalog) if procedure_catalog else None
-    procedure_store_path=Path(procedure_store) if procedure_store else None
-    if ((procedure_catalog_path is None)!=(procedure_store_path is None) or
-        procedure_catalog_path is not None and
-        (not procedure_catalog_path.is_absolute() or not procedure_store_path.is_absolute())):
-        raise ServerConfigurationError(
-            "procedure configuration is invalid",
-            "VOINEY_LAB_PROCEDURE_CATALOG",
-            "VOINEY_LAB_PROCEDURE_STORE",
-        )
     curated_fixture=os.environ.get(
         "VOINEY_LAB_CURATED_PROTOCOL_FIXTURE","").strip()
     curated_provenance=os.environ.get(
@@ -1650,7 +1412,6 @@ def server_config()->ServerConfig:
             "VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF",
         )
     return ServerConfig(catalog_path,facility,scope,allowed,default,
-                        procedure_catalog_path,procedure_store_path,
                         curated_paths[0],curated_paths[1],curated_paths[2])
 
 def server_tool_context(
@@ -1699,29 +1460,6 @@ def _role_client(
         role,asynchronous=asynchronous,timeout=timeout,
         max_retries=0 if max_retries is _KEEP_SDK_RETRIES else max_retries,
     )
-
-
-def semantic_intent_resolver(
-    settings:SemanticIntentSettings,
-)->Callable[[SemanticIntentContext],Awaitable[SemanticIntentProposal|None]]|None:
-    """Bind the existing xAI chat boundary as a read-only intent proposer.
-
-    Returns ``None`` when the fallback is disabled, and the client is built
-    lazily inside the coroutine so a turn the deterministic path resolves never
-    constructs a provider client at all.
-    """
-
-    if not settings.enabled:
-        return None
-
-    async def resolve(context:SemanticIntentContext)->SemanticIntentProposal|None:
-        client=AsyncOpenAI(
-            base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-            max_retries=0)
-        client.model=settings.model
-        return await propose_semantic_intent(client,context,settings=settings)
-
-    return resolve
 
 
 @dataclass(frozen=True)
@@ -2075,47 +1813,22 @@ def _candidate_fixture_execution_state(
 )->dict[str,object]:
     """Answer whether the configured development fixture may execute right now.
 
-    Until 2026-09-05 this answer was the literal ``True``.  A fixture is
-    configured by a launcher environment variable, so every readiness gate
-    could be blocked -- an unresolved ambiguity, no declared safety warning,
-    two unsupported repeat-untils -- and the UI still offered the protocol as
-    runnable.  Being the configured fixture is a statement about which file
-    the server loaded, and it was standing in for a statement about whether
-    anyone had judged the protocol fit to run.
-
-    The answer now comes from the same place it comes from for every other
-    protocol: the catalog entry materialized from this exact fixture, which is
-    executable only when a recorded development activation stands *and* every
-    blocking readiness reason is either absent or cleared by a person.  It is
-    additionally gated on a non-operational usage scope, which the
-    activate-development endpoint already required and this path did not.
-
-    Anything that cannot be read is a no.  A disabled store, a missing entry,
-    a fixture the store does not match -- none of those are reasons to assume
-    yes, because a fixture whose authority cannot be read has no authority.
+    The same question the catalog answers for every uploaded PDF (decision
+    of 2026-10-08): the entry materialized from this exact fixture is
+    executable when its analysis carries no execution blocker. Being the
+    configured fixture says which file the server loaded, not that it may
+    run, so a disabled store, a missing entry or a fixture the store does not
+    match is a no. The curated fixture is development material and never runs
+    under the operational usage scope.
     """
 
     state:dict[str,object]={
         "available_for_execution":False,
-        "blocked_reason":"development_activation_not_recorded",
-        "outstanding_blockers":[],
-        "development_activation":{
-            "activated":False,
-            "actor_principal_id":None,
-            "actor_role":None,
-            "recorded_at":None,
-            "authority":None,
-        },
-        "approval":{
-            "status":"review_required",
-            "final_approval":False,
-            "actor_principal_id":None,
-            "actor_role":None,
-            "recorded_at":None,
-            "authority":None,
-        },
+        "blocked_reason":"development_fixture_not_materialized",
+        "execution_blockers":[],
+        "execution_notices":[],
     }
-    if not _development_activation_allowed():
+    if not _development_fixture_allowed():
         state["blocked_reason"]="usage_scope_not_development"
         return state
     settings=_protocol_store_settings()
@@ -2129,24 +1842,14 @@ def _candidate_fixture_execution_state(
         return state
     try:
         if not catalog.development_fixture_is_materialized(fixture):
-            state["blocked_reason"]="development_fixture_not_materialized"
             return state
         entry=catalog.get_entry(fixture.protocol_id)
-        state["development_activation"]=catalog.development_activation_context(
-            fixture.protocol_id)
-        state["approval"]=catalog.approval_context(fixture.protocol_id)
-        state["available_for_execution"]=bool(entry.available_for_execution)
         review=catalog.review(fixture.protocol_id)
-        state["outstanding_blockers"]=review.get("outstanding_blockers") or []
-        if entry.available_for_execution:
-            state["blocked_reason"]=None
-        elif review.get("readiness_gates_cleared") is not True:
-            # Readiness comes first in the truth of it. Reporting a missing
-            # activation while two capability blockers stand tells a reviewer
-            # to press activate, which is what the STEP 26 screen did.
-            state["blocked_reason"]="readiness_gates_blocked"
-        elif state["development_activation"].get("activated"):
-            state["blocked_reason"]="readiness_gates_blocked"
+        state["available_for_execution"]=bool(entry.available_for_execution)
+        state["execution_blockers"]=review.get("execution_blockers") or []
+        state["execution_notices"]=review.get("execution_notices") or []
+        state["blocked_reason"]=(
+            None if entry.available_for_execution else "execution_blocked")
     except Exception:  # noqa: BLE001 - see the docstring: unreadable is a no
         state["available_for_execution"]=False
         state["blocked_reason"]="protocol_catalog_unavailable"
@@ -2164,29 +1867,26 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "source_sha256":fixture.source_pdf_sha256,
         "revision_id":fixture.revision_id,
         "readiness_status":fixture.draft.readiness.status.value,
-        "approval_status":(
-            "development_only_not_final_acceptance"
-            if execution["available_for_execution"] else "unapproved"),
         "analysis_status":"validated_curated_fixture",
         "step_count":len(fixture.steps),
         "created_at":None,
         "available_for_execution":execution["available_for_execution"],
+        "execution_blocker_codes":[
+            item.get("code") for item in execution.get("execution_blockers") or []
+            if isinstance(item,dict)],
         "development_only":True,
-        "development_activation":execution["development_activation"],
+        "lifecycle_state":(
+            "ready" if execution["available_for_execution"] else "blocked"),
         "execution_blocked_reason":execution["blocked_reason"],
-        "outstanding_blockers":execution.get("outstanding_blockers") or [],
-        "approval":execution["approval"],
     }
 
 
 def _catalog_entry_projection(
     catalog:ProtocolCatalog,entry:ProtocolCatalogEntry,
 )->dict[str,object]:
-    """Project one catalog entry with its existing approval evidence."""
+    """Project one catalog entry as the screen reads it."""
 
-    public=entry.public_dict()
-    public["approval"]=catalog.approval_context(entry.protocol_id)
-    return public
+    return entry.public_dict()
 
 
 def _public_protocol_catalog_entries(
@@ -2255,35 +1955,6 @@ def log_protocol_catalog_runtime_configuration()->None:
         )
 
 
-#: A reviewer finding the catalog refuses for what it says, not for who sent
-#: it: the catalog's own refusal sentence -> (reason code, HTTP status).
-#: They all reached the screen as 403 "protocol_approval_denied", which read
-#: as a permission problem (lane R6, decision 5). 400 is a request the
-#: endpoint does not support, 422 one whose content does not hold. Every
-#: sentence here is one protocol_catalog.py raises (tested).
-FINDING_REJECTIONS:dict[str,tuple[str,int]]={
-    "A reviewer finding must cite the segments it rests on.":("finding_evidence_missing",422),
-    "An ambiguity decision must cite the segments it rests on.":("finding_evidence_missing",422),
-    "The cited evidence segments do not resolve on that page.":("finding_evidence_span_mismatch",422),
-    "This analysis revision has no such ambiguity.":("ambiguity_not_found",422),
-    "Ambiguity decision is unsupported.":("finding_unsupported",400),
-    "This readiness reason cannot be cleared by acknowledgement.":("finding_unsupported",400),
-    "A validated analysis revision is required for acknowledgement.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to resolve an ambiguity.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to record a finding.":("analysis_revision_missing",422),
-    "A validated analysis revision is required to revoke a finding.":("analysis_revision_missing",422),
-    "This analysis revision does not carry that readiness gate.":("finding_target_not_found",422),
-    "This analysis revision has no such fixed repetition.":("finding_target_not_found",422),
-    "That page is not in this source.":("finding_target_not_found",422),
-    "That label is not a numbered line on that page.":("finding_target_not_found",422),
-    "A confirmed count must be a number.":("finding_value_invalid",400),
-    "A confirmed count must be positive.":("finding_value_invalid",400),
-    "The confirmed count does not match the analysed count.":("finding_value_mismatch",422),
-    "This analysis revision carries no confirmation to revoke.":("finding_not_recorded",422),
-    "This analysis revision carries no finding to revoke.":("finding_not_recorded",422),
-}
-
-
 def _catalog_http_error(exc:Exception)->HTTPException:
     if isinstance(exc,(AuthenticationRequiredError,AuthorizationDeniedError,WorkspaceError)):
         return _workspace_http_error(exc)
@@ -2320,13 +1991,6 @@ def _catalog_http_error(exc:Exception)->HTTPException:
         return HTTPException(status_code=422,detail=exc.code)
     if isinstance(exc,ProtocolCatalogNotFoundError):
         return HTTPException(status_code=404,detail=getattr(exc,"code","not_found"))
-    if isinstance(exc,ProtocolApprovalError) and str(exc) in FINDING_REJECTIONS:
-        # A finding refused for its content: its reason, and not 403, which
-        # is kept for a real permission refusal (lane R6, decision 5).
-        code,status=FINDING_REJECTIONS[str(exc)]
-        return HTTPException(status_code=status,detail=code)
-    if isinstance(exc,ProtocolApprovalError):
-        return HTTPException(status_code=403,detail=exc.code)
     if isinstance(exc,ProtocolRegistrationError):
         return HTTPException(status_code=400,detail=exc.code)
     return HTTPException(
@@ -2351,19 +2015,13 @@ async def get_workspace_session()->dict[str,object]:
         principal,store=_commercial_workspace()
         try:
             store.record_workspace_access(principal)
-            routes=["researcher"]
-            if any(role.value in {"reviewer","lab_admin","organization_admin"}
-                   for role in principal.roles):
-                routes.append("reviewer")
-            if any(role.value in {"lab_admin","organization_admin"}
-                   for role in principal.roles):
-                routes.append("admin")
+            # Lane DI (2026-10-08): the experimenter's bench is the one
+            # workspace; the reviewer and lab-admin screens are gone.
             return {
                 "principal_id":principal.principal_id,
                 "display_name":principal.display_name,
                 "organization_id":principal.organization_id,
-                "roles":sorted(role.value for role in principal.roles),
-                "workspaces":routes,
+                "workspaces":["researcher"],
                 "authentication_method":principal.authentication_method,
             }
         finally:
@@ -2541,35 +2199,6 @@ async def create_workspace_experiment_observation(
                     if payload.get("protocol_step_id") is not None else None
                 ),
             )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post(
-    "/api/workspace/reviewer/experiments/{session_id}/actions",
-    status_code=201,
-)
-async def create_workspace_experiment_review_action(
-    session_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            state=store.record_experiment_review_action(
-                principal,
-                session_id,
-                event_key=str(payload.get("idempotency_key", "")),
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
-            )
-            return {
-                "session_id":state["session_id"],
-                "version":state["version"],
-                "recorded":True,
-            }
         finally:
             store.close()
     except Exception as exc:
@@ -2855,515 +2484,6 @@ def download_workspace_experiment_evidence(
         raise _workspace_http_error(exc) from exc
 
 
-@app.get("/api/workspace/protocol-adaptations")
-def get_workspace_protocol_adaptations()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "adaptations":list(store.list_lab_adaptations(principal))
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/protocol-adaptations/{adapted_revision_id}")
-def get_workspace_protocol_adaptation(
-    adapted_revision_id:str,
-)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.lab_adaptation(principal,adapted_revision_id)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post(
-    "/api/workspace/protocols/{base_revision_id}/adaptations",
-    status_code=201,
-)
-async def create_workspace_protocol_adaptation(
-    base_revision_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    raw_changes=payload.get("changes")
-    if not isinstance(raw_changes,list):
-        raise HTTPException(status_code=400,detail="workspace_error")
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.create_lab_adaptation(
-                principal,
-                base_revision_id=base_revision_id,
-                changes=tuple(raw_changes),
-                change_summary=str(payload.get("change_summary", "")),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/protocol-library")
-def get_workspace_protocol_library(search:str="")->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            protocols=list(store.protocol_library(principal,search=search))
-        finally:
-            store.close()
-        catalog_protocols={
-            str(item["catalog_protocol_id"])
-            for item in protocols
-            if isinstance(item.get("catalog_protocol_id"),str)
-            and item["catalog_protocol_id"]
-        }
-        if catalog_protocols:
-            try:
-                catalog,catalog_store=_open_protocol_catalog()
-            except (
-                ProtocolCatalogError,
-                ProtocolConfigurationError,
-                ProtocolFeatureDisabledError,
-            ):
-                for item in protocols:
-                    if item.get("catalog_protocol_id") in catalog_protocols:
-                        item["executable"]=False
-            else:
-                try:
-                    for item in protocols:
-                        protocol_id=item.get("catalog_protocol_id")
-                        if protocol_id not in catalog_protocols:
-                            continue
-                        try:
-                            _scope_catalog_resource(str(protocol_id))
-                            entry=catalog.get_entry(str(protocol_id))
-                        except (HTTPException,ProtocolCatalogError):
-                            item["executable"]=False
-                            continue
-                        item["executable"]=entry.available_for_execution
-                        item["catalog_revision_id"]=entry.revision_id
-                        item["approval_state"]=entry.approval_status
-                        item["risk_state"]=entry.lifecycle_state
-                finally:
-                    catalog_store.close()
-        return {"protocols":protocols}
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/protocol-library/{family_id}/preference")
-async def set_workspace_protocol_preference(
-    family_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    tags=payload.get("tags")
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            store.set_protocol_preference(
-                principal,family_id,
-                favorite=payload.get("favorite") is True,
-                tags=(tuple(str(item) for item in tags)
-                      if isinstance(tags,list) else ()),
-            )
-            return {"family_id":family_id,"saved":True}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/memberships")
-def get_workspace_memberships()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "memberships":list(store.membership_summaries(principal)),
-                "permission_levels":[
-                    {
-                        "role":role.value,
-                        "permissions":list(permissions_for_roles((role,))),
-                    }
-                    for role in Role
-                ],
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/admin/memberships/{target_principal_id}")
-async def set_workspace_membership(
-    target_principal_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.set_membership(
-                principal,
-                target_principal_id=target_principal_id,
-                target_subject=str(payload.get("subject", "")),
-                display_name=str(payload.get("display_name", "")),
-                role=str(payload.get("role", "")),
-                active=payload.get("active") is True,
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/admin/retention")
-async def update_workspace_retention(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        retention_days=int(payload.get("analytics_retention_days", 0))
-    except (TypeError,ValueError) as exc:
-        raise HTTPException(status_code=422,detail="retention_invalid") from exc
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.update_analytics_retention(
-                principal,retention_days=retention_days)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-def _workspace_catalog_analysis_gate(
-    principal: Principal,
-    workspace,
-    revision_id: str,
-) -> dict[str, object] | None:
-    """Project the live catalog gate for one local-PDF workspace revision."""
-
-    revision = workspace.get_revision(principal, revision_id)
-    source = workspace.source_for_revision(principal, revision_id)
-    if source.connector_kind != "local_pdf":
-        return None
-    protocol_id = source.metadata.get("catalog_protocol_id")
-    execution_identity = revision.content.get("execution_identity")
-    if not isinstance(execution_identity, dict):
-        execution_identity = {}
-    recorded_protocol_id = execution_identity.get("protocol_id")
-    recorded_source_hash = execution_identity.get("source_sha256")
-    base: dict[str, object] = {
-        "kind": "catalog_structured_analysis",
-        "catalog_protocol_id": (
-            protocol_id if isinstance(protocol_id, str) else None
-        ),
-        "workspace_revision_id": revision_id,
-        "source_hash": source.source_hash,
-        "candidate_revision_id": None,
-        "analysis_status": "analysis_unavailable",
-        "failure_code": None,
-        "failure_detail": None,
-        "readiness_status": "analysis_required",
-        "execution_approval_allowed": False,
-        "available_for_execution": False,
-        "representation": "recovery_triage",
-        "action": "승인 전에 올바른 구조 분석을 다시 만들어 주세요.",
-    }
-    if (
-        not isinstance(protocol_id, str)
-        or not protocol_id
-        or recorded_protocol_id != protocol_id
-        or recorded_source_hash != source.source_hash
-        or revision.source_hash != source.source_hash
-        or source.version_identity != source.source_hash
-    ):
-        base.update(
-            {
-                "analysis_status": "invalid_source_revision",
-                "failure_code": "invalid_source_revision",
-                "action": "검토 전에 원문과 버전의 연결을 바로잡아 주세요.",
-            }
-        )
-        return base
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog, catalog_store = _open_protocol_catalog()
-        try:
-            entry = catalog.get_entry(protocol_id)
-            review = catalog.review(protocol_id)
-        finally:
-            catalog_store.close()
-    except (
-        HTTPException,
-        ProtocolCatalogError,
-        ProtocolConfigurationError,
-        ProtocolFeatureDisabledError,
-    ):
-        base["failure_code"] = "protocol_catalog_unavailable"
-        base["action"] = "검토·승인 전에 프로토콜 카탈로그를 복구해 주세요."
-        return base
-    analysis_failure = review.get("analysis_failure")
-    readiness = review.get("readiness")
-    readiness_status = (
-        readiness.get("status")
-        if isinstance(readiness, dict)
-        and isinstance(readiness.get("status"), str)
-        else "analysis_required"
-    )
-    failure_code = (
-        analysis_failure.get("code")
-        if isinstance(analysis_failure, dict)
-        and isinstance(analysis_failure.get("code"), str)
-        else None
-    )
-    failure_detail = (
-        analysis_failure.get("detail")
-        if isinstance(analysis_failure, dict)
-        and isinstance(analysis_failure.get("detail"), dict)
-        else None
-    )
-    exact_source = entry.source_sha256 == source.source_hash
-    analyzed_revision = (
-        review.get("analysis_available") is True
-        and entry.revision_id.startswith("pdf-")
-        and "-analysis-" in entry.revision_id
-    )
-    approval_allowed = bool(
-        exact_source
-        and analyzed_revision
-        and readiness_status == "guidance_ready"
-    )
-    if not exact_source:
-        status = "invalid_source_revision"
-        failure_code = "invalid_source_revision"
-        action = "이 원문 버전으로 분석을 다시 해 주세요."
-    elif failure_code is not None:
-        status = "analysis_failed"
-        action = "구조 분석을 다시 시도해 주세요. 이 항목은 복구용이며 실행할 수 없습니다."
-    elif not analyzed_revision:
-        status = entry.analysis_status
-        action = "실행 승인 전에 구조 분석을 끝내 주세요."
-    elif readiness_status != "guidance_ready":
-        status = "analysis_not_ready"
-        action = "승인 전에 실행 준비·안전 차단 항목을 해결해 주세요."
-    elif entry.approval_status == "approved":
-        status = "approved"
-        action = "The exact analyzed revision is already execution-approved."
-    else:
-        status = "approval_ready"
-        action = "Approve this exact analyzed revision for Researcher execution."
-    base.update(
-        {
-            "candidate_revision_id": (
-                entry.revision_id if analyzed_revision else None
-            ),
-            "analysis_status": status,
-            "failure_code": failure_code,
-            "failure_detail": failure_detail,
-            "readiness_status": readiness_status,
-            "execution_approval_allowed": approval_allowed,
-            "available_for_execution": entry.available_for_execution,
-            "representation": (
-                "execution_approval"
-                if approval_allowed
-                else "recovery_triage"
-            ),
-            "action": action,
-        }
-    )
-    return base
-
-
-def _apply_workspace_catalog_gate(
-    packet: dict[str, object],
-    gate: dict[str, object] | None,
-) -> dict[str, object]:
-    if gate is None:
-        return packet
-    packet["catalog_analysis_gate"] = gate
-    decision_state = packet.get("decision_state")
-    if not isinstance(decision_state, dict):
-        return packet
-    actions = decision_state.get("allowed_actions")
-    allowed = list(actions) if isinstance(actions, list) else []
-    if gate.get("execution_approval_allowed") is not True:
-        allowed = [action for action in allowed if action != "approved"]
-    decision_state["allowed_actions"] = allowed
-    decision_state["available_for_new_operational_sessions"] = bool(
-        decision_state.get("state") == "approved"
-        and gate.get("available_for_execution") is True
-    )
-    decision_state["execution_gate_state"] = gate.get("analysis_status")
-    return packet
-
-
-@app.get("/api/workspace/reviewer/inbox")
-def get_workspace_reviewer_inbox()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {"items":list(store.source_inbox(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/reviewer/revisions/{revision_id}/diff")
-def get_workspace_revision_diff(revision_id:str)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            require_permission(principal,Permission.PROTOCOL_REVIEW)
-            packet=store.revision_diff(principal,revision_id)
-            return _apply_workspace_catalog_gate(
-                packet,
-                _workspace_catalog_analysis_gate(
-                    principal,
-                    store,
-                    revision_id,
-                ),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/reviewer/revisions/{revision_id}/decision")
-async def decide_workspace_revision(revision_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            action=str(payload.get("action", ""))
-            comment=str(payload.get("comment", ""))
-            idempotency_key=str(payload.get("idempotency_key", ""))
-            replacement_revision_id=(
-                str(payload["replacement_revision_id"])
-                if payload.get("replacement_revision_id") else None
-            )
-            gate=_workspace_catalog_analysis_gate(
-                principal,
-                store,
-                revision_id,
-            )
-            catalog_entry=None
-            if action=="approved" and gate is not None:
-                packet=_apply_workspace_catalog_gate(
-                    store.revision_diff(principal,revision_id),
-                    gate,
-                )
-                decision_state=packet.get("decision_state")
-                allowed=(
-                    decision_state.get("allowed_actions",[])
-                    if isinstance(decision_state,dict) else []
-                )
-                if (
-                    gate.get("execution_approval_allowed") is not True
-                    or "approved" not in allowed
-                ):
-                    raise WorkspaceConflictError(
-                        "Valid structured analysis of this exact source revision "
-                        "is required before execution approval."
-                    )
-                if (
-                    not comment.strip()
-                    or len(comment)>4000
-                    or re.fullmatch(
-                        r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}",
-                        idempotency_key,
-                    ) is None
-                ):
-                    raise WorkspaceError("Approval request is invalid.")
-                protocol_id=gate.get("catalog_protocol_id")
-                candidate_revision_id=gate.get("candidate_revision_id")
-                if not isinstance(protocol_id,str) or not isinstance(
-                    candidate_revision_id,str
-                ):
-                    raise WorkspaceConflictError(
-                        "Catalog analysis identity is unavailable."
-                    )
-                catalog,catalog_store=_open_protocol_catalog()
-                try:
-                    role=next(
-                        item.value for item in principal.roles
-                        if item.value in {
-                            "reviewer","lab_admin","organization_admin",
-                        }
-                    )
-                    catalog_entry=catalog.approve(
-                        protocol_id,
-                        candidate_revision_id,
-                        policy=SharedSecretApprovalPolicy(
-                            "tenant-rbac-authorized"
-                        ),
-                        presented_secret="tenant-rbac-authorized",
-                        actor_principal_id=principal.principal_id,
-                        actor_role=role,
-                        comment=comment,
-                        actor_display_name=principal.display_name,
-                    )
-                finally:
-                    catalog_store.close()
-            event=store.record_approval(
-                principal,
-                revision_id=revision_id,
-                action=action,
-                comment=comment,
-                idempotency_key=idempotency_key,
-                replacement_revision_id=replacement_revision_id,
-            )
-            store.record_analytics(
-                principal,
-                category="protocol",
-                metric_name="review_decision",
-                dimensions={"status":event.action,"event_kind":"approval"},
-            )
-            state=store.revision_operational_state(principal,revision_id)
-            if catalog_entry is not None:
-                state.update(
-                    {
-                        "catalog_protocol_id":catalog_entry.protocol_id,
-                        "catalog_revision_id":catalog_entry.revision_id,
-                        "available_for_new_operational_sessions":(
-                            catalog_entry.available_for_execution
-                        ),
-                    }
-                )
-            return {"event":event.__dict__,"state":state}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/reviewer/revisions/{revision_id}/translations")
-async def add_workspace_translation(revision_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            translation_id=store.add_translation(
-                principal,
-                revision_id=revision_id,
-                language=str(payload.get("language", "")),
-                original_text=str(payload.get("original_text", "")),
-                translated_text=str(payload.get("translated_text", "")),
-                status=str(payload.get("status", "machine")),
-            )
-            return {"translation_id":translation_id,"label":str(payload.get("status","machine"))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.get("/api/workspace/knowledge")
 def get_workspace_knowledge()->dict[str,object]:
     try:
@@ -3398,23 +2518,6 @@ async def create_workspace_knowledge(request:Request)->dict[str,object]:
         raise _workspace_http_error(exc) from exc
 
 
-@app.post("/api/workspace/reviewer/knowledge/{knowledge_id}/promote")
-async def promote_workspace_knowledge(knowledge_id:str,request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            promotion_id=store.promote_knowledge(
-                principal,knowledge_id=knowledge_id,
-                comment=str(payload.get("comment", "")),
-            )
-            return {"promotion_id":promotion_id,"effective_kind":"approved_protocol_fact"}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
 @app.get("/api/workspace/assets")
 def get_workspace_assets()->dict[str,object]:
     try:
@@ -3433,810 +2536,6 @@ def get_workspace_asset_diff(asset_id:str)->dict[str,object]:
         principal,store=_commercial_workspace()
         try:
             return store.asset_card_diff(principal,asset_id)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/admin/assets",status_code=201)
-async def create_workspace_asset(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            version_id=store.add_asset_card_version(
-                principal,
-                asset_id=str(payload.get("asset_id", "")),
-                asset_kind=str(payload.get("asset_kind", "")),
-                name=str(payload.get("name", "")),
-                location=(payload.get("location")
-                          if isinstance(payload.get("location"),dict) else {}),
-                review_status=str(payload.get("review_status", "draft")),
-                photo_url=(str(payload["photo_url"]) if payload.get("photo_url") else None),
-                barcode=(str(payload["barcode"]) if payload.get("barcode") else None),
-                sds_url=(str(payload["sds_url"]) if payload.get("sds_url") else None),
-            )
-            return {"version_id":version_id}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/connectors")
-def get_workspace_connectors()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {"connectors":list(store.connector_summaries(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/connector-credentials")
-def get_workspace_connector_credentials()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            require_permission(principal,Permission.CONNECTOR_MANAGE)
-            return {
-                "credentials":list(_server_credential_options(principal)),
-                "credential_values_exposed":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/admin/connectors",status_code=201)
-async def configure_workspace_connector(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    roots=payload.get("allowed_roots")
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            credential_reference=(
-                _credential_reference_from_handle(
-                    principal,str(payload.get("credential_handle", "")))
-                if payload.get("credential_handle")
-                else str(payload.get("credential_reference", ""))
-            )
-            webhook_reference=(
-                _credential_reference_from_handle(
-                    principal,str(payload.get("webhook_credential_handle", "")))
-                if payload.get("webhook_credential_handle")
-                else (
-                    str(payload["webhook_secret_reference"])
-                    if payload.get("webhook_secret_reference") else None
-                )
-            )
-            tenant_prefix=f"secret://{principal.organization_id}/"
-            if not credential_reference.startswith(tenant_prefix) or (
-                webhook_reference is not None
-                and not webhook_reference.startswith(tenant_prefix)
-            ):
-                raise WorkspaceError("Connector credential is outside the tenant scope.")
-            connector=store.configure_connector(
-                principal,
-                connector_kind=str(payload.get("connector_kind", "")),
-                display_name=str(payload.get("display_name", "")),
-                credential_reference=credential_reference,
-                allowed_roots=(tuple(str(item) for item in roots)
-                               if isinstance(roots,list) else ()),
-                webhook_secret_reference=webhook_reference,
-                enabled=False,
-            )
-            return {
-                "connector_id":connector.connector_id,
-                "connector_kind":connector.connector_kind,
-                "display_name":connector.display_name,
-                "allowed_roots":list(connector.allowed_roots),
-                "enabled":connector.enabled,
-                "credential_configured":True,
-                "validation_status":connector.validation_status,
-                "next_action":"test_configuration",
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/admin/connectors/{connector_id}/test")
-def test_workspace_connector_configuration(connector_id:str)->dict[str,object]:
-    """Check server credential resolution and scope syntax without provider I/O."""
-
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            connector=store.get_connector(principal,connector_id)
-            require_permission(principal,Permission.CONNECTOR_MANAGE)
-            failure_code=_connector_configuration_failure(connector)
-            result=store.record_connector_configuration_test(
-                principal,connector_id,
-                succeeded=failure_code is None,
-                failure_code=failure_code,
-            )
-            return {
-                **result,
-                "test_scope":"server_configuration",
-                "provider_connection_tested":False,
-                "next_action":("enable" if failure_code is None else "fix_configuration"),
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.put("/api/workspace/admin/connectors/{connector_id}/enabled")
-async def set_workspace_connector_enabled(
-    connector_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    if not isinstance(payload.get("enabled"),bool):
-        raise HTTPException(status_code=422,detail="connector_state_invalid")
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.set_connector_enabled(
-                principal,connector_id,enabled=payload["enabled"])
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/eln/elabftw/writeback",status_code=201)
-async def write_experiment_to_elabftw(request:Request)->dict[str,object]:
-    """Write one exact completed report only after an explicit user confirmation."""
-
-    payload=await _json_object(request)
-    if payload.get("confirmed") is not True:
-        raise HTTPException(status_code=409,detail="eln_confirmation_required")
-    connector_id=str(payload.get("connector_id", ""))
-    report_id=str(payload.get("report_id", ""))
-    revision_id=str(payload.get("protocol_revision_id", ""))
-    idempotency_key=str(payload.get("idempotency_key", ""))
-    principal=None
-    store=None
-    claimed=False
-    try:
-        principal,store=_commercial_workspace()
-        configured=store.connector_for_use(
-            principal,connector_id,expected_kind="elabftw")
-        revision=store.get_revision(principal,revision_id)
-        source=store.source_for_revision(principal,revision_id)
-        report_settings=ExperimentReportSettings.from_environment()
-        if not report_settings.enabled or report_settings.database_path is None:
-            raise WorkspaceNotFoundError("Experiment report is not available.")
-        store.require_resource(principal,"experiment_report",report_id)
-        report=ExperimentReportStore(report_settings.database_path).get_report(report_id)
-        if report.get("status")!="completed" or not report.get("ended_at"):
-            raise WorkspaceConflictError(
-                "Only a completed experiment report can be written back.")
-        experiment_session_id=report.get("session_id")
-        if not isinstance(experiment_session_id,str):
-            raise WorkspaceConflictError(
-                "Experiment report has no durable session identity.")
-        experiment=store.get_experiment(principal,experiment_session_id)
-        if experiment.get("status")!="completed":
-            raise WorkspaceConflictError(
-                "Only a completed experiment session can be written back.")
-        if (
-            experiment.get("protocol_id")!=report.get("protocol_id")
-            or experiment.get("protocol_revision_id")
-            !=report.get("protocol_revision")
-        ):
-            raise WorkspaceConflictError(
-                "Experiment session and report protocol identities do not match."
-            )
-        identity=revision.content.get("execution_identity")
-        identity_matches=(
-            revision.source_hash==report.get("protocol_sha256")
-            or (
-                isinstance(identity,dict)
-                and identity.get("protocol_id")==report.get("protocol_id")
-                and identity.get("source_sha256")==report.get("protocol_sha256")
-            )
-        )
-        if not identity_matches:
-            raise WorkspaceConflictError(
-                "The report and selected protocol lineage revision do not match.")
-        bases=tuple(
-            root.rstrip("/") for root in configured.allowed_roots
-            if root.startswith("https://")
-        )
-        if len(bases)!=1:
-            raise WorkspaceError("eLabFTW connector origin is invalid.")
-        completed_steps=[]
-        observations=[]
-        timer_events=[]
-        deviations=[]
-        for item in report.get("events",[]):
-            if not isinstance(item,dict):
-                continue
-            event_type=item.get("event_type")
-            step_id=str(item.get("step_id") or item.get("step_label") or "unlabeled")
-            created_at=str(item.get("created_at") or report["started_at"])
-            wording=item.get("user_wording")
-            if event_type=="step_completed":
-                completed_steps.append(CompletedStep(step_id,created_at,None))
-            elif event_type=="observation":
-                value=(wording if isinstance(wording,str) and wording.strip()
-                       else str((item.get("payload") or {}).get("summary") or "recorded"))
-                observations.append(ElnObservation(step_id,created_at,value[:2000]))
-            elif event_type=="timer_started":
-                timer=(item.get("payload") or {}).get("timer")
-                safe_timer={
-                    key:value for key,value in (timer.items() if isinstance(timer,dict) else ())
-                    if key in {
-                        "source_duration_seconds","started_at","elapsed_seconds",
-                        "remaining_seconds","completion_state","demo_bypassed",
-                    } and isinstance(value,(str,int,float,bool))
-                }
-                timer_events.append({
-                    "event_type":"timer_started","step_id":step_id,
-                    "recorded_at":created_at,"timer":safe_timer,
-                })
-            elif event_type in {"anomaly","blocked"}:
-                label=wording if isinstance(wording,str) and wording.strip() else event_type
-                deviations.append(f"{step_id}: {label[:2000]}")
-        experiment=ExperimentWriteback(
-            report_id=report_id,
-            protocol_id=str(report["protocol_id"]),
-            protocol_revision_id=revision_id,
-            protocol_title=str(report["protocol_title"]),
-            protocol_version=(source.version_identity or str(revision.revision_number)),
-            protocol_source_url=source.canonical_url,
-            source_status=str(source.metadata.get("source_status") or "Imported draft"),
-            started_at=str(report["started_at"]),
-            ended_at=str(report["ended_at"]),
-            completed_steps=tuple(completed_steps),
-            observations=tuple(observations),
-            timer_events=tuple(timer_events),
-            deviations=tuple(deviations),
-            report_url=None,
-        )
-        store.claim_eln_writeback_request(
-            principal,connector_id=connector_id,
-            experiment_session_id=experiment_session_id,report_id=report_id,
-            protocol_revision_id=revision_id,idempotency_key=idempotency_key,
-        )
-        claimed=True
-        result=await asyncio.to_thread(
-            ELabFtwConnector(
-                server_configured_base_url=bases[0],
-                api_key=_resolve_server_secret(configured.credential_reference),
-            ).write_completed_experiment,
-            experiment,confirmed=True,
-        )
-        writeback_id=store.record_eln_writeback(
-            principal,connector_id=connector_id,
-            experiment_session_id=experiment_session_id,report_id=report_id,
-            protocol_revision_id=revision_id,
-            external_experiment_id=result.external_experiment_id,
-            request_sha256=result.request_sha256,
-            idempotency_key=idempotency_key,
-        )
-        store.finish_eln_writeback_request(
-            principal,idempotency_key,succeeded=True)
-        store.record_analytics(
-            principal,category="connector",metric_name="eln_writeback",
-            dimensions={"connector_kind":"elabftw","status":"ok"},
-        )
-        return {
-            "writeback_id":writeback_id,
-            "connector_kind":"elabftw",
-            "experiment_session_id":experiment_session_id,
-            "external_experiment_id":result.external_experiment_id,
-            "location":result.location,
-            "raw_audio_transmitted":False,
-            "transcript_transmitted":False,
-        }
-    except Exception as exc:
-        if store is not None and principal is not None and claimed:
-            try:
-                store.finish_eln_writeback_request(
-                    principal,idempotency_key,succeeded=False)
-            except Exception as finish_exc:
-                log.warning(
-                    "eln_writeback.finish_failed succeeded=false error=%s",
-                    type(finish_exc).__name__,
-                )
-        raise _workspace_http_error(exc) from exc
-    finally:
-        if store is not None:
-            store.close()
-
-
-@app.post("/api/workspace/sources/protocols-io/import")
-async def import_protocols_io_source(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            connector=store.connector_for_use(
-                principal,str(payload.get("connector_id", "")),
-                expected_kind="protocols_io",
-            )
-            selected_identifier=normalize_protocols_io_identifier(
-                str(payload.get("identifier", ""))
-            )
-            allowed_prefixes=tuple(
-                root.removeprefix("protocol:").casefold()
-                for root in connector.allowed_roots
-                if root.startswith("protocol:")
-            )
-            if not allowed_prefixes or not any(
-                selected_identifier.casefold().startswith(prefix)
-                for prefix in allowed_prefixes
-            ):
-                raise AuthorizationDeniedError(
-                    "protocols.io source is outside the connector allowlist."
-                )
-            snapshot=await asyncio.to_thread(
-                ProtocolsIoConnector(
-                    access_token=_resolve_server_secret(connector.credential_reference)
-                ).fetch,
-                selected_identifier,
-            )
-            imported=ProtocolSourceHub(store).ingest(principal,snapshot)
-            store.record_analytics(
-                principal,category="connector",metric_name="source_import",
-                dimensions={"connector_kind":"protocols_io","status":imported.inbox_state},
-            )
-            return {
-                "family_id":imported.family_id,
-                "revision_id":imported.revision.revision_id,
-                "changed":imported.changed,
-                "inbox_state":imported.inbox_state,
-                "source":snapshot.metadata,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/sources/google-drive/sync")
-async def sync_google_drive_source(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            configured=store.connector_for_use(
-                principal,str(payload.get("connector_id", "")),
-                expected_kind="google_drive",
-            )
-            folder_id=str(payload.get("folder_id", ""))
-            folder_roots=tuple(root.removeprefix("folder:") for root in configured.allowed_roots if root.startswith("folder:"))
-            shared=next((root.removeprefix("shared-drive:") for root in configured.allowed_roots if root.startswith("shared-drive:")),None)
-            connector=GoogleDriveConnector(
-                access_token=_resolve_server_secret(configured.credential_reference),
-                allowed_folder_ids=folder_roots,
-                shared_drive_id=shared,
-            )
-            cursor=store.connector_cursor(
-                principal,configured.connector_id,cursor_kind="drive_changes")
-            if cursor is None:
-                next_cursor=await asyncio.to_thread(connector.start_page_token)
-                snapshots=await asyncio.to_thread(connector.list_snapshots,folder_id)
-                sync_mode="initial_snapshot"
-            else:
-                changed_ids,next_cursor=await asyncio.to_thread(
-                    connector.changed_file_ids,cursor)
-                snapshots=(
-                    await asyncio.to_thread(connector.list_snapshots,folder_id)
-                    if changed_ids else ()
-                )
-                changed_set=frozenset(changed_ids)
-                snapshots=tuple(
-                    item for item in snapshots
-                    if item.metadata.get("drive_file_id") in changed_set
-                )
-                sync_mode="change_log"
-            results=[]
-            hub=ProtocolSourceHub(store)
-            for snapshot in snapshots:
-                imported=hub.ingest(principal,snapshot)
-                results.append({
-                    "family_id":imported.family_id,
-                    "revision_id":imported.revision.revision_id,
-                    "changed":imported.changed,
-                    "inbox_state":imported.inbox_state,
-                })
-            store.record_analytics(
-                principal,category="connector",metric_name="source_sync",
-                metric_value=len(results),dimensions={"connector_kind":"google_drive","status":"ok"},
-            )
-            store.set_connector_cursor(
-                principal,configured.connector_id,
-                cursor_kind="drive_changes",opaque_cursor=next_cursor,
-            )
-            return {
-                "imports":results,
-                "read_only":True,
-                "sync_mode":sync_mode,
-                "change_token_persisted":True,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/sources/github/import")
-async def import_github_source(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            configured=store.connector_for_use(
-                principal,str(payload.get("connector_id", "")),expected_kind="github"
-            )
-            repository=str(payload.get("repository", ""))
-            ref=str(payload.get("ref", ""))
-            path=str(payload.get("path", ""))
-            allowed=[]
-            for root in configured.allowed_roots:
-                match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
-                if match:
-                    allowed.append(match.groups())
-            matching=[item for item in allowed if item[0]==repository and item[1]==ref and path.startswith(item[2].rstrip("/")+"/")]
-            if not matching:
-                raise AuthorizationDeniedError("GitHub source is outside the connector allowlist.")
-            snapshot=await asyncio.to_thread(
-                GitHubConnector(
-                    installation_token=_resolve_server_secret(configured.credential_reference),
-                    allowed_repositories=(repository,),allowed_refs=(ref,),
-                    allowed_path_prefixes=tuple(item[2] for item in matching),
-                ).fetch,
-                repository,ref,path,
-            )
-            imported=ProtocolSourceHub(store).ingest(principal,snapshot)
-            store.record_analytics(
-                principal,category="connector",metric_name="source_import",
-                dimensions={"connector_kind":"github","status":imported.inbox_state},
-            )
-            return {
-                "family_id":imported.family_id,
-                "revision_id":imported.revision.revision_id,
-                "changed":imported.changed,
-                "inbox_state":imported.inbox_state,
-                "source":snapshot.metadata,
-                "code_executed":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/webhooks/github/{connector_id}",status_code=202)
-async def receive_github_webhook(
-    connector_id:str,
-    request:Request,
-    x_hub_signature_256:str|None=Header(default=None),
-    x_github_delivery:str|None=Header(default=None),
-    x_github_event:str|None=Header(default=None),
-)->dict[str,object]:
-    """Verify one GitHub delivery and import allowlisted changed source files."""
-
-    content_length=request.headers.get("content-length")
-    if content_length:
-        try:
-            parsed_content_length=int(content_length)
-        except ValueError as exc:
-            raise HTTPException(status_code=400,detail="invalid_content_length") from exc
-        if parsed_content_length<0 or parsed_content_length>1_000_000:
-            raise HTTPException(status_code=413,detail="webhook_payload_too_large")
-    raw=await request.body()
-    if not raw or len(raw)>1_000_000:
-        raise HTTPException(status_code=413,detail="webhook_payload_invalid")
-    if not x_github_delivery or not x_github_event:
-        raise HTTPException(status_code=400,detail="webhook_headers_missing")
-    store=None
-    delivery_started=False
-    try:
-        settings=_workspace_settings()
-        if not settings.enabled:
-            raise WorkspaceError("Commercial workspace is disabled.")
-        store=initialize_workspace_store(settings)
-        organization_id,configured=store.github_webhook_configuration(connector_id)
-        webhook_reference=configured.webhook_secret_reference
-        assert webhook_reference is not None
-        if not verify_github_webhook_signature(
-            raw,x_hub_signature_256,_resolve_server_secret(webhook_reference)
-        ):
-            raise AuthenticationRequiredError("Webhook signature is invalid.")
-        body_sha256=hashlib.sha256(raw).hexdigest()
-        store.begin_github_webhook_delivery(
-            organization_id=organization_id,
-            connector_id=connector_id,
-            delivery_id=x_github_delivery,
-            body_sha256=body_sha256,
-            event_name=x_github_event,
-        )
-        delivery_started=True
-        try:
-            payload=json.loads(raw)
-        except (json.JSONDecodeError,UnicodeDecodeError) as exc:
-            raise SourceConnectorError("Webhook payload is invalid JSON.") from exc
-        if not isinstance(payload,dict):
-            raise SourceConnectorError("Webhook payload must be an object.")
-        if x_github_event=="ping":
-            store.finish_github_webhook_delivery(
-                connector_id,x_github_delivery,succeeded=True)
-            return {"accepted":True,"event":"ping","imports":[]}
-        if x_github_event!="push":
-            store.finish_github_webhook_delivery(
-                connector_id,x_github_delivery,succeeded=True)
-            return {"accepted":True,"event":x_github_event,"imports":[]}
-        repository_value=payload.get("repository")
-        repository=(
-            repository_value.get("full_name")
-            if isinstance(repository_value,dict) else None
-        )
-        raw_ref=payload.get("ref")
-        commit_sha=payload.get("after")
-        if (
-            not isinstance(repository,str)
-            or not isinstance(raw_ref,str)
-            or not raw_ref.startswith("refs/heads/")
-            or not isinstance(commit_sha,str)
-            or re.fullmatch(r"[0-9a-f]{40,64}",commit_sha) is None
-        ):
-            raise SourceConnectorError("GitHub push identity is invalid.")
-        branch=raw_ref.removeprefix("refs/heads/")
-        allowed=[]
-        for root in configured.allowed_roots:
-            match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
-            if match and match.group(1)==repository and match.group(2)==branch:
-                allowed.append(match.group(3).rstrip("/"))
-        if not allowed:
-            raise AuthorizationDeniedError("GitHub push is outside the connector allowlist.")
-        changed:set[str]=set()
-        commits=payload.get("commits")
-        for commit in commits if isinstance(commits,list) else []:
-            if not isinstance(commit,dict):
-                continue
-            for key in ("added","modified"):
-                values=commit.get(key)
-                for value in values if isinstance(values,list) else []:
-                    if isinstance(value,str) and len(value)<=1000:
-                        changed.add(value)
-        selected=tuple(sorted(
-            path for path in changed
-            if any(path==prefix or path.startswith(prefix+"/") for prefix in allowed)
-        ))[:100]
-        service=Principal(
-            principal_id=("system:github:"+hashlib.sha256(
-                f"{organization_id}:{connector_id}".encode()).hexdigest()[:24]),
-            subject=f"system:github:{connector_id}",
-            organization_id=organization_id,
-            display_name="GitHub Source Connector",
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="webhook",
-        )
-        store.bootstrap_principal(service)
-        service=store.effective_principal(service)
-        token=_resolve_server_secret(configured.credential_reference)
-        hub=ProtocolSourceHub(store)
-        imports=[]
-        for path in selected:
-            prefixes=tuple(
-                prefix for prefix in allowed
-                if path==prefix or path.startswith(prefix+"/")
-            )
-            snapshot=await asyncio.to_thread(
-                GitHubConnector(
-                    installation_token=token,
-                    allowed_repositories=(repository,),
-                    allowed_refs=(commit_sha,),
-                    allowed_path_prefixes=prefixes,
-                ).fetch,
-                repository,commit_sha,path,
-            )
-            imported=hub.ingest(service,snapshot)
-            imports.append({
-                "revision_id":imported.revision.revision_id,
-                "changed":imported.changed,
-                "inbox_state":imported.inbox_state,
-                "path":path,
-            })
-        store.record_analytics(
-            service,category="connector",metric_name="webhook_import",
-            metric_value=len(imports),
-            dimensions={"connector_kind":"github","status":"ok"},
-        )
-        store.finish_github_webhook_delivery(
-            connector_id,x_github_delivery,succeeded=True)
-        return {
-            "accepted":True,
-            "event":"push",
-            "commit_sha":commit_sha,
-            "imports":imports,
-            "code_executed":False,
-        }
-    except Exception as exc:
-        if store is not None and delivery_started:
-            try:
-                store.finish_github_webhook_delivery(
-                    connector_id,x_github_delivery or "invalid",succeeded=False)
-            except Exception as finish_exc:
-                log.warning(
-                    "github_webhook.finish_failed succeeded=false error=%s",
-                    type(finish_exc).__name__,
-                )
-        raise _workspace_http_error(exc) from exc
-    finally:
-        if store is not None:
-            store.close()
-
-
-@app.get("/api/workspace/dry-lab/workflows")
-def get_dry_lab_workflows()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {"workflows":list(store.computational_workflows(principal))}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/sources/github/dry-lab/import",status_code=201)
-async def import_github_dry_lab_workflow(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            configured=store.connector_for_use(
-                principal,str(payload.get("connector_id", "")),expected_kind="github"
-            )
-            repository=str(payload.get("repository", ""))
-            ref=str(payload.get("ref", ""))
-            path=str(payload.get("path", ""))
-            engine=str(payload.get("engine", "")).casefold()
-            allowed=[]
-            for root in configured.allowed_roots:
-                match=re.fullmatch(r"([^@]+/[^@]+)@([^:]+):(.+)",root)
-                if match and match.group(1)==repository and match.group(2)==ref:
-                    prefix=match.group(3).rstrip("/")
-                    if path==prefix or path.startswith(prefix+"/"):
-                        allowed.append(prefix)
-            if not allowed:
-                raise AuthorizationDeniedError(
-                    "GitHub workflow is outside the connector allowlist.")
-            snapshot=await asyncio.to_thread(
-                GitHubConnector(
-                    installation_token=_resolve_server_secret(
-                        configured.credential_reference),
-                    allowed_repositories=(repository,),allowed_refs=(ref,),
-                    allowed_path_prefixes=tuple(allowed),
-                ).fetch,
-                repository,ref,path,
-            )
-            if engine=="snakemake":
-                metadata=inspect_snakemake_snapshot(snapshot)
-            elif engine=="nextflow":
-                metadata=inspect_nextflow_snapshot(snapshot)
-            else:
-                raise WorkspaceError("Dry-lab workflow engine is invalid.")
-            imported=DryLabWorkflowRegistry(store).import_metadata(
-                principal,snapshot,metadata)
-            store.record_analytics(
-                principal,category="connector",metric_name="dry_lab_import",
-                dimensions={"connector_kind":"github","status":"review_required"},
-            )
-            return {**imported,"code_executed":False,"metadata_only":True}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/reviewer/dry-lab/{workflow_revision_id}/decision")
-async def decide_dry_lab_workflow(
-    workflow_revision_id:str,request:Request
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.review_computational_workflow(
-                principal,workflow_revision_id,
-                action=str(payload.get("action", "")),
-                comment=str(payload.get("comment", "")),
-            )
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.post("/api/workspace/dry-lab/links",status_code=201)
-async def link_dry_lab_workflow(request:Request)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            link_id=store.link_wet_dry_workflow(
-                principal,
-                experiment_session_id=str(payload.get("experiment_session_id", "")),
-                protocol_revision_id=str(payload.get("protocol_revision_id", "")),
-                workflow_revision_id=str(payload.get("workflow_revision_id", "")),
-            )
-            return {"link_id":link_id,"execution_started":False}
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/dry-lab/links")
-def get_dry_lab_workflow_links(
-    experiment_session_id:str,
-)->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return {
-                "experiment_session_id":experiment_session_id,
-                "links":list(store.wet_dry_workflow_links(
-                    principal,
-                    experiment_session_id=experiment_session_id,
-                )),
-                "execution_supported":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/analytics")
-def get_workspace_analytics()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.analytics_summary(principal)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/pilot-metrics")
-def get_workspace_pilot_metrics()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            return store.pilot_metrics_summary(principal)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _workspace_http_error(exc) from exc
-
-
-@app.get("/api/workspace/admin/security")
-def get_workspace_admin_security()->dict[str,object]:
-    try:
-        principal,store=_commercial_workspace()
-        try:
-            overview=store.admin_security_overview(principal)
-            overview["authentication"]={
-                "current_method":principal.authentication_method,
-                "production_requirement":"oidc",
-                "development_identity_operationally_accepted":False,
-            }
-            return overview
         finally:
             store.close()
     except Exception as exc:
@@ -4287,11 +2586,7 @@ def list_protocol_catalog()->dict[str,object]:
             ]
     except Exception as exc:
         raise _catalog_http_error(exc) from exc
-    payload:dict[str,object]={"protocols":entries}
-    if _test_mode_skips_readiness_gates():
-        # Drives the page-top banner; absent when test mode is off.
-        payload["test_mode"]={"readiness_gates_skipped":True}
-    return payload
+    return {"protocols":entries}
 
 
 @app.get("/api/protocols/{protocol_id}")
@@ -4344,40 +2639,6 @@ async def register_protocol_pdf(request:Request,filename:str)->dict[str,object]:
                     media_type=media_type,
                 )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
-                if _workspace_settings().enabled:
-                    principal,workspace=_commercial_workspace()
-                    try:
-                        ProtocolSourceHub(workspace).ingest(
-                            principal,
-                            SourceSnapshot(
-                                connector_kind="local_pdf",
-                                external_id=f"upload:{result.entry.source_filename}",
-                                version_identity=result.entry.source_sha256,
-                                source_hash=result.entry.source_sha256,
-                                canonical_url=None,
-                                title=result.entry.title,
-                                metadata={
-                                    "source_status":"Uploaded draft",
-                                    "risk_state":"review_required",
-                                    "owner":principal.display_name,
-                                    "catalog_protocol_id":result.entry.protocol_id,
-                                },
-                                content={
-                                    "document":{
-                                        "format":"pdf",
-                                        "sha256":result.entry.source_sha256,
-                                        "analysis_state":result.entry.analysis_status,
-                                    },
-                                    "execution_identity":{
-                                        "protocol_id":result.entry.protocol_id,
-                                        "source_sha256":result.entry.source_sha256,
-                                        "catalog_revision_id":result.entry.revision_id,
-                                    },
-                                },
-                            ),
-                        )
-                    finally:
-                        workspace.close()
                 _record_workspace_metric(
                     category="protocol",metric_name="upload",
                     dimensions={"source_kind":"local_pdf","status":"stored"},
@@ -4526,82 +2787,20 @@ def _protocol_analysis_model()->OpenAICompatibleProtocolAnalysisModel:
         client,require_env("VOINEY_LAB_ANALYSIS_MODEL"),reasoning_effort)
 
 
-def _auto_activate_ready_uploads_enabled() -> bool:
-    scope = (
-        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
-        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
-    ).strip().casefold()
-    if scope == "operational":
-        return False  # NEVER silently bypass human/facility approval in operational mode
-    raw = os.environ.get("VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS", "false").strip().casefold()
-    return raw in ("1", "true", "yes", "on")
+def _development_fixture_allowed() -> bool:
+    """Whether the configured development fixture may run in this usage scope.
 
-
-def _development_activation_allowed() -> bool:
-    """Fail closed outside an explicitly non-operational runtime scope."""
+    The curated in-gel fixture is development material. It runs under the
+    demo, reference_only and test_only scopes and never under operational;
+    an unset scope is a no. This is the one place the usage scope still
+    bears on execution (decision of 2026-10-08).
+    """
 
     scope = (
         os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
         or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
     ).strip().casefold()
     return scope in {"demo", "reference_only", "test_only"}
-
-
-READINESS_GATE_TEST_MODE_ENV = "VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
-READINESS_GATE_TEST_MODE_LABEL = "테스트 모드: 실행 준비 게이트를 건너뜀"
-
-
-def _readiness_gate_test_mode_requested() -> bool:
-    raw = os.environ.get(READINESS_GATE_TEST_MODE_ENV, "false").strip().casefold()
-    return raw in ("1", "true", "yes", "on")
-
-
-def _test_mode_skips_readiness_gates() -> bool:
-    """Whether development test mode lets analysed protocols skip readiness gates.
-
-    Off unless a person sets the variable before starting the server; no
-    launcher sets it. It is honoured only in the scopes that already permit
-    development activation, so an operational runtime ignores it (the
-    startup log says so). It never changes a readiness verdict and never
-    stands in for the development activation itself.
-    """
-
-    return _readiness_gate_test_mode_requested() and _development_activation_allowed()
-
-
-def log_readiness_gate_test_mode() -> None:
-    """Say loudly at startup that test mode is on, or that it was ignored."""
-
-    if not _readiness_gate_test_mode_requested():
-        return
-    if _test_mode_skips_readiness_gates():
-        banner = "!" * 72
-        log.warning(banner)
-        log.warning(
-            "%s (%s=true)",
-            READINESS_GATE_TEST_MODE_LABEL, READINESS_GATE_TEST_MODE_ENV,
-        )
-        log.warning(
-            "TEST MODE: analysed protocols can be activated and run with "
-            "readiness gates outstanding. Development only; not for real "
-            "experiments."
-        )
-        log.warning(banner)
-        return
-    scope = (
-        os.environ.get("VOINEY_LAB_USAGE_SCOPE", "")
-        or os.environ.get("VOINEY_LAB_SAFETY_USAGE_SCOPE", "")
-    ).strip().casefold()
-    log.warning(
-        "readiness_gate_test_mode.ignored %s=true reason=%s usage_scope=%s",
-        READINESS_GATE_TEST_MODE_ENV,
-        (
-            "operational_usage_scope"
-            if scope == "operational"
-            else "usage_scope_not_development"
-        ),
-        scope or "unset",
-    )
 
 
 @app.post("/api/protocols/{protocol_id}/ocr",status_code=202)
@@ -4670,67 +2869,6 @@ def get_protocol_ocr_status(protocol_id:str)->dict[str,object]:
         raise _catalog_http_error(exc) from exc
 
 
-@app.post("/api/protocols/{protocol_id}/ocr/review")
-async def review_protocol_ocr(
-    protocol_id:str,
-    request:Request,
-    x_protocol_approval_token:str|None=Header(default=None),
-)->dict[str,object]:
-    payload=await _json_object(request)
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog,store=_open_protocol_catalog()
-        try:
-            actor=None
-            role=None
-            if _workspace_settings().enabled:
-                actor=_REQUEST_PRINCIPAL.get()
-                if actor is None:
-                    raise AuthenticationRequiredError(
-                        "Authentication is required."
-                    )
-                require_permission(actor,Permission.PROTOCOL_REVIEW)
-                role=next(
-                    item.value for item in actor.roles
-                    if item.value in {
-                        "reviewer","lab_admin","organization_admin",
-                    }
-                )
-                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
-                presented="tenant-rbac-authorized"
-            else:
-                policy=SharedSecretApprovalPolicy(
-                    os.environ.get(
-                        "VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"
-                    )
-                )
-                presented=x_protocol_approval_token
-            ocr=catalog.review_ocr(
-                protocol_id,
-                decision=str(payload.get("decision", "")),
-                policy=policy,
-                presented_secret=presented,
-                actor_principal_id=(actor.principal_id if actor else None),
-                actor_role=role,
-                comment=str(
-                    payload.get(
-                        "comment",
-                        "OCR page text reviewed against the source PDF.",
-                    )
-                ),
-            )
-            return {
-                "ocr":ocr,
-                "protocol":catalog.get_entry(protocol_id).public_dict(),
-                "structured_analysis_started":False,
-                "executable":False,
-            }
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
 @app.post("/api/protocols/{protocol_id}/analysis",status_code=202)
 async def trigger_protocol_analysis(
     protocol_id:str,background:bool=True
@@ -4763,14 +2901,6 @@ async def trigger_protocol_analysis(
                 model,
                 analysis_id=analysis_id,
             )
-            if _auto_activate_ready_uploads_enabled():
-                try:
-                    rev = catalog._latest_protocol_revision(protocol_id)
-                    analysis = catalog._latest_analysis(rev)
-                    if analysis is not None and analysis.readiness.status.value == "guidance_ready":
-                        entry = catalog.activate_development(protocol_id)
-                except Exception as auto_exc:
-                    log.warning("Auto-activation skipped for %s: %s", protocol_id, auto_exc)
             public=entry.public_dict()
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
@@ -4848,14 +2978,6 @@ async def _begin_background_analysis(
                     "Protocol analysis provider is not configured."
                 ) from exc
             entry=catalog.analyze(protocol_id,model,analysis_id=analysis_id)
-            if _auto_activate_ready_uploads_enabled():
-                try:
-                    rev=catalog._latest_protocol_revision(protocol_id)
-                    analysis=catalog._latest_analysis(rev)
-                    if analysis is not None and analysis.readiness.status.value=="guidance_ready":
-                        entry=catalog.activate_development(protocol_id)
-                except Exception as auto_exc:
-                    log.warning("Auto-activation skipped for %s: %s",protocol_id,auto_exc)
             public=entry.public_dict()
             public["analysis_run"]=catalog.analysis_run_status(
                 protocol_id).public_dict()
@@ -4962,30 +3084,17 @@ def get_protocol_analysis_status(protocol_id:str)->dict[str,object]:
 
 @app.get("/api/protocols/{protocol_id}/review")
 def get_protocol_review(protocol_id: str) -> dict[str, object]:
-    """Expose the source-linked analysis draft without approving or activating it."""
+    """Expose the source-linked analysis, its notices and its safety statements."""
 
     try:
         _scope_catalog_resource(protocol_id)
         catalog, store = _open_protocol_catalog()
         try:
             review = catalog.review(protocol_id)
-            readiness = review.get("readiness")
-            # An acknowledged gate counts as cleared here, exactly as it does
-            # for approval. Reading the readiness status alone meant a
-            # Protocol whose only blocker a reviewer had already signed off
-            # could never be activated, because the stored status does not
-            # know about acknowledgements.
-            review["development_activation_allowed"] = bool(
-                _development_activation_allowed()
-                and review.get("analysis_available") is True
-                and isinstance(readiness, dict)
-                and (
-                    readiness.get("status") == "guidance_ready"
-                    or review.get("readiness_gates_cleared") is True
-                    or _test_mode_skips_readiness_gates()
-                )
-                and review.get("available_for_execution") is not True
-            )
+            # The screen the experimenter reads before pressing start
+            # (decision of 2026-10-08): the source's safety statements with
+            # their stored Korean beside them, never collapsed.
+            review["safety_notices"]=_review_safety_notices(catalog,protocol_id,review)
             review["pipeline"]=_pipeline_with_translation(catalog,protocol_id,review)
             return review
         finally:
@@ -4997,21 +3106,13 @@ def get_protocol_review(protocol_id: str) -> dict[str, object]:
 def _pipeline_with_translation(
     catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
 )->dict[str,object]:
-    """The catalog's stage line, with what the server alone knows (lane PX 4).
-
-    Whether the person's one confirmation is a press here (test mode) or a
-    reviewer's approval, and how far the revision's Korean has come.
+    """The catalog's stage line, with what the server alone knows (lane PX 4):
+    how far the revision's Korean has come.
     """
 
     pipeline=dict(review.get("pipeline") or {})
     if not pipeline:
         return pipeline
-    if pipeline.get("stage")=="activation":
-        pipeline["action"]=(
-            "'이 프로토콜로 시작'을 한 번 누르면 개발용으로 활성화하고 실험을 시작합니다."
-            if review.get("development_activation_allowed") else
-            "검토자가 검토 화면에서 남은 사유를 확인·해제하고 이 분석 버전을 승인하면 "
-            "실행할 수 있습니다.")
     if review.get("analysis_available") is True:
         try:
             pipeline["translation"]=_translation_progress(catalog,protocol_id)
@@ -5019,6 +3120,32 @@ def _pipeline_with_translation(
             log.warning("revision_translation progress_failed error=%s",type(exc).__name__)
             pipeline["translation"]={"state":"unknown","message":"번역 상태를 읽지 못했습니다."}
     return pipeline
+
+
+def _review_safety_notices(
+    catalog:ProtocolCatalog,protocol_id:str,review:dict[str,object],
+)->list[dict[str,object]]:
+    """The source's safety statements with their Korean, for the start screen.
+
+    The fixture a session will run, with its stored translations, so the
+    Korean shown here is the Korean the step will show; a line whose
+    translation is missing or fails the mechanical check shows the source
+    alone. Empty before an analysis has passed.
+    """
+
+    if review.get("analysis_available") is not True:
+        return []
+    try:
+        fixture=_with_revision_translations(
+            catalog.load_analysis_fixture(protocol_id),start_missing=False)
+    except Exception as exc:  # noqa: BLE001 - the sources stand without Korean
+        log.warning("safety_notices fixture_unavailable error=%s",type(exc).__name__)
+        return [
+            {**item,"primary_text":None,"translation_check":"missing"}
+            for item in review.get("safety_notice_sources") or []
+            if isinstance(item,dict)
+        ]
+    return fixture_safety_notices(fixture)
 
 
 def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,object]:
@@ -5078,376 +3205,6 @@ def _translation_progress(catalog:ProtocolCatalog,protocol_id:str)->dict[str,obj
         "refused":refused,"steps_total":len(step_keys),"steps_korean":steps_korean,
         "message":message,
     }
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/approve")
-def approve_protocol_revision(
-    protocol_id:str,
-    revision_id:str,
-    x_protocol_approval_token:str|None=Header(default=None),
-)->dict[str,object]:
-    """Service-authorized approval; deliberately absent from the public UI."""
-
-    try:
-        _scope_catalog_resource(protocol_id)
-        catalog,store=_open_protocol_catalog()
-        try:
-            actor=None
-            role=None
-            if _workspace_settings().enabled:
-                actor=_REQUEST_PRINCIPAL.get()
-                if actor is None:
-                    raise AuthenticationRequiredError("Authentication is required.")
-                require_permission(actor,Permission.PROTOCOL_APPROVE)
-                role=next(
-                    item.value for item in actor.roles
-                    if item.value in {"reviewer","lab_admin","organization_admin"}
-                )
-                policy=SharedSecretApprovalPolicy("tenant-rbac-authorized")
-                presented="tenant-rbac-authorized"
-            else:
-                policy=SharedSecretApprovalPolicy(
-                    os.environ.get("VOINEY_LAB_PROTOCOL_APPROVAL_TOKEN"))
-                presented=x_protocol_approval_token
-            entry=catalog.approve(
-                protocol_id,
-                revision_id,
-                policy=policy,
-                presented_secret=presented,
-                actor_principal_id=actor.principal_id if actor else None,
-                actor_role=role,
-                actor_display_name=actor.display_name if actor else None,
-            )
-            return _catalog_entry_projection(catalog,entry)
-        finally:
-            store.close()
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-def _development_activation_actor() -> tuple[str | None, str | None]:
-    """Name the person taking a development decision, or refuse to take it.
-
-    An activation is the recorded authority that makes a blocked draft
-    runnable, so "who" is not decoration.  Where a workspace is configured the
-    principal is required and must hold the review permission; where none is
-    configured -- a single-operator development host -- the actor is recorded
-    as unattributed rather than invented.
-    """
-
-    if not _workspace_settings().enabled:
-        return None, None
-    actor = _REQUEST_PRINCIPAL.get()
-    if actor is None:
-        raise AuthenticationRequiredError("Authentication is required.")
-    require_permission(actor, Permission.PROTOCOL_REVIEW)
-    role = next(
-        (
-            item.value for item in actor.roles
-            if item.value in {"reviewer", "lab_admin", "organization_admin"}
-        ),
-        None,
-    )
-    return actor.principal_id, role
-
-
-def _reviewer_finding_actor() -> tuple[str, str]:
-    """Name the person recording a finding, or refuse to record one.
-
-    A finding clears a readiness gate. It is the whole of the human judgement
-    this system insists on, so it is never recorded for nobody: unlike a
-    development activation, which may be attributed to the host on a
-    single-operator machine, a finding without an actor is refused outright.
-
-    Where a workspace is configured the principal is required and must hold
-    PROTOCOL_REVIEW. Where none is configured the operator identity the host
-    already resolved is used, and if the host cannot name one the request
-    fails closed rather than inventing "local".
-    """
-
-    if _workspace_settings().enabled:
-        actor = _REQUEST_PRINCIPAL.get()
-        if actor is None:
-            raise AuthenticationRequiredError("Authentication is required.")
-        require_permission(actor, Permission.PROTOCOL_REVIEW)
-        role = next(
-            (
-                item.value for item in actor.roles
-                if item.value in {"reviewer", "lab_admin", "organization_admin"}
-            ),
-            None,
-        )
-        if not role:
-            raise AuthorizationDeniedError(
-                "A reviewing role is required to record a finding."
-            )
-        return actor.principal_id, role
-    actor = _REQUEST_PRINCIPAL.get()
-    if actor is None or not getattr(actor, "principal_id", ""):
-        raise AuthenticationRequiredError(
-            "A named reviewer is required to record a finding."
-        )
-    role = next(
-        (
-            item.value for item in actor.roles
-            if item.value in {"reviewer", "lab_admin", "organization_admin"}
-        ),
-        None,
-    )
-    if not role:
-        raise AuthorizationDeniedError(
-            "A reviewing role is required to record a finding."
-        )
-    return actor.principal_id, role
-
-
-def _finding_segment_ids(payload: dict[str, object]) -> tuple[str, ...]:
-    """Read the citation a finding must carry, without repairing it.
-
-    An empty or malformed list is passed through as empty and the catalog
-    refuses it there. Filling one in here would be the server citing evidence
-    on the reviewer's behalf, which is the one thing this citation exists to
-    prevent.
-    """
-
-    raw = payload.get("evidence_segment_ids")
-    if not isinstance(raw, list) or any(
-        not isinstance(item, str) for item in raw
-    ):
-        return ()
-    return tuple(raw[:64])
-
-
-def _finding_comment(payload: dict[str, object]) -> str | None:
-    comment = payload.get("comment")
-    return comment if isinstance(comment, str) and comment.strip() else None
-
-
-def _finding_response(
-    catalog: ProtocolCatalog, protocol_id: str, entry: ProtocolCatalogEntry,
-) -> dict[str, object]:
-    review = catalog.review(protocol_id)
-    return {
-        "protocol_id": protocol_id,
-        "revision_id": entry.revision_id,
-        "readiness_status": entry.readiness_status,
-        "readiness_gates_cleared": review.get("readiness_gates_cleared"),
-        "available_for_execution": entry.available_for_execution,
-        "outstanding_blockers": review.get("outstanding_blockers"),
-        "reviewer_findings": review.get("reviewer_findings"),
-    }
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/acknowledge-gate")
-def acknowledge_protocol_readiness_gate(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record a reviewer confirming this Protocol's safety warnings."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        reason_code = body.get("reason_code")
-        if not isinstance(reason_code, str) or not reason_code:
-            raise HTTPException(status_code=400, detail="reason_code_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.acknowledge_readiness_gate(
-                protocol_id,
-                revision_id,
-                reason_code=reason_code,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/confirm-repetition")
-def confirm_protocol_fixed_repetition(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record a reviewer confirming one bounded repetition and its count."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        repetition_id = body.get("repetition_id")
-        repeat_count = body.get("repeat_count")
-        if not isinstance(repetition_id, str) or not repetition_id:
-            raise HTTPException(status_code=400, detail="repetition_id_required")
-        if isinstance(repeat_count, bool) or not isinstance(repeat_count, int):
-            raise HTTPException(status_code=400, detail="repeat_count_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.confirm_fixed_repetition(
-                protocol_id,
-                revision_id,
-                repetition_id=repetition_id,
-                repeat_count=repeat_count,
-                evidence_segment_ids=_finding_segment_ids(body),
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/revoke-repetition")
-def revoke_protocol_fixed_repetition(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Withdraw a repetition confirmation; the Protocol blocks again."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        repetition_id = body.get("repetition_id")
-        if not isinstance(repetition_id, str) or not repetition_id:
-            raise HTTPException(status_code=400, detail="repetition_id_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.revoke_fixed_repetition_confirmation(
-                protocol_id,
-                revision_id,
-                repetition_id=repetition_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/revisions/{revision_id}/findings/resolve-ambiguity")
-def resolve_protocol_ambiguity(
-    protocol_id: str, revision_id: str, payload: dict = Body(default=None),
-) -> dict[str, object]:
-    """Record which of two source statements a reviewer read as authoritative."""
-
-    body = payload if isinstance(payload, dict) else {}
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _reviewer_finding_actor()
-        ambiguity_id = body.get("ambiguity_id")
-        decision = body.get("decision")
-        if not isinstance(ambiguity_id, str) or not ambiguity_id:
-            raise HTTPException(status_code=400, detail="ambiguity_id_required")
-        if not isinstance(decision, str) or not decision:
-            raise HTTPException(status_code=400, detail="decision_required")
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.resolve_ambiguity(
-                protocol_id,
-                revision_id,
-                ambiguity_id=ambiguity_id,
-                decision=decision,
-                evidence_segment_ids=_finding_segment_ids(body),
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-                comment=_finding_comment(body),
-            )
-            return _finding_response(catalog, protocol_id, entry)
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/activate-development")
-def activate_protocol_for_development(protocol_id: str) -> dict[str, object]:
-    """Explicit developer action promoting an analyzed protocol draft to active development execution."""
-    if not _development_activation_allowed():
-        raise HTTPException(
-            status_code=403,
-            detail="development_activation_not_allowed",
-        )
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _development_activation_actor()
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.activate_development(
-                protocol_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-            )
-            return {
-                "protocol_id": protocol_id,
-                "status": "active_development",
-                "development_only": True,
-                "available_for_execution": entry.available_for_execution,
-                "development_activation": catalog.development_activation_context(
-                    protocol_id
-                ),
-                "message": "Protocol draft activated for development session.",
-            }
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
-
-@app.post("/api/protocols/{protocol_id}/deactivate-development")
-def deactivate_protocol_for_development(protocol_id: str) -> dict[str, object]:
-    """Withdraw a development activation; the draft stops being executable."""
-
-    if not _development_activation_allowed():
-        raise HTTPException(
-            status_code=403,
-            detail="development_activation_not_allowed",
-        )
-    try:
-        _scope_catalog_resource(protocol_id)
-        actor_principal_id, actor_role = _development_activation_actor()
-        catalog, store = _open_protocol_catalog()
-        try:
-            entry = catalog.deactivate_development(
-                protocol_id,
-                actor_principal_id=actor_principal_id,
-                actor_role=actor_role,
-            )
-            return {
-                "protocol_id": protocol_id,
-                "status": "development_activation_withdrawn",
-                "development_only": True,
-                "available_for_execution": entry.available_for_execution,
-                "development_activation": catalog.development_activation_context(
-                    protocol_id
-                ),
-                "message": "Development activation withdrawn.",
-            }
-        finally:
-            store.close()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _catalog_http_error(exc) from exc
-
 
 
 @app.get("/api/protocols/{protocol_id}/revisions/{revision_id}/assets/{asset_id}")
@@ -5529,49 +3286,6 @@ def get_protocol_visual_asset(
         raise _catalog_http_error(exc) from exc
 
 
-@app.get("/api/generated-visuals/{asset_id}")
-def get_generated_visual_asset(asset_id:str):
-    """Serve one validated generated image through an opaque same-origin ID."""
-
-    _scope_tenant_resource("generated_visual",asset_id)
-    asset=GENERATED_VISUALS.get(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404,detail="Generated visual is unknown.")
-    return Response(
-        content=asset.content,media_type=asset.mime_type,
-        headers={
-            "Cache-Control":"private, max-age=3600, immutable",
-            "X-Content-Type-Options":"nosniff",
-            "Content-Security-Policy":"default-src 'none'; sandbox",
-            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
-            "X-Generated-Visual-SHA256":asset.content_sha256,
-            "X-Protocol-Source-SHA256":asset.source_document_hash,
-            "X-Protocol-Visual-Kind":"generated_instructional",
-        },
-    )
-
-
-@app.get("/api/web-visuals/{asset_id}")
-def get_web_visual_asset(asset_id:str):
-    """Serve one validated proxied web image through an opaque same-origin ID."""
-
-    _scope_tenant_resource("web_visual",asset_id)
-    asset=WEB_VISUAL_REGISTRY.get(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404,detail="Web visual is unknown.")
-    return Response(
-        content=asset.content,media_type=asset.mime_type,
-        headers={
-            "Cache-Control":"private, max-age=3600, immutable",
-            "X-Content-Type-Options":"nosniff",
-            "Content-Security-Policy":"default-src 'none'; sandbox",
-            "Content-Disposition":f'inline; filename="{asset.asset_id}"',
-            "X-Web-Visual-SHA256":asset.content_sha256,
-            "X-Protocol-Visual-Kind":"web_reference_image",
-        },
-    )
-
-
 def _require_admin_access(presented_token:str|None)->None:
     """Fail closed without retaining or logging the presented credential."""
 
@@ -5592,18 +3306,6 @@ def get_admin_metrics(
 )->dict[str,object]:
     """Return aggregate product/operations signals without private lab content."""
 
-    if _workspace_settings().enabled:
-        try:
-            principal,workspace=_commercial_workspace()
-            try:
-                return {
-                    "workspace":workspace.analytics_summary(principal),
-                    "legacy_global_metrics_disabled":True,
-                }
-            finally:
-                workspace.close()
-        except Exception as exc:
-            raise _workspace_http_error(exc) from exc
     _require_admin_access(x_voice_workflow_admin_token)
     try:
         report_settings=ExperimentReportSettings.from_environment()
@@ -5976,7 +3678,7 @@ TURN_PROGRESS_TERMINAL_STATES=frozenset({
 })
 TURN_PROGRESS_SAFE_ROUTES=frozenset({
     "approved_information","brain","curated_protocol",
-    "deterministic_emergency","deterministic_procedure",
+    "deterministic_emergency",
     "language_clarification",
 })
 TURN_PROGRESS_TRANSITIONS={
@@ -6018,10 +3720,7 @@ class ListenerSession:
                  experiment_report_store:ExperimentReportStore|None=None,
                  external_reference_settings:ExternalReferenceSettings|None=None,
                  supplemental_knowledge_settings:SupplementalKnowledgeSettings|None=None,
-                 web_visual_settings:WebVisualSettings|None=None,
-                 generated_visual_settings:GeneratedVisualSettings|None=None,
                  multi_brain_settings:MultiBrainSettings|None=None,
-                 semantic_intent_settings:SemanticIntentSettings|None=None,
                  llm_router_settings:LlmRouterSettings|None=None)->None:
         self.detector=detector or EndpointDetector(listening_onset=True)
         self.clock=clock; self.active=False
@@ -6039,9 +3738,6 @@ class ListenerSession:
             external_reference_settings or ExternalReferenceSettings(False))
         self.supplemental_knowledge_settings=(
             supplemental_knowledge_settings or SupplementalKnowledgeSettings(False))
-        self.web_visual_settings=web_visual_settings or WebVisualSettings(False)
-        self.generated_visual_settings=(
-            generated_visual_settings or GeneratedVisualSettings(False))
         self.multi_brain_settings=multi_brain_settings or MultiBrainSettings(False)
         # Checked Korean readings of source statements, so a step read twice
         # is translated once: (fixture sha, step label, statement) -> Korean.
@@ -6056,8 +3752,6 @@ class ListenerSession:
         self.spoken_recently:collections.deque[tuple[float,str]]=collections.deque(
             maxlen=ECHO_MEMORY_SENTENCES)
         self.last_playback_ended_at:float|None=None
-        self.semantic_intent_settings=(
-            semantic_intent_settings or SemanticIntentSettings())
         #: The lane R router (off by default): a turn the front rules hand on
         #: goes to the model, and to the rules when the model cannot be used.
         self.llm_router_settings=llm_router_settings or LlmRouterSettings()
@@ -6065,7 +3759,10 @@ class ListenerSession:
         #: The words that open the report's value review (lane N, decision 3),
         #: said once after the end of the experiment.
         self.report_review_intro:tuple[str,str]|None=None
-        self.test_mode_readiness_gates_skipped=False
+        #: The source's safety statements shown to the experimenter before
+        #: the press of start that opened this session (decision of
+        #: 2026-10-08); written into the experiment report when it opens.
+        self.safety_notices_shown:list[dict[str,Any]]|None=None
         self.session_id=new_session_id()
         self.voice_connection_id="voice-"+secrets.token_hex(16)
         self.experiment_state_version:int|None=None
@@ -6229,6 +3926,7 @@ class ListenerSession:
         self.accepted_language=None; self.accepted_protocol_id=None
         self.accepted_input_language=InputLanguagePreference.AUTO
         self.accepted_revision_id=None
+        self.safety_notices_shown=None
         self.greeting_audio_ready=False
         self.client_audio_constraints={}
         self._reset_turn_identity()
@@ -6685,433 +4383,6 @@ class LockedSender:
                 frame_count=len(frames)))
 
 
-def _curated_visual_specification(
-    curated:CuratedProtocolSession,
-) -> VisualSpecification|None:
-    fixture=curated.fixture
-    if not curated.active or fixture.source_pdf_sha256 is None:
-        return None
-    index=curated.current_index
-    existing=fixture.visual_for_step(index)
-    if existing is not None and existing.kind==ProtocolVisualKind.SOURCE_CROP.value:
-        return None
-    step=fixture.steps[index]
-    facts=fixture.facts_for_step(index)
-    return VisualSpecification(
-        document_sha256=fixture.source_pdf_sha256,
-        protocol_id=fixture.protocol_id,
-        revision_id=fixture.revision_id,
-        step_id=step.step_id,
-        step_label=step.source_label,
-        source_page=step.evidence.source_page_number,
-        source_evidence_ids=tuple(fact.fact_id for fact in facts),
-        action_summary=step.instruction_source_text,
-        verified_materials=tuple(
-            fact.text for fact in facts if fact.kind=="material"),
-        verified_tools=tuple(
-            fact.text for fact in facts if fact.kind=="equipment"),
-        verified_relations=(step.instruction_source_text,),
-        forbidden_inferences=(
-            "unverified colors","unverified equipment","unverified PPE",
-            "unverified quantities","unverified results","completion status",
-        ),
-    )
-
-
-async def _queue_curated_generated_visual(
-    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
-    endpoint:float,clock:Callable[[],float],
-    specification:VisualSpecification,
-    settings:GeneratedVisualSettings,
-) -> None:
-    configuration_id=session.accepted_configuration_id
-    job_id=specification.cache_key(settings.model)
-    identity={
-        "configuration_id":configuration_id,"turn_id":turn_id,
-        "generation":generation,"protocol_id":specification.protocol_id,
-        "step_id":specification.step_id,
-        "source_document_hash":specification.document_sha256,
-        "visual_job_id":job_id,
-    }
-    if not session.owns_visual_result(
-        turn_id,generation,configuration_id,specification.protocol_id):
-        return
-    await sender.text(
-        "protocol.visual.state",**identity,status="visual_pending",
-        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
-
-    async def worker() -> None:
-        provider_called=False
-        provider_started=0.0
-
-        async def generate(spec:VisualSpecification)->bytes:
-            nonlocal provider_called,provider_started
-            provider_called=True
-            provider_started=clock()
-            if session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                await sender.text(
-                    "tool.call",**identity,tool="generate_instructional_visual",
-                    round=2)
-            client=AsyncOpenAI(
-                base_url=api_url(""),api_key=require_env("XAI_API_KEY"),
-                max_retries=0)
-            return await XaiImageGenerator(client,settings).generate(spec)
-
-        try:
-            asset,cache_hit=await GENERATED_VISUALS.obtain(
-                specification,settings,generate)
-            _scope_tenant_resource("generated_visual",asset.asset_id,bind=True)
-            if not session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                return
-            elapsed=max(0,round((clock()-endpoint)*1000))
-            if provider_called:
-                await sender.text(
-                    "tool.result",**identity,
-                    tool="generate_instructional_visual",round=2,
-                    status="success",
-                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
-            await sender.text(
-                "protocol.visual.state",**identity,
-                status="visual_cache_hit" if cache_hit else "visual_ready",
-                visual_ready_ms=elapsed,asset=asset.public_dict())
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "generated visual failed closed turn_id=%s error=%s",
-                turn_id,type(exc).__name__)
-            if not session.owns_visual_result(
-                turn_id,generation,configuration_id,specification.protocol_id):
-                return
-            if provider_called:
-                await sender.text(
-                    "tool.result",**identity,
-                    tool="generate_instructional_visual",round=2,
-                    status="error",
-                    elapsed_ms=max(0,round((clock()-provider_started)*1000)))
-            await sender.text(
-                "protocol.visual.state",**identity,status="visual_failed",
-                visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                fallback="none")
-
-    task=asyncio.create_task(worker())
-    session.track_visual_task(task)
-
-
-async def _prepare_external_visual_candidate(
-    candidate:dict[str,Any],
-)->dict[str,Any]|None:
-    """Proxy displayable bytes or reduce the result to a cited source link."""
-
-    prepared=dict(candidate)
-    source_url=prepared.get("source_page_url")
-    image_url=prepared.get("image_url")
-    publisher=prepared.get("publisher_domain")
-    if (
-        not isinstance(source_url,str) or not source_url.startswith("https://")
-        or not isinstance(publisher,str) or not publisher.strip()
-    ):
-        return None
-    rights=prepared.get("rights")
-    if not isinstance(rights,str) or not rights.strip():
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        prepared["verification_label"]=(
-            "출처 링크만 제공 · 이미지 표시 권한 미확인")
-        return prepared
-    if not isinstance(image_url,str) or not image_url.startswith("https://"):
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        return prepared
-    asset=await WEB_VISUAL_REGISTRY.obtain_or_register(
-        image_url=image_url,
-        source_url=source_url,
-        publisher_domain=publisher,
-        title=str(prepared.get("title") or "Web reference image"),
-    )
-    if asset is None:
-        prepared.pop("image_url",None)
-        prepared["display_mode"]="source_link"
-        prepared["verification_label"]=(
-            "출처 링크만 제공 · 이미지 바이트 검증 실패")
-        return prepared
-    _scope_tenant_resource("web_visual",asset.asset_id,bind=True)
-    prepared["image_url"]=f"/api/web-visuals/{asset.asset_id}"
-    prepared["display_mode"]="web_image"
-    prepared["rights"]=rights.strip()[:300]
-    return prepared
-
-
-async def _queue_curated_web_visual(
-    *,session:ListenerSession,sender:LockedSender,turn_id:int,generation:int,
-    endpoint:float,clock:Callable[[],float],curated:CuratedProtocolSession,
-    settings:WebVisualSettings,requested_entities:tuple[str,...]=(),
-    visual_intent:str|None=None,
-) -> None:
-    fixture=curated.fixture
-    step=fixture.steps[curated.current_index]
-    configuration_id=session.accepted_configuration_id
-    job_id=hashlib.sha256(
-        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-    ).hexdigest()
-    identity={
-        "configuration_id":configuration_id,"turn_id":turn_id,
-        "generation":generation,"protocol_id":fixture.protocol_id,
-        "step_id":step.step_id,"source_document_hash":fixture.source_pdf_sha256,
-        "visual_job_id":job_id,
-    }
-    if not session.owns_visual_result(
-        turn_id,generation,configuration_id,fixture.protocol_id):
-        return
-    await sender.text(
-        "protocol.visual.state",**identity,status="web_visual_pending",
-        visual_requested_ms=max(0,round((clock()-endpoint)*1000)))
-
-    async def worker() -> None:
-        started = clock()
-        try:
-            await sender.text(
-                "tool.call", **identity, tool="search_authoritative_web", round=2,
-                image_search_enabled=False,
-                intent_triggered=True,
-                max_results=1,
-            )
-
-            # 1. Fast PubChem chemistry structure lookup (strictly for chemical structure requests or known compounds)
-            pubchem_match = None
-            detected_entities = list(requested_entities)
-            if not detected_entities:
-                step_text_lower = f"{step.instruction_source_text} {fixture.title}".casefold()
-                for comp in _KNOWN_PUBCHEM_COMPOUNDS:
-                    if comp in step_text_lower:
-                        detected_entities.append(comp)
-                        break
-
-            if visual_intent == "chemical_structure" or (
-                visual_intent != "lab_equipment_image"
-                and any(ent.casefold() in _KNOWN_PUBCHEM_COMPOUNDS for ent in detected_entities)
-            ):
-                pubchem_adapter = PubChemChemistryAdapter()
-                for ent in detected_entities:
-                    pubchem_match = await pubchem_adapter.lookup(ent)
-                    if pubchem_match:
-                        break
-
-            if pubchem_match is not None:
-                if not session.owns_visual_result(
-                    turn_id, generation, configuration_id, fixture.protocol_id
-                ):
-                    return
-                pubchem_match=await _prepare_external_visual_candidate(
-                    pubchem_match)
-                if pubchem_match is None:
-                    raise RuntimeError("PubChem candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="pubchem_pug_rest", match_count=1,
-                    image_search_enabled=False,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=pubchem_match
-                )
-                return
-
-            # 2. Try a bounded public catalog first.  Only contact the paid
-            # provider if that local policy path cannot produce a candidate.
-            search_terms = [*detected_entities, step.instruction_source_text[:50]] if detected_entities else [step.instruction_source_text[:50]]
-            wiki_adapter = WikimediaVisualAdapter(timeout_seconds=3.5)
-
-            async def _fast_public_search():
-                for term in search_terms:
-                    cand = await wiki_adapter.lookup(term)
-                    if cand and cand.get("image_url"):
-                        return cand
-                return None
-
-            web_visual_timeout = float(os.environ.get("VOINEY_LAB_WEB_VISUAL_TIMEOUT_SECONDS", "6.0"))
-
-            async def _grok_image_search() -> dict[str, Any]:
-                try:
-                    client = AsyncOpenAI(
-                        base_url=api_url(""),
-                        api_key=require_env("XAI_API_KEY"),
-                        max_retries=0,
-                    )
-                    query = "\n".join((
-                        "Find a real, authoritative laboratory image for this request. Include Markdown link ![alt](image_url).",
-                        f"Protocol: {fixture.title}",
-                        f"Step {step.source_label}: {step.instruction_source_text}",
-                        "Requested entities: " + (", ".join(detected_entities) or "current step"),
-                    ))
-                    search_settings = settings
-                    if search_settings.references:
-                        ref_copy = copy.deepcopy(search_settings.references)
-                        object.__setattr__(ref_copy, "timeout_seconds", web_visual_timeout)
-                        search_settings = WebVisualSettings(True, ref_copy)
-                    await sender.text(
-                        "tool.call", **identity,
-                        tool="search_authoritative_web", round=3,
-                        image_search_enabled=True,
-                        intent_triggered=True,
-                        max_results=1,
-                    )
-                    log.info(
-                        "web_visual.provider_request turn_id=%s generation=%s "
-                        "image_search_enabled=true max_results=1",
-                        turn_id, generation,
-                    )
-                    res = await XaiAuthoritativeImageSearch(client, search_settings).search(query)
-                    return res
-                except Exception as exc:
-                    log.info("grok image search failed turn_id=%s class=%s", turn_id, type(exc).__name__)
-                return {
-                    "status": "error",
-                    "matches": [],
-                    "image_search_enabled": True,
-                    "image_search_count": 0,
-                    "web_search_count": 0,
-                    "max_results": 1,
-                }
-
-            fast_task = asyncio.create_task(_fast_public_search())
-
-            # Wait for fast public search with up to 3.5s budget
-            fast_candidate = None
-            try:
-                fast_candidate = await asyncio.wait_for(asyncio.shield(fast_task), timeout=3.5)
-            except (asyncio.TimeoutError, Exception):
-                fast_candidate = None
-
-            if fast_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                fast_candidate=await _prepare_external_visual_candidate(
-                    fast_candidate)
-                if fast_candidate is None:
-                    raise RuntimeError("Wikimedia candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="wikimedia_rest", match_count=1,
-                    image_search_enabled=False,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=fast_candidate
-                )
-                return
-
-            # No public-catalog match: run exactly one intent-triggered xAI
-            # image-search request under the global deadline.
-            grok_result: dict[str, Any]
-            try:
-                grok_result = await asyncio.wait_for(
-                    _grok_image_search(), timeout=web_visual_timeout
-                )
-            except (asyncio.TimeoutError, Exception):
-                grok_result = {
-                    "status": "timeout",
-                    "matches": [],
-                    "image_search_enabled": True,
-                    "image_search_count": 0,
-                    "web_search_count": 0,
-                    "max_results": 1,
-                }
-            grok_candidate = (
-                grok_result["matches"][0]
-                if grok_result.get("status") == "success"
-                and grok_result.get("matches")
-                else None
-            )
-
-            if grok_candidate and session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                grok_candidate=await _prepare_external_visual_candidate(
-                    grok_candidate)
-                if grok_candidate is None:
-                    raise RuntimeError("xAI image candidate identity is invalid")
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=3, status="success", elapsed_ms=elapsed,
-                    retrieval_backend="xai_responses_web_image_search", match_count=1,
-                    image_search_enabled=True,
-                    web_search_count=grok_result.get("web_search_count", 0),
-                    image_search_count=grok_result.get("image_search_count", 0),
-                    max_results=1,
-                )
-                await sender.text(
-                    "protocol.visual.state", **identity, status="web_visual_ready",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    candidate=grok_candidate
-                )
-                return
-
-            if session.owns_visual_result(turn_id, generation, configuration_id, fixture.protocol_id):
-                elapsed = max(0, round((clock() - started) * 1000))
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=3, status="not_found", elapsed_ms=elapsed, match_count=0,
-                    image_search_enabled=bool(
-                        grok_result.get("image_search_enabled", False)
-                    ),
-                    web_search_count=grok_result.get("web_search_count", 0),
-                    image_search_count=grok_result.get("image_search_count", 0),
-                    max_results=1,
-                )
-                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
-                    visual_spec = _curated_visual_specification(curated)
-                    if visual_spec is not None:
-                        await _queue_curated_generated_visual(
-                            session=session, sender=sender, turn_id=turn_id,
-                            generation=generation, endpoint=endpoint, clock=clock,
-                            specification=visual_spec, settings=session.generated_visual_settings,
-                        )
-                        return
-                await sender.text(
-                    "protocol.visual.state", **identity, status="visual_failed",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    fallback="none"
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "web visual search failed closed turn_id=%s error=%s",
-                turn_id, type(exc).__name__
-            )
-            if session.owns_visual_result(
-                turn_id, generation, configuration_id, fixture.protocol_id
-            ):
-                await sender.text(
-                    "tool.result", **identity, tool="search_authoritative_web",
-                    round=2, status="error",
-                    elapsed_ms=max(0, round((clock() - started) * 1000))
-                )
-                if visual_intent not in ("photo_only", "equipment_photo") and session.generated_visual_settings.enabled:
-                    visual_spec = _curated_visual_specification(curated)
-                    if visual_spec is not None:
-                        await _queue_curated_generated_visual(
-                            session=session, sender=sender, turn_id=turn_id,
-                            generation=generation, endpoint=endpoint, clock=clock,
-                            specification=visual_spec, settings=session.generated_visual_settings,
-                        )
-                        return
-                await sender.text(
-                    "protocol.visual.state", **identity, status="visual_failed",
-                    visual_ready_ms=max(0, round((clock() - endpoint) * 1000)),
-                    fallback="none"
-                )
-
-    task=asyncio.create_task(worker())
-    session.track_visual_task(task)
-
-
 READER_TRANSLATION_PROMPT=(
     "You translate one laboratory protocol step for a researcher who is new to the lab "
     "and reads Korean. Write plain, concrete Korean that says exactly what the step "
@@ -7225,6 +4496,45 @@ def curated_safety_items(curated:CuratedProtocolSession)->list[dict[str,Any]]:
             "source_text":source,"source_language":doc.language,
             "primary_text":primary,"translation_check":check,
         })
+    return items
+
+
+def fixture_safety_notices(fixture:CuratedProtocolFixture)->list[dict[str,Any]]:
+    """Every safety statement the source declares, with its Korean, for the start screen.
+
+    The step's own PDF warnings and its sub-actions' warnings, in source
+    order, each with the page it stands on and its step label. A line
+    carries Korean only where a stored translation exists and passes the
+    same mechanical check the safety box applies; otherwise
+    ``primary_text`` is None and the screen shows the source itself. The
+    source text is the document's own excerpt, never a summary.
+    """
+
+    items:list[dict[str,Any]]=[]
+    seen:set[tuple[str,str]]=set()
+    lookup=getattr(fixture,"localization_source",None)
+    for step in fixture.steps:
+        statements=list(step.warnings)
+        for action in step.sub_actions:
+            statements.extend(action.warnings)
+        for index,warning in enumerate(statements,1):
+            source=" ".join(str(
+                warning.evidence.source_excerpt or warning.source_text or "").split())
+            if not source or (step.step_id,source) in seen:
+                continue
+            seen.add((step.step_id,source))
+            primary,check=_safety_translation(
+                source,fixture.localized_fact(step.step_id,f"warning_{index}"))
+            items.append({
+                "step_id":step.step_id,"step_label":step.source_label,
+                "statement_id":warning.statement_id,"warning_index":index,
+                "source_page_number":warning.evidence.source_page_number,
+                "source_text":source,"source_language":"en",
+                "primary_text":primary,"translation_check":check,
+                "translation_source":(
+                    lookup(step.step_id,f"warning_{index}") if callable(lookup)
+                    else None),
+            })
     return items
 
 
@@ -7702,21 +5012,6 @@ async def _queue_curated_research(
                         "External guidance cannot modify the active protocol.",
                     ),
                 )
-                if result.get("images") and getattr(plan, "visual_requested", False):
-                    img_match = result["images"][0]
-                    fixture = curated.fixture
-                    step = fixture.steps[curated.current_index]
-                    job_id = hashlib.sha256(
-                        f"web-image\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                    ).hexdigest()
-                    await sender.text(
-                        "protocol.visual.state",
-                        configuration_id=configuration_id,turn_id=turn_id,
-                        generation=generation,protocol_id=fixture.protocol_id,
-                        step_id=step.step_id,source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=job_id,status="web_visual_ready",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        candidate=img_match)
 
         # 3a. A short outside-PDF explanation, said after the rules' answer
         # (lane R6, decision 6, restoring D4).
@@ -7952,17 +5247,27 @@ def _open_experiment_report(
                 event_type="experimenter_recorded",
                 payload={"display_name":experimenter},
             )
-        if getattr(session,"test_mode_readiness_gates_skipped",False):
-            readiness=curated.fixture.draft.readiness
+        shown=getattr(session,"safety_notices_shown",None)
+        if shown is not None:
+            # The one human confirmation of the MVP rule (decision of
+            # 2026-10-08): the experimenter pressed start on the screen that
+            # showed the source's safety statements. What was shown is
+            # recorded in the document's own words.
             store.append_event(
                 session.experiment_report_id,
-                event_key="test-mode-readiness-gates-skipped",
-                event_type="test_mode_readiness_gates_skipped",
+                event_key="safety-notices-acknowledged",
+                event_type="safety_notices_acknowledged",
                 payload={
-                    "switch":READINESS_GATE_TEST_MODE_ENV,
-                    "readiness_status":readiness.status.value,
-                    "outstanding_reason_codes":sorted(
-                        set(readiness.reason_codes)),
+                    "notice_count":len(shown),
+                    "notices":[
+                        {
+                            "step_label":item.get("step_label"),
+                            "source_page_number":item.get("source_page_number"),
+                            "source_text":item.get("source_text"),
+                        }
+                        for item in shown
+                    ],
+                    "confirmed_by":"experimenter_start",
                 },
             )
     return store.get_report(session.experiment_report_id)
@@ -8900,22 +6205,6 @@ def _record_screen_history(
         log.warning("router history screen bundle rejected control=%s",control)
 
 
-def _router_development_note(
-    outcome:RouterTurnOutcome,settings:LlmRouterSettings,
-)->str:
-    """The folded development line under a router answer (test mode only)."""
-
-    answer=outcome.answer
-    parts=[f"LLM 라우터 · {settings.model}"]
-    if answer is not None:
-        parts.append(f"근거 종류 {answer.source_kind}")
-        if answer.evidence_ids:
-            parts.append("근거 "+", ".join(answer.evidence_ids))
-    if "total_ms" in outcome.timings_ms:
-        parts.append(f"{round(outcome.timings_ms['total_ms'])} ms")
-    return " · ".join(parts)
-
-
 def _router_route_fields(
     outcome:RouterTurnOutcome,settings:LlmRouterSettings,
 )->dict[str,object]:
@@ -9391,7 +6680,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         brain_terminals={}
         answer_output=None
         brain_snapshot=None
-        source_boundary_note=None
         router_outcome:RouterTurnOutcome|None=None
         router_before=(
             history_before(curated)
@@ -9404,16 +6692,13 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             pre_transition_index=curated.current_index
             turn_actor_principal_id,turn_actor_role=_voice_turn_actor()
             async def rules_route()->CuratedRuntimeRoute:
-                return await route_curated_runtime_turn_with_semantics(
+                return route_curated_runtime_turn(
                     curated,
                     transcript,turn_id=turn_id,language=turn_language,
                     transcript_quality=transcription_quality_issue(transcription),
                     configuration_id=session.accepted_configuration_id,
                     generation=generation,
                     arbitration=request_arbitration,
-                    resolver=semantic_intent_resolver(
-                        session.semantic_intent_settings),
-                    semantic_settings=session.semantic_intent_settings,
                     actor_principal_id=turn_actor_principal_id,
                     actor_role=turn_actor_role)
             if session.llm_router_settings.enabled:
@@ -9434,19 +6719,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         plan=router_outcome.plan,
                     )
                 )
-                if router_outcome.handled_by=="llm":
-                    # Development information about the answer, beside it
-                    # and folded; shown only in development test mode.
-                    source_boundary_note=_router_development_note(
-                        router_outcome,session.llm_router_settings)
                 for name,value in router_outcome.timings_ms.items():
                     timings[f"router_{name}"]=value
             else:
                 routed_turn=await rules_route()
             plan=routed_turn.plan
-            semantic_outcome=(
-                routed_turn.semantic.public_payload()
-                if routed_turn.semantic is not None else None)
             await current_text(
                 "turn.route_decision",turn_id=turn_id,
                 normalized_text=routed_turn.arbitration.normalized_text,
@@ -9467,7 +6744,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     }
                     else None
                 ),
-                semantic_fallback=semantic_outcome,
                 **(
                     _router_route_fields(router_outcome,session.llm_router_settings)
                     if router_outcome is not None else {}
@@ -9476,8 +6752,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             log.info(
                 "turn.route_decision turn_id=%s generation=%s text_sha256=%s "
                 "intent=%s runtime_router=%s action=%s state_mutation=%s "
-                "answer_origin=%s fallback_reason=%s semantic_status=%s "
-                "semantic_reason=%s semantic_intent=%s",
+                "answer_origin=%s fallback_reason=%s",
                 turn_id,generation,
                 hashlib.sha256(
                     routed_turn.arbitration.normalized_text.encode("utf-8")
@@ -9489,9 +6764,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     None if plan.answer_origin not in {"unsupported","current_protocol"}
                     else "local_specialized_answer_unavailable"
                 ),
-                (semantic_outcome or {}).get("status"),
-                (semantic_outcome or {}).get("reason_code"),
-                (semantic_outcome or {}).get("proposed_intent"),
             )
             _record_workspace_metric(
                 category="agent",metric_name="turn_route",
@@ -9503,18 +6775,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "status":"mutated" if plan.state_changed else "read_only",
                 },
             )
-            if semantic_outcome is not None:
-                _record_workspace_metric(
-                    category="agent",metric_name="semantic_intent_fallback",
-                    dimensions={
-                        "route":"semantic_intent_fallback",
-                        "status":str(semantic_outcome["status"]),
-                        "reason_code":str(semantic_outcome["reason_code"]),
-                        "intent":str(
-                            semantic_outcome["proposed_intent"] or "none"),
-                        "event_kind":plan.action.value,
-                    },
-                )
             stt_diagnostic_metadata.update({
                 "normalized_transcript":(
                     plan.normalized_transcript
@@ -9694,17 +6954,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 envelope=curated.protocol_answer_envelope(
                     replace(plan,facts=tuple(facts)),language=turn_language)
                 speech=envelope.speech_summary
-                # The answer alone is the reply. Where it came from is a
-                # development detail: it goes beside the reply, folded, and
-                # only in development test mode (never a pilot run).
+                # The answer alone is the reply.
                 display=envelope.direct_answer
-                source_boundary_note=(
-                    "근거 경계: 활성 프로토콜의 확인된 내용이며, "
-                    "활성화된 경우에만 부족한 설명을 읽기 전용 참고자료에서 확인합니다."
-                    if turn_language=="ko" else
-                    "Source boundary: the active protocol remains authoritative; "
-                    "missing explanation is checked read-only."
-                )
                 plan=replace(
                     plan,display_text=display,speech_text=speech,
                     speech_mode=CuratedProtocolSpeechMode.VERIFIED_FACT,
@@ -9730,7 +6981,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         ))),
                         translation_status="answer_brain_grounded",
                     )
-                    source_boundary_note=None
                 research_context={
                     "query":resolved_query,"reference_query":reference_query,
                     "step":step,"facts":tuple(facts),
@@ -10470,12 +7720,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             source_plan_scopes=list(plan.source_plan_scopes),
             unresolved_dimensions=list(plan.unresolved_dimensions),
             display_document=getattr(plan, "display_document", None),
-            # Only in development test mode, which run_pilot.sh forces off:
-            # a development-only protocol alone does not mean a development
-            # run, since the pilot's reference_only scope may activate one.
-            development_note=(
-                source_boundary_note
-                if _test_mode_skips_readiness_gates() else None))
+            development_note=None)
         await current_text(
             "state.changed",state=session.state.value,turn_id=turn_id)
         if speech_policy=="speak":
@@ -10633,58 +7878,22 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     "approved_visual":"original_source",
                     "no_visual":"no_visual",
                 }[visual_output.preferred_class]
-            if visual_kind=="web_photo" and existing_visual is None:
-                web_visual_settings=session.web_visual_settings
-                if web_visual_settings.enabled:
-                    await _queue_curated_web_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        curated=curated,settings=web_visual_settings,
-                        requested_entities=plan.requested_entities,
-                        visual_intent=plan.visual_intent)
-                else:
-                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
-                    await current_text(
-                        "protocol.visual.state",turn_id=turn_id,
-                        protocol_id=fixture.protocol_id,step_id=step.step_id,
-                        source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=hashlib.sha256(
-                            f"web-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                        ).hexdigest(),status="visual_failed",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        fallback="feature_disabled")
-            elif existing_visual is None and visual_kind!="no_visual":
-                visual_settings=session.generated_visual_settings
-                visual_spec=(
-                    _curated_visual_specification(curated)
-                    if visual_settings.enabled else None)
-                if visual_spec is not None:
-                    await _queue_curated_generated_visual(
-                        session=session,sender=sender,turn_id=turn_id,
-                        generation=generation,endpoint=endpoint,clock=clock,
-                        specification=visual_spec,settings=visual_settings)
-                else:
-                    fixture=curated.fixture;step=fixture.steps[curated.current_index]
-                    await current_text(
-                        "protocol.visual.state",turn_id=turn_id,
-                        protocol_id=fixture.protocol_id,step_id=step.step_id,
-                        source_document_hash=fixture.source_pdf_sha256,
-                        visual_job_id=hashlib.sha256(
-                            f"generated-unavailable\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
-                        ).hexdigest(),status="visual_failed",
-                        visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                        fallback="feature_disabled")
-            elif existing_visual is None and visual_kind=="no_visual":
+            if existing_visual is None:
+                # Lane DI (2026-10-08): the xAI web-image search and image
+                # generation are gone (lane WV builds their successor). The
+                # PDF's own visual is the only one shown, so a request for
+                # any other kind is answered once as unavailable.
                 fixture=curated.fixture;step=fixture.steps[curated.current_index]
+                unavailable_kind="no-visual" if visual_kind=="no_visual" else "visual-unavailable"
                 await current_text(
                     "protocol.visual.state",turn_id=turn_id,
                     protocol_id=fixture.protocol_id,step_id=step.step_id,
                     source_document_hash=fixture.source_pdf_sha256,
                     visual_job_id=hashlib.sha256(
-                        f"no-visual\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
+                        f"{unavailable_kind}\x1f{fixture.source_pdf_sha256}\x1f{step.step_id}".encode()
                     ).hexdigest(),status="visual_failed",
                     visual_ready_ms=max(0,round((clock()-endpoint)*1000)),
-                    fallback="planner_no_visual")
+                    fallback="planner_no_visual" if visual_kind=="no_visual" else "feature_disabled")
         if research_context is not None:
             await _queue_curated_research(
                 session=session,
@@ -10707,162 +7916,9 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             ])
         return
     if session.tool_context is None: raise RuntimeError("trusted Tool context is required")
-    authorized_step_id=None
-    authorized_timer_step_id=None
-    if pending is None:
-        authorized_step_id=authorized_completion_step_id(
-            transcript,turn_language,session.tool_context.procedure_controller)
-        authorized_timer_step_id=authorized_timer_start_step_id(
-            transcript,turn_language,session.tool_context.procedure_controller)
-        observation_arguments=authorized_observation_arguments(
-            transcript,turn_language,session.tool_context.procedure_controller)
-    else:
-        observation_arguments=None
     turn_context=ToolContext(session.tool_context.catalog_path,session.tool_context.facility_id,
                              turn_language,session.tool_context.usage_scope,
-                             session.tool_context.report_language,
-                             session.tool_context.procedure_controller,
-                             authorized_step_id,
-                             transcript)
-    deterministic_tool=None
-    deterministic_arguments=None
-    if authorized_step_id is not None:
-        deterministic_tool=COMPLETE_CURRENT_STEP_TOOL_NAME
-        deterministic_arguments={"expected_step_id":authorized_step_id}
-    elif authorized_timer_step_id is not None:
-        deterministic_tool=START_STEP_TIMER_TOOL_NAME
-        deterministic_arguments={"expected_step_id":authorized_timer_step_id}
-    elif observation_arguments is not None:
-        deterministic_tool=RECORD_STEP_OBSERVATION_TOOL_NAME
-        deterministic_arguments=observation_arguments
-    elif pending is None and korean_timer_status_question(
-            transcript,turn_language):
-        deterministic_tool=GET_CURRENT_STEP_TOOL_NAME
-        deterministic_arguments={}
-    if deterministic_tool is not None:
-        await current_text(
-            "turn.route_decision",turn_id=turn_id,
-            normalized_text=request_arbitration.normalized_text,
-            intent=request_arbitration.intent.value,
-            confidence=request_arbitration.confidence,
-            reason_code=request_arbitration.reason_code,
-            dimensions=list(request_arbitration.dimensions),
-            runtime_router="deterministic_procedure",
-            action=deterministic_tool,
-            state_mutation=True,
-            answer_origin="server_workflow_state",
-            fallback_reason=None,
-        )
-        await progress("checking_protocol",route="deterministic_procedure")
-        await current_text(
-            "tool.call",turn_id=turn_id,tool=deterministic_tool,round=0)
-        started_tool=clock()
-        try:
-            deterministic_result=execute_tool(
-                deterministic_tool,deterministic_arguments,turn_context)
-        except Exception:
-            deterministic_result={
-                "status":"error","code":"procedure_store_unavailable"}
-        tool_elapsed_ms=round((clock()-started_tool)*1000)
-        timings["tool_ms"]=tool_elapsed_ms
-        fields={
-            "tool":deterministic_tool,
-            "status":deterministic_result.get("status","error"),
-            "elapsed_ms":tool_elapsed_ms,
-            "round":0,
-        }
-        if deterministic_result.get("code"):
-            fields["code"]=deterministic_result["code"]
-        if isinstance(deterministic_result.get("state"),dict):
-            fields["procedure_state"]=deterministic_result["state"]
-        for key in (
-            "operation","idempotent","completed_step_id","recorded_step_id",
-            "timer_step_id","observation","timer","audit_summary",
-            "remaining_seconds",
-        ):
-            if deterministic_result.get(key) is not None:
-                fields[key]=deterministic_result[key]
-        fields["procedure_completed"]=bool(
-            deterministic_result.get("completed"))
-        await current_text("tool.result",turn_id=turn_id,**fields)
-        if deterministic_result.get("code"):
-            await current_text(
-                "procedure.error",turn_id=turn_id,
-                code=deterministic_result["code"])
-        state=deterministic_result.get("state")
-        if isinstance(state,dict):
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="complete" and
-                    not deterministic_result.get("idempotent")):
-                await current_text(
-                    "procedure.step_completed",turn_id=turn_id,
-                    step_id=deterministic_result.get("completed_step_id"))
-                if deterministic_result.get("completed"):
-                    await current_text(
-                        "procedure.completed",turn_id=turn_id,state=state)
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="record_observation"):
-                await current_text(
-                    "procedure.observation_recorded",turn_id=turn_id,
-                    step_id=deterministic_result.get("recorded_step_id"))
-            if (not deterministic_result.get("code") and
-                    deterministic_result.get("operation")=="start_timer" and
-                    not deterministic_result.get("idempotent")):
-                await current_text(
-                    "procedure.timer_started",turn_id=turn_id,
-                    step_id=deterministic_result.get("timer_step_id"),
-                    timer=state.get("timer"))
-            await current_text(
-                "procedure.state",turn_id=turn_id,state=state)
-        text=deterministic_procedure_text(
-            deterministic_result,turn_language)
-        timings["primary_text_ready_ms"]=round((clock()-endpoint)*1000)
-        if deterministic_result.get("code"):
-            session.set_turn_terminal_outcome(turn_id,generation,"blocked")
-        await current_text(
-            "reply.delta",turn_id=turn_id,segment_index=0,text=text)
-        try:
-            timings["first_tts_request_ms"]=round((clock()-endpoint)*1000)
-            await progress("synthesizing",route="deterministic_procedure")
-            pcm=await asyncio.to_thread(synthesize,said(text),turn_language)
-            frames=frame_complete_audio(pcm)
-            if filler is not None:await filler.primary_ready()
-        except Exception:
-            log.exception("deterministic procedure TTS failed")
-            await progress("error",route="deterministic_procedure")
-            frames=[]
-        segment_count=0
-        output_frames=0
-        playback_started=bool(frames and session.start_playback(turn_id))
-        if playback_started:
-            timings["first_audio_ms"]=round((clock()-endpoint)*1000)
-            await progress(
-                "playing",route="deterministic_procedure",
-                timings_ms={"time_to_playable_audio":timings["first_audio_ms"]})
-            await current_text(
-                "state.changed",state=session.state.value,turn_id=turn_id)
-            await sender.segment(turn_id,0,frames,generation)
-            segment_count=1
-            output_frames=len(frames)
-        await current_text("reply.complete",turn_id=turn_id,text=text)
-        await current_text(
-            "audio.complete",turn_id=turn_id,segment_count=segment_count)
-        timings["total_ms"]=round((clock()-endpoint)*1000)
-        await current_text(
-            "turn.done",turn_id=turn_id,timings_ms=timings,
-            segment_count=segment_count,input_frames=input_frames,
-            output_frames=output_frames,tools_used=[deterministic_tool],
-            route="deterministic_procedure")
-        if session.is_current(turn_id,generation):
-            session.history.commit([
-                {"role":"user","content":transcript},
-                {"role":"assistant","content":text},
-            ])
-        if not playback_started and session.complete_without_playback(turn_id):
-            await sender.text(
-                "state.changed",state=session.state.value,turn_id=turn_id,
-                cooldown_ms=session.detector.config.cooldown_ms)
-        return
+                             session.tool_context.report_language)
     queue=asyncio.Queue(); output_frames=0; segment_count=0; first_token=False; first_sentence=False; first_audio=False
     def mark_token():
         nonlocal first_token
@@ -10881,43 +7937,6 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             await progress(
                 "checking_approved_information",route="approved_information")
         if not await current_text(kind,turn_id=turn_id,**fields): return
-        if kind=="tool.result" and fields.get("tool") in PROCEDURE_TOOL_NAMES:
-            state=fields.get("procedure_state")
-            if fields.get("code"):
-                await current_text("procedure.error",turn_id=turn_id,code=fields["code"])
-            elif isinstance(state,dict):
-                operation=fields.get("operation")
-                if operation=="start" and not fields.get("idempotent"):
-                    await current_text("procedure.started",turn_id=turn_id,state=state)
-                if operation=="complete" and not fields.get("idempotent"):
-                    await current_text("procedure.step_completed",turn_id=turn_id,
-                                       step_id=fields.get("completed_step_id"))
-                    if fields.get("procedure_completed"):
-                        await current_text("procedure.completed",turn_id=turn_id,state=state)
-                if operation=="record_observation":
-                    await current_text(
-                        "procedure.observation_recorded",turn_id=turn_id,
-                        step_id=fields.get("recorded_step_id"))
-                if operation=="start_timer" and not fields.get("idempotent"):
-                    await current_text(
-                        "procedure.timer_started",turn_id=turn_id,
-                        step_id=fields.get("timer_step_id"),
-                        timer=state.get("timer"))
-                if operation=="summary":
-                    await current_text(
-                        "procedure.audit_summary",turn_id=turn_id,
-                        audit_summary=fields.get("audit_summary"))
-                await current_text("procedure.state",turn_id=turn_id,state=state)
-        if (kind=="tool.result" and fields.get("tool")==CREATE_REPORT_TOOL_NAME
-                and fields.get("status")=="confirmed"
-                and isinstance(fields.get("procedure_state"),dict)):
-            await current_text(
-                "procedure.blocked_for_handoff",turn_id=turn_id,
-                report_id=fields.get("report_id"),
-                state=fields["procedure_state"])
-            await current_text(
-                "procedure.state",turn_id=turn_id,
-                state=fields["procedure_state"])
         log.info("%s turn_id=%s tool=%s status=%s elapsed_ms=%s",kind,turn_id,fields.get("tool"),fields.get("status"),fields.get("elapsed_ms"))
     async def consume():
         nonlocal output_frames,segment_count,first_audio
@@ -11255,14 +8274,7 @@ async def voice_socket(websocket:WebSocket):
                 raise IdentityConfigurationError(
                     "Operational scope requires the tenant workspace.")
             headers=getattr(websocket,"headers",{})
-            query_params=getattr(websocket,"query_params",{})
-            principal=_identity_resolver().resolve(
-                headers.get("authorization"),
-                dev_profile_id=(
-                    headers.get("x-voice-dev-profile")
-                    or query_params.get("dev_profile")
-                ),
-            )
+            principal=_identity_resolver().resolve(headers.get("authorization"))
             workspace=initialize_workspace_store(settings)
             try:
                 workspace.bootstrap_principal(principal)
@@ -11282,10 +8294,7 @@ async def voice_socket(websocket:WebSocket):
         external_settings=ExternalReferenceSettings.from_environment()
         supplemental_settings=SupplementalKnowledgeSettings.from_environment()
         multi_brain_settings=MultiBrainSettings.from_environment()
-        semantic_intent_settings=SemanticIntentSettings.from_environment()
         llm_router_settings=LlmRouterSettings.from_environment()
-        web_visual_settings=WebVisualSettings.from_environment(external_settings)
-        generated_visual_settings=GeneratedVisualSettings.from_environment()
     except (ConfigurationError,ValueError) as exc:
         await websocket.send_text(event(
             "error",message=f"invalid non-secret configuration: {exc}"))
@@ -11294,18 +8303,7 @@ async def voice_socket(websocket:WebSocket):
     research_capabilities={
         "external_text":external_settings.public_capability(),
         "supplemental_model":supplemental_settings.public_capability(),
-        "web_image":{
-            "status":"enabled" if web_visual_settings.enabled else "disabled",
-        },
-        "generated_visual":{
-            "status":(
-                "enabled" if generated_visual_settings.enabled else "disabled"),
-            "model":(
-                generated_visual_settings.model
-                if generated_visual_settings.enabled else None),
-        },
         "multi_brain":multi_brain_settings.public_capability(),
-        "semantic_intent_fallback":semantic_intent_settings.public_capability(),
     }
     if llm_router_settings.enabled:
         research_capabilities["llm_router"]=llm_router_settings.public_capability()
@@ -11319,12 +8317,9 @@ async def voice_socket(websocket:WebSocket):
         experiment_report_store=report_store,
         external_reference_settings=external_settings,
         supplemental_knowledge_settings=supplemental_settings,
-        web_visual_settings=web_visual_settings,
-        generated_visual_settings=generated_visual_settings,
         multi_brain_settings=multi_brain_settings,
-        semantic_intent_settings=semantic_intent_settings,
         llm_router_settings=llm_router_settings,
-    ); task=None; trusted_config=None; procedure_store=None
+    ); task=None; trusted_config=None
     # Every sentence this connection synthesizes is remembered for the echo
     # check; tasks started from here inherit the binding.
     _SPEAKING_SESSION.set(session)
@@ -11525,7 +8520,6 @@ async def voice_socket(websocket:WebSocket):
                     configuration_stage="session_language"
                     context=server_tool_context(trusted_config,control["language"])
                     selected_curated_fixture=None
-                    selected_procedure_definitions=None
                     selected_revision_id=None
                     selection_failure=None
                     if requested_mode=="cascade":
@@ -11583,44 +8577,17 @@ async def voice_socket(websocket:WebSocket):
                                                     "protocol_selection_unavailable")
                                     finally:
                                         protocol_store.close()
-                            if (selected_curated_fixture is None and
-                                    trusted_config.procedure_catalog_path and
-                                    trusted_config.procedure_store_path):
-                                configuration_stage="procedure_configuration"
-                                definitions=load_procedure_definitions(
-                                    trusted_config.procedure_catalog_path,
-                                    trusted_config.catalog_path,
-                                    facility_id=trusted_config.facility_id,
-                                    language=context.language,
-                                    usage_scope=trusted_config.usage_scope)
-                                if requested_protocol_id in definitions:
-                                    selected_procedure_definitions=definitions
-                                    selection_failure=None
-                                    selected_revision_id=(
-                                        f"approved-procedure-"
-                                        f"{definitions[requested_protocol_id].version}")
-                            if (selected_curated_fixture is None and
-                                    selected_procedure_definitions is None):
+                            if selected_curated_fixture is None:
                                 # A refusal already recorded upstream is the
                                 # true one.  Overwriting it made a protocol the
                                 # server knows about, and is declining to run,
                                 # report itself as unknown.
                                 selection_failure=selection_failure or (
                                     "protocol_selection_unknown"
-                                    if (trusted_config.curated_protocol_fixture_path or
-                                        trusted_config.procedure_catalog_path)
+                                    if trusted_config.curated_protocol_fixture_path
                                     else "protocol_selection_unavailable")
                     elif requested_protocol_id is not None:
                         selection_failure="protocol_selection_not_supported_for_mode"
-                    elif (trusted_config.procedure_catalog_path and
-                            trusted_config.procedure_store_path):
-                        configuration_stage="procedure_configuration"
-                        selected_procedure_definitions=load_procedure_definitions(
-                            trusted_config.procedure_catalog_path,
-                            trusted_config.catalog_path,
-                            facility_id=trusted_config.facility_id,
-                            language=context.language,
-                            usage_scope=trusted_config.usage_scope)
                     if selection_failure is not None:
                         await websocket.send_text(event(
                             "session.configuration_required",
@@ -11631,24 +8598,18 @@ async def voice_socket(websocket:WebSocket):
                             reason=selection_failure,
                         ))
                         continue
-                    if selected_procedure_definitions is not None:
-                        configuration_stage="procedure_configuration"
-                        procedure_store=procedure_store or ProcedureStore(trusted_config.procedure_store_path)
-                        context=ToolContext(
-                            context.catalog_path,context.facility_id,
-                            context.language,context.usage_scope,
-                            context.report_language,
-                            ProcedureController(
-                                selected_procedure_definitions,procedure_store))
                     configuration_stage="session_state"
                     session.set_tool_context(context)
-                    # Recorded in the experiment report when it opens.
-                    session.test_mode_readiness_gates_skipped=bool(
-                        selected_curated_fixture is not None
-                        and _test_mode_skips_readiness_gates())
                     if selected_curated_fixture is not None:
                         selected_curated_fixture=_with_revision_translations(
                             selected_curated_fixture)
+                    # The experimenter's press of start is the one human
+                    # confirmation (decision of 2026-10-08). The source's
+                    # safety statements shown before it are recorded in the
+                    # experiment report when it opens.
+                    session.safety_notices_shown=(
+                        fixture_safety_notices(selected_curated_fixture)
+                        if selected_curated_fixture is not None else None)
                     session.set_curated_protocol_fixture(selected_curated_fixture)
                     _subscribe_translations(session,sender)
                     recovery_session_id=control.get("experiment_session_id")
@@ -11835,10 +8796,6 @@ async def voice_socket(websocket:WebSocket):
                 try:
                     trusted_config=trusted_config or server_config()
                     context=server_tool_context(trusted_config,control["language"])
-                    if session.tool_context and session.tool_context.procedure_controller:
-                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
-                                            context.usage_scope,context.report_language,
-                                            session.tool_context.procedure_controller)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid session language"))
                     continue
@@ -11858,10 +8815,6 @@ async def voice_socket(websocket:WebSocket):
                     trusted_config=trusted_config or server_config()
                     context=(server_tool_context(trusted_config,control["language"])
                              if control["mode"]=="manual" else None)
-                    if context and session.tool_context and session.tool_context.procedure_controller:
-                        context=ToolContext(context.catalog_path,context.facility_id,context.language,
-                                            context.usage_scope,context.report_language,
-                                            session.tool_context.procedure_controller)
                     session.set_language_mode(control["mode"],context)
                 except (RuntimeError,ValueError):
                     await websocket.send_text(event("error",message="invalid language mode"))
@@ -11881,16 +8834,12 @@ async def voice_socket(websocket:WebSocket):
                         sender,session,"cancelled")
                     task.cancel()
                 session.reset_sensitive_state()
-                if session.tool_context and session.tool_context.procedure_controller:
-                    session.tool_context.procedure_controller.detach()
                 await websocket.send_text(event("session.reset",state=session.state.value))
                 if session.curated_protocol_session is not None:
                     fixture_state = session.curated_protocol_session.state()
                     await websocket.send_text(event(
                         "protocol.fixture.state", state=fixture_state,
                         screen=curated_screen_fields(session.curated_protocol_session)))
-                else:
-                    await websocket.send_text(event("procedure.state",state=unattached_procedure_state()))
                 await websocket.send_text(event("session.language_state",mode=session.language_mode,
                                                 language=session.manual_language))
             elif control["type"]=="session.stop":
@@ -12160,7 +9109,6 @@ async def voice_socket(websocket:WebSocket):
             except (asyncio.CancelledError, WebSocketDisconnect): pass
         _unsubscribe_translations(session)
         session.stop()
-        if procedure_store is not None: procedure_store.close()
         if workspace_context_token is not None:
             _REQUEST_PRINCIPAL.reset(workspace_context_token)
 

@@ -116,9 +116,9 @@ class AgedByAccumulationTests(unittest.TestCase):
             server_module, "_candidate_fixture_execution_state",
             return_value={
                 "available_for_execution": False,
-                "blocked_reason": "development_activation_not_recorded",
-                "development_activation": {"activated": False},
-                "approval": {},
+                "blocked_reason": "execution_blocked",
+                "execution_blockers": [],
+                "execution_notices": [],
             },
         ):
             config.return_value = None

@@ -30,25 +30,31 @@ authority.
   completion, pause/resume, and interruption stay on the production WebSocket
   path covered by integration tests.
 - Model prose cannot advance a step, record an observation, start a timer,
-  approve a protocol, resume blocked work, or write to an ELN.
+  or resume blocked work.
 - Read-only questions do not mutate workflow state. Combined explanation/next
   requests explain and preview, then wait for explicit completion.
 - Every executable session is pinned to an exact protocol revision and source
-  identity. Source changes create drafts; they never overwrite an approved
-  revision or rebind a running experiment.
-- Parsing, structural readiness, hazard review, human approval, and operational
-  authorization are separate gates.
+  identity. A changed PDF is a new upload and a new analysis; it never rebinds
+  a running experiment.
+- The gates before a run are the analysis itself: parsing, structural
+  readiness and the source-evidence check. There is no approval step. The
+  experimenter's press of "이 프로토콜로 시작" is the one human confirmation,
+  recorded in the experiment ledger together with the source's safety
+  statements shown before it (lane DI, 2026-10-08).
 - Raw audio, unrestricted transcripts, prompts, model reasoning, and connector
   secrets are excluded from persistent pilot analytics.
 
 ## Architecture
 
 ```text
-Local PDF / protocols.io / Drive / GitHub
-  → source connector boundary
-  → immutable source identity + tenant-scoped lineage revision
-  → inbox + source/evidence review + diff
-  → reviewer decision / explicit non-operational development activation
+Protocol PDF upload
+  → immutable source bytes + SHA-256
+  → automatic OCR for pages without a text layer
+  → automatic structured analysis + source-evidence check
+  → start screen: step count, the source's safety statements beside their
+    Korean, what blocks a run and what to do, notices for constructs the
+    guidance cannot handle yet
+  → the experimenter presses "이 프로토콜로 시작" (the one human confirmation)
   → exact executable protocol revision
 
 Browser AudioWorklet (16 kHz PCM)
@@ -67,24 +73,21 @@ Canonical workflow events
   → tenant-owned persistent ExperimentSession
   → append-only experiment timeline and report
   → JSON / Markdown / CSV / DOCX export
-  → explicit confirmed eLabFTW write-back
-  → tenant-scoped privacy-safe aggregates
 ```
 
 The main runtime routing boundary is
-`src/voiney_lab/runtime_routing.py`. An optional, disabled-by-default
-semantic intent fallback (`semantic_intent.py`) sits behind it: when
-deterministic routing returns a catch-all, it may *propose* one of the existing
-bounded workflow actions, and server-owned policy in the same boundary decides
-whether that proposal is used. It never mutates workflow state - see
-[Semantic intent fallback](#semantic-intent-fallback). An LLM router that
-takes over intent judgment behind deterministic front rules is wired behind a
-setting that is off by default - see
-[LLM router (off by default)](#llm-router-off-by-default).
-Tenant/RBAC logic is in
-`identity.py` and `workspace_store.py`. Protocol source adapters are in
-`protocol_sources.py`; computational metadata is in `drylab_workflows.py`; the
-ELN boundary is in `eln_connectors.py`.
+`src/voiney_lab/runtime_routing.py`. An LLM router that takes over intent
+judgment behind deterministic front rules is wired behind a setting that is
+off by default - see [LLM router (off by default)](#llm-router-off-by-default).
+The utterance fences its tool validation applies live in `intent_fences.py`.
+Identity (one experimenter identity, tenant-scoped resources) and the durable
+experiment workspace are in `identity.py` and `workspace_store.py`. The
+reviewer and lab-admin screens, protocol approval and lab adaptations, the
+protocols.io / Google Drive / GitHub imports, the eLabFTW export, the
+Snakemake/Nextflow metadata lane, the xAI-only semantic-intent helper and
+web-image/image-generation code, and the config-gated legacy procedures stack
+were removed on 2026-10-08 (lane DI); their storage tables remain unused and
+their code is in the git history.
 
 The current component, authority, and persistence design is documented in
 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md). The older
@@ -114,7 +117,7 @@ and revision and a fresh optimistic version. The server restores only contiguous
 completed steps and the authoritative current step. It does not restore pending
 confirmations, model output, conversation history, or active timers.
 
-`GET /api/workspace/experiments` lists sessions visible to the current role;
+`GET /api/workspace/experiments` lists the experimenter's own sessions;
 `GET /api/workspace/experiments/{session_id}` returns the durable event history.
 The dashboard transition endpoint permits explicit pause/resume/stop/block but
 cannot claim completion—completion remains a protocol-authority action.
@@ -140,8 +143,7 @@ Timeline endpoints are:
 - `GET /api/workspace/experiments/{session_id}/timeline`;
 - `POST /api/workspace/experiments/{session_id}/observations`;
 - `POST /api/workspace/experiments/{session_id}/evidence`;
-- `GET /api/workspace/experiments/{session_id}/evidence/{evidence_id}`; and
-- `POST /api/workspace/reviewer/experiments/{session_id}/actions`.
+- `GET /api/workspace/experiments/{session_id}/evidence/{evidence_id}`.
 
 ## Researcher screen wording
 
@@ -152,31 +154,24 @@ lane U). It only changes what is shown; every state it shows is the server's.
   ids are not in the body. Each sits in a closed "개발 상세 정보" block next to
   the readable name, so it can still be checked later. An experiment record
   reads "실험 기록 · {protocol title} · {start date and time}" (two records of
-  one protocol started the same day are numbered "· 2번째"); the approval reads
-  "개발용 초안(승인 전)" or "승인본 · {approval date} · {approver role}". The
+  one protocol started the same day are numbered "· 2번째"); the context card's
+  "분석 상태" reads "분석 통과 · 실행 가능", "실행을 막는 사유 있음 · 실행
+  불가" or "개발용 큐레이션 분석(원문 PDF 기준)" (lane DI, 2026-10-08). The
   names are built in the browser from `experiment.report.state` (`started_at`,
-  `protocol_id`) and the catalog entry (`title`, `approval`). The server also
+  `protocol_id`) and the catalog entry. The server also
   sends (lane R6, decision 5; the screen does not read them yet):
   `protocol_title`, `day_sequence` and `day_sequence_date` (the Nth record
   started that UTC day) on `experiment.report.state` and on each
-  `/api/workspace/experiments` item, and `actor_display_name` on a catalog
-  approval where the approver had one.
-- **Evidence candidates** in a reviewer finding are one row each — checkbox,
-  page, a one-line excerpt (full excerpt on hover) — in a list of fixed height
-  that scrolls inside itself. Pressing the finding button with nothing ticked
-  says so beside the button and sends nothing; the server refuses an uncited
-  finding either way.
-- **A refused finding** says why and what to do on one line beside the button.
-  `protocol_approval_denied` is the catalog's refusal of the finding's content
-  (for example a citation that does not resolve), not a permission check, and
-  is shown that way; `authorization_denied` names the reviewer role. Since
-  lane R6 (decision 5) the server answers a finding refused for its content
-  with its own code and 400/422 instead: `finding_evidence_missing`,
-  `finding_evidence_span_mismatch`, `ambiguity_not_found`,
-  `analysis_revision_missing`, `finding_target_not_found`,
-  `finding_value_mismatch`, `finding_not_recorded` (422) and
-  `finding_unsupported`, `finding_value_invalid` (400). Only a real
-  permission refusal is 403.
+  `/api/workspace/experiments` item.
+- **The start screen (lane DI, 2026-10-08).** Picking a protocol loads its
+  analysis result into "시작 전 확인 · 분석 결과 요약": the step count, every
+  safety statement the source declares beside its Korean (never folded),
+  "실행을 막는 사유 N건" with what to do, "시작 전 알림 N건" for constructs the
+  guidance cannot handle yet, and the translation state. "이 프로토콜로 시작"
+  is shown only when the analysis passed with no blocker; pressing it starts
+  the session and writes `safety_notices_acknowledged` to the experiment
+  ledger. There is no reviewer finding, approval button or OCR acceptance to
+  press any more.
 - **A turn card shows one status.** The end of a turn ("완료", "중단됨",
   "차단됨", "오류") is shown once; the red line under it is kept for the text of
   a real failure. When a later utterance is committed, an earlier card that
@@ -211,11 +206,9 @@ lane U). It only changes what is shown; every state it shows is the server's.
 - **Remaining words (lane U2, decision 5).** The step card names the step
   once, "4단계 · 전체 25단계", and the rail "4단계 / 25"; the English
   "Step N" line is gone. Timers read minutes and seconds, "⏱ 14:55 남음".
-  The "관리자 인계" row is shown, in red, only for a real block; with nothing
-  handed over it is not shown. The readiness and development status
-  ("확인 기록") is in the step card's "개발 상세 정보". A review choice reads
-  "이 근거로 해결된 것으로 표시" or "기록만 하고 해결로 표시하지 않음", and a
-  review group with nothing in it (an empty "실행 전 확인 조건") is not drawn.
+  The "진행 제한" row is shown, in red, only for a real block; with nothing
+  blocking it is not shown. The readiness and development status
+  ("확인 기록") is in the step card's "개발 상세 정보".
 - **Where reference words come from (decisions 5–7).** The reference panel is
   titled by its latest entry: "PDF 밖 설명 · AI 일반 지식" for an
   outside-PDF explanation, "AI 일반 지식" for other model knowledge (the
@@ -244,13 +237,8 @@ lane U). It only changes what is shown; every state it shows is the server's.
     the server sends no such values, the screen counts the records this
     browser has seen, as before. The experiment list
     (`/api/workspace/experiments`) uses the same title and count.
-  - *Approver.* An approval reads "승인본 · {local date} · {actor_display_name}";
-    without a recorded name, the role as before.
-  - *Refused findings.* Each reason code from `/findings/*` (422/400) has one
-    line saying what to do, e.g. `finding_evidence_missing` "원문 근거를 하나
-    이상 고른 뒤 다시 눌러 주세요". Only a permission refusal (403
-    `authorization_denied`) reads "검토자 계정으로 로그인한 뒤 다시 눌러
-    주세요".
+  - *Experimenter.* The context card's "실험자" row shows the signed-in
+    display name (lane DI, 2026-10-08).
   - *Cut-off playback.* A `turn.state` `complete` or `cancelled` that the
     server sends for an earlier turn replaces the screen's own clearing of
     that card: the card shows the server's end and the "화면 정리" line in
@@ -262,13 +250,11 @@ The browser implements the explicit lifecycle:
 
 ```text
 uploaded
+  → ocr_required (pages without a text layer; OCR runs by itself)
   → analysis_pending
   → analyzing
   → analysis_ready
-  → review_required
-  → executable_draft OR blocked
-  → approved
-  → revoked
+  → ready (analysis passed, no execution blocker) OR blocked
 ```
 
 1. `POST /api/protocols?filename=...` streams a PDF to a bounded temporary file,
@@ -278,30 +264,34 @@ uploaded
    and runs analysis in a background task; the browser polls
    `GET /api/protocols/{id}/analysis/status` until a terminal state.
 3. `GET /api/protocols/{id}/review` exposes source identity, evidence, structure,
-   warnings, missing values, readiness blockers, and lifecycle gates.
-4. In `demo`, `reference_only`, or `test_only`, a user may explicitly activate a
-   guidance-ready revision as a development-only draft. Operational scope never
-   permits this shortcut.
-5. Approval/revocation history is append-only. Revocation prevents new
-   operational sessions but does not erase historical experiment provenance.
+   warnings, missing values and the execution rule's two lists:
+   `execution_blockers` (invalid protocol, failed source-evidence check, no
+   executable step, a page still needing OCR, a safety-critical conflict) and
+   `execution_notices` (everything else the readiness assessment found, read
+   before the start; constructs without guidance are said once at their step),
+   plus `safety_notices`, the source's safety statements with their Korean.
+4. `available_for_execution` is true when an analysis exists and carries no
+   execution blocker, in every scope. The experimenter's press of
+   "이 프로토콜로 시작" is the one confirmation (lane DI, 2026-10-08); there is
+   no approval, no reviewer finding and no development activation. The
+   readiness assessment itself (`assess_readiness`) is unchanged; the split
+   into blockers and notices happens when the catalog is read.
 
-For a scanned/text-empty PDF, onboarding pauses before structured analysis. A
-reviewer explicitly calls `POST /api/protocols/{id}/ocr`; the server invokes only
-the trusted deployment-injected `ProtocolOcrProvider` and validates the exact
-source SHA-256, complete ordered page set, bounded text, provider identity,
-confidence, language, and warnings. The browser polls `GET
-/api/protocols/{id}/ocr`, renders page text with `textContent`, and requires an
-accept/reject decision at `POST /api/protocols/{id}/ocr/review`. Acceptance only
-makes the reviewed text eligible for a separate structured-analysis request. It
-does not start analysis, approve a revision, or make anything executable.
+For a scanned/text-empty PDF the upload runs OCR by itself (lane PX) and
+starts the analysis when the text is in; `POST /api/protocols/{id}/ocr` remains
+for a manual run. The server invokes only the trusted deployment-injected
+`ProtocolOcrProvider` and validates the exact source SHA-256, complete ordered
+page set, bounded text, provider identity, confidence, language, and warnings.
+The browser polls `GET /api/protocols/{id}/ocr` and renders page text with
+`textContent`. OCR text is accepted automatically as source text; the
+experimenter's start covers it, and there is no separate OCR review route any
+more (lane DI, 2026-10-08).
 
 A readable PDF with only some pages marked `ocr_required` does not pause: its
-readable pages are analysed as usual, and the same OCR route
-(`GET`/`POST /api/protocols/{id}/ocr`, then review) is open for the marked
-pages. Until a reviewer has accepted their OCR text and the Protocol has been
-analysed again from it, readiness carries `source_page_requires_ocr` naming
-those pages, so the Protocol is not guidance-ready. No gate acknowledgement
-clears it.
+readable pages are analysed as usual and the marked pages are read by OCR.
+Until the Protocol has been analysed from that text, readiness carries
+`source_page_requires_ocr` naming those pages, and that is an execution
+blocker.
 
 No OCR engine is selected by a client. At startup the server builds the
 adapter from the environment (`src/voiney_lab/protocol_ocr_providers.py`) and
@@ -361,30 +351,6 @@ validation and final domain assembly.
 Chunk calls are serial by default, concurrency two is explicit/experimental, and
 the 120-second limit is one total-run deadline rather than a fresh timeout per
 batch. No partial-success result is persisted as a review candidate.
-
-## Lab adaptations
-
-A local protocol difference is represented as a new immutable child revision, never
-as an edit to an imported original. The adaptation record pins the exact base
-and adapted revision IDs and accepts only step-linked equipment differences,
-reagent substitutions, lab notes, and troubleshooting tips. Equipment/reagent
-changes require explicit before/after values and a rationale.
-
-Every adaptation begins `review_required`, appears in the existing source-review
-inbox, uses the existing diff view, and becomes executable only after the
-existing reviewer/admin approval event. A development-status source cannot be
-approved directly; an explicit lab-adaptation child must be reviewed. Rejected,
-revoked, stale, or already adapted revisions fail closed.
-
-The tenant-scoped API is:
-
-- `POST /api/workspace/protocols/{base_revision_id}/adaptations`;
-- `GET /api/workspace/protocol-adaptations`; and
-- `GET /api/workspace/protocol-adaptations/{adapted_revision_id}`.
-
-Approval and revocation continue through
-`POST /api/workspace/reviewer/revisions/{revision_id}/decision`; there is no
-parallel approval mechanism.
 
 ## Korean STT reliability
 
@@ -731,9 +697,8 @@ acts on carries where it came from (`value_source`: `source`, `operator`, or
   ("16단계 완료하셨나요?", lane XO); their yes then meets the round question.
   "12단계로 돌아가" (lane R7) still works and shares the round count. Rounds
   are counted from returns confirmed in words, as before. A fixed repetition
-  is led by the count the source states -- a reviewer confirms it before an
-  approved run, a development run takes the analysis's reading -- so in an
-  approved run only reviewer-confirmed repeats are led, as before. A bounded
+  is led by the count the source states, as the analysis read it (since lane
+  DI, 2026-10-08, no reviewer confirms it: the start covers it). A bounded
   repetition's step no longer gets an observed-endpoint question: its end is
   a count. A repeat-until (in-gel 7, 9, 20) is unchanged: it waits on the
   person's observation.
@@ -763,79 +728,6 @@ acts on carries where it came from (`value_source`: `source`, `operator`, or
   for recovery: after a reconnect the open question is asked again where the
   run stands.
 
-## Semantic intent fallback
-
-Researchers code-switch and paraphrase. `타이머 얼마나 남았어?` and
-`타임 얼마나 남았어?` are recognized deterministically, but `Time 얼마나 남았어?`
-is the same question in a form no regex table anticipated. The semantic intent
-fallback answers that class of utterance without giving a model any authority.
-
-```text
-STT
- → deterministic intent fast path            (unchanged, still the fast path)
- → semantic intent proposal                  (only when the fast path returns a catch-all)
- → server-owned policy validation            (evidence, context, and tier gates)
- → deterministic workflow state machine      (the only thing that transitions)
- → persistence
- → acknowledgement
-```
-
-The resolver may propose only an intent that already exists in the curated
-action contract - current step, next-step information, complete current step,
-not done, start timer, timer status, timer-operation information, pause, resume,
-stop, repeat, related question, or `unknown` - and returns structured data (`intent`, `target`,
-`mutation_requested`, `confidence`, `explicit_action_evidence`, `reason`), never
-free-form instructions. It uses the same xAI chat boundary as the rest of the
-product; no second provider is introduced.
-
-Mutation safety is structural, not advisory:
-
-- **Read-only intents** need only the read-only confidence floor. A timer
-  question is answered from the server's own timer, so it can report "the timer
-  is not started yet" but can never invent a timer the approved step does not
-  define.
-- **Bounded control** (start timer, pause, resume) additionally requires
-  `mutation_requested`, a verbatim action span copied from the utterance, a
-  actual action request rather than an informational or hypothetical question,
-  an active workflow, no open confirmation gate, and the higher mutation
-  confidence floor. A polite request may end in question punctuation; it still
-  passes the same verbatim-evidence and server-state gates.
-- **Checkpoint intents** never execute. A completion proposal is downgraded to
-  the existing explicit completion confirmation, so the researcher's own answer
-  commits the step. A stop proposal is refused outright: ending a run stays a
-  deterministically worded command.
-- Source-defined observation checkpoints, transcript-quality blocks, pending
-  confirmation gates, and the deterministic non-mutating completion guards
-  (hypothetical, quoted, negated, future completion) are all evaluated
-  independently of the proposal and continue to win.
-
-Failure is always closed. If the fallback is disabled, the resolver is
-unreachable, the call times out, the structured output is malformed, the
-proposed intent is unsupported, or confidence is below the floor, the turn keeps
-exactly the outcome the deterministic path already produced. A turn the
-deterministic path resolves never constructs a provider client at all, so voice
-interaction never depends on the model being available.
-
-Enable it per deployment (see `.env.example`):
-
-```bash
-VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true
-VOINEY_LAB_SEMANTIC_INTENT_MODEL=grok-4.20-0309-non-reasoning
-VOINEY_LAB_SEMANTIC_INTENT_TIMEOUT_SECONDS=2.5
-VOINEY_LAB_SEMANTIC_INTENT_MIN_CONFIDENCE=0.6
-VOINEY_LAB_SEMANTIC_INTENT_MUTATION_MIN_CONFIDENCE=0.85
-```
-
-The dedicated non-reasoning model keeps this small typed classification off the
-slower general reasoning path. The 2.5-second value is a hard provider boundary,
-not permission to retry; the request uses no tools and caps its output at 160
-tokens.
-
-Every turn publishes a privacy-safe ruling on `turn.route_decision` under
-`semantic_fallback` (`status`, `reason_code`, `proposed_intent`, `accepted`,
-`confidence`, `latency_ms`) - reason codes and enum values only, never
-utterance text or model prose.
-
 ## LLM router (off by default)
 
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
@@ -849,11 +741,6 @@ above. The router role's `VOINEY_LAB_ROUTER_PROVIDER` (default `xai`),
 `VOINEY_LAB_ROUTER_REASONING` choose the model (see [Model providers by
 role](#model-providers-by-role)), and `VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS`
 (default 2.5) how long a turn waits for it; it needs that provider's key.
-
-The router and the semantic-intent fallback are never both on: with
-`VOINEY_LAB_LLM_ROUTER_ENABLED=true` and
-`VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true` the server refuses to start and says
-why (lane M1, decision 4) -- one turn is decided along one line.
 
 On, a turn goes:
 
@@ -928,106 +815,34 @@ model that proposes `next`, `stop` or `start` on every turn the front rules
 hand on, no step is moved, no session ended and no protocol restarted
 (`tests/test_llm_router.py`, `AdversarialModelTests`).
 
-## Workspace identity and authorization
+## Workspace identity
 
-Workspace mode models organizations, principals, roles, memberships, ownership,
-and tenant-scoped resources. Roles are `researcher`, `reviewer`, `lab_admin`, and
-`organization_admin`; permissions are enforced centrally.
+Workspace mode models organizations, principals, memberships, ownership and
+tenant-scoped resources. Since 2026-10-08 (lane DI, decision 4) there is one
+identity, the experimenter: no roles, no permission table, no reviewer or
+lab-admin screens. A person sees their own experiments; tenant isolation and
+the non-enumerable cross-tenant checks stay.
 
 OIDC bearer tokens require signed `RS256` or `ES256` JWTs with matching issuer and
-audience plus `exp`, `iat`, `iss`, `aud`, and `sub`. The tenant and roles come from
-server-configured claims. Effective permissions are the intersection of verified
-OIDC roles and active local memberships. External subjects are represented by an
-opaque issuer-scoped principal ID.
+audience plus `exp`, `iat`, `iss`, `aud`, and `sub`. The tenant comes from a
+server-configured claim; a roles claim is not read. External subjects are
+represented by an opaque issuer-scoped principal ID.
 
 The boundary is provider-neutral OpenID Connect and is compatible with Google
 Workspace, Microsoft Entra ID, Auth0, and Keycloak when each issuer supplies an
-HTTPS JWKS endpoint and the configured tenant/role claims. Provider setup and
-claim mapping remain deployment responsibilities; the application does not add
-provider-specific token shortcuts.
+HTTPS JWKS endpoint and the configured tenant claim. Provider setup and claim
+mapping remain deployment responsibilities.
 
-An allowlisted development identity provider is available only outside
-`operational` scope. Operational workspace access requires a complete OIDC
-configuration. Client-supplied tenant IDs are never accepted as an ownership
-override. HTTP and WebSocket access share the same identity boundary.
+Outside `operational` scope every request is one development identity, chosen
+by the server and by nobody else: the page sends no profile header and the
+WebSocket takes no `dev_profile` query. Operational workspace access requires a
+complete OIDC configuration. Client-supplied tenant IDs are never accepted as
+an ownership override. HTTP and WebSocket access share the same identity
+boundary. A login for the pilot comes later.
 
-## Protocol Source Hub
+## Step translations
 
-All imports produce an immutable `ProtocolSource` and a new lineage revision when
-the source identity changes.
-
-### protocols.io
-
-- Accepts an exact DOI, protocol URL, URI, or version-qualified `/vN` identity.
-- Calls `GET /api/v4/protocols/{id}` with a server-side bearer token and requests
-  structured Markdown content.
-- Preserves DOI, version URI, authors, license, source status, material/step
-  structure, warnings, and canonical URL.
-- Never upgrades an “In development” source to approved.
-
-Official contract: [protocols.io API](https://apidoc.protocols.io/).
-
-### Google Drive and Shared Drives
-
-- Read-only folder allowlists; supports PDFs and Google Docs exported as PDF.
-- Preserves file ID, modified timestamp, head revision where available, parents,
-  owner metadata allowed by Drive, and Shared Drive identity.
-- Uses `supportsAllDrives`, `includeItemsFromAllDrives`, and the Drive change-log
-  cursor. The next cursor is persisted per connector/root.
-- A changed file becomes a review-required revision; active revisions are never
-  overwritten.
-
-Official contracts: [Drive files](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
-and [Drive changes](https://developers.google.com/workspace/drive/api/reference/rest/v3/changes/list).
-
-### GitHub
-
-- Read-only repository/ref/path allowlists; source content is pinned to the
-  resolved commit SHA.
-- Preserves repository, branch/tag, commit, path, license, and source URL.
-- Webhooks verify `X-Hub-Signature-256` over the raw body with HMAC-SHA256 and a
-  constant-time comparison, enforce delivery replay protection, and import only
-  changed allowlisted paths.
-- Imported repository content is never executed by the FastAPI process.
-
-Official contract: [GitHub webhook validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
-
-## Dry-lab workflow registry
-
-Snakemake and Nextflow imports are metadata-only. The registry recognizes exact
-entry points, configuration/schema/environment files, declared rules or
-processes, engine metadata, repository identity, and commit. Reviewer decisions
-are append-only. An explicit link connects a real tenant-owned durable
-ExperimentSession, its matching source-hash-bound wet-lab lineage revision, and
-one approved computational workflow revision. The researcher cockpit keeps the
-link panel folded and closed under "개발 상세 정보" (the pilot market is wet-lab;
-see "Researcher screen wording"), where it shows the repository, and the commit
-and entry point in its developer details; the API always reports
-`execution_supported:false` and `execution_started:false`.
-
-There is no arbitrary workflow execution, validation sandbox, or Seqera launch in
-this service. `SeqeraLaunchBoundary` is an integration interface for a future
-separate execution plane. The registry follows the repository-structure patterns
-documented by the [Snakemake Workflow Catalog](https://snakemake.github.io/snakemake-workflow-catalog/docs/snakemake.html)
-and [Nextflow](https://docs.seqera.io/nextflow/workflow).
-
-New links fail closed when the experiment is only a fabricated resource binding,
-the wet-lab lineage protocol/source identity differs, the runtime revision is
-incompatible with the catalog revision, the workflow is unreviewed/revoked, or
-the stored metadata claims execution support. Revocation is terminal for that
-immutable workflow revision; a changed workflow must be imported and reviewed as
-a new revision.
-
-## Knowledge, translations, and asset cards
-
-The workspace store separates `ApprovedProtocolFact`, `LabTip`,
-`HistoricalObservation`, and `TroubleshootingNote`. Observations and tips remain
-non-authoritative until a reviewer explicitly promotes them into an approved
-annotation; provenance is retained.
-
-Translations are linked to the original revision, labeled machine-generated or
-reviewed, and rejected if protected scientific numeric tokens differ from the
-source. A Protocol revision's sentences are machine-translated once its analysis
+A Protocol revision's sentences are machine-translated once its analysis
 passes (lane PX); a source sentence already in Korean is not sent -- more
 Hangul than Latin letters, or at least four Hangul letters with Hangul as the
 sentence's last letter, so "9. Seahorse XF glycolysis stress test 를
@@ -1047,29 +862,11 @@ source is shown when it refuses it, so a check fixed later reaches a revision
 already translated; the stored row, its text and its source hash do not
 change, and each sentence's judgement is computed once (lane FX). A step
 whose source is Korean shows no "한국어 번역이 없어 원문으로 보여 드립니다."
-line on its card (lane FX). Lightweight reagent/equipment cards store tenant-scoped location,
-optional photo/QR/barcode metadata, and an HTTPS SDS/source link. Location changes
-produce a reviewable history rather than a hidden overwrite.
+line on its card (lane FX).
 
-## eLabFTW write-back
-
-`ElnConnector` is the generic boundary; `ELabFtwConnector` implements the real
-eLabFTW API v2 create-then-patch contract. A write-back requires:
-
-- a completed, tenant-owned durable ExperimentSession and its completed report;
-- exact agreement between the session protocol/revision and report
-  protocol/revision identities;
-- the exact tenant-owned protocol lineage revision and matching source/execution
-  identity;
-- an enabled eLabFTW connector with an allowlisted HTTPS origin;
-- explicit user confirmation; and
-- a unique idempotency key reserved before the network write.
-
-The server builds the payload from its own report store. Raw audio, full
-transcripts, model reasoning, and secrets are never sent. Unpublished protocol
-instructions are withheld by default. Cross-origin `Location` responses are
-rejected before PATCH to prevent follow-up SSRF. See the
-[eLabFTW API v2 documentation](https://doc.elabftw.net/api/v2/).
+The workspace store still holds the knowledge-entry and asset-card tables with
+their read routes (`/api/workspace/knowledge`, `/api/workspace/assets`); no
+screen reads them and nothing promotes an entry any more (lane DI).
 
 ## PDF text extraction
 
@@ -1172,13 +969,12 @@ same key in a repo-root `.env`. Their optional settings are only defaults
 (lane XO, decision 1): a name already set in the shell is left alone, and a
 name written in the `.env` keeps the file's value
 (`configuration.launcher_defaults`). The settings a launcher fixes for safety
--- the paths it verified, the analysis model the development launcher clears,
-the pilot's safety catalog, usage scope and test mode -- stay fixed.
+-- the paths it verified and the pilot's safety catalog and usage scope --
+stay fixed.
 
 ```bash
 ./scripts/run_dev.sh                 # development, port 8000
 ./scripts/run_dev.sh --bootstrap-only  # load the curated fixture, do not serve
-./scripts/run_dev.sh --test-mode       # also skip execution readiness gates
 ./scripts/run_dev.sh --check-only      # print the settings, touch nothing under data/runtime
 ./scripts/run_pilot.sh               # controlled pilot, port 8080
 ./scripts/run_pilot.sh --check-only  # print the configuration, do not serve
@@ -1200,27 +996,19 @@ once more by itself, recorded as `protocol_analysis_retry_started` with
 authority `automatic_invalid_response_retry`, and the progress line says
 "다시 시도 중(1/1)". A failed source-evidence check, a time-out or a missing
 provider is never sent again by itself, nor is a person's own retry; if the
-second answer fails too, a person presses "분석 다시 시도". The four features only xAI provides --
-external reference search, web image search, generated images and semantic
-intent -- default to off. Its
-`--test-mode` flag sets `VOINEY_LAB_USAGE_SCOPE=demo` and
-`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` and says so loudly;
-without the flag neither variable is set. `scripts/run_candidate_a.sh` is the
-former name and now forwards to it.
+second answer fails too, a person presses "분석 다시 시도". The one feature only xAI provides -- external reference search -- defaults to
+off. There is no test mode any more (lane DI,
+2026-10-08): an analysed protocol runs under the one execution rule in every
+scope. `scripts/run_candidate_a.sh` is the former name and now forwards to
+it.
 
 `scripts/run_pilot.sh` loads no fixture, keeps its state under
 `data/runtime/pilot/`, and turns every feature that reaches outside the
 approved source documents off — `VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED`,
-`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED`, `VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED`,
-`VOINEY_LAB_GENERATED_VISUALS_ENABLED`, `VOINEY_LAB_SEMANTIC_INTENT_ENABLED` —
+`VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED` —
 along with `VOINEY_LAB_MOSS_ENABLED`. Each keeps a value the operator set in
 the shell (and, but for MOSS, wrote in the `.env`), so enabling one is a
-deliberate act taken before startup. Test
-mode is forced off whatever the environment said. Dry-lab workflows and the
-eLabFTW ELN write-back have no flag of their own: both sit behind the
-commercial workspace that the reviewer inbox and experiment timeline also
-need, and both stay inert until an admin configures and verifies a connector,
-so the launcher reports them rather than disabling them.
+deliberate act taken before startup.
 
 The pilot's approved safety documents are fixed by the launcher, never by a
 `.env`. It exports `VOINEY_LAB_SAFETY_CATALOG` as the absolute path
@@ -1243,8 +1031,8 @@ these holds, so a checkout without a reviewed catalog reports exit 1;
 `docs/APPROVED_DOCUMENT_OPERATIONS.md` §4 describes how to put one in place.
 
 The development launcher differs on each of these points. `run_dev.sh` takes
-the safety catalog and scope from the environment or `.env` (`--test-mode`
-sets the scope to `demo`), keeps its state under
+the safety catalog and scope from the environment or `.env`, keeps its state
+under
 `data/runtime/candidate-a-live-acceptance/`, and serves on port 8000. With no
 catalog file in the `demo` or `test_only` scope, its step safety card falls
 back to the fictional records in
@@ -1350,8 +1138,8 @@ system. Both have one structure (`experiment_reports.report_blocks`):
   name of the signed-in person who started the experiment (blank for the
   researcher to fill where no workspace names anyone); time taken; steps
   completed n/N; completed, or stopped at which step; the protocol's
-  approval state in words; and, for a test-mode run, that the readiness
-  gates were skipped;
+  state in words ("분석 통과 · 실험자가 시작함", lane DI); and the safety
+  statements the experimenter saw before pressing start, by count;
 - 1 purpose and 2 background and principle, from the protocol's PDF -- or,
   when the PDF has no background, a short one from the report model's general
   knowledge, labelled "AI 일반 지식 — 출처 없음, 확인 필요" (lane N);
@@ -1471,30 +1259,12 @@ parameter or else the file name. The image is never read.
 | `VOINEY_LAB_ANALYTICS_RETENTION_DAYS` | Tenant default, 1–3650 days |
 | `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED` | Enables append-only experiment records |
 | `VOINEY_LAB_EXPERIMENT_REPORT_DB` | Absolute report SQLite path |
-| `VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES` | Default `false`. Development test mode; see below |
-
-`VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES=true` lets an analysed
-Protocol be development-activated and run while readiness gates are still
-outstanding. It is honoured only in the `demo`, `reference_only` and
-`test_only` scopes; under `operational` it is ignored and the startup log says
-so. It does not change any readiness verdict, the outstanding-gate list, the
-source-evidence validation, or service approval, and a Protocol with no
-analysis, or a failed one, still cannot run. While it is on, the startup log
-and a page-top banner read "테스트 모드: 실행 준비 게이트를 건너뜀", an
-activation made through it carries `test_mode_readiness_gates_skipped` in the
-ledger, and each experiment report opened in such a session starts with a
-`test_mode_readiness_gates_skipped` event. `./scripts/run_dev.sh --test-mode`
-turns it on, together with the `demo` scope; `scripts/run_pilot.sh` always turns
-it off, with a `[WARN]` when the environment had it on. A server started any
-other way reads it from the environment or `.env`.
 
 `VOINEY_LAB_ANALYSIS_MODEL` is read from deployment environment configuration;
 there is no hidden model fallback. Protocol analysis uses `grok-4.6` in the
 current deployment example. Protocol analysis explicitly defaults to high
 reasoning effort. Lower effort levels remain deployment-configurable but must
-pass protocol-specific completeness and evidence validation before use. The
-separate low-latency semantic-intent path keeps its dedicated non-reasoning
-model and timeout settings.
+pass protocol-specific completeness and evidence validation before use.
 
 The browser's analysis request returns at once (`analysis_pending`) and the
 provider call runs in a background task; the screen polls the status and shows
@@ -1558,50 +1328,27 @@ VOINEY_LAB_OIDC_ISSUER=https://id.example.test/
 VOINEY_LAB_OIDC_AUDIENCE=voice-workflow-agent
 VOINEY_LAB_OIDC_JWKS_URL=https://id.example.test/.well-known/jwks.json
 VOINEY_LAB_OIDC_TENANT_CLAIM=organization_id
-VOINEY_LAB_OIDC_ROLES_CLAIM=roles
 VOINEY_LAB_OIDC_NAME_CLAIM=name
 ```
 
-For a non-operational local demo, omit OIDC values and optionally set a JSON
-allowlist in `VOINEY_LAB_DEV_AUTH_PROFILES`. If omitted, one local
-lab-admin profile is created. Do not enable development identities in operational
+For a non-operational local demo, omit the OIDC values: every request is then
+the one development identity, the experimenter (lane DI, 2026-10-08; a login
+comes before the pilot). Do not enable development identities in operational
 scope.
-
-### Connector secrets
-
-Connector records contain opaque `secret://` references, never credential values.
-The application resolves them through a server-owned environment mapping:
-
-```dotenv
-VOINEY_LAB_SECRET_REFERENCES={"secret://tenant-a/protocols-io":"PROTOCOLS_IO_TOKEN","secret://tenant-a/drive":"DRIVE_ACCESS_TOKEN","secret://tenant-a/github":"GITHUB_INSTALLATION_TOKEN","secret://tenant-a/github-webhook":"GITHUB_WEBHOOK_SECRET","secret://tenant-a/elabftw":"ELABFTW_API_KEY"}
-```
-
-Set the referenced environment variables only in the process secret manager.
-Connector `allowed_roots` constrain Drive folders/shared drives, GitHub
-repository/ref/path, or an eLabFTW HTTPS origin. Live OAuth/App provisioning is an
-operator responsibility; local tests use fakes.
 
 ## API surface
 
 The browser consumes these main groups:
 
-- `/api/protocols`: local upload, lifecycle, analysis status, evidence review,
-  development activation, approval, source pages, and verified assets;
-- `/api/workspace/session` and `/protocol-library`: identity-aware workspace and
-  quick protocol access;
-- `/api/workspace/experiments` and `/experiments/{session_id}`: tenant-owned
-  experiment dashboard, recovery version, completed steps, observations,
-  opaque evidence metadata, reviewer actions, and lifecycle timeline;
-- `/api/workspace/protocol-adaptations`: immutable, typed lab-adaptation drafts
-  linked to an exact original and the existing reviewer approval path;
-- `/api/workspace/reviewer/*`: source inbox, diff, decisions, translations,
-  knowledge promotion, and dry-lab review;
-- `/api/workspace/admin/*`: memberships, connector configuration/check/enable,
-  retention, asset cards, audit posture, tenant analytics, and pilot metrics;
-- `/api/workspace/sources/*`: protocols.io, Drive, GitHub, and dry-lab import;
-- `/api/workspace/webhooks/github/{connector_id}`: signed, replay-protected source
-  updates;
-- `/api/workspace/eln/elabftw/writeback`: confirmed experiment export; and
+- `/api/protocols`: local upload, lifecycle, analysis status, the analysis
+  result with the execution rule's lists (`/review`), OCR status, source pages,
+  and verified assets;
+- `/api/workspace/session`: the signed-in experimenter and the one workspace;
+- `/api/workspace/experiments` and `/experiments/{session_id}`: the
+  experimenter's own experiments, recovery version, completed steps,
+  observations, opaque evidence metadata, and lifecycle timeline;
+- `/api/workspace/knowledge` and `/api/workspace/assets`: read routes with no
+  screen (lane DI); and
 - `/api/experiment-reports/*`: tenant-scoped report reads/exports, and the
   report's values to confirm (`/review`, lane N).
 
@@ -1614,7 +1361,6 @@ not block readiness, and a `503` means local configuration failed to parse—not
 that a live external call was attempted.
 
 All sensitive workspace APIs derive the tenant from the authenticated principal.
-Connector list responses never return credential references or resolved secrets.
 
 ## Replay and voice evaluation
 
@@ -1672,7 +1418,7 @@ The suite needs no system PDF tools: PyMuPDF is a Python wheel, and the
 `pdftotext` comparator the suite used to expect is gone (see
 [PDF text extraction](#pdf-text-extraction)).
 
-Browser acceptance coverage for the researcher/reviewer/admin workspaces (desktop
+Browser acceptance coverage for the experimenter's bench (desktop
 and mobile viewports) lives under `tests/e2e/` and runs separately via
 [Playwright](https://playwright.dev/):
 
@@ -1783,7 +1529,6 @@ tests/test_phase3_acceptance.py
 tests/test_protocol_catalog.py
 tests/test_runtime_intent_routing.py
 tests/test_safety_pack.py
-tests/test_semantic_intent_fallback.py
 tests/test_stability_and_semantic_hardening.py
 tests/test_transcript_admission.py
 ```
@@ -1796,29 +1541,21 @@ repository. Work that changes either premise should be verified under
 condition A, because under condition B the tests that defend them are not
 running.
 
-Tests are provider-free unless explicitly marked otherwise. Connector and
-eLabFTW contracts use fakes; the real adapters remain in the production code
-path. The current integration classification is in the
+Tests are provider-free unless explicitly marked otherwise. STT/TTS, OCR,
+translation and router contracts use fakes; the real adapters remain in the
+production code path. The current integration classification is in the
 [`Capability Matrix`](docs/CAPABILITY_MATRIX.md).
 
 ## Security and privacy boundaries
 
-- Immutable source hashes, exact revisions, tenant bindings, central RBAC, and
-  negative IDOR tests protect protocol/report/asset ownership.
+- Immutable source hashes, exact revisions, tenant bindings and negative IDOR
+  tests protect protocol/report ownership.
 - OIDC tokens are signature/issuer/audience/time validated; production does not
   fall back to a shared admin token or development identity.
-- PDFs and connector documents have byte limits, strict identifiers, sanitized
-  filenames, and no executable path.
-- protocols.io and GitHub identifiers reject alternate origins, credentials,
-  traversal, and unallowlisted roots. eLabFTW and displayed web assets enforce
-  HTTPS/same-origin or SSRF controls.
-- GitHub webhooks verify the raw payload before normal workspace middleware and
-  fence repeated delivery IDs.
-- Approval and write-back idempotency keys are append-only replay fences.
-- Analytics persist allowlisted categories/dimensions only and purge according to
-  tenant retention policy.
-- Pilot metrics expose only tenant-scoped counts; durable counts and
-  retention-bounded analytics are labeled separately.
+- PDFs have byte limits, strict identifiers, sanitized filenames, and no
+  executable path.
+- Analytics rows are written with allowlisted categories/dimensions only; since
+  lane DI (2026-10-08) nothing reads them back and no screen shows them.
 - Evidence downloads are tenant-authorized and verified against their recorded
   byte size and SHA-256 before delivery.
 - Audio diagnostics are disabled by default, bounded when enabled, and must stay
@@ -1835,10 +1572,13 @@ and user-accessibility/noisy-lab studies.
 ## Known limitations and deliberate non-goals
 
 - No autonomous protocol approval or safety decision.
-- No full ELN/LIMS, inventory, video hosting, or facility directory.
-- No arbitrary GitHub/Snakemake/Nextflow execution in the voice server.
-- No live Seqera, Google Drive, GitHub App, protocols.io authenticated import, or
-  eLabFTW instance verification without operator credentials.
+- No ELN export, LIMS, inventory, video hosting, or facility directory.
+- No protocol import from protocols.io, Google Drive or GitHub, no Snakemake/
+  Nextflow metadata lane, no reviewer or lab-admin screens, no protocol
+  approval or lab adaptation: all removed on 2026-10-08 (lane DI) so the MVP
+  is one thing -- upload a protocol PDF, be guided through it in Korean, have
+  the experiment recorded. Web and image search for the steps are being
+  rebuilt by lane WV.
 - No claim of field STT performance until the consented noisy-lab evaluation plan
   is executed.
 - No cross-process job queue yet: PDF analysis background tasks are process-local;

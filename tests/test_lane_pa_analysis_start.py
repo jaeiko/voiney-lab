@@ -95,7 +95,6 @@ function serve(upload){
   if(url===`/api/protocols/${id}/analysis`&&options.method==="POST")return json({...upload.protocol,analysis_status:"analyzing",analysis_request_accepted:true,analysis_run:{state:"analysis_pending"}});
   if(url===`/api/protocols/${id}/analysis/status`)return json(statusQueue.length?statusQueue.shift():{state:"analyzing"});
   if(url===`/api/protocols/${id}/review`)return json(reviewFor(id,reviewExtra));
-  if(url===`/api/protocols/${id}/activate-development`&&options.method==="POST")return json({protocol_id:id,status:"active_development",available_for_execution:true});
   if(url==="/api/protocols")return json({protocols:[{...upload.protocol,title:"ANKOM",revision_id:"pdf-1",available_for_execution:reviewExtra.available_for_execution===true}]});
   if(url.startsWith("/api/workspace/"))return json({protocols:[],experiments:[],revisions:[]});
   throw new Error(`unexpected ${options.method||"GET"} ${url}`);};
@@ -168,7 +167,7 @@ await pollProtocolAnalysisStatus("p-ankom");
 let status=node("protocol-upload-status").textContent;
 assert(status.includes("분석 실패")&&status.includes("이유")&&status.includes("분석 근거가 원문과 맞지 않음"),`failure line: ${status}`);
 assert(!status.includes("protocol_analysis_invalid_evidence"),`the raw code is on screen: ${status}`);
-reviewExtra={analysis_status:"review_required",analysis_failure:null,development_activation_allowed:true};
+reviewExtra={analysis_status:"review_required",analysis_failure:null,available_for_execution:true};
 currentProtocolReviewId="p-ankom";
 statusQueue=[{state:"review_required",requested_at:new Date(Date.now()-90000).toISOString()}];
 await pollProtocolAnalysisStatus("p-ankom");
@@ -176,29 +175,32 @@ status=node("protocol-upload-status").textContent;
 assert(status.includes("분석 통과"),`pass line: ${status}`);
 """)
 
-    def test_one_press_starts_the_experiment_where_activation_is_allowed(self) -> None:
+    def test_one_press_starts_the_experiment_on_a_passed_analysis(self) -> None:
+        # Lane DI (2026-10-08): the press is the one human confirmation. No
+        # activation call is made; the session starts on the protocol whose
+        # analysis result is on screen.
         self.run_page(r"""
 let started=null;startSession=async()=>{started=node("protocol-id").value};
-reviewExtra={analysis_status:"review_required",analysis_failure:null,development_activation_allowed:true};
-await upload({analysis_status:"review_required",available_for_execution:false},true);
-const button=node("protocol-development-activate");
-assert(!button.hidden,"the start button is not offered where the server allows it");
-button.dispatch("click");reviewExtra={...reviewExtra,development_activation_allowed:false,available_for_execution:true};
+reviewExtra={analysis_status:"review_required",analysis_failure:null,available_for_execution:true};
+await upload({analysis_status:"review_required",available_for_execution:true},true);
+const button=node("protocol-start");
+assert(!button.hidden,"the start button is not offered for a passed analysis");
+button.dispatch("click");
 await new Promise(resolve=>setTimeout(resolve,30));
-assert(calls.includes("POST /api/protocols/p-ankom/activate-development"),`no activation: ${calls}`);
-assert(started==="p-ankom",`the experiment did not start on the activated protocol: ${started}`);
+assert(!calls.some(call=>call.includes("activate-development")||call.includes("/approve")),`an authority call was made: ${calls}`);
+assert(started==="p-ankom",`the experiment did not start on the analysed protocol: ${started}`);
 """)
 
     def test_the_start_button_is_named_for_what_it_does(self) -> None:
         html = (ROOT / "src" / "voiney_lab" / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<button id="protocol-development-activate" type="button" hidden>이 프로토콜로 시작</button>', html)
+        self.assertIn('<button id="protocol-start" type="button" hidden>이 프로토콜로 시작</button>', html)
 
-    def test_no_start_button_where_the_server_does_not_allow_activation(self) -> None:
+    def test_no_start_button_while_the_analysis_has_not_passed(self) -> None:
         self.run_page(r"""
 let started=null;startSession=async()=>{started="yes"};
-reviewExtra={analysis_status:"review_required",analysis_failure:null,development_activation_allowed:false};
+reviewExtra={analysis_status:"review_required",analysis_failure:null,available_for_execution:false,execution_blockers:[{code:"no_executable_steps",message_ko:"실행할 단계를 원문에서 찾지 못했습니다.",kind:"blocking"}]};
 await upload({analysis_status:"review_required",available_for_execution:false},true);
-assert(node("protocol-development-activate").hidden,"a start button without the server's permission");
+assert(node("protocol-start").hidden,"a start button for a protocol the server says cannot run");
 assert(started===null,"an experiment started without a press");
 """)
 

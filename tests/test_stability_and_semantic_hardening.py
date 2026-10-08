@@ -486,30 +486,3 @@ class StabilityAndSemanticHardeningTests(unittest.TestCase):
         self.assertIn("localized_display_bullets", pub)
         self.assertIn("warnings", pub)
         self.assertEqual(pub["warnings"], list(guidance.warnings))
-
-    def test_web_visual_asset_registry(self) -> None:
-        """WebVisualAssetRegistry stores and retrieves validated assets with same-origin IDs."""
-        from voiney_lab.web_visuals import WebVisualAsset, WebVisualAssetRegistry
-
-        registry = WebVisualAssetRegistry()
-        dummy_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x40\x00\x00\x00\x40\x08\x06\x00\x00\x00\xaa"
-        sha = "a" * 64
-        asset = WebVisualAsset(
-            asset_id=sha,
-            mime_type="image/png",
-            content=dummy_content,
-            width=64,
-            height=64,
-            content_sha256=sha,
-            source_url="https://example.com/image.png",
-            publisher_domain="example.com",
-            title="Example Test Image",
-        )
-        registry._assets[sha] = asset
-        self.assertIsNotNone(registry.get(sha))
-        self.assertEqual(registry.get(sha).asset_id, sha)
-        self.assertIsNone(registry.get("invalid_id"))
-
-
-if __name__ == "__main__":
-    unittest.main()

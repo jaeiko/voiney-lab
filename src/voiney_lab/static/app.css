@@ -26,13 +26,6 @@
       --radius-pill:9999px;
     }
     *{box-sizing:border-box}
-    .test-mode-banner{
-      padding:10px 16px;
-      background:var(--amber);color:#1a1300;
-      font-weight:800;text-align:center;
-      border-bottom:3px solid var(--red);
-    }
-    .test-mode-banner[hidden]{display:none}
     body{
       margin:0;
       background:
@@ -398,18 +391,22 @@
     .protocol-review-group{padding:.6rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
     .protocol-review-group h4{margin:0 0 .35rem;color:var(--blurple);font-size:.78rem}
     .protocol-review-group p{margin:.2rem 0;color:var(--subtext);font-size:.75rem;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
-    .citation-list{display:flex;flex-direction:column;max-height:12.5rem;overflow-y:auto;overscroll-behavior:contain;margin:.3rem 0 .5rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:rgba(0,0,0,.12);scrollbar-width:thin;scrollbar-color:var(--blurple) rgba(255,255,255,.06)}
-    .citation-list:focus-visible{outline:2px solid var(--border-focus);outline-offset:2px}
-    .citation-row{display:flex;align-items:center;gap:.5rem;min-height:2.3rem;padding:.3rem .55rem;border-bottom:1px solid var(--border);font-size:.76rem;color:var(--ink);cursor:pointer}
-    .citation-row:last-child{border-bottom:0}
-    .citation-row:hover{background:rgba(88,101,242,.1)}
-    .citation-row input{flex:0 0 auto;width:1.05rem;height:1.05rem;margin:0}
-    .citation-page{flex:0 0 auto;min-width:2.6rem;color:var(--blurple);font-weight:800}
-    .citation-excerpt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--subtext)}
     .protocol-review-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.65rem}
     .protocol-review-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--ink);padding:.45rem .7rem;font-weight:750;cursor:pointer}
     .protocol-review-actions button:disabled{cursor:not-allowed;opacity:.45}
-    #protocol-development-activate{border-color:var(--green-cta);color:var(--green-cta)}
+    #protocol-start{border-color:var(--green-cta);color:var(--green-cta);font-size:.95rem;padding:.6rem 1rem}
+    /* Lane DI (2026-10-08): the start screen. The source's safety statements
+       beside their Korean, never folded, above the one start button. */
+    .protocol-start-summary{grid-column:1/-1;margin-top:.35rem;padding:.75rem;border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card)}
+    .protocol-start-summary[hidden]{display:none}
+    .protocol-start-summary h3{margin:0 0 .35rem;color:var(--ink);font-size:.9rem}
+    .protocol-execution-reasons,.protocol-safety-notices{display:grid;gap:.55rem;min-width:0}
+    .protocol-safety-group{border-color:var(--amber)}
+    .safety-notice-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem .9rem;padding:.45rem 0;border-top:1px solid var(--border)}
+    .safety-notice-row:first-of-type{border-top:0}
+    .safety-notice-where{grid-column:1/-1;color:var(--muted);font-size:.68rem;font-weight:800}
+    .safety-notice-source,.safety-notice-korean{margin:0;font-size:.82rem;line-height:1.5;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+    .safety-notice-korean{font-weight:650}
 
     .session-context{
       display:flex;
@@ -458,24 +455,7 @@
     .dev-code-details{margin-top:.3rem;font-size:.7rem;color:var(--muted)}
     .dev-code-details>summary{cursor:pointer;color:var(--blurple);font-weight:700;user-select:none}
     .dev-code-details small{display:block;margin-top:.25rem;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .admin-console{grid-column:1/-1;margin-top:.25rem;font-size:.75rem;color:var(--muted)}
-    .admin-console summary{cursor:pointer;color:var(--amber);font-weight:800}
-    .admin-access{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
-    .admin-access input{flex:1 1 15rem;min-width:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .7rem}
-    .admin-access button{border:1px solid var(--amber);border-radius:var(--radius-sm);background:rgba(240,178,50,.12);color:var(--amber);padding:.5rem .75rem;font-weight:800;cursor:pointer}
-    .admin-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.5rem;margin-top:.55rem}
-    .admin-metric{padding:.55rem .65rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
-    .admin-metric b{display:block;color:var(--ink);font-size:1rem}
-    .admin-privacy{grid-column:1/-1;color:var(--green-cta)}
-    .workspace-bar{max-width:92rem;margin:.2rem auto .35rem;padding:0 1.5rem;display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
-    .workspace-bar button{min-height:2.55rem;border:1px solid var(--border);border-radius:var(--radius-pill);background:var(--surface-card);color:var(--subtext);padding:.45rem .9rem;font-weight:800;cursor:pointer}
-    .workspace-bar button[aria-current="page"]{background:var(--blurple);border-color:var(--blurple);color:white}
-    .workspace-bar select{margin-left:auto;min-height:2.55rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.4rem .7rem}
-    .workspace-page{max-width:92rem;margin:0 auto;padding:.75rem 1.5rem 4rem}
-    .shell[hidden],.workspace-page[hidden]{display:none}
-    .workspace-page-head{display:flex;justify-content:space-between;gap:1rem;align-items:end;margin-bottom:1rem}
-    .workspace-page-head h1{max-width:none}
-    .workspace-page-head p{color:var(--muted);margin:.25rem 0 0}
+    .shell[hidden]{display:none}
     .workspace-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
     .workspace-card{padding:1.15rem;align-self:start;min-width:0}
     .workspace-card h2{margin:0 0 .35rem;font-size:1rem}
@@ -496,166 +476,17 @@
     .bounded-record-list::-webkit-scrollbar-track{background:rgba(255,255,255,.06);border-radius:var(--radius-pill)}
     .bounded-record-list::-webkit-scrollbar-thumb{background:var(--blurple);border-radius:var(--radius-pill);border:2px solid var(--surface-raised)}
     .bounded-list-hint{margin:.45rem 0 0!important;color:var(--muted)!important;font-size:.72rem!important}
-    #reviewer-change-summary{--record-list-max:clamp(12rem,30vh,21rem)}
-    #reviewer-history{--record-list-max:clamp(12rem,34vh,24rem)}
-    #admin-security-activity{--record-list-max:clamp(16rem,48vh,32rem)}
     .workspace-row{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.7rem;overflow-wrap:anywhere}
     .workspace-row b{display:block;color:var(--ink)}
     .workspace-row small{color:var(--muted)}
     .workspace-actions{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.65rem}
     .workspace-actions button{border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:var(--surface-card);padding:.5rem .75rem;font-weight:800;cursor:pointer}
-    .admin-connector-overview,.admin-connector-setup,.admin-boundary-card{grid-column:1/-1}
-    .admin-setup-flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.4rem;list-style:none;counter-reset:admin-flow;margin:.8rem 0;padding:0}
-    .admin-setup-flow li{counter-increment:admin-flow;position:relative;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.55rem .45rem .55rem 1.8rem;background:var(--surface-card);color:var(--subtext);font-size:.72rem;font-weight:800}
-    .admin-setup-flow li::before{content:counter(admin-flow);position:absolute;left:.5rem;top:.48rem;display:grid;place-items:center;width:1rem;height:1rem;border-radius:50%;background:var(--blurple);color:white;font-size:.62rem}
-    .admin-field-help,.admin-test-boundary{margin:.3rem 0!important;padding:.55rem .65rem;border-left:3px solid var(--cyan);background:rgba(0,176,244,.06);color:var(--subtext)!important}
-    .admin-test-boundary{border-left-color:var(--amber);background:rgba(240,178,50,.06)}
-    .admin-permission-preview{margin:.45rem 0;padding:.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--subtext);font-size:.76rem;line-height:1.5}
-    .admin-active-toggle{display:flex;align-items:center;gap:.45rem;color:var(--subtext);font-size:.78rem;font-weight:800}
-    .admin-connector-actions{margin-top:.5rem}
-    .admin-danger-action{border-color:rgba(250,119,124,.6)!important;color:#ffafb2!important}
-    .admin-security-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem;margin:.7rem 0 1rem}
-    .admin-security-summary>div{padding:.6rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card)}
-    .admin-security-summary strong,.admin-security-summary span{display:block}
-    .admin-security-summary strong{color:var(--ink)}
-    .admin-security-summary span{margin-top:.12rem;color:var(--muted);font-size:.7rem;font-weight:800}
     .workspace-card>h3{margin:1rem 0 .25rem;color:var(--subtext);font-size:.82rem}
-    .reviewer-history-overview{margin-top:.9rem;border-top:1px solid var(--border);padding-top:.7rem}
-    .reviewer-history-overview summary,.reviewer-technical-details summary{cursor:pointer;color:var(--subtext);font-size:.78rem;font-weight:850}
-    .reviewer-context-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem;margin:.75rem 0}
-    .reviewer-context-grid>div{border:1px solid var(--border);border-radius:var(--radius-sm);padding:.6rem;background:var(--surface-card)}
-    .reviewer-context-grid span{display:block;color:var(--muted);font-size:.68rem;font-weight:800}
-    .reviewer-context-grid strong{display:block;margin-top:.08rem;color:var(--ink);font-size:.78rem;overflow-wrap:anywhere}
-    .reviewer-summary-block{margin-top:.75rem}
-    .reviewer-summary-block h3,.reviewer-assessment-grid h3,.reviewer-decision-confirmation h3{margin:0 0 .25rem;color:var(--subtext);font-size:.78rem}
-    .reviewer-summary-block p{margin:.15rem 0}
-    .reviewer-assessment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem;margin-top:.75rem}
-    .reviewer-assessment-grid section{border:1px solid rgba(255,196,92,.35);border-radius:var(--radius-sm);padding:.65rem;background:rgba(255,196,92,.07)}
-    .reviewer-assessment-grid p{margin:0;color:var(--subtext);font-weight:750}
-    .reviewer-technical-details{margin-top:.8rem}
-    .reviewer-technical-details pre{margin-top:.55rem;white-space:pre-wrap;max-height:clamp(16rem,42vh,28rem);overflow:auto;min-width:0}
-    .reviewer-action-guidance{margin:.6rem 0 0;color:var(--subtext)}
-    .reviewer-decision-confirmation{margin-top:.7rem;padding:.75rem;border:1px solid var(--border-accent);border-radius:var(--radius-sm);background:rgba(0,176,244,.08)}
-    .reviewer-decision-confirmation p{margin:.2rem 0;color:var(--subtext)}
-    .btn-reviewer-disable{border-color:rgba(250,119,124,.7)!important;color:#ffafb2!important}
     .workspace-field{display:grid;gap:.25rem;margin:.55rem 0}
     .workspace-field span{font-size:.74rem;color:var(--muted);font-weight:800}
     .workspace-field input,.workspace-field select,.workspace-field textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-card);padding:.6rem .7rem;color:var(--ink)}
     .workspace-field textarea{min-height:5.5rem;resize:vertical}
     .workspace-status{font-size:.78rem;color:var(--cyan);min-height:1.2rem}
-
-    /* Reviewer and Admin are task workspaces, so their reading width and
-       progressive disclosure are scoped here without changing the bench UI. */
-    #reviewer-workspace .workspace-page-head,
-    #reviewer-workspace .workspace-columns,
-    #admin-workspace .workspace-page-head,
-    #admin-workspace .workspace-columns,
-    #admin-workspace .admin-attention{
-      width:min(100%,70rem);
-      margin-left:auto;
-      margin-right:auto;
-    }
-    #reviewer-workspace .workspace-columns,
-    #admin-workspace .workspace-columns{
-      grid-template-columns:minmax(0,1fr);
-      gap:1rem;
-    }
-    #reviewer-workspace .workspace-purpose,
-    #admin-workspace .workspace-purpose{
-      max-width:62ch;
-      color:var(--subtext);
-      font-size:.92rem;
-      line-height:1.55;
-    }
-    #reviewer-workspace .workspace-card,
-    #admin-workspace .workspace-card{padding:1.25rem}
-    #reviewer-workspace .reviewer-queue-card{border-color:rgba(88,101,242,.3)}
-    #reviewer-workspace .reviewer-decision-card{padding:clamp(1.15rem,2.4vw,1.75rem)}
-    #reviewer-workspace .reviewer-primary-context{margin-bottom:1rem}
-    #reviewer-workspace .reviewer-reason-block{
-      padding:.75rem .85rem;
-      border-left:3px solid var(--blurple);
-      border-radius:0 var(--radius-sm) var(--radius-sm) 0;
-      background:rgba(88,101,242,.08);
-    }
-    #reviewer-workspace .reviewer-blockers{
-      padding:.75rem .85rem;
-      border:1px solid rgba(240,178,50,.34);
-      border-radius:var(--radius-sm);
-      background:rgba(240,178,50,.06);
-    }
-    #reviewer-workspace .reviewer-blockers .reviewer-assessment-grid{margin-top:.45rem}
-    #reviewer-workspace .reviewer-consequence{
-      margin:.9rem 0 .6rem;
-      padding:.75rem .85rem;
-      border:1px solid var(--border);
-      border-radius:var(--radius-sm);
-      background:rgba(255,255,255,.035);
-    }
-    #reviewer-workspace .reviewer-consequence h3{margin:0 0 .35rem;font-size:.86rem}
-    #reviewer-workspace .reviewer-consequence p{margin:.2rem 0;color:var(--subtext);line-height:1.55}
-    #reviewer-workspace .reviewer-technical-details,
-    #reviewer-workspace .reviewer-source-tools,
-    #reviewer-workspace .reviewer-source-group,
-    #admin-workspace .admin-disclosure,
-    #admin-workspace .admin-row-details{
-      margin-top:.75rem;
-      padding:.6rem .75rem;
-      border:1px solid var(--border);
-      border-radius:var(--radius-sm);
-      background:rgba(255,255,255,.025);
-    }
-    #reviewer-workspace .reviewer-technical-details>summary,
-    #reviewer-workspace .reviewer-source-tools>summary,
-    #reviewer-workspace .reviewer-source-group>summary,
-    #admin-workspace .admin-disclosure>summary,
-    #admin-workspace .admin-row-details>summary{
-      cursor:pointer;
-      color:var(--subtext);
-      font-size:.82rem;
-      font-weight:800;
-    }
-    #reviewer-workspace .reviewer-source-tools{margin-top:0}
-    #reviewer-workspace .reviewer-source-group{background:var(--surface-card)}
-    #reviewer-workspace .reviewer-principle{margin:.8rem 0 0;padding-top:.7rem;border-top:1px solid var(--border)}
-    #reviewer-workspace details[open]>summary,
-    #admin-workspace details[open]>summary{color:var(--ink)}
-    #reviewer-workspace textarea:focus-visible,
-    #admin-workspace textarea:focus-visible,
-    #reviewer-workspace summary:focus-visible,
-    #admin-workspace summary:focus-visible{
-      outline:3px solid var(--border-focus);
-      outline-offset:3px;
-      border-radius:.2rem;
-    }
-    #reviewer-workspace pre,
-    #admin-workspace pre{max-width:100%;overflow:auto}
-    #admin-workspace .admin-attention{
-      margin-top:0;
-      margin-bottom:1rem;
-      padding:.8rem 1rem;
-      border:1px solid rgba(53,237,126,.3);
-      border-radius:var(--radius-sm);
-      background:rgba(53,237,126,.08);
-      color:#baf5cd;
-      font-size:.84rem;
-      font-weight:750;
-    }
-    #admin-workspace .admin-attention.needs-action{
-      border-color:rgba(240,178,50,.42);
-      background:rgba(240,178,50,.09);
-      color:#ffdf91;
-    }
-    #admin-workspace .admin-disclosure[open]{padding-bottom:.8rem}
-    #admin-workspace .admin-disclosure>*+*{margin-top:.55rem}
-    #admin-workspace .admin-security-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
-    #admin-workspace .admin-technical-boundary p{margin-bottom:0}
-    #admin-workspace .admin-row-details{padding:.45rem .6rem;background:transparent}
-    #admin-workspace .admin-row-details small{display:block;margin-top:.45rem;overflow-wrap:anywhere}
-    #reviewer-workspace .workspace-actions button,
-    #admin-workspace .workspace-actions button{min-height:2.65rem}
-    #reviewer-workspace .workspace-actions button:disabled,
-    #admin-workspace .workspace-actions button:disabled{opacity:.45;cursor:not-allowed}
     .experiment-ledger{margin:0;padding:1.15rem}
     .experiment-ledger-head{display:flex;justify-content:space-between;align-items:end;gap:1rem;flex-wrap:wrap}
     .experiment-ledger-head h2{margin:0;font-size:1.1rem}
@@ -699,8 +530,6 @@
 
     .btn-ocr-neutral{background:rgba(0,176,244,.1);border:1px solid rgba(0,176,244,.4) !important;color:var(--cyan) !important}
     .btn-ocr-neutral:hover{background:rgba(0,176,244,.2)}
-    .btn-reviewer-approve{background:var(--green-cta) !important;color:#000000 !important;border-color:var(--green-cta) !important;font-weight:800}
-    .btn-reviewer-approve:hover:not(:disabled){background:var(--green-cta-hover) !important}
     .context-chip{
       display:inline-flex;
       align-items:center;
@@ -1080,7 +909,6 @@
     }
     @media(max-width:720px){
       .example-strip{grid-template-columns:minmax(0,1fr)}
-      .workspace-bar select{width:100%;margin-left:0}
       .voice-console{grid-template-columns:auto 1fr}
       .controls{grid-column:1/-1}
       .controls button{flex:1}
@@ -1094,22 +922,10 @@
       .step-visual img{max-height:18rem}
       .btn-rail-secondary,.btn-rail-danger,.btn-rail-ghost{min-height:2.75rem;padding:.6rem 1rem;font-size:.85rem}
       .workspace-actions button{min-height:2.75rem;padding:.65rem .9rem}
-      .reviewer-context-grid,.reviewer-assessment-grid{grid-template-columns:1fr}
-      .admin-setup-flow{grid-template-columns:1fr}
-      .admin-security-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
       .workspace-field input,.workspace-field select,.workspace-field textarea{min-height:2.75rem}
       .rail-left{flex-wrap:wrap}
       .rail-right{width:100%;justify-content:stretch}
       .rail-right button{flex:1;min-width:0}
-      #reviewer-workspace,
-      #admin-workspace{padding-left:1rem;padding-right:1rem}
-      #reviewer-workspace .workspace-page-head,
-      #admin-workspace .workspace-page-head{align-items:stretch;flex-direction:column}
-      #reviewer-workspace .workspace-page-head button,
-      #admin-workspace .workspace-page-head button{width:100%;min-height:2.75rem}
-      #reviewer-workspace .workspace-card,
-      #admin-workspace .workspace-card{padding:1rem}
-      #admin-workspace .admin-security-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
     }
     @media(max-width:520px){
       .topbar,.shell{padding-left:1rem;padding-right:1rem}
@@ -1127,7 +943,6 @@
     .workflow-paused-banner button:hover{background:var(--green-cta-hover)}
     #rail-pause-session.is-resume{background:var(--green-cta);color:#03210f;border-color:var(--green-cta);font-weight:850}
     .experiment-context-grid strong .dev-code-details,#procedure-meta .dev-code-details,#procedure-handoff .dev-code-details{font-weight:400}
-    .experiment-workflow-panel{margin-top:.75rem}
     .finding-status:empty{display:none}
     .finding-status{color:var(--amber);font-weight:700}
     .audio-echo-notice{margin:.35rem 0 0;color:var(--amber);font-size:.8rem;font-weight:700}

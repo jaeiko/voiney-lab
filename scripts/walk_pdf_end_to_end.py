@@ -25,10 +25,7 @@ from voiney_lab.experiment_protocol_store import (
     ProtocolPersistenceSettings,
     initialize_protocol_store,
 )
-from voiney_lab.protocol_catalog import (
-    AMBIGUITY_SINGLE_AUTHORITATIVE,
-    ProtocolCatalog,
-)
+from voiney_lab.protocol_catalog import ProtocolCatalog
 from voiney_lab.protocol_chunk_analysis import (
     ChunkAnalysisLimits,
     ValidatedChunkResult,
@@ -40,7 +37,6 @@ from voiney_lab.protocol_chunk_analysis import (
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "data/runtime/candidate-a-source/in-gel-digestion.pdf"
-_GATE = domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value
 
 
 def _reason(error: BaseException) -> dict[str, object]:
@@ -59,10 +55,9 @@ def _probe_9_and_10(draft, stages, record) -> None:
     """Stages 9 and 10 with the readiness wall stepped around, on purpose.
 
     This is a diagnostic, not a route: it does not change a rule and it does
-    not make anything executable.  Stage 8 refuses on reasons no
-    acknowledgement can clear, so without this the stages after it stay
-    untested and a plumbing fault would be indistinguishable from the policy
-    wall.  The fixture is built here exactly as ``replay_turns`` builds its
+    not make anything executable.  Stage 8 refuses while an execution
+    blocker stands, so without this the stages after it stay untested and a
+    plumbing fault would be indistinguishable from the rule.  The fixture is built here exactly as ``replay_turns`` builds its
     own, which is the same constructor ``load_executable_fixture`` uses.
     """
 
@@ -259,7 +254,9 @@ def main() -> int:
             reason_codes=list(readiness.reason_codes),
         )
 
-        # 7) audited human safety confirmation
+        # 7) the execution rule (decision of 2026-10-08): a passed analysis
+        # with no execution blocker may run; the experimenter's press of
+        # start is the one human confirmation, so nothing is recorded here.
         store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, workspace / "catalog")
         )
@@ -273,7 +270,7 @@ def main() -> int:
             registered_id = registration.entry.protocol_id
             stored_protocol = replace(draft.protocol, protocol_id=registered_id)
             stored_protocol = domain.validate_protocol(stored_protocol)
-            analysis = store.append_analysis_revision(
+            store.append_analysis_revision(
                 registered_id,
                 1,
                 "analysis-walkthrough",
@@ -281,90 +278,27 @@ def main() -> int:
                 domain.assess_readiness(stored_protocol),
                 draft.capability_policy.profile_id,
             )
-            revision_id = (
-                f"pdf-1-analysis-{analysis.analysis_revision_number}"
-            )
-            try:
-                catalog.acknowledge_readiness_gate(
-                    registered_id,
-                    revision_id,
-                    reason_code=_GATE,
-                    actor_principal_id="reviewer@example.org",
-                    actor_role="reviewer",
-                    comment="Plumbing walkthrough; warnings reviewed.",
-                )
-            except Exception as error:  # noqa: BLE001
-                record(7, "audited safety confirmation", False, **_reason(error))
-                print(json.dumps(stages, indent=2))
-                return 1
-            gate_events = [
-                event
-                for event in store.list_events(registered_id)
-                if event.event_type == "protocol_readiness_gate_acknowledged"
-            ]
+            entry = catalog.get_entry(registered_id)
+            review = catalog.review(registered_id)
             record(
                 7,
-                "audited safety confirmation",
+                "execution rule",
                 True,
-                ledger_entries=len(gate_events),
-                actor=gate_events[-1].payload["actor_principal_id"],
+                available_for_execution=entry.available_for_execution,
+                execution_blockers=[
+                    item["code"] for item in review["execution_blockers"]
+                ],
+                execution_notices=[
+                    item["code"] for item in review["execution_notices"]
+                ],
+                safety_notice_sources=len(review["safety_notice_sources"]),
             )
-
-            # 7b) reviewer findings on each ambiguity, through the audited
-            # resolution path. No wall is stepped around here.
-            ambiguities = [
-                construct
-                for construct in stored_protocol.constructs
-                if isinstance(construct, domain.SourceAmbiguity)
-            ]
-            for ambiguity in ambiguities:
-                catalog.resolve_ambiguity(
-                    registered_id,
-                    revision_id,
-                    ambiguity_id=ambiguity.ambiguity_id,
-                    decision=AMBIGUITY_SINGLE_AUTHORITATIVE,
-                    evidence_segment_ids=(
-                        ambiguity.evidence.evidence_segment_ids
-                    ),
-                    actor_principal_id="reviewer@example.org",
-                    actor_role="reviewer",
-                    comment=(
-                        "Prose interval and timer literal state the same "
-                        "interval."
-                    ),
-                )
-            analysis_now = store.get_analysis_revision(registered_id, 1, 1)
-            record(
-                7,
-                "reviewer findings on ambiguities",
-                True,
-                resolved=len(ambiguities),
-                every_ambiguity_resolved=catalog._every_ambiguity_resolved(
-                    registered_id, 1, analysis_now
-                ),
-                all_gates_cleared=catalog._readiness_gates_cleared(
-                    registered_id, 1, analysis_now
-                ),
-                still_blocking=sorted(
-                    set(analysis_now.readiness.reason_codes)
-                ),
-            )
-
-            # 8) development activation
-            try:
-                activated = catalog.activate_development(registered_id)
-            except Exception as error:  # noqa: BLE001
-                record(8, "development activation", False, **_reason(error))
+            if not entry.available_for_execution:
+                record(8, "runnable", False, blockers=list(entry.execution_blocker_codes))
                 _probe_9_and_10(draft, stages, record)
                 print(json.dumps(stages, indent=2, default=str))
                 return 1
-            record(
-                8,
-                "development activation",
-                True,
-                available_for_execution=activated.available_for_execution,
-                approval_status=activated.approval_status,
-            )
+            record(8, "runnable", True)
 
             # 9) load an executable fixture
             try:

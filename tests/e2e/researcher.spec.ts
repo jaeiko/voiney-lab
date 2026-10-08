@@ -24,7 +24,6 @@ test.describe('Researcher / Bench workspace', () => {
   test('loads with the researcher workspace active and core state visible', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#researcher-workspace')).toBeVisible();
-    await expect(page.locator('#workspace-researcher')).toHaveAttribute('aria-current', 'page');
 
     // Voice controls
     await expect(page.locator('#start')).toBeVisible();
@@ -36,19 +35,12 @@ test.describe('Researcher / Bench workspace', () => {
     await expect(page.locator('.experiment-context-card')).toBeVisible();
     await expect(page.locator('#experiment-context-name')).not.toHaveText('');
     await expect(page.locator('#experiment-context-version')).not.toHaveText('');
-    await expect(page.locator('#experiment-context-approval')).not.toHaveText('');
+    await expect(page.locator('#experiment-context-experimenter')).not.toHaveText('');
     await expect(page.locator('#experiment-context-actions')).not.toHaveText('');
 
     // Experiment ledger / timeline empty state before any session exists
     await expect(page.locator('#experiment-session-ledger')).toBeVisible();
     await expect(page.locator('#experiment-event-timeline')).toBeVisible();
-  });
-
-  test('reviewer and admin nav items become visible for the default dev identity', async ({ page }) => {
-    await page.goto('/');
-    // loadWorkspaceSession() resolves asynchronously after page load.
-    await expect(page.locator('#workspace-reviewer')).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('#workspace-admin')).toBeVisible({ timeout: 20_000 });
   });
 
   test('experiment session status badge is hidden when no experiment is selected', async ({ page }) => {

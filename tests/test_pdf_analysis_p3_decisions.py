@@ -49,7 +49,7 @@ from voiney_lab.experiment_protocol_pdf import (
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.model_providers import ModelProviderError
 from voiney_lab.pdf_text_engine import BOTTOM_BAND_FRACTION, PdfTextBlock
-from voiney_lab.protocol_catalog import ProtocolCatalog, SharedSecretApprovalPolicy
+from voiney_lab.protocol_catalog import ProtocolCatalog
 from voiney_lab.protocol_ocr import OcrPage, OcrResult
 from voiney_lab import protocol_ocr_providers as ocrp
 from tests.test_protocol_catalog import write_text_pdf
@@ -191,9 +191,8 @@ class KoreanOcrLineBreakTests(unittest.TestCase):
                                        provider_version="pymupdf-1")),
                     )
 
+            # Accepted for analysis at once (lane PX 3; lane DI 2026-10-08).
             catalog.run_ocr(entry.protocol_id, Provider(), ocr_id="ocr-p3")
-            catalog.review_ocr(entry.protocol_id, decision="accepted",
-                               policy=SharedSecretApprovalPolicy("s"), presented_secret="s")
             revision = catalog._latest_protocol_revision(entry.protocol_id)
             from voiney_lab.experiment_protocol_pdf import extract_protocol_pdf
 

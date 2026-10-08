@@ -12,15 +12,14 @@ It is not a regulated production or high-availability deployment.
 Before installation, record:
 
 - laboratory owner and technical owner;
-- approved protocol and exact revision;
-- participants and assigned roles;
-- test dates, analytics-retention period, and evidence/report retention policy;
+- the protocol PDF to be used and its SHA-256 after upload;
+- participants (every participant is an experimenter; there are no roles
+  since lane DI, 2026-10-08);
+- test dates and evidence/report retention policy;
 - whether provider-backed voice will be used;
-- whether any external connector or eLabFTW write-back is in scope;
 - incident owner, abort criteria, and restore objective.
 
-Do not include a connector in scope merely because its adapter is contract-
-tested. `CAPABILITY_MATRIX.md` is the current integration truth.
+`CAPABILITY_MATRIX.md` is the current integration truth.
 
 ## 2. Prepare the host
 
@@ -47,9 +46,7 @@ At minimum, review the configuration groups in `.env.example`:
 - protocol, workspace, and report storage;
 - OIDC identity for operational scope;
 - xAI credential and Cascade voice options;
-- analytics retention;
-- connector credential-name mapping and allowed scopes;
-- optional reference/visual features, disabled unless approved.
+- the optional reference feature, disabled unless approved.
 
 Start the pilot with `scripts/run_pilot.sh`, not by hand. It decides the usage
 scope and the approved safety catalog itself and ignores `.env` for both:
@@ -79,17 +76,10 @@ each one before the session:
   `VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE` and
   `VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF` are empty; otherwise the
   Candidate A development fixture loads.
-- `VOINEY_LAB_PROCEDURE_CATALOG` and
-  `VOINEY_LAB_PROCEDURE_STORE` are empty (the older procedure stack
-  described in `CLAUDE.md`).
-- `VOINEY_LAB_AUTO_ACTIVATE_READY_UPLOADS` is false or unset. Under
-  `reference_only` it would development-activate an analysed upload with no
-  person involved.
 - `VOINEY_LAB_STT_DIAGNOSTICS_ENABLED` is false. When it is on, raw
   transcripts and audio are written to disk.
-- `VOINEY_LAB_DEV_AUTH_PROFILES` lists the participants' profiles.
-  Under `reference_only` everyone is a development identity, and with no
-  profiles everyone is the `local-admin` lab administrator.
+- Under a non-operational scope everyone is the one development identity,
+  the experimenter (lane DI, 2026-10-08); a login comes before the pilot.
 - The safety card filters facility SOPs by `VOINEY_LAB_FACILITY_ID`
   only when the SOP itself is in the `operational` scope, so a
   `reference_only` catalog filters none: put only this laboratory's documents
@@ -123,16 +113,20 @@ curl --fail http://127.0.0.1:8080/readyz
 `/readyz` proves local configuration parsing, including the operational
 identity boundary. It does not prove external-provider reachability.
 
-## 5. Seed and approve the protocol
+## 5. Upload the protocol and read its analysis
 
-1. Import the exact source and verify its source hash/version.
-2. Complete extraction/OCR review and structured analysis.
-3. Resolve missing values, unsupported constructs, warnings, and hazards.
-4. Have an authorized reviewer approve the exact revision.
-5. Confirm the Researcher workspace displays the intended approval context.
+1. Upload the protocol PDF and note its SHA-256.
+2. Wait for the automatic OCR (if any) and the automatic analysis to finish.
+3. Open the start screen ("시작 전 확인 · 분석 결과 요약"): read the step
+   count, the safety statements beside their Korean, "실행을 막는 사유" and
+   "시작 전 알림". A blocked analysis has to be fixed at the source (a
+   readable PDF, resolved safety-critical conflict); nothing on the screen
+   overrides it.
+4. Confirm "이 프로토콜로 시작" is offered. That press, by the experimenter at
+   the bench, is the one human confirmation and is written to the ledger.
 
-A development activation is not an operational approval and is unavailable in
-operational scope.
+There is no approval, reviewer step or development activation (lane DI,
+2026-10-08).
 
 ## 6. Prepare recoverability
 
@@ -140,23 +134,19 @@ Stop the process and create/verify a pre-session snapshot using the exact comman
 in `DEPLOYMENT_RUNBOOK.md`. Store it on approved encrypted off-host storage. Run
 one restore drill into a fresh location before the first participant session.
 
-## 7. Rehearse all roles
+## 7. Rehearse the bench
 
 Use a non-hazardous or fictional workflow to verify:
 
-- Researcher: start, current-step question, completion confirmation,
-  observation/evidence, pause, refresh, and resume;
-- Reviewer: inbox, impact summary, technical diff, request revision, approval,
-  and revocation consequences;
-- Administrator: membership, permissions, connector check-before-enable,
-  activity view, retention, and pilot metrics;
+- Experimenter: upload, start screen, start, current-step question,
+  completion confirmation, observation/evidence, value confirmation, pause,
+  refresh, and resume;
 - Failure: empty speech, stale version, provider failure, missing evidence file,
   and service restart all remain non-mutating or recover to confirmed state.
 
 ## 8. Run the supervised session
 
 - Keep a human observer available.
-- Record the starting pilot-metrics snapshot and retention period.
 - Stop immediately on any abort criterion in `PILOT_READINESS_PACKAGE.md`.
 - Use session identifiers—not user identifiers or transcripts—in incident notes.
 - When uncertain whether a mutation committed, refresh the canonical timeline
@@ -165,18 +155,16 @@ Use a non-hazardous or fictional workflow to verify:
 ## 9. Close out
 
 1. Verify final session state and report/evidence completeness.
-2. Capture the ending pilot-metrics snapshot.
-3. Export only the approved report formats and perform any explicitly confirmed
-   ELN write-back.
-4. Stop the service and create/verify the post-session backup.
-5. Complete participant interviews and incident review.
-6. Do not advance beyond a supervised pilot until the remaining gates in
+2. Export the report formats the laboratory keeps (JSON, Markdown, CSV, DOCX).
+3. Stop the service and create/verify the post-session backup.
+4. Complete participant interviews and incident review.
+5. Do not advance beyond a supervised pilot until the remaining gates in
    `PRODUCTIZATION_FINAL_REPORT.md` have owners and acceptance evidence.
 
 ## Operational references
 
 - Detailed service, probe, backup, restore, monitoring, and incident commands:
   `DEPLOYMENT_RUNBOOK.md`.
-- Role instructions: `USER_GUIDE.md`.
+- Experimenter instructions: `USER_GUIDE.md`.
 - Failure recovery: `TROUBLESHOOTING_GUIDE.md`.
 - KPI and participant package: `PILOT_READINESS_PACKAGE.md`.

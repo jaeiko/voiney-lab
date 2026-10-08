@@ -225,11 +225,10 @@ class TheWarningIsReadOutTests(unittest.TestCase):
             domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
             after.reason_codes,
         )
-        from voiney_lab.protocol_catalog import ProtocolCatalog
-
-        self.assertNotIn(
-            "safety_warning_disclosure",
-            set(ProtocolCatalog._BLOCKER_RESOLUTION),
+        # The disclosure is a session duty, not a readiness reason anyone
+        # settles before the run.
+        self.assertFalse(
+            hasattr(domain.ReadinessReasonCode, "SAFETY_WARNING_DISCLOSURE")
         )
 
     def test_a_count_of_model_written_warnings_opens_nothing(self) -> None:

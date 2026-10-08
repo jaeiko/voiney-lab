@@ -296,8 +296,8 @@ export VOINEY_LAB_EXTERNAL_REFERENCE_MAX_CITATIONS=5
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=true
 export VOINEY_LAB_SUPPLEMENTAL_MODEL='grok-4.6'
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_TIMEOUT_SECONDS=8
-export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=true
-export VOINEY_LAB_GENERATED_VISUALS_ENABLED=true
+# (옛 설정, 줄 DI 2026-10-08 에 삭제) WEB_VISUAL_SEARCH_ENABLED=true
+# (옛 설정, 줄 DI 2026-10-08 에 삭제) GENERATED_VISUALS_ENABLED=true
 export VOINEY_LAB_CASCADE_BARGE_IN_PREFIX_MS=800
 ```
 
@@ -312,9 +312,9 @@ the dedicated launcher makes them available. No visual lookup or generation runs
 on routine step transitions. For another launcher the model/timeout controls are:
 
 ```bash
-export VOINEY_LAB_GENERATED_VISUALS_ENABLED=true
-export VOINEY_LAB_GENERATED_VISUAL_MODEL='grok-imagine-image-quality'
-export VOINEY_LAB_GENERATED_VISUAL_TIMEOUT_SECONDS=60
+# (옛 설정, 줄 DI 2026-10-08 에 삭제) GENERATED_VISUALS_ENABLED=true
+# (옛 설정, 줄 DI 2026-10-08 에 삭제) GENERATED_VISUAL_MODEL='grok-imagine-image-quality'
+# (옛 설정, 줄 DI 2026-10-08 에 삭제) GENERATED_VISUAL_TIMEOUT_SECONDS=60
 ```
 
 Do not enable either feature merely to run offline tests. Automated tests use

@@ -3,9 +3,9 @@
 A page is marked as needing OCR when its text layer cannot be read -- no text,
 or a glyph with no Unicode mapping. The rest of the document is still read and
 analysed, so the page's mark has to travel to the one decision that matters:
-until the page's OCR text has been accepted by a reviewer and analysed, the
-Protocol does not execute. A signature cannot clear it, because a signature
-does not make the glyph readable; OCR does.
+until the page's OCR text is in and analysed, the Protocol does not execute.
+Under the MVP rule (lane DI, 2026-10-08) this is one of the few readiness
+reasons that still blocks: a page that could not be read is not a notice.
 """
 
 from __future__ import annotations
@@ -25,11 +25,7 @@ from voiney_lab.experiment_protocol_pdf import (
     extract_protocol_pdf,
 )
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
-from voiney_lab.protocol_catalog import (
-    _ACKNOWLEDGEABLE_GATES,
-    ProtocolCatalog,
-    SharedSecretApprovalPolicy,
-)
+from voiney_lab.protocol_catalog import ProtocolCatalog
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_GEL = ROOT / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf"
@@ -69,11 +65,10 @@ class TheReadinessReasonTests(unittest.TestCase):
         reason = next(item for item in assessment.reasons if item.code.value == CODE_VALUE)
         self.assertIn("page(s) 3", reason.message)
 
-    def test_a_signature_cannot_clear_it(self) -> None:
-        self.assertNotIn(CODE_VALUE, _ACKNOWLEDGEABLE_GATES)
-        self.assertEqual(
-            ProtocolCatalog._BLOCKER_RESOLUTION.get(CODE_VALUE),
-            {"kind": "reviewer_can_clear", "action": "run_ocr"},
+    def test_it_is_an_execution_blocker_not_a_notice(self) -> None:
+        self.assertIn(
+            domain.ReadinessReasonCode.SOURCE_PAGE_REQUIRES_OCR,
+            domain.EXECUTION_BLOCKING_REASON_CODES,
         )
 
 
@@ -100,7 +95,7 @@ class OnePageOfAReadableDocumentTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.catalog = ProtocolCatalog(self.store)
 
-    def test_the_page_goes_through_ocr_and_review_while_the_rest_stays(self) -> None:
+    def test_the_page_goes_through_ocr_while_the_rest_stays(self) -> None:
         entry = self.catalog.register(
             self.source, source_filename="one-glyph.pdf", media_type="application/pdf"
         ).entry
@@ -112,16 +107,9 @@ class OnePageOfAReadableDocumentTests(unittest.TestCase):
         provider = FakeOcrProvider()
         completed = self.catalog.run_ocr(entry.protocol_id, provider, ocr_id="ocr-one")
         self.assertEqual(provider.calls, 1)
-        self.assertEqual(completed["state"], "review_required")
-        accepted = self.catalog.review_ocr(
-            entry.protocol_id,
-            decision="accepted",
-            policy=SharedSecretApprovalPolicy("review-secret"),
-            presented_secret="review-secret",
-            actor_principal_id="reviewer-a",
-            actor_role="reviewer",
-        )
-        self.assertTrue(accepted["accepted_for_analysis"])
+        # The OCR text is accepted for analysis at once (lane PX 3, lane DI).
+        self.assertEqual(completed["state"], "accepted_for_analysis")
+        self.assertTrue(completed["accepted_for_analysis"])
         revision = self.catalog._latest_protocol_revision(entry.protocol_id)
         analysed = self.catalog._extraction_for_analysis(
             revision, extract_protocol_pdf(self.source)

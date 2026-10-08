@@ -549,19 +549,19 @@ def test_researchers_cannot_enumerate_other_users_or_tenants(tmp_path):
     owner = _principal("owner", "tenant-a")
     colleague = _principal("colleague", "tenant-a")
     outsider = _principal("outsider", "tenant-b")
-    reviewer = _principal("reviewer", "tenant-a", Role.REVIEWER)
     store = _store(tmp_path)
     try:
-        for principal in (owner, colleague, outsider, reviewer):
+        for principal in (owner, colleague, outsider):
             store.bootstrap_principal(principal)
         session = store.start_experiment(
             owner,
             protocol_id="protocol-a",
             protocol_revision_id="revision-a",
         )
+        # Lane DI (2026-10-08): no role sees another person's experiments;
+        # an experiment is listed for its owner only.
         assert len(store.list_experiments(owner)) == 1
         assert store.list_experiments(colleague) == ()
-        assert len(store.list_experiments(reviewer)) == 1
         with pytest.raises(WorkspaceNotFoundError):
             store.get_experiment(colleague, session["session_id"])
         with pytest.raises(WorkspaceNotFoundError):
@@ -570,13 +570,11 @@ def test_researchers_cannot_enumerate_other_users_or_tenants(tmp_path):
         store.close()
 
 
-def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_path):
+def test_observations_and_evidence_form_a_separate_timeline(tmp_path):
     researcher = _principal("researcher", "tenant-a")
-    reviewer = _principal("reviewer", "tenant-a", Role.REVIEWER)
     store = _store(tmp_path)
     try:
         store.bootstrap_principal(researcher)
-        store.bootstrap_principal(reviewer)
         session = store.start_experiment(
             researcher,
             session_id="experiment-timeline-1",
@@ -634,13 +632,6 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
             storage_reference="evidence/tenant/session/a.jpg",
         )
         assert evidence["interpretation_status"] == "not_interpreted"
-        store.record_experiment_review_action(
-            reviewer,
-            session["session_id"],
-            event_key="review-1",
-            action="acknowledged",
-            comment="Observation reviewed; no SOP change was made.",
-        )
 
         timeline = store.experiment_timeline(researcher, session["session_id"])
         assert timeline["observation_count"] == 1
@@ -673,7 +664,6 @@ def test_observations_evidence_and_reviewer_actions_form_separate_timeline(tmp_p
             "protocol_started",
             "observation_recorded",
             "evidence_attached",
-            "reviewer_action",
         ]
         observed = next(
             item for item in timeline["timeline"]

@@ -3,8 +3,8 @@
 #
 # Unlike scripts/run_dev.sh this loads no development fixture, keeps its own
 # data root, and turns every out-of-source-document feature off. Nothing here
-# weakens a readiness gate or a source check: it only decides which optional
-# subsystems are configured on.
+# weakens the execution rule or a source check: it only decides which
+# optional subsystems are configured on.
 #
 # server.py calls load_dotenv(..., override=False), so a value exported by this
 # script wins over the same key in a repo-root .env. Every flag the startup
@@ -65,26 +65,11 @@ export VOINEY_LAB_WORKSPACE_DATA_DIR="$PILOT_DATA_DIR/workspace"
 # XAI_API_KEY is refused below, by name.
 eval "$(python -B -m voiney_lab.configuration --launcher-defaults "$ROOT/.env" \
   VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED=false \
-  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false \
-  VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED=false \
-  VOINEY_LAB_GENERATED_VISUALS_ENABLED=false \
-  VOINEY_LAB_SEMANTIC_INTENT_ENABLED=false)"
+  VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED=false)"
 
 # --- Outside the pilot's scope -----------------------------------------------
 # MOSS (the org-governed approved-safety-document corpus) has its own flag.
 export VOINEY_LAB_MOSS_ENABLED="${VOINEY_LAB_MOSS_ENABLED:-false}"
-# Dry-lab workflows and the eLabFTW ELN write-back have no launcher flag of
-# their own: both sit behind the commercial workspace, which the reviewer
-# inbox, protocol library and experiment timeline also need, so disabling it
-# would take the pilot's own approval path with it. Both paths are inert
-# until an admin creates and verifies a connector for them.
-
-# --- Test mode is never on in a pilot ----------------------------------------
-if [[ "${VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES:-}" =~ ^([1]|[Tt]rue|[Yy]es|[Oo]n)$ ]]; then
-  echo "[WARN] VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES was set in the"
-  echo "[WARN] environment. A pilot never skips readiness gates; forcing it off."
-fi
-export VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES="false"
 
 # --- Approved safety documents: decided here, never by a .env ---------------
 # operational needs OIDC, which the pilot does not have yet: without it the
@@ -171,17 +156,7 @@ report_feature "experiment_reports:" "$VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED"
 report_feature "workspace:" "$VOINEY_LAB_WORKSPACE_ENABLED"
 report_feature "external_references:" "$VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED"
 report_feature "supplemental_model_knowledge:" "$VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED"
-report_feature "web_visual_search:" "$VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED"
-report_feature "generated_visuals:" "$VOINEY_LAB_GENERATED_VISUALS_ENABLED"
-report_feature "semantic_intent:" "$VOINEY_LAB_SEMANTIC_INTENT_ENABLED"
 report_feature "moss_safety_documents:" "$VOINEY_LAB_MOSS_ENABLED"
-report_feature "readiness_gate_test_mode:" "$VOINEY_LAB_TEST_MODE_SKIP_READINESS_GATES"
-echo
-echo "--- No launcher flag of their own (reported, not disabled) ---"
-printf '%-30s %s\n' "dry_lab_workflows:" \
-  "behind the workspace; inert without a verified connector"
-printf '%-30s %s\n' "eln_writeback (eLabFTW):" \
-  "behind the workspace; inert without a verified connector"
 
 XAI_REFUSAL=""
 if ! python -B -m voiney_lab.configuration --refuse-xai-only-without-key "$ROOT/.env"; then

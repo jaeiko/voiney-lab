@@ -159,7 +159,12 @@ class ReportStructureTests(_ReportCase):
                     "| 걸린 시간 | 45분 |", "| 완료 단계 | 4 / 5 |", "| 결과 | 중단 — 5단계에서 종료 |",
                     "| 실험자 | (직접 적어 주세요) |"):
             self.assertIn(row, text)
-        self.assertIn("개발용 시험 프로토콜", text)
+        # Lane DI (2026-10-08): the run table names the protocol's state as
+        # "분석 통과 · 실험자가 시작함"; a curated development fixture adds
+        # what it is, without approval or test-protocol wording.
+        self.assertIn("| 프로토콜 상태 | 분석 통과 · 실험자가 시작함", text)
+        self.assertIn("개발용 큐레이션 분석(원문 PDF 기준)", text)
+        self.assertNotIn("승인", text)
         with mock.patch.dict(os.environ, {"VOINEY_LAB_REPORT_TIMEZONE": "UTC"}):
             utc = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.assertIn("| 시작 | 00:30 |", utc)
@@ -496,12 +501,17 @@ class ReportLayoutTests(_ReportCase):
         self.assertNotIn("다른 사람", text)
         self.assertNotIn("수행자", text)
 
-    def test_a_test_mode_run_says_so_in_the_run_table(self) -> None:
-        self.event("00:29", "test_mode_readiness_gates_skipped", None, payload={"switch": "X"})
+    def test_the_run_table_says_the_analysis_passed_and_the_experimenter_started(self) -> None:
+        # Lane DI (2026-10-08, decision 7): the approval row is gone; the row
+        # says the rule, and the safety statements seen before the start.
+        self.event("00:29", "safety_notices_acknowledged", None,
+                   payload={"notice_count": 2, "confirmed_by": "experimenter_start"})
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertIn("| 준비 검사 | 시험 모드로 실행 — 프로토콜 준비 검사를 건너뜀 |", text)
-        self.assertNotIn("test_mode", text)
+        self.assertIn("| 프로토콜 상태 | 분석 통과 · 실험자가 시작함", text)
+        self.assertIn("| 안전 주의 확인 | 시작 전 화면에서 원문 안전 주의 2건을 보고 시작함 |", text)
+        for gone in ("승인", "검토자", "test_mode", "준비 검사"):
+            self.assertNotIn(gone, text)
 
     def test_the_last_line_says_who_wrote_the_sentences_and_when(self) -> None:
         self.run_steps_one_to_four_then_stop()

@@ -60,7 +60,7 @@ from voiney_lab.server import (
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import EndpointDetector, TurnState
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2832,210 +2832,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         self.assertIsNone(session.advance_turn_progress(
             1,session.generation,"error"))
 
-    def test_generated_visual_is_queued_after_answer_audio_and_patches_same_turn(self):
-        from voiney_lab.curated_protocol import _png_rgb
-        from voiney_lab.generated_visuals import (
-            GeneratedVisualAsset, GeneratedVisualSettings,
-        )
-
-        session=self.make_session(index=0)
-        socket=Socket()
-        listening=session.advance_turn_progress(1,session.generation,"listening")
-        socket.text.append({"type":"turn.state",**listening})
-
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-
-        async def fake_image_generate(self,specification):
-            self.client.called_specification=specification
-            return _png_rgb(64,64,b"\xff\xff\xff"*64*64)
-
-        async def fake_obtain(specification,settings,generate):
-            content=await generate(specification)
-            content_hash=hashlib.sha256(content).hexdigest()
-            return GeneratedVisualAsset(
-                asset_id=content_hash,cache_key=specification.cache_key(settings.model),
-                protocol_id=specification.protocol_id,
-                revision_id=specification.revision_id,
-                step_id=specification.step_id,step_label=specification.step_label,
-                source_document_hash=specification.document_sha256,
-                source_page=specification.source_page,
-                source_evidence_ids=specification.source_evidence_ids,
-                mime_type="image/png",content_sha256=content_hash,
-                byte_size=len(content),width=64,height=64,content=content,
-            ),False
-
-        async def scenario():
-            await run_turn(socket,session,b"\0\0",1,1)
-            for _ in range(10):
-                await asyncio.sleep(0)
-                if any(
-                    item.get("type")=="protocol.visual.state"
-                    and item.get("status")=="visual_ready"
-                    for item in socket.text
-                ):
-                    break
-
-        fake_client=SimpleNamespace(images=SimpleNamespace())
-        with patch.dict(os.environ,{
-            "VOINEY_LAB_GENERATED_VISUALS_ENABLED":"true",
-            "VOINEY_LAB_GENERATED_VISUAL_MODEL":"offline-test-model",
-        },clear=False),patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription(
-                "이 단계를 이해하기 쉽게 그림으로 보여줘.", "ko"
-            ),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ),patch(
-            "voiney_lab.server.AsyncOpenAI",return_value=fake_client,
-        ),patch(
-            "voiney_lab.server.require_env",
-            return_value="offline-test-value",
-        ),patch(
-            "voiney_lab.server.XaiImageGenerator.generate",
-            new=fake_image_generate,
-        ),patch(
-            "voiney_lab.server.GENERATED_VISUALS.obtain",
-            side_effect=fake_obtain,
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",
-            side_effect=immediate,
-        ):
-            session.generated_visual_settings=GeneratedVisualSettings(
-                True,"offline-test-model"
-            )
-            asyncio.run(scenario())
-
-        kinds=[item["type"] for item in socket.text]
-        pending=next(
-            index for index,item in enumerate(socket.text)
-            if item["type"]=="protocol.visual.state"
-            and item["status"]=="visual_pending")
-        ready=next((
-            index for index,item in enumerate(socket.text)
-            if item["type"]=="protocol.visual.state"
-            and item["status"]=="visual_ready"),None)
-        self.assertIsNotNone(ready,socket.text)
-        self.assertLess(kinds.index("reply.delta"),pending)
-        self.assertLess(kinds.index("audio.segment.start"),pending)
-        self.assertLess(pending,ready)
-        visual=socket.text[ready]
-        self.assertEqual(
-            (visual["turn_id"],visual["generation"],visual["step_id"]),
-            (1,session.generation,"candidate-a-step-01"),
-        )
-        self.assertEqual(
-            visual["asset"]["url"],
-            f"/api/generated-visuals/{visual['asset']['asset_id']}",
-        )
-        self.assertEqual(kinds.count("tool.call"),1)
-        self.assertEqual(kinds.count("tool.result"),1)
-
-    def test_entity_visual_is_queued_before_slow_explanatory_research(self):
-        from voiney_lab.generated_visuals import GeneratedVisualSettings
-
-        session=self.make_session(index=0)
-        session.tool_context=None
-        session.generated_visual_settings=GeneratedVisualSettings(
-            True,"offline-test-model")
-        session.external_reference_settings=ExternalReferenceSettings(
-            True,("pubchem.ncbi.nlm.nih.gov",),"offline-web",2.0,3,
-            "candidate_a",user_visible_enrichment_budget_seconds=.005,
-        )
-        socket=Socket();order=[]
-
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-
-        async def queued_visual(**kwargs):
-            order.append(("visual",kwargs["turn_id"],kwargs["generation"]))
-
-        class Web:
-            def __init__(self,*args): pass
-            async def search(self,query,*,language):
-                await asyncio.sleep(.02)
-                order.append(("research",language))
-                return {"status":"not_found","matches":[]}
-
-        with patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription(
-                "염색된 단백질 밴드가 어떤 걸 의미해? 그림도 보여줘.","ko"
-            ),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ),patch(
-            "voiney_lab.server._queue_curated_generated_visual",
-            side_effect=queued_visual,
-        ),patch(
-            "voiney_lab.server.XaiAuthoritativeWebSearch",Web,
-        ),patch(
-            "voiney_lab.server.AsyncOpenAI",
-            return_value=SimpleNamespace(),
-        ),patch(
-            "voiney_lab.server.require_env",return_value="offline",
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",
-            side_effect=immediate,
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-
-        self.assertEqual(order[0],("visual",1,session.generation))
-        self.assertEqual(order[1],("research","ko"))
-        reply=next(item for item in socket.text if item["type"]=="reply.delta")
-        self.assertIn("염색된 단백질 밴드",reply["primary_text"])
-        self.assertEqual(reply["requested_entities"],["stained_protein_band"])
-        self.assertFalse(reply.get("state_changed",False))
-        bounded=next(
-            item for item in socket.text
-            if item["type"]=="research.state"
-            and item.get("status")=="background_bounded"
-        )
-        self.assertEqual(bounded["phase"],"optional_enrichment")
-        self.assertEqual(bounded["user_visible_budget_ms"],5)
-        self.assertEqual(
-            len([item for item in socket.text if item["type"]=="research.result"]),
-            1,
-        )
-
-    def test_entity_visual_disabled_returns_same_turn_unavailable_state(self):
-        session=self.make_session(index=0);session.tool_context=None
-        socket=Socket()
-        async def immediate(function,*args,**kwargs):
-            return function(*args,**kwargs)
-        with patch(
-            "voiney_lab.server.transcribe",
-            return_value=Transcription("젤 플러그 이미지를 보여줘.","ko"),
-        ),patch(
-            "voiney_lab.server.synthesize",return_value=b"\0\0",
-        ),patch(
-            "voiney_lab.server.asyncio.to_thread",
-            side_effect=immediate,
-        ):
-            asyncio.run(run_turn(socket,session,b"\0\0",1,1))
-        unavailable=next(
-            item for item in socket.text
-            if item["type"]=="protocol.visual.state"
-        )
-        self.assertEqual(unavailable["status"],"visual_failed")
-        self.assertEqual(unavailable["fallback"],"feature_disabled")
-        self.assertEqual(unavailable["turn_id"],1)
-        self.assertEqual(unavailable["generation"],session.generation)
-        self.assertFalse(any(item["type"]=="tool.call" for item in socket.text))
-
-    def test_verified_source_crop_suppresses_generated_visual_specification(self):
-        from voiney_lab.server import _curated_visual_specification
-
-        source_session=CuratedProtocolSession(self.fixture)
-        source_session.active=True
-        source_session.current_index=6
-        self.assertEqual(
-            self.fixture.visual_for_step(6).kind,"source_crop")
-        self.assertIsNone(_curated_visual_specification(source_session))
-        source_session.current_index=0
-        self.assertIsNotNone(_curated_visual_specification(source_session))
-
     def test_related_question_uses_approved_reference_without_state_mutation(self):
         session=self.make_session(index=1)
         socket=Socket()
@@ -4184,8 +3980,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "test_only",
             frozenset({"ko"}),
             "ko",
-            None,
-            None,
             FIXTURE,
             PROVENANCE,
             SOURCE_PDF,
@@ -4281,12 +4075,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             "voiney_lab.server.ListenerSession",
             side_effect=listener_factory,
         ), patch(
-            "voiney_lab.server.ProcedureStore",
-            side_effect=AssertionError("ProcedureStore must not be constructed"),
-        ) as procedure_store, patch(
-            "voiney_lab.server.load_procedure_definitions",
-            side_effect=AssertionError("procedure catalog must not be loaded"),
-        ), patch(
             "voiney_lab.server.transcribe",
             side_effect=[Transcription(value, "ko") for value in transcripts],
         ), patch(
@@ -4307,14 +4095,13 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         ), patch(
             "voiney_lab.experiment_protocol_analysis.save_protocol_analysis",
             side_effect=AssertionError("persistence is forbidden"),
-        ), development_activation_recorded():
+        ), runnable_fixture_assumed():
             # This test is about what the curated boundary does once a session
             # is running.  Selecting the fixture at all now needs a recorded
             # development activation, which the in-gel fixture cannot earn:
-            # see tests/development_activation.
+            # see tests/runnable_fixture.
             asyncio.run(scenario())
 
-        procedure_store.assert_not_called()
         ready = [item for item in socket.text if item["type"] == "session.ready"]
         self.assertEqual(len(ready), 1)
         self.assertEqual(ready[0]["configuration_id"], configuration_id)
@@ -4459,95 +4246,6 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
             self.assertNotIn("cycle", item["state"])
         self.assertEqual(states[-1]["state"]["active"], False)
         self.assertEqual(states[-2]["state"]["current_step_label"], "2")
-
-    def test_curated_selection_is_the_single_authority_even_when_legacy_procedure_config_exists(self):
-        """Phase 15 reconciliation: a session must never be bound to both the
-        production curated-protocol authority and the legacy ProcedureController
-        authority at once. server.py's selection logic only attempts a legacy
-        procedure lookup when `selected_curated_fixture is None` - this proves
-        that guard actually holds end to end even when an operator has fully
-        configured *both* authorities, not just when the legacy one is unset."""
-        configuration_id = 91
-        config = ServerConfig(
-            Path("/unused/offline-catalog.sqlite"),
-            None,
-            "test_only",
-            frozenset({"ko"}),
-            "ko",
-            ROOT / "data" / "procedure_demo" / "procedures.ko.json",
-            Path(tempfile.mkdtemp()) / "legacy_procedure_sessions.sqlite",
-            FIXTURE,
-            PROVENANCE,
-            SOURCE_PDF,
-        )
-        self_protocol_id = self.fixture.protocol_id
-
-        class ReadySocket(Socket):
-            def __init__(self):
-                super().__init__()
-                self.ready = asyncio.Event()
-                self.disconnect = asyncio.Event()
-                self.receive_count = 0
-
-            async def accept(self):
-                return None
-
-            async def receive(self):
-                self.receive_count += 1
-                if self.receive_count == 1:
-                    return {"text": json.dumps({
-                        "type": "session.start",
-                        "mode": "cascade",
-                        "language": "ko",
-                        "protocol_id": self_protocol_id,
-                        "configuration_id": configuration_id,
-                    })}
-                await self.disconnect.wait()
-                return {"type": "websocket.disconnect", "code": 1000}
-
-            async def send_text(self, value: str) -> None:
-                await super().send_text(value)
-                if self.text[-1]["type"] == "session.ready":
-                    self.ready.set()
-
-        socket = ReadySocket()
-
-        async def scenario():
-            server_task = asyncio.create_task(voice_socket(socket))
-            await asyncio.wait_for(socket.ready.wait(), timeout=5)
-            socket.disconnect.set()
-            await server_task
-
-        with patch(
-            "voiney_lab.server.server_config",
-            return_value=config,
-        ), patch(
-            "voiney_lab.server.ProcedureStore",
-            side_effect=AssertionError(
-                "legacy ProcedureStore must not be constructed when a "
-                "curated protocol was selected"),
-        ) as procedure_store, patch(
-            "voiney_lab.server.ProcedureController",
-            side_effect=AssertionError(
-                "legacy ProcedureController must not be constructed when a "
-                "curated protocol was selected"),
-        ) as procedure_controller, patch(
-            "voiney_lab.server.load_procedure_definitions",
-            side_effect=AssertionError(
-                "legacy procedure catalog must not be loaded when a "
-                "curated protocol was selected"),
-        ) as load_definitions, development_activation_recorded():
-            # The assertion here is that the curated selection wins over the
-            # legacy procedure stack; reaching that selection needs a recorded
-            # development activation, which is stepped around, not weakened.
-            asyncio.run(scenario())
-
-        procedure_store.assert_not_called()
-        procedure_controller.assert_not_called()
-        load_definitions.assert_not_called()
-        ready = [item for item in socket.text if item["type"] == "session.ready"]
-        self.assertEqual(len(ready), 1)
-        self.assertEqual(ready[0]["protocol_id"], self.fixture.protocol_id)
 
     def test_readiness_blocked_next_is_spoken_without_llm_or_state_change(self):
         session = self.make_session(index=6)

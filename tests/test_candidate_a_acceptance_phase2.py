@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 import unittest
 
@@ -11,7 +10,6 @@ from voiney_lab.language import (
     Transcription,
     classify_input_event,
 )
-from voiney_lab.web_visuals import PubChemChemistryAdapter
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "fixtures" / "development_protocols"
@@ -59,7 +57,7 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
         self.assertEqual(session.current_index, 0)
 
     def test_turn_5_and_6_ambic_coreference_and_visual_retrieval(self) -> None:
-        """Turn 5 (explain AMBIC) -> Turn 6 (show related picture) resolves AMBIC and retrieves PubChem structure."""
+        """Turn 5 (explain AMBIC) -> Turn 6 (show related picture) resolves AMBIC."""
         session = self.session()
         session.plan("실험 시작해 줘.", language="ko", turn_id=3, generation=1)
         self.assertEqual(session.current_index, 0)
@@ -92,16 +90,8 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
         self.assertFalse(plan_6.state_changed)
         self.assertEqual(session.current_index, 0)
 
-        # Verify PubChem chemistry adapter resolves AMBIC 2D structure
-        adapter = PubChemChemistryAdapter()
-        match = asyncio.run(adapter.lookup("ambic"))
-        self.assertIsNotNone(match)
-        self.assertEqual(match["cid"], 14013)
-        self.assertIn("pubchem.ncbi.nlm.nih.gov", match["image_url"])
-        self.assertEqual(match["display_mode"], "structure_image")
-
     def test_turn_7_and_8_hplc_water_explanation_and_visual(self) -> None:
-        """Turn 7 (advance to Step 2) -> Turn 8 (HPLC water + visual) resolves water structure."""
+        """Turn 7 (advance to Step 2) -> Turn 8 (HPLC water + visual) keeps the step."""
         session = self.session()
         session.plan("실험 시작해 줘.", language="ko", turn_id=3, generation=1)
         session.plan("현재 단계를 완료했어.", language="ko", turn_id=7, generation=1)
@@ -118,13 +108,6 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
         self.assertIn("hplc_water", plan_8.requested_entities)
         self.assertFalse(plan_8.state_changed)
         self.assertEqual(session.current_index, 1)
-
-        # Verify PubChem chemistry adapter resolves Water 2D structure
-        adapter = PubChemChemistryAdapter()
-        match = asyncio.run(adapter.lookup("hplc_water"))
-        self.assertIsNotNone(match)
-        self.assertEqual(match["cid"], 962)
-        self.assertEqual(match["formula"], "H2O")
 
     def test_turn_10_and_11_anomaly_triage_choke_point(self) -> None:
         """Turn 10 and 11: Anomaly utterances are caught by high-recall triage rather than general QA or off-topic fallback."""

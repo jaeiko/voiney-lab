@@ -38,8 +38,6 @@ export VOINEY_LAB_WORKSPACE_DATA_DIR="$PROTOCOL_DATA_DIR/workspace"
 export VOINEY_LAB_EXTERNAL_REFERENCES_ENABLED="false"
 export VOINEY_LAB_MULTI_BRAIN_ENABLED="false"
 export VOINEY_LAB_SUPPLEMENTAL_MODEL_KNOWLEDGE_ENABLED="false"
-export VOINEY_LAB_WEB_VISUAL_SEARCH_ENABLED="false"
-export VOINEY_LAB_GENERATED_VISUALS_ENABLED="false"
 
 echo "=== Starting Voiney Lab (CI, empty protocol catalog) ==="
 exec python -B -m uvicorn \

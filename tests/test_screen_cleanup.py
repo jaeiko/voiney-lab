@@ -89,72 +89,36 @@ class ServerCodeTranslationTests(unittest.TestCase):
 
     def test_review_panel_translates_codes_and_keeps_them_in_dev_details(self):
         result = run_page_script(r"""
-const review={protocol_id:"protocol-x",title:"In-gel",revision_id:"pdf-1-analysis-1",lifecycle_state:"blocked",readiness_status:"analysis_required",available_for_execution:false,
+const review={protocol_id:"protocol-x",title:"In-gel",revision_id:"pdf-1-analysis-1",lifecycle_state:"blocked",readiness_status:"analysis_required",available_for_execution:false,analysis_available:true,
  source:{filename:"in-gel.pdf",sha256:"a".repeat(64),page_count:9},
  readiness:{status:"analysis_required",label:"Protocol 분석 필요",reasons:[
   {code:"unresolved_ambiguity",message:"A source ambiguity remains unresolved."},
-  {code:"no_declared_safety_warnings",message:"A reviewer must confirm this Protocol's safety warnings before execution."},
+  {code:"no_executable_steps",message:"The structured Protocol contains no executable source steps."},
   {code:"reason_from_a_newer_server",message:"Something new."}]},
  analysis_failure:{code:"protocol_analysis_invalid_evidence",retryable:true,action:"Review the failure code and explicitly retry analysis."},
- gates:{parsing:"passed",structural_readiness:"blocked",hazard_review:"review_required",human_approval:"pending",operational_authorization:"blocked"},
  constructs:[{construct_type:"SourceAmbiguity",source_text:"Two volumes are stated.",resolved:false,evidence:{source_page_number:3,source_excerpt:"20 µL or 30 µL"}}],
- outstanding_blockers:[
-  {code:"unresolved_ambiguity",kind:"reviewer_can_clear",reviewer_action:"resolve_ambiguity",already_acknowledged:false,decision_options:["single_statement_is_authoritative","statements_are_distinct"],clearing_decision:"single_statement_is_authoritative",citable_segments:[{segment_id:"seg-1",segment_index:0,source_page_number:3,excerpt:"20 µL"}]},
-  {code:"no_declared_safety_warnings",kind:"reviewer_can_clear",reviewer_action:"acknowledge_gate",already_acknowledged:false},
-  {code:"unsupported_repeat_until",kind:"capability_required",reviewer_action:null,already_acknowledged:false}],
- reviewer_findings:[{kind:"gate_acknowledged",reason_code:"no_declared_safety_warnings",actor_principal_id:"reviewer-a",actor_role:"reviewer",recorded_at:"2026-09-30T00:00:00Z"}],
+ execution_blockers:[{code:"no_executable_steps",message:"The structured Protocol contains no executable source steps.",message_ko:"실행할 단계를 원문에서 찾지 못했습니다.",kind:"blocking",source_page_number:null,source_excerpt:null,step_id:null}],
+ execution_notices:[
+  {code:"unresolved_ambiguity",message:"A source ambiguity remains unresolved.",message_ko:"원문에 서로 다른 두 서술이 있습니다.",kind:"source_note",source_page_number:3,source_excerpt:"20 µL or 30 µL",step_id:"step-4"},
+  {code:"unsupported_parallel_background_work",message:"Parallel work.",message_ko:"동시 작업은 아직 안내 기능이 없습니다.",kind:"no_guidance_yet",source_page_number:5,source_excerpt:"Meanwhile, prepare the gel.",step_id:"step-6"}],
+ safety_notices:[{step_label:"4",step_id:"step-4",source_page_number:3,source_text:"Wear gloves and work in a fume hood.",primary_text:"장갑을 끼고 흄후드에서 작업하세요."}],
  sections:[]};
 renderProtocolReview(review);
-const hosts=["protocol-review-content","protocol-blockers","protocol-findings"].map(node);
+const hosts=["protocol-review-content","protocol-blockers","protocol-start-summary","protocol-start-overview","protocol-execution-blockers","protocol-safety-notices","protocol-execution-notices"].map(node);
 const visible=hosts.map(visibleText).join(" "),dev=hosts.map(devText).join(" ");
-for(const code of ["analysis_required","blocked","unresolved_ambiguity","no_declared_safety_warnings","statements_are_distinct","single_statement_is_authoritative","review_required","reviewer_can_clear","capability_required","gate_acknowledged","protocol_analysis_invalid_evidence","SourceAmbiguity","structural_readiness","reason_from_a_newer_server"]){
+for(const code of ["analysis_required","blocked","unresolved_ambiguity","no_executable_steps","unsupported_parallel_background_work","no_guidance_yet","source_note","protocol_analysis_invalid_evidence","SourceAmbiguity","reason_from_a_newer_server"]){
  assert(withoutCode(visible,code),`raw code ${code} is still on screen: ${visible}`);
  assert(!withoutCode(dev,code),`raw code ${code} is missing from 개발 상세 정보: ${dev}`);
 }
-for(const label of ["프로토콜 분석 필요","차단됨 · 조치 필요","원문의 모호한 부분이 해결되지 않음","안전 경고를 검토자가 확인해야 함","두 진술은 서로 다른 내용임","한 진술이 기준임","검토자가 해제 가능","분석 근거가 원문과 맞지 않음","원문의 모호한 부분","구조 실행 준비 · 차단","위험 검토 · 검토 필요","검토자"])assert(visible.includes(label),`label missing: ${label}`);
+for(const label of ["시작 전에 읽을 알림 있음","실행 불가 · 조치 필요","원문에 서로 다른 두 서술","실행할 원문 단계 없음","동시·백그라운드 작업 · 아직 안내 기능 없음","분석 근거가 원문과 맞지 않음","원문의 모호한 부분","실행을 막는 사유 1건","시작 전 알림 2건","원문의 안전 주의 1건","Wear gloves and work in a fume hood.","장갑을 끼고 흄후드에서 작업하세요."])assert(visible.includes(label),`label missing: ${label}`);
 assert(visible.includes("확인되지 않은 상태"),"an unknown code was not marked as unconfirmed");
 assert(visible.includes("A source ambiguity remains unresolved."),"the server's own reason message was dropped");
-const select=node("protocol-blockers").children[0].children.find(item=>item.tagName==="select");
-assert(select&&select.children.map(option=>option.value).join(",")==="single_statement_is_authoritative,statements_are_distinct","the decision sent to the server must stay the raw code");
-renderProtocolReview({...review,lifecycle_state:"review_required",readiness:{status:"guidance_ready",label:"안내 준비 완료",reasons:[]},outstanding_blockers:[],reviewer_findings:[],analysis_failure:null,constructs:[]});
+for(const word of ["검토자","승인","활성화"])assert(!visible.includes(word),`${word} is still on the screen: ${visible}`);
+assert(node("protocol-start").hidden,"a blocked protocol offered the start button");
+renderProtocolReview({...review,lifecycle_state:"ready",available_for_execution:true,readiness:{status:"guidance_ready",label:"안내 준비 완료",reasons:[]},execution_blockers:[],execution_notices:[],analysis_failure:null,constructs:[]});
 const ready=visibleText(node("protocol-review-content"));
 assert(ready.includes("안내 준비 완료")&&withoutCode(ready,"guidance_ready"),`guidance_ready not translated: ${ready}`);
-""")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_records_lists_and_status_lines_translate_codes(self):
-        result = run_page_script(r"""
-renderExperimentReportList([{report_id:"ER-1",status:"in_progress"},{report_id:"ER-2",status:"status_from_a_newer_server"}]);
-renderExperimentReportEvents([{event_type:"blocked",step_label:"3",created_at:"2026-09-30T00:00:00Z",payload:{timer:{completion_state:"not_started"}}}]);
-const reports=[node("experiment-report-list"),node("experiment-report-events")];
-const reportText=reports.map(visibleText).join(" "),reportDev=reports.map(devText).join(" ");
-for(const code of ["in_progress","blocked","not_started","status_from_a_newer_server"]){assert(withoutCode(reportText,code),`report code ${code} on screen: ${reportText}`);assert(!withoutCode(reportDev,code),`report code ${code} not in dev details`);}
-assert(reportText.includes("진행 중")&&reportText.includes("진행 차단")&&reportText.includes("시작 전")&&reportText.includes("확인되지 않은 상태"),`report labels missing: ${reportText}`);
-renderExperimentTimeline({timeline:[{event_type:"observation_recorded",step_label:"2",created_at:"2026-09-30T00:00:00Z",observation:{category:"appearance",content:"시료가 탁함"}}]});
-const timeline=node("experiment-event-timeline");
-assert(visibleText(timeline).includes("외관 · 시료가 탁함")&&withoutCode(visibleText(timeline),"appearance")&&devText(timeline).includes("appearance"),`observation category not translated: ${visibleText(timeline)}`);
-acceptedSessionConfiguration={configuration_id:1,mode:"cascade"};
-await onMessage({data:JSON.stringify({type:"experiment.report.state",configuration_id:1,generation:0,report:{report_id:"ER-1",status:"completed",event_count:2,anomaly_count:0,blocker_count:0,reports:[],events:[]}})},sessionGeneration,socket);
-const last=node("last-report-state");
-assert(visibleText(last).includes("완료 · 이벤트 2")&&withoutCode(visibleText(last),"completed")&&devText(last).includes("completed"),`report status not translated: ${visibleText(last)}`);
-await onMessage({data:JSON.stringify({type:"report.status",report_id:"SR-1",report_status:"lookup_failed",attempts:1})},sessionGeneration,socket);
-assert(visibleText(last).includes("상태 조회 실패 · 시도 1회")&&withoutCode(visibleText(last),"lookup_failed")&&devText(last).includes("lookup_failed"),`safety report status not translated: ${visibleText(last)}`);
-globalThis.fetch=async url=>{assert(String(url).startsWith("/api/workspace/protocol-library"),`unexpected ${url}`);return json({protocols:[{family_id:"f-1",title:"Local",revision_number:1,connector_kind:"local_pdf",owner:"Lab",department:"Bio",approval_state:null,risk_state:"review_required",tags:[]}]})};
-await loadQuickProtocolLibrary();
-const library=node("quick-library-results");
-for(const code of ["local_pdf","review_required"]){assert(withoutCode(visibleText(library),code),`library code ${code} on screen: ${visibleText(library)}`);assert(devText(library).includes(code),`library code ${code} not in dev details`);}
-assert(visibleText(library).includes("로컬 PDF")&&visibleText(library).includes("검토 필요"),`library labels missing: ${visibleText(library)}`);
-node("protocols-io-connector").value="connector-1";node("protocols-io-identifier").value="10.17504/protocols.io.x";
-globalThis.fetch=async()=>json({detail:"authorization_denied"},false);
-await importProtocolsIo();
-const status=node("protocols-io-status");
-assert(visibleText(status).includes("이 작업을 할 권한이 없습니다.")&&withoutCode(visibleText(status),"authorization_denied")&&devText(status).includes("authorization_denied"),`error detail not translated: ${visibleText(status)}`);
-globalThis.fetch=async()=>json({detail:"detail_from_a_newer_server"},false);
-await importProtocolsIo();
-assert(visibleText(status).includes("가져오기 실패")&&withoutCode(visibleText(status),"detail_from_a_newer_server")&&devText(status).includes("detail_from_a_newer_server"),`unknown detail was not kept in dev details: ${visibleText(status)}`);
-globalThis.fetch=async()=>json({inbox_state:"new",revision_id:"rev-1"});
-await importProtocolsIo();
-assert(visibleText(status).includes("새 검토 초안 · rev-1")&&!devText(status).includes("authorization_denied"),`success status kept a stale code: ${status.textContent}`);
+assert(!node("protocol-start").hidden,"a runnable protocol did not offer the start button");
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -204,41 +168,6 @@ assert(cancelled.status.textContent==="중단됨"&&cancelled.error==="",`cancell
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-class DryLabWorkflowLoadingTests(unittest.TestCase):
-    """Item 3: opening the page does not ask for the dry-lab workflow list."""
-
-    def test_page_open_skips_workflows_and_loads_them_on_demand(self):
-        result = run_page_script(r"""
-const calls=[];
-globalThis.fetch=async url=>{url=String(url);calls.push(url);
- if(url==="/api/protocols")return json({protocols:[]});
- if(url==="/api/workspace/session")return json({workspaces:["researcher","reviewer"]});
- if(url==="/api/workspace/connectors")return json({connectors:[]});
- if(url.startsWith("/api/workspace/protocol-library"))return json({protocols:[]});
- if(url==="/api/workspace/experiments")return json({experiments:[]});
- if(url.startsWith("/api/workspace/experiments/exp-1/timeline"))return json({timeline:[],session:{session_id:"exp-1",version:1,status:"in_progress",protocol_id:"p-1",current_step_label:"1"}});
- if(url.startsWith("/api/workspace/dry-lab/links"))return json({links:[]});
- if(url==="/api/workspace/dry-lab/workflows")return json({workflows:[{workflow_revision_id:"wf-1",engine:"snakemake",repository:"lab/flows",commit_sha:"a".repeat(40),source_path:"Snakefile",approval_state:"approved"}]});
- if(url==="/api/workspace/reviewer/inbox")return json({items:[]});
- throw new Error(`unexpected ${url}`);};
-const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
-const workflowCalls=()=>calls.filter(url=>url==="/api/workspace/dry-lab/workflows").length;
-assert((pageListeners.load||[]).length===1,"the page load handler was not registered");
-pageListeners.load[0]();await settle();
-assert(calls.includes("/api/workspace/session")&&calls.includes("/api/protocols"),`page open did not load the workspace: ${calls}`);
-assert(workflowCalls()===0,`page open still requested dry-lab workflows: ${calls}`);
-await loadExperimentTimeline("exp-1");
-assert(workflowCalls()===1,`an open experiment did not load the workflow picker: ${calls}`);
-const picker=node("experiment-workflow-revision");
-assert(picker.children.some(option=>option.value==="wf-1"),"approved workflow missing from the researcher picker");
-await loadExperimentTimeline("exp-1");
-assert(workflowCalls()===1,"the researcher picker refetched on every timeline refresh");
-activateWorkspace("reviewer");await settle();
-assert(workflowCalls()===2,"opening the reviewer workspace no longer loads its workflow list");
-""")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-
 class DuplicateUploadNoticeTests(unittest.TestCase):
     """Item 4: a re-upload of a stored PDF names the file it matched."""
 
@@ -272,57 +201,59 @@ assert(notice.hidden&&notice.textContent==="","a first-time upload kept the prev
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-class ActivationFromProtocolListTests(unittest.TestCase):
-    """Item 5: picking a protocol in the run list reaches its activation."""
+class StartFromProtocolListTests(unittest.TestCase):
+    """Item 5: picking a protocol in the run list shows its analysis result and its start."""
 
-    def test_selected_protocol_loads_its_review_and_shows_activation_when_allowed(self):
+    def test_selected_protocol_loads_its_review_and_shows_the_start_when_it_may_run(self):
         result = run_page_script(r"""
-const entry=(id,title,available,extra={})=>({protocol_id:id,title,revision_id:`${id}-rev`,readiness_status:"guidance_ready",analysis_status:available?"approved":"review_required",lifecycle_state:available?"approved":"review_required",available_for_execution:available,...extra});
-const catalog=[entry("p-run","Runnable",true),entry("p-act","Needs activation",false),entry("p-block","Blocked",false,{lifecycle_state:"blocked",readiness_status:"analysis_required"})];
-const reviews={"p-run":{development_activation_allowed:false,available_for_execution:true},"p-act":{development_activation_allowed:true,available_for_execution:false},"p-block":{development_activation_allowed:false,available_for_execution:false}};
+const entry=(id,title,available,extra={})=>({protocol_id:id,title,revision_id:`${id}-rev`,readiness_status:"guidance_ready",analysis_status:"review_required",lifecycle_state:available?"ready":"blocked",available_for_execution:available,...extra});
+const catalog=[entry("p-run","Runnable",true),entry("p-block","Blocked",false,{readiness_status:"analysis_required"})];
+const reviews={"p-run":{available_for_execution:true,execution_blockers:[],execution_notices:[],safety_notices:[]},"p-block":{available_for_execution:false,execution_blockers:[{code:"no_executable_steps",message_ko:"실행할 단계를 원문에서 찾지 못했습니다.",kind:"blocking"}],execution_notices:[],safety_notices:[]}};
 const held=new Map(),calls=[];
 globalThis.fetch=async(url,options={})=>{url=String(url);calls.push(`${options.method||"GET"} ${url}`);
  if(url==="/api/protocols")return json({protocols:catalog});
  const reviewMatch=url.match(/^\/api\/protocols\/([^/]+)\/review$/);
- if(reviewMatch){const id=decodeURIComponent(reviewMatch[1]);const payload={...catalog.find(item=>item.protocol_id===id),...reviews[id],source:{filename:`${id}.pdf`,sha256:"a".repeat(64),page_count:1},readiness:{status:"guidance_ready",reasons:[]},sections:[]};if(held.has(id))await held.get(id);return json(payload);}
- if(url==="/api/protocols/p-act/activate-development"&&options.method==="POST")return json({protocol_id:"p-act"});
+ if(reviewMatch){const id=decodeURIComponent(reviewMatch[1]);const payload={...catalog.find(item=>item.protocol_id===id),...reviews[id],analysis_available:true,source:{filename:`${id}.pdf`,sha256:"a".repeat(64),page_count:1},readiness:{status:"guidance_ready",reasons:[]},sections:[]};if(held.has(id))await held.get(id);return json(payload);}
  if(url.startsWith("/api/workspace/"))return json({protocols:[]});
  throw new Error(`unexpected ${options.method||"GET"} ${url}`);};
 const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
-const select=node("protocol-id"),panel=node("protocol-review-panel"),activate=node("protocol-development-activate");
+const select=node("protocol-id"),panel=node("protocol-review-panel"),summary=node("protocol-start-summary"),start=node("protocol-start");
+// The fake DOM is flat, so the start screen's inner hosts are read beside it.
+const summaryText=()=>["protocol-start-summary","protocol-start-overview","protocol-execution-blockers","protocol-safety-notices","protocol-execution-notices"].map(id=>visibleText(node(id))).join(" ");
 const pick=async id=>{select.value=id;select.dispatch("change");await settle();};
-panel.hidden=true;activate.hidden=true;// as in the page markup
+panel.hidden=true;summary.hidden=true;start.hidden=true;// as in the page markup
 await loadProtocolCatalog();
 const option=id=>select.children.find(item=>item.value===id);
-assert(option("p-act")&&!option("p-act").disabled&&option("p-act").dataset.runnable==="false"&&option("p-run").dataset.runnable==="true","a protocol that cannot run is not pickable");
+assert(option("p-block")&&!option("p-block").disabled&&option("p-block").dataset.runnable==="false"&&option("p-run").dataset.runnable==="true","a protocol that cannot run is not pickable");
 assert(node("protocol-upload-status").textContent.includes("실행 가능 항목만 시작할 수 있습니다"),"catalog status still says only runnable items can be picked");
-assert(panel.hidden!==false&&activate.hidden,"a review opened before anything was picked");
-await pick("p-act");
-assert(calls.includes("GET /api/protocols/p-act/review"),`picking did not load the review: ${calls}`);
-assert(!panel.hidden&&panel.open&&!activate.hidden&&!activate.disabled,"an activatable pick did not show the activation button");
-assert(node("start").disabled,"a protocol that cannot run became startable");
-await loadProtocolCatalog("p-act");
-assert(select.value==="p-act","a refresh dropped the person's own pick");
 await pick("p-block");
-assert(activate.hidden&&!panel.hidden,"activation shown although the server did not allow it");
-let release;held.set("p-act",new Promise(resolve=>{release=resolve}));
-select.value="p-act";select.dispatch("change");
+assert(calls.includes("GET /api/protocols/p-block/review"),`picking did not load the review: ${calls}`);
+assert(!panel.hidden&&panel.open&&!summary.hidden&&start.hidden,"a blocked pick offered the start button or hid its result");
+assert(summaryText().includes("실행을 막는 사유 1건"),`the blocker is not on the start screen: ${summaryText()}`);
+assert(node("start").disabled,"a protocol that cannot run became startable");
+await loadProtocolCatalog("p-block");
+assert(select.value==="p-block","a refresh dropped the person's own pick");
+let release;held.set("p-run",new Promise(resolve=>{release=resolve}));
+select.value="p-run";select.dispatch("change");
 await pick("p-block");
 release();await settle();
-assert(activate.hidden&&lastProtocolReview.protocol_id==="p-block",`a late review of an earlier pick replaced the current one: ${lastProtocolReview?.protocol_id}`);
+assert(start.hidden&&lastProtocolReview.protocol_id==="p-block",`a late review of an earlier pick replaced the current one: ${lastProtocolReview?.protocol_id}`);
 held.clear();
 await pick("p-run");
-assert(!panel.hidden&&!panel.open&&activate.hidden&&!node("start").disabled,"a runnable pick did not keep its review collapsed or stay startable");
+assert(!panel.hidden&&!panel.open&&!summary.hidden&&!start.hidden&&!node("start").disabled,"a runnable pick did not keep its detail folded, show its start screen and stay startable");
 select.value="p-run";await loadProtocolCatalog("p-block");
 assert(select.value==="p-run","a refresh picked a protocol that cannot run on the person's behalf");
 await pick("");
-assert(panel.hidden&&activate.hidden&&currentProtocolReviewId===null,"clearing the pick left a review and its activation on screen");
-await pick("p-act");
-currentProtocolReviewId="p-block";activate.dispatch("click");await settle();
-assert(!calls.includes("POST /api/protocols/p-block/activate-development")&&!calls.includes("POST /api/protocols/p-act/activate-development"),"activation acted on a protocol whose review is not on screen");
-await pick("p-act");
-activate.dispatch("click");await settle();
-assert(calls.includes("POST /api/protocols/p-act/activate-development"),"activation of the reviewed pick was not sent");
+assert(panel.hidden&&summary.hidden&&start.hidden&&currentProtocolReviewId===null,"clearing the pick left a result and its start on screen");
+// The start acts only on the protocol whose result is on screen, and makes no authority call.
+let started=null;startSession=async()=>{started=node("protocol-id").value};
+await pick("p-run");
+currentProtocolReviewId="p-block";start.dispatch("click");await settle();
+assert(started===null,"the start acted on a protocol whose result is not on screen");
+await pick("p-run");
+start.dispatch("click");await settle();
+assert(started==="p-run",`the start did not begin the session on the reviewed pick: ${started}`);
+assert(!calls.some(call=>call.startsWith("POST")),`an authority call was made: ${calls}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -341,12 +272,13 @@ class PlainScreenTermTests(unittest.TestCase):
 
     def test_review_panel_renders_the_plain_words(self):
         result = run_page_script(r"""
-renderProtocolReview({protocol_id:"p-1",title:"In-gel",revision_id:"pdf-1-analysis-2",lifecycle_state:"review_required",analysis_payload_sha256:"b".repeat(64),available_for_execution:false,
- source:{filename:"in-gel.pdf",sha256:"a".repeat(64),page_count:9},readiness:{status:"guidance_ready",reasons:[]},gates:{parsing:"passed"},
- outstanding_blockers:[{code:"unresolved_ambiguity",kind:"reviewer_can_clear",reviewer_action:"resolve_ambiguity",already_acknowledged:false,decision_options:["single_statement_is_authoritative"],clearing_decision:"single_statement_is_authoritative",citable_segments:[]}],
- reviewer_findings:[{kind:"ambiguity_resolved",actor_principal_id:"reviewer-a",actor_role:"reviewer"},{kind:"gate_acknowledged",reason_code:"no_declared_safety_warnings",actor_principal_id:"reviewer-a",actor_role:"reviewer"}],sections:[]});
-const text=["protocol-review-content","protocol-blockers","protocol-findings"].map(id=>visibleText(node(id))).join(" ");
-for(const phrase of ["원문 파일","9쪽","처리 단계 · 검토 필요","실행 전 확인 조건","어느 진술이 기준인지","근거 없는 해결은 서버가 거부합니다","고를 수 있는 원문 근거가 없어","이 모호성을 해결","모호성 해결","확인 처리"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+renderProtocolReview({protocol_id:"p-1",title:"In-gel",revision_id:"pdf-1-analysis-2",lifecycle_state:"ready",analysis_payload_sha256:"b".repeat(64),available_for_execution:true,analysis_available:true,
+ source:{filename:"in-gel.pdf",sha256:"a".repeat(64),page_count:9},readiness:{status:"guidance_ready",reasons:[]},
+ execution_blockers:[],execution_notices:[{code:"unresolved_ambiguity",message_ko:"원문에 서로 다른 두 서술이 있습니다.",kind:"source_note",source_page_number:4,source_excerpt:"20 µL or 30 µL",step_id:"step-4"}],
+ safety_notices:[],sections:[]});
+const text=["protocol-review-content","protocol-blockers","protocol-start-summary","protocol-start-overview","protocol-execution-blockers","protocol-safety-notices","protocol-execution-notices"].map(id=>visibleText(node(id))).join(" ");
+for(const phrase of ["원문 파일","9쪽","처리 단계 · 분석 통과 · 실행 가능","시작 전 알림 1건","원문에 서로 다른 두 서술","원문에 적힌 안전 주의 없음","이 프로토콜로 시작"])assert(text.includes(phrase),`plain wording missing: ${phrase}`);
+for(const gone of ["검토","승인","해제"])assert(!text.includes(gone),`reviewer wording still rendered: ${gone}`);
 // Lane U decision 2: the revision id and the hashes sit in the developer details, not the body.
 for(const hidden of ["pdf-1-analysis-2","SHA-256","a".repeat(64),"b".repeat(64)])assert(!text.includes(hidden),`identifier in the body: ${hidden}`);
 const dev=["protocol-review-content"].map(id=>devText(node(id))).join(" ");assert(dev.includes("pdf-1-analysis-2")&&dev.includes("b".repeat(64)),"identifier missing from the developer details");

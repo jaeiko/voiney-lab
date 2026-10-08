@@ -6,9 +6,8 @@ lane U2:
 * the experiment record state and each /api/workspace/experiments item carry
   ``protocol_title`` and ``day_sequence`` (the Nth started that UTC day,
   ``day_sequence_date``);
-* an approval record carries ``actor_display_name`` where one was recorded;
-* a finding refused for its content says why, with 400 or 422 -- only a real
-  permission refusal is 403;
+* (the approval record and the refused-finding codes of lane R6 left with
+  the approval flow, lane DI, 2026-10-08);
 * a turn whose playback was cut by a barge-in candidate still gets its end
   state: "complete" when the candidate is rejected, "cancelled" when the
   next turn is committed.
@@ -16,7 +15,6 @@ lane U2:
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 import tempfile
@@ -24,19 +22,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from tests import test_ambiguity_resolution as _ambiguity
-from voiney_lab import protocol_catalog
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.identity import Principal, Role
-from voiney_lab.protocol_catalog import (
-    AMBIGUITY_SINGLE_AUTHORITATIVE,
-    ProtocolApprovalError,
-    SharedSecretApprovalPolicy,
-)
 from voiney_lab.server import (
-    FINDING_REJECTIONS,
     ListenerSession,
-    _catalog_http_error,
     _public_experiment_report_state,
     _send_playback_terminal,
     cancel_cascade_generation,
@@ -87,8 +76,7 @@ class ExperimentListNameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             store = initialize_workspace_store(WorkspaceSettings(True, Path(temp)))
             first, second = _principal("a"), _principal("b")
-            reviewer = _principal("c", Role.REVIEWER)
-            for principal in (first, second, reviewer):
+            for principal in (first, second):
                 store.bootstrap_principal(principal)
             store.start_experiment(
                 first, session_id="experiment-1", protocol_id="in-gel",
@@ -96,8 +84,11 @@ class ExperimentListNameTests(unittest.TestCase):
             store.start_experiment(
                 second, session_id="experiment-2", protocol_id="in-gel",
                 protocol_revision_id="rev-1")
+            # Lane DI (2026-10-08): each person lists their own experiments.
             items = {
-                item["session_id"]: item for item in store.list_experiments(reviewer)
+                item["session_id"]: item
+                for owner in (first, second)
+                for item in store.list_experiments(owner)
             }
             store.close()
         self.assertEqual(items["experiment-1"]["day_sequence"], 1)
@@ -109,73 +100,6 @@ class ExperimentListNameTests(unittest.TestCase):
         # Not a workspace revision: the server fills the title from the catalog.
         self.assertIn("protocol_title", items["experiment-1"])
         self.assertIsNone(items["experiment-1"]["protocol_title"])
-
-
-class FindingRejectionTests(unittest.TestCase):
-    def setUp(self) -> None:
-        # The ambiguity tests' own catalog, one revision with one ambiguity.
-        _ambiguity.AmbiguityResolutionTests.setUp(self)
-
-    _protocol = _ambiguity.AmbiguityResolutionTests._protocol
-    _resolve = _ambiguity.AmbiguityResolutionTests._resolve
-
-    def _refused(self, **call):
-        with self.assertRaises(ProtocolApprovalError) as raised:
-            self._resolve(**call)
-        return _catalog_http_error(raised.exception)
-
-    def test_each_content_refusal_has_its_own_code_and_no_403(self) -> None:
-        for call, code, status in (
-            ({"decision": AMBIGUITY_SINGLE_AUTHORITATIVE, "evidence_segment_ids": ()},
-             "finding_evidence_missing", 422),
-            ({"decision": AMBIGUITY_SINGLE_AUTHORITATIVE,
-              "evidence_segment_ids": ("s-not-a-real-handle",)},
-             "finding_evidence_span_mismatch", 422),
-            ({"decision": AMBIGUITY_SINGLE_AUTHORITATIVE, "ambiguity_id": "ambiguity-404"},
-             "ambiguity_not_found", 422),
-            ({"decision": "looks_the_same_to_me"}, "finding_unsupported", 400),
-        ):
-            with self.subTest(code=code):
-                http = self._refused(**call)
-                self.assertEqual((http.status_code, http.detail), (status, code))
-
-    def test_a_missing_analysis_revision_is_its_own_code(self) -> None:
-        self.revision_id = "pdf-1"
-        http = self._refused(decision=AMBIGUITY_SINGLE_AUTHORITATIVE)
-        self.assertEqual((http.status_code, http.detail), (422, "analysis_revision_missing"))
-
-    def test_every_mapped_refusal_is_one_the_catalog_raises(self) -> None:
-        # The table is keyed by the catalog's own sentences; one that drifts
-        # would fall back to 403 silently.
-        source = ast.parse(Path(protocol_catalog.__file__).read_text(encoding="utf-8"))
-        raised = {
-            node.exc.args[0].value
-            for node in ast.walk(source)
-            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
-            and getattr(node.exc.func, "id", None) == "ProtocolApprovalError"
-            and node.exc.args and isinstance(node.exc.args[0], ast.Constant)
-        }
-        self.assertEqual(sorted(set(FINDING_REJECTIONS) - raised), [])
-        for message in raised - set(FINDING_REJECTIONS):
-            with self.subTest(message=message):
-                self.assertEqual(
-                    _catalog_http_error(ProtocolApprovalError(message)).status_code, 403)
-
-    def test_an_authorization_failure_is_still_403(self) -> None:
-        http = _catalog_http_error(ProtocolApprovalError("Protocol approval authorization failed."))
-        self.assertEqual((http.status_code, http.detail), (403, "protocol_approval_denied"))
-
-    def test_an_approval_names_its_approver_when_one_was_recorded(self) -> None:
-        self._resolve(decision=AMBIGUITY_SINGLE_AUTHORITATIVE)
-        self.catalog.approve(
-            self.protocol_id, self.revision_id,
-            policy=SharedSecretApprovalPolicy("secret"), presented_secret="secret",
-            actor_principal_id="reviewer@example.org", actor_role="reviewer",
-            actor_display_name="  Dr.  Kim  ",
-        )
-        approval = self.catalog.approval_context(self.protocol_id)
-        self.assertEqual(approval["actor_display_name"], "Dr. Kim")
-        self.assertEqual(approval["actor_principal_id"], "reviewer@example.org")
 
 
 class Socket:

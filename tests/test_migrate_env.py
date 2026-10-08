@@ -47,7 +47,7 @@ def old_unprefixed(new: str) -> str:
 
 OLD_MOSS = OLD_PREFIX + "MOSS_ENABLED"
 OLD_CATALOG = OLD_PREFIX + "SAFETY_CATALOG"
-OLD_PROFILES = OLD_PREFIX + "DEV_AUTH_PROFILES"
+OLD_FACILITY = OLD_PREFIX + "FACILITY_ID"
 OLD_OCR = OLD_PREFIX + "OCR_PROVIDERS"
 OLD_UNREAD = OLD_PREFIX + "NO_LONGER_READ"
 OLD_CHAT = old_unprefixed("VOINEY_LAB_ANSWER_MODEL")
@@ -65,7 +65,7 @@ FAKE_ENV = (
     f"UNRELATED_TOOL_TOKEN=keep {SECRET}-3\n"
     f"{OLD_CATALOG}=/absolute/{SECRET}-4/catalog.sqlite\n"
     "VOINEY_LAB_USAGE_SCOPE=demo\n"
-    f"{OLD_PROFILES}='[{{\"id\": \"{SECRET}-5\"}},\n {{\"id\": \"b\"}}]'\n"
+    f"{OLD_FACILITY}='[{{\"id\": \"{SECRET}-5\"}},\n {{\"id\": \"b\"}}]'\n"
     f"{OLD_OCR}=clova\n"
     f"COHERE_API_KEY=sk-co-{SECRET}-6\n"
     f"{OLD_UNREAD}=x={SECRET}-7\n"
@@ -102,7 +102,7 @@ class CheckTests(MigrateEnvCase):
         original = self.given(FAKE_ENV)
         code, output = self.run_tool("--check")
         self.assertEqual(code, 1)
-        for old in (OLD_MOSS, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_PROFILES, OLD_OCR):
+        for old in (OLD_MOSS, OLD_CHAT, OLD_VOICE, OLD_CATALOG, OLD_FACILITY, OLD_OCR):
             self.assertIn(f"  {old} → {renamed(old)}\n", output)
         stays = output.split("그대로인 이름")[1].split("코드가 읽지 않는 이름")[0]
         self.assertIn("  XAI_API_KEY\n", stays)
@@ -262,32 +262,6 @@ class StopTests(MigrateEnvCase):
 
     def test_a_line_that_is_not_dotenv_stops(self):
         self.assert_stops_without_writing(f"XAI_API_KEY={SECRET}\nthis is not a setting\n", "2번째 줄")
-
-
-class SecretReferenceTests(MigrateEnvCase):
-    def test_referenced_secrets_stay_with_the_provider_keys(self):
-        self.given(
-            f"{OLD_PREFIX}SECRET_REFERENCES={{\"secret://t/eln\":\"ELN_TOKEN\"}}\n"
-            f"ELN_TOKEN={SECRET}\n"
-        )
-        code, output = self.run_tool("--write")
-        self.assertEqual(code, 0, output)
-        keys = self.path.read_text(encoding="utf-8").split("## ── 공급자 키 ──\n")[1]
-        self.assertIn(f"ELN_TOKEN={SECRET}\n", keys.split("## ── ")[0])
-        self.assertIn('VOINEY_LAB_SECRET_REFERENCES={"secret://t/eln":"ELN_TOKEN"}\n', keys)
-
-    def test_a_reference_to_an_old_name_stops(self):
-        old_token = OLD_PREFIX + "ELN_TOKEN"
-        original = self.given(
-            f"VOINEY_LAB_SECRET_REFERENCES={{\"secret://t/eln\":\"{old_token}\"}}\n"
-            f"{old_token}={SECRET}\n"
-        )
-        code, output = self.run_tool("--write")
-        self.assertEqual(code, 2, output)
-        self.assertIn(old_token, output)
-        self.assertEqual(self.path.read_bytes(), original)
-        self.assertEqual(self.backups(), [])
-        self.assertEqual(self.run_tool("--check")[0], 1)
 
 
 class ExampleFileTests(unittest.TestCase):

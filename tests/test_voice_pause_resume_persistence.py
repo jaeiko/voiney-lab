@@ -33,10 +33,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.development_activation import development_activation_recorded
+from tests.runnable_fixture import runnable_fixture_assumed
+from tests.identity_support import development_principal
 from tests.test_frontend import run_node_harness
 from voiney_lab.curated_protocol import load_curated_protocol_fixture
-from voiney_lab.identity import Principal, Role
 from voiney_lab.server import (
     ListenerSession,
     ServerConfig,
@@ -129,7 +129,7 @@ class VoiceSessionHarness:
         cls.fixture = load_curated_protocol_fixture(FIXTURE, PROVENANCE, SOURCE_PDF)
 
     def setUp(self) -> None:
-        activation = development_activation_recorded()
+        activation = runnable_fixture_assumed()
         activation.__enter__()
         self.addCleanup(activation.__exit__, None, None, None)
         self._fresh_tenant()
@@ -139,14 +139,7 @@ class VoiceSessionHarness:
         self.addCleanup(tmp.cleanup)
         self.workspace_dir = Path(tmp.name) / "workspace"
         self.report_db = Path(tmp.name) / "reports.sqlite"
-        self.principal = Principal(
-            principal_id=PROFILE["principal_id"],
-            subject="dev:researcher-a",
-            organization_id=PROFILE["organization_id"],
-            display_name=PROFILE["display_name"],
-            roles=frozenset({Role.RESEARCHER}),
-            authentication_method="development",
-        )
+        self.principal = development_principal()
         store = initialize_workspace_store(WorkspaceSettings(True, self.workspace_dir))
         store.bootstrap_principal(self.principal)
         store.bind_resource(self.principal, "protocol_catalog", PROTOCOL_ID)
@@ -157,7 +150,6 @@ class VoiceSessionHarness:
             "VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED": "true",
             "VOINEY_LAB_EXPERIMENT_REPORT_DB": str(self.report_db),
             "VOINEY_LAB_USAGE_SCOPE": "demo",
-            "VOINEY_LAB_DEV_AUTH_PROFILES": json.dumps([PROFILE]),
         }
 
     def _session(self, scenario, *extra_patches):
@@ -166,7 +158,7 @@ class VoiceSessionHarness:
         placeholder = Path("/tmp/offline-session-contract")
         config = ServerConfig(
             placeholder, None, "test_only", frozenset({"ko", "en"}), "ko",
-            None, None, placeholder, placeholder, placeholder,
+            placeholder, placeholder, placeholder,
         )
         captured: list[ListenerSession] = []
 

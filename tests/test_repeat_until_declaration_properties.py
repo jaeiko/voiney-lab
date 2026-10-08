@@ -416,46 +416,8 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
         )
         self.revision_id = "pdf-1-analysis-1"
 
-    def test_resolving_every_ambiguity_alone_does_not_clear_the_wall(self) -> None:
-        from voiney_lab.protocol_catalog import (
-            AMBIGUITY_SINGLE_AUTHORITATIVE,
-            ProtocolCatalogUnavailableError,
-        )
-
-        ambiguities = [
-            construct
-            for construct in self.draft.protocol.constructs
-            if isinstance(construct, domain.SourceAmbiguity)
-        ]
-        self.assertEqual(len(ambiguities), 4)
-        for ambiguity in ambiguities:
-            self.catalog.resolve_ambiguity(
-                self.protocol_id,
-                self.revision_id,
-                ambiguity_id=ambiguity.ambiguity_id,
-                decision=AMBIGUITY_SINGLE_AUTHORITATIVE,
-                evidence_segment_ids=ambiguity.evidence.evidence_segment_ids,
-                actor_principal_id="reviewer@example.org",
-                actor_role="reviewer",
-                comment="Prose interval and timer literal agree.",
-            )
-        analysis = self.store.get_analysis_revision(self.protocol_id, 1, 1)
-        self.assertTrue(
-            self.catalog._every_ambiguity_resolved(
-                self.protocol_id, 1, analysis
-            )
-        )
-        # The safety gate is untouched, so the wall stands.
-        self.assertFalse(
-            self.catalog._readiness_gates_cleared(self.protocol_id, 1, analysis)
-        )
-        with self.assertRaises(ProtocolCatalogUnavailableError):
-            self.catalog.activate_development(self.protocol_id)
-        with self.assertRaises(ProtocolCatalogUnavailableError):
-            self.catalog.load_executable_fixture(self.protocol_id)
-
-    def test_the_two_remaining_reasons_are_both_reviewer_clearable(self) -> None:
-        from voiney_lab.protocol_catalog import ProtocolCatalog
+    def test_the_two_remaining_reasons_are_notices_so_the_analysis_may_run(self) -> None:
+        """Lane DI (2026-10-08): neither reason blocks; the fixture loads."""
 
         analysis = self.store.get_analysis_revision(self.protocol_id, 1, 1)
         remaining = sorted(set(analysis.readiness.reason_codes))
@@ -466,9 +428,10 @@ class TheWallNeedsEveryReasonClearedTests(unittest.TestCase):
                 domain.ReadinessReasonCode.UNRESOLVED_AMBIGUITY.value,
             ],
         )
-        for code in remaining:
-            with self.subTest(code=code):
-                self.assertIn(code, set(ProtocolCatalog._BLOCKER_RESOLUTION))
+        self.assertEqual(domain.execution_blocking_reasons(analysis.readiness), ())
+        self.assertTrue(self.catalog.get_entry(self.protocol_id).available_for_execution)
+        fixture = self.catalog.load_executable_fixture(self.protocol_id)
+        self.assertEqual(fixture.status, "analysis_passed")
 
 
 class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
@@ -545,48 +508,6 @@ class TheAnalysisIdentitySeesTheAnalysisTests(unittest.TestCase):
             self.assertIn(_UNSUPPORTED, first.readiness.reason_codes)
             self.assertNotIn(_UNSUPPORTED, second.readiness.reason_codes)
             self.assertNotEqual(first.analysis_id, second.analysis_id)
-
-    def test_a_finding_on_the_earlier_analysis_does_not_clear_the_later_one(self):
-        """Findings belong to the analysis they were recorded against.
-
-        The same trap in a second shape: a reviewer who cleared this fixture
-        before the declaration has cleared the analysis that existed then, and
-        the screen must ask again rather than treat the old finding as
-        standing.
-        """
-
-        from voiney_lab.protocol_catalog import (
-            ProtocolCatalogUnavailableError,
-        )
-
-        before = self._as_of(
-            domain.CapabilityPolicy(
-                "p1-conservative",
-                domain.P1_CAPABILITY_POLICY.supported_features
-                - {domain.FeatureCode.REPEAT_UNTIL},
-            )
-        )
-        after = self._as_of(domain.P1_CAPABILITY_POLICY)
-        with tempfile.TemporaryDirectory() as directory:
-            catalog, store = self._catalog(directory)
-            catalog.bootstrap_development_fixture(before)
-            catalog.acknowledge_readiness_gate(
-                before.protocol_id,
-                "pdf-1-analysis-1",
-                reason_code=(
-                    domain.ReadinessReasonCode
-                    .NO_DECLARED_SAFETY_WARNINGS.value
-                ),
-                actor_principal_id="reviewer@example.org",
-                actor_role="reviewer",
-            )
-            catalog.bootstrap_development_fixture(after)
-            later = store.get_analysis_revision(after.protocol_id, 1, 2)
-            self.assertFalse(
-                catalog._readiness_gates_cleared(after.protocol_id, 1, later)
-            )
-            with self.assertRaises(ProtocolCatalogUnavailableError):
-                catalog.activate_development(after.protocol_id)
 
 
 if __name__ == "__main__":  # pragma: no cover

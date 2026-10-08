@@ -12,7 +12,7 @@ from voiney_lab.configuration import (
 )
 from voiney_lab.tools import ToolContext
 from voiney_lab.vad import VadConfig
-from voiney_lab.semantic_intent import SemanticIntentSettings
+from voiney_lab.llm_router import LlmRouterSettings
 from pathlib import Path
 
 
@@ -207,30 +207,30 @@ class DeploymentConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             environment_file=Path(temporary)/".env"
             environment_file.write_text(
-                "VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true\n",
+                "VOINEY_LAB_LLM_ROUTER_ENABLED=true\n",
                 encoding="utf-8",
             )
             with patch.dict(
                 os.environ,
-                {"VOINEY_LAB_SEMANTIC_INTENT_ENABLED":"false"},
+                {"VOINEY_LAB_LLM_ROUTER_ENABLED":"false"},
                 clear=True,
             ):
                 server._load_project_environment(environment_file)
                 self.assertFalse(
-                    SemanticIntentSettings.from_environment().enabled
+                    LlmRouterSettings.from_environment().enabled
                 )
 
     def test_local_development_environment_precedes_documented_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             environment_file=Path(temporary)/".env"
             environment_file.write_text(
-                "VOINEY_LAB_SEMANTIC_INTENT_ENABLED=true\n",
+                "VOINEY_LAB_LLM_ROUTER_ENABLED=true\n",
                 encoding="utf-8",
             )
             with patch.dict(os.environ,{},clear=True):
                 server._load_project_environment(environment_file)
                 self.assertTrue(
-                    SemanticIntentSettings.from_environment().enabled
+                    LlmRouterSettings.from_environment().enabled
                 )
 
     def test_protocol_analysis_model_is_deployment_supplied_grok_4_6(self):

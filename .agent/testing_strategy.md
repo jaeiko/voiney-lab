@@ -5,7 +5,7 @@
 In a wet-lab AI workflow copilot, software reliability is directly tied to experimental integrity and human safety.
 Our testing pyramid spans 5 layers:
 1. **Unit Tests**: Deterministic validation of intent classifiers, VAD windowing, sentence chunkers, audio converters, and schema validators.
-2. **State Machine & Gate Tests**: Verification of procedure lifecycle, timer countdowns, observation validation, and handoff blocking.
+2. **State Machine & Gate Tests**: Verification of the experiment session's step lifecycle, timer countdowns, observation validation, and completion gates.
 3. **Multi-Brain & Grounding Tests**: Validation of prompt schemas, evidence extraction, citation enforcement, and unsupported fallback.
 4. **WebSocket & Integration Tests**: End-to-end simulation of full voice turns, tool execution loops, barge-in cancellation, and session recovery.
 5. **Frontend Regression Tests**: DOM rendering, timer widget countdowns, badge status updates, and audio worklet streaming.
@@ -20,7 +20,7 @@ Our testing pyramid spans 5 layers:
 .venv/bin/pytest -q
 
 # Run specific domain test suites
-.venv/bin/pytest tests/test_procedures.py
+.venv/bin/pytest tests/test_curated_protocol_cascade.py
 .venv/bin/pytest tests/test_completion_intent.py
 .venv/bin/pytest tests/test_experiment_reports.py
 .venv/bin/pytest tests/test_multi_brain.py

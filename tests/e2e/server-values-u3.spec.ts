@@ -12,26 +12,21 @@ test.use({ timezoneId: 'Asia/Seoul' });
 const PROTOCOL_ID = 'protocol-ingel-0001';
 const REVISION_ID = 'fixture-69517f0fe629d0e4dc35';
 
-const entry = (approval: Record<string, unknown> | null = null) => ({
+const entry = (runnable = false) => ({
   protocol_id: PROTOCOL_ID, title: 'In-gel digestion', source_filename: 'in-gel-digestion.pdf',
   source_sha256: 'a'.repeat(64), revision_id: REVISION_ID,
-  readiness_status: approval ? 'guidance_ready' : 'analysis_required',
-  approval_status: approval ? 'approved' : 'development_only', analysis_status: 'analysis_complete', step_count: 25,
-  created_at: '2026-10-05T01:00:00+00:00', available_for_execution: Boolean(approval), development_only: !approval,
-  lifecycle_state: approval ? 'ready' : 'blocked',
-  approval: approval ?? { status: 'development_only', final_approval: false, actor_principal_id: 'local-admin', actor_role: 'lab_admin', recorded_at: '2026-10-05T01:02:00+00:00' },
+  readiness_status: runnable ? 'guidance_ready' : 'analysis_required',
+  analysis_status: 'review_required', step_count: 25,
+  created_at: '2026-10-05T01:00:00+00:00', available_for_execution: runnable, development_only: !runnable,
+  lifecycle_state: runnable ? 'ready' : 'blocked',
 });
 
 const review = {
-  protocol_id: PROTOCOL_ID, revision_id: 'pdf-1-analysis-2', source: { filename: 'in-gel-digestion.pdf', page_count: 9 },
-  readiness: { status: 'analysis_required', reasons: [] }, gates: {},
+  protocol_id: PROTOCOL_ID, revision_id: 'pdf-1-analysis-2', source: { filename: 'in-gel-digestion.pdf', page_count: 9 }, analysis_available: true,
+  readiness: { status: 'analysis_required', reasons: [] },
   constructs: [{ construct_type: 'SourceAmbiguity', ambiguity_id: 'amb-1', step_id: 'step-4', resolved: false }],
-  outstanding_blockers: [{
-    code: 'unresolved_ambiguity', kind: 'reviewer_can_clear', step_id: 'step-4', source_page_number: 4,
-    reviewer_action: 'resolve_ambiguity', already_acknowledged: false,
-    decision_options: ['single_statement_is_authoritative'], clearing_decision: 'single_statement_is_authoritative',
-    citable_segments: [{ segment_id: 'seg-p4-0', source_page_number: 4, segment_index: 0, excerpt: 'Incubate the gel pieces at 37 °C for 30 min.' }],
-  }],
+  execution_blockers: [], execution_notices: [{ code: 'unresolved_ambiguity', kind: 'source_note', step_id: 'step-4', source_page_number: 4, message_ko: '원문에 서로 다른 두 서술이 있습니다.' }],
+  safety_notices: [],
 };
 
 async function openPage(page: Page, protocol = entry()) {
@@ -110,57 +105,14 @@ test.describe('Server values on the screen (lane U3)', () => {
     await expect(options.nth(2)).toHaveText(/^Western blot · 2026-10-06 13:30 · 2번째 · 3단계 · /);
   });
 
-  test('an approval names the approver the server recorded, else the role', async ({ page }) => {
-    const approved = (name: string | null) => ({ status: 'approved', final_approval: true, actor_principal_id: 'principal-77',
-      actor_role: 'lab_admin', actor_display_name: name, recorded_at: '2026-10-05T16:30:00+00:00' });
-    await openPage(page, entry(approved('김연구')));
+  test('the context card says the analysis state and the experimenter, never an approver', async ({ page }) => {
+    await openPage(page, entry(true));
     await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
     await page.evaluate(() => renderExperimentContext());
-    // 16:30 UTC on the 5th is the 6th in Seoul.
-    await expect(page.locator('#experiment-context-version')).toContainText('승인본 · 2026-10-06 · 김연구');
-    await expect(page.locator('#experiment-context-approval')).toContainText('김연구');
-    await expect(page.locator('#experiment-context-version')).not.toContainText('랩 관리자');
-
-    await page.unroute('**/api/protocols');
-    await openPage(page, entry(approved(null)));
-    await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
-    await page.evaluate(() => renderExperimentContext());
-    await expect(page.locator('#experiment-context-version')).toContainText('승인본 · 2026-10-06 · 랩 관리자');
-  });
-
-  test('each refusal reason says what to do, and only a missing role asks for a reviewer login', async ({ page }) => {
-    let answer = { status: 422, detail: 'finding_evidence_missing' };
-    await page.route(`**/api/protocols/${PROTOCOL_ID}/revisions/**`, route => route.fulfill({ status: answer.status, json: { detail: answer.detail } }));
-    await openPage(page);
-    await page.locator('#protocol-id').selectOption(PROTOCOL_ID);
-    await expect(page.locator('#protocol-blockers .citation-row')).toHaveCount(1);
-    await page.locator('#protocol-blockers .citation-row input').first().check();
-    const resolve = page.locator('#protocol-blockers button', { hasText: '이 모호성을 해결' });
-    const note = page.locator('#protocol-blockers .finding-status');
-    const firstLine = () => note.evaluate(node => [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE).map(child => child.textContent).join(''));
-    const expected: Array<[number, string, string]> = [
-      [422, 'finding_evidence_missing', '원문 근거를 하나 이상 고른 뒤 다시 눌러 주세요.'],
-      [422, 'finding_evidence_span_mismatch', '근거를 다시 골라 주세요.'],
-      [422, 'ambiguity_not_found', '‘검토 새로고침’ 뒤 다시 확인해 주세요.'],
-      [422, 'analysis_revision_missing', '분석이 끝난 뒤 다시 눌러 주세요.'],
-      [422, 'finding_target_not_found', '‘검토 새로고침’ 뒤 다시 골라 주세요.'],
-      [422, 'finding_value_mismatch', '횟수를 고쳐 주세요.'],
-      [422, 'finding_not_recorded', '되돌릴 판단 기록이 없습니다.'],
-      [400, 'finding_unsupported', '다른 선택지를 골라 주세요.'],
-      [400, 'finding_value_invalid', '횟수는 1 이상의 숫자로 적어 주세요.'],
-    ];
-    for (const [status, detail, words] of expected) {
-      answer = { status, detail };
-      await resolve.click();
-      await expect(note, detail).toContainText(words);
-      const line = await firstLine();
-      expect(line, detail).toMatch(/^기록하지 못했습니다\. /);
-      expect(line, detail).not.toContain('검토자 계정으로 로그인');
-      expect(line, detail).not.toContain('\n');
-    }
-    answer = { status: 403, detail: 'authorization_denied' };
-    await resolve.click();
-    await expect.poll(firstLine).toBe('기록하지 못했습니다. 검토자 계정으로 로그인한 뒤 다시 눌러 주세요.');
+    await expect(page.locator('#experiment-context-version')).toContainText('분석 통과');
+    await expect(page.locator('#experiment-context-experimenter')).not.toHaveText('');
+    const card = await page.locator('.experiment-context-card').innerText();
+    for (const word of ['승인', '검토자', '랩 관리자']) expect(card).not.toContain(word);
   });
 
   test('the server end of a cut-off playback replaces the screen guess on an earlier card', async ({ page }) => {
@@ -199,7 +151,7 @@ test.describe('Server values on the screen (lane U3)', () => {
   test('model knowledge is named "AI 일반 지식" in the turn card too', async ({ page }) => {
     await openPage(page);
     await send(page, { type: 'ready', research_capabilities: {
-      external_text: { status: 'disabled' }, supplemental_model: { status: 'enabled' }, web_image: { status: 'disabled' }, generated_visual: { status: 'disabled' } } });
+      external_text: { status: 'disabled' }, supplemental_model: { status: 'enabled' } } });
     await send(page, { type: 'speech.start', turn_id: 1, generation: 0 });
     await send(page, { type: 'transcript', turn_id: 1, generation: 0, text: '완충액은 왜 써?' });
     await send(page, { type: 'reply.complete', turn_id: 1, generation: 0, text: 'pH 를 일정하게 유지합니다.', answer_origin: 'supplemental_model_knowledge' });

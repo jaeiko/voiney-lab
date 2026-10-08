@@ -2,11 +2,13 @@
 
 Human decision of 2026-10-06: when a document does not reach a start, the
 review says in one Korean line where it stopped -- 원문 읽기, OCR, 분석, 근거
-대조, 실행 준비, 사람 확인, 번역 -- why, and what a person does; and the
-English reasons and notices still on the review screen are given in Korean,
-the server's wording by the server and the page's by the page. The English
+대조, 실행 준비, 번역 -- why, and what a person does; and the English reasons
+and notices still on the review screen are given in Korean, the server's
+wording by the server and the page's by the page. The English
 ``ReadinessReason.message`` the analysis records is unchanged; ``message_ko``
-stands beside it.
+stands beside it. Under the MVP rule (lane DI, 2026-10-08) there is no 사람
+확인 stage: a passed analysis with no execution blocker is 실행 가능, and the
+experimenter's press of start is the one confirmation.
 """
 
 from __future__ import annotations
@@ -44,15 +46,13 @@ def korean(text: object) -> bool:
 
 
 class _Case(unittest.TestCase):
-    skip_gates = False
-
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         clear_protocol_pdf_cache()
         self.store = initialize_protocol_store(
             ProtocolPersistenceSettings(True, self.root / "catalog"))
-        self.catalog = ProtocolCatalog(self.store, skip_readiness_gates=self.skip_gates)
+        self.catalog = ProtocolCatalog(self.store)
         self.pdf = self.root / "sample.pdf"
         write_text_pdf(
             self.pdf, "Protocol Test\nSection preparation\n1. Add solution.\nWear gloves.",
@@ -100,25 +100,36 @@ class StageLineTests(_Case):
         self.assertIn("원문 쪽의 글과 맞지 않아", line["message"])
         self.assertIn("분석 다시 시도", line["action"])
 
-    def test_a_passed_analysis_with_a_gate_is_stuck_at_readiness_until_a_person_clears_it(self) -> None:
+    def test_a_passed_analysis_whose_only_reason_is_a_notice_is_ready(self) -> None:
+        # Lane DI (2026-10-08): no_declared_safety_warnings is a notice, not a
+        # gate. The analysis passed, so the line says the document may run and
+        # what the experimenter does: read the safety statements and press start.
         self.analysed()
-        line = self.pipeline()
-        self.assertEqual((line["stage"], line["blocked"]), ("readiness", True))
-        self.assertIn("안전 경고", line["message"])
-        self.assertIn("검토자", line["action"])
-        self.assertEqual(line["remaining_reason_codes"], ["no_declared_safety_warnings"])
-        self.catalog.acknowledge_readiness_gate(
-            self.protocol_id, "pdf-1-analysis-1",
-            reason_code=domain.ReadinessReasonCode.NO_DECLARED_SAFETY_WARNINGS.value,
-            actor_principal_id="reviewer@example.org", actor_role="reviewer",
-            comment="Warnings reviewed against the source.")
-        line = self.pipeline()
-        self.assertEqual((line["stage"], line["blocked"]), ("activation", False))
-        self.assertIn("사람 확인", line["message"])
-        self.catalog.activate_development(self.protocol_id)
         line = self.pipeline()
         self.assertEqual((line["stage"], line["blocked"]), ("ready", False))
         self.assertTrue(korean(line["message"]))
+        self.assertIn("이 프로토콜로 시작", line["action"])
+        self.assertNotIn("검토자", line["action"])
+        self.assertNotIn("remaining_reason_codes", line)
+
+    def test_an_analysis_with_an_execution_blocker_is_stuck_at_readiness(self) -> None:
+        self.analysed()
+        analysis = self.catalog._latest_analysis(
+            self.catalog._latest_protocol_revision(self.protocol_id))
+        blocked = domain.ReadinessAssessment(
+            status=domain.ReadinessStatus.ANALYSIS_REQUIRED,
+            label=domain.ANALYSIS_REQUIRED_LABEL,
+            reasons=(domain.ReadinessReason(
+                code=domain.ReadinessReasonCode.NO_EXECUTABLE_STEPS,
+                message="The structured Protocol contains no executable source steps."),))
+        self.store.append_analysis_revision(
+            self.protocol_id, 1, "analysis-blocked", analysis.protocol, blocked,
+            analysis.capability_policy_id)
+        line = self.pipeline()
+        self.assertEqual((line["stage"], line["blocked"]), ("readiness", True))
+        self.assertIn("실행할 단계를 원문에서 찾지 못했습니다", line["message"])
+        self.assertIn("분석 다시 시도", line["action"])
+        self.assertEqual(line["remaining_reason_codes"], ["no_executable_steps"])
 
     def test_a_document_without_text_is_stuck_at_ocr_until_the_ocr_text_is_in(self) -> None:
         from tests.test_lane_px_auto_ocr import MixedProvider
@@ -137,19 +148,8 @@ class StageLineTests(_Case):
 
     def test_every_stage_has_a_korean_name(self) -> None:
         for stage in ("extraction", "ocr", "analysis", "evidence", "readiness",
-                      "activation", "translation", "ready"):
+                      "translation", "ready"):
             self.assertTrue(korean(PIPELINE_STAGE_KO[stage]) or PIPELINE_STAGE_KO[stage] == "OCR", stage)
-
-
-class TestModeStageTests(_Case):
-    skip_gates = True
-
-    def test_test_mode_says_the_gates_are_skipped_and_what_to_press(self) -> None:
-        self.analysed()
-        line = self.pipeline()
-        self.assertEqual((line["stage"], line["blocked"]), ("activation", False))
-        self.assertIn("테스트 모드", line["message"])
-        self.assertIn("이 프로토콜로 시작", line["action"])
 
 
 class KoreanReasonTests(_Case):
@@ -176,18 +176,20 @@ class KoreanReasonTests(_Case):
         self.analysed()
         review = self.catalog.review(self.protocol_id)
         readiness = review["readiness"]
-        self.assertEqual(readiness["label_ko"], "실행 전 확인할 사유가 남아 있음")
+        self.assertEqual(readiness["label_ko"], "시작 전에 읽을 알림이 있음")
         for reason in readiness["reasons"]:
             self.assertTrue(korean(reason["message_ko"]), reason)
             # The recorded English is untouched.
             self.assertIn("A reviewer must confirm", reason["message"])
-        self.assertTrue(korean(review["outstanding_blockers"][0]["message_ko"]))
-        self.assertEqual(review["pipeline"]["stage"], "readiness")
+        # Lane DI: the reason is a notice the experimenter reads before
+        # starting, not a blocker; the document is ready.
+        self.assertEqual(review["execution_blockers"], [])
+        self.assertTrue(korean(review["execution_notices"][0]["message_ko"]))
+        self.assertEqual(review["execution_notices"][0]["kind"], "source_note")
+        self.assertEqual(review["pipeline"]["stage"], "ready")
 
 
 class TranslationStageTests(_Case):
-    skip_gates = True
-
     def tearDown(self) -> None:
         server_module._REVISION_TRANSLATIONS_RUNNING.clear()
         super().tearDown()
@@ -195,10 +197,9 @@ class TranslationStageTests(_Case):
     def test_without_a_workspace_the_line_says_translation_is_off(self) -> None:
         self.analysed()
         review = self.catalog.review(self.protocol_id)
-        review["development_activation_allowed"] = True
         with patch.dict(os.environ, {"VOINEY_LAB_WORKSPACE_ENABLED": "false"}):
             line = server_module._pipeline_with_translation(self.catalog, self.protocol_id, review)
-        self.assertEqual(line["stage"], "activation")
+        self.assertEqual(line["stage"], "ready")
         self.assertIn("이 프로토콜로 시작", line["action"])
         self.assertEqual(line["translation"]["state"], "off")
         self.assertIn("원문으로 안내", line["translation"]["message"])
@@ -206,7 +207,6 @@ class TranslationStageTests(_Case):
     def test_with_a_workspace_the_line_follows_the_korean_as_it_is_made(self) -> None:
         self.analysed()
         review = self.catalog.review(self.protocol_id)
-        review["development_activation_allowed"] = False
         fixture = self.catalog.load_analysis_fixture(self.protocol_id)
         with tempfile.TemporaryDirectory() as workspace, patch.dict(os.environ, {
             "VOINEY_LAB_WORKSPACE_ENABLED": "true",
@@ -231,32 +231,36 @@ class TranslationStageTests(_Case):
             self.assertEqual(
                 (done["translation"]["steps_korean"], done["translation"]["steps_total"]), (1, 1))
             self.assertIn("번역 끝", done["translation"]["message"])
-            self.assertIn("검토자", done["action"])
+            self.assertIn("이 프로토콜로 시작", done["action"])
 
 
 class PageTests(unittest.TestCase):
     def test_the_review_shows_the_stage_line_and_korean_reasons_only(self) -> None:
         result = run_page_script(r"""
-const review={protocol_id:"protocol-x",title:"Headspace",revision_id:"pdf-1-analysis-1",lifecycle_state:"blocked",readiness_status:"analysis_required",available_for_execution:false,
+const review={protocol_id:"protocol-x",title:"Headspace",revision_id:"pdf-1-analysis-1",lifecycle_state:"blocked",readiness_status:"analysis_required",available_for_execution:false,analysis_available:true,
  source:{filename:"headspace.pdf",sha256:"a".repeat(64),page_count:16},
- pipeline:{stage:"readiness",stage_ko:"실행 준비",blocked:true,message:"이 프로토콜의 안전 경고를 검토자가 실행 전에 확인해야 합니다. (외 1건)",action:"검토자가 검토 화면에서 사유를 하나씩 확인·해제한 뒤 승인합니다.",ocr_page_numbers:[3],translation:{state:"running",message:"번역 준비 중 · 한국어 단계 12/62 · 준비되면 다음 안내부터 씁니다."}},
- readiness:{status:"analysis_required",label:"Protocol analysis required",label_ko:"실행 전 확인할 사유가 남아 있음",reasons:[
+ pipeline:{stage:"readiness",stage_ko:"실행 준비",blocked:true,message:"실행할 단계를 원문에서 찾지 못했습니다. 원문을 확인하고 '분석 다시 시도'를 누르세요.",action:"원문을 확인하고 '분석 다시 시도'를 누르세요.",ocr_page_numbers:[3],translation:{state:"running",message:"번역 준비 중 · 한국어 단계 12/62 · 준비되면 다음 안내부터 씁니다."}},
+ readiness:{status:"analysis_required",label:"Protocol analysis required",label_ko:"시작 전에 읽을 알림이 있음",reasons:[
   {code:"unresolved_ambiguity",message:"A source ambiguity remains unresolved.",message_ko:"원문에 서로 다른 두 서술이 있어 어느 쪽이 맞는지 정해지지 않았습니다."},
-  {code:"no_declared_safety_warnings",message:"A reviewer must confirm this Protocol's safety warnings before execution.",message_ko:"이 프로토콜의 안전 경고를 검토자가 실행 전에 확인해야 합니다."}]},
- outstanding_blockers:[{code:"no_declared_safety_warnings",message:"A reviewer must confirm this Protocol's safety warnings before execution.",message_ko:"이 프로토콜의 안전 경고를 검토자가 실행 전에 확인해야 합니다.",kind:"reviewer_can_clear",reviewer_action:"acknowledge_gate",already_acknowledged:false}],
- gates:{parsing:"passed",structural_readiness:"blocked"},sections:[]};
+  {code:"no_executable_steps",message:"The structured Protocol contains no executable source steps.",message_ko:"실행할 단계를 원문에서 찾지 못했습니다."}]},
+ execution_blockers:[{code:"no_executable_steps",message:"The structured Protocol contains no executable source steps.",message_ko:"실행할 단계를 원문에서 찾지 못했습니다.",kind:"blocking",source_page_number:null,source_excerpt:null,step_id:null}],
+ execution_notices:[{code:"unresolved_ambiguity",message:"A source ambiguity remains unresolved.",message_ko:"원문에 서로 다른 두 서술이 있어 어느 쪽이 맞는지 정해지지 않았습니다.",kind:"source_note",source_page_number:4,source_excerpt:"20 µL or 30 µL",step_id:"step-4"}],
+ safety_notices:[],sections:[]};
 renderProtocolReview(review);
-const hosts=["protocol-review-content","protocol-blockers"].map(node);
+const hosts=["protocol-review-content","protocol-blockers","protocol-start-summary","protocol-start-overview","protocol-execution-blockers","protocol-safety-notices","protocol-execution-notices"].map(node);
 const visible=hosts.map(visibleText).join(" "),dev=hosts.map(devText).join(" ");
-assert(visible.includes("막힘 · 실행 준비 · 이 프로토콜의 안전 경고"),`stage line missing: ${visible}`);
-assert(visible.includes("할 일 · 검토자가 검토 화면에서"),`action missing: ${visible}`);
+assert(visible.includes("막힘 · 실행 준비 · 실행할 단계를 원문에서 찾지 못했습니다"),`stage line missing: ${visible}`);
+assert(visible.includes("할 일 · 원문을 확인하고 '분석 다시 시도'를 누르세요."),`action missing: ${visible}`);
 assert(visible.includes("OCR 쪽 · p.3"),`OCR pages missing: ${visible}`);
 assert(visible.includes("번역 · 번역 준비 중 · 한국어 단계 12/62"),`translation line missing: ${visible}`);
 assert(visible.includes("원문에 서로 다른 두 서술이 있어"),`Korean reason missing: ${visible}`);
-for(const english of ["A source ambiguity remains unresolved.","A reviewer must confirm"]){
+assert(visible.includes("실행을 막는 사유 1건")&&visible.includes("시작 전 알림 1건"),`execution lists missing: ${visible}`);
+assert(node("protocol-start").hidden,"a blocked protocol offered the start button");
+for(const english of ["A source ambiguity remains unresolved.","The structured Protocol contains no executable source steps."]){
  assert(!visible.includes(english),`English still on screen: ${english}`);
  assert(dev.includes(english),`English not kept in 개발 상세 정보: ${english}`);
 }
+for(const word of ["검토자","승인"])assert(!visible.includes(word),`${word} still on the screen: ${visible}`);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 

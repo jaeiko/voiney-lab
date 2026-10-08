@@ -256,11 +256,11 @@ class UnreadPageAtExecutionTests(unittest.TestCase):
         )
 
     def test_the_acknowledgement_is_not_a_reviewer_finding(self) -> None:
-        from voiney_lab.protocol_catalog import ProtocolCatalog
+        from voiney_lab import experiment_protocol as domain
 
-        self.assertNotIn(
-            "unread_page", set(ProtocolCatalog._BLOCKER_RESOLUTION)
-        )
+        # The acknowledgement is a session fact: no readiness reason is
+        # named after it, so nothing before the run can stand in for it.
+        self.assertFalse(hasattr(domain.ReadinessReasonCode, "UNREAD_PAGE"))
         session = self._session({5: ()})
         session.acknowledge_unread_page(
             5, actor_principal_id="operator-a", actor_role="researcher"
