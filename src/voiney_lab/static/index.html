@@ -1783,7 +1783,7 @@ function renderStepTimers(timers){
  heading.textContent=verified.length?`단계 타이머 ${verified.length}개 · 원문에서 확인한 시간`:"원문에서 확인한 단계 타이머 없음";group.appendChild(heading);
  for(const item of verified){
   const row=document.createElement("p");row.className="protocol-review-status";
-  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’ · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
+  row.textContent=`${item.step_label?`${item.step_label}단계`:"단계"} · ${item.value_ko||""}${item.choice===true?" (시작할 때 고름)":""} · 원문 ‘${item.source_literal||""}’${item.source==="step_text"?" · 단계 문장에서 읽음":""} · p.${item.source_page_number??"—"} · 발췌 “${item.source_excerpt||""}”`;
   group.appendChild(row);
  }
  if(refused.length){

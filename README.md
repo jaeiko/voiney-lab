@@ -749,12 +749,22 @@ source. The in-gel sidecar is unchanged and its fixture keeps its own path.
   does this; `ProtocolCatalog._fixture_for_analysis` puts the result on the
   fixture as `timer_manifest` (step_id → seconds, the sidecar's shape),
   `timer_choices` and `timer_table`, and `timer_seconds_for_step` reads it.
+  The excerpt also counts as the step's when it lies in the stretch of the
+  page from the step's text to the next step's (a protocols.io duration line,
+  "03:00:00", printed under the step).
+- **Times in the step text** (human decision during the measurement,
+  2026-10-08). Measured on 12 real analyses, the analysis seldom attaches a
+  duration (only ANKOM did), so the server also reads the times printed in
+  the step's own instruction text -- the analysis's source-verified words,
+  checked again on the step's pages -- with the same parser and refusals.
+  These rows carry `source: "step_text"`; the analysis's durations carry
+  `"analysis_duration"`. One value kept from both is one timer.
 - **What does not** (decision 2). No number ("overnight", "until clear"), a
   bound ("at least 30 min", "a minimum of 2 hours", "30분 이상"), an interval
   ("every 10 min"), a time since something else ("After 2 hours, remove"), a
-  number beside an unnumbered alternative ("1 h or overnight"), a step the
-  analysis marked as having an ambiguous time, and a time printed in a step
-  the analysis did not extract. Each is listed with its reason; asked about,
+  number beside an unnumbered alternative ("1 h or overnight"), and a step
+  the analysis marked as having an ambiguous time. Each is listed with its
+  reason; asked about,
   the step's source sentence is read back.
 - **Choices** (decision 2). A range ("12–16 h"), printed alternatives ("15 or
   30 min") or two durations of one step are asked when the timer starts:

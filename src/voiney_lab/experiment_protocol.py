@@ -2281,7 +2281,6 @@ SOURCE_DURATION_REFUSAL_KO: dict[str, str] = {
     "analysis_value_mismatch": "분석이 적은 초가 원문 값과 달라요.",
     "step_time_ambiguity": "분석이 이 단계의 시간을 모호하다고 표시했어요.",
     "before_start": "단계가 아닌 시작 전 준비에 적힌 시간이에요.",
-    "not_extracted": "분석이 이 시간을 단계의 시간으로 뽑지 않았어요.",
 }
 
 
@@ -2408,6 +2407,9 @@ class VerifiedStepTimer:
     literal: str
     seconds: tuple[int, ...]
     page_number: int
+    #: "analysis_duration": a duration the analysis attached to the step;
+    #: "step_text": read by the server in the step's own instruction text.
+    source: str = "analysis_duration"
 
 
 @dataclass(frozen=True)

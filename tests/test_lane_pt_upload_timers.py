@@ -263,6 +263,44 @@ class TheServerVerificationTests(_Catalog):
         self.assertEqual(table.manifest(), {"w1": 600})
         self.assertIn(("w2", "not_in_step_text"), {(r.step_id, r.reason) for r in table.refused})
 
+    def test_a_time_in_the_steps_own_text_is_read_when_the_analysis_attached_none(self) -> None:
+        """Human decision during the measurement: the analysis seldom attaches one."""
+
+        pdf = Path(self.temp.name) / "text.pdf"
+        page = ("Text Protocol\nSection spin\n1. Centrifuge at 14000 x g for 5 minutes.\n"
+                "2. Block for 60 minutes or 1 h.\n3. Incubate overnight at 4 C.")
+        write_text_pdf(pdf, page, title="Text Protocol")
+        extraction = extract_protocol_pdf(pdf)
+        texts = (
+            "1. Centrifuge at 14000 x g for 5 minutes.",
+            "2. Block for 60 minutes or 1 h.",
+            "3. Incubate overnight at 4 C.",
+        )
+        steps = tuple(
+            domain.ProtocolSourceStep(f"t{n}", str(n), text, _evidence(text))
+            for n, text in enumerate(texts, 1)
+        )
+        protocol = domain.ExperimentProtocol(
+            "text",
+            domain.ProtocolMetadata(extraction, "Text Protocol", "en",
+                                    evidence=_evidence("Text Protocol")),
+            sections=(domain.ProtocolSection(
+                "spin", "Section spin", _evidence("Section spin"), steps,
+            ),),
+        )
+        domain.validate_protocol(protocol)
+        table = verify_step_timers(protocol, extraction)
+        self.assertEqual(
+            [(t.step_id, t.literal, t.seconds, t.source) for t in table.verified],
+            [("t1", "5 minutes", (300,), "step_text"),
+             ("t2", "60 minutes or 1 h", (3600,), "step_text")],
+        )
+        self.assertEqual(table.manifest(), {"t1": 300, "t2": 3600})
+        self.assertEqual(
+            {(r.step_id, r.literal, r.reason) for r in table.refused},
+            {("t3", "overnight", "no_number")},
+        )
+
     def test_seconds_the_analysis_wrote_must_be_a_source_value(self) -> None:
         table = self.table(step3_parsed=50400)  # 14 h: not printed
         self.assertNotIn("step-3", table.choices())

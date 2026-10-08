@@ -2224,9 +2224,12 @@ def verify_step_timers(
       ("overnight", "until ...") beside it;
     * where the analysis also wrote seconds, they are one of the values read.
 
-    A step the analysis marked as having an ambiguous time keeps no timer.
-    Times printed in a step's text that the analysis did not extract are
-    listed, never made into timers. Before-start times are listed too.
+    Times printed in the step's own instruction text (its and its
+    sub-actions') are read the same way and kept as ``source="step_text"``
+    when that text is on a page of the step (human decision during the lane's
+    measurement: the analysis seldom attaches a duration). A step the
+    analysis marked as having an ambiguous time keeps no timer. Before-start
+    times are listed, never made into timers.
     """
 
     steps = tuple(
@@ -2298,6 +2301,44 @@ def verify_step_timers(
                         step.step_id, step.source_label, action.action_id,
                         excerpt, duration.literal, duration.seconds, page_number,
                     ))
+        # The times the step's own instruction text prints (human decision
+        # during lane PT's measurement, 2026-10-08): the analysis seldom
+        # attaches a duration, but its step text is the source's own words,
+        # verified on the page. The server reads the number and unit there
+        # with the same refusals; a value already kept from the analysis's
+        # durations is not kept twice.
+        seen = {item.literal for item in refused if item.step_id == step.step_id}
+        seen.update(timer.literal for timer in step_verified)
+        for owner in (step, *step.sub_actions):
+            text = owner.instruction_source_text
+            owner_page = owner.evidence.source_page_number
+            reading = domain.read_source_durations(text)
+            on_page = anchor <= owner_page <= last and _claim_occurs_on_evidence_page(
+                text, owner.evidence, extraction
+            )
+            for duration in reading.durations:
+                if duration.literal in seen or any(
+                    duration.literal in excerpt for excerpt in extracted
+                ):
+                    continue
+                seen.add(duration.literal)
+                if not on_page:
+                    refuse(getattr(owner, "action_id", None), text,
+                           duration.literal, "not_on_page", owner_page)
+                    continue
+                step_verified.append(domain.VerifiedStepTimer(
+                    step.step_id, step.source_label,
+                    getattr(owner, "action_id", None), text, duration.literal,
+                    duration.seconds, owner_page, source="step_text",
+                ))
+            for item in reading.refused:
+                if item.literal in seen or any(
+                    item.literal in excerpt for excerpt in extracted
+                ):
+                    continue
+                seen.add(item.literal)
+                refuse(getattr(owner, "action_id", None), text, item.literal,
+                       item.reason, owner_page)
         if step.step_id in ambiguous_steps:
             construct = ambiguous_steps[step.step_id]
             for timer in step_verified:
@@ -2307,24 +2348,6 @@ def verify_step_timers(
                    "step_time_ambiguity", construct.evidence.source_page_number)
             step_verified = []
         verified.extend(step_verified)
-        # What the step's text prints and the analysis did not extract is
-        # shown, so a missing timer is visible on the start screen.
-        seen = {item.literal for item in refused if item.step_id == step.step_id}
-        seen.update(timer.literal for timer in step_verified)
-        for owner in (step, *step.sub_actions):
-            reading = domain.read_source_durations(owner.instruction_source_text)
-            for literal, reason in (
-                *((d.literal, "not_extracted") for d in reading.durations),
-                *((r.literal, r.reason) for r in reading.refused),
-            ):
-                if literal in seen or any(literal in text for text in extracted):
-                    continue
-                seen.add(literal)
-                refuse(
-                    getattr(owner, "action_id", None),
-                    owner.instruction_source_text, literal, reason,
-                    owner.evidence.source_page_number,
-                )
     for prerequisite in protocol.before_start:
         if prerequisite.estimated_duration is None:
             continue

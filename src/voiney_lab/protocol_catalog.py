@@ -505,6 +505,7 @@ def _review_timers(table: domain.StepTimerTable) -> dict[str, list[dict[str, obj
                 "seconds": list(timer.seconds),
                 "value_ko": " 또는 ".join(_duration_ko(s) for s in timer.seconds),
                 "choice": timer.step_id in choices,
+                "source": timer.source,
             }
             for timer in table.verified
         ],
