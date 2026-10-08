@@ -728,6 +728,69 @@ acts on carries where it came from (`value_source`: `source`, `operator`, or
   for recovery: after a reconnect the open question is asked again where the
   run stands.
 
+## Timers for an uploaded protocol (lane PT, 2026-10-08)
+
+Before this, only the in-gel development fixture had step timers (its sidecar
+`*.timers.json`); an uploaded PDF's executable had none, and "타이머 시작해줘"
+said there was no timer. Now the catalog builds the executable's timer table
+from the analysis, but only from times the server verifies against the
+source. The in-gel sidecar is unchanged and its fixture keeps its own path.
+
+- **What becomes a timer** (decision 1). A duration the analysis attached to
+  a step's sub-action (`EstimatedDuration`, or the process timer's duration)
+  is kept when its excerpt lies within that step's own source text (the
+  step's and its sub-actions' instructions and evidence excerpts), is printed
+  on a page between the step's anchor page and the next step's (checked
+  against the same OCR-aware text the analysis was checked against), and the
+  server reads the number and unit in the excerpt itself
+  (`experiment_protocol.read_source_durations`: "15 min", "00:15:00", "3 h",
+  "30 s", "15분", "1시간 30분", "10 minutes"). Seconds the analysis wrote must be
+  one of the values read. `experiment_protocol_analysis.verify_step_timers`
+  does this; `ProtocolCatalog._fixture_for_analysis` puts the result on the
+  fixture as `timer_manifest` (step_id → seconds, the sidecar's shape),
+  `timer_choices` and `timer_table`, and `timer_seconds_for_step` reads it.
+  The excerpt also counts as the step's when it lies in the stretch of the
+  page from the step's text to the next step's (a protocols.io duration line,
+  "03:00:00", printed under the step).
+- **Times in the step text** (human decision during the measurement,
+  2026-10-08). Measured on 12 real analyses, the analysis seldom attaches a
+  duration (only ANKOM did), so the server also reads the times printed in
+  the step's own instruction text -- the analysis's source-verified words,
+  checked again on the step's pages -- with the same parser and refusals.
+  These rows carry `source: "step_text"`; the analysis's durations carry
+  `"analysis_duration"`. One value kept from both is one timer.
+- **What does not** (decision 2). No number ("overnight", "until clear"), a
+  bound ("at least 30 min", "a minimum of 2 hours", "30분 이상"), an interval
+  ("every 10 min"), a time since something else ("After 2 hours, remove"), a
+  number beside an unnumbered alternative ("1 h or overnight") -- in one
+  excerpt, or anywhere in the step's words ("O/N" over a "14:00:00" line) --
+  and a step the analysis marked as having an ambiguous time. Each is listed with its
+  reason; asked about,
+  the step's source sentence is read back.
+- **Choices** (decision 2). A range ("12–16 h"), printed alternatives ("15 or
+  30 min") or two durations of one step are asked when the timer starts:
+  "원문에는 ‘12–16 h’로 적혀 있어요. 12시간과 16시간 중 몇 시간으로 맞출까요?" —
+  several durations are listed in step order ("첫째 ‘30 min’, 둘째 ‘1 h’"). The
+  reply names a value aloud, "첫 번째"/"두 번째", or "짧은 거"/"긴 거"; a value
+  the source does not print is not run and the question is asked again. The
+  question is the one-turn timer question (D6), so "아니" declines it. With
+  the router on, a `start_timer` proposal at such a step gets the same question.
+- **Time questions** (decision 3, front rule `step_time`). "몇 분 반응시켜?",
+  "이 단계 몇 분이야?", "몇 시간 배양해?", "시간 얼마나 걸려?" are answered from
+  the verified values with the source literal ("1단계 원문에는 ‘15 min’(15분)으로
+  적혀 있어요."), or the source sentence where no value was verified — only for
+  timers read from an analysis, so the in-gel routing is as it was. "몇 분
+  지났어?" says the running timer's time gone and left (every fixture);
+  "얼마나 남았어?" is unchanged.
+- **Start screen** (decision 4). `GET /api/protocols/{id}/review` carries
+  `timers`: `verified` (step, value in Korean, whether it is a choice, the
+  source literal, page, excerpt) and `refused` (step, literal, reason in
+  Korean); the "시작 전 확인" panel lists both (`#protocol-step-timers`).
+- Wording for timers read from an analysis says hours ("12시간", "1시간 30분");
+  the in-gel wording ("60분") is unchanged. The experiment report's timer
+  column reads `timer_manifest` as before, so a step whose timer was a choice
+  shows its started duration only through the timer event.
+
 ## LLM router (off by default)
 
 Decision D1 (2026-10-02, AGENTS rule 3): behind deterministic front rules,
